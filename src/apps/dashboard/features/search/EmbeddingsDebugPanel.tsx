@@ -1,0 +1,250 @@
+import { useCallback, useEffect, useState } from 'react';
+import { AlertCircle, ChevronDown, ChevronRight, FlaskConical, Loader2 } from 'lucide-react';
+import { Badge } from '../../components/ui/badge.js';
+import { Button } from '../../components/ui/button.js';
+import { Input } from '../../components/ui/input.js';
+import { Progress } from '../../components/ui/progress.js';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../../components/ui/collapsible.js';
+
+interface EmbeddingStats {
+  coverage: {
+    files_total: number;
+    files_embedded: number;
+    symbols_total: number;
+    symbols_embedded: number;
+    symbol_bodies_embedded: number;
+  };
+  vectorIds: {
+    total: number;
+    byType: Record<string, number>;
+  };
+  health: {
+    embeddingService: string;
+    vectorStore: string;
+    vectorStoreAvailable: boolean;
+  };
+  sampleEmbedded: Array<{ type: string; path: string; embeddingHash: string }>;
+  sampleNotEmbedded: Array<{ type: string; path: string }>;
+}
+
+interface TestStep {
+  step: string;
+  ok: boolean;
+  detail?: string;
+  error?: string;
+}
+
+interface TestMatch {
+  vectorId: string;
+  score: number;
+  type: string;
+  refId: number;
+  rehydrated: boolean;
+  path?: string;
+  name?: string;
+}
+
+interface TestResult {
+  steps: TestStep[];
+  matches: TestMatch[];
+}
+
+function CoverageStat({ label, value, total }: { label: string; value: number; total: number }) {
+  const pct = total > 0 ? Math.round((value / total) * 100) : 0;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="tabular-nums font-medium">{value}/{total} ({pct}%)</span>
+      </div>
+      <Progress value={pct} className="h-1.5" />
+    </div>
+  );
+}
+
+export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
+  const [open, setOpen] = useState(false);
+  const [stats, setStats] = useState<EmbeddingStats | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [testQuery, setTestQuery] = useState('');
+  const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
+
+  const loadStats = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/embeddings/stats`);
+      setStats(await r.json());
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (open && !stats) void loadStats();
+  }, [open, stats, loadStats]);
+
+  const runTest = async () => {
+    if (!testQuery.trim()) return;
+    setTestLoading(true);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/embeddings/test-query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: testQuery }),
+      });
+      setTestResult(await r.json());
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger className="flex items-center gap-2 w-full py-2 px-3 rounded-md hover:bg-muted/50 text-sm cursor-pointer">
+        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        <FlaskConical className="h-4 w-4 text-muted-foreground" />
+        <span className="font-medium">Debug Embeddings</span>
+        {stats && (
+          <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+            {stats.coverage.files_embedded}/{stats.coverage.files_total} files embedded
+          </span>
+        )}
+      </CollapsibleTrigger>
+
+      <CollapsibleContent className="px-3 pb-3 space-y-4">
+        {loading && <div className="text-xs text-muted-foreground py-2">Loading...</div>}
+
+        {stats && (
+          <>
+            {/* Health */}
+            <div className="flex flex-wrap gap-2">
+              <Badge variant={stats.health.embeddingService === 'null' ? 'destructive' : 'outline'}>
+                Embedding: {stats.health.embeddingService}
+              </Badge>
+              <Badge variant={stats.health.vectorStore === 'null' ? 'destructive' : 'outline'}>
+                Vector store: {stats.health.vectorStore}
+              </Badge>
+              <Badge variant={stats.health.vectorStoreAvailable ? 'default' : 'destructive'}>
+                {stats.health.vectorStoreAvailable ? 'Available' : 'Unavailable'}
+              </Badge>
+            </div>
+
+            {/* Warnings */}
+            {stats.health.embeddingService === 'null' && (
+              <div className="flex items-start gap-2 p-2 rounded-md bg-destructive/10 text-destructive text-xs">
+                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span>No embedding service configured. Vector search will always return empty. Configure in Admin &gt; Embeddings &amp; Vector Stores.</span>
+              </div>
+            )}
+            {stats.health.vectorStore === 'null' && (
+              <div className="flex items-start gap-2 p-2 rounded-md bg-destructive/10 text-destructive text-xs">
+                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span>No vector store configured. Embeddings cannot be stored or searched.</span>
+              </div>
+            )}
+            {stats.coverage.files_embedded === 0 && stats.health.embeddingService !== 'null' && (
+              <div className="flex items-start gap-2 p-2 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs">
+                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span>No files have been embedded yet. Run indexing with embeddings enabled to populate the vector store.</span>
+              </div>
+            )}
+
+            {/* Coverage */}
+            <div className="space-y-2">
+              <CoverageStat label="Files" value={stats.coverage.files_embedded} total={stats.coverage.files_total} />
+              <CoverageStat label="Symbols" value={stats.coverage.symbols_embedded} total={stats.coverage.symbols_total} />
+              <div className="text-xs text-muted-foreground">
+                Symbol bodies: {stats.coverage.symbol_bodies_embedded}
+              </div>
+            </div>
+
+            {/* Vector IDs by type */}
+            <div className="text-xs space-y-0.5">
+              <div className="font-medium text-muted-foreground">Vector IDs in store: {stats.vectorIds.total}</div>
+              <div className="flex gap-3 text-muted-foreground tabular-nums">
+                {Object.entries(stats.vectorIds.byType).map(([type, count]) => (
+                  <span key={type}>{type}: {count}</span>
+                ))}
+              </div>
+            </div>
+
+            {/* Samples */}
+            {stats.sampleEmbedded.length > 0 && (
+              <div className="text-xs space-y-1">
+                <div className="font-medium text-muted-foreground">Sample embedded files:</div>
+                {stats.sampleEmbedded.map((f, i) => (
+                  <div key={i} className="font-mono text-[11px] truncate">
+                    <span className="text-emerald-500">{f.embeddingHash}</span>{' '}
+                    {f.path}
+                  </div>
+                ))}
+              </div>
+            )}
+            {stats.sampleNotEmbedded.length > 0 && (
+              <div className="text-xs space-y-1">
+                <div className="font-medium text-muted-foreground">Sample NOT embedded:</div>
+                {stats.sampleNotEmbedded.map((f, i) => (
+                  <div key={i} className="font-mono text-[11px] text-muted-foreground truncate">{f.path}</div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Test query */}
+        <div className="space-y-2 pt-2 border-t">
+          <div className="text-xs font-medium text-muted-foreground">Test vector query</div>
+          <div className="flex gap-2">
+            <Input
+              placeholder="how create tools"
+              value={testQuery}
+              onChange={(e) => setTestQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && runTest()}
+              className="text-xs h-8"
+            />
+            <Button size="sm" onClick={runTest} disabled={testLoading} className="h-8">
+              {testLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Test'}
+            </Button>
+          </div>
+
+          {testResult && (
+            <div className="space-y-2">
+              {/* Steps */}
+              <div className="space-y-1">
+                {testResult.steps.map((s, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className={`h-2 w-2 rounded-full shrink-0 ${s.ok ? 'bg-emerald-500' : 'bg-destructive'}`} />
+                    <span className="font-medium">{s.step}</span>
+                    {s.detail && <span className="text-muted-foreground">{s.detail}</span>}
+                    {s.error && <span className="text-destructive">{s.error}</span>}
+                  </div>
+                ))}
+              </div>
+
+              {/* Matches */}
+              {testResult.matches.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-xs font-medium text-muted-foreground">Matches:</div>
+                  {testResult.matches.map((m, i) => (
+                    <div key={i} className="flex items-center gap-2 text-[11px] font-mono">
+                      <Badge variant={m.rehydrated ? 'default' : 'destructive'} className="h-4 text-[10px]">
+                        {m.type}
+                      </Badge>
+                      <span className="text-emerald-500 tabular-nums">{m.score.toFixed(3)}</span>
+                      <span className="truncate">{m.path ?? `ref:${m.refId}`}{m.name ? `:${m.name}` : ''}</span>
+                      {!m.rehydrated && <span className="text-destructive">(missing in DB)</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {testResult.matches.length === 0 && testResult.steps.length > 0 && (
+                <div className="text-xs text-muted-foreground">No matches returned from vector store.</div>
+              )}
+            </div>
+          )}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}

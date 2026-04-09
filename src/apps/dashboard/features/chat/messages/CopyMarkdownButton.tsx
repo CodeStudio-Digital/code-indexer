@@ -1,0 +1,41 @@
+import React, { useState } from 'react';
+import { Check, Copy } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
+
+interface CopyMarkdownButtonProps {
+  text: string;
+}
+
+/**
+ * Tiny inline button for the assistant message header — copies the
+ * concatenated markdown text of the turn to the clipboard. Visible on hover
+ * over the parent `.group/msg` row, with a brief "Copied" confirmation.
+ */
+export function CopyMarkdownButton({ text }: CopyMarkdownButtonProps) {
+  const [copied, setCopied] = useState(false);
+  const onClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  };
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          aria-label="Copy markdown"
+          className="opacity-0 group-hover/msg:opacity-100 focus:opacity-100 transition-opacity inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground rounded px-1 py-0.5 hover:bg-muted"
+        >
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{copied ? 'Copiado!' : 'Copiar markdown'}</TooltipContent>
+    </Tooltip>
+  );
+}

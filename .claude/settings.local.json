@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(find F:/CodeStudio/MCP-CodeBase/node_modules/@anthropic-ai/sdk -name messages*.d.ts)",
+      "Bash(npm test:*)",
+      "Bash(npm install:*)",
+      "Bash(cat tailwind.config.*)",
+      "Bash(npm i:*)",
+      "Bash(npx vite:*)",
+      "mcp__code-indexer__get_project_pulse",
+      "Bash(echo \"exit=$?\")",
+      "Bash(npx vitest:*)",
+      "Bash(npm run:*)",
+      "mcp__code-indexer__read_file",
+      "Bash(grep -l \"Connect ChatGPT\\\\|chatgpt\" F:/CodeStudio/MCP-CodeBase/src/dashboard/features/admin/*.tsx)",
+      "Bash(wc -l src/core/services/oauth/*.ts)",
+      "Bash(timeout 5 npx tsx src/apps/mcp-server/index.ts)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(ls tsconfig*.json)",
+      "Bash(echo \"TSC_EXIT=$?\")",
+      "Bash(echo \"---exit=$?\")",
+      "Bash(echo \"==exit=$?==\")",
+      "Read(//tmp/**)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(xargs grep:*)"
+    ]
+  }
+}

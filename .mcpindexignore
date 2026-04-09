@@ -1,0 +1,43 @@
+# MCP Code Indexer — files and folders to exclude from indexing
+# Uses the same syntax as .gitignore
+
+# Dependencies
+node_modules/
+vendor/
+.venv/
+
+# Build output
+dist/
+build/
+out/
+.next/
+.nuxt/
+
+# Tests (uncomment to skip test files)
+# *.test.*
+# *.spec.*
+# __tests__/
+
+# Generated files
+# *.generated.*
+# *.g.dart
+
+# Large / binary assets
+*.min.js
+*.min.css
+*.map
+*.bundle.js
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+tmp_*.json

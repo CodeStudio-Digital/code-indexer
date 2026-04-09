@@ -1,0 +1,168 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* ===== Brand palette (provided) ===== */
+  --primary-base: #195ab4;
+  --primary-extended-10: #d2e5ff;
+  --primary-extended-20: #b1d2ff;
+  --primary-extended-30: #87baff;
+  --primary-extended-40: #6baaff;
+  --primary-extended-50: #549cff;
+  --primary-extended-60: #307ae0;
+  --primary-extended-70: #195ab4;
+  --primary-extended-80: #10408d;
+  --primary-extended-90: #0b2859;
+  --primary-extended-100: #05132a;
+
+  --neutral-extended-10: #ffffff;
+  --neutral-extended-20: #f5f6f9;
+  --neutral-extended-30: #d7dbdf;
+  --neutral-extended-40: #b8bec4;
+  --neutral-extended-50: #959ca2;
+  --neutral-extended-60: #61686e;
+  --neutral-extended-70: #464c51;
+  --neutral-extended-80: #34383c;
+  --neutral-extended-90: #272a2e;
+  --neutral-extended-100: #1b1e20;
+
+  --status-success: #159e5c;
+  --status-warning: #f05800;
+  --status-error: #eb3d47;
+  --status-info: #1f7dff;
+
+  /* ===== shadcn tokens (light) ===== */
+  --background: #f5f5f6;
+  --foreground: #1b1e20;
+  --card: #ffffff;
+  --card-foreground: #1b1e20;
+  --popover: #ffffff;
+  --popover-foreground: #1b1e20;
+  --primary: #195ab4;
+  --primary-foreground: #ffffff;
+  --secondary: #f5f6f9;
+  --secondary-foreground: #195ab4;
+  --muted: #f5f6f9;
+  --muted-foreground: #61686e;
+  --accent: #d2e5ff;
+  --accent-foreground: #10408d;
+  --destructive: #eb3d47;
+  --destructive-foreground: #ffffff;
+  --success: #159e5c;
+  --warning: #f05800;
+  --info: #1f7dff;
+  --border: #e3e6ea;
+  --input: #e3e6ea;
+  --ring: #195ab4;
+  --radius: 0.75rem;
+}
+
+.dark {
+  --background: #101010;
+  --foreground: #f5f6f9;
+  --card: #1b1e20;
+  --card-foreground: #f5f6f9;
+  --popover: #1b1e20;
+  --popover-foreground: #f5f6f9;
+  --primary: #6baaff;
+  --primary-foreground: #05132a;
+  --secondary: #272a2e;
+  --secondary-foreground: #87baff;
+  --muted: #272a2e;
+  --muted-foreground: #959ca2;
+  --accent: #10408d;
+  --accent-foreground: #d2e5ff;
+  --destructive: #f76970;
+  --destructive-foreground: #ffffff;
+  --success: #62c395;
+  --warning: #ff8752;
+  --info: #4795ff;
+  --border: #34383c;
+  --input: #34383c;
+  --ring: #6baaff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-feature-settings: "rlig" 1, "calt" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Subtle scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted-foreground) 25%, transparent);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
+  background-clip: padding-box;
+}
+
+/* Pulse dot animation for streaming */
+@keyframes pulse-dot {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+.dot-pulse > span {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 2px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse-dot 1.4s infinite ease-in-out both;
+}
+.dot-pulse > span:nth-child(1) { animation-delay: -0.32s; }
+.dot-pulse > span:nth-child(2) { animation-delay: -0.16s; }
+
+.chat-scroll > div > div{
+  display: block !important;
+}
+
+/* Indeterminate progress bar (shimmer) */
+@keyframes progress-indeterminate {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(150%); }
+  100% { transform: translateX(300%); }
+}

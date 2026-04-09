@@ -1,0 +1,53 @@
+export type ProviderKind = 'anthropic' | 'openai' | 'gemini' | 'bedrock' | 'copilot' | 'chatgpt';
+
+export interface AdminProvider {
+  id: string;
+  name: string;
+  kind: ProviderKind;
+  base_url: string | null;
+  api_key_masked: string | null;
+  has_key: boolean;
+  auth_mode: 'api_key' | 'oauth' | 'aws_sigv4';
+  enabled: boolean;
+  use_for_agent: boolean;
+  use_for_coder: boolean;
+  is_default: boolean;
+  extra: Record<string, unknown>;
+}
+
+export interface AdminModel {
+  provider_id: string;
+  model_id: string;
+  mode: string;
+  name: string;
+  enabled: boolean;
+  source: string;
+}
+
+export interface TestResult {
+  ok: boolean;
+  latencyMs?: number;
+  error?: string;
+}
+
+export const KINDS: ProviderKind[] = ['anthropic', 'openai', 'gemini', 'bedrock', 'copilot', 'chatgpt'];
+
+export interface CopilotOpts {
+  edition: 'individual' | 'enterprise';
+  ghes_host?: string;
+  integration_id?: string;
+}
+
+export type CopilotFlowState =
+  | { state: 'idle' }
+  | { state: 'picker' }
+  | { state: 'enterprise_form' }
+  | { state: 'waiting'; userCode: string; verificationUri: string; deviceCode: string }
+  | { state: 'success'; providerId?: string; modelCount?: number }
+  | { state: 'error'; message: string };
+
+export type ChatgptFlowState =
+  | { state: 'idle' }
+  | { state: 'waiting'; authorizeUrl: string; flowState: string }
+  | { state: 'success'; providerId?: string; modelCount?: number }
+  | { state: 'error'; message: string };

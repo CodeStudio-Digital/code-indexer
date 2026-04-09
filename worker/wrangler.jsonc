@@ -1,0 +1,16 @@
+{
+  "name": "mcp-indexer-worker",
+  "account_id": "0748c7a37faefcdbd0b2ab71580791cd",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-09-23",
+  "ai": {
+    "binding": "AI"
+  },
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "code-index"
+    }
+  ],
+  // Set AUTH_TOKEN as a secret: wrangler secret put AUTH_TOKEN
+}

@@ -1,0 +1,49 @@
+import { describe, it, expect } from 'vitest';
+import { AGENTS, isAgentId, getAgent, agentsSummary } from '../core/coder/agents/index.js';
+
+describe('agent presets', () => {
+  it('exposes exactly the four built-in agents', () => {
+    expect(Object.keys(AGENTS).sort()).toEqual(['admin', 'build', 'explore', 'plan']);
+  });
+
+  it('explore is read-only with bootstrap profile', () => {
+    const a = getAgent('explore');
+    expect(a.profile).toBe('bootstrap');
+    expect(a.planMode).toBe(false);
+  });
+
+  it('plan is navigate + plan mode on', () => {
+    const a = getAgent('plan');
+    expect(a.profile).toBe('navigate');
+    expect(a.planMode).toBe(true);
+  });
+
+  it('build is navigate with no plan gate', () => {
+    const a = getAgent('build');
+    expect(a.profile).toBe('navigate');
+    expect(a.planMode).toBe(false);
+  });
+
+  it('admin is full tier, no plan gate', () => {
+    const a = getAgent('admin');
+    expect(a.profile).toBe('full');
+    expect(a.planMode).toBe(false);
+  });
+
+  it('isAgentId accepts known ids and rejects unknown', () => {
+    expect(isAgentId('explore')).toBe(true);
+    expect(isAgentId('plan')).toBe(true);
+    expect(isAgentId('build')).toBe(true);
+    expect(isAgentId('admin')).toBe(true);
+    expect(isAgentId('random')).toBe(false);
+    expect(isAgentId('')).toBe(false);
+  });
+
+  it('agentsSummary lists all four agents', () => {
+    const s = agentsSummary();
+    expect(s).toContain('explore');
+    expect(s).toContain('plan');
+    expect(s).toContain('build');
+    expect(s).toContain('admin');
+  });
+});
