@@ -119,10 +119,10 @@ export type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped' |
 
 /** Curated context the orchestrator pre-extracts and ships to a subagent. */
 export type TaskReference =
-  | { type: 'symbol'; value: string }
-  | { type: 'snippet'; value: string }
-  | { type: 'file'; value: string }
-  | { type: 'doc'; value: string };
+  | { type: 'symbol'; value: string; file?: string; lines?: string; note?: string }
+  | { type: 'snippet'; value: string; file?: string; lines?: string; note?: string }
+  | { type: 'file'; value: string; file?: string; lines?: string; note?: string }
+  | { type: 'doc'; value: string; file?: string; lines?: string; note?: string };
 
 /** A single executable unit produced by submit_tasks and consumed by execute_task. */
 export interface CoderTask {

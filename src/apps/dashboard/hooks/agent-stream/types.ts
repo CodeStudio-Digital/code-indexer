@@ -30,7 +30,7 @@ export interface StreamTask {
   title: string;
   description: string;
   files: string[];
-  references?: Array<{ type: string; value: string }>;
+  references?: Array<{ type: string; value: string; file?: string; lines?: string; note?: string }>;
   depends_on: string[];
   suggested_mode: StreamTaskMode;
   estimated_complexity: 'small' | 'medium' | 'large';

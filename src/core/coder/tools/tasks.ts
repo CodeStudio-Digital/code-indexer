@@ -39,7 +39,11 @@ function validateReference(r: unknown): TaskReference | string {
   if (!['symbol', 'snippet', 'file', 'doc'].includes(o.type)) {
     return `reference.type '${String(o.type)}' invalid (use symbol|snippet|file|doc)`;
   }
-  return { type: o.type as TaskReference['type'], value: o.value } as TaskReference;
+  const ref: TaskReference = { type: o.type as TaskReference['type'], value: o.value } as TaskReference;
+  if (typeof o.file === 'string' && o.file.trim()) ref.file = o.file;
+  if (typeof o.lines === 'string' && o.lines.trim()) ref.lines = o.lines;
+  if (typeof o.note === 'string' && o.note.trim()) ref.note = o.note;
+  return ref;
 }
 
 function validateTaskInput(raw: unknown, idx: number): CoderTask | string {
@@ -161,7 +165,7 @@ const submitTasksSchema: JsonSchema = {
           references: {
             type: 'array',
             items: { type: 'object' },
-            description: "Curated context pre-extracted by you. Each entry: {type: 'symbol'|'snippet'|'file'|'doc', value: string}.",
+            description: "Curated context pre-extracted by you. Each entry: {type: 'symbol'|'snippet'|'file'|'doc', value: string, file?: string, lines?: string, note?: string}.",
           },
           depends_on: {
             type: 'array',

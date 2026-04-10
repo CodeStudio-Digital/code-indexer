@@ -42,6 +42,8 @@ export interface CompanyStreamState {
   boardMessages: BoardMessage[];
   error: string | null;
   userMessage: string | null;
+  /** Set when Master calls submit_plan — needs human approval. */
+  pendingMasterPlan: { plan: string } | null;
 }
 
 interface AgentEvent {
@@ -62,6 +64,7 @@ export function useCompanyStream(companySessionId: number | null) {
     boardMessages: [],
     error: null,
     userMessage: null,
+    pendingMasterPlan: null,
   });
 
   const abortRef = useRef<AbortController | null>(null);
@@ -121,6 +124,9 @@ export function useCompanyStream(companySessionId: number | null) {
         }
         return { ...prev, subordinateStates: subs };
       });
+    } else if (eventType === 'master_plan_posted') {
+      const d = data as { plan: string };
+      setState((prev) => ({ ...prev, pendingMasterPlan: { plan: d.plan } }));
     } else if (eventType === 'error') {
       const d = data as { error?: string };
       setState((prev) => ({
@@ -208,14 +214,13 @@ export function useCompanyStream(companySessionId: number | null) {
   /**
    * Start the company session — sends user message and opens SSE stream.
    */
-  const start = useCallback(async (userMessage: string, roleConfigs?: unknown[]) => {
+  const start = useCallback(async (userMessage: string) => {
     if (!companySessionId) return;
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    setState((prev) => ({
-      ...prev,
+    setState({
       started: true,
       connected: true,
       userMessage,
@@ -223,13 +228,14 @@ export function useCompanyStream(companySessionId: number | null) {
       masterState: null,
       subordinateStates: new Map(),
       boardMessages: [],
-    }));
+      pendingMasterPlan: null,
+    });
 
     try {
       const res = await fetch(`/api/company/sessions/${companySessionId}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_message: userMessage, role_configs: roleConfigs }),
+        body: JSON.stringify({ user_message: userMessage }),
         signal: ctrl.signal,
       });
 
@@ -300,6 +306,20 @@ export function useCompanyStream(companySessionId: number | null) {
     setState((prev) => ({ ...prev, connected: false }));
   }, [companySessionId]);
 
+  const respondToMasterPlan = useCallback(async (approved: boolean, feedback?: string) => {
+    if (!companySessionId) return;
+    try {
+      await fetch(`/api/company/sessions/${companySessionId}/plan-response`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved, feedback }),
+      });
+      setState((prev) => ({ ...prev, pendingMasterPlan: null }));
+    } catch (e) {
+      console.error('Failed to respond to master plan:', e);
+    }
+  }, [companySessionId]);
+
   const reset = useCallback(() => {
     abortRef.current?.abort();
     setState({
@@ -310,6 +330,7 @@ export function useCompanyStream(companySessionId: number | null) {
       boardMessages: [],
       error: null,
       userMessage: null,
+      pendingMasterPlan: null,
     });
   }, []);
 
@@ -319,5 +340,6 @@ export function useCompanyStream(companySessionId: number | null) {
     reattach,
     abort,
     reset,
+    respondToMasterPlan,
   };
 }

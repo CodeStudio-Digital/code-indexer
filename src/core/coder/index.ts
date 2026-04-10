@@ -182,13 +182,43 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(todoTools);
   registry.registerAll(worktreeTools);
 
+  // MCP bridges — Master gets N bridges (one per company project, prefixed tools),
+  // subordinates and regular sessions get a single bridge.
   const bridge = new McpToolBridge();
-  try {
-    await bridge.connect();
-    const mcpTools = await bridge.listTools({ projectName: project.name, overlay });
-    registry.registerAll(mcpTools);
-  } catch (e) {
-    console.warn(`[coder] MCP bridge failed to connect: ${e instanceof Error ? e.message : String(e)}`);
+  const extraBridges: McpToolBridge[] = [];
+
+  if (opts.companyContext?.isMaster) {
+    // Master: register prefixed MCP tools for ALL company projects
+    const companyProjects = opts.companyContext.orchestrator.listProjects();
+    for (const proj of companyProjects) {
+      const projBridge = new McpToolBridge();
+      try {
+        await projBridge.connect();
+        const slug = proj.name.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+        const projOverlay = new SessionOverlay(resolvePath(proj.rootPath));
+        const mcpTools = await projBridge.listTools({ projectName: proj.name, overlay: projOverlay });
+        // Rename: mcp__read_file → mcp__{slug}__read_file
+        const prefixed = mcpTools.map((t) => ({
+          ...t,
+          name: `mcp__${slug}__${t.name.replace(/^mcp__/, '')}`,
+        }));
+        registry.registerAll(prefixed);
+        extraBridges.push(projBridge);
+        console.log(`[coder] Master: ${prefixed.length} MCP tools for project ${proj.name} (prefix: mcp__${slug}__*)`);
+      } catch (e) {
+        console.warn(`[coder] MCP bridge for ${proj.name} failed: ${e instanceof Error ? e.message : String(e)}`);
+        await projBridge.close();
+      }
+    }
+  } else {
+    // Regular session / subordinate: single bridge
+    try {
+      await bridge.connect();
+      const mcpTools = await bridge.listTools({ projectName: project.name, overlay });
+      registry.registerAll(mcpTools);
+    } catch (e) {
+      console.warn(`[coder] MCP bridge failed to connect: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   // External MCP servers — configured via admin panel (migration 015).
@@ -614,6 +644,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       void lastToolMessageId; // silence unused
       await mcpServerManager.closeAll();
       await bridge.close();
+      for (const b of extraBridges) await b.close();
       store.close();
       db.close();
     });

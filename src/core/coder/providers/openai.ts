@@ -26,6 +26,8 @@ export class OpenAIChatProvider implements ChatProvider {
       ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
       ...(opts.defaultHeaders ? { defaultHeaders: opts.defaultHeaders } : {}),
     });
+
+    console.log(opts.baseURL)
   }
 
   setModel(model: string): void {

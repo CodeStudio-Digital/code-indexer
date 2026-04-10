@@ -89,7 +89,11 @@ export function TaskRow({
                 <div className="text-[11px]">
                   <span className="text-muted-foreground">refs:</span>{' '}
                   <span className="font-mono">
-                    {task.references.map((r) => `${r.type}:${r.value}`).join(', ')}
+                    {task.references.map((r) => {
+                      let label = `${r.type}:${r.value}`;
+                      if (r.file) label += ` [${r.file}${r.lines ? `:${r.lines}` : ''}]`;
+                      return label;
+                    }).join(', ')}
                   </span>
                 </div>
               )}

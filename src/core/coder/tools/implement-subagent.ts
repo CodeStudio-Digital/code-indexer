@@ -184,18 +184,29 @@ export const IMPLEMENT_ALLOWLIST = new Set<string>([
  * and file refs get a single line. Doc refs are dumped verbatim.
  */
 function formatReference(r: TaskReference): string {
+  let base: string;
   switch (r.type) {
     case 'symbol':
-      return `**Symbol**: \`${r.value}\``;
+      base = `**Symbol**: \`${r.value}\``;
+      break;
     case 'file':
-      return `**File reference**: \`${r.value}\` (read it via mcp__read_file or get_file_skeleton)`;
+      base = `**File reference**: \`${r.value}\` (read it via mcp__read_file or get_file_skeleton)`;
+      break;
     case 'snippet':
-      return `**Snippet**:\n\n\`\`\`\n${r.value}\n\`\`\``;
+      base = `**Snippet**:\n\n\`\`\`\n${r.value}\n\`\`\``;
+      break;
     case 'doc':
-      return `**Doc**:\n${r.value}`;
+      base = `**Doc**:\n${r.value}`;
+      break;
     default:
-      return String(r);
+      base = String(r);
   }
+  const meta: string[] = [];
+  if (r.file) meta.push(`file: \`${r.file}\``);
+  if (r.lines) meta.push(`lines: ${r.lines}`);
+  if (r.note) meta.push(r.note);
+  if (meta.length) base += `\n  _${meta.join(' | ')}_`;
+  return base;
 }
 
 function buildImplementSystemPrompt(task: CoderTask): string {

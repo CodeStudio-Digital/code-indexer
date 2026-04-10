@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Send, StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle } from 'lucide-react';
+import { Send, StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { useApi } from '../../hooks/useApi.js';
@@ -71,17 +71,8 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
     const text = input.trim();
     if (!text) return;
     setInput('');
-
-    // Build role configs from session data
-    const roleConfigs = config?.role_assignments?.map((r: Record<string, unknown>) => ({
-      role: r.role,
-      provider: r.provider,
-      model: r.model,
-      tier: r.tier ?? 'navigate',
-    }));
-
-    await stream.start(text, roleConfigs);
-    refetch(); // Refresh session data after start
+    await stream.start(text);
+    refetch();
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -155,6 +146,15 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
                 <p className="mt-0.5 text-destructive/80">{stream.error}</p>
               </div>
             </div>
+          )}
+
+          {/* Master plan approval card */}
+          {stream.pendingMasterPlan && (
+            <PlanApprovalCard
+              plan={stream.pendingMasterPlan.plan}
+              onApprove={(feedback) => stream.respondToMasterPlan(true, feedback)}
+              onReject={(feedback) => stream.respondToMasterPlan(false, feedback)}
+            />
           )}
 
           {/* Pre-start info: show session config */}
@@ -312,4 +312,51 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
 
 function parseConfig(json: string): Record<string, unknown> | null {
   try { return JSON.parse(json); } catch { return null; }
+}
+
+function PlanApprovalCard({ plan, onApprove, onReject }: {
+  plan: string;
+  onApprove: (feedback?: string) => void;
+  onReject: (feedback?: string) => void;
+}) {
+  const [feedback, setFeedback] = useState('');
+
+  return (
+    <div className="mb-3 rounded-lg border-2 border-yellow-500/40 bg-yellow-500/5 p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <Crown className="h-4 w-4 text-yellow-400" />
+        <span className="text-sm font-medium">Master submitted a plan for your approval</span>
+      </div>
+      <div className="bg-background rounded-md border p-3 mb-3 text-xs whitespace-pre-wrap max-h-60 overflow-y-auto">
+        {plan}
+      </div>
+      <textarea
+        value={feedback}
+        onChange={(e) => setFeedback(e.target.value)}
+        placeholder="Optional feedback..."
+        className="w-full rounded-md border bg-background px-3 py-1.5 text-xs resize-none mb-2"
+        rows={2}
+      />
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          variant="default"
+          onClick={() => onApprove(feedback || undefined)}
+          className="gap-1"
+        >
+          <CheckCircle className="h-3.5 w-3.5" />
+          Approve
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => onReject(feedback || undefined)}
+          className="gap-1 text-destructive"
+        >
+          <XCircle className="h-3.5 w-3.5" />
+          Reject
+        </Button>
+      </div>
+    </div>
+  );
 }

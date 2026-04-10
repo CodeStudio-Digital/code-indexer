@@ -44,14 +44,17 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
     source: 'native',
     handler: async (args) => {
       try {
+        const role = args.role as string;
+        // Apply template defaults if the LLM didn't specify provider/model/tier
+        const defaults = orchestrator.getRoleDefaults(role);
         const result = await orchestrator.spawnSubordinate({
-          role: args.role as string,
+          role,
           task: args.task as string,
           projectId: args.project_id as number,
-          provider: args.provider as string | undefined,
-          model: args.model as string | undefined,
-          tier: args.tier as 'bootstrap' | 'navigate' | 'full' | undefined,
-          skills: args.skills as string[] | undefined,
+          provider: (args.provider as string | undefined) ?? defaults?.provider,
+          model: (args.model as string | undefined) ?? defaults?.model,
+          tier: (args.tier as 'bootstrap' | 'navigate' | 'full' | undefined) ?? (defaults?.tier as 'bootstrap' | 'navigate' | 'full' | undefined),
+          skills: (args.skills as string[] | undefined) ?? defaults?.skills,
           wait: args.wait as boolean | undefined,
         });
         return ok(JSON.stringify(result, null, 2));

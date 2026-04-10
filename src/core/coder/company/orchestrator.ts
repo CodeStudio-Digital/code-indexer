@@ -7,8 +7,6 @@
  * multiplexed into a single meta-bus for the dashboard to consume.
  */
 import { runCoder, type RunCoderOptions, type RunCoderHandle } from '../index.js';
-import { createChatProviderAsync } from '../providers/factory.js';
-import type { CoderProviderName } from '../providers/adapter.js';
 import type { ChatUsage } from '../core/messages.js';
 import {
   createBus,
@@ -45,8 +43,6 @@ export interface SpawnSubordinateSpec {
   model?: string;
   tier?: 'bootstrap' | 'navigate' | 'full';
   wait?: boolean;
-  /** Skill IDs to enable for this subordinate. When set, configures session-level
-   *  skill overrides so only these skills are active for the subordinate's run. */
   skills?: string[];
 }
 
@@ -60,14 +56,20 @@ export class CompanyOrchestrator {
   readonly companySessionId: number;
   readonly metaBus: CoderRunBus;
 
+  /** Exposed for plan-response endpoint. */
+  masterHandle: RunCoderHandle | null = null;
+
   private companyStore: CompanyStore;
   private db: CodeIndexDB;
   private subordinates = new Map<number, SubordinateHandle>();
   private pendingPlans = new Map<number, PendingPlan>();
-  private masterHandle: RunCoderHandle | null = null;
   private masterAgentRunId: number | null = null;
   private projects: CompanySessionProject[] = [];
   private aborted = false;
+  /** Pending master plan — set when master calls submit_plan. */
+  private pendingMasterPlan: { resolve: (response: string) => void } | null = null;
+  /** Template role configs — stored so spawn_subordinate_agent can use defaults. */
+  private roleConfigs: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }> = [];
 
   constructor(opts: CompanyOrchestratorOpts) {
     this.companySessionId = opts.companySessionId;
@@ -85,7 +87,7 @@ export class CompanyOrchestrator {
     model: string;
     maxTurns?: number;
     signal?: AbortSignal;
-    roleConfigs?: Array<{ role: string; provider: string; model: string; tier: string; projectHints?: string[] }>;
+    roleConfigs?: Array<{ role: string; provider: string; model: string; tier: string; projectHints?: string[]; skills?: string[] }>;
   }): Promise<RunCoderHandle> {
     if (this.masterHandle) throw new Error('Master already started');
 
@@ -113,6 +115,7 @@ export class CompanyOrchestrator {
       model: opts.model,
     });
     this.masterAgentRunId = masterRun.id;
+    this.roleConfigs = (opts.roleConfigs ?? []) as Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }>;
 
     // Update company session
     this.companyStore.setMasterSessionId(this.companySessionId, masterSession.id);
@@ -139,12 +142,16 @@ export class CompanyOrchestrator {
       };
     });
 
+    // Board: announce master start
+    this.postToBoard('system', null, 'message',
+      `Master agent started (${opts.provider}/${opts.model}). Analyzing task...`);
+
     const handle = await runCoder({
       session: { id: masterSession.id },
       userMessage: opts.userMessage,
       maxTurns: opts.maxTurns ?? 100,
       signal: opts.signal,
-      planMode: true, // Master must submit_plan for human approval
+      planMode: false, // Master acts AUTONOMOUSLY — delegates via spawn_subordinate_agent
       profile: 'full',
       companyContext,
       companyPromptBlock: buildMasterCompanyBlock({
@@ -155,22 +162,59 @@ export class CompanyOrchestrator {
 
     this.masterHandle = handle;
     this.wireAgentToMetaBus(handle, 'master', masterRun.id);
+    this.wireMasterPlanInterception(handle);
 
-    // Update status when master finishes
-    handle.done.then(({ reason }) => {
-      this.companyStore.updateAgentRunStatus(masterRun.id, reason === 'completed' ? 'completed' : 'error');
-      if (!this.aborted) {
-        this.companyStore.updateCompanySessionStatus(this.companySessionId, 'completed');
-        markEnded(this.metaBus, 'done', { reason });
-      }
-    }).catch((err) => {
-      this.companyStore.updateAgentRunStatus(masterRun.id, 'error');
-      this.companyStore.updateCompanySessionStatus(this.companySessionId, 'error');
-      markEnded(this.metaBus, 'error', { error: err?.message ?? String(err) });
-    });
+    // Update status when master finishes — use .finally to GUARANTEE markEnded
+    handle.done
+      .then(({ reason }) => {
+        try {
+          this.companyStore.updateAgentRunStatus(masterRun.id, reason === 'completed' ? 'completed' : 'error');
+          this.companyStore.updateCompanySessionStatus(this.companySessionId, 'completed');
+        } catch { /* DB errors shouldn't break the stream */ }
+        this.postToBoard('system', null, 'message',
+          `Master finished: ${reason}`);
+      })
+      .catch((err) => {
+        try {
+          this.companyStore.updateAgentRunStatus(masterRun.id, 'error');
+          this.companyStore.updateCompanySessionStatus(this.companySessionId, 'error');
+        } catch { /* ignore */ }
+        this.postToBoard('system', null, 'message',
+          `Master error: ${err?.message ?? String(err)}`);
+      })
+      .finally(() => {
+        if (!this.aborted && !this.metaBus.ended) {
+          markEnded(this.metaBus, 'done', { reason: 'completed' });
+        }
+      });
 
     store.close();
     return handle;
+  }
+
+  // ─── Master plan interception (for human approval) ─────────────
+
+  private wireMasterPlanInterception(handle: RunCoderHandle): void {
+    handle.runner.on('plan_posted', (block: { plan: string }) => {
+      // Publish to meta-bus so dashboard can show the plan approval card
+      publish(this.metaBus, 'master_plan_posted', {
+        plan: block.plan,
+      });
+      this.postToBoard('master', this.masterAgentRunId, 'question',
+        `[Master submitted plan for human review]`);
+    });
+  }
+
+  /** Called by the HTTP plan-response endpoint when human approves/rejects. */
+  respondToMasterPlan(approved: boolean, feedback?: string): boolean {
+    if (!this.masterHandle) return false;
+    const response = JSON.stringify({ approved, feedback: feedback ?? '' });
+    const resolved = this.masterHandle.runner.provideUserInput(response);
+    if (resolved) {
+      this.postToBoard('human', null, 'decision',
+        `Plan ${approved ? 'APPROVED' : 'REJECTED'}${feedback ? `: ${feedback}` : ''}`);
+    }
+    return resolved;
   }
 
   // ─── Subordinate spawning ──────────────────────────────────────
@@ -180,7 +224,6 @@ export class CompanyOrchestrator {
     coderSessionId: number;
     status: AgentRunStatus;
   }> {
-    // Validate project belongs to this company
     if (!this.projects.some((p) => p.project_id === spec.projectId)) {
       throw new Error(
         `Project ${spec.projectId} is not linked to company session ${this.companySessionId}`,
@@ -192,6 +235,12 @@ export class CompanyOrchestrator {
 
     const provider = spec.provider ?? 'anthropic';
     const model = spec.model ?? 'claude-sonnet-4-6';
+    const project = this.db.getProject(spec.projectId);
+    const projectName = project?.name ?? `project-${spec.projectId}`;
+
+    // Board: announce subordinate spawn
+    this.postToBoard('system', null, 'message',
+      `Spawned @${spec.role} agent (project: ${projectName}, ${provider}/${model})`);
 
     // Create subordinate's coder_session
     const subSession = store.createSession({
@@ -201,11 +250,10 @@ export class CompanyOrchestrator {
       model,
     });
 
-    // Configure skills for this subordinate if specified in the role config
+    // Configure skills
     if (spec.skills && spec.skills.length > 0) {
       try {
         const skillStore = new SkillStore(config.dbPath);
-        // Enable specified skills, disable others at session level
         const allSkills = skillStore.resolveActiveSkills(subSession.id, spec.projectId);
         for (const skill of allSkills) {
           const shouldEnable = spec.skills.includes(skill.id);
@@ -227,7 +275,7 @@ export class CompanyOrchestrator {
       model,
     });
 
-    // Build company context for subordinate
+    // Build company context
     const companyContext: CompanyContext = {
       orchestrator: this,
       companySessionId: this.companySessionId,
@@ -237,13 +285,11 @@ export class CompanyOrchestrator {
       isMaster: false,
     };
 
-    // Build subordinate prompt block
-    const project = this.db.getProject(spec.projectId);
     const subordinateBlock = buildSubordinateCompanyBlock({
       role: spec.role,
       projects: [{
         id: spec.projectId,
-        name: project?.name ?? `project-${spec.projectId}`,
+        name: projectName,
         rootPath: project?.root_path ?? '',
       }],
     });
@@ -258,9 +304,8 @@ export class CompanyOrchestrator {
       companyPromptBlock: subordinateBlock,
     } as RunCoderOptions & { companyPromptBlock: string });
 
-    // Wire plan interception
+    // Wire plan interception for subordinate
     this.wireSubordinatePlanInterception(handle, agentRun.id, spec.role);
-
     // Wire SSE to meta-bus
     this.wireAgentToMetaBus(handle, spec.role, agentRun.id);
 
@@ -277,19 +322,22 @@ export class CompanyOrchestrator {
     };
     this.subordinates.set(agentRun.id, subordinateHandle);
 
-    // Update status when subordinate finishes
-    handle.done.then(({ reason }) => {
-      const finalStatus: AgentRunStatus = reason === 'completed' ? 'completed' : 'error';
-      this.companyStore.updateAgentRunStatus(agentRun.id, finalStatus);
-      this.postToBoard(spec.role, agentRun.id, 'message',
-        `[${spec.role}] finished with status: ${finalStatus}`);
-    }).catch(() => {
-      this.companyStore.updateAgentRunStatus(agentRun.id, 'error');
-    });
+    // Update status when subordinate finishes — .finally guarantees cleanup
+    handle.done
+      .then(({ reason }) => {
+        const finalStatus: AgentRunStatus = reason === 'completed' ? 'completed' : 'error';
+        try { this.companyStore.updateAgentRunStatus(agentRun.id, finalStatus); } catch { /* ignore */ }
+        this.postToBoard('system', null, 'message',
+          `@${spec.role} finished: ${reason}`);
+      })
+      .catch(() => {
+        try { this.companyStore.updateAgentRunStatus(agentRun.id, 'error'); } catch { /* ignore */ }
+        this.postToBoard('system', null, 'message',
+          `@${spec.role} encountered an error`);
+      });
 
     store.close();
 
-    // If wait=true, await completion inline (blocking the Master's tool call)
     if (spec.wait) {
       await handle.done;
     }
@@ -301,7 +349,7 @@ export class CompanyOrchestrator {
     };
   }
 
-  // ─── Plan interception ─────────────────────────────────────────
+  // ─── Subordinate plan interception ─────────────────────────────
 
   private wireSubordinatePlanInterception(
     handle: RunCoderHandle,
@@ -311,21 +359,15 @@ export class CompanyOrchestrator {
     handle.runner.on('plan_posted', (block: { plan: string; toolUseId?: string }) => {
       this.companyStore.updateAgentRunStatus(agentRunId, 'waiting_plan');
 
-      // Post to board so master can see it
       this.postToBoard(role, agentRunId, 'question',
         `[@master] ${role} submitted plan for review:\n\n${block.plan}`);
 
-      // Publish to meta-bus for dashboard
       publish(this.metaBus, 'subordinate_plan_posted', {
         agentRunId,
         role,
         plan: block.plan,
       });
 
-      // The submit_plan tool calls runner.waitForUserInput() which returns
-      // a Promise<string>. We don't directly hook into that Promise here.
-      // Instead, the Master calls approve_subordinate_plan which calls
-      // runner.provideUserInput() on the subordinate, unblocking it.
       this.pendingPlans.set(agentRunId, {
         agentRunId,
         role,
@@ -371,16 +413,18 @@ export class CompanyOrchestrator {
     this.aborted = true;
     for (const sub of this.subordinates.values()) {
       sub.runner.abort();
-      this.companyStore.updateAgentRunStatus(sub.agentRunId, 'aborted');
+      try { this.companyStore.updateAgentRunStatus(sub.agentRunId, 'aborted'); } catch { /* ignore */ }
     }
     if (this.masterHandle) {
       this.masterHandle.runner.abort();
       if (this.masterAgentRunId) {
-        this.companyStore.updateAgentRunStatus(this.masterAgentRunId, 'aborted');
+        try { this.companyStore.updateAgentRunStatus(this.masterAgentRunId, 'aborted'); } catch { /* ignore */ }
       }
     }
-    this.companyStore.updateCompanySessionStatus(this.companySessionId, 'error');
-    markEnded(this.metaBus, 'done', { reason: 'aborted' });
+    try { this.companyStore.updateCompanySessionStatus(this.companySessionId, 'error'); } catch { /* ignore */ }
+    if (!this.metaBus.ended) {
+      markEnded(this.metaBus, 'done', { reason: 'aborted' });
+    }
   }
 
   // ─── Board ─────────────────────────────────────────────────────
@@ -392,7 +436,6 @@ export class CompanyOrchestrator {
     content: string,
     mentions?: string[],
   ): void {
-    // Extract @mentions from content if not provided
     const extractedMentions = mentions ?? [];
     if (!mentions) {
       const re = /@(\w+)/g;
@@ -420,7 +463,6 @@ export class CompanyOrchestrator {
       sinceId: opts?.sinceId,
       limit: opts?.limit ?? 50,
     });
-
     if (opts?.mentionsRole) {
       return entries.filter(
         (e) => e.mentions.includes(opts.mentionsRole!) || e.mentions.includes('all'),
@@ -464,6 +506,12 @@ export class CompanyOrchestrator {
     });
   }
 
+  /** Get template defaults for a role (provider, model, tier, skills). */
+  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: string[] } | null {
+    const cfg = this.roleConfigs.find((r) => r.role === role);
+    return cfg ? { provider: cfg.provider, model: cfg.model, tier: cfg.tier, skills: cfg.skills } : null;
+  }
+
   hasPendingPlan(agentRunId: number): boolean {
     return this.pendingPlans.has(agentRunId);
   }
@@ -489,8 +537,6 @@ export class CompanyOrchestrator {
     ];
 
     for (const evt of events) {
-      // Cast to 'any' event name — we're generically forwarding all runner
-      // events to the meta-bus and the typed overloads can't express this.
       (handle.runner as import('node:events').EventEmitter).on(evt, (...args: unknown[]) => {
         publish(this.metaBus, 'agent_event', {
           agent: role,

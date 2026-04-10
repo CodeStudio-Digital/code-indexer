@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { subscribe, waitEnded, publish, markEnded } from '../../../coder-bus.js';
+import { subscribe, waitEnded } from '../../../coder-bus.js';
 import type { ServerDeps } from '../../deps.js';
 import { CompanyOrchestrator } from '../../../../../core/coder/company/orchestrator.js';
 
@@ -10,17 +10,6 @@ const activeOrchestrators = new Map<number, CompanyOrchestrator>();
 interface StartBody {
   user_message: string;
   max_turns?: number;
-  role_configs?: Array<{
-    role: string;
-    provider: string;
-    model: string;
-    tier: string;
-    projectHints?: string[];
-  }>;
-}
-
-interface MessageBody {
-  content: string;
 }
 
 interface PlanResponseBody {
@@ -34,6 +23,11 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   /**
    * Start the company session — spawns the Master agent and returns
    * a multiplexed SSE stream with all agent events enveloped.
+   *
+   * IMPORTANT: We AWAIT startMaster() before opening SSE. This ensures
+   * the runner is wired to the metaBus before any events are emitted.
+   * The subscribe with sinceSeq=-1 replays ALL buffered events, so
+   * events emitted during startMaster() are never lost.
    */
   app.post('/api/company/sessions/:id/start', async (c) => {
     const id = parseInt(c.req.param('id'), 10);
@@ -48,9 +42,17 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ error: 'user_message required' }, 400);
     }
 
-    // Parse config
-    let config: { master_provider?: string; master_model?: string; role_assignments?: unknown[] } = {};
+    // Parse config from DB — this is the source of truth for roles
+    let config: {
+      master_provider?: string;
+      master_model?: string;
+      role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }>;
+    } = {};
     try { config = JSON.parse(session.config_json); } catch { /* use defaults */ }
+
+    const roleConfigs = (config.role_assignments ?? []) as Array<{
+      role: string; provider: string; model: string; tier: string; skills?: string[];
+    }>;
 
     const orchestrator = new CompanyOrchestrator({
       companySessionId: id,
@@ -59,22 +61,24 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     });
     activeOrchestrators.set(id, orchestrator);
 
-    // Start the master — fire and forget, SSE stream follows.
-    // Errors are published to the meta-bus so the SSE client sees them.
-    orchestrator.startMaster({
-      userMessage: body.user_message,
-      provider: config.master_provider ?? 'anthropic',
-      model: config.master_model ?? 'claude-sonnet-4-6',
-      maxTurns: body.max_turns ?? 100,
-      roleConfigs: body.role_configs,
-    }).catch((err) => {
+    // Await startMaster — if it fails, return JSON error (not a broken SSE stream)
+    try {
+      await orchestrator.startMaster({
+        userMessage: body.user_message,
+        provider: config.master_provider ?? 'anthropic',
+        model: config.master_model ?? 'claude-sonnet-4-6',
+        maxTurns: body.max_turns ?? 100,
+        roleConfigs,
+      });
+    } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[company] Master start failed:`, msg);
-      publish(orchestrator.metaBus, 'error', { error: msg });
-      markEnded(orchestrator.metaBus, 'error', { error: msg });
-    });
+      activeOrchestrators.delete(id);
+      companyStore.updateCompanySessionStatus(id, 'error');
+      return c.json({ error: `Master start failed: ${msg}` }, 500);
+    }
 
-    // Return SSE from the meta-bus
+    // Now open SSE — subscribe with -1 replays all events from buffer
     return streamSSE(c, async (stream) => {
       const unsubscribe = subscribe(
         orchestrator.metaBus,
@@ -92,7 +96,6 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       } finally {
         unsubscribe();
         await stream.close();
-        // Clean up after linger
         setTimeout(() => activeOrchestrators.delete(id), 30_000);
       }
     });
@@ -144,6 +147,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
   /**
    * Human responds to the Master's submit_plan.
+   * This unblocks the Master's waitForUserInput() call.
    */
   app.post('/api/company/sessions/:id/plan-response', async (c) => {
     const id = parseInt(c.req.param('id'), 10);
@@ -151,9 +155,16 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
     const body = await c.req.json<PlanResponseBody>().catch(() => ({}) as PlanResponseBody);
-    // The master's plan is handled by the regular plan mechanism via provideUserInput
-    // This is a placeholder — the actual mechanism uses the same path as regular coder sessions
-    return c.json({ ok: true, note: 'Plan response received. Use the coder session plan-response endpoint for the master session.' });
+    if (body.approved === undefined) {
+      return c.json({ error: 'approved field required' }, 400);
+    }
+
+    const resolved = orchestrator.respondToMasterPlan(body.approved, body.feedback);
+    if (!resolved) {
+      return c.json({ error: 'No pending master plan to respond to' }, 409);
+    }
+
+    return c.json({ ok: true });
   });
 
   /**
