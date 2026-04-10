@@ -17,7 +17,7 @@ import { buildExpandTools } from './tools/expand.js';
 import { McpToolBridge } from './tools/mcp-bridge.js';
 import { McpServerManager } from './tools/mcp-server-manager.js';
 import { McpServerStore } from '../../store/mcp-server-store.js';
-import { buildSubagentTool } from './tools/subagent.js';
+import { buildSubagentTool, buildSpawnAgentsTool } from './tools/subagent.js';
 import { inferProfileFromMessage, profileToTiers, type CoderProfile } from './tools/tiers.js';
 import { AGENTS, type AgentId } from './agents/index.js';
 import { SessionOverlay } from './overlay/session-overlay.js';
@@ -225,12 +225,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Subagent tool — registered AFTER MCP tools so it can snapshot the full
   // tool list for the explore allowlist. Disabled via CODER_DISABLE_SUBAGENTS=1.
   if (process.env.CODER_DISABLE_SUBAGENTS !== '1') {
-    registry.register(
-      buildSubagentTool({
-        provider,
-        parentTools: registry.list(),
-      }),
-    );
+    const subagentDeps = { provider, parentTools: registry.list() };
+    registry.register(buildSubagentTool(subagentDeps));
+    registry.register(buildSpawnAgentsTool(subagentDeps));
   }
 
   const toolContext: ToolContext = {
@@ -562,10 +559,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // for the turn. We need to persist that too. Hook done to flush the latest one.
   // Easiest: peek at runner.messages after the turn — but we don't have a per-turn
   // event. Instead, persist the tool message right before each new turn_start.
-  // On resume the runner already has the full DB history (including the
-  // tool_result we just appended). Skip past it so flushToolMessages only
-  // persists tool messages produced *after* the resume point.
-  let lastPersistedIdx = opts.resume ? runner.messages.length : 0;
+  // The runner starts with initialMessages loaded from the DB — those are
+  // already persisted. Skip past them so flushToolMessages only persists
+  // tool messages produced *during this run*. Before this fix,
+  // lastPersistedIdx was 0 for non-resume runs, causing every tool message
+  // from history to be re-appended on the first turn_start — exponential
+  // duplication across turns and forks.
+  let lastPersistedIdx = runner.messages.length;
   const flushToolMessages = () => {
     for (let i = lastPersistedIdx; i < runner.messages.length; i++) {
       const m = runner.messages[i];

@@ -20,6 +20,6 @@ export function providerLabel(id: string): string {
 }
 
 /** How many visual groups to show initially when opening a session. */
-export const INITIAL_PAGE_SIZE = 15;
-/** How many more groups to load when user clicks "Load earlier". */
-export const LOAD_MORE_SIZE = 20;
+export const INITIAL_PAGE_SIZE = 30;
+/** How many more groups to load when user clicks "Load earlier" or infinite scroll triggers. */
+export const LOAD_MORE_SIZE = 40;

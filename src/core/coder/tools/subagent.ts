@@ -1,44 +1,42 @@
+import { randomUUID } from 'node:crypto';
 import type { CoderTool, ToolResult, JsonSchema } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
 import type { ChatProvider } from '../providers/adapter.js';
 import type { AgentMessage } from '../core/messages.js';
-import { runSubagent, EXPLORE_ALLOWLIST, extractLastAssistantText } from './implement-subagent.js';
+import { runSubagent, EXPLORE_ALLOWLIST, extractLastAssistantText, runParallelAgents } from './implement-subagent.js';
 
-const EXPLORE_SYSTEM_PROMPT = `You are the EXPLORE subagent. A parent coder agent delegated a focused investigation to you. Your job:
+const EXPLORE_SYSTEM_PROMPT = `You are the EXPLORE subagent. A parent coder agent delegated a focused investigation to you.
 
 1. Use the provided read-only tools to find what was asked.
-2. Be terse. Return findings as \`file:line — what\` lines, or short bulleted facts.
+2. Return findings as \`file:line — what\` lines, or short bulleted facts.
 3. NEVER speculate, NEVER write code, NEVER suggest implementation. Pure observation.
 
-# CRITICAL — STOPPING RULES (must follow)
+# CRITICAL — ALWAYS PRODUCE A SUMMARY
 
-You have a HARD budget of about 8 tool-calling turns. If you go past that without producing your final summary, the parent receives nothing useful and your work is wasted. Therefore:
+The parent agent ONLY reads your final assistant text. If you hit max_turns without a text summary, your entire investigation is WASTED — the parent gets "(no summary produced)" and all your tool calls were for nothing.
 
-- **After at most 6 tool calls**, stop investigating and write your final summary.
-- **If a search returns no results twice in a row**, stop searching that topic — the answer is likely "not found" and that itself is the finding. Report it explicitly: "No evidence of X in the codebase."
-- **Never end a turn with only tool calls and no text** when you sense you're close to the limit. Always pair tool calls with a closing text block.
-- **Your LAST turn must contain a text block** that summarizes everything. The parent only reads your final assistant text — without it, your run is a total loss.
+**Rules:**
+- Every few turns, write a partial text summary of what you found so far. This ensures the parent gets SOMETHING even if you hit max_turns.
+- When you have gathered enough info, stop and write your complete final summary.
+- If a search returns no results twice in a row, stop — report "No evidence of X" as a finding.
+- NEVER end your run with only tool calls and no text.
 
 # Output format
 
-Final summary, max 25 lines, structured as:
-
-\`\`\`
 ## Findings
 - <fact 1 with file:line>
 - <fact 2 with file:line>
-- ...
+...
 
 ## Confidence
-<one line: high/medium/low + why>
+<high/medium/low + why>
 
 ## Open questions
-<only if you couldn't fully answer, otherwise omit>
-\`\`\`
+<only if relevant>
 
 # Token economy
 
-Prefer \`get_file_skeleton\`, \`get_symbol_body\`, \`grep_code\`, \`find_references\` over \`read_file\` of whole files. Always pass \`max_tokens\`/\`limit\` parameters. If a tool returns "[output truncado]", refine the query — don't re-read.`;
+Prefer get_file_skeleton, get_symbol_body, grep_code, find_references over read_file of whole files. Always pass max_tokens/limit parameters.`;
 
 export interface SubagentDeps {
   provider: ChatProvider;
@@ -63,7 +61,7 @@ const subagentSchema: JsonSchema = {
     },
     max_turns: {
       type: 'number',
-      description: 'Max turns for the subagent loop (default 12, max 20).',
+      description: 'Max turns for the subagent loop (default 50).',
     },
   },
   required: ['type', 'task'],
@@ -89,8 +87,9 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
     handler: async (args, ctx): Promise<ToolResult> => {
       const type = String(args.type ?? 'explore');
       const task = typeof args.task === 'string' ? args.task : '';
-      const requestedMaxTurns = typeof args.max_turns === 'number' ? args.max_turns : 8;
-      const maxTurns = Math.min(Math.max(1, requestedMaxTurns), 12);
+      const MIN_TURNS = 50;
+      const requestedMaxTurns = typeof args.max_turns === 'number' ? args.max_turns : 100;
+      const maxTurns = Math.max(MIN_TURNS, requestedMaxTurns);
 
       if (!task) return err('spawn_subagent: missing required parameter `task`');
       if (type !== 'explore') return err(`spawn_subagent: unknown type '${type}' (only 'explore' supported)`);
@@ -119,6 +118,123 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
       return {
         ...ok(header + body),
         subUsage: result.usage,
+      };
+    },
+  };
+}
+
+// ─── spawn_agents (parallel) ──────────────────────────────────
+
+const spawnAgentsSchema: JsonSchema = {
+  type: 'object',
+  properties: {
+    agents: {
+      type: 'array',
+      description:
+        'Array of agent tasks to run in parallel. Each gets its own isolated context window. ' +
+        'Only their final summaries come back — intermediate tool results never enter your history.',
+      items: {
+        type: 'object',
+        properties: {
+          task: {
+            type: 'string',
+            description:
+              'Self-contained natural-language description of what this agent must find. ' +
+              'Include all context needed — the agent has no access to the parent conversation.',
+          },
+          label: {
+            type: 'string',
+            description: 'Short label (3-5 words) shown in the UI during execution.',
+          },
+          max_turns: {
+            type: 'number',
+            description: 'Max turns for this agent (default 50).',
+          },
+        },
+        required: ['task', 'label'],
+      },
+      minItems: 1,
+      maxItems: 8,
+    },
+  },
+  required: ['agents'],
+} as unknown as JsonSchema;
+
+/**
+ * Build the spawn_agents tool for running multiple explore subagents in parallel.
+ * Each agent gets its own isolated CoderRunner. Progress events are emitted to
+ * the parent runner so the dashboard can show real-time per-agent status.
+ */
+export function buildSpawnAgentsTool(deps: SubagentDeps): CoderTool {
+  return {
+    name: 'spawn_agents',
+    description:
+      'Run multiple read-only investigations IN PARALLEL. Each agent gets its own isolated context ' +
+      'window — their intermediate tool results never enter your history. Only the combined summaries ' +
+      'come back. Use this when you need to explore 2+ independent topics simultaneously. ' +
+      'The token cost of all agents IS counted in this session.',
+    parameters: spawnAgentsSchema,
+    source: 'native',
+    handler: async (args, ctx): Promise<ToolResult> => {
+      const rawAgents = args.agents;
+      if (!Array.isArray(rawAgents) || rawAgents.length === 0) {
+        return err('spawn_agents: `agents` must be a non-empty array');
+      }
+      if (rawAgents.length > 8) {
+        return err('spawn_agents: maximum 8 agents allowed');
+      }
+
+      const agentSpecs = rawAgents.map((a: Record<string, unknown>) => ({
+        task: typeof a.task === 'string' ? a.task : '',
+        label: typeof a.label === 'string' ? a.label : 'agent',
+        maxTurns: Math.max(50, typeof a.max_turns === 'number' ? a.max_turns : 100),
+      }));
+
+      for (const s of agentSpecs) {
+        if (!s.task) return err('spawn_agents: each agent must have a non-empty `task`');
+      }
+
+      const groupId = randomUUID().slice(0, 8);
+
+      // Emit group start so the UI can create the parallel agents container.
+      ctx.runner?.emit('agents_group_start', {
+        groupId,
+        agents: agentSpecs.map((a, i) => ({ index: i, label: a.label })),
+      });
+
+      const { results, totalUsage } = await runParallelAgents(
+        { provider: deps.provider, tools: deps.parentTools, ctx },
+        agentSpecs,
+        EXPLORE_SYSTEM_PROMPT,
+        EXPLORE_ALLOWLIST,
+        (progress) => {
+          ctx.runner?.emit('agent_progress', { groupId, ...progress });
+        },
+      );
+
+      // Emit group end.
+      ctx.runner?.emit('agents_group_end', {
+        groupId,
+        totalUsage,
+        agentCount: results.length,
+        successCount: results.filter((r) => r.reason === 'completed').length,
+      });
+
+      // Build combined text result for the parent conversation.
+      const cached = totalUsage.cache_read_input_tokens ?? 0;
+      const header = `[parallel agents: ${results.length} agents, input=${totalUsage.input_tokens} output=${totalUsage.output_tokens} cache_hit=${cached}]\n\n`;
+
+      const body = results
+        .map((r, i) => {
+          const meta = `[reason=${r.reason} tools=${r.toolCallCount} input=${r.usage.input_tokens} output=${r.usage.output_tokens}]`;
+          const text = r.finalText || '(no summary produced)';
+          return `### Agent ${i + 1}: ${r.label}\n${meta}\n${text}`;
+        })
+        .join('\n\n---\n\n');
+
+      return {
+        ...ok(header + body),
+        subUsage: totalUsage,
       };
     },
   };

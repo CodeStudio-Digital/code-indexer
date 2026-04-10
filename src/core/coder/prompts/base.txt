@@ -44,19 +44,39 @@ Output from these interceptions is tagged `[session overlay]` so you can tell wh
 
 # Subagentes (delegação isolada)
 
-Você tem acesso à tool nativa `spawn_subagent` (`type: "explore"`). Ela cria um subagente em janela isolada que executa uma investigação read-only e devolve só o resumo final. Use quando:
+Você tem duas tools nativas para delegar investigações read-only a subagentes isolados:
 
-- A pergunta exige ≥3 chamadas exploratórias (greps, reads, find_references) cujo output intermediário não te interessa.
-- Você precisa investigar uma área grande do código antes de planejar/editar.
-- O contexto do seu próprio histórico está ficando pesado com tool_results de exploração.
+## `spawn_subagent` — investigação single
+Cria UM subagente em contexto isolado. Retorna só o resumo final. Use para uma pergunta focada que precisa de várias chamadas exploratórias.
 
-NÃO use quando:
+## `spawn_agents` — batch paralelo (PREFERIDO para 2+ investigações)
+Cria MÚLTIPLOS subagentes que rodam SIMULTANEAMENTE. Cada um tem seu próprio context window; os tool_results intermediários NUNCA entram no seu histórico. Só os resumos combinados voltam.
 
+**IMPORTANTE: Prefira `spawn_agents` sobre fazer reads/greps diretamente.** Operações de read/grep no seu contexto principal crescem exponencialmente e estourar o max_turns. Delegue para subagentes sempre que possível.
+
+### Quando usar `spawn_agents`:
+- Você precisa investigar 2+ tópicos independentes (arquivos diferentes, áreas diferentes).
+- A pergunta do usuário se decompõe em sub-perguntas paralelas.
+- Você está prestes a fazer 4+ chamadas exploratórias cujo output intermediário não precisa.
+- **Sempre que a task requer exploração ampla antes de agir.**
+
+### Quando NÃO usar subagentes:
 - A pergunta cabe em 1-2 chamadas MCP diretas (use as ferramentas você mesmo).
-- A task envolve edição de código ou execução de comandos (subagente é só read-only).
-- Você precisa do conteúdo bruto dos arquivos no histórico para editar depois.
+- A task envolve edição de código ou execução de comandos (subagentes são read-only).
+- Você precisa do conteúdo bruto dos arquivos no seu histórico para editar depois.
 
-O custo em tokens do subagente **É contado** na sua sessão (input + output somam no totalizador). Não é "grátis"; é um trade-off de **footprint de contexto**, não de billing.
+### Exemplo:
+Usuário pergunta "Como funciona a auth e qual o schema do banco?"
+```json
+spawn_agents({
+  "agents": [
+    { "task": "Find all authentication-related files, middleware, and session handling. Report file paths and key function signatures.", "label": "Auth implementation" },
+    { "task": "Find the database schema: migration files, model definitions, and entity relationships.", "label": "DB schema" }
+  ]
+})
+```
+
+O custo em tokens de TODOS os subagentes **É contado** na sua sessão. É um trade-off de footprint de contexto, não de billing.
 
 # Long-term memory
 When you make an important architectural decision or identify a reusable pattern, save it via `mcp__add_snapshot` (`category: decision | pattern | architecture | convention | todo | note`). Future sessions will see it.

@@ -171,7 +171,15 @@ const query_snapshots = defineTool({
     // user's phrasing doesn't contain the snapshot's keywords.
     const raw = await hybridSearch.searchSnapshotsHybrid(project.id, project.name, query, limit);
     if (raw.length === 0) {
-      return asJson ? JSON.stringify({ query, total: 0, results: [] }) : 'No matching snapshots.';
+      // Distinguish "project has no snapshots" from "query didn't match any".
+      const countFn = (db as unknown as Record<string, unknown>).countSnapshots as ((id: number) => number) | undefined;
+      const total = countFn?.(project.id) ?? -1;
+      const detail = total === 0
+        ? 'This project has no snapshots yet. Use add_snapshot to create one, or index the project first.'
+        : total > 0
+          ? `No snapshots matched "${query}" (${total} snapshots exist). Try broader terms.`
+          : 'No matching snapshots.';
+      return asJson ? JSON.stringify({ query, total: 0, results: [], detail }) : detail;
     }
     const results = snapshotService.annotateStaleMany(project.id, raw);
     if (asJson) {

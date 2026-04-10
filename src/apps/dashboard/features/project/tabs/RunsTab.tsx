@@ -70,6 +70,7 @@ interface EmbeddingCoverage {
   files_embedded: number;
   symbols_total: number;
   symbols_embedded: number;
+  symbol_bodies_total: number;
   symbol_bodies_embedded: number;
 }
 
@@ -709,8 +710,8 @@ export function RunsTab({ projectId }: RunsTabProps) {
                 </div>
               </div>
               {(() => {
-                const total = coverage.files_total + coverage.symbols_total;
-                const done = coverage.files_embedded + coverage.symbols_embedded;
+                const total = coverage.files_total + coverage.symbols_total + coverage.symbol_bodies_total;
+                const done = coverage.files_embedded + coverage.symbols_embedded + coverage.symbol_bodies_embedded;
                 const pct = total > 0 ? Math.round((done / total) * 100) : 100;
                 return (
                   <Badge variant={pct >= 100 ? 'success' : pct > 0 ? 'warning' : 'destructive'}>
@@ -721,7 +722,7 @@ export function RunsTab({ projectId }: RunsTabProps) {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 text-sm">
+            <div className="grid grid-cols-3 gap-3 text-sm">
               <div className="rounded-lg border bg-card px-3 py-2">
                 <span className="text-muted-foreground text-xs">Files</span>
                 <div className="font-medium tabular-nums">
@@ -732,11 +733,12 @@ export function RunsTab({ projectId }: RunsTabProps) {
                 <span className="text-muted-foreground text-xs">Symbols</span>
                 <div className="font-medium tabular-nums">
                   {coverage.symbols_embedded}/{coverage.symbols_total}
-                  {coverage.symbol_bodies_embedded > 0 && (
-                    <span className="text-muted-foreground text-xs ml-1">
-                      (+{coverage.symbol_bodies_embedded} bodies)
-                    </span>
-                  )}
+                </div>
+              </div>
+              <div className="rounded-lg border bg-card px-3 py-2">
+                <span className="text-muted-foreground text-xs">Bodies</span>
+                <div className="font-medium tabular-nums">
+                  {coverage.symbol_bodies_embedded}/{coverage.symbol_bodies_total}
                 </div>
               </div>
             </div>

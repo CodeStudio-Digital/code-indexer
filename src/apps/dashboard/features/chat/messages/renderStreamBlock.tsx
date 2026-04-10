@@ -3,6 +3,7 @@ import { PlanPromptView } from '../prompts/PlanPromptView.js';
 import { QuestionPromptView } from '../prompts/QuestionPromptView.js';
 import { TaskListReview } from '../prompts/TaskListReview.js';
 import type { PromptHandlers } from '../types.js';
+import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { Markdown } from './Markdown.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
 
@@ -28,6 +29,9 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
         onResponse={handlers.onTasksResponse}
       />
     );
+  }
+  if (block.type === 'agents') {
+    return <AgentsGroupBlock key={`ag-${block.group.groupId}`} group={block.group} />;
   }
   return (
     <QuestionPromptView key={`qq-${block.question.id}`} question={block.question} onAnswer={handlers.onAnswer} />

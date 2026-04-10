@@ -100,7 +100,7 @@ const search_concepts = defineTool({
 
 const search_by_kind = defineTool({
   name: 'search_by_kind',
-  description: 'Search symbols by kind (function, class, interface, etc.)',
+  description: 'Search symbols by kind. Common kinds: function, class, interface, type, enum, method, property, variable, constant.',
   inputSchema: {
     type: 'object',
     properties: { project_name: { type: 'string' }, kind: { type: 'string' }, limit: { type: 'number' } },
@@ -108,14 +108,18 @@ const search_by_kind = defineTool({
   },
   handler: (args, { db }) => {
     const project = resolveProject(db, args.project_name as string);
-    const symbols = db.listSymbolsByKind(project.id, args.kind as string, (args.limit as number) ?? 50);
-    return symbols.map(s => `${s.kind} ${s.name} — ${s.file_path}:${s.line ?? '?'} | ${s.signature}`).join('\n') || 'No symbols found.';
+    const kind = args.kind as string;
+    const symbols = db.listSymbolsByKind(project.id, kind, (args.limit as number) ?? 50);
+    if (symbols.length === 0) {
+      return `No symbols found with kind "${kind}". Common kinds: function, class, interface, type, enum, method, property, variable, constant.`;
+    }
+    return symbols.map(s => `${s.kind} ${s.name} — ${s.file_path}:${s.line ?? '?'} | ${s.signature}`).join('\n');
   },
 });
 
 const grep_code = defineTool({
   name: 'grep_code',
-  description: 'Textual search across project files with semantic filters (language/layer/glob). Compact output.',
+  description: 'Textual search across project files with filters (language/layer/glob). Results capped at max_results (default 50). Use literal=true for exact string matching.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -133,7 +137,7 @@ const grep_code = defineTool({
   handler: (args, { db }) => {
     const project = resolveProject(db, args.project_name as string);
     const pattern = args.pattern as string;
-    const literal = args.literal === true;
+    let literal = args.literal === true;
     const ci = !args.case_sensitive;
     const lang = args.language as string | undefined;
     const layer = args.layer as string | undefined;
@@ -144,10 +148,20 @@ const grep_code = defineTool({
     if (glob) files = files.filter(f => minimatch(f.path, glob));
     const escaped = literal ? pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : pattern;
     let re: RegExp;
-    try { re = new RegExp(escaped, ci ? 'i' : ''); } catch (e) { return `Invalid regex: ${(e as Error).message}`; }
+    let fallbackNote = '';
+    try {
+      re = new RegExp(escaped, ci ? 'i' : '');
+    } catch {
+      // Invalid regex — fall back to literal match instead of blocking the agent.
+      re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), ci ? 'i' : '');
+      literal = true;
+      fallbackNote = `[note: pattern was not valid regex, searched as literal string]\n`;
+    }
     const hits = grepInFiles(project.root_path, files.map(f => f.path), re, maxResults);
-    if (hits.length === 0) return 'No matches.';
-    return hits.map(h => `${h.file}:${h.line}: ${h.text}`).join('\n');
+    if (hits.length === 0) return fallbackNote + 'No matches.';
+    const results = hits.map(h => `${h.file}:${h.line}: ${h.text}`).join('\n');
+    const capNote = hits.length >= maxResults ? `\n... [capped at ${maxResults} results]` : '';
+    return fallbackNote + results + capNote;
   },
 });
 

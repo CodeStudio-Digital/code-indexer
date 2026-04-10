@@ -65,6 +65,21 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
     runner.on('provider_swapped', (provider, model) => {
       publish(bus, 'provider_swapped', { provider, model });
     });
+    runner.on('agents_group_start', (payload) => {
+      publish(bus, 'agents_group_start', payload);
+    });
+    runner.on('agent_progress', (payload) => {
+      publish(bus, 'agent_progress', payload);
+    });
+    runner.on('agents_group_end', (payload) => {
+      publish(bus, 'agents_group_end', payload);
+    });
+    runner.on('auto_continue', (count, max) => {
+      publish(bus, 'auto_continue', { count, max });
+    });
+    runner.on('context_status', (payload) => {
+      publish(bus, 'context_status', payload);
+    });
     runner.on('done', (reason, error) => {
       if (error) {
         // Surface provider/runner errors to the server log. The dashboard SSE

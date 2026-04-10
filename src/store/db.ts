@@ -1246,6 +1246,7 @@ export class CodeIndexDB {
     files_embedded: number;
     symbols_total: number;
     symbols_embedded: number;
+    symbol_bodies_total: number;
     symbol_bodies_embedded: number;
   } {
     const files = this.db
@@ -1255,14 +1256,17 @@ export class CodeIndexDB {
       .get(projectId) as { total: number; embedded: number };
     const symbols = this.db
       .prepare(
-        'SELECT COUNT(*) AS total, COUNT(embedding_hash) AS embedded, COUNT(body_embedding_hash) AS bodies FROM symbols WHERE project_id = ?'
+        `SELECT COUNT(*) AS total, COUNT(embedding_hash) AS embedded, COUNT(body_embedding_hash) AS bodies,
+                SUM(CASE WHEN kind IN ('class','function','interface','method') AND line IS NOT NULL THEN 1 ELSE 0 END) AS bodies_eligible
+         FROM symbols WHERE project_id = ?`
       )
-      .get(projectId) as { total: number; embedded: number; bodies: number };
+      .get(projectId) as { total: number; embedded: number; bodies: number; bodies_eligible: number };
     return {
       files_total: files.total,
       files_embedded: files.embedded,
       symbols_total: symbols.total,
       symbols_embedded: symbols.embedded,
+      symbol_bodies_total: symbols.bodies_eligible,
       symbol_bodies_embedded: symbols.bodies,
     };
   }

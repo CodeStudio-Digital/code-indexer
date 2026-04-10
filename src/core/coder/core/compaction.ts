@@ -45,15 +45,15 @@ import type { AgentMessage, ContentBlock } from './messages.js';
  * opencode's PRUNE_MINIMUM — small enough that normal sessions never trigger
  * compaction, large enough to avoid thrashing on short exploratory runs.
  */
-export const PRUNE_MINIMUM = Number(process.env.CODER_PRUNE_MINIMUM ?? 20_000);
+export const PRUNE_MINIMUM = Number(process.env.CODER_PRUNE_MINIMUM ?? 60_000);
 
 /**
  * How many chars of the most-recent history are guaranteed to survive
  * compaction verbatim. Older tool_result blocks are pruned until the
- * remaining protected region fits inside this budget. Default 40k matches
- * opencode.
+ * remaining protected region fits inside this budget. Default 80k — keeps
+ * ~20 turns of full context visible to the model before pruning starts.
  */
-export const PRUNE_PROTECT = Number(process.env.CODER_PRUNE_PROTECT ?? 40_000);
+export const PRUNE_PROTECT = Number(process.env.CODER_PRUNE_PROTECT ?? 80_000);
 
 /**
  * Content marker written in place of a pruned tool_result. Deterministic:

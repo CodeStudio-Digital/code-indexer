@@ -1,6 +1,6 @@
 import React from 'react';
 import { Bot, GitBranch, Paperclip, User } from 'lucide-react';
-import type { ToolCallEvent } from '../../../hooks/useAgentStream.js';
+import type { AgentsGroup, ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Avatar, AvatarFallback } from '../../../components/ui/avatar.js';
 import { cn } from '../../../lib/utils.js';
 import { providerAccent } from '../constants.js';
@@ -14,6 +14,7 @@ import type {
   PersistedTasksState,
   PromptHandlers,
 } from '../types.js';
+import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { CopyMarkdownButton } from './CopyMarkdownButton.js';
 import { Markdown } from './Markdown.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
@@ -101,7 +102,7 @@ function MessageViewInner({
           <Bot className="h-4 w-4" />
         </AvatarFallback>
       </Avatar>
-      <div className="flex-1 min-w-0 max-w-[85%]">
+      <div className="flex-1 min-w-0 max-w-[100%]">
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
           <span>assistant{tokenBadge}</span>
           {assistantMarkdown && <CopyMarkdownButton text={assistantMarkdown} />}
@@ -129,8 +130,8 @@ function UserMessage({
   const images = message.content.filter((b) => b.type === 'image');
   const docs = message.content.filter((b) => b.type === 'document');
   return (
-    <div className="flex gap-3 items-start justify-end group/user">
-      <div className="flex-1 min-w-0 max-w-[85%] flex flex-col items-end">
+    <div className="flex gap-3 items-start justify-end group/user group/msg">
+      <div className="flex-1 min-w-0 max-w-[100%] flex flex-col items-end">
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
           {onFork && (
             <button
@@ -143,10 +144,15 @@ function UserMessage({
               Fork from here
             </button>
           )}
+          {text && <CopyMarkdownButton text={text} />}
           <span>you{tokenBadge}</span>
         </div>
-        <div className="rounded-2xl rounded-tr-sm bg-primary text-primary-foreground px-4 py-2.5 shadow-sm max-h-[60vh] max-w-[100%] overflow-y-auto">
-          {text && <div className="text-sm whitespace-pre-wrap break-words">{text}</div>}
+        <div className="rounded-2xl rounded-tr-sm bg-gray-50 dark:bg-gray-900 border border-primary/40 text-foreground px-4 py-2.5 shadow-sm max-h-[60vh] max-w-[100%] overflow-y-auto">
+          {text && (
+            <div className="text-sm">
+              <Markdown text={text} />
+            </div>
+          )}
           {images.length > 0 && (
             <div className="flex flex-wrap gap-2 mt-2">
               {images.map((img, i) => (
@@ -290,6 +296,14 @@ export function renderAssistantBlock(
     );
   }
 
+  // spawn_agents: render the rich parallel-agents group instead of raw JSON.
+  if (b.name === 'spawn_agents') {
+    const group = parsePersistedAgentsGroup(b.input, result);
+    if (group) {
+      return <AgentsGroupBlock key={`ag-${b.id}-${i}`} group={group} />;
+    }
+  }
+
   const tc: ToolCallEvent = {
     id: b.id ?? '',
     name: b.name ?? '',
@@ -298,4 +312,70 @@ export function renderAssistantBlock(
     status: result ? (result.isError ? 'error' : 'done') : 'running',
   };
   return <ToolCallBlock key={`tu-${b.id}-${i}`} call={tc} />;
+}
+
+/**
+ * Reconstruct an AgentsGroup from the persisted tool_use input + tool_result
+ * so the rich AgentsGroupBlock renders instead of raw JSON on session reload.
+ */
+function parsePersistedAgentsGroup(
+  input: Record<string, unknown> | undefined,
+  result: { content: string; isError: boolean } | undefined,
+): AgentsGroup | null {
+  const agents = (input as { agents?: unknown[] })?.agents;
+  if (!Array.isArray(agents) || agents.length === 0) return null;
+
+  // Parse per-agent results from the combined result text.
+  // Format: "### Agent N: <label>\n[reason=... tools=N input=N output=N]\n<summary>"
+  const agentResults = new Map<number, { reason: string; tools: number; input: number; output: number; summary: string }>();
+  if (result?.content) {
+    const sections = result.content.split(/^---$/m);
+    for (const section of sections) {
+      const headerMatch = section.match(/###\s+Agent\s+(\d+):\s+(.+)/);
+      if (!headerMatch) continue;
+      const idx = parseInt(headerMatch[1], 10) - 1;
+      const metaMatch = section.match(/\[reason=(\w+)\s+tools=(\d+)\s+input=(\d+)\s+output=(\d+)\]/);
+      const summaryStart = section.indexOf('\n', section.indexOf(']') + 1);
+      const summary = summaryStart >= 0 ? section.slice(summaryStart).trim() : '';
+      agentResults.set(idx, {
+        reason: metaMatch?.[1] ?? 'unknown',
+        tools: parseInt(metaMatch?.[2] ?? '0', 10),
+        input: parseInt(metaMatch?.[3] ?? '0', 10),
+        output: parseInt(metaMatch?.[4] ?? '0', 10),
+        summary,
+      });
+    }
+  }
+
+  const isCompleted = !!result;
+
+  return {
+    groupId: `persisted-${Date.now()}`,
+    status: isCompleted ? 'completed' : 'running',
+    totalUsage: isCompleted
+      ? {
+          input_tokens: Array.from(agentResults.values()).reduce((s, r) => s + r.input, 0),
+          output_tokens: Array.from(agentResults.values()).reduce((s, r) => s + r.output, 0),
+        }
+      : undefined,
+    agents: agents.map((a, i) => {
+      const raw = a as { label?: string; task?: string };
+      const parsed = agentResults.get(i);
+      return {
+        index: i,
+        label: String(raw.label ?? `Agent ${i + 1}`),
+        status: parsed
+          ? parsed.reason === 'error'
+            ? ('error' as const)
+            : ('completed' as const)
+          : isCompleted
+            ? ('completed' as const)
+            : ('pending' as const),
+        toolCallCount: parsed?.tools ?? 0,
+        usage: parsed ? { input_tokens: parsed.input, output_tokens: parsed.output } : undefined,
+        summary: parsed?.summary || undefined,
+        error: parsed?.reason === 'error' ? parsed.summary : undefined,
+      };
+    }),
+  };
 }

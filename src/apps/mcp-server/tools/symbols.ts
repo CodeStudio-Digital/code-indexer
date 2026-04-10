@@ -470,7 +470,7 @@ const semantic_neighbors = defineTool({
     if (!sym) throw new Error(`Symbol with id ${args.symbol_id} not found. Use search or get_file_skeleton to find valid symbol IDs. Do not retry with the same symbol_id.`);
 
     if (!vectorStore || (embeddingService as { constructor: { name: string } }).constructor.name === 'NullEmbeddingService') {
-      return 'Vector search not configured. Run get_project_pulse to confirm vector coverage.';
+      return `[unavailable] Vector search is not configured for this project. Use grep_code or find_references instead for ${sym.kind} \`${sym.name}\`.`;
     }
 
     const project = db.getProject(sym.project_id);

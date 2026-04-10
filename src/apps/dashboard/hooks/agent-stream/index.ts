@@ -1,7 +1,11 @@
 export { useAgentStream } from './useAgentStream.js';
 export type {
   AgentAttachment,
+  AgentsGroup,
+  AgentStatus,
   AssistantTurn,
+  ContextStatus,
+  ParallelAgent,
   PlanPrompt,
   QuestionPrompt,
   RunDelta,

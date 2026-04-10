@@ -93,9 +93,18 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
     // Step 2: search vector store
     if (vector.length > 0 && !(vectorStore instanceof NullVectorStore)) {
       try {
+        // Step 2a: unfiltered search (diagnostic — detects missing metadata indexes)
+        const unfilteredRaw = await vectorStore.search(vector, { topK: 3 });
+        steps.push({
+          step: 'search_unfiltered',
+          ok: unfilteredRaw.length > 0,
+          detail: `unfiltered matches: ${unfilteredRaw.length}`,
+        });
+
+        // Step 2b: filtered search
         const filter: Record<string, string> = { project_name: project.name };
         const raw = await vectorStore.search(vector, { topK: 10, filter });
-        steps.push({ step: 'search', ok: true, detail: `raw matches: ${raw.length}` });
+        steps.push({ step: 'search', ok: raw.length > 0, detail: `raw matches: ${raw.length}` });
 
         // Step 3: rehydrate
         let found = 0;

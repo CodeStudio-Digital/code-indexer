@@ -1,4 +1,6 @@
 import type {
+  AgentStatus,
+  AgentsGroup,
   StreamBlock,
   StreamTask,
   StreamTaskMode,
@@ -99,6 +101,90 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
 
     task_started: (data, eventName) => patchTask(blocks, flush, data, eventName),
     task_finished: (data, eventName) => patchTask(blocks, flush, data, eventName),
+
+    agents_group_start: (data) => {
+      const d = data as { groupId: string; agents: Array<{ index: number; label: string }> };
+      const group: AgentsGroup = {
+        groupId: d.groupId,
+        status: 'running',
+        agents: d.agents.map((a) => ({
+          index: a.index,
+          label: a.label,
+          status: 'pending' as AgentStatus,
+          toolCallCount: 0,
+        })),
+      };
+      blocks.push({ type: 'agents', group });
+      flush();
+    },
+
+    agent_progress: (data) => {
+      const d = data as {
+        groupId: string;
+        agentIndex: number;
+        label: string;
+        event: 'spawned' | 'tool_call' | 'completed' | 'error';
+        toolCallCount?: number;
+        usage?: Usage;
+        summary?: string;
+        error?: string;
+      };
+      for (const b of blocks) {
+        if (b.type !== 'agents' || b.group.groupId !== d.groupId) continue;
+        const agent = b.group.agents[d.agentIndex];
+        if (!agent) continue;
+        switch (d.event) {
+          case 'spawned':
+            agent.status = 'running';
+            break;
+          case 'tool_call':
+            agent.toolCallCount = d.toolCallCount ?? agent.toolCallCount + 1;
+            break;
+          case 'completed':
+            agent.status = 'completed';
+            agent.usage = d.usage;
+            agent.summary = d.summary;
+            break;
+          case 'error':
+            agent.status = 'error';
+            agent.error = d.error;
+            break;
+        }
+        break;
+      }
+      flush();
+    },
+
+    agents_group_end: (data) => {
+      const d = data as { groupId: string; totalUsage?: Usage };
+      for (const b of blocks) {
+        if (b.type !== 'agents' || b.group.groupId !== d.groupId) continue;
+        b.group.status = 'completed';
+        b.group.totalUsage = d.totalUsage;
+        break;
+      }
+      flush();
+    },
+
+    auto_continue: (data) => {
+      const d = data as { count: number; max: number };
+      blocks.push({
+        type: 'text',
+        text: `\n---\n**Context compacted. Auto-continuing... (${d.count}/${d.max})**\n---\n`,
+      });
+      flush();
+    },
+
+    context_status: (data) => {
+      const d = data as {
+        history_chars: number;
+        turn: number;
+        max_turns: number;
+        auto_continue_count: number;
+        auto_continue_max: number;
+      };
+      updateSession(sid, { contextStatus: d });
+    },
 
     todos_updated: (data) => {
       const d = data as { todos?: TodoItem[] };

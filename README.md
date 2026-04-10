@@ -683,6 +683,15 @@ worker/            # Cloudflare Worker (embeddings + vectorize)
 | `symbols_fts` | FTS5 para busca em symbols |
 | `snapshots_fts` | FTS5 para busca em snapshots |
 
+### Workers
+```bash 
+cd worker
+npx wrangler vectorize create-metadata-index code-index --property-name=project_name --type=string
+npx wrangler vectorize create-metadata-index code-index --property-name=type --type=string
+```
+
+
+
 ## Licenca
 
 MIT

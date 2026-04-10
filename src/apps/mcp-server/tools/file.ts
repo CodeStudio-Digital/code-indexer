@@ -160,7 +160,7 @@ const get_file_skeleton = defineTool({
 
 const read_file = defineTool({
   name: 'read_file',
-  description: 'Read a file slice. Default 100 lines max. Files up to 400L can be read without range; >400L requires start/end_line or force=true.',
+  description: 'Read a file slice. Default 100 lines; use start_line/end_line for ranges, max_lines to adjust window, or force=true for the whole file.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -182,15 +182,17 @@ const read_file = defineTool({
     const endLine = args.end_line as number | undefined;
     const maxLines = (args.max_lines as number) ?? 100;
     const force = args.force === true;
-    if (!startLine && !force && file.line_count > 400) {
-      return `File has ${file.line_count} lines (>400). Specify start_line/end_line, set force=true, or use get_file_skeleton / get_symbol_body.`;
-    }
     const start = startLine ?? 1;
     const defaultEnd = force ? file.line_count : Math.min(file.line_count, start + maxLines - 1);
     const end = endLine ?? defaultEnd;
     try {
       const slice = readFileSlice(join(project.root_path, filePath), start, end);
-      return slice.lines.map((l, i) => `${start + i}\t${l}`).join('\n');
+      const numbered = slice.lines.map((l, i) => `${start + i}\t${l}`).join('\n');
+      const remaining = file.line_count - end;
+      const footer = remaining > 0
+        ? `\n... [${remaining} more lines — use start_line/end_line to continue, or force=true for the full file]`
+        : '';
+      return numbered + footer;
     } catch (e) {
       return `Failed: ${(e as Error).message}`;
     }

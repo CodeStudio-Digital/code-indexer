@@ -12,6 +12,7 @@ interface EmbeddingStats {
     files_embedded: number;
     symbols_total: number;
     symbols_embedded: number;
+    symbol_bodies_total: number;
     symbol_bodies_embedded: number;
   };
   vectorIds: {
@@ -154,9 +155,7 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
             <div className="space-y-2">
               <CoverageStat label="Files" value={stats.coverage.files_embedded} total={stats.coverage.files_total} />
               <CoverageStat label="Symbols" value={stats.coverage.symbols_embedded} total={stats.coverage.symbols_total} />
-              <div className="text-xs text-muted-foreground">
-                Symbol bodies: {stats.coverage.symbol_bodies_embedded}
-              </div>
+              <CoverageStat label="Symbol Bodies" value={stats.coverage.symbol_bodies_embedded} total={stats.coverage.symbol_bodies_total} />
             </div>
 
             {/* Vector IDs by type */}
@@ -240,6 +239,17 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
               )}
               {testResult.matches.length === 0 && testResult.steps.length > 0 && (
                 <div className="text-xs text-muted-foreground">No matches returned from vector store.</div>
+              )}
+              {/* Warn when unfiltered finds matches but filtered doesn't — metadata index missing */}
+              {testResult.steps.find(s => s.step === 'search_unfiltered')?.ok &&
+               !testResult.steps.find(s => s.step === 'search')?.ok && (
+                <div className="flex items-start gap-2 p-2 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs">
+                  <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    Vectors exist but metadata filter returned 0 results. This usually means Vectorize metadata indexes
+                    are missing. Run: <code className="bg-muted px-1 rounded">wrangler vectorize create-metadata-index &lt;index&gt; --propertyName=project_name --type=string</code> then re-index.
+                  </span>
+                </div>
               )}
             </div>
           )}

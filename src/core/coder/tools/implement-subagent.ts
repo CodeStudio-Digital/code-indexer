@@ -259,9 +259,9 @@ export async function runImplementSubagent(parent: SubagentParent, task: CoderTa
     allowlist: IMPLEMENT_ALLOWLIST,
     initialMessages,
     // Implement subagents need more turns than explore — they read, edit,
-    // verify, and report. 20 is the practical ceiling before token cost
-    // outweighs the savings vs inline.
-    maxTurns: 20,
+    // verify, and report. 40 gives realistic margin for non-trivial tasks.
+    // Override via CODER_IMPLEMENT_MAX_TURNS.
+    maxTurns: Number(process.env.CODER_IMPLEMENT_MAX_TURNS ?? 40),
     pathScope: task.files,
   });
 
@@ -361,6 +361,188 @@ function wrapToolForPathScope(tool: CoderTool, pathScope: string[], violations: 
       return tool.handler(args, ctx);
     },
   };
+}
+
+// ─── parallel agents ──────────────────────────────────────────
+
+const PARALLEL_AGENT_MAX = Number(process.env.CODER_PARALLEL_AGENT_MAX ?? 5);
+
+export interface ParallelAgentSpec {
+  task: string;
+  label: string;
+  maxTurns: number;
+}
+
+export interface ParallelAgentProgress {
+  agentIndex: number;
+  label: string;
+  event: 'spawned' | 'tool_call' | 'completed' | 'error';
+  toolCallCount?: number;
+  usage?: ChatUsage;
+  summary?: string;
+  error?: string;
+}
+
+export type ParallelAgentResult = SubagentRunResult & { label: string; toolCallCount: number };
+
+/**
+ * Run N subagents in parallel with a concurrency limiter. Each agent gets its
+ * own isolated CoderRunner and message history. Progress events are emitted
+ * via `onProgress` so the UI can show real-time updates.
+ */
+export async function runParallelAgents(
+  parent: SubagentParent,
+  agents: ParallelAgentSpec[],
+  systemPrompt: string,
+  allowlist: Set<string>,
+  onProgress: (p: ParallelAgentProgress) => void,
+  concurrency?: number,
+): Promise<{ results: ParallelAgentResult[]; totalUsage: ChatUsage }> {
+  const limit = Math.min(agents.length, concurrency ?? PARALLEL_AGENT_MAX);
+  const results: ParallelAgentResult[] = new Array(agents.length);
+
+  const tasks = agents.map((spec, agentIndex) => async () => {
+    onProgress({ agentIndex, label: spec.label, event: 'spawned' });
+
+    let toolCallCount = 0;
+
+    // Build isolated registry.
+    const subRegistry = new ToolRegistry();
+    for (const tool of parent.tools) {
+      if (!allowlist.has(tool.name)) continue;
+      subRegistry.register(tool);
+    }
+
+    const subContext: ToolContext = {
+      cwd: parent.ctx.cwd,
+      projectName: parent.ctx.projectName,
+      overlay: parent.ctx.overlay,
+      signal: parent.ctx.signal,
+      planMode: false,
+    };
+
+    const subRunner = new CoderRunner({
+      provider: parent.provider,
+      registry: subRegistry,
+      systemPrompt,
+      toolContext: subContext,
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
+      maxTurns: spec.maxTurns,
+      pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
+    });
+
+    // Track tool calls for progress reporting.
+    subRunner.on('tool_call_result', () => {
+      toolCallCount++;
+      onProgress({ agentIndex, label: spec.label, event: 'tool_call', toolCallCount });
+    });
+
+    if (parent.ctx.signal) {
+      parent.ctx.signal.addEventListener('abort', () => subRunner.abort(), { once: true });
+    }
+
+    try {
+      const runResult = await subRunner.run();
+      const finalText = extractLastAssistantText(subRunner.messages);
+      const agentResult: ParallelAgentResult = {
+        reason: runResult.reason,
+        finalText,
+        usage: runResult.totalUsage,
+        sandboxViolations: [],
+        label: spec.label,
+        toolCallCount,
+      };
+      onProgress({
+        agentIndex,
+        label: spec.label,
+        event: 'completed',
+        toolCallCount,
+        usage: runResult.totalUsage,
+        summary: finalText.slice(0, 500),
+      });
+      return agentResult;
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      const agentResult: ParallelAgentResult = {
+        reason: 'error',
+        finalText: errMsg,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        sandboxViolations: [],
+        label: spec.label,
+        toolCallCount,
+      };
+      onProgress({ agentIndex, label: spec.label, event: 'error', error: errMsg });
+      return agentResult;
+    }
+  });
+
+  // Run with concurrency limit.
+  const settled = await withConcurrencyLimit(tasks, limit);
+
+  let totalInput = 0;
+  let totalOutput = 0;
+  let totalCacheRead = 0;
+  let totalCacheCreation = 0;
+
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i];
+    if (s.status === 'fulfilled') {
+      results[i] = s.value;
+      totalInput += s.value.usage.input_tokens;
+      totalOutput += s.value.usage.output_tokens;
+      totalCacheRead += s.value.usage.cache_read_input_tokens ?? 0;
+      totalCacheCreation += s.value.usage.cache_creation_input_tokens ?? 0;
+    } else {
+      // Should not happen — errors are caught inside the task.
+      const errMsg = s.reason instanceof Error ? s.reason.message : String(s.reason);
+      results[i] = {
+        reason: 'error',
+        finalText: errMsg,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        sandboxViolations: [],
+        label: agents[i].label,
+        toolCallCount: 0,
+      };
+    }
+  }
+
+  return {
+    results,
+    totalUsage: {
+      input_tokens: totalInput,
+      output_tokens: totalOutput,
+      cache_read_input_tokens: totalCacheRead,
+      cache_creation_input_tokens: totalCacheCreation,
+    },
+  };
+}
+
+/**
+ * Execute async tasks with a concurrency limit. Uses a simple worker-pool
+ * pattern — no external dependencies.
+ */
+async function withConcurrencyLimit<T>(
+  tasks: Array<() => Promise<T>>,
+  limit: number,
+): Promise<PromiseSettledResult<T>[]> {
+  const results: PromiseSettledResult<T>[] = new Array(tasks.length);
+  let nextIndex = 0;
+
+  async function runNext(): Promise<void> {
+    while (nextIndex < tasks.length) {
+      const i = nextIndex++;
+      try {
+        const value = await tasks[i]();
+        results[i] = { status: 'fulfilled', value };
+      } catch (reason) {
+        results[i] = { status: 'rejected', reason };
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => runNext());
+  await Promise.all(workers);
+  return results;
 }
 
 // ─── shared helpers ────────────────────────────────────────────

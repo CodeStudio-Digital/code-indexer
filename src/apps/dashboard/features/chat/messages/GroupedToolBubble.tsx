@@ -82,7 +82,7 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
           <Bot className="h-4 w-4" />
         </AvatarFallback>
       </Avatar>
-      <div className="flex-1 min-w-0 max-w-[85%]">
+      <div className="flex-1 min-w-0 max-w-[100%]">
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
           <span>
             assistant

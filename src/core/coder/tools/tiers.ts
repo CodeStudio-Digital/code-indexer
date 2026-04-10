@@ -93,6 +93,7 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'git_diff',
   'git_log',
   'spawn_subagent',
+  'spawn_agents',
   'execute_task',
   'task_complete',
   // MCP — deep navigation + edit prep

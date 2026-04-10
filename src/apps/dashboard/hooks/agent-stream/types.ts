@@ -62,12 +62,36 @@ export interface AgentAttachment {
   text?: string;
 }
 
+// ─── Parallel agents ──────────────────────────────────────────
+
+export type AgentStatus = 'pending' | 'running' | 'completed' | 'error';
+
+export interface ParallelAgent {
+  index: number;
+  label: string;
+  status: AgentStatus;
+  toolCallCount: number;
+  usage?: Usage;
+  summary?: string;
+  error?: string;
+}
+
+export interface AgentsGroup {
+  groupId: string;
+  agents: ParallelAgent[];
+  totalUsage?: Usage;
+  status: 'running' | 'completed';
+}
+
+// ─── Stream blocks ────────────────────────────────────────────
+
 export type StreamBlock =
   | { type: 'text'; text: string }
   | { type: 'tool'; call: ToolCallEvent }
   | { type: 'plan'; plan: PlanPrompt }
   | { type: 'question'; question: QuestionPrompt }
-  | { type: 'tasks'; tasks: TasksPrompt };
+  | { type: 'tasks'; tasks: TasksPrompt }
+  | { type: 'agents'; group: AgentsGroup };
 
 export interface AssistantTurn {
   /** Blocks in arrival order — text and tool_use intercalados como o modelo emitiu. */
@@ -99,6 +123,15 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
+/** Live context metrics emitted per-turn so the dashboard can show progress. */
+export interface ContextStatus {
+  history_chars: number;
+  turn: number;
+  max_turns: number;
+  auto_continue_count: number;
+  auto_continue_max: number;
+}
+
 export interface SessionState {
   streaming: boolean;
   currentTurn: AssistantTurn | null;
@@ -113,6 +146,8 @@ export interface SessionState {
   reattached: boolean;
   /** Lightweight checklist from the `todo_write` tool. Replaced whole on each SSE event. */
   todos: TodoItem[];
+  /** Per-turn context metrics for progress indicator. */
+  contextStatus: ContextStatus | null;
 }
 
 export const ZERO_DELTA: RunDelta = {
@@ -132,6 +167,7 @@ export const EMPTY_STATE: SessionState = {
   lastSeenSeq: -1,
   reattached: false,
   todos: [],
+  contextStatus: null,
 };
 
 export type SessionPatch =

@@ -33,7 +33,10 @@ export interface CompactionSummary {
 }
 
 export function isSummarizerEnabled(): boolean {
-  return process.env.CODER_SUMMARIZER_ENABLE === '1';
+  // Default ON (opt-out via CODER_SUMMARIZER_ENABLE=0). The summarizer uses
+  // a cheap model and preserves semantic context far better than the
+  // deterministic `[compacted: N]` markers.
+  return process.env.CODER_SUMMARIZER_ENABLE !== '0';
 }
 
 // ---------------------------------------------------------------------------

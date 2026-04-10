@@ -85,6 +85,14 @@ const TURN_BUDGET_CHARS = Number(process.env.CODER_TURN_BUDGET_CHARS ?? 30_000);
  * (or any N<2) to disable. Default 3 matches opencode's processor.ts.
  */
 const DOOM_LOOP_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_THRESHOLD ?? 3);
+/**
+ * Auto-continue: when the runner exhausts maxTurns, instead of dying it
+ * compacts the history (summarizer → deterministic fallback) and resets the
+ * turn counter. This mirrors Claude Code's behaviour where the agent never
+ * stops due to turn limits alone — only due to lack of work or explicit abort.
+ * Set to 0 to disable (legacy hard-stop at maxTurns).
+ */
+const MAX_AUTO_CONTINUES = Number(process.env.CODER_MAX_AUTO_CONTINUES ?? 3);
 
 /**
  * Deterministic signature of a turn's tool calls. Two turns with the same
@@ -262,6 +270,39 @@ export interface RunnerEvents {
   worktree_entered: (payload: { path: string; originalCwd: string }) => void;
   /** Emitted when `exit_worktree` restores the session cwd to the project root. */
   worktree_exited: (payload: { path: string }) => void;
+  /** Emitted when spawn_agents starts a parallel agent group. */
+  agents_group_start: (payload: {
+    groupId: string;
+    agents: Array<{ index: number; label: string }>;
+  }) => void;
+  /** Emitted for per-agent progress within a parallel group. */
+  agent_progress: (payload: {
+    groupId: string;
+    agentIndex: number;
+    label: string;
+    event: 'spawned' | 'tool_call' | 'completed' | 'error';
+    toolCallCount?: number;
+    usage?: ChatUsage;
+    summary?: string;
+    error?: string;
+  }) => void;
+  /** Emitted when all agents in a parallel group have finished. */
+  agents_group_end: (payload: {
+    groupId: string;
+    totalUsage: ChatUsage;
+    agentCount: number;
+    successCount: number;
+  }) => void;
+  /** Emitted when the runner auto-continues after hitting maxTurns. */
+  auto_continue: (count: number, max: number) => void;
+  /** Emitted per-turn with context size metrics for the dashboard. */
+  context_status: (payload: {
+    history_chars: number;
+    turn: number;
+    max_turns: number;
+    auto_continue_count: number;
+    auto_continue_max: number;
+  }) => void;
 }
 
 /**
@@ -544,6 +585,7 @@ export class CoderRunner extends EventEmitter {
       cache_creation_input_tokens: 0,
       cache_read_input_tokens: 0,
     };
+    let autoContinueCount = 0;
     // Tools array is rebuilt each turn when tier filtering is active, so
     // `expand_toolset` calls take effect on the very next turn without any
     // extra plumbing. When `activeTiers` is null (subagents, tests) we
@@ -605,6 +647,9 @@ export class CoderRunner extends EventEmitter {
     let lastTiersKey = this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : '*';
 
     let turn = 0;
+    // Outer loop: allows auto-continue after maxTurns by resetting `turn`.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
     while (turn < this.maxTurns) {
       if (this.aborted) {
         this.emit('done', 'aborted');
@@ -730,6 +775,16 @@ export class CoderRunner extends EventEmitter {
       }
       this.emit('message_complete', assistantMessage, lastUsage);
 
+      // Emit context metrics so the dashboard can show a progress indicator.
+      const historyChars = totalChars(this.messages);
+      this.emit('context_status', {
+        history_chars: historyChars,
+        turn,
+        max_turns: this.maxTurns,
+        auto_continue_count: autoContinueCount,
+        auto_continue_max: MAX_AUTO_CONTINUES,
+      });
+
       // No tool calls → conversation finished. In plan mode this is fine:
       // the real safety net is at the tool-invocation level (mutating tools
       // are blocked until submit_plan/submit_tasks is approved — see the
@@ -838,7 +893,69 @@ export class CoderRunner extends EventEmitter {
       }
 
       this.messages.push({ role: 'tool', content: toolResultBlocks });
+    } // end inner while (turn < maxTurns)
+
+    // If aborted during the inner loop, don't auto-continue.
+    if (this.aborted) {
+      this.emit('done', 'aborted');
+      return { totalUsage, reason: 'aborted' };
     }
+
+    // Auto-continue: instead of dying at maxTurns, compact the history and
+    // reset the turn counter. Mirrors Claude Code's behaviour — the agent
+    // only stops when there's no more work, not due to an artificial ceiling.
+    if (MAX_AUTO_CONTINUES > 0 && autoContinueCount < MAX_AUTO_CONTINUES) {
+      autoContinueCount++;
+      console.log(
+        `[coder] auto-continue ${autoContinueCount}/${MAX_AUTO_CONTINUES} — compacting history before resuming`,
+      );
+      this.emit('auto_continue', autoContinueCount, MAX_AUTO_CONTINUES);
+
+      // Summarize the old span for richer context preservation, falling
+      // back to deterministic compaction if the summarizer is unavailable.
+      const histTotal = totalChars(this.messages);
+      const cutoff = computeCutoffIndex(this.messages, PRUNE_PROTECT);
+      if (cutoff > 1) {
+        const span = this.messages.slice(0, cutoff);
+        let replaced = false;
+        try {
+          const summary = await summarizeSpan(span, this.opts.provider);
+          if (summary) {
+            const synthetic: AgentMessage = {
+              role: 'assistant',
+              content: [{ type: 'text', text: renderSummary(summary) }],
+            };
+            this.messages.splice(0, cutoff, synthetic);
+            replaced = true;
+            console.log(
+              `[coder] summarizer collapsed ${cutoff} messages (~${histTotal} chars) into 1 synthetic summary`,
+            );
+          }
+        } catch (e) {
+          console.warn(`[coder] summarizer failed during auto-continue: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        if (!replaced) {
+          const compacted = compactMessages(this.messages);
+          if (compacted.applied) {
+            // compactMessages returns a new array — swap in-place.
+            this.messages.length = 0;
+            this.messages.push(...compacted.messages);
+            console.log(
+              `[coder] deterministic compaction pruned ${compacted.prunedBlocks} blocks (~${compacted.prunedChars} chars)`,
+            );
+          }
+        }
+      }
+      // Allow the summarizer to run again in the next continuation window.
+      this.summarizedOnce = false;
+      // Reset turn counter so the inner while gets a full maxTurns budget.
+      turn = 0;
+      continue; // → back to outer while(true)
+    }
+
+    // Exhausted all auto-continues — stop for real.
+    break;
+    } // end outer while(true)
 
     this.emit('done', 'max_turns');
     return { totalUsage, reason: 'max_turns' };

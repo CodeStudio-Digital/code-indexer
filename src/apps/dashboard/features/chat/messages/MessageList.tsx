@@ -82,7 +82,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
     }
   }, [sessionData.session.id]);
   useEffect(() => {
-    if (streaming && groups.length > 40 && renderCap === null) {
+    if (streaming && groups.length > 80 && renderCap === null) {
       setRenderCap(INITIAL_PAGE_SIZE);
     }
     if (!streaming && renderCap !== null) {
@@ -103,20 +103,40 @@ const PersistedMessages = React.memo(function PersistedMessages({
   const loadingEarlierRef = useRef(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
+  // Sync guard refs — React state batching can allow multiple observer
+  // callbacks to slip through before `loadingMore` is committed. Refs
+  // update synchronously and prevent duplicate requests.
+  const loadingRef = useRef(false);
+  const exhaustedRef = useRef(false);
+  const [exhausted, setExhausted] = useState(false);
+
+  // Reset exhausted flag when switching sessions.
+  useEffect(() => {
+    exhaustedRef.current = false;
+    setExhausted(false);
+  }, [sessionData.session.id]);
+
   const handleLoadEarlier = useCallback(async () => {
-    if (!onLoadEarlier || loadingMore) return;
+    if (!onLoadEarlier || loadingRef.current || exhaustedRef.current) return;
     const earliestId = sessionData.message_rows[0]?.id;
     if (!earliestId) return;
+    loadingRef.current = true;
     const el = scrollContainerRef.current;
     if (el) prevScrollHeightRef.current = el.scrollHeight;
     loadingEarlierRef.current = true;
     setLoadingMore(true);
     try {
-      await onLoadEarlier(earliestId, LOAD_MORE_SIZE);
+      const count = await onLoadEarlier(earliestId, LOAD_MORE_SIZE);
+      if (count === 0) {
+        // Backend returned nothing — stop polling forever for this session.
+        exhaustedRef.current = true;
+        setExhausted(true);
+      }
     } finally {
+      loadingRef.current = false;
       setLoadingMore(false);
     }
-  }, [onLoadEarlier, loadingMore, sessionData.message_rows, scrollContainerRef]);
+  }, [onLoadEarlier, sessionData.message_rows, scrollContainerRef]);
 
   // After new messages are prepended, restore scroll position
   useLayoutEffect(() => {
@@ -128,20 +148,56 @@ const PersistedMessages = React.memo(function PersistedMessages({
     if (delta > 0) el.scrollTop += delta;
   }, [sessionData.messages.length, scrollContainerRef]);
 
+  // Stable ref to the latest handleLoadEarlier — avoids re-creating the
+  // IntersectionObserver every time the callback identity changes.
+  const handleRef = useRef(handleLoadEarlier);
+  handleRef.current = handleLoadEarlier;
+
+  // Infinite scroll: auto-load when a sentinel element near the top becomes
+  // visible. The observer is only created once per hasEarlier/exhausted
+  // change and uses refs for all guards to avoid stale closures.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !hasEarlier || !onLoadEarlier || exhaustedRef.current) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !loadingRef.current && !exhaustedRef.current) {
+          void handleRef.current();
+        }
+      },
+      { root: scrollContainerRef.current, rootMargin: '200px 0px 0px 0px' },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [hasEarlier, exhausted, onLoadEarlier, scrollContainerRef]);
+
   const providerId = sessionData.session.provider;
 
   return (
     <>
-      {hasEarlier && (
-        <button
-          type="button"
-          onClick={handleLoadEarlier}
-          disabled={loadingMore}
-          className="flex items-center justify-center gap-1.5 w-full py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors disabled:opacity-50"
-        >
-          <ChevronUp className="h-3.5 w-3.5" />
-          {loadingMore ? 'Loading...' : `Load earlier messages`}
-        </button>
+      {/* Sentinel for infinite scroll — triggers auto-load when near top */}
+      {hasEarlier && !exhausted && <div ref={sentinelRef} className="h-px" />}
+      {hasEarlier && !exhausted && (
+        <div className="flex items-center justify-center gap-2 w-full py-2">
+          <button
+            type="button"
+            onClick={handleLoadEarlier}
+            disabled={loadingMore}
+            className="flex items-center justify-center gap-1.5 py-1.5 px-3 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors disabled:opacity-50"
+          >
+            <ChevronUp className="h-3.5 w-3.5" />
+            {loadingMore ? 'Loading...' : 'Load earlier'}
+          </button>
+          <span className="text-[10px] text-muted-foreground/60">
+            {sessionData.message_rows.length} of {totalMessages} loaded
+          </span>
+        </div>
+      )}
+      {exhausted && sessionData.message_rows.length < totalMessages && (
+        <div className="text-center py-1.5 text-[10px] text-muted-foreground/50">
+          All available messages loaded
+        </div>
       )}
       {displayGroups.map((g, gi) => {
         const groupKey = g.kind === 'user'
@@ -259,15 +315,47 @@ export function MessageList({
   // animation per token fights with layout and amplifies the jank.
   const stickToBottomRef = useRef(true);
   const sessionIdRef = useRef<number | null>(null);
+  // Detect user-initiated scroll-up via wheel/touch — not generic scroll
+  // events, which also fire on programmatic scrolls & layout reflows and
+  // can falsely flip stickToBottomRef off when the chat grows.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const onScroll = () => {
+
+    const checkBottom = () => {
       const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-      stickToBottomRef.current = gap < 80;
+      if (gap < 80) stickToBottomRef.current = true;
     };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) {
+        stickToBottomRef.current = false;
+      } else {
+        requestAnimationFrame(checkBottom);
+      }
+    };
+
+    let touchStartY = 0;
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartY = e.touches[0]?.clientY ?? 0;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY ?? 0;
+      if (y > touchStartY + 5) {
+        stickToBottomRef.current = false;
+      } else if (y < touchStartY - 5) {
+        requestAnimationFrame(checkBottom);
+      }
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: true });
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+    };
   }, []);
 
   // When the session changes, force the sticky-bottom ref back on so the

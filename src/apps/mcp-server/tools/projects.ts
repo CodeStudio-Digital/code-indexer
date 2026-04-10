@@ -159,6 +159,7 @@ const get_project_pulse = defineTool({
     const cov = db.getEmbeddingCoverage(project.id);
     const filePct = cov.files_total > 0 ? Math.round((cov.files_embedded / cov.files_total) * 100) : 0;
     const symPct = cov.symbols_total > 0 ? Math.round((cov.symbols_embedded / cov.symbols_total) * 100) : 0;
+    const bodyPct = cov.symbol_bodies_total > 0 ? Math.round((cov.symbol_bodies_embedded / cov.symbol_bodies_total) * 100) : 0;
 
     if (args.format === 'json') {
       return JSON.stringify({
@@ -175,7 +176,7 @@ const get_project_pulse = defineTool({
         vector_coverage: {
           files_pct: filePct,
           symbols_pct: symPct,
-          symbol_bodies_embedded: cov.symbol_bodies_embedded,
+          bodies_pct: bodyPct,
         },
         cost: {
           total_usd: costs.total_cost_usd,
@@ -190,7 +191,7 @@ const get_project_pulse = defineTool({
       ? `cost: $${costs.total_cost_usd.toFixed(4)} (llm $${costs.llm_analysis_cost_usd.toFixed(4)} + emb $${costs.embedding_cost_usd.toFixed(4)}) | avg/file: $${avgCost.toFixed(5)}`
       : '';
     const covLine = cov.files_total > 0
-      ? `vector coverage: files ${filePct}% | symbols ${symPct}% | bodies ${cov.symbol_bodies_embedded}`
+      ? `vector coverage: files ${filePct}% | symbols ${symPct}% | bodies ${bodyPct}%`
       : 'vector coverage: none (search will use FTS only)';
     const lines = [
       `${project.name} | ${stats.file_count} files, ${stats.symbol_count} symbols, ${stats.total_lines}L | indexed: ${stats.last_indexed ?? 'never'}`,

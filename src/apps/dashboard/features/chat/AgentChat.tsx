@@ -60,7 +60,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [skillConfigOpen, setSkillConfigOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
-  const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=60` : '';
+  const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=120` : '';
   const { data: sessionData, refetch: refetchSession, update: updateSessionData } = useApi<SessionData>(sessionUrl);
 
   const stream = useAgentStream(selectedId);
