@@ -13,6 +13,7 @@ import { createEmbeddingService } from '../../../core/search/embeddings.js';
 import type { EmbeddingService } from '../../../core/search/embeddings.js';
 import { createVectorStore, NullVectorStore, type VectorStore } from '../../../store/vectors.js';
 import { SessionStore } from '../../../core/coder/index.js';
+import { CompanyStore } from '../../../store/company-store.js';
 
 export interface ServerDeps {
   config: IndexerConfig;
@@ -28,6 +29,7 @@ export interface ServerDeps {
   vectorStore: VectorStore;
   hybridSearch: HybridSearch;
   sessionStore: SessionStore;
+  companyStore: CompanyStore;
   /** Resolved kind names for diagnostics (avoid importing concrete classes). */
   embeddingKind: string;
   vectorStoreKind: string;
@@ -61,6 +63,7 @@ export function createDeps(): ServerDeps {
   const hybridSearch = new HybridSearch(db, searchableVectorStore, embeddingService, hydeService);
   const snapshotService = new SnapshotService(db, embeddingService, searchableVectorStore);
   const sessionStore = new SessionStore(config.dbPath);
+  const companyStore = new CompanyStore(config.dbPath);
 
   // Derive kind labels from class names for diagnostics. Avoids importing
   // every concrete class — constructor.name is sufficient for the debug panel.
@@ -87,6 +90,7 @@ export function createDeps(): ServerDeps {
     vectorStore,
     hybridSearch,
     sessionStore,
+    companyStore,
     embeddingKind,
     vectorStoreKind,
   };

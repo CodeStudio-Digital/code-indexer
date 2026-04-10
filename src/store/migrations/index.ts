@@ -33,6 +33,7 @@ import { toolConfigs014 } from './014_tool_configs.js';
 import { mcpServers015 } from './015_mcp_servers.js';
 import { skills016 } from './016_skills.js';
 import { mcpServerTools017 } from './017_mcp_server_tools.js';
+import { companyAgents018 } from './018_company_agents.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -60,6 +61,7 @@ export const MIGRATIONS: Migration[] = [
   mcpServers015,
   skills016,
   mcpServerTools017,
+  companyAgents018,
 ];
 
 /**

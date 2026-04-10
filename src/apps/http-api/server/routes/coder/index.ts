@@ -7,6 +7,7 @@ import { mountCoderGroupsRoutes } from './groups.js';
 import { mountCoderInteractionRoutes } from './interaction.js';
 import { mountCoderStreamRoutes } from './stream.js';
 import { mountCoderSkillsRoutes } from './skills.js';
+import { mountCompanyRoutes } from '../company/index.js';
 
 export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
   const runtime = createCoderRuntime(deps.sessionStore);
@@ -16,4 +17,5 @@ export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
   mountCoderInteractionRoutes(app, deps, runtime);
   mountCoderStreamRoutes(app, deps, runtime);
   mountCoderSkillsRoutes(app, deps, runtime);
+  mountCompanyRoutes(app, deps);
 }

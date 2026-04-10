@@ -568,7 +568,12 @@ export class IndexAgent {
     }
 
     console.error(`[indexer] Embedding ${candidates.length} new/changed records`);
-    await this.executeEmbedding(project, runId, candidates);
+
+    const CHUNK = 50;
+    for (let i = 0; i < candidates.length; i += CHUNK) {
+      const chunk = candidates.slice(i, i + CHUNK);
+      await this.executeEmbedding(project, runId, chunk);
+    }
   }
 
   /**

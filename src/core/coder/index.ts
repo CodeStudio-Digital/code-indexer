@@ -18,6 +18,8 @@ import { McpToolBridge } from './tools/mcp-bridge.js';
 import { McpServerManager } from './tools/mcp-server-manager.js';
 import { McpServerStore } from '../../store/mcp-server-store.js';
 import { buildSubagentTool, buildSpawnAgentsTool } from './tools/subagent.js';
+import { buildMasterTools } from './tools/company/master-tools.js';
+import { buildBoardTools } from './tools/company/board-tools.js';
 import { inferProfileFromMessage, profileToTiers, type CoderProfile } from './tools/tiers.js';
 import { AGENTS, type AgentId } from './agents/index.js';
 import { SessionOverlay } from './overlay/session-overlay.js';
@@ -101,6 +103,10 @@ export interface RunCoderOptions {
    * runner should pick up from existing history and run the next turn.
    */
   resume?: boolean;
+  /** Company orchestrator context — when present, company tools are registered. */
+  companyContext?: import('./company/types.js').CompanyContext;
+  /** Extra system prompt block for company agents (master/subordinate). Appended to the base prompt. */
+  companyPromptBlock?: string;
 }
 
 export interface RunCoderHandle {
@@ -230,6 +236,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     registry.register(buildSpawnAgentsTool(subagentDeps));
   }
 
+  // Company tools — registered when this runner is part of a company session.
+  if (opts.companyContext) {
+    const { orchestrator, agentRole, isMaster, agentRunId } = opts.companyContext;
+    registry.registerAll(buildBoardTools(orchestrator, agentRole, agentRunId));
+    if (isMaster) {
+      registry.registerAll(buildMasterTools(orchestrator));
+    }
+  }
+
   const toolContext: ToolContext = {
     cwd: resolvePath(project.root_path),
     projectName: project.name,
@@ -281,6 +296,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         return null;
       }
     },
+    companyContext: opts.companyContext,
   };
 
   // Load existing history FIRST so we can detect fresh vs resumed sessions
@@ -336,7 +352,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     );
   }
 
-  const systemPrompt = buildSystemPrompt({
+  let systemPrompt = buildSystemPrompt({
     projectName: project.name,
     projectRoot: project.root_path,
     os: process.platform,
@@ -353,6 +369,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         }))
       : undefined,
   });
+
+  // Append company prompt block (master orchestration or subordinate instructions)
+  if (opts.companyPromptBlock) {
+    systemPrompt += '\n' + opts.companyPromptBlock;
+  }
 
   // Reuse the history we loaded early for profile resolution.
   const initialMessages: AgentMessage[] = initialMessagesEarly;

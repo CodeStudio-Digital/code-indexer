@@ -1,17 +1,19 @@
 import { useEffect, useState } from 'react';
-import { Boxes, ChevronRight, FolderGit2, Home, Moon, Settings, Sun } from 'lucide-react';
+import { Boxes, ChevronRight, FolderGit2, Home, Moon, Settings, Sun, Users } from 'lucide-react';
 import { Button } from './components/ui/button.js';
 import { DialogProvider } from './components/ui/dialog-provider.js';
 import Admin from './features/admin/index.js';
 import ProjectDetail from './features/project/index.js';
 import { ProjectList } from './features/project/index.js';
 import { RecentSessionsList } from './features/recent/RecentSessionsList.js';
+import { AgentsTab } from './features/agents/AgentsTab.js';
 import { cn } from './lib/utils.js';
 
 type View =
   | { page: 'home' }
   | { page: 'project'; id: number; name: string; sessionId?: number }
-  | { page: 'admin' };
+  | { page: 'admin' }
+  | { page: 'agents' };
 
 export default function App() {
   const [view, setView] = useState<View>({ page: 'home' });
@@ -66,6 +68,18 @@ export default function App() {
               onSelect={(id, name, sessionId) => setView({ page: 'project', id, name, sessionId })}
             />
             <button
+              onClick={() => setView({ page: 'agents' })}
+              className={cn(
+                'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                view.page === 'agents'
+                  ? 'bg-accent text-accent-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              <Users className="h-4 w-4" />
+              Agents
+            </button>
+            <button
               onClick={() => setView({ page: 'admin' })}
               className={cn(
                 'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
@@ -100,6 +114,12 @@ export default function App() {
                 <span className="text-sm font-semibold truncate">{view.name}</span>
               </>
             )}
+            {view.page === 'agents' && (
+              <>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-semibold">Agents</span>
+              </>
+            )}
             {view.page === 'admin' && (
               <>
                 <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -125,6 +145,7 @@ export default function App() {
                 initialSessionId={view.sessionId}
               />
             )}
+            {view.page === 'agents' && <AgentsTab />}
             {view.page === 'admin' && <Admin />}
           </main>
         </div>

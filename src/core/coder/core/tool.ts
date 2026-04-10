@@ -73,6 +73,8 @@ export interface ToolContext {
     patch: Partial<import('../sessions/types.js').CoderTask>,
   ) => void;
   getTasksState?: () => import('../sessions/types.js').TasksState | null;
+  /** Company orchestrator context — present when this runner is part of a company session. */
+  companyContext?: import('../company/types.js').CompanyContext;
 }
 
 export interface ToolResult {

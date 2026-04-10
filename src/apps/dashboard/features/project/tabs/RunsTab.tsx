@@ -26,6 +26,7 @@ import { Switch } from '../../../components/ui/switch.js';
 import { useApi } from '../../../hooks/useApi.js';
 import { cn } from '../../../lib/utils.js';
 import type { Run } from '../types.js';
+import { Input } from "../../../components/ui/input.js";
 
 interface RunsTabProps {
   projectId: number;
@@ -120,6 +121,7 @@ export function RunsTab({ projectId }: RunsTabProps) {
   const [kind, setKind] = useState<string>('');
   const [model, setModel] = useState<string>('');
   const [force, setForce] = useState<boolean>(false);
+  const [concurrent, setConcurrent] = useState<number>(5);
 
   useEffect(() => {
     let cancelled = false;
@@ -227,6 +229,7 @@ export function RunsTab({ projectId }: RunsTabProps) {
           provider: kind || undefined,
           model: model || undefined,
           force,
+          concurrent,
         }),
         signal: ctrl.signal,
       });
@@ -550,7 +553,14 @@ export function RunsTab({ projectId }: RunsTabProps) {
               )}
             </div>
           </div>
-
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Concurrent
+            </label>
+            <Input
+                onValueChange={(v: any) => setConcurrent(v)}
+                type={"number"} min={0}></Input>
+          </div>
           <div className="flex items-center justify-between rounded-lg border bg-card px-3 py-2">
             <div className="flex items-center gap-3">
               <Switch

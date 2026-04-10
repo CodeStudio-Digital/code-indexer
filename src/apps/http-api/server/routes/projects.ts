@@ -23,6 +23,7 @@ interface IndexProjectBody {
   provider?: string;
   model?: string;
   force?: boolean;
+  concurrent?: number;
 }
 
 export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
@@ -171,6 +172,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
           model: body.model ?? config.model,
           force: !!body.force,
           started_at: new Date().toISOString(),
+          concurrent: body.concurrent ?? 5,
         });
 
         const provider = await createProviderAsync(
@@ -184,7 +186,10 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
           vectorStore,
           costTracker,
           webhookDispatcher,
-          config,
+          {
+            ...config,
+            concurrency: body.concurrent ?? 5,
+          },
         );
 
         // Coalesce progress events to at most one frame per ~120ms so chatty

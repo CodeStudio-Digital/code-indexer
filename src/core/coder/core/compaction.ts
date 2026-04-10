@@ -115,6 +115,21 @@ export function computeCutoffIndex(messages: AgentMessage[], protect = PRUNE_PRO
     return 0;
 }
 
+/**
+ * Adjust cutoff so it never falls between an assistant message (with tool_use
+ * blocks) and its paired tool message (with tool_result blocks). If the
+ * message at `cutoff` is role='tool', advance past it — those tool_results
+ * reference tool_uses in the preceding assistant message, which would be
+ * spliced away by the summarizer, causing a 400 "No tool call found" error
+ * from the provider.
+ */
+export function snapCutoffToRoleBoundary(messages: AgentMessage[], cutoff: number): number {
+    while (cutoff < messages.length && messages[cutoff].role === 'tool') {
+        cutoff++;
+    }
+    return cutoff;
+}
+
 export interface CompactionResult {
     messages: AgentMessage[];
     /** Number of tool_result blocks whose content was replaced with a marker. */

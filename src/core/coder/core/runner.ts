@@ -4,7 +4,7 @@ import type { ChatProvider } from '../providers/adapter.js';
 import type { ToolRegistry } from './registry.js';
 import type { AgentMessage, ChatDelta, ChatUsage, ContentBlock, ToolUseBlock, PlanBlock, QuestionBlock, ToolResultBlock } from './messages.js';
 import type { ToolContext } from './tool.js';
-import {compactMessages, PRUNE_PROTECT, computeCutoffIndex, totalChars, PRUNE_MINIMUM} from "./compaction.js";
+import {compactMessages, PRUNE_PROTECT, computeCutoffIndex, totalChars, PRUNE_MINIMUM, snapCutoffToRoleBoundary} from "./compaction.js";
 import { isSummarizerEnabled, summarizeSpan, renderSummary } from './summarizer.js';
 import { filterByTiers, profileToTiers, type ToolTier, type CoderProfile } from '../tools/tiers.js';
 import { getModelMaxTools, getModelCapabilityNote } from '../providers/capabilities.js';
@@ -227,7 +227,42 @@ export function compactHistoryForLLM(messages: AgentMessage[]): AgentMessage[] {
         `Lower CODER_PUSH_TIME_CAP or increase CODER_TURN_BUDGET_CHARS.`,
     );
   }
-  return result.messages;
+
+  // Safety net: remove orphaned tool_results whose tool_use was dropped
+  // (e.g. by a prior summarizer splice). Without this, the provider rejects
+  // the request with "400 No tool call found for function call output".
+  const knownToolUseIds = new Set<string>();
+  for (const m of result.messages) {
+    if (m.role !== 'assistant') continue;
+    for (const b of m.content) {
+      if (b.type === 'tool_use') knownToolUseIds.add(b.id);
+    }
+  }
+  let orphanCount = 0;
+  const sanitized = result.messages.map((m): AgentMessage | null => {
+    if (m.role !== 'tool') return m;
+    const filtered = m.content.filter((b) => {
+      if (b.type !== 'tool_result') return true;
+      const tid = (b as { tool_use_id?: string }).tool_use_id;
+      if (tid && !knownToolUseIds.has(tid)) {
+        orphanCount++;
+        return false;
+      }
+      return true;
+    });
+    if (filtered.length === 0) return null;
+    if (filtered.length === m.content.length) return m;
+    return { ...m, content: filtered };
+  }).filter((m): m is AgentMessage => m !== null);
+
+  if (orphanCount > 0) {
+    console.warn(
+      `[coder] sanitized ${orphanCount} orphaned tool_result block(s) ` +
+      `whose tool_use was removed by summarization`,
+    );
+  }
+
+  return sanitized;
 }
 
 /**
@@ -669,7 +704,7 @@ export class CoderRunner extends EventEmitter {
       if (isSummarizerEnabled() && !this.summarizedOnce) {
         const total = totalChars(this.messages);
         if (total > PRUNE_MINIMUM) {
-          const cutoff = computeCutoffIndex(this.messages, PRUNE_PROTECT);
+          const cutoff = snapCutoffToRoleBoundary(this.messages, computeCutoffIndex(this.messages, PRUNE_PROTECT));
           if (cutoff > 1) {
             const span = this.messages.slice(0, cutoff);
             console.log(`[coder] running summarizer on ${cutoff} old messages (~${total} chars total)`);
@@ -914,7 +949,7 @@ export class CoderRunner extends EventEmitter {
       // Summarize the old span for richer context preservation, falling
       // back to deterministic compaction if the summarizer is unavailable.
       const histTotal = totalChars(this.messages);
-      const cutoff = computeCutoffIndex(this.messages, PRUNE_PROTECT);
+      const cutoff = snapCutoffToRoleBoundary(this.messages, computeCutoffIndex(this.messages, PRUNE_PROTECT));
       if (cutoff > 1) {
         const span = this.messages.slice(0, cutoff);
         let replaced = false;
