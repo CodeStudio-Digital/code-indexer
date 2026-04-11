@@ -1,14 +1,19 @@
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { defineTool, type McpTool } from '../tool.js';
 import { resolveProject } from '../utils.js';
 import { readFileSlice, extractSkeletonFromFile } from '../../../core/services/code-reader.js';
 
 const get_file_structure = defineTool({
   name: 'get_file_structure',
-  description: 'Get file details and symbols',
+  description: 'Get file details and symbols. Hard-capped to max_symbols (default 50) to protect context limits. Use get_file_skeleton if you just need a broad outline.',
   inputSchema: {
     type: 'object',
-    properties: { project_name: { type: 'string' }, file_path: { type: 'string' } },
+    properties: { 
+        project_name: { type: 'string' }, 
+        file_path: { type: 'string' },
+        max_symbols: { type: 'number', description: 'Max symbols to list. Default 50.' }
+    },
     required: ['project_name', 'file_path'],
   },
   handler: (args, { db }) => {
@@ -39,9 +44,17 @@ const get_file_structure = defineTool({
     if (dependents.length > 0) {
       sections.push('', '## Dependents (imported by)', dependents.map(d => `- ${d.source_file_path} (via ${d.import_path})`).join('\n'));
     }
+    
     if (symbols.length > 0) {
+      const maxSymbols = (args.max_symbols as number) ?? 50;
+      const shownSymbols = symbols.slice(0, maxSymbols);
+      
       sections.push('', `## Symbols (${symbols.length})`);
-      for (const s of symbols) {
+      if (symbols.length > maxSymbols) {
+          sections.push(`[truncated: showing ${maxSymbols}/${symbols.length} symbols — file has too many symbols. Use get_file_skeleton or grep_code for deeper exploration without context bloat.]`);
+      }
+
+      for (const s of shownSymbols) {
         const parts = [`### ${s.kind} \`${s.name}\``];
         if (s.signature) parts.push(`Signature: \`${s.signature}\``);
         if (s.comment) parts.push(s.comment);
@@ -160,12 +173,13 @@ const get_file_skeleton = defineTool({
 
 const read_file = defineTool({
   name: 'read_file',
-  description: 'Read a file slice. Default 100 lines; use start_line/end_line for ranges, max_lines to adjust window, or force=true for the whole file.',
+  description: 'Read a file slice. Default 100 lines. CRITICAL: NEVER paginate blindly. If you are looking for a specific function, string, or code block, pass "search_term" to automatically recenter the window at the first match.',
   inputSchema: {
     type: 'object',
     properties: {
       project_name: { type: 'string' },
       file_path: { type: 'string' },
+      search_term: { type: 'string', description: 'Center the read window around the first match of this text (Regex supported).' },
       start_line: { type: 'number' },
       end_line: { type: 'number' },
       max_lines: { type: 'number' },
@@ -178,11 +192,34 @@ const read_file = defineTool({
     const filePath = args.file_path as string;
     const file = db.getFile(project.id, filePath);
     if (!file) throw new Error(`File "${filePath}" not found in index. Use list_directory or search to find the correct path. Do not retry with the same file_path.`);
+    
     const startLine = args.start_line as number | undefined;
     const endLine = args.end_line as number | undefined;
     const maxLines = (args.max_lines as number) ?? 100;
     const force = args.force === true;
-    const start = startLine ?? 1;
+    let start = startLine ?? 1;
+    let headerNote = '';
+
+    if (args.search_term) {
+      const term = args.search_term as string;
+      try {
+        const content = readFileSync(join(project.root_path, filePath), 'utf-8');
+        const lines = content.split('\n');
+        // Case insensitive search using Regex
+        const re = new RegExp(term, 'i');
+        const idx = lines.findIndex(l => re.test(l));
+        
+        if (idx === -1) {
+          return `[Search term "${term}" not found in ${filePath}. Use grep_code to search across files.]`;
+        }
+        // Center the view around the found index
+        start = Math.max(1, idx + 1 - Math.floor(maxLines / 2));
+        headerNote = `[Auto-scrolled to line ${idx + 1} matching "${term}"]\n`;
+      } catch (e) {
+        return `Failed to read file for search_term: ${(e as Error).message}`;
+      }
+    }
+
     const defaultEnd = force ? file.line_count : Math.min(file.line_count, start + maxLines - 1);
     const end = endLine ?? defaultEnd;
     try {
@@ -192,7 +229,7 @@ const read_file = defineTool({
       const footer = remaining > 0
         ? `\n... [${remaining} more lines — use start_line/end_line to continue, or force=true for the full file]`
         : '';
-      return numbered + footer;
+      return headerNote + numbered + footer;
     } catch (e) {
       return `Failed: ${(e as Error).message}`;
     }

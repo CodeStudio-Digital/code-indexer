@@ -3,6 +3,8 @@ import type { VectorStore } from '../../store/vectors.js';
 import type { EmbeddingService } from './embeddings.js';
 import { NullEmbeddingService } from './embeddings.js';
 import type { HyDEService } from './hyde.js';
+import type { RerankerService } from './reranker.js';
+import { NullReranker } from './reranker.js';
 import type { HybridSearchResult, SearchMode, SearchType, DBFile, DBSymbol, ContextSnapshot } from '../../types.js';
 
 /** Diagnostic info returned alongside search results. */
@@ -45,12 +47,27 @@ function buildQueryVariants(query: string): string[] {
 }
 
 export class HybridSearch {
+  private reranker: RerankerService;
+
+  /** LRU query cache: key = `${projectId}:${query}:${mode}:${type}` → results */
+  private queryCache = new Map<string, { results: HybridSearchResult[]; ts: number }>();
+  private readonly queryCacheMax = 128;
+  private readonly queryCacheTtlMs = 5 * 60 * 1000; // 5 min
+
   constructor(
     private db: CodeIndexDB,
     private vectorStore: VectorStore | null,
     private embeddingService: EmbeddingService,
-    private hydeService: HyDEService | null = null
-  ) {}
+    private hydeService: HyDEService | null = null,
+    reranker?: RerankerService | null,
+  ) {
+    this.reranker = reranker ?? new NullReranker();
+  }
+
+  /** Invalidate query cache (call after indexing). */
+  invalidateCache(): void {
+    this.queryCache.clear();
+  }
 
   async search(
     projectId: number,
@@ -74,20 +91,37 @@ export class HybridSearch {
     const limit = options?.limit ?? 20;
     const overFetch = limit * 3;
 
+    // Check cache
+    const cacheKey = `${projectId}:${query}:${mode}:${type}:${limit}`;
+    const cached = this.queryCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < this.queryCacheTtlMs) {
+      return { results: cached.results, diagnostics: { vectorAvailable: !!this.vectorStore, embeddingAvailable: !(this.embeddingService instanceof NullEmbeddingService) } };
+    }
+
     const diag: SearchDiagnostics = {
       vectorAvailable: !!this.vectorStore,
       embeddingAvailable: !(this.embeddingService instanceof NullEmbeddingService),
     };
 
+    const cacheAndReturn = (r: { results: HybridSearchResult[]; diagnostics: SearchDiagnostics }) => {
+      // Evict oldest if full
+      if (this.queryCache.size >= this.queryCacheMax) {
+        const oldest = [...this.queryCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+        if (oldest) this.queryCache.delete(oldest[0]);
+      }
+      this.queryCache.set(cacheKey, { results: r.results, ts: Date.now() });
+      return r;
+    };
+
     if (mode === 'fts') {
       const results = await this.ftsSearch(projectId, query, type, limit);
       diag.ftsCount = results.length;
-      return { results, diagnostics: diag };
+      return cacheAndReturn({ results, diagnostics: diag });
     }
 
     if (mode === 'vector') {
       const results = await this.vectorSearchExpanded(projectId, projectName, query, type, limit, diag);
-      return { results, diagnostics: diag };
+      return cacheAndReturn({ results, diagnostics: diag });
     }
 
     // Hybrid: merge FTS + Vector using RRF
@@ -101,7 +135,34 @@ export class HybridSearch {
     const vec = vectorResults.status === 'fulfilled' ? vectorResults.value : [];
     hybridDiag.ftsCount = fts.length;
 
-    return { results: this.rrfMerge(fts, vec, limit), diagnostics: hybridDiag };
+    const merged = this.rrfMerge(fts, vec, limit * 2); // Over-fetch for re-ranking
+
+    // Re-rank if a cross-encoder is configured
+    if (merged.length > 0 && !(this.reranker instanceof NullReranker)) {
+      const reranked = await this.reranker.rerank(
+        query,
+        merged.map(r => {
+          const d = r.data as unknown as Record<string, unknown>;
+          const text = r.type === 'file'
+            ? `${d.path ?? ''}\n${d.summary ?? ''}\n${Array.isArray(d.concepts) ? d.concepts.join(', ') : ''}`
+            : `${d.name ?? ''} (${d.kind ?? ''})\n${d.signature ?? ''}\n${d.comment ?? ''}`;
+          return { id: `${r.type}:${r.id}`, text, originalScore: r.score };
+        }),
+        limit,
+      );
+
+      // Map reranked results back
+      const idToScore = new Map(reranked.map(r => [r.id, r.score]));
+      const rerankedResults = merged
+        .filter(r => idToScore.has(`${r.type}:${r.id}`))
+        .map(r => ({ ...r, score: idToScore.get(`${r.type}:${r.id}`)! }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+
+      return cacheAndReturn({ results: rerankedResults, diagnostics: hybridDiag });
+    }
+
+    return cacheAndReturn({ results: merged.slice(0, limit), diagnostics: hybridDiag });
   }
 
   private async ftsSearch(projectId: number, query: string, type: SearchType, limit: number): Promise<HybridSearchResult[]> {

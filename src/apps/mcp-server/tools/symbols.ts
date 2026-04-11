@@ -187,7 +187,11 @@ const trace_usage = defineTool({
     const tree = db.traceSymbolUsage(project.id, args.symbol_name as string, depth);
 
     const formatTree = (callers: typeof tree.callers, indent: string): string => {
-      return callers.map(c => {
+      const MAX_CALLERS_PER_NODE = 5;
+      const shownCallers = callers.slice(0, MAX_CALLERS_PER_NODE);
+      const isTruncated = callers.length > MAX_CALLERS_PER_NODE;
+
+      const result = shownCallers.map(c => {
         const lines = [`${indent}- **${c.file}**${c.line ? `:${c.line}` : ''}`];
         if (c.symbols_in_file.length > 0) {
           lines.push(`${indent}  Symbols here: ${c.symbols_in_file.map(s => `\`${s}\``).join(', ')}`);
@@ -198,6 +202,11 @@ const trace_usage = defineTool({
         }
         return lines.join('\n');
       }).join('\n');
+
+      if (isTruncated) {
+          return result + `\n${indent}- [... and ${callers.length - MAX_CALLERS_PER_NODE} more callers omitted here to protect context limits. Use find_references on specific parents to drill down.]`;
+      }
+      return result;
     };
 
     const sections = [

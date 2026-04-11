@@ -16,6 +16,7 @@ export function buildBoardTools(
   return [
     postToBoard(orchestrator, agentRole, agentRunId),
     readBoard(orchestrator, agentRole),
+    setAgentStatus(orchestrator, agentRole, agentRunId),
   ];
 }
 
@@ -104,6 +105,43 @@ function readBoard(
       });
 
       return ok(lines.join('\n\n'));
+    },
+  };
+}
+
+// ─── set_agent_status ──────────────────────────────────────────
+
+function setAgentStatus(
+  orchestrator: CompanyOrchestrator,
+  agentRole: string,
+  agentRunId: number | null,
+): CoderTool {
+  const parameters: JsonSchema = {
+    type: 'object',
+    properties: {
+      status: {
+        type: 'string',
+        enum: ['working', 'waiting', 'reviewing', 'blocked', 'done'],
+        description: 'Your current status. Use "waiting" when done with current task and ready for more. Use "working" when actively coding. Use "done" when all work is finished.',
+      },
+      message: { type: 'string', description: 'Brief status description (e.g., "Investigation done. Ready for next task.", "Working on campaign routes")' },
+    },
+    required: ['status'],
+  };
+
+  return {
+    name: 'set_agent_status',
+    description: 'Set your current status. Use "waiting" when you finish a task and are ready for the next one — this keeps you alive for reuse instead of being discarded.',
+    parameters,
+    source: 'native',
+    handler: async (args) => {
+      const status = args.status as string;
+      const message = (args.message as string) ?? '';
+
+      if (!agentRunId) return err('No agent_run_id available');
+
+      orchestrator.setAgentStatus(agentRunId, agentRole, status, message);
+      return ok(`Status set to "${status}"${message ? `: ${message}` : ''}`);
     },
   };
 }

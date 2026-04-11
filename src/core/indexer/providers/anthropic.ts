@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { LLMProvider } from './base.js';
-import { SYSTEM_PROMPT, buildUserPrompt, parseAnalysisResponse } from './base.js';
+import { SYSTEM_PROMPT, SUMMARY_ONLY_SYSTEM_PROMPT, buildUserPrompt, buildSummaryUserPrompt, parseAnalysisResponse } from './base.js';
 import type { AnalysisResult } from '../../../types.js';
 
 export class AnthropicProvider implements LLMProvider {
@@ -22,6 +22,30 @@ export class AnthropicProvider implements LLMProvider {
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: buildUserPrompt(filePath, content) }],
+    });
+
+    const text = response.content
+      .filter(block => block.type === 'text')
+      .map(block => block.text)
+      .join('');
+
+    return {
+      analysis: parseAnalysisResponse(text, filePath),
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+    };
+  }
+
+  async analyzeSummary(
+    filePath: string,
+    content: string,
+    symbols: Array<{ name: string; kind: string; signature: string; line?: number | null; end_line?: number }>
+  ): Promise<AnalysisResult> {
+    const response = await this.client.messages.create({
+      model: this.model,
+      max_tokens: 1024,
+      system: SUMMARY_ONLY_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: buildSummaryUserPrompt(filePath, content, symbols) }],
     });
 
     const text = response.content

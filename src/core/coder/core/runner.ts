@@ -166,7 +166,7 @@ export function buildToolResultBlock(
     tool_use_id: toolUseId,
     content:
       head +
-      `\n\n[truncated: original_size=${content.length} chars; ${content.length - cap} chars elided — call the tool again with narrower params if needed${idSuffix}]`,
+      `\n\n[truncated: original_size=${content.length} chars; ${content.length - cap} chars elided — call the tool again with narrower params if needed, OR explicitly use 'spawn_agents' to delegate this exploration without bloating your main context window${idSuffix}]`,
     is_error: isError,
     truncated: true,
     originalSize: content.length,
@@ -262,7 +262,103 @@ export function compactHistoryForLLM(messages: AgentMessage[]): AgentMessage[] {
     );
   }
 
-  return sanitized;
+  // Safety net 2: inject synthetic tool_result for orphaned tool_use blocks
+  // (tool_use exists in assistant message but no matching tool_result in any
+  // tool message). This happens when the runner crashes/aborts between
+  // persisting the assistant message and persisting the tool result message.
+  // Without this, the provider rejects with
+  // "400 No tool output found for function call".
+  const knownToolResultIds = new Set<string>();
+  for (const m of sanitized) {
+    if (m.role !== 'tool') continue;
+    for (const b of m.content) {
+      if (b.type === 'tool_result') {
+        const tid = (b as { tool_use_id?: string }).tool_use_id;
+        if (tid) knownToolResultIds.add(tid);
+      }
+    }
+  }
+
+  let syntheticCount = 0;
+  const patched: AgentMessage[] = [];
+  for (let i = 0; i < sanitized.length; i++) {
+    const m = sanitized[i];
+    patched.push(m);
+    if (m.role !== 'assistant') continue;
+
+    const orphanedToolUses: Array<{ id: string; name: string }> = [];
+    for (const b of m.content) {
+      if (b.type === 'tool_use' && !knownToolResultIds.has(b.id)) {
+        orphanedToolUses.push({ id: b.id, name: b.name });
+      }
+    }
+    if (orphanedToolUses.length === 0) continue;
+
+    // Check if the very next message is already a tool message that covers
+    // some of these IDs (partial coverage). Only inject for truly missing ones.
+    const next = sanitized[i + 1];
+    if (next?.role === 'tool') {
+      const coveredIds = new Set<string>();
+      for (const b of next.content) {
+        if (b.type === 'tool_result') {
+          const tid = (b as { tool_use_id?: string }).tool_use_id;
+          if (tid) coveredIds.add(tid);
+        }
+      }
+      const stillOrphaned = orphanedToolUses.filter((tu) => !coveredIds.has(tu.id));
+      if (stillOrphaned.length === 0) continue;
+
+      // Merge synthetic results into the existing tool message
+      const syntheticResults = stillOrphaned.map((tu) => ({
+        type: 'tool_result' as const,
+        tool_use_id: tu.id,
+        content: `[Session interrupted — tool "${tu.name}" was running when the session ended. Result was not captured.]`,
+        is_error: true,
+      }));
+      // Replace next message with merged version
+      sanitized[i + 1] = { ...next, content: [...next.content, ...syntheticResults] };
+      syntheticCount += stillOrphaned.length;
+    } else {
+      // No tool message follows — inject a new one
+      const syntheticResults = orphanedToolUses.map((tu) => ({
+        type: 'tool_result' as const,
+        tool_use_id: tu.id,
+        content: `[Session interrupted — tool "${tu.name}" was running when the session ended. Result was not captured.]`,
+        is_error: true,
+      }));
+      patched.push({ role: 'tool' as const, content: syntheticResults });
+      // Skip the next message if it was already pushed (it wasn't a tool msg)
+      syntheticCount += orphanedToolUses.length;
+    }
+  }
+
+  const resultArray = syntheticCount > 0 ? patched : sanitized;
+
+  // Merge consecutive same-role messages to avoid 400 "The messages parameter
+  // is illegal" from providers that strictly require alternating turns.
+  // User merges: classic Anthropic requirement.
+  // Assistant merges: happens after summarizer splice when the synthetic
+  // assistant is followed by an original assistant (GLM error 1214).
+  const merged: AgentMessage[] = [];
+  for (const m of resultArray) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === 'user' && m.role === 'user') {
+      last.content = [...last.content, ...m.content];
+    } else if (last && last.role === 'assistant' && m.role === 'assistant') {
+      last.content = [...last.content, ...m.content];
+    } else {
+      merged.push({ ...m, content: [...m.content] });
+    }
+  }
+
+  if (syntheticCount > 0) {
+    console.warn(
+      `[coder] injected ${syntheticCount} synthetic tool_result(s) for orphaned ` +
+      `tool_use blocks (session was interrupted mid-tool-execution)`,
+    );
+  }
+
+  return merged;
 }
 
 /**
@@ -746,6 +842,7 @@ export class CoderRunner extends EventEmitter {
       let pendingText = '';
       const pendingToolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
       const usageBox: { value: ChatUsage | null } = { value: null };
+      let retriedThisTurn = false;
       void assistantContent;
 
       try {
@@ -771,6 +868,17 @@ export class CoderRunner extends EventEmitter {
         }
       } catch (e) {
         const error = e instanceof Error ? e : new Error(String(e));
+        // Retry once on recoverable provider 400 errors (message format issues).
+        // GLM/ZAI returns code 1214 for illegal message sequences that may be
+        // fixable by the compaction safety nets on a second pass.
+        const status = (e as { status?: number }).status;
+        const code = (e as { error?: { code?: string } }).error?.code;
+        const is400 = status === 400 || code === '1214';
+        if (is400 && !retriedThisTurn) {
+          retriedThisTurn = true;
+          console.warn(`[coder] provider returned 400 at turn ${turn}, retrying once`);
+          continue;
+        }
         this.emit('done', 'error', error);
         return { totalUsage, reason: 'error' };
       }

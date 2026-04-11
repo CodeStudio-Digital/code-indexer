@@ -112,8 +112,8 @@ export interface RunCoderOptions {
 export interface RunCoderHandle {
   session: CoderSession;
   runner: CoderRunner;
-  /** Awaits completion. Resolves with the run reason and usage. */
-  done: Promise<{ reason: string; usage: ChatUsage }>;
+  /** Awaits completion. Resolves with the run reason, usage, and optional error detail. */
+  done: Promise<{ reason: string; usage: ChatUsage; error?: string }>;
 }
 
 /**
@@ -258,10 +258,30 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const customTierSummary = mcpServerManager.getCustomTierSummary();
   registry.registerAll(buildExpandTools(customTierSummary.size > 0 ? customTierSummary : undefined));
 
+  // Load disabled tools early so the subagent parentTools snapshot is already
+  // filtered. Must happen before registry.list() is captured below.
+  let globalDisabledTools: ReadonlySet<string> | undefined;
+  try {
+    const ps = new ProviderStore(config.dbPath);
+    const disabled = ps.listGlobalDisabledTools();
+    ps.close();
+    if (disabled.length > 0) globalDisabledTools = new Set(disabled);
+  } catch {
+    /* table may not exist yet — no-op */
+  }
+  const sessionDisabledTools = store.getSessionDisabledTools(session.id);
+
   // Subagent tool — registered AFTER MCP tools so it can snapshot the full
   // tool list for the explore allowlist. Disabled via CODER_DISABLE_SUBAGENTS=1.
-  if (process.env.CODER_DISABLE_SUBAGENTS !== '1') {
-    const subagentDeps = { provider, parentTools: registry.list() };
+  // Subagent tools — DISABLED for company Master. The Master must use
+  // spawn_subordinate_agent (persistent company sessions) instead of
+  // spawn_agents/spawn_subagent (ephemeral read-only subagents).
+  if (process.env.CODER_DISABLE_SUBAGENTS !== '1' && !opts.companyContext?.isMaster) {
+    const allDisabled = new Set([...(globalDisabledTools ?? []), ...sessionDisabledTools]);
+    const parentTools = allDisabled.size > 0
+      ? registry.list().filter((t) => !allDisabled.has(t.name))
+      : registry.list();
+    const subagentDeps = { provider, parentTools };
     registry.register(buildSubagentTool(subagentDeps));
     registry.register(buildSpawnAgentsTool(subagentDeps));
   }
@@ -414,18 +434,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       `[coder] profile=${preResolvedProfile} active_tiers=${Array.from(activeTiers).sort().join(',')}`,
     );
   }
-
-  // Load disabled tools (global from admin panel + session-level overrides)
-  let globalDisabledTools: ReadonlySet<string> | undefined;
-  try {
-    const ps = new ProviderStore(config.dbPath);
-    const disabled = ps.listGlobalDisabledTools();
-    ps.close();
-    if (disabled.length > 0) globalDisabledTools = new Set(disabled);
-  } catch {
-    /* table may not exist yet — no-op */
-  }
-  const sessionDisabledTools = store.getSessionDisabledTools(session.id);
 
   const runner = new CoderRunner({
     provider,
@@ -629,12 +637,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   };
   runner.on('turn_start', flushToolMessages);
 
+  // Capture the last error emitted by the runner so we can propagate it
+  // through the done promise. The runner emits `done('error', Error)` but
+  // `run()` returns `{ reason: 'error' }` without the Error — this bridges that gap.
+  let lastRunnerError: Error | undefined;
+  runner.on('done', (_reason: string, error?: Error) => { lastRunnerError = error; });
+
   const donePromise = runner
     .run()
     .then((res) => {
       flushToolMessages();
       store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
-      return { reason: res.reason, usage: res.totalUsage };
+      return { reason: res.reason, usage: res.totalUsage, error: lastRunnerError?.message };
     })
     .catch((e) => {
       store.updateSessionStatus(session.id, 'error');

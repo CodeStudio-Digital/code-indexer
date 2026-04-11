@@ -14,8 +14,10 @@ import type {
   ScannedFile,
   LLMSymbol,
   LLMReference,
+  AnalysisResult,
 } from '../../types.js';
 import { FileScanner } from './scanner.js';
+import { TreeSitterExtractor } from './tree-sitter/index.js';
 
 /**
  * Enriches LLM-extracted symbol references with line numbers and snippets.
@@ -180,6 +182,9 @@ export class IndexAgent {
     // 6. Process files concurrently
     const concurrency = options?.concurrency ?? this.config.concurrency;
     const indexedFiles: Array<{ path: string; fileId: number; analysis: import('../../types.js').LLMFileAnalysis; content: string }> = [];
+    const treeSitter = new TreeSitterExtractor();
+    let treeSitterHits = 0;
+    let llmSkipped = 0;
 
     await withConcurrency(toIndex, async (file, idx) => {
       try {
@@ -190,8 +195,100 @@ export class IndexAgent {
           content = readFileSync(file.path, 'utf-8');
         }
 
-        // Analyze with LLM
-        const result = await this.provider.analyzeFile(file.relativePath, content);
+        // ── Try tree-sitter extraction first (free, <15ms) ─────
+        const tsResult = await treeSitter.extract(file.relativePath, content);
+        let result: AnalysisResult;
+
+        if (tsResult.supported && tsResult.analysis.symbols && tsResult.analysis.symbols.length > 0) {
+          treeSitterHits++;
+
+          // Compute structure hash from sorted symbol signatures
+          const structSig = tsResult.analysis.symbols
+            .map(s => `${s.kind}:${s.name}:${s.signature}`)
+            .sort()
+            .join('|');
+          const newStructHash = createHash('md5').update(structSig).digest('hex');
+
+          // Check if structure is unchanged — if so, skip LLM entirely
+          const oldStructHash = this.db.getFileStructureHash(project.id, file.relativePath);
+          const existingFile = this.db.getFile(project.id, file.relativePath);
+          const oldStructEmbedding = this.db.getFileStructureEmbedding(project.id, file.relativePath);
+
+          let sim = 0;
+          let newStructEmbedding: Float32Array | null = null;
+
+          if (oldStructHash === newStructHash && existingFile && existingFile.summary) {
+             sim = 1.0;
+          } else if (oldStructEmbedding && existingFile && existingFile.summary) {
+             const { vector } = await this.embeddingService.embedQuery(structSig);
+             if (vector && vector.length > 0) {
+                 newStructEmbedding = new Float32Array(vector);
+                 sim = cosineSimilarity(oldStructEmbedding, newStructEmbedding);
+             }
+          }
+
+          if (sim >= 0.98 && existingFile && existingFile.summary) {
+            // Structure unchanged or trivially changed — reuse existing LLM metadata
+            llmSkipped++;
+            result = {
+              analysis: {
+                language: tsResult.analysis.language ?? existingFile.language,
+                summary: existingFile.summary,
+                concepts: JSON.parse(existingFile.concepts || '[]'),
+                dependencies: tsResult.analysis.dependencies ?? JSON.parse(existingFile.dependencies || '[]'),
+                internal_deps: tsResult.analysis.internal_deps ?? JSON.parse(existingFile.internal_deps || '[]'),
+                external_deps: tsResult.analysis.external_deps ?? JSON.parse(existingFile.external_deps || '[]'),
+                notes: JSON.parse(existingFile.notes || '[]'),
+                complexity: existingFile.complexity,
+                layer: existingFile.layer,
+                is_entry_point: !!existingFile.is_entry_point,
+                is_test: !!existingFile.is_test,
+                is_generated: !!existingFile.is_generated,
+                symbols: tsResult.analysis.symbols,
+                references: tsResult.analysis.references ?? [],
+              },
+              inputTokens: 0,
+              outputTokens: 0,
+            };
+          } else {
+            // Structure changed — need LLM for summary
+            let llmResult;
+            if (sim >= 0.90 && this.provider.analyzeSummary) {
+               // Use cheaper prompt (skeleton) for moderate structural changes
+               llmResult = await this.provider.analyzeSummary(file.relativePath, content, tsResult.analysis.symbols);
+            } else {
+               // Fallback to full content analysis for major structural mutations
+               llmResult = await this.provider.analyzeFile(file.relativePath, content);
+            }
+
+            result = {
+              analysis: {
+                ...llmResult.analysis,
+                symbols: tsResult.analysis.symbols,
+                references: tsResult.analysis.references ?? llmResult.analysis.references ?? [],
+                dependencies: tsResult.analysis.dependencies ?? llmResult.analysis.dependencies,
+                internal_deps: tsResult.analysis.internal_deps ?? llmResult.analysis.internal_deps,
+                external_deps: tsResult.analysis.external_deps ?? llmResult.analysis.external_deps,
+                language: tsResult.analysis.language ?? llmResult.analysis.language,
+              },
+              inputTokens: llmResult.inputTokens,
+              outputTokens: llmResult.outputTokens,
+            };
+          }
+
+          // Compute embedding if it was not computed during similarity check
+          if (!newStructEmbedding && sim !== 1.0) {
+              const { vector } = await this.embeddingService.embedQuery(structSig);
+              if (vector && vector.length > 0) newStructEmbedding = new Float32Array(vector);
+          }
+
+          // Store structure hash and embedding — will be persisted after upsertFile below
+          (tsResult as { _structHash?: string })._structHash = newStructHash;
+          (tsResult as { _structEmbedding?: Float32Array })._structEmbedding = newStructEmbedding ?? undefined;
+        } else {
+          // Unsupported language — full LLM analysis as before
+          result = await this.provider.analyzeFile(file.relativePath, content);
+        }
 
         // Record cost
         const cost = this.costTracker.record({
@@ -228,6 +325,14 @@ export class IndexAgent {
           isTest: result.analysis.is_test,
           isGenerated: result.analysis.is_generated,
         });
+
+        // Persist structure hash and embedding if tree-sitter produced one
+        if (tsResult.supported && (tsResult as { _structHash?: string })._structHash) {
+          this.db.setFileStructureHash(fileId, (tsResult as { _structHash?: string })._structHash!);
+        }
+        if (tsResult.supported && (tsResult as { _structEmbedding?: Float32Array })._structEmbedding) {
+          this.db.setFileStructureEmbedding(fileId, (tsResult as { _structEmbedding?: Float32Array })._structEmbedding!);
+        }
 
         // Upsert symbols
         this.db.upsertSymbols(project.id, fileId, file.relativePath, result.analysis.symbols);
@@ -290,6 +395,12 @@ export class IndexAgent {
     // Release file content from indexedFiles — embeddings are done, and these
     // strings can be hundreds of MB in aggregate for large codebases.
     for (const f of indexedFiles) (f as { content: string }).content = '';
+
+    // Cleanup tree-sitter parsers
+    treeSitter.dispose();
+    if (treeSitterHits > 0) {
+      console.error(`[indexer] Tree-sitter: ${treeSitterHits}/${toIndex.length} files from AST; ${llmSkipped} LLM calls skipped (structure unchanged)`);
+    }
 
     // 12. Update project counters
     const stats = this.db.getStats(project.id);
@@ -427,14 +538,22 @@ export class IndexAgent {
         .sort((a, b) => (a.line ?? Number.MAX_SAFE_INTEGER) - (b.line ?? Number.MAX_SAFE_INTEGER));
 
       const fileLines = file.content.split(/\r?\n/);
+      const skippedSymbols: Array<{ sym: any; symDbId: number; lineStart: number; lineEnd: number }> = [];
 
       for (let i = 0; i < sortedSymbols.length; i++) {
         const sym = sortedSymbols[i];
         const symDbId = symIdMap.get(`${sym.kind}:${sym.name}`);
         if (!symDbId) continue;
 
+        const globalContext = [
+          `File: ${file.path}`,
+          file.summary ? `Summary: ${file.summary}` : '',
+          file.concepts.length ? `Concepts: ${file.concepts.join(', ')}` : ''
+        ].filter(Boolean).join(' | ');
+
         // ── Signature/comment embedding (always) ────────────────
         const sigText = [
+          `[Context: ${globalContext}]`,
           `${sym.kind}: ${sym.name}`,
           sym.signature ? `Signature: ${sym.signature}` : '',
           sym.comment ? `Description: ${sym.comment}` : '',
@@ -467,14 +586,26 @@ export class IndexAgent {
         if (sym.line === null || sym.line === undefined) continue;
 
         const lineStart = Math.max(0, sym.line - 1);
-        const nextSym = sortedSymbols[i + 1];
-        const nextLine = nextSym?.line ?? fileLines.length + 1;
-        const lineEnd = Math.min(fileLines.length, nextLine - 1);
+        // Use tree-sitter's precise end_line when available, fallback to next symbol heuristic
+        const symEndLine = (sym as { end_line?: number }).end_line;
+        let lineEnd: number;
+        if (symEndLine) {
+          // AST-aware: exact end boundary from tree-sitter
+          lineEnd = Math.min(fileLines.length, symEndLine);
+        } else {
+          // Heuristic fallback: use next symbol's start line
+          const nextSym = sortedSymbols[i + 1];
+          const nextLine = nextSym?.line ?? fileLines.length + 1;
+          lineEnd = Math.min(fileLines.length, nextLine - 1);
+        }
         const spanLines = lineEnd - lineStart;
-        if (spanLines < MIN_BODY_LINES) continue;
+        if (spanLines < MIN_BODY_LINES) {
+          skippedSymbols.push({ sym, symDbId, lineStart, lineEnd });
+          continue;
+        }
 
         const bodySlice = fileLines.slice(lineStart, lineEnd).join('\n').slice(0, MAX_BODY_CHARS);
-        const bodyText = `${sym.kind} ${sym.name}\n${sym.signature ?? ''}\n---\n${bodySlice}`;
+        const bodyText = `[Context: ${globalContext}]\n${sym.kind} ${sym.name}\n${sym.signature ?? ''}\n---\n${bodySlice}`;
         const bodyHash = createHash('md5').update(bodyText).digest('hex');
         const bodyVecId =
           'sb_' +
@@ -495,6 +626,83 @@ export class IndexAgent {
             onCommit: () => this.db.setSymbolEmbeddingHash(symDbId, bodyHash, 'body'),
           });
         }
+      }
+
+      // ── cAST Sibling Merging (Second Pass) ─────────────────
+      if (skippedSymbols.length > 0) {
+        skippedSymbols.sort((a, b) => a.lineStart - b.lineStart);
+        const MCP_INDEX_SIBLING_GAP = 3;
+        const MCP_INDEX_GROUP_MIN_LINES = 3;
+
+        let currentGroup: typeof skippedSymbols = [];
+        let groupChars = 0;
+
+        const processGroup = () => {
+          if (currentGroup.length === 0) return;
+          const first = currentGroup[0];
+          const last = currentGroup[currentGroup.length - 1];
+          const totalLines = last.lineEnd - first.lineStart;
+
+          if (totalLines >= MCP_INDEX_GROUP_MIN_LINES) {
+            const bodyParts = currentGroup.map(item => {
+              const slice = fileLines.slice(item.lineStart, item.lineEnd).join('\n');
+              return `method ${item.sym.name}: ${item.sym.signature ?? '()'}\n---\n${slice}`;
+            });
+            const globalContext = [
+              `File: ${file.path}`,
+              file.summary ? `Summary: ${file.summary}` : '',
+              file.concepts.length ? `Concepts: ${file.concepts.join(', ')}` : ''
+            ].filter(Boolean).join(' | ');
+            const bodyText = `[Context: ${globalContext}]\n[group] File: ${file.path} (parent: ${first.sym.parent ?? 'None'})\n\n${bodyParts.join('\n\n')}`;
+
+            const bodyHash = createHash('md5').update(bodyText).digest('hex');
+            
+            const sgVecId = 'sg_' + createHash('md5')
+              .update(`${project.id}:${file.path}:${first.sym.name}:${last.sym.name}`)
+              .digest('hex').slice(0, 22);
+
+            const anchorSymDbId = first.symDbId;
+            const storedBodyHash = symHashMap.get(anchorSymDbId)?.body ?? null;
+
+            if (storedBodyHash !== bodyHash) {
+              candidates.push({
+                text: bodyText.slice(0, MAX_BODY_CHARS),
+                id: sgVecId,
+                filePath: file.path,
+                metadata: {
+                  project_name: project.name,
+                  type: 'symbol_group',
+                  ref_id: String(anchorSymDbId),
+                },
+                hash: bodyHash,
+                onCommit: () => this.db.setSymbolEmbeddingHash(anchorSymDbId, bodyHash, 'body'),
+              });
+            }
+          }
+        };
+
+        for (let j = 0; j < skippedSymbols.length; j++) {
+          const item = skippedSymbols[j];
+          if (currentGroup.length === 0) {
+            currentGroup.push(item);
+            groupChars += (item.lineEnd - item.lineStart) * 50; // estimate
+            continue;
+          }
+
+          const prev = currentGroup[currentGroup.length - 1];
+          const gap = item.lineStart - prev.lineEnd;
+          const sameParent = item.sym.parent === prev.sym.parent;
+          
+          if (gap <= MCP_INDEX_SIBLING_GAP && sameParent && groupChars < MAX_BODY_CHARS) {
+            currentGroup.push(item);
+            groupChars += (item.lineEnd - item.lineStart) * 50;
+          } else {
+            processGroup();
+            currentGroup = [item];
+            groupChars = (item.lineEnd - item.lineStart) * 50;
+          }
+        }
+        processGroup(); // flush last
       }
     }
 
@@ -1067,4 +1275,20 @@ export class IndexAgent {
 
     return patterns;
   }
+}
+
+export function cosineSimilarity(vecA: Float32Array, vecB: Float32Array): number {
+  if (vecA.length !== vecB.length) return 0;
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    const a = vecA[i];
+    const b = vecB[i];
+    dotProduct += a * b;
+    normA += a * a;
+    normB += b * b;
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }

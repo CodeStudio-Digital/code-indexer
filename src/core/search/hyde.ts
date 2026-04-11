@@ -37,7 +37,7 @@ export class HyDEService {
    * returned unchanged — the caller should treat "HyDE output === input"
    * as a graceful fallback.
    */
-  async generate(query: string): Promise<string> {
+  async generate(query: string, projectContext?: { language?: string; concepts?: string[] }): Promise<string> {
     const key = query.trim();
     if (!key) return query;
 
@@ -49,7 +49,7 @@ export class HyDEService {
     if (!cfg) return query;
 
     try {
-      const text = await this.callLLM(cfg, key);
+      const text = await this.callLLM(cfg, key, projectContext);
       const cleaned = this.clean(text);
       if (!cleaned || cleaned.length < 8) return query;
       // LRU-ish eviction: drop oldest when full.
@@ -81,8 +81,8 @@ export class HyDEService {
     return usable.find((r) => r.is_default) ?? usable[0];
   }
 
-  private async callLLM(cfg: ProviderConfig, query: string): Promise<string> {
-    const prompt = buildHyDEPrompt(query);
+  private async callLLM(cfg: ProviderConfig, query: string, projectContext?: { language?: string; concepts?: string[] }): Promise<string> {
+    const prompt = buildHyDEPrompt(query, projectContext);
     if (cfg.kind === 'anthropic') return this.callAnthropic(cfg, prompt);
     // OpenAI-compatible: openai, zai, deepseek, and any "kind: openai" custom.
     return this.callOpenAICompat(cfg, prompt);
@@ -105,7 +105,7 @@ export class HyDEService {
       ...(cfg.base_url ? { baseURL: cfg.base_url } : {}),
     });
     const resp = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: (cfg.extra?.hyde_model as string) || 'claude-haiku-4-5-20251001',
       max_tokens: 180,
       messages: [{ role: 'user', content: prompt }],
     });
@@ -186,9 +186,13 @@ export class HyDEService {
  * essays — the goal is to land in the same embedding neighborhood as the
  * actual source code.
  */
-function buildHyDEPrompt(query: string): string {
-  return `Write a short hypothetical code snippet or docstring (3-6 lines) that would answer this question. Do not explain. Output only code-like content with key function/class names and types. No markdown fences.
+function buildHyDEPrompt(query: string, ctx?: { language?: string; concepts?: string[] }): string {
+  const contextHint = ctx
+    ? `\nProject context: ${ctx.language ? `primary language: ${ctx.language}` : ''}${ctx.concepts?.length ? `, key concepts: ${ctx.concepts.slice(0, 8).join(', ')}` : ''}\n`
+    : '';
 
+  return `Write a short hypothetical code snippet or docstring (3-6 lines) that would answer this question. Do not explain. Output only code-like content with key function/class names and types. No markdown fences.
+${contextHint}
 Question: ${query}
 
 Hypothetical snippet:`;

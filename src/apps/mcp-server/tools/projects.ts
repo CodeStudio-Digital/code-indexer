@@ -2,6 +2,7 @@ import { defineTool, type McpTool } from '../tool.js';
 import { resolveProject, truncateToTokens } from '../utils.js';
 import { createProviderAsync } from '../../../core/providers/factory.js';
 import { IndexAgent } from '../../../core/indexer/indexer.js';
+import { buildRepoMap } from '../../../core/services/repo-map.js';
 import type { ProviderName } from '../../../types.js';
 
 const list_projects = defineTool({
@@ -222,6 +223,24 @@ const get_architecture = defineTool({
   },
 });
 
+const get_repo_map = defineTool({
+  name: 'get_repo_map',
+  description: 'Structural map of the repository (~2000 tokens). Shows key files weighted by importance (entry points, hubs, high-complexity) with their top symbols. Use after get_project_pulse for a mental model of the codebase architecture. Based on dependency graph analysis (PageRank-style scoring).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_name: { type: 'string' },
+      max_tokens: { type: 'number', description: 'Token budget (default 2000)' },
+    },
+    required: ['project_name'],
+  },
+  handler: (args, { db }) => {
+    const project = resolveProject(db, args.project_name as string);
+    const maxTokens = (args.max_tokens as number) ?? 2000;
+    return buildRepoMap(db, project.id, maxTokens);
+  },
+});
+
 export const projectTools: McpTool[] = [
   list_projects,
   delete_project,
@@ -229,5 +248,6 @@ export const projectTools: McpTool[] = [
   get_project_stats,
   get_project_overview,
   get_project_pulse,
+  get_repo_map,
   get_architecture,
 ];

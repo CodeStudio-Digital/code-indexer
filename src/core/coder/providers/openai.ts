@@ -45,13 +45,36 @@ export class OpenAIChatProvider implements ChatProvider {
       },
     }));
 
-    const stream = await this.client.chat.completions.create({
-      model: this.model,
-      messages,
-      tools: tools.length > 0 ? tools : undefined,
-      stream: true,
-      stream_options: { include_usage: true },
-    });
+    try {
+      // DEBUG LOGGING
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      fs.writeFileSync(
+        path.join(process.cwd(), 'zai-debug-request.json'),
+        JSON.stringify({ model: this.model, messages, tools: tools.length > 0 ? tools : undefined }, null, 2)
+      );
+    } catch {}
+
+    let stream;
+    try {
+      stream = await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        tools: tools.length > 0 ? tools : undefined,
+        stream: true,
+        stream_options: { include_usage: true },
+      });
+    } catch (apiErr: any) {
+      try {
+        const fs = await import('node:fs');
+        const path = await import('node:path');
+        fs.writeFileSync(
+          path.join(process.cwd(), 'zai-debug-error.json'),
+          JSON.stringify({ error: apiErr, response: apiErr.response?.data || apiErr.error }, null, 2)
+        );
+      } catch {}
+      throw apiErr;
+    }
 
     // Tool calls arrive in deltas indexed by `tool_calls[i].index`.
     const toolAcc = new Map<number, { id: string; name: string; argsAcc: string; emittedStart: boolean }>();
@@ -181,7 +204,7 @@ function toOpenAIMessages(system: string, messages: AgentMessage[]): OAIMsg[] {
       const toolUses = m.content.filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use');
       const msg: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam = {
         role: 'assistant',
-        content: text || null,
+        content: text || "",
       };
       if (toolUses.length > 0) {
         msg.tool_calls = toolUses.map((tu) => ({
@@ -195,6 +218,14 @@ function toOpenAIMessages(system: string, messages: AgentMessage[]): OAIMsg[] {
       }
       out.push(msg);
     }
+  }
+
+  // Guard: strict OpenAI-compatible providers (GLM/ZAI) may reject messages
+  // that don't start with a user turn after the system message. This can
+  // happen when the summarizer replaces the opening user message with a
+  // synthetic assistant summary.
+  if (out.length > 1 && out[1].role !== 'user') {
+    out.splice(1, 0, { role: 'user', content: '[Conversation continues from summarized context.]' });
   }
 
   return out;

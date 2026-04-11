@@ -4,6 +4,16 @@ export interface LLMProvider {
   readonly name: string;
   readonly model: string;
   analyzeFile(filePath: string, content: string): Promise<AnalysisResult>;
+  /**
+   * Summary-only analysis — used when tree-sitter handles structural extraction.
+   * Sends a skeleton instead of full content, requesting only semantic metadata.
+   * Default implementation falls back to full analyzeFile().
+   */
+  analyzeSummary?(
+    filePath: string,
+    content: string,
+    symbols: Array<{ name: string; kind: string; signature: string; line?: number | null; end_line?: number }>
+  ): Promise<AnalysisResult>;
 }
 
 export const SYSTEM_PROMPT = `You are a code analysis engine. Analyze the provided source file and return a JSON object with the following structure. Return ONLY valid JSON, no markdown, no explanation.
@@ -73,6 +83,85 @@ Layer classification:
 - "config": configuration files (JSON, YAML, TOML, env)
 - "test": test files, specs, fixtures, mocks
 - "unknown": cannot determine`;
+
+/**
+ * Reduced system prompt for summary-only analysis.
+ * Used when tree-sitter handles structural extraction (symbols, refs, deps).
+ * The LLM only needs to provide semantic metadata: summary, concepts, complexity, etc.
+ * This cuts input tokens by ~60-80% and output tokens by ~75%.
+ */
+export const SUMMARY_ONLY_SYSTEM_PROMPT = `You are a code analysis engine. A structural parser has already extracted all symbols, imports, and dependencies from this file. You only need to provide semantic metadata.
+
+Return ONLY valid JSON with this structure:
+
+{
+  "summary": "string - concise description of what this file does (1-3 sentences)",
+  "concepts": ["string array - domain concepts, patterns, and technologies used"],
+  "notes": ["string array - important observations, TODOs, potential issues"],
+  "complexity": "low | medium | high | very-high",
+  "layer": "presentation | business | data | infrastructure | config | test | unknown",
+  "is_entry_point": "boolean - true if this is a main entry point",
+  "is_test": "boolean - true if this is a test/spec file",
+  "is_generated": "boolean - true if auto-generated"
+}
+
+Complexity guidelines:
+- "low": < 3 code paths, < 2 nesting levels, < 3 dependencies
+- "medium": 3-10 code paths, 2-3 nesting levels, 3-8 dependencies
+- "high": 10-25 code paths, 4+ nesting levels, 8-15 dependencies
+- "very-high": 25+ code paths OR deeply nested OR 15+ dependencies
+
+Layer classification:
+- "presentation": UI components, views, templates, CSS, frontend routing
+- "business": domain logic, services, use cases, validation rules
+- "data": database schemas, models, repositories, migrations, ORMs
+- "infrastructure": servers, middleware, configs, adapters, external service clients
+- "config": configuration files (JSON, YAML, TOML, env)
+- "test": test files, specs, fixtures, mocks
+- "unknown": cannot determine`;
+
+/**
+ * Build a skeleton-based user prompt for summary-only analysis.
+ * Sends the file path + a structural skeleton (symbol signatures, first/last lines)
+ * instead of the full source. This drastically reduces input tokens.
+ */
+export function buildSummaryUserPrompt(
+  filePath: string,
+  content: string,
+  symbols: Array<{ name: string; kind: string; signature: string; line?: number | null; end_line?: number }>
+): string {
+  const lines = content.split('\n');
+  const totalLines = lines.length;
+
+  // Build a skeleton: file header + symbol list + first/last 3 lines of file
+  const parts: string[] = [`File: ${filePath} (${totalLines} lines)`];
+
+  const hints = getLanguageHints(filePath);
+  if (hints) parts.push(hints);
+
+  // First 5 lines (usually imports/module declaration)
+  parts.push('\n--- File header ---');
+  parts.push(lines.slice(0, 5).join('\n'));
+
+  // Symbol skeleton
+  if (symbols.length > 0) {
+    parts.push('\n--- Symbols ---');
+    for (const sym of symbols) {
+      const loc = sym.end_line ? `L${sym.line}-${sym.end_line}` : `L${sym.line}`;
+      parts.push(`${sym.kind} ${sym.name} ${loc}: ${sym.signature.slice(0, 150)}`);
+    }
+  }
+
+  // Last 3 lines (sometimes contain exports or setup)
+  if (totalLines > 8) {
+    parts.push('\n--- File footer ---');
+    parts.push(lines.slice(-3).join('\n'));
+  }
+
+  const skeleton = parts.join('\n');
+  // Cap at 8000 chars (still much smaller than 50000 for full content)
+  return skeleton.length > 8000 ? skeleton.slice(0, 8000) + '\n...[truncated]' : skeleton;
+}
 
 export function buildUserPrompt(filePath: string, content: string): string {
   const maxChars = 50000;

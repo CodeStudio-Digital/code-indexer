@@ -1,83 +1,98 @@
 import React from 'react';
-import { Bot, Check, Clock, Loader2, X, Wrench } from 'lucide-react';
+import { Bot, Check, Clock, Loader2, X, Wrench, Crown, Pause, Eye, AlertTriangle } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { cn } from '../../lib/utils.js';
 import type { AgentStreamState } from '../../hooks/useCompanyStream.js';
 
 interface AgentPaneProps {
   agent: AgentStreamState;
+  onClick?: () => void;
 }
 
-const STATUS_CONFIG = {
+const STATUS_CONFIG: Record<string, { icon: React.FC<{ className?: string }>; color: string; label: string; spin?: boolean }> = {
   idle: { icon: Clock, color: 'text-muted-foreground bg-muted/50', label: 'Idle' },
   running: { icon: Loader2, color: 'text-warning bg-warning/10', label: 'Running', spin: true },
-  waiting_plan: { icon: Clock, color: 'text-yellow-400 bg-yellow-500/10', label: 'Awaiting Plan Approval' },
-  completed: { icon: Check, color: 'text-success bg-success/10', label: 'Completed' },
+  working: { icon: Loader2, color: 'text-blue-400 bg-blue-500/10', label: 'Working', spin: true },
+  waiting: { icon: Pause, color: 'text-yellow-400 bg-yellow-500/10', label: 'Waiting' },
+  waiting_plan: { icon: Clock, color: 'text-yellow-400 bg-yellow-500/10', label: 'Plan Review' },
+  reviewing: { icon: Eye, color: 'text-cyan-400 bg-cyan-500/10', label: 'Reviewing' },
+  blocked: { icon: AlertTriangle, color: 'text-orange-400 bg-orange-500/10', label: 'Blocked' },
+  completed: { icon: Check, color: 'text-success bg-success/10', label: 'Done' },
   error: { icon: X, color: 'text-destructive bg-destructive/10', label: 'Error' },
-} as const;
+  aborted: { icon: X, color: 'text-muted-foreground bg-muted/50', label: 'Aborted' },
+};
 
-export function AgentPane({ agent }: AgentPaneProps) {
+export function AgentPane({ agent, onClick }: AgentPaneProps) {
   const statusCfg = STATUS_CONFIG[agent.status] ?? STATUS_CONFIG.idle;
   const StatusIcon = statusCfg.icon;
   const currentText = agent.textChunks.join('');
   const activeToolCalls = agent.toolCalls.filter((t) => t.status === 'running');
-  const completedToolCalls = agent.toolCalls.filter((t) => t.status === 'done');
+  const completedCount = agent.toolCalls.filter((t) => t.status === 'done').length;
+  const isMaster = agent.role === 'master';
 
   return (
-    <div className="rounded-lg border bg-card overflow-hidden flex flex-col h-full">
+    <div
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={onClick ? (e) => e.key === 'Enter' && onClick() : undefined}
+      className={cn(
+        'rounded-lg border bg-card overflow-hidden flex flex-col',
+        onClick && 'cursor-pointer hover:bg-muted/30 transition-colors',
+      )}
+    >
       {/* Header */}
-      <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/30">
-        <div className={cn('h-5 w-5 rounded-md flex items-center justify-center shrink-0', statusCfg.color)}>
-          <StatusIcon className={cn('h-3 w-3', 'spin' in statusCfg && statusCfg.spin && 'animate-spin')} />
+      <div className="px-2.5 py-1.5 border-b flex items-center gap-1.5 bg-muted/20">
+        <div className={cn('h-4 w-4 rounded flex items-center justify-center shrink-0', statusCfg.color)}>
+          <StatusIcon className={cn('h-2.5 w-2.5', statusCfg.spin && 'animate-spin')} />
         </div>
-        <Bot className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs font-medium capitalize">{agent.role}</span>
-        <Badge variant="outline" className="text-[10px] ml-auto">
+        {isMaster ? (
+          <Crown className="h-3 w-3 text-yellow-400 shrink-0" />
+        ) : (
+          <Bot className="h-3 w-3 text-muted-foreground shrink-0" />
+        )}
+        <span className="text-[11px] font-medium capitalize truncate">{agent.role}</span>
+        <Badge variant="outline" className="text-[9px] ml-auto shrink-0">
           {statusCfg.label}
         </Badge>
       </div>
 
-      {/* Content area */}
-      <div className="flex-1 overflow-y-auto p-2 text-xs space-y-2">
-        {/* Active tool calls */}
-        {activeToolCalls.map((tc) => (
-          <div key={tc.id} className="flex items-center gap-1.5 text-warning">
-            <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-            <span className="font-mono truncate">{tc.name}</span>
-          </div>
-        ))}
+      {/* Compact content */}
+      <div className="px-2.5 py-1.5 text-[10px] space-y-1">
+        {/* Status message */}
+        {agent.statusMessage && (
+          <p className="text-muted-foreground italic truncate">{agent.statusMessage}</p>
+        )}
 
-        {/* Current streaming text */}
-        {currentText && (
-          <div className="text-foreground/80 whitespace-pre-wrap break-words leading-relaxed">
-            {currentText.length > 300 ? `...${currentText.slice(-300)}` : currentText}
+        {/* Active tool call */}
+        {activeToolCalls.length > 0 && (
+          <div className="flex items-center gap-1 text-warning truncate">
+            <Loader2 className="h-2.5 w-2.5 animate-spin shrink-0" />
+            <span className="font-mono truncate">{activeToolCalls[0].name}</span>
           </div>
         )}
 
-        {/* Completed tool calls count */}
-        {completedToolCalls.length > 0 && (
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <Wrench className="h-3 w-3" />
-            <span>{completedToolCalls.length} tool call{completedToolCalls.length !== 1 ? 's' : ''} completed</span>
-          </div>
+        {/* Current text (very short preview) */}
+        {currentText && !activeToolCalls.length && (
+          <p className="text-foreground/70 truncate">
+            {currentText.length > 80 ? `...${currentText.slice(-80)}` : currentText}
+          </p>
         )}
 
-        {/* Usage stats */}
-        {agent.usage && (
-          <div className="text-[10px] text-muted-foreground tabular-nums">
-            {formatTokens(agent.usage.input_tokens + agent.usage.output_tokens)} tokens
-          </div>
-        )}
-
-        {/* Done reason */}
-        {agent.doneReason && (
-          <div className={cn(
-            'text-[10px] font-medium',
-            agent.status === 'completed' ? 'text-success' : 'text-destructive',
-          )}>
-            {agent.doneReason}
-          </div>
-        )}
+        {/* Stats */}
+        <div className="flex items-center gap-2 text-muted-foreground">
+          {completedCount > 0 && (
+            <span className="flex items-center gap-0.5">
+              <Wrench className="h-2.5 w-2.5" />
+              {completedCount}
+            </span>
+          )}
+          {agent.usage && (
+            <span className="tabular-nums">
+              {formatTokens(agent.usage.input_tokens + agent.usage.output_tokens)}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );

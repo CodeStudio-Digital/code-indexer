@@ -243,6 +243,27 @@ const get_context_for = defineTool({
           const f = r.data as unknown as Record<string, unknown>;
           return `${f.path} | ${f.layer} | ${f.summary || ''}`.slice(0, 200);
         }).join('\n'));
+
+        // ── Graph neighbors: 1-hop dependencies/dependents ──
+        const neighborPaths = new Set<string>();
+        const topFilePaths = new Set(fileResults.map(r => (r.data as unknown as { path: string }).path));
+        for (const r of fileResults.slice(0, 3)) {
+          const f = r.data as unknown as { id: number; path: string };
+          const deps = db.getDependencies(f.id);
+          const dependents = db.getDependents(project.id, f.id);
+          for (const d of [...deps, ...dependents]) {
+            const path = 'target_file_path' in d ? d.target_file_path : (d as { source_file_path: string }).source_file_path;
+            if (path && !topFilePaths.has(path)) neighborPaths.add(path);
+          }
+        }
+        if (neighborPaths.size > 0) {
+          const neighborFiles = [...neighborPaths].slice(0, 5).map(p => {
+            const file = db.getFile(project.id, p);
+            return file ? `${file.path} | ${file.layer} | ${file.summary || ''}`.slice(0, 200) : p;
+          });
+          sections.push('\n[RELATED FILES (graph neighbors)]');
+          sections.push(neighborFiles.join('\n'));
+        }
       }
       const symResults = hyde
         ? await hybridSearch.searchExpanded(project.id, project.name, question, { type: 'symbols', limit: 8 })

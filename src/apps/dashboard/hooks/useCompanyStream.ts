@@ -22,6 +22,7 @@ export interface BoardMessage {
 export interface AgentStreamState {
   role: string;
   agentRunId: number;
+  coderSessionId?: number;
   textChunks: string[];
   toolCalls: Array<{
     id: string;
@@ -29,7 +30,8 @@ export interface AgentStreamState {
     status: 'running' | 'done' | 'error';
     durationMs?: number;
   }>;
-  status: 'idle' | 'running' | 'waiting_plan' | 'completed' | 'error';
+  status: 'idle' | 'running' | 'working' | 'waiting' | 'waiting_plan' | 'reviewing' | 'blocked' | 'completed' | 'error' | 'aborted';
+  statusMessage?: string;
   usage?: Usage;
   doneReason?: string;
 }
@@ -44,6 +46,12 @@ export interface CompanyStreamState {
   userMessage: string | null;
   /** Set when Master calls submit_plan — needs human approval. */
   pendingMasterPlan: { plan: string } | null;
+  /** Set when Master calls ask_user — needs human answer. */
+  pendingMasterQuestion: {
+    question: string;
+    options?: Array<{ label: string; value: string }>;
+    allowFreeform?: boolean;
+  } | null;
 }
 
 interface AgentEvent {
@@ -65,6 +73,7 @@ export function useCompanyStream(companySessionId: number | null) {
     error: null,
     userMessage: null,
     pendingMasterPlan: null,
+    pendingMasterQuestion: null,
   });
 
   const abortRef = useRef<AbortController | null>(null);
@@ -124,9 +133,40 @@ export function useCompanyStream(companySessionId: number | null) {
         }
         return { ...prev, subordinateStates: subs };
       });
+    } else if (eventType === 'agent_status') {
+      const d = data as { agentRunId: number; role: string; status: string; message: string };
+      setState((prev) => {
+        const isMaster = d.role === 'master';
+        if (isMaster && prev.masterState) {
+          return { ...prev, masterState: { ...prev.masterState, status: d.status as AgentStreamState['status'], statusMessage: d.message } };
+        }
+        const subs = new Map(prev.subordinateStates);
+        const existing = subs.get(d.agentRunId);
+        if (existing) {
+          subs.set(d.agentRunId, { ...existing, status: d.status as AgentStreamState['status'], statusMessage: d.message });
+        }
+        return { ...prev, subordinateStates: subs };
+      });
     } else if (eventType === 'master_plan_posted') {
       const d = data as { plan: string };
       setState((prev) => ({ ...prev, pendingMasterPlan: { plan: d.plan } }));
+    } else if (eventType === 'master_question_posted') {
+      const d = data as {
+        question: string;
+        options?: Array<{ label: string; value: string }>;
+        allowFreeform?: boolean;
+      };
+      setState((prev) => ({ ...prev, pendingMasterQuestion: d }));
+    } else if (eventType === 'session_idle') {
+      // Session is waiting for user input — master finished but bus is alive.
+      // Keep connected=true so the SSE stream survives and the user can send
+      // follow-up messages that resurrect the master.
+      setState((prev) => ({
+        ...prev,
+        masterState: prev.masterState
+          ? { ...prev.masterState, status: 'waiting', statusMessage: 'Waiting for your input' }
+          : prev.masterState,
+      }));
     } else if (eventType === 'error') {
       const d = data as { error?: string };
       setState((prev) => ({
@@ -229,6 +269,7 @@ export function useCompanyStream(companySessionId: number | null) {
       subordinateStates: new Map(),
       boardMessages: [],
       pendingMasterPlan: null,
+      pendingMasterQuestion: null,
     });
 
     try {
@@ -264,7 +305,113 @@ export function useCompanyStream(companySessionId: number | null) {
   }, [companySessionId]);
 
   /**
+   * Resume a completed/paused company session. Unlike start(), this
+   * preserves the master's conversation history and the board entries.
+   */
+  const resume = useCallback(async (message: string) => {
+    if (!companySessionId) return;
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    // Don't clear boardMessages or agent states — preserve existing context
+    setState((prev) => ({
+      ...prev,
+      started: true,
+      connected: true,
+      error: null,
+      pendingMasterPlan: null,
+      pendingMasterQuestion: null,
+    }));
+
+    try {
+      const res = await fetch(`/api/company/sessions/${companySessionId}/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+        signal: ctrl.signal,
+      });
+
+      if (!res.ok) {
+        const errorBody = await res.text().catch(() => 'Unknown error');
+        setState((prev) => ({ ...prev, connected: false, error: `Resume failed: ${errorBody}` }));
+        return;
+      }
+
+      if (!res.body) {
+        setState((prev) => ({ ...prev, connected: false, error: 'No response body' }));
+        return;
+      }
+
+      await consumeSSE(res.body.getReader());
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') {
+        setState((prev) => ({
+          ...prev,
+          error: `Connection error: ${(e as Error).message}`,
+        }));
+      }
+    } finally {
+      setState((prev) => ({ ...prev, connected: false }));
+    }
+  }, [companySessionId]);
+
+  /**
+   * Load final session state from DB when SSE stream is unavailable.
+   * This covers the case where the session completed while the user
+   * was on another page — we load board + agent runs from persisted data.
+   */
+  const loadFinalStateFromDB = useCallback(async () => {
+    if (!companySessionId) return;
+    try {
+      const res = await fetch(`/api/company/sessions/${companySessionId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setState((prev) => {
+        // Build board messages from DB
+        const dbBoard: BoardMessage[] = (data.recentBoard ?? []).map((b: { id: number; author_role: string; agent_run_id: number | null; kind: string; content: string; mentions_json: string; created_at: string }) => ({
+          id: b.id,
+          author_role: b.author_role,
+          agent_run_id: b.agent_run_id,
+          kind: b.kind,
+          content: b.content,
+          mentions: JSON.parse(b.mentions_json || '[]'),
+          created_at: b.created_at,
+        }));
+        // Build agent states from DB
+        const subs = new Map<number, AgentStreamState>();
+        let master: AgentStreamState | null = prev.masterState;
+        for (const run of data.agentRuns ?? []) {
+          const agentState: AgentStreamState = {
+            role: run.role,
+            agentRunId: run.id,
+            coderSessionId: run.coder_session_id,
+            textChunks: [],
+            toolCalls: [],
+            status: run.status as AgentStreamState['status'],
+            statusMessage: run.status_message,
+          };
+          if (run.role === 'master') {
+            master = agentState;
+          } else {
+            subs.set(run.id, agentState);
+          }
+        }
+        return {
+          ...prev,
+          started: true,
+          boardMessages: dbBoard.length > 0 ? dbBoard : prev.boardMessages,
+          masterState: master,
+          subordinateStates: subs.size > 0 ? subs : prev.subordinateStates,
+        };
+      });
+    } catch { /* ignore fetch errors */ }
+  }, [companySessionId]);
+
+  /**
    * Reattach to an active company session run.
+   * Retries up to 3 times with exponential backoff.
+   * If all retries fail, falls back to loading final state from DB.
    */
   const reattach = useCallback(async () => {
     if (!companySessionId) return;
@@ -272,29 +419,55 @@ export function useCompanyStream(companySessionId: number | null) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    setState((prev) => ({ ...prev, connected: true, error: null }));
+    setState((prev) => ({ ...prev, started: true, connected: true, error: null }));
 
-    try {
-      const res = await fetch(`/api/company/sessions/${companySessionId}/attach`, {
-        signal: ctrl.signal,
-        headers: { Accept: 'text/event-stream' },
-      });
+    const maxRetries = 3;
+    const baseDelayMs = 1000;
 
-      if (!res.ok) {
-        setState((prev) => ({ ...prev, connected: false }));
-        return;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (ctrl.signal.aborted) break;
+
+      // Exponential backoff on retries
+      if (attempt > 0) {
+        await new Promise<void>((r) => setTimeout(r, baseDelayMs * Math.pow(2, attempt - 1)));
+        if (ctrl.signal.aborted) break;
       }
 
-      if (res.body) {
-        await consumeSSE(res.body.getReader());
+      try {
+        const res = await fetch(`/api/company/sessions/${companySessionId}/attach`, {
+          signal: ctrl.signal,
+          headers: { Accept: 'text/event-stream' },
+        });
+
+        if (res.ok && res.body) {
+          // Connected successfully — consume the stream
+          await consumeSSE(res.body.getReader());
+          // Stream ended naturally (bus closed) — load final state
+          await loadFinalStateFromDB();
+          setState((prev) => ({ ...prev, connected: false }));
+          return;
+        }
+
+        // 404 = bus ended or orchestrator gone — retry in case of timing
+        if (res.status === 404 && attempt < maxRetries - 1) {
+          continue;
+        }
+
+        // Non-retryable error or last attempt
+        if (!res.ok) {
+          // Fall through to final fallback below
+          break;
+        }
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') return;
+        if (attempt < maxRetries - 1) continue;
+        break;
       }
-    } catch (e) {
-      if ((e as Error).name !== 'AbortError') {
-        setState((prev) => ({ ...prev, connected: false }));
-      }
-    } finally {
-      setState((prev) => ({ ...prev, connected: false }));
     }
+
+    // All retries exhausted — load final state from DB
+    await loadFinalStateFromDB();
+    setState((prev) => ({ ...prev, connected: false }));
   }, [companySessionId]);
 
   const abort = useCallback(async () => {
@@ -320,6 +493,50 @@ export function useCompanyStream(companySessionId: number | null) {
     }
   }, [companySessionId]);
 
+  const sendMessage = useCallback(async (message: string) => {
+    if (!companySessionId) return;
+    try {
+      const res = await fetch(`/api/company/sessions/${companySessionId}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        const errorMsg = res.status === 404
+          ? 'Session is no longer active. Start a new session or reload the page.'
+          : `Failed to send message (${res.status}): ${body}`;
+        setState((prev) => ({ ...prev, error: errorMsg }));
+      }
+    } catch (e) {
+      console.error('Failed to send message to master:', e);
+      setState((prev) => ({ ...prev, error: `Connection error: ${(e as Error).message}` }));
+    }
+  }, [companySessionId]);
+
+  const respondToMasterQuestion = useCallback(async (answer: string) => {
+    if (!companySessionId) return;
+    try {
+      const res = await fetch(`/api/company/sessions/${companySessionId}/answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answer }),
+      });
+      if (res.ok) {
+        setState((prev) => ({ ...prev, pendingMasterQuestion: null }));
+      } else {
+        const body = await res.text().catch(() => '');
+        const errorMsg = res.status === 404
+          ? 'Session is no longer active. Your answer could not be delivered.'
+          : `Failed to answer (${res.status}): ${body}`;
+        setState((prev) => ({ ...prev, error: errorMsg }));
+      }
+    } catch (e) {
+      console.error('Failed to answer master question:', e);
+      setState((prev) => ({ ...prev, error: `Connection error: ${(e as Error).message}` }));
+    }
+  }, [companySessionId]);
+
   const reset = useCallback(() => {
     abortRef.current?.abort();
     setState({
@@ -331,15 +548,19 @@ export function useCompanyStream(companySessionId: number | null) {
       error: null,
       userMessage: null,
       pendingMasterPlan: null,
+      pendingMasterQuestion: null,
     });
   }, []);
 
   return {
     ...state,
     start,
+    resume,
     reattach,
     abort,
     reset,
+    sendMessage,
     respondToMasterPlan,
+    respondToMasterQuestion,
   };
 }

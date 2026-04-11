@@ -10,6 +10,7 @@ import { ProviderCard } from './ProviderCard.js';
 import { McpServersPanel } from './McpServersPanel.js';
 import { SkillsPanel } from './SkillsPanel.js';
 import { StoragePanel } from './StoragePanel.js';
+import { HydePanel } from './HydePanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
 import { useAdminProviders } from './hooks/useAdminProviders.js';
 import type { AdminProvider } from './types.js';
@@ -58,6 +59,7 @@ export default function Admin() {
         <TabsList>
           <TabsTrigger value="providers">Providers &amp; Models</TabsTrigger>
           <TabsTrigger value="storage">Embeddings &amp; Vector Stores</TabsTrigger>
+          <TabsTrigger value="search">Search</TabsTrigger>
           <TabsTrigger value="tools">Tools</TabsTrigger>
           <TabsTrigger value="mcp-servers">MCP Servers</TabsTrigger>
           <TabsTrigger value="skills">Skills</TabsTrigger>
@@ -122,6 +124,10 @@ export default function Admin() {
 
         <TabsContent value="storage">
           <StoragePanel />
+        </TabsContent>
+
+        <TabsContent value="search">
+          <HydePanel />
         </TabsContent>
 
         <TabsContent value="tools">

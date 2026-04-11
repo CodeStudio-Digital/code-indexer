@@ -38,7 +38,7 @@ export async function discoverModels(
     case 'gemini':
       return discoverGemini(cfg);
     case 'bedrock':
-      return discoverBedrock(cfg);
+      return discoverBedrock(store, cfg);
     default:
       throw new Error(`Live discovery not implemented for kind=${cfg.kind}`);
   }

@@ -432,7 +432,7 @@ export class CodeIndexDB {
     return this.db.prepare('SELECT * FROM projects ORDER BY name').all() as Project[];
   }
 
-  updateProject(id: number, updates: Partial<Pick<Project, 'name' | 'description' | 'root_path' | 'provider' | 'model' | 'last_indexed' | 'file_count' | 'symbol_count'>>): void {
+  updateProject(id: number, updates: Partial<Pick<Project, 'name' | 'description' | 'group_name' | 'root_path' | 'provider' | 'model' | 'last_indexed' | 'file_count' | 'symbol_count'>>): void {
     const fields: string[] = [];
     const values: unknown[] = [];
 
@@ -1216,6 +1216,33 @@ export class CodeIndexDB {
   setFileEmbeddingHash(fileId: number, hash: string): void {
     this.db.prepare('UPDATE files SET embedding_hash = ? WHERE id = ?').run(hash, fileId);
   }
+
+  getFileStructureHash(projectId: number, path: string): string | null {
+    const row = this.db.prepare(
+      'SELECT structure_hash FROM files WHERE project_id = ? AND path = ?'
+    ).get(projectId, path) as { structure_hash: string | null } | undefined;
+    return row?.structure_hash ?? null;
+  }
+
+  setFileStructureHash(fileId: number, hash: string): void {
+    this.db.prepare('UPDATE files SET structure_hash = ? WHERE id = ?').run(hash, fileId);
+  }
+
+  getFileStructureEmbedding(projectId: number, path: string): Float32Array | null {
+    const row = this.db.prepare(
+      'SELECT structure_embedding FROM files WHERE project_id = ? AND path = ?'
+    ).get(projectId, path) as { structure_embedding: Buffer | null } | undefined;
+    if (row?.structure_embedding) {
+      return new Float32Array(row.structure_embedding.buffer, row.structure_embedding.byteOffset, row.structure_embedding.byteLength / 4);
+    }
+    return null;
+  }
+
+  setFileStructureEmbedding(fileId: number, embedding: Float32Array): void {
+    const buffer = Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
+    this.db.prepare('UPDATE files SET structure_embedding = ? WHERE id = ?').run(buffer, fileId);
+  }
+
 
   getSymbolEmbeddingHashes(symbolIds: number[]): Map<number, { sig: string | null; body: string | null }> {
     const out = new Map<number, { sig: string | null; body: string | null }>();

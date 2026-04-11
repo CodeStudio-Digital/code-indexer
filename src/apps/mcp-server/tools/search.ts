@@ -109,7 +109,7 @@ const search_by_kind = defineTool({
   handler: (args, { db }) => {
     const project = resolveProject(db, args.project_name as string);
     const kind = args.kind as string;
-    const symbols = db.listSymbolsByKind(project.id, kind, (args.limit as number) ?? 50);
+    const symbols = db.listSymbolsByKind(project.id, kind, (args.limit as number) ?? 20);
     if (symbols.length === 0) {
       return `No symbols found with kind "${kind}". Common kinds: function, class, interface, type, enum, method, property, variable, constant.`;
     }
@@ -119,7 +119,7 @@ const search_by_kind = defineTool({
 
 const grep_code = defineTool({
   name: 'grep_code',
-  description: 'Textual search across project files with filters (language/layer/glob). Results capped at max_results (default 50). Use literal=true for exact string matching.',
+  description: 'Textual search across project files with filters (language/layer/glob). Results capped at max_results (default 20). Use literal=true for exact string matching.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -142,7 +142,7 @@ const grep_code = defineTool({
     const lang = args.language as string | undefined;
     const layer = args.layer as string | undefined;
     const glob = args.glob as string | undefined;
-    const maxResults = (args.max_results as number) ?? 50;
+    const maxResults = (args.max_results as number) ?? 20;
     let files = db.listFiles(project.id, lang);
     if (layer) files = files.filter(f => f.layer === layer);
     if (glob) files = files.filter(f => minimatch(f.path, glob));

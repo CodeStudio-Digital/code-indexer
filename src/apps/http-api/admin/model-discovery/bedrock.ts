@@ -5,9 +5,14 @@
  * build time and the dep stays optional — users who don't use Bedrock don't
  * need to install the SDK.
  */
-import type { ProviderConfig, UpsertModelInput } from '../../../../store/provider-store.js';
+import type {
+  ProviderStore,
+  ProviderConfig,
+  UpsertModelInput,
+} from '../../../../store/provider-store.js';
 
 type BedrockExtra = {
+  region?: string;
   aws_region?: string;
   accessKeyId?: string;
   secretAccessKey?: string;
@@ -30,9 +35,11 @@ type BedrockSdk = {
   ListFoundationModelsCommand: new (input: unknown) => unknown;
 };
 
-export async function discoverBedrock(cfg: ProviderConfig): Promise<UpsertModelInput[]> {
-  const tok = cfg.extra as BedrockExtra;
-  const region = tok.aws_region ?? process.env.AWS_REGION ?? 'us-east-1';
+export async function discoverBedrock(store: ProviderStore, cfg: ProviderConfig): Promise<UpsertModelInput[]> {
+  const oauth = store.getOAuth(cfg.id);
+  const tok = (oauth?.extra || {}) as BedrockExtra;
+  const cfgExtra = (cfg.extra || {}) as BedrockExtra;
+  const region = tok.region ?? tok.aws_region ?? cfgExtra.aws_region ?? process.env.AWS_REGION ?? 'us-east-1';
   try {
     const modName = '@aws-sdk/client-bedrock';
     const sdk = (await import(/* @vite-ignore */ modName)) as BedrockSdk;

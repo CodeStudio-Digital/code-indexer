@@ -16,6 +16,7 @@ interface CreateProjectBody {
 interface UpdateProjectBody {
   name?: string;
   description?: string;
+  group_name?: string | null;
   root_path?: string;
 }
 
@@ -91,6 +92,10 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
 
     if (body.description !== undefined) {
       updates.description = body.description;
+    }
+
+    if (body.group_name !== undefined) {
+      updates.group_name = body.group_name || null;
     }
 
     if (body.root_path !== undefined) {

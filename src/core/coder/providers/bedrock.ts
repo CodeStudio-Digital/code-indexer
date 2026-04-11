@@ -136,6 +136,12 @@ export class BedrockChatProvider implements ChatProvider {
 
     let stream;
     try {
+      console.log('\n--- Bedrock Request Debug ---');
+      console.log('Model ID sendo enviado:', this.model);
+      console.log('Ferramentas carregadas:', toolConfig?.tools?.length ?? 0);
+      console.log('Tem System Prompt?', !!system);
+      console.log('-----------------------------\n');
+
       const cmd = new sdk.ConverseStreamCommand({
         modelId: this.model,
         messages,
@@ -320,6 +326,9 @@ function base64ToBytes(b64: string): Uint8Array {
 // ─── Error humanizer ───────────────────────────────────────────
 
 function humanizeBedrockError(e: unknown, model: string): string {
+  // Dump raw trace to terminal for deep-debugging (e.g. AWS requestId, HTTP status)
+  console.error('\n[Bedrock Raw Trace]:', e, '\n');
+
   if (!(e instanceof Error)) return String(e);
   const msg = e.message;
   const name = e.name;

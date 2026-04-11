@@ -124,8 +124,18 @@ export function computeCutoffIndex(messages: AgentMessage[], protect = PRUNE_PRO
  * from the provider.
  */
 export function snapCutoffToRoleBoundary(messages: AgentMessage[], cutoff: number): number {
+    // Advance past tool messages (their tool_uses are in the preceding assistant)
     while (cutoff < messages.length && messages[cutoff].role === 'tool') {
         cutoff++;
+    }
+    // If cutoff landed on an assistant, include it + its tool results too.
+    // Otherwise the summarizer's synthetic assistant would create consecutive
+    // assistant messages — illegal in OpenAI-compatible APIs (GLM error 1214).
+    if (cutoff < messages.length && messages[cutoff].role === 'assistant') {
+        cutoff++;
+        while (cutoff < messages.length && messages[cutoff].role === 'tool') {
+            cutoff++;
+        }
     }
     return cutoff;
 }

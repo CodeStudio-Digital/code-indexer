@@ -48,6 +48,7 @@ export interface Project {
   name: string;
   root_path: string;
   description: string | null;
+  group_name: string | null;
   provider: string | null;
   model: string | null;
   created_at: string;
@@ -77,6 +78,8 @@ export interface LLMSymbol {
   return_type: string | null;
   parameters: string | null;
   line: number | null;
+  /** End line of the symbol (1-indexed). Provided by tree-sitter; may be absent for LLM-extracted symbols. */
+  end_line?: number;
   comment: string | null;
   tags: string[];
 }

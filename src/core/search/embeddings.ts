@@ -10,6 +10,7 @@ export class CloudflareEmbeddingService implements EmbeddingService {
   private authToken: string;
   private batchSize = 100;
   private maxBatchTokens = 50_000; // Cloudflare limit is 60k, keep margin
+  private maxSingleTextTokens = 8192; // BGE-M3 max sequence length
 
   constructor(workerUrl: string, authToken: string) {
     this.workerUrl = workerUrl.replace(/\/$/, '');
@@ -27,9 +28,9 @@ export class CloudflareEmbeddingService implements EmbeddingService {
 
     for (const text of texts) {
       let processed = text;
-      if (this.estimateTokens(processed) > this.maxBatchTokens) {
-        console.warn(`[embeddings] Single text exceeds ${this.maxBatchTokens} token limit, truncating (${this.estimateTokens(processed)} est. tokens)`);
-        processed = processed.slice(0, this.maxBatchTokens * 4);
+      if (this.estimateTokens(processed) > this.maxSingleTextTokens) {
+        console.warn(`[embeddings] Single text exceeds ${this.maxSingleTextTokens} token limit, truncating (${this.estimateTokens(processed)} est. tokens)`);
+        processed = processed.slice(0, this.maxSingleTextTokens * 4);
       }
 
       const textTokens = this.estimateTokens(processed);

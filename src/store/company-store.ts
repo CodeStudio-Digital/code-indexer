@@ -169,6 +169,16 @@ export class CompanyStore {
     `).run(masterSessionId, id);
   }
 
+  setLastUserMessage(id: number, message: string): void {
+    // Add column idempotently if it doesn't exist yet
+    try {
+      this.db.prepare(`ALTER TABLE company_sessions ADD COLUMN last_user_message TEXT`).run();
+    } catch { /* column already exists */ }
+    this.db.prepare(`
+      UPDATE company_sessions SET last_user_message = ?, updated_at = datetime('now') WHERE id = ?
+    `).run(message, id);
+  }
+
   deleteCompanySession(id: number): boolean {
     const r = this.db.prepare('DELETE FROM company_sessions WHERE id = ?').run(id);
     return r.changes > 0;
@@ -226,10 +236,16 @@ export class CompanyStore {
       .all(companySessionId) as CompanyAgentRun[];
   }
 
-  updateAgentRunStatus(id: number, status: AgentRunStatus): void {
-    this.db.prepare(`
-      UPDATE company_agent_runs SET status = ?, updated_at = datetime('now') WHERE id = ?
-    `).run(status, id);
+  updateAgentRunStatus(id: number, status: AgentRunStatus, statusMessage?: string): void {
+    if (statusMessage !== undefined) {
+      this.db.prepare(`
+        UPDATE company_agent_runs SET status = ?, status_message = ?, updated_at = datetime('now') WHERE id = ?
+      `).run(status, statusMessage, id);
+    } else {
+      this.db.prepare(`
+        UPDATE company_agent_runs SET status = ?, updated_at = datetime('now') WHERE id = ?
+      `).run(status, id);
+    }
   }
 
   // ─── Board ─────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import { ExportService } from '../../core/services/exporter.js';
 import { WebhookDispatcher } from '../../core/services/webhooks.js';
 import { HybridSearch } from '../../core/search/hybrid.js';
 import { HyDEService } from '../../core/search/hyde.js';
+import { createReranker } from '../../core/search/reranker.js';
 import { ModelDiscovery } from '../../core/indexer/providers/model-discovery.js';
 import {
   createEmbeddingService,
@@ -67,6 +68,6 @@ export function buildContext(): ToolContext {
     modelDiscovery: new ModelDiscovery(db),
     embeddingService,
     vectorStore,
-    hybridSearch: new HybridSearch(db, searchableVectorStore, embeddingService, hydeService),
+    hybridSearch: new HybridSearch(db, searchableVectorStore, embeddingService, hydeService, createReranker()),
   };
 }

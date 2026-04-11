@@ -23,7 +23,9 @@
       "Bash(echo \"==exit=$?==\")",
       "Read(//tmp/**)",
       "Bash(echo \"EXIT: $?\")",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(npm ls:*)",
+      "Bash(npx --prefix \"D:/MCP\" tsc --noEmit --skipLibCheck --project \"D:/MCP/tsconfig.json\")"
     ]
   }
 }

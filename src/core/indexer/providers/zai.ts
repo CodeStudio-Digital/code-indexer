@@ -37,4 +37,12 @@ export class ZAIProvider implements LLMProvider {
   analyzeFile(filePath: string, content: string): Promise<AnalysisResult> {
     return this.inner.analyzeFile(filePath, content);
   }
+
+  analyzeSummary(
+    filePath: string,
+    content: string,
+    symbols: Array<{ name: string; kind: string; signature: string; line?: number | null; end_line?: number }>
+  ): Promise<AnalysisResult> {
+    return this.inner.analyzeSummary(filePath, content, symbols);
+  }
 }

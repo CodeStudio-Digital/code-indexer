@@ -50,7 +50,7 @@ export interface CompanySessionProject {
 
 // ─── Agent Run ─────────────────────────────────────────────────
 
-export type AgentRunStatus = 'idle' | 'running' | 'waiting_plan' | 'completed' | 'error' | 'aborted';
+export type AgentRunStatus = 'idle' | 'running' | 'working' | 'waiting' | 'waiting_plan' | 'reviewing' | 'blocked' | 'completed' | 'error' | 'aborted';
 
 export interface CompanyAgentRun {
   id: number;
@@ -103,5 +103,5 @@ export interface SubordinateHandle {
   session: CoderSession;
   runner: CoderRunner;
   bus: CoderRunBus;
-  done: Promise<{ reason: string; usage: ChatUsage }>;
+  done: Promise<{ reason: string; usage: ChatUsage; error?: string }>;
 }

@@ -34,6 +34,10 @@ import { mcpServers015 } from './015_mcp_servers.js';
 import { skills016 } from './016_skills.js';
 import { mcpServerTools017 } from './017_mcp_server_tools.js';
 import { companyAgents018 } from './018_company_agents.js';
+import { companyStatusMessage019 } from './019_company_status_message.js';
+import { structureHash020 } from './020_structure_hash.js';
+import { structureEmbedding021 } from './021_structure_embedding.js';
+import { projectGroup022 } from './022_project_group.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -62,6 +66,10 @@ export const MIGRATIONS: Migration[] = [
   skills016,
   mcpServerTools017,
   companyAgents018,
+  companyStatusMessage019,
+  structureHash020,
+  structureEmbedding021,
+  projectGroup022,
 ];
 
 /**

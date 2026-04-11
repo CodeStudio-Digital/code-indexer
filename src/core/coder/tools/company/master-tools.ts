@@ -11,6 +11,8 @@ import type { CompanyOrchestrator } from '../../company/orchestrator.js';
 export function buildMasterTools(orchestrator: CompanyOrchestrator): CoderTool[] {
   return [
     spawnSubordinateAgent(orchestrator),
+    waitForSubordinates(orchestrator),
+    resumeSubordinate(orchestrator),
     approveSubordinatePlan(orchestrator),
     abortSubordinateAgent(orchestrator),
     listSubordinates(orchestrator),
@@ -39,7 +41,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
 
   return {
     name: 'spawn_subordinate_agent',
-    description: 'Delegate a task to a subordinate agent. The subordinate runs as a full coder session with write access, scoped to the specified project. Returns the agent_run_id for tracking.',
+    description: 'Delegate a task to a subordinate agent. The subordinate runs as a full coder session with write access, scoped to the specified project. The task MUST contain your synthesized research findings (specific file paths, functions, changes) — never copy-paste the user request. After calling this with wait=false, immediately call wait_for_subordinates.',
     parameters,
     source: 'native',
     handler: async (args) => {
@@ -61,6 +63,55 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
       } catch (e) {
         return err(`Failed to spawn subordinate: ${e instanceof Error ? e.message : String(e)}`);
       }
+    },
+  };
+}
+
+// ─── wait_for_subordinates ─────────────────────────────────────
+
+function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
+  return {
+    name: 'wait_for_subordinates',
+    description:
+      'Block your session until ALL currently-running subordinates complete. ' +
+      'ALWAYS call this after spawning subordinates with wait=false — otherwise your session ' +
+      'closes before their results arrive. Returns when all agents are done.',
+    parameters: {
+      type: 'object',
+      properties: {
+        timeout_minutes: {
+          type: 'number',
+          description: 'Max minutes to wait before giving up (default: 30)',
+        },
+      },
+      required: [],
+    },
+    source: 'native',
+    handler: async (args) => {
+      const timeoutMs = ((args.timeout_minutes as number | undefined) ?? 30) * 60 * 1000;
+      const pollMs = 3_000;
+      const deadline = Date.now() + timeoutMs;
+
+      if (!orchestrator.hasRunningSubordinates()) {
+        return ok('No subordinates currently running — all done.');
+      }
+
+      while (orchestrator.hasRunningSubordinates()) {
+        if (Date.now() >= deadline) {
+          const subs = orchestrator.listSubordinates().filter((s) => s.status === 'running');
+          return err(
+            `Timed out after ${args.timeout_minutes ?? 30}min. Still running: ${subs.map((s) => s.role).join(', ')}. ` +
+            `Use list_subordinates to check status or abort_subordinate_agent if needed.`,
+          );
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+      }
+
+      const summary = orchestrator
+        .listSubordinates()
+        .map((s) => `  - ${s.role} (run=${s.agentRunId}): ${s.status}`)
+        .join('\n');
+      return ok(`All subordinates finished:\n${summary}\nCheck the board for their deliverables, then synthesize results.`);
     },
   };
 }
@@ -183,7 +234,7 @@ function forwardToAgent(orchestrator: CompanyOrchestrator): CoderTool {
 
   return {
     name: 'forward_to_agent',
-    description: "Send a direct message to a subordinate agent. Posts on the board AND pushes the message into the agent's conversation as a user message.",
+    description: "Send a task or message to a subordinate agent. If the agent is 'waiting' (finished previous task), it auto-reactivates with full context preserved. Use this to reuse agents instead of spawning new ones.",
     parameters,
     source: 'native',
     handler: async (args) => {
@@ -191,18 +242,60 @@ function forwardToAgent(orchestrator: CompanyOrchestrator): CoderTool {
       const message = args.message as string;
 
       const sub = orchestrator.getSubordinate(agentRunId);
-      if (!sub) {
-        return err(`Agent run ${agentRunId} not found`);
+      const dbStatus = orchestrator.getSubordinateStatus(agentRunId);
+
+      // Post to board first
+      const roleName = sub?.role ?? `agent-${agentRunId}`;
+      orchestrator.postToBoard('master', null, 'handoff',
+        `[@${roleName}] ${message}`, [roleName]);
+
+      const isRunning = orchestrator.isSubordinateRunning(agentRunId);
+
+      // If the agent is actually running its event loop, push directly.
+      if (isRunning && sub) {
+        sub.runner.pushUserMessage(`[From Master]: ${message}`);
+        return ok(`Message forwarded to ${roleName} (agent_run_id=${agentRunId})`);
       }
 
-      // Post to board
-      orchestrator.postToBoard('master', null, 'handoff',
-        `[@${sub.role}] ${message}`, [sub.role]);
+      // Otherwise, the agent is dead (waiting, completed, errored, aborted),
+      // we must reactivate it via a new runCoder call.
+      const reactivated = await orchestrator.reactivateSubordinate(agentRunId, `[From Master]: ${message}`);
+      if (reactivated) {
+        return ok(`Reactivated ${roleName} (agent_run_id=${agentRunId}) with new task. Agent is running again with full context preserved.`);
+      }
 
-      // Push into subordinate's message history
-      sub.runner.pushUserMessage(`[From Master]: ${message}`);
+      return err(`Agent run ${agentRunId} could not be reactivated. It might be in an unresumable state. Use spawn_subordinate_agent for a fresh agent.`);
+    },
+  };
+}
 
-      return ok(`Message forwarded to ${sub.role} (agent_run_id=${agentRunId})`);
+// ─── resume_subordinate ────────────────────────────────────────
+
+function resumeSubordinate(orchestrator: CompanyOrchestrator): CoderTool {
+  const parameters: JsonSchema = {
+    type: 'object',
+    properties: {
+      agent_run_id: { type: 'number', description: 'ID of the failed/aborted subordinate agent to resume' },
+      message: { type: 'string', description: 'Optional message to send when resuming (default: "Continue your task")' },
+    },
+    required: ['agent_run_id'],
+  };
+
+  return {
+    name: 'resume_subordinate',
+    description: 'Resume a failed or aborted subordinate agent. Picks up from where it left off, keeping its full conversation history. Use this instead of spawning a new agent when you want to retry.',
+    parameters,
+    source: 'native',
+    handler: async (args) => {
+      try {
+        const result = await orchestrator.resumeSubordinate(
+          args.agent_run_id as number,
+          args.message as string | undefined,
+        );
+        return ok(JSON.stringify(result, null, 2));
+      } catch (e) {
+        return err(`Failed to resume subordinate: ${e instanceof Error ? e.message : String(e)}`);
+      }
     },
   };
 }
