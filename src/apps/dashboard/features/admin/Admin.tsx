@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Plus } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
 import { BedrockCredentialsDialog } from './BedrockCredentialsDialog.js';
 import { ChatgptConnectionDialog } from './ChatgptConnectionDialog.js';
 import { CopilotConnectionDialog } from './CopilotConnectionDialog.js';
+import { GoogleConnectionDialog } from './GoogleConnectionDialog.js';
 import { EditDialog } from './EditDialog.js';
 import { ProviderCard } from './ProviderCard.js';
 import { McpServersPanel } from './McpServersPanel.js';
@@ -16,6 +18,7 @@ import { useAdminProviders } from './hooks/useAdminProviders.js';
 import type { AdminProvider } from './types.js';
 
 export default function Admin() {
+  const { t } = useTranslation(['admin', 'common']);
   const {
     providers,
     loading,
@@ -37,6 +40,7 @@ export default function Admin() {
   const [bedrockOpen, setBedrockOpen] = useState(false);
   const [copilotOpen, setCopilotOpen] = useState(false);
   const [chatgptOpen, setChatgptOpen] = useState(false);
+  const [googleOpen, setGoogleOpen] = useState(false);
 
   const handleConnected = async (providerId?: string) => {
     await load();
@@ -49,32 +53,35 @@ export default function Admin() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Admin</h1>
+        <h1 className="text-2xl font-semibold">{t('admin:title')}</h1>
         <p className="text-sm text-muted-foreground">
-          Configure providers, embeddings, and vector stores that power indexing, search, and the coder agent.
+          {t('admin:description')}
         </p>
       </div>
 
       <Tabs defaultValue="providers">
         <TabsList>
-          <TabsTrigger value="providers">Providers &amp; Models</TabsTrigger>
-          <TabsTrigger value="storage">Embeddings &amp; Vector Stores</TabsTrigger>
-          <TabsTrigger value="search">Search</TabsTrigger>
-          <TabsTrigger value="tools">Tools</TabsTrigger>
-          <TabsTrigger value="mcp-servers">MCP Servers</TabsTrigger>
-          <TabsTrigger value="skills">Skills</TabsTrigger>
+          <TabsTrigger value="providers">{t('admin:tabs.providers')}</TabsTrigger>
+          <TabsTrigger value="storage">{t('admin:tabs.embeddings')}</TabsTrigger>
+          <TabsTrigger value="search">{t('admin:tabs.search')}</TabsTrigger>
+          <TabsTrigger value="tools">{t('admin:tabs.tools')}</TabsTrigger>
+          <TabsTrigger value="mcp-servers">{t('admin:tabs.mcpServers')}</TabsTrigger>
+          <TabsTrigger value="skills">{t('admin:tabs.skills')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="providers" className="space-y-4">
           <div className="flex items-center justify-end gap-2">
             <Button variant="outline" onClick={() => setCopilotOpen(true)}>
-              Connect Copilot
+              {t('admin:connectCopilot')}
+            </Button>
+            <Button variant="outline" onClick={() => setGoogleOpen(true)}>
+              {t('admin:connectGoogle')}
             </Button>
             <Button variant="outline" onClick={() => setChatgptOpen(true)}>
-              Connect ChatGPT
+              {t('admin:connectChatgpt')}
             </Button>
             <Button variant="outline" onClick={() => setBedrockOpen(true)}>
-              AWS Bedrock
+              {t('admin:awsBedrock')}
             </Button>
             <Button
               onClick={() =>
@@ -87,11 +94,11 @@ export default function Admin() {
                 })
               }
             >
-              <Plus className="h-4 w-4 mr-2" /> Add Provider
+              <Plus className="h-4 w-4 mr-2" /> {t('admin:addProvider')}
             </Button>
           </div>
 
-          {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
+          {loading && <div className="text-sm text-muted-foreground">{t('common:actions.loading')}</div>}
 
           <div className="grid gap-3">
             {providers.map((p) => (
@@ -116,7 +123,7 @@ export default function Admin() {
             ))}
             {!loading && providers.length === 0 && (
               <div className="text-sm text-muted-foreground border rounded-lg p-6 text-center">
-                No providers configured yet. Click "Add Provider" to get started.
+                {t('admin:noProviders')}
               </div>
             )}
           </div>
@@ -162,6 +169,12 @@ export default function Admin() {
       {chatgptOpen && (
         <ChatgptConnectionDialog
           onClose={() => setChatgptOpen(false)}
+          onConnected={handleConnected}
+        />
+      )}
+      {googleOpen && (
+        <GoogleConnectionDialog
+          onClose={() => setGoogleOpen(false)}
           onConnected={handleConnected}
         />
       )}

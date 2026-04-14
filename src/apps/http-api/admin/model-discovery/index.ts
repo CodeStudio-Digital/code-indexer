@@ -21,6 +21,7 @@ import { discoverOpenai } from './openai.js';
 import { discoverAnthropic } from './anthropic.js';
 import { discoverGemini } from './gemini.js';
 import { discoverBedrock } from './bedrock.js';
+import { discoverGoogleOAuth } from './google-oauth.js';
 
 export async function discoverModels(
   store: ProviderStore,
@@ -39,6 +40,8 @@ export async function discoverModels(
       return discoverGemini(cfg);
     case 'bedrock':
       return discoverBedrock(store, cfg);
+    case 'google-oauth':
+      return discoverGoogleOAuth(store, cfg);
     default:
       throw new Error(`Live discovery not implemented for kind=${cfg.kind}`);
   }

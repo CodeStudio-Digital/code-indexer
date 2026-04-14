@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Combobox } from '../../components/ui/combobox.js';
@@ -38,6 +39,7 @@ export default function ProjectEditDialog({
   onDeleted,
   existingGroups = [],
 }: ProjectEditDialogProps) {
+  const { t } = useTranslation(['projects', 'common']);
   const [name, setName] = useState(project.name);
   const [rootPath, setRootPath] = useState(project.root_path);
   const [description, setDescription] = useState(project.description ?? '');
@@ -94,15 +96,15 @@ export default function ProjectEditDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Edit project</DialogTitle>
+          <DialogTitle>{t('projects:edit.title')}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Name</label>
+            <label className="text-sm font-medium">{t('projects:edit.nameLabel')}</label>
             <Input value={name} onChange={(e) => setName(e.target.value)} required />
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Root path</label>
+            <label className="text-sm font-medium">{t('projects:edit.rootPathLabel')}</label>
             <Input
               value={rootPath}
               onChange={(e) => setRootPath(e.target.value)}
@@ -110,19 +112,19 @@ export default function ProjectEditDialog({
               required
             />
             <p className="text-xs text-muted-foreground">
-              Caminho absoluto pra pasta do código. Atualize aqui se você moveu o projeto de lugar.
+              {t('projects:edit.rootPathHint')}
             </p>
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Group</label>
+            <label className="text-sm font-medium">{t('projects:edit.groupLabel')}</label>
             {groupOptions.length > 0 ? (
               <Combobox
                 value={groupName}
                 onChange={setGroupName}
                 options={groupOptions}
-                placeholder="Sem grupo"
-                searchPlaceholder="Buscar ou criar grupo…"
-                emptyLabel="Digite para criar um novo grupo"
+                placeholder={t('projects:edit.groupPlaceholder')}
+                searchPlaceholder={t('projects:edit.groupSearchPlaceholder')}
+                emptyLabel={t('projects:edit.groupEmptyLabel')}
                 allowCustom
                 size="md"
               />
@@ -130,15 +132,15 @@ export default function ProjectEditDialog({
               <Input
                 value={groupName}
                 onChange={(e) => setGroupName(e.target.value)}
-                placeholder="Ex: ZapCode, Personal…"
+                placeholder={t('projects:edit.groupInputPlaceholder')}
               />
             )}
             <p className="text-xs text-muted-foreground">
-              Agrupa projetos relacionados na listagem. Deixe em branco para não agrupar.
+              {t('projects:edit.groupHint')}
             </p>
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Description</label>
+            <label className="text-sm font-medium">{t('projects:edit.descLabel')}</label>
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -150,7 +152,7 @@ export default function ProjectEditDialog({
           {confirmDelete ? (
             <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 space-y-3">
               <p className="text-sm text-destructive font-medium">
-                Remover <strong>{project.name}</strong> do índice? Os arquivos não serão apagados.
+                {t('projects:edit.deleteConfirm', { name: project.name })}
               </p>
               <div className="flex gap-2 justify-end">
                 <Button
@@ -160,7 +162,7 @@ export default function ProjectEditDialog({
                   onClick={() => setConfirmDelete(false)}
                   disabled={deleting}
                 >
-                  Cancelar
+                  {t('common:actions.cancel')}
                 </Button>
                 <Button
                   type="button"
@@ -169,7 +171,7 @@ export default function ProjectEditDialog({
                   onClick={handleDelete}
                   disabled={deleting}
                 >
-                  {deleting ? 'Removendo…' : 'Confirmar exclusão'}
+                  {deleting ? t('projects:edit.deleting') : t('projects:edit.deleteConfirmBtn')}
                 </Button>
               </div>
             </div>
@@ -184,14 +186,14 @@ export default function ProjectEditDialog({
                 disabled={saving}
               >
                 <Trash2 className="h-4 w-4 mr-1.5" />
-                Deletar projeto
+                {t('projects:edit.deleteBtn')}
               </Button>
               <div className="flex gap-2">
                 <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-                  Cancel
+                  {t('common:actions.cancel')}
                 </Button>
                 <Button type="submit" disabled={saving}>
-                  {saving ? 'Saving…' : 'Save'}
+                  {saving ? t('common:actions.saving') : t('common:actions.save')}
                 </Button>
               </div>
             </DialogFooter>

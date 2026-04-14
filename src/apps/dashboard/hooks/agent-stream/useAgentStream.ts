@@ -58,6 +58,8 @@ export function useAgentStream(sessionId: number | null) {
         profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
         /** Override max turns for this run. null/undefined = use default. */
         maxTurns?: number | null;
+        /** Enable thinking/reasoning mode. */
+        thinking?: boolean;
       },
     ) => {
       if (!sessionId) return;
@@ -73,6 +75,7 @@ export function useAgentStream(sessionId: number | null) {
             agent: extras?.agent,
             profile: extras?.profile,
             max_turns: extras?.maxTurns ?? undefined,
+            thinking: extras?.thinking || undefined,
           },
         },
         onMessageComplete,
@@ -209,6 +212,7 @@ export function useAgentStream(sessionId: number | null) {
     runDelta: active.runDelta,
     reattached: active.reattached,
     todos: active.todos,
+    indexStatus: active.indexStatus,
     sendMessage,
     reattach,
     abort,

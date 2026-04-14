@@ -5,6 +5,80 @@ Todas as mudancas notaveis deste projeto sao documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 e o projeto adere a [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.15.0] - 2026-04-14
+
+Overhaul do **Company Agents Mode** — multi-agent orchestration com master/subordinados.
+Correcao de diversos bugs descobertos em uso real e adicao de features de interacao.
+
+### Added
+
+- **`wait_for_subordinates` tool** (`src/core/coder/tools/company/master-tools.ts`).
+  - Ferramenta bloqueante que o master chama apos spawnar subordinados; faz
+    polling a cada 3s ate todos os subordinados encerrarem (timeout default 30min).
+  - Retorna sumario final com status de cada agente.
+
+- **Composer sempre habilitado na view de Company** (`CompanySessionView.tsx`).
+  - `handleSend` bifurca: se sessao nao iniciada → `stream.start(text)`, caso
+    contrario → `stream.sendMessage(text)` (follow-up ao master).
+  - Placeholder muda de "Describe the task..." para "Send a message to Master..."
+    apos inicio da sessao.
+
+- **Endpoint POST `/api/company/sessions/:id/message`** (`stream.ts`).
+  - Envia mensagem de follow-up ao master via `orchestrator.sendMessageToMaster()`.
+  - Posta no board como autor "human" antes de encaminhar ao runner.
+
+- **Endpoint POST `/api/company/sessions/:id/answer`** (`stream.ts`).
+  - Responde a pergunta do master (ask_user) via `orchestrator.respondToMasterQuestion()`.
+
+- **`sendMessage` exposto no hook `useCompanyStream`**.
+  - Callback adicionado ao objeto de retorno do hook para uso direto no composer.
+
+- **QuestionCard no board** (`CompanySessionView.tsx`).
+  - Renderiza card azul com icone HelpCircle quando master faz `ask_user`.
+  - Botoes de opcao + textarea para o usuario responder direto da view de agentes.
+
+- **Persistencia de `last_user_message`** (`company-store.ts`).
+  - Coluna adicionada via ALTER TABLE idempotente para recuperar a mensagem
+    inicial do usuario mesmo apos reload de pagina.
+
+### Fixed
+
+- **Master encerrava antes dos subordinados** — adicionados flag `masterEnded`,
+  metodo `maybeMarkEnded()` e `resumeMasterWithMessage()` no orchestrator para
+  ressuscitar o master quando um subordinado completa e notifico-o.
+
+- **Subordinado nao reativava apos completar** — `resumeSubordinate` agora aceita
+  status `waiting` e `completed` alem de `error`/`aborted`; `forwardToAgent`
+  consulta DB (nao memoria) e chama `reactivateSubordinate` para runners mortos.
+
+- **Stream perdido ao navegar e voltar** — `reattach()` com guard `reattachAttemptedRef`
+  evita loop infinito de reconexao; erro 404 exibe mensagem explicita.
+
+- **"Invalid date" no AgentSessionModal** — helper `formatTime()` converte
+  timestamps SQLite (espaco como separador) para ISO antes de passar ao `Date`.
+
+- **Master lia git diff em vez do board** — system prompt atualizado com regra
+  CRITICAL proibindo `git_diff`/`git_status`/`git_log` para inspecionar trabalho
+  de subordinados; board e a unica fonte de verdade.
+
+- **Master questionava usuario no chat interno (invisivel)** — `wireMasterQuestionInterception`
+  intercepta eventos `question_posted`, posta no board e emite `master_question_posted`
+  via metaBus para o dashboard exibir o QuestionCard.
+
+- **Injecao de contexto incremental no master** — watermark `lastMasterBoardId`
+  rastreia ultima entrada vista pelo master; `notifyMaster()` enriquece notificacoes
+  apenas com entradas novas desde o watermark.
+
+- **Subordinados enviavam relatorio fraco** — system prompt de subordinado reescrito
+  com "CRITICAL: Final Report (MANDATORY)" — checklist de 6 pontos obrigatorio.
+
+- **Master delegava tarefa sem contexto** — system prompt com regras CRITICAL #6
+  (chamar `wait_for_subordinates`) e #7 (sintetizar pesquisa na tarefa, nao
+  copy-paste); exemplo BAD vs GOOD adicionado.
+
+- **Crash null `sessionData.projects`** — acesso protegido com optional chaining
+  `sessionData?.projects.length ?? 0` na sidebar de configuracao.
+
 ## [3.14.0] - 2026-04-08
 
 Rodada 3 do overhaul do coder agent — comparativo contra

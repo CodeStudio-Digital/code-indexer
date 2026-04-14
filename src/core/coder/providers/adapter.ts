@@ -12,6 +12,8 @@ export interface ChatRequest {
   messages: AgentMessage[];
   tools: ToolSpec[];
   signal?: AbortSignal;
+  /** Enable thinking/reasoning mode (Gemini thinkingConfig, Anthropic extended thinking). */
+  thinking?: boolean;
 }
 
 /**

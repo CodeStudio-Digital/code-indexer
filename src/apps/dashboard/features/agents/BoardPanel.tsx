@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { MessageSquare, Zap, HelpCircle, Package, ArrowRightLeft } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { cn } from '../../lib/utils.js';
@@ -36,6 +37,7 @@ interface BoardPanelProps {
 }
 
 export function BoardPanel({ messages }: BoardPanelProps) {
+  const { t } = useTranslation('agents');
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -46,12 +48,12 @@ export function BoardPanel({ messages }: BoardPanelProps) {
     <div className="flex flex-col h-full">
       <div className="px-3 py-2 border-b flex items-center gap-2">
         <MessageSquare className="h-4 w-4 text-muted-foreground" />
-        <span className="text-sm font-medium">Board</span>
+        <span className="text-sm font-medium">{t('board.title')}</span>
         <Badge variant="outline" className="text-[10px]">{messages.length}</Badge>
       </div>
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {messages.length === 0 && (
-          <p className="text-xs text-muted-foreground text-center py-4">No board activity yet.</p>
+          <p className="text-xs text-muted-foreground text-center py-4">{t('board.noActivity')}</p>
         )}
         {messages.map((msg) => {
           const Icon = KIND_ICONS[msg.kind] ?? MessageSquare;

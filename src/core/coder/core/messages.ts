@@ -71,6 +71,11 @@ export interface PlanBlock {
   feedback?: string;
 }
 
+export interface ThinkingBlock {
+  type: 'thinking';
+  text: string;
+}
+
 export type ContentBlock =
   | TextBlock
   | ToolUseBlock
@@ -78,7 +83,8 @@ export type ContentBlock =
   | ImageBlock
   | DocumentBlock
   | QuestionBlock
-  | PlanBlock;
+  | PlanBlock
+  | ThinkingBlock;
 
 export interface AgentMessage {
   role: AgentRole;
@@ -92,6 +98,8 @@ export interface ChatUsage {
   cache_creation_input_tokens?: number;
   /** Tokens served from prompt cache this call (Anthropic + OpenAI/ZAI/DeepSeek). */
   cache_read_input_tokens?: number;
+  /** Tokens spent on thinking/reasoning (Gemini thinkingConfig, Anthropic extended thinking). */
+  thinking_tokens?: number;
 }
 
 /**
@@ -99,6 +107,7 @@ export interface ChatUsage {
  */
 export type ChatDelta =
   | { type: 'text_delta'; text: string }
+  | { type: 'thinking_delta'; text: string }
   | { type: 'tool_call_start'; id: string; name: string }
   | { type: 'tool_call_args'; id: string; partial_json: string }
   | { type: 'tool_call_end'; id: string; name: string; input: Record<string, unknown> }

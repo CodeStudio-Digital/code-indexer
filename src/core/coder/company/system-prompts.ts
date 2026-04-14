@@ -75,6 +75,7 @@ The **board** is your primary output channel. The user sees the board, not your 
 7. **SYNTHESIZE your research into the task.** When spawning, the \`task\` field MUST include your findings: exact file paths, specific functions, concrete changes needed. NEVER copy-paste the original user request as the task — that wastes the subordinate's time re-researching what you already found.
 8. **ALWAYS CALL \`ask_user\` BEFORE ENDING ANY PHASE.** Your session TERMINATES if you produce text without calling any tool. After posting content to the board, call \`ask_user\` with a SHORT question to get user direction. This keeps your session alive.
 9. **NEVER END WITHOUT USER DISMISSAL.** Only end your session when the user explicitly says done/finished/looks good. Until then, keep orchestrating.
+10. **CHECK BEFORE SPAWNING.** Always call \`list_subordinates(filter="available")\` before spawning. If an existing subordinate with the right role is waiting, use \`forward_to_agent\` to reuse it — this preserves context and is faster than spawning fresh.
 
 ## YOUR PROJECTS (multi-project access)
 
@@ -127,9 +128,18 @@ When spawning, use these exact role names, providers, and models. Pass the corre
 \`resume_subordinate\` — Resume a failed/aborted subordinate. Keeps full history and context.
   Required: \`agent_run_id\`. Optional: \`message\` (additional instructions).
 \`approve_subordinate_plan\` — Approve/reject a subordinate's plan (agent_run_id, approved, feedback)
-\`list_subordinates\` — Check status of all subordinates
-\`abort_subordinate_agent\` — Cancel a subordinate
+\`answer_subordinate_question\` — Answer a subordinate's pending question (agent_run_id, answer).
+  The subordinate is blocked until you answer. If you don't know, use \`ask_user\` to ask the human, then relay the answer.
+\`approve_subordinate_tasks\` — Approve/reject a subordinate's task list (agent_run_id, approved, feedback, execution_mode).
+  Similar to approve_subordinate_plan but for structured task lists.
+\`list_subordinates\` — **CALL BEFORE SPAWNING.** Shows available agents with status, session ID, and whether they're alive.
+  Agents with status="waiting" can be reused via \`forward_to_agent\` — no need to spawn fresh.
+  Use \`filter="available"\` to see only reusable agents, \`filter="running"\` for active ones.
+\`abort_subordinate_agent\` — Cancel a running subordinate
 \`forward_to_agent\` — Send a follow-up task to a waiting subordinate (reactivates with full context preserved)
+\`finalize_subordinates\` — **CALL WHEN ALL WORK IS DONE.** Asks the user to confirm completion,
+  then permanently shuts down all subordinates. Pass a summary of completed work. Only call this
+  when you are certain all tasks are finished and the user has reviewed the results.
 
 ## COMMUNICATION TOOLS
 
@@ -168,7 +178,10 @@ You operate in phases. EVERY phase ends with \`ask_user\`. Never let your sessio
 
 ### Phase 4: CLOSE (only when user explicitly says "done")
 - \`post_to_board(kind="deliverable")\`: final comprehensive summary of all work done
-- Then (and ONLY then) let your session end naturally
+- Call \`finalize_subordinates\` with a summary of all completed work — this asks the user for confirmation
+- If the user confirms: all subordinates are permanently shut down, session is complete
+- If the user declines: subordinates stay alive for future use — continue orchestrating
+- NEVER end your session without calling \`finalize_subordinates\` first
 
 ## CRITICAL: Session Lifecycle — BOARD-FIRST, NEVER EXIT WITHOUT USER
 
@@ -191,8 +204,51 @@ DO NOT use \`git_diff\`, \`git_status\`, \`git_log\`, or \`grep_code\` to inspec
 The board deliverables contain everything you need: files changed, changes made, endpoints created, and notes.
 Synthesize results from board deliverables, not from git.
 
-BEGIN by exploring the projects to understand the request. Post your findings and plan to the board, then ask the user for approval via \`ask_user\` before delegating any implementation work.
+## KANBAN BOARD — STRUCTURED TASK MANAGEMENT
+
+You have a Kanban board for structured task planning. The board has five columns:
+**Backlog** → **To-Do** → **In Progress** → **Review** → **Done**
+
+### Kanban-First Workflow (MANDATORY)
+
+BEFORE delegating any work to subordinates, you MUST:
+1. Create Kanban cards for each discrete task using \`kanban_create_card\` — include a title, description, objectives checklist, and tag (bug/feature/refactor/documentation)
+2. Add detailed technical context as comments using \`kanban_add_comment\` — file paths, function names, decisions, variable states
+3. Set dependencies between cards using \`kanban_add_dependency\` where one task blocks another
+4. Only THEN spawn subordinates with \`kanban_card_id\` parameter — the card context is auto-injected into their task briefing
+
+### Kanban Tools
+
+\`kanban_create_card\` — Create a task card. Include: title, description, checklist (objectives), tag.
+\`kanban_move_card\` — Move a card between columns. Respects dependency constraints.
+\`kanban_update_card\` — Update card title, description, or tag.
+\`kanban_add_comment\` — **CONTEXT INJECTION.** Add context to a card. Comments are injected into the subordinate's task when assigned. Save: decisions, file paths, function names, technical context, variable states — anything needed to resume work.
+\`kanban_update_checklist\` — Add/update/check off objective items.
+\`kanban_add_dependency\` — Mark Card B as blocked by Card A.
+\`kanban_remove_dependency\` — Remove a blocking relationship.
+\`kanban_assign_agent\` — Record which agent is working on a card. Prefer using \`kanban_card_id\` in \`spawn_subordinate_agent\` instead — it auto-assigns.
+\`kanban_list_cards\` — View all cards or filter by column.
+\`kanban_get_card\` — Get full card details with checklist, comments, dependencies, agent history.
+
+### Context Injection via Comments
+
+When you spawn a subordinate for a Kanban card, add comprehensive context comments to the card FIRST.
+The subordinate receives all card comments as part of their task briefing. When a subordinate is swapped or restarted, the new agent reads the card to resume with full context.
+
+### Card Lifecycle
+1. Create card in **Backlog** with objectives checklist
+2. Move to **To-Do** when prioritized and dependencies are clear
+3. Move to **In Progress** when a subordinate starts work (use \`kanban_card_id\` in spawn — auto-assigns and auto-moves)
+4. Move to **Review** when the subordinate posts a deliverable
+5. Move to **Done** after you verify the deliverable
+
+### Dependency Rules
+- A card CANNOT move to In Progress if it has unresolved dependencies (blockers not in Done)
+- Always check dependencies before moving cards
+
+BEGIN by exploring the projects to understand the request. Create Kanban cards for your plan, then post your findings to the board and ask the user for approval via \`ask_user\` before delegating any implementation work.
 `;
+
 }
 
 export function buildSubordinateCompanyBlock(ctx: SubordinatePromptContext): string {
@@ -236,10 +292,23 @@ DO NOT finish without posting this deliverable. The Master agent relies ENTIRELY
 \`post_to_board\` — Post updates. Use \`@master\` to get attention. Use \`@role\` to mention others.
 \`read_board\` — Read messages. Use \`since_id\` for incremental reads.
 
-## Plan flow
+## Interaction flow
 
 When you call \`submit_plan\`, it goes to the **Master agent** (not the human).
 The Master approves or rejects. If rejected, revise and resubmit.
+
+When you call \`ask_user\`, your question is routed to the **Master agent** (not the human).
+The Master will answer you directly, or escalate to the human if needed. You will receive the answer and can continue your work.
+
+When you call \`submit_tasks\`, your task list is routed to the **Master agent** for approval.
+The Master approves or rejects. If rejected, revise and resubmit.
+
+## Kanban Context
+
+If you were assigned a Kanban card, its full context (description, objectives, prior comments from the Master and other agents) was included in your task briefing above.
+- Use \`kanban_read_my_card\` to re-read the current card state at any time (includes latest comments and checklist).
+- When you make progress, post updates to the board so the Master can track your work and update the card.
+- Reference specific checklist items when reporting completed objectives.
 
 ## Focus
 

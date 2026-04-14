@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import {
   Dialog,
@@ -55,6 +56,7 @@ export function StorageConfigDialog<K extends string>({
   onClose,
   onSave,
 }: StorageConfigDialogProps<K>) {
+  const { t } = useTranslation(['admin', 'common']);
   const isNew = !initial.id;
   const [form, setForm] = useState<Partial<StorageConfig> & { kind: K }>({
     enabled: true,
@@ -93,33 +95,33 @@ export function StorageConfigDialog<K extends string>({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>{isNew ? `Add ${title}` : `Edit ${initial.name ?? initial.id}`}</DialogTitle>
+          <DialogTitle>{isNew ? t('admin:storageConfig.addTitle', { title }) : t('admin:storageConfig.editTitle', { name: initial.name ?? initial.id, id: initial.id })}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium">ID</label>
+              <label className="text-xs font-medium">{t('admin:storageConfig.id')}</label>
               <Input
                 disabled={!isNew}
                 value={form.id ?? ''}
                 onChange={(e) =>
                   update('id', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))
                 }
-                placeholder="my-backend"
+                placeholder={t('admin:storageConfig.idPlaceholder')}
               />
             </div>
             <div>
-              <label className="text-xs font-medium">Display name</label>
+              <label className="text-xs font-medium">{t('admin:storageConfig.nameLabel')}</label>
               <Input
                 value={form.name ?? ''}
                 onChange={(e) => update('name', e.target.value)}
-                placeholder="My Backend"
+                placeholder={t('admin:storageConfig.namePlaceholder')}
               />
             </div>
           </div>
 
           <div>
-            <label className="text-xs font-medium">Kind</label>
+            <label className="text-xs font-medium">{t('admin:storageConfig.kind')}</label>
             <Select value={form.kind} onValueChange={(v) => update('kind', v as K)}>
               <SelectTrigger>
                 <SelectValue />
@@ -144,7 +146,7 @@ export function StorageConfigDialog<K extends string>({
                   </label>
                   <Select value={value} onValueChange={(v) => updateConfig(f.key, v)}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select…" />
+                      <SelectValue placeholder={t('admin:storageConfig.selectKind')} />
                     </SelectTrigger>
                     <SelectContent>
                       {f.options?.map((o) => (
@@ -178,23 +180,23 @@ export function StorageConfigDialog<K extends string>({
                 checked={!!form.enabled}
                 onCheckedChange={(v) => update('enabled', v)}
               />
-              Enabled
+              {t('admin:storageConfig.enabled')}
             </label>
             <label className="flex items-center gap-2 text-sm">
               <Switch
                 checked={!!form.is_default}
                 onCheckedChange={(v) => update('is_default', v)}
               />
-              Default
+              {t('admin:storageConfig.default')}
             </label>
           </div>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button onClick={submit} disabled={!form.id || !form.kind || missingRequired}>
-            Save
+            {t('common:actions.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

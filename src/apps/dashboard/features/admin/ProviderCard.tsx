@@ -1,8 +1,10 @@
+import { useTranslation } from 'react-i18next';
 import { CheckCircle2, Loader2, RefreshCw, Trash2, XCircle, Zap } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
 import { Switch } from '../../components/ui/switch.js';
+import { GoogleQuotaPanel } from './GoogleQuotaPanel.js';
 import type { AdminModel, AdminProvider, TestResult } from './types.js';
 
 interface ProviderCardProps {
@@ -32,6 +34,7 @@ export function ProviderCard({
   onRemove,
   onToggleModel,
 }: ProviderCardProps) {
+  const { t } = useTranslation(['admin', 'common']);
   return (
     <Card className="overflow-hidden">
       <CardHeader className="py-3">
@@ -39,38 +42,38 @@ export function ProviderCard({
           <div className="flex items-center gap-3 min-w-0">
             <CardTitle className="text-base truncate">{p.name}</CardTitle>
             <Badge variant="outline">{p.kind}</Badge>
-            {p.is_default && <Badge>default</Badge>}
-            {!p.enabled && <Badge variant="secondary">disabled</Badge>}
+            {p.is_default && <Badge>{t('admin:provider.default')}</Badge>}
+            {!p.enabled && <Badge variant="secondary">{t('admin:provider.disabled')}</Badge>}
             {p.has_key ? (
               <span className="text-xs text-muted-foreground font-mono">{p.api_key_masked}</span>
             ) : (
-              <span className="text-xs text-amber-600">no key</span>
+              <span className="text-xs text-amber-600">{t('admin:provider.noKey')}</span>
             )}
             {tr &&
               (tr.ok ? (
                 <span className="flex items-center gap-1 text-xs text-emerald-600">
                   <CheckCircle2 className="h-3 w-3" /> {tr.latencyMs}ms
                 </span>
-              ) : tr.error === 'testing…' ? (
+              ) : tr.error === t('admin:provider.testing') ? (
                 <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
               ) : (
                 <span className="flex items-center gap-1 text-xs text-red-600" title={tr.error}>
-                  <XCircle className="h-3 w-3" /> fail
+                  <XCircle className="h-3 w-3" /> {t('admin:provider.fail')}
                 </span>
               ))}
           </div>
           <div className="flex items-center gap-1.5">
             <Button size="sm" variant="ghost" onClick={onTest}>
-              <Zap className="h-4 w-4 mr-1" /> Test
+              <Zap className="h-4 w-4 mr-1" /> {t('common:actions.test')}
             </Button>
             <Button size="sm" variant="ghost" onClick={onToggleExpand}>
-              Models ({models.length || '…'})
+              {t('admin:provider.models', { count: models.length || '…' })}
             </Button>
             <Button size="sm" variant="ghost" onClick={onRefresh} disabled={refreshing}>
               {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             </Button>
             <Button size="sm" variant="ghost" onClick={onEdit}>
-              Edit
+              {t('common:actions.edit')}
             </Button>
             <Button size="sm" variant="ghost" onClick={onRemove}>
               <Trash2 className="h-4 w-4 text-red-600" />
@@ -80,9 +83,12 @@ export function ProviderCard({
       </CardHeader>
       {isExpanded && (
         <CardContent className="pt-0 border-t bg-muted/20">
+          {p.kind === 'google-oauth' && (
+            <GoogleQuotaPanel providerId={p.id} />
+          )}
           {models.length === 0 ? (
             <div className="py-3 text-sm text-muted-foreground">
-              No models yet. Click refresh to fetch from the provider API.
+              {t('admin:provider.noModels')}
             </div>
           ) : (
             <div className="divide-y">

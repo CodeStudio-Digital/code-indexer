@@ -9,6 +9,9 @@ import {
   refreshIfExpired as refreshOpenAIToken,
   CHATGPT_CODEX_BASE_URL,
 } from '../../services/oauth/openai.js';
+import {
+  refreshIfExpired as refreshGoogleToken,
+} from '../../services/oauth/google.js';
 import { extractAccountIdFromIdToken } from '../../coder/providers/chatgpt.js';
 import { getStore } from './store.js';
 
@@ -76,5 +79,33 @@ export async function resolveChatGPTCreds(cfg: ProviderConfig): Promise<Resolved
     apiKey: token,
     baseURL,
     extra: { accountId },
+  };
+}
+
+/**
+ * Refresh the Google OAuth access token and return it as apiKey so the
+ * Gemini providers can use it via Bearer header.
+ */
+export async function resolveGoogleOAuthCreds(cfg: ProviderConfig): Promise<ResolvedCreds> {
+  const store = getStore();
+  if (!store) throw new Error('Google OAuth requires the ProviderStore');
+
+  let token = cfg.api_key ?? '';
+  try {
+    const fresh = await refreshGoogleToken(store, cfg.id);
+    if (fresh) token = fresh;
+  } catch (e) {
+    console.warn(`[google-oauth] refresh failed: ${(e as Error).message}`);
+  }
+
+  const tok = store.getOAuth(cfg.id);
+  const extra = (tok?.extra ?? {}) as { projectId?: string };
+
+  return {
+    apiKey: token,
+    extra: {
+      refreshToken: tok?.refresh_token,
+      projectId: extra.projectId,
+    },
   };
 }

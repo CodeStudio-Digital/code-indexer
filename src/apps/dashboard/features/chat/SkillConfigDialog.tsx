@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Sparkles } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import {
@@ -30,13 +31,10 @@ interface SkillConfigDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-const MODE_LABEL: Record<string, string> = {
-  inline: 'Inline',
-  tool: 'Tool',
-  both: 'Both',
-};
+// MODE_LABEL is now provided via i18n t('skillConfig.*')
 
 export function SkillConfigDialog({ sessionId, open, onOpenChange }: SkillConfigDialogProps) {
+  const { t } = useTranslation(['chat', 'common']);
   const [skills, setSkills] = useState<SessionSkill[]>([]);
   const [activeCount, setActiveCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -80,23 +78,23 @@ export function SkillConfigDialog({ sessionId, open, onOpenChange }: SkillConfig
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-4 w-4" />
-            Session Skills
+            {t('chat:skillConfig.title')}
           </DialogTitle>
           <DialogDescription>
-            Enable or disable skills for this session. Changes take effect on the next message.
+            {t('chat:skillConfig.description')}
           </DialogDescription>
         </DialogHeader>
 
         {loading ? (
-          <div className="text-sm text-muted-foreground py-4">Loading...</div>
+          <div className="text-sm text-muted-foreground py-4">{t('common:actions.loading')}</div>
         ) : skills.length === 0 ? (
           <div className="text-sm text-muted-foreground py-4 text-center">
-            No skills configured. Go to Admin &gt; Skills to create some.
+            {t('chat:skillConfig.noSkills')}
           </div>
         ) : (
           <>
             <div className="text-xs text-muted-foreground">
-              Active: <strong className="text-foreground">{activeCount}</strong> / {skills.length}
+              {t('chat:skillConfig.active', { count: activeCount })} / {skills.length}
             </div>
             <div className="flex-1 overflow-auto space-y-1 -mx-2 px-2">
               {skills.map((s) => (
@@ -108,7 +106,7 @@ export function SkillConfigDialog({ sessionId, open, onOpenChange }: SkillConfig
                     <div className="flex items-center gap-1.5">
                       <span className="text-sm font-medium truncate">{s.name}</span>
                       <Badge variant="outline" className="h-4 text-[10px] shrink-0">
-                        {MODE_LABEL[s.context_mode] ?? s.context_mode}
+                        {t(`chat:skillConfig.${s.context_mode}`, { defaultValue: s.context_mode })}
                       </Badge>
                       {s.slash_command && (
                         <Badge variant="secondary" className="h-4 text-[10px] font-mono shrink-0">
@@ -117,7 +115,7 @@ export function SkillConfigDialog({ sessionId, open, onOpenChange }: SkillConfig
                       )}
                       {s.source === 'builtin' && (
                         <Badge variant="secondary" className="h-4 text-[10px] shrink-0">
-                          builtin
+                          {t('chat:skillConfig.builtin')}
                         </Badge>
                       )}
                     </div>

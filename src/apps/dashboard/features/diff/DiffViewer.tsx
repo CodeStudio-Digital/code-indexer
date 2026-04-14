@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { useApi } from '../../hooks/useApi.js';
 
 interface DiffEntry {
@@ -33,25 +34,26 @@ interface DiffViewerProps {
 }
 
 export default function DiffViewer({ projectId }: DiffViewerProps) {
+  const { t } = useTranslation('projects');
   const { data: diff, loading, error } = useApi<RunDiff>(`/projects/${projectId}/diff`);
 
-  if (loading) return <div className="text-muted-foreground text-sm">Loading diff…</div>;
-  if (error) return <div className="text-muted-foreground text-sm">Not enough runs to compare.</div>;
-  if (!diff) return <div className="text-muted-foreground text-sm">No diff data available.</div>;
+  if (loading) return <div className="text-muted-foreground text-sm">{t('diff.loading')}</div>;
+  if (error) return <div className="text-muted-foreground text-sm">{t('diff.notEnoughRuns')}</div>;
+  if (!diff) return <div className="text-muted-foreground text-sm">{t('diff.noData')}</div>;
 
   return (
     <div className="space-y-6">
       <div className="flex gap-6 text-sm flex-wrap">
-        <span className="text-success">+{diff.files_added.length} added</span>
-        <span className="text-destructive">-{diff.files_removed.length} removed</span>
-        <span className="text-warning">{diff.files_modified.length} modified</span>
+        <span className="text-success">{t('diff.added', { count: diff.files_added.length })}</span>
+        <span className="text-destructive">{t('diff.removed', { count: diff.files_removed.length })}</span>
+        <span className="text-warning">{t('diff.modified', { count: diff.files_modified.length })}</span>
         <span className="text-muted-foreground">
-          Symbols: +{diff.total_symbols_added} / -{diff.total_symbols_removed}
+          {t('diff.symbolsAdded', { added: diff.total_symbols_added })} / {t('diff.symbolsRemoved', { removed: diff.total_symbols_removed })}
         </span>
       </div>
 
       {diff.files_added.length > 0 && (
-        <Section title="Added Files" color="green">
+        <Section title={t('diff.addedFiles')} color="green">
           {diff.files_added.map((f) => (
             <FileRow key={f.path} path={f.path} language={f.language} summary={f.summary} />
           ))}
@@ -59,7 +61,7 @@ export default function DiffViewer({ projectId }: DiffViewerProps) {
       )}
 
       {diff.files_removed.length > 0 && (
-        <Section title="Removed Files" color="red">
+        <Section title={t('diff.removedFiles')} color="red">
           {diff.files_removed.map((f) => (
             <FileRow key={f.path} path={f.path} language={f.language} summary={f.summary} />
           ))}
@@ -67,7 +69,7 @@ export default function DiffViewer({ projectId }: DiffViewerProps) {
       )}
 
       {diff.files_modified.length > 0 && (
-        <Section title="Modified Files" color="yellow">
+        <Section title={t('diff.modifiedFiles')} color="yellow">
           {diff.files_modified.map((f) => (
             <div key={f.path} className="py-2 border-b last:border-0">
               <p className="font-mono text-sm">
@@ -90,7 +92,7 @@ export default function DiffViewer({ projectId }: DiffViewerProps) {
 
       {diff.concepts_added.length > 0 && (
         <div>
-          <h4 className="text-sm font-medium mb-1">New Concepts</h4>
+          <h4 className="text-sm font-medium mb-1">{t('diff.newConcepts')}</h4>
           <div className="flex flex-wrap gap-1">
             {diff.concepts_added.map((c) => (
               <span key={c} className="px-2 py-0.5 rounded-md text-xs bg-success/15 text-success">

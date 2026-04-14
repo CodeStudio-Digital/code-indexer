@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Bot } from 'lucide-react';
 import { Avatar, AvatarFallback } from '../../../components/ui/avatar.js';
 import { cn } from '../../../lib/utils.js';
@@ -48,6 +49,7 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
   handlers,
   tasksState,
 }: GroupedToolBubbleProps) {
+  const { t } = useTranslation('chat');
   const agg = aggregateUsage(group.usages);
   const hasTokens = agg.input_tokens > 0 || agg.output_tokens > 0;
 
@@ -85,9 +87,9 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
       <div className="flex-1 min-w-0 max-w-[100%]">
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
           <span>
-            assistant
+            {t('messages.assistant')}
             {!group.hasText && toolCount > 0 && (
-              <span className="normal-case ml-1 opacity-70">({toolCount} tools)</span>
+              <span className="normal-case ml-1 opacity-70">({t('messages.toolCount', { count: toolCount })})</span>
             )}
             {tokenBadge}
           </span>

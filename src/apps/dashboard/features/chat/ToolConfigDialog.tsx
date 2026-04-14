@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight, RotateCcw, Search } from 'lucide-react';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import {
@@ -14,11 +15,7 @@ import { Switch } from '../../components/ui/switch.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../../components/ui/collapsible.js';
 import { useSessionToolConfig, type SessionToolItem } from './hooks/useSessionToolConfig.js';
 
-const TIER_LABELS: Record<string, string> = {
-  bootstrap: 'Bootstrap',
-  navigate: 'Navigate',
-  admin: 'Admin',
-};
+// TIER_LABELS are now provided via i18n t('toolConfig.*')
 
 function ToolRow({
   tool,
@@ -27,6 +24,7 @@ function ToolRow({
   tool: SessionToolItem;
   onToggle: (name: string, disabled: boolean) => void;
 }) {
+  const { t } = useTranslation('chat');
   const isGloballyDisabled = tool.globallyDisabled;
   return (
     <div className="flex items-center justify-between py-1 px-2 rounded hover:bg-muted/50 gap-2">
@@ -38,13 +36,13 @@ function ToolRow({
             {tool.name}
           </span>
           {tool.source === 'mcp' && (
-            <Badge variant="outline" className="h-4 text-[10px] shrink-0">mcp</Badge>
+            <Badge variant="outline" className="h-4 text-[10px] shrink-0">{t('toolConfig.mcp')}</Badge>
           )}
           {tool.source === 'mcp_external' && (
-            <Badge variant="outline" className="h-4 text-[10px] shrink-0 border-blue-300 text-blue-600">ext</Badge>
+            <Badge variant="outline" className="h-4 text-[10px] shrink-0 border-blue-300 text-blue-600">{t('toolConfig.ext')}</Badge>
           )}
           {isGloballyDisabled && (
-            <Badge variant="destructive" className="h-4 text-[10px] shrink-0">global off</Badge>
+            <Badge variant="destructive" className="h-4 text-[10px] shrink-0">{t('toolConfig.globalOff')}</Badge>
           )}
         </div>
         {tool.description && (
@@ -72,6 +70,7 @@ function TierGroup({
   tools: SessionToolItem[];
   onToggle: (name: string, disabled: boolean) => void;
 }) {
+  const { t } = useTranslation('chat');
   const [open, setOpen] = useState(true);
   const enabled = tools.filter((t) => !t.globallyDisabled && !t.sessionDisabled).length;
 
@@ -80,7 +79,7 @@ function TierGroup({
       <CollapsibleTrigger className="flex items-center gap-2 w-full py-1.5 hover:bg-muted/30 rounded px-2 cursor-pointer">
         {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
         <span className="font-semibold text-xs">
-          {TIER_LABELS[tier] ?? tier.charAt(0).toUpperCase() + tier.slice(1)}
+          {t(`toolConfig.${tier}`, { defaultValue: tier.charAt(0).toUpperCase() + tier.slice(1) })}
         </span>
         <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
           {enabled}/{tools.length}
@@ -88,7 +87,7 @@ function TierGroup({
       </CollapsibleTrigger>
       <CollapsibleContent className="pl-5 space-y-0">
         {tools.length === 0 ? (
-          <div className="text-xs text-muted-foreground py-1">No matching tools</div>
+          <div className="text-xs text-muted-foreground py-1">{t('toolConfig.noMatch')}</div>
         ) : (
           tools.map((t) => <ToolRow key={t.name} tool={t} onToggle={onToggle} />)
         )}
@@ -104,6 +103,7 @@ interface ToolConfigDialogProps {
 }
 
 export function ToolConfigDialog({ sessionId, open, onOpenChange }: ToolConfigDialogProps) {
+  const { t } = useTranslation(['chat', 'common']);
   const {
     byTier,
     sortedTiers,
@@ -121,27 +121,27 @@ export function ToolConfigDialog({ sessionId, open, onOpenChange }: ToolConfigDi
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Session Tools</DialogTitle>
+          <DialogTitle>{t('chat:toolConfig.title')}</DialogTitle>
           <DialogDescription>
-            Enable or disable tools for this session. Globally disabled tools (admin) cannot be toggled here.
+            {t('chat:toolConfig.description')}
           </DialogDescription>
         </DialogHeader>
 
         {loading ? (
-          <div className="text-sm text-muted-foreground py-4">Loading...</div>
+          <div className="text-sm text-muted-foreground py-4">{t('common:actions.loading')}</div>
         ) : (
           <>
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span>Active: <strong className="text-foreground">{activeCount}</strong></span>
+              <span>{t('chat:toolConfig.active', { count: activeCount })}</span>
               {disabledCount > 0 && (
-                <span>Session disabled: <strong className="text-orange-500">{disabledCount}</strong></span>
+                <span>{t('chat:toolConfig.sessionDisabled', { count: disabledCount })}</span>
               )}
               {globalDisabledCount > 0 && (
-                <span>Global disabled: <strong className="text-destructive">{globalDisabledCount}</strong></span>
+                <span>{t('chat:toolConfig.globalDisabled', { count: globalDisabledCount })}</span>
               )}
               {disabledCount > 0 && (
                 <Button variant="ghost" size="sm" className="ml-auto h-6 text-xs gap-1" onClick={() => void resetAll()}>
-                  <RotateCcw className="h-3 w-3" /> Reset
+                  <RotateCcw className="h-3 w-3" /> {t('common:actions.reset')}
                 </Button>
               )}
             </div>
@@ -149,7 +149,7 @@ export function ToolConfigDialog({ sessionId, open, onOpenChange }: ToolConfigDi
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
               <Input
-                placeholder="Filter tools..."
+                placeholder={t('chat:toolConfig.filterPlaceholder')}
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 className="pl-8 h-8 text-xs"

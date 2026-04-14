@@ -14,10 +14,13 @@ export function buildMasterTools(orchestrator: CompanyOrchestrator): CoderTool[]
     waitForSubordinates(orchestrator),
     resumeSubordinate(orchestrator),
     approveSubordinatePlan(orchestrator),
+    answerSubordinateQuestion(orchestrator),
+    approveSubordinateTasks(orchestrator),
     abortSubordinateAgent(orchestrator),
     listSubordinates(orchestrator),
     listCompanyProjects(orchestrator),
     forwardToAgent(orchestrator),
+    finalizeSubordinates(orchestrator),
   ];
 }
 
@@ -34,6 +37,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
       model: { type: 'string', description: 'Optional model name' },
       tier: { type: 'string', enum: ['bootstrap', 'navigate', 'full'], description: 'Tool tier for the agent (default: navigate)' },
       skills: { type: 'array', items: { type: 'string' }, description: 'Optional skill IDs to enable for this agent. Skills provide specialized capabilities (e.g. code review, testing patterns).' },
+      kanban_card_id: { type: 'number', description: 'Optional Kanban card ID. When provided, the card\'s full context (description, checklist, comments) is prepended to the task, the agent is auto-assigned to the card, and the card moves to in_progress.' },
       wait: { type: 'boolean', description: 'If true, block until the subordinate completes (default: false)' },
     },
     required: ['role', 'task', 'project_id'],
@@ -47,11 +51,22 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
     handler: async (args) => {
       try {
         const role = args.role as string;
+        const kanbanCardId = args.kanban_card_id as number | undefined;
+
+        // Inject Kanban card context into task if card_id provided
+        let task = args.task as string;
+        if (kanbanCardId) {
+          const cardContext = orchestrator.getCardContextForSubordinate(kanbanCardId);
+          if (cardContext) {
+            task = `## Kanban Card Context\n\n${cardContext}\n\n---\n\n## Task\n\n${task}`;
+          }
+        }
+
         // Apply template defaults if the LLM didn't specify provider/model/tier
         const defaults = orchestrator.getRoleDefaults(role);
         const result = await orchestrator.spawnSubordinate({
           role,
-          task: args.task as string,
+          task,
           projectId: args.project_id as number,
           provider: (args.provider as string | undefined) ?? defaults?.provider,
           model: (args.model as string | undefined) ?? defaults?.model,
@@ -59,6 +74,18 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           skills: (args.skills as string[] | undefined) ?? defaults?.skills,
           wait: args.wait as boolean | undefined,
         });
+
+        // Auto-assign agent to Kanban card and move to in_progress
+        if (kanbanCardId && result.agentRunId) {
+          try {
+            orchestrator.kanbanAssignAgent(kanbanCardId, result.agentRunId, role);
+            const card = orchestrator.kanbanGetCard(kanbanCardId);
+            if (card && (card.column === 'backlog' || card.column === 'todo')) {
+              orchestrator.kanbanMoveCard(kanbanCardId, 'in_progress');
+            }
+          } catch { /* non-fatal — card ops shouldn't block spawn */ }
+        }
+
         return ok(JSON.stringify(result, null, 2));
       } catch (e) {
         return err(`Failed to spawn subordinate: ${e instanceof Error ? e.message : String(e)}`);
@@ -153,6 +180,88 @@ function approveSubordinatePlan(orchestrator: CompanyOrchestrator): CoderTool {
   };
 }
 
+// ─── answer_subordinate_question ──────────────────────────────
+
+function answerSubordinateQuestion(orchestrator: CompanyOrchestrator): CoderTool {
+  const parameters: JsonSchema = {
+    type: 'object',
+    properties: {
+      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run' },
+      answer: { type: 'string', description: 'Your answer to the subordinate\'s question' },
+    },
+    required: ['agent_run_id', 'answer'],
+  };
+
+  return {
+    name: 'answer_subordinate_question',
+    description:
+      "Answer a subordinate agent's pending question. The subordinate is blocked until you respond. " +
+      "If you don't know the answer, use ask_user to escalate to the human, then relay their response with this tool.",
+    parameters,
+    source: 'native',
+    handler: async (args) => {
+      const agentRunId = args.agent_run_id as number;
+      const answer = args.answer as string;
+
+      if (!orchestrator.hasPendingQuestion(agentRunId)) {
+        return err(`No pending question found for agent_run_id ${agentRunId}. Use list_subordinates to check status.`);
+      }
+
+      const resolved = orchestrator.resolveSubordinateQuestion(agentRunId, answer);
+      if (!resolved) {
+        return err(`Failed to resolve question for agent_run_id ${agentRunId}`);
+      }
+
+      return ok(`Question answered for agent ${agentRunId}. The subordinate will continue with your answer.`);
+    },
+  };
+}
+
+// ─── approve_subordinate_tasks ───────────────────────────────
+
+function approveSubordinateTasks(orchestrator: CompanyOrchestrator): CoderTool {
+  const parameters: JsonSchema = {
+    type: 'object',
+    properties: {
+      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run' },
+      approved: { type: 'boolean', description: 'Whether to approve (true) or reject (false) the task list' },
+      feedback: { type: 'string', description: 'Optional feedback for the subordinate' },
+      execution_mode: {
+        type: 'string',
+        enum: ['inline', 'per-task', 'all-subagent', 'smart'],
+        description: 'How the subordinate should execute tasks (default: inline)',
+      },
+    },
+    required: ['agent_run_id', 'approved'],
+  };
+
+  return {
+    name: 'approve_subordinate_tasks',
+    description:
+      "Approve or reject a subordinate agent's pending task list. The subordinate is blocked until you respond. " +
+      "Check the board for the task list content.",
+    parameters,
+    source: 'native',
+    handler: async (args) => {
+      const agentRunId = args.agent_run_id as number;
+      const approved = args.approved as boolean;
+      const feedback = args.feedback as string | undefined;
+      const executionMode = args.execution_mode as string | undefined;
+
+      if (!orchestrator.hasPendingTasks(agentRunId)) {
+        return err(`No pending task list found for agent_run_id ${agentRunId}. Use list_subordinates to check status.`);
+      }
+
+      const resolved = orchestrator.resolveSubordinateTasks(agentRunId, approved, feedback, executionMode);
+      if (!resolved) {
+        return err(`Failed to resolve tasks for agent_run_id ${agentRunId}`);
+      }
+
+      return ok(`Task list ${approved ? 'approved' : 'rejected'} for agent ${agentRunId}${feedback ? `. Feedback: ${feedback}` : ''}`);
+    },
+  };
+}
+
 // ─── abort_subordinate_agent ───────────────────────────────────
 
 function abortSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
@@ -186,16 +295,41 @@ function abortSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
 function listSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
   return {
     name: 'list_subordinates',
-    description: 'List all subordinate agents in this company session with their current status, role, project, and provider/model.',
-    parameters: { type: 'object', properties: {}, required: [] },
+    description:
+      'List all subordinate agents with their status. Shows which agents are available (status="waiting") ' +
+      'for reuse via forward_to_agent. ALWAYS call this before spawning to check if an existing agent can be reused.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filter: {
+          type: 'string',
+          enum: ['all', 'available', 'running'],
+          description: 'Filter: "all" (default), "available" (waiting/completed — can receive forward_to_agent), "running" (currently executing)',
+        },
+      },
+      required: [],
+    },
     source: 'native',
-    handler: async () => {
-      const subs = orchestrator.listSubordinates();
+    handler: async (args) => {
+      let subs = orchestrator.listSubordinates();
+      const filter = (args.filter as string | undefined) ?? 'all';
+      if (filter === 'available') {
+        subs = subs.filter((s) => ['waiting', 'completed'].includes(s.status));
+      } else if (filter === 'running') {
+        subs = subs.filter((s) => ['running', 'working'].includes(s.status));
+      }
       if (subs.length === 0) {
+        if (filter === 'available') return ok('No available subordinates. Spawn a new one.');
         return ok('No subordinate agents spawned yet.');
       }
       const lines = subs.map((s) =>
-        `- agent_run_id=${s.agentRunId} role=${s.role} status=${s.status} projects=${JSON.stringify(s.projectIds)} provider=${s.provider} model=${s.model}`,
+        `- agent_run_id=${s.agentRunId} role=${s.role} status=${s.status}` +
+        ` coder_session_id=${s.coderSessionId}` +
+        ` projects=${JSON.stringify(s.projectIds)}` +
+        ` provider=${s.provider} model=${s.model}` +
+        (s.statusMessage ? ` last_message="${s.statusMessage}"` : '') +
+        (s.isAlive ? ' [ALIVE]' : '') +
+        (['waiting', 'completed'].includes(s.status) ? ' [AVAILABLE for forward_to_agent]' : ''),
       );
       return ok(lines.join('\n'));
     },
@@ -265,6 +399,71 @@ function forwardToAgent(orchestrator: CompanyOrchestrator): CoderTool {
       }
 
       return err(`Agent run ${agentRunId} could not be reactivated. It might be in an unresumable state. Use spawn_subordinate_agent for a fresh agent.`);
+    },
+  };
+}
+
+// ─── resume_subordinate ────────────────────────────────────────
+
+function finalizeSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
+  return {
+    name: 'finalize_subordinates',
+    description:
+      'Permanently shut down all subordinate agents after confirming with the user. ' +
+      'Call this when you believe ALL work is complete. This asks the user for confirmation — ' +
+      'if they say yes, all subordinates are aborted and marked completed. ' +
+      'If they say no, subordinates remain alive/waiting for future tasks.',
+    parameters: {
+      type: 'object',
+      properties: {
+        summary: {
+          type: 'string',
+          description: 'Brief summary of all completed work to present to the user for confirmation.',
+        },
+      },
+      required: ['summary'],
+    },
+    source: 'native',
+    handler: async (args, ctx) => {
+      const summary = args.summary as string;
+      const runner = ctx.runner;
+      if (!runner) return err('finalize_subordinates requires runner context');
+
+      const id = `finalize_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      runner.emit('question_posted', {
+        type: 'question',
+        id,
+        question:
+          `All work appears complete. Here is a summary:\n\n${summary}\n\n` +
+          `Shall I finalize and shut down all subordinate agents?\n` +
+          `- **Yes** = permanent shutdown, session complete\n` +
+          `- **No** = keep agents alive for future tasks`,
+        options: [
+          { label: 'Yes, finalize all', value: 'yes' },
+          { label: 'No, keep agents alive', value: 'no' },
+        ],
+        allowFreeform: true,
+      });
+
+      const answer = await runner.waitForUserInput();
+      let parsed: { aborted?: boolean; answer?: string };
+      try { parsed = JSON.parse(answer); } catch { parsed = { answer }; }
+      if (parsed.aborted) return err('Finalization cancelled by user.');
+
+      const userAnswer = (parsed.answer ?? answer).toLowerCase().trim();
+      const isYes = userAnswer.startsWith('yes') || userAnswer === 'y' || userAnswer.includes('finalize');
+
+      if (isYes) {
+        const results = orchestrator.finalizeAllSubordinates();
+        orchestrator.postToBoard('master', orchestrator.getMasterAgentRunId(), 'deliverable',
+          `All ${results.finalized + results.alreadyStopped} subordinate agent(s) finalized. Session complete.\n\n${summary}`);
+        return ok(`Finalized ${results.finalized} running + ${results.alreadyStopped} idle subordinate(s). Session is complete.`);
+      } else {
+        return ok(
+          'Finalization cancelled. All subordinate agents remain in their current state. ' +
+          'You can continue using forward_to_agent to send them new tasks, or spawn new subordinates.',
+        );
+      }
     },
   };
 }

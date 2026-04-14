@@ -17,6 +17,7 @@ export function buildBoardTools(
     postToBoard(orchestrator, agentRole, agentRunId),
     readBoard(orchestrator, agentRole),
     setAgentStatus(orchestrator, agentRole, agentRunId),
+    kanbanReadMyCard(orchestrator, agentRunId),
   ];
 }
 
@@ -142,6 +143,54 @@ function setAgentStatus(
 
       orchestrator.setAgentStatus(agentRunId, agentRole, status, message);
       return ok(`Status set to "${status}"${message ? `: ${message}` : ''}`);
+    },
+  };
+}
+
+// ─── kanban_read_my_card ──────────────────────────────────────
+
+function kanbanReadMyCard(
+  orchestrator: CompanyOrchestrator,
+  agentRunId: number | null,
+): CoderTool {
+  const parameters: JsonSchema = {
+    type: 'object',
+    properties: {
+      card_id: { type: 'number', description: 'ID of the Kanban card to read. If omitted, reads the card assigned to your current agent run.' },
+    },
+  };
+
+  return {
+    name: 'kanban_read_my_card',
+    description: 'Read a Kanban card with full details (description, objectives checklist, comments, agent history, dependencies). Use this to get the latest context for your assigned task.',
+    parameters,
+    source: 'native',
+    handler: async (args) => {
+      try {
+        let cardId = args.card_id as number | undefined;
+
+        // If no card_id provided, look up the card assigned to this agent run
+        if (!cardId && agentRunId) {
+          const context = orchestrator.getCardContextForSubordinate(0); // dummy — we need to find the card first
+          // Use the store method directly via orchestrator
+          const cards = orchestrator.kanbanListCardsFull();
+          const myCard = cards.find(c =>
+            c.agents.some(a => a.agent_run_id === agentRunId && !a.unassigned_at)
+          );
+          if (myCard) cardId = myCard.id;
+        }
+
+        if (!cardId) {
+          return err('No card_id provided and no card currently assigned to this agent.');
+        }
+
+        const card = orchestrator.kanbanGetCard(cardId);
+        if (!card) return err(`Card #${cardId} not found`);
+
+        return ok(JSON.stringify(card, null, 2));
+      } catch (e) {
+        return err(`Failed to read card: ${(e as Error).message}`);
+      }
     },
   };
 }

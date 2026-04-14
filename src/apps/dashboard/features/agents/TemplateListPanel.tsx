@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Edit2, Plus, Trash2, Users, Crown } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
@@ -26,6 +27,7 @@ interface TemplateListPanelProps {
 }
 
 export function TemplateListPanel({ onNewTemplate }: TemplateListPanelProps) {
+  const { t } = useTranslation('agents');
   const { data: templates, refetch } = useApi<Template[]>('/company/templates');
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
 
@@ -39,13 +41,13 @@ export function TemplateListPanel({ onNewTemplate }: TemplateListPanelProps) {
     <>
       <div className="p-2">
         <Button variant="outline" size="sm" className="w-full text-xs" onClick={onNewTemplate}>
-          <Plus className="h-3 w-3 mr-1" /> New Template
+          <Plus className="h-3 w-3 mr-1" /> {t('template.newTemplate')}
         </Button>
       </div>
 
       {(!templates || templates.length === 0) && (
         <p className="px-3 py-4 text-xs text-muted-foreground text-center">
-          No templates yet. Create one to define reusable agent teams.
+          {t('template.noTemplates')}
         </p>
       )}
 

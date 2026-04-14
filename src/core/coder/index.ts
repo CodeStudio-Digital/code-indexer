@@ -19,6 +19,7 @@ import { McpServerManager } from './tools/mcp-server-manager.js';
 import { McpServerStore } from '../../store/mcp-server-store.js';
 import { buildSubagentTool, buildSpawnAgentsTool } from './tools/subagent.js';
 import { buildMasterTools } from './tools/company/master-tools.js';
+import { buildKanbanTools } from './tools/company/kanban-tools.js';
 import { buildBoardTools } from './tools/company/board-tools.js';
 import { inferProfileFromMessage, profileToTiers, type CoderProfile } from './tools/tiers.js';
 import { AGENTS, type AgentId } from './agents/index.js';
@@ -103,10 +104,17 @@ export interface RunCoderOptions {
    * runner should pick up from existing history and run the next turn.
    */
   resume?: boolean;
+  /** Enable thinking/reasoning mode for providers that support it. */
+  thinking?: boolean;
   /** Company orchestrator context — when present, company tools are registered. */
   companyContext?: import('./company/types.js').CompanyContext;
   /** Extra system prompt block for company agents (master/subordinate). Appended to the base prompt. */
   companyPromptBlock?: string;
+}
+
+export interface IndexStatus {
+  isIndexed: boolean;
+  mcpAvailable: boolean;
 }
 
 export interface RunCoderHandle {
@@ -114,6 +122,8 @@ export interface RunCoderHandle {
   runner: CoderRunner;
   /** Awaits completion. Resolves with the run reason, usage, and optional error detail. */
   done: Promise<{ reason: string; usage: ChatUsage; error?: string }>;
+  /** Whether the project is indexed and MCP tools were registered. */
+  indexStatus: IndexStatus;
 }
 
 /**
@@ -154,8 +164,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const project = db.getProject(session.project_id);
   if (!project) throw new Error(`Project ${session.project_id} not found`);
 
+  // For google-oauth sessions, ensure a persistent CloudCode session ID exists.
+  let cloudCodeSessionId: string | undefined;
+  if (session.provider === 'google-oauth') {
+    cloudCodeSessionId = store.getOrCreateCloudCodeSessionId(session.id);
+  }
+
   // Provider — async path so Copilot tokens get refreshed before the run.
-  const provider = await createChatProviderAsync(session.provider as CoderProviderName, session.model);
+  const provider = await createChatProviderAsync(
+    session.provider as CoderProviderName,
+    session.model,
+    cloudCodeSessionId,
+  );
 
   // Session overlay — tracks files touched this run so MCP read tools
   // serve fresh disk data without re-indexing.
@@ -186,6 +206,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // subordinates and regular sessions get a single bridge.
   const bridge = new McpToolBridge();
   const extraBridges: McpToolBridge[] = [];
+  let mcpBridgeOk = false;
 
   if (opts.companyContext?.isMaster) {
     // Master: register prefixed MCP tools for ALL company projects
@@ -210,12 +231,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         await projBridge.close();
       }
     }
+    mcpBridgeOk = extraBridges.length > 0;
   } else {
     // Regular session / subordinate: single bridge
     try {
       await bridge.connect();
       const mcpTools = await bridge.listTools({ projectName: project.name, overlay });
       registry.registerAll(mcpTools);
+      mcpBridgeOk = mcpTools.length > 0;
     } catch (e) {
       console.warn(`[coder] MCP bridge failed to connect: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -292,6 +315,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     registry.registerAll(buildBoardTools(orchestrator, agentRole, agentRunId));
     if (isMaster) {
       registry.registerAll(buildMasterTools(orchestrator));
+      registry.registerAll(buildKanbanTools(orchestrator));
     }
   }
 
@@ -402,6 +426,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     );
   }
 
+  // Detect indexing status — used for prompt conditioning and dashboard feedback.
+  const projectStats = db.getStats(project.id);
+  const isIndexed = (projectStats?.file_count ?? 0) > 0 && (projectStats?.run_count ?? 0) > 0;
+  const indexStatus: IndexStatus = { isIndexed, mcpAvailable: mcpBridgeOk };
+
   let systemPrompt = buildSystemPrompt({
     projectName: project.name,
     projectRoot: project.root_path,
@@ -418,6 +447,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           toolCount: info.toolCount,
         }))
       : undefined,
+    mcpAvailable: mcpBridgeOk,
   });
 
   // Append company prompt block (master orchestration or subordinate instructions)
@@ -443,6 +473,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     initialMessages,
     maxTurns: opts.maxTurns ?? 50,
     planMode: opts.planMode,
+    thinking: opts.thinking,
     activeTiers,
     globalDisabledTools,
     sessionDisabledTools: sessionDisabledTools.size > 0 ? sessionDisabledTools : undefined,
@@ -663,7 +694,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       db.close();
     });
 
-  return { session, runner, done: donePromise };
+  return { session, runner, done: donePromise, indexStatus };
 }
 
 function defaultModelFor(provider: CoderProviderName): string {

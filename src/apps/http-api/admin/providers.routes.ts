@@ -21,6 +21,9 @@ import {
   openaiAuthHeaders,
   CHATGPT_CODEX_BASE_URL,
 } from '../../../core/services/oauth/openai.js';
+import {
+  refreshIfExpired as refreshGoogleOAuthToken,
+} from '../../../core/services/oauth/google.js';
 import { publicProvider } from './shared/mask.js';
 import { resolveCopilotApiBase } from './shared/copilot-opts.js';
 
@@ -199,6 +202,18 @@ export function providersRouter(store: ProviderStore): Hono {
         const r = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cfg.api_key ?? '')}`
         );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      } else if (cfg.kind === 'google-oauth') {
+        let token = cfg.api_key ?? '';
+        try {
+          const fresh = await refreshGoogleOAuthToken(store, cfg.id);
+          if (fresh) token = fresh;
+        } catch (e) {
+          throw new Error(`token refresh failed: ${(e as Error).message}`);
+        }
+        const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
       } else if (cfg.kind === 'bedrock') {
         return c.json({ ok: false, error: 'bedrock test not implemented' });

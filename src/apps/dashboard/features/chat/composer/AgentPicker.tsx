@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Compass, ClipboardList, Hammer, ShieldAlert, Sparkles } from 'lucide-react';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
 
@@ -39,6 +40,7 @@ interface AgentPickerProps {
 }
 
 export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProps) {
+  const { t } = useTranslation('chat');
   const [agents, setAgents] = useState<AgentDef[] | null>(null);
   const [suggestion, setSuggestion] = useState<AgentId | null>(null);
 
@@ -97,10 +99,10 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
     const source =
       agents ??
       ([
-        { id: 'explore', description: 'Read-only investigation (bootstrap tier)', profile: 'bootstrap', planMode: false },
-        { id: 'plan', description: 'Read + plan mode (navigate tier)', profile: 'navigate', planMode: true },
-        { id: 'build', description: 'Read + edit + shell (navigate tier)', profile: 'navigate', planMode: false },
-        { id: 'admin', description: 'Everything (full tier)', profile: 'full', planMode: false },
+        { id: 'explore', description: t('agentPicker.bootstrap'), profile: 'bootstrap', planMode: false },
+        { id: 'plan', description: t('agentPicker.navigate'), profile: 'navigate', planMode: true },
+        { id: 'build', description: t('agentPicker.navigateFull'), profile: 'navigate', planMode: false },
+        { id: 'admin', description: t('agentPicker.full'), profile: 'full', planMode: false },
       ] satisfies AgentDef[]);
     return source.map((a) => ({
       value: a.id,
@@ -122,9 +124,9 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
           value={value}
           onChange={(v) => onChange(v as AgentId)}
           options={options}
-          placeholder="Agent"
-          searchPlaceholder="Search agent…"
-          emptyLabel="No agent"
+          placeholder={t('toolbar.agent')}
+          searchPlaceholder={t('toolbar.searchAgent')}
+          emptyLabel={t('toolbar.noAgent')}
         />
       </div>
       {suggestion && SuggestionIcon && (
@@ -135,10 +137,10 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
             setSuggestion(null);
           }}
           className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400 hover:underline"
-          title={`Your message looks like it needs the '${suggestion}' agent. Click to switch.`}
+          title={t('agentPicker.suggestionTooltip', { suggestion })}
         >
           <Sparkles className="h-3 w-3" />
-          <span>try {suggestion}</span>
+          <span>{t('agentPicker.suggestion', { suggestion })}</span>
         </button>
       )}
     </div>

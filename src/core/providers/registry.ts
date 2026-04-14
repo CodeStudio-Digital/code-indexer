@@ -7,6 +7,7 @@ import { zai } from './definitions/zai.js';
 import { copilot } from './definitions/copilot.js';
 import { chatgpt } from './definitions/chatgpt.js';
 import { bedrock } from './definitions/bedrock.js';
+import { googleOAuth } from './definitions/google-oauth.js';
 
 /**
  * Provider registry — single source of truth for all provider shapes.
@@ -34,6 +35,7 @@ const ALL_DEFINITIONS: ProviderDefinition[] = [
   copilot,
   chatgpt,
   bedrock,
+  googleOAuth,
 ];
 
 let cachedRegistry: Map<string, ProviderDefinition> | null = null;

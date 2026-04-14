@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import { useApi, apiPost } from '../../hooks/useApi.js';
 import { useProviders } from '../../hooks/useProviders.js';
@@ -22,6 +23,7 @@ interface NewCompanyDialogProps {
 }
 
 export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) {
+  const { t } = useTranslation(['agents', 'common']);
   const { data: templates } = useApi<Template[]>('/company/templates');
   const { data: projects } = useApi<Project[]>('/projects');
   const { providerOptions, getModelsForProvider, getDefaultModel } = useProviders();
@@ -73,37 +75,37 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="bg-card rounded-lg border shadow-lg w-full max-w-lg max-h-[80vh] overflow-y-auto">
         <div className="px-6 py-4 border-b">
-          <h2 className="text-lg font-semibold">Start Company Session</h2>
+          <h2 className="text-lg font-semibold">{t('agents:newCompanyDialog.title')}</h2>
         </div>
 
         <div className="p-6 space-y-4">
           {/* Name */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Session Name</label>
+            <label className="text-xs font-medium text-muted-foreground">{t('agents:newCompanyDialog.sessionName')}</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm"
-              placeholder="Feature Sprint Q2"
+              placeholder={t('agents:newCompanyDialog.sessionPlaceholder')}
             />
           </div>
 
           {/* Template */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Template (optional)</label>
+            <label className="text-xs font-medium text-muted-foreground">{t('agents:newCompanyDialog.template')}</label>
             <select
               value={selectedTemplateId ?? ''}
               onChange={(e) => setSelectedTemplateId(e.target.value ? Number(e.target.value) : null)}
               className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm"
             >
-              <option value="">Custom (no template)</option>
+              <option value="">{t('agents:newCompanyDialog.customTemplate')}</option>
               {templates?.map((t) => (
                 <option key={t.id} value={t.id}>{t.name} — {t.description}</option>
               ))}
             </select>
             {selectedTemplate && (
               <div className="mt-2 text-xs text-muted-foreground">
-                Roles: {selectedTemplate.roles.map((r) => r.role).join(', ')}
+                {t('agents:newCompanyDialog.roles')}{selectedTemplate.roles.map((r) => r.role).join(', ')}
               </div>
             )}
           </div>
@@ -111,7 +113,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
           {/* Projects */}
           <div>
             <label className="text-xs font-medium text-muted-foreground">
-              Projects ({selectedProjectIds.length} selected)
+              {t('agents:newCompanyDialog.projects', { count: selectedProjectIds.length })}
             </label>
             <div className="mt-1 max-h-40 overflow-y-auto border rounded-md divide-y">
               {projects?.map((p) => (
@@ -127,7 +129,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
                 </label>
               ))}
               {(!projects || projects.length === 0) && (
-                <p className="px-3 py-2 text-xs text-muted-foreground">No indexed projects found.</p>
+                <p className="px-3 py-2 text-xs text-muted-foreground">{t('agents:newCompanyDialog.noProjects')}</p>
               )}
             </div>
           </div>
@@ -135,7 +137,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
           {/* Master provider/model — from admin config */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium text-muted-foreground">Master Provider</label>
+              <label className="text-xs font-medium text-muted-foreground">{t('agents:newCompanyDialog.masterProvider')}</label>
               <select
                 value={masterProvider}
                 onChange={(e) => handleMasterProviderChange(e.target.value)}
@@ -147,7 +149,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
               </select>
             </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground">Master Model</label>
+              <label className="text-xs font-medium text-muted-foreground">{t('agents:newCompanyDialog.masterModel')}</label>
               {masterModels.length > 0 ? (
                 <select
                   value={masterModel}
@@ -165,7 +167,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
                   value={masterModel}
                   onChange={(e) => setMasterModel(e.target.value)}
                   className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm font-mono"
-                  placeholder="model name"
+                  placeholder={t('agents:newCompanyDialog.modelPlaceholder')}
                 />
               )}
             </div>
@@ -174,13 +176,13 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
 
         {/* Footer */}
         <div className="px-6 py-3 border-t flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose} size="sm">Cancel</Button>
+          <Button variant="outline" onClick={onClose} size="sm">{t('common:actions.cancel')}</Button>
           <Button
             onClick={handleCreate}
             disabled={creating || !name.trim() || selectedProjectIds.length === 0}
             size="sm"
           >
-            {creating ? 'Creating...' : 'Create & Start'}
+            {creating ? t('agents:newCompanyDialog.creating') : t('agents:newCompanyDialog.createStart')}
           </Button>
         </div>
       </div>

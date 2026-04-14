@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { Check, Circle, Loader2 } from 'lucide-react';
 import type { TodoItem } from '../../hooks/agent-stream/types.js';
 
@@ -19,9 +20,10 @@ interface TodosSidebarProps {
 }
 
 export function TodosSidebar({ todos }: TodosSidebarProps) {
+  const { t } = useTranslation('chat');
   if (todos.length === 0) return null;
 
-  const completed = todos.filter((t) => t.status === 'completed').length;
+  const completed = todos.filter((td) => td.status === 'completed').length;
   const total = todos.length;
   const percent = Math.round((completed / total) * 100);
 
@@ -29,9 +31,9 @@ export function TodosSidebar({ todos }: TodosSidebarProps) {
     <aside className="border-l bg-card/50 w-64 shrink-0 overflow-y-auto hidden lg:block">
       <div className="sticky top-0 bg-card border-b px-3 py-2.5">
         <div className="flex items-center justify-between text-xs font-medium">
-          <span className="text-foreground">Agent todos</span>
+          <span className="text-foreground">{t('todos.title')}</span>
           <span className="text-muted-foreground">
-            {completed}/{total} · {percent}%
+            {t('todos.progress', { completed, total, percent })}
           </span>
         </div>
         <div className="mt-1.5 h-1 w-full rounded-full bg-muted overflow-hidden">

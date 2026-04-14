@@ -7,6 +7,7 @@
  * multiplexed into a single meta-bus for the dashboard to consume.
  */
 import { runCoder, type RunCoderOptions, type RunCoderHandle } from '../index.js';
+import { createChatProviderAsync } from '../providers/factory.js';
 import type { ChatUsage } from '../core/messages.js';
 import {
   createBus,
@@ -32,6 +33,23 @@ interface PendingPlan {
   role: string;
   planText: string;
   toolUseId: string;
+  resolve: (response: string) => void;
+}
+
+interface PendingQuestion {
+  agentRunId: number;
+  role: string;
+  question: string;
+  options?: Array<{ label: string; value: string }>;
+  allowFreeform?: boolean;
+  resolve: (response: string) => void;
+}
+
+interface PendingTasks {
+  agentRunId: number;
+  role: string;
+  summary: string;
+  tasks: unknown[];
   resolve: (response: string) => void;
 }
 
@@ -63,6 +81,8 @@ export class CompanyOrchestrator {
   private db: CodeIndexDB;
   private subordinates = new Map<number, SubordinateHandle>();
   private pendingPlans = new Map<number, PendingPlan>();
+  private pendingQuestions = new Map<number, PendingQuestion>();
+  private pendingTasks = new Map<number, PendingTasks>();
   private masterAgentRunId: number | null = null;
   private projects: CompanySessionProject[] = [];
   private aborted = false;
@@ -169,6 +189,9 @@ export class CompanyOrchestrator {
     // Save context so we can resume master if a subordinate finishes after master exits
     this.masterCompanyContext = companyContext;
     this.masterPromptBlock = masterPromptBlock;
+
+    // Board: post the initial user message so it appears in the board as a human entry
+    this.postToBoard('human', null, 'message', opts.userMessage);
 
     // Board: announce master start
     this.postToBoard('system', null, 'message',
@@ -637,8 +660,10 @@ export class CompanyOrchestrator {
       companyPromptBlock: subordinateBlock,
     } as RunCoderOptions & { companyPromptBlock: string });
 
-    // Wire plan interception for subordinate
+    // Wire interceptions for subordinate
     this.wireSubordinatePlanInterception(handle, agentRun.id, spec.role);
+    this.wireSubordinateQuestionInterception(handle, agentRun.id, spec.role);
+    this.wireSubordinateTasksInterception(handle, agentRun.id, spec.role);
     // Wire SSE to meta-bus
     this.wireAgentToMetaBus(handle, spec.role, agentRun.id);
 
@@ -740,6 +765,103 @@ export class CompanyOrchestrator {
     });
   }
 
+  // ─── Subordinate question interception (ask_user → master) ──────
+
+  private wireSubordinateQuestionInterception(
+    handle: RunCoderHandle,
+    agentRunId: number,
+    role: string,
+  ): void {
+    handle.runner.on('question_posted', (block: {
+      id: string;
+      question: string;
+      options?: Array<{ label: string; value: string }>;
+      allowFreeform?: boolean;
+    }) => {
+      this.companyStore.updateAgentRunStatus(agentRunId, 'waiting_question');
+
+      const optionsText = block.options?.length
+        ? `\nOptions: ${block.options.map((o) => o.label).join(', ')}`
+        : '';
+      this.postToBoard(role, agentRunId, 'question',
+        `[@master] ${role} asks: ${block.question}${optionsText}`);
+
+      publish(this.metaBus, 'subordinate_question_posted', {
+        agentRunId,
+        role,
+        question: block.question,
+        options: block.options,
+        allowFreeform: block.allowFreeform,
+      });
+
+      this.pendingQuestions.set(agentRunId, {
+        agentRunId,
+        role,
+        question: block.question,
+        options: block.options,
+        allowFreeform: block.allowFreeform,
+        resolve: (response: string) => {
+          handle.runner.provideUserInput(response);
+          this.companyStore.updateAgentRunStatus(agentRunId, 'running');
+        },
+      });
+
+      // Notify master so it can answer or escalate to human
+      this.notifyMasterAboutSubordinate(
+        `[SYSTEM] @${role} (agent_run_id=${agentRunId}) is asking a question and BLOCKED waiting for your answer.\n` +
+        `Question: "${block.question}"${optionsText}\n` +
+        `Use answer_subordinate_question(agent_run_id=${agentRunId}, answer="...") to respond. ` +
+        `If you cannot answer, use ask_user to escalate the question to the human, then relay the human's response.`,
+      );
+    });
+  }
+
+  // ─── Subordinate tasks interception (submit_tasks → master) ────
+
+  private wireSubordinateTasksInterception(
+    handle: RunCoderHandle,
+    agentRunId: number,
+    role: string,
+  ): void {
+    handle.runner.on('tasks_posted', (block: {
+      tool_use_id?: string;
+      summary?: string;
+      tasks?: unknown[];
+    }) => {
+      const summary = block.summary ?? '(no summary)';
+      const tasks = block.tasks ?? [];
+
+      this.companyStore.updateAgentRunStatus(agentRunId, 'waiting_tasks');
+
+      this.postToBoard(role, agentRunId, 'question',
+        `[@master] ${role} submitted task list for review:\n\n${summary}`);
+
+      publish(this.metaBus, 'subordinate_tasks_posted', {
+        agentRunId,
+        role,
+        summary,
+        tasks,
+      });
+
+      this.pendingTasks.set(agentRunId, {
+        agentRunId,
+        role,
+        summary,
+        tasks,
+        resolve: (response: string) => {
+          handle.runner.provideUserInput(response);
+          this.companyStore.updateAgentRunStatus(agentRunId, 'running');
+        },
+      });
+
+      this.notifyMasterAboutSubordinate(
+        `[SYSTEM] @${role} (agent_run_id=${agentRunId}) submitted a task list for approval and is BLOCKED.\n` +
+        `Summary: "${summary}"\n` +
+        `Use approve_subordinate_tasks(agent_run_id=${agentRunId}, approved=true/false, feedback="...") to respond.`,
+      );
+    });
+  }
+
   // ─── Resume failed subordinate ──────────────────────────────────
 
   async resumeSubordinate(agentRunId: number, message?: string): Promise<{
@@ -814,6 +936,8 @@ export class CompanyOrchestrator {
     }
 
     this.wireSubordinatePlanInterception(handle, agentRun.id, agentRun.role);
+    this.wireSubordinateQuestionInterception(handle, agentRun.id, agentRun.role);
+    this.wireSubordinateTasksInterception(handle, agentRun.id, agentRun.role);
     this.wireAgentToMetaBus(handle, agentRun.role, agentRun.id);
 
     this.companyStore.updateAgentRunStatus(agentRun.id, 'running');
@@ -890,14 +1014,89 @@ export class CompanyOrchestrator {
     return true;
   }
 
+  // ─── Subordinate question resolution ────────────────────────────
+
+  resolveSubordinateQuestion(agentRunId: number, answer: string): boolean {
+    const pending = this.pendingQuestions.get(agentRunId);
+    if (!pending) return false;
+
+    const response = JSON.stringify({ answer });
+    pending.resolve(response);
+    this.pendingQuestions.delete(agentRunId);
+
+    this.postToBoard('master', this.masterAgentRunId, 'decision',
+      `[@${pending.role}] Answered question: ${answer}`);
+
+    publish(this.metaBus, 'subordinate_question_resolved', { agentRunId });
+    return true;
+  }
+
+  hasPendingQuestion(agentRunId: number): boolean {
+    return this.pendingQuestions.has(agentRunId);
+  }
+
+  // ─── Subordinate tasks resolution ─────────────────────────────
+
+  resolveSubordinateTasks(
+    agentRunId: number,
+    approved: boolean,
+    feedback?: string,
+    executionMode?: string,
+  ): boolean {
+    const pending = this.pendingTasks.get(agentRunId);
+    if (!pending) return false;
+
+    const response = JSON.stringify({
+      approved,
+      feedback: feedback ?? '',
+      execution_mode: executionMode ?? 'inline',
+    });
+    pending.resolve(response);
+    this.pendingTasks.delete(agentRunId);
+
+    this.postToBoard('master', this.masterAgentRunId, 'decision',
+      `[@${pending.role}] Tasks ${approved ? 'APPROVED' : 'REJECTED'}${feedback ? `: ${feedback}` : ''}`);
+
+    publish(this.metaBus, 'subordinate_tasks_resolved', { agentRunId });
+    return true;
+  }
+
+  hasPendingTasks(agentRunId: number): boolean {
+    return this.pendingTasks.has(agentRunId);
+  }
+
   // ─── Abort ─────────────────────────────────────────────────────
 
   abortSubordinate(agentRunId: number): boolean {
     const sub = this.subordinates.get(agentRunId);
     if (!sub) return false;
     sub.runner.abort();
+    this.pendingPlans.delete(agentRunId);
+    this.pendingQuestions.delete(agentRunId);
+    this.pendingTasks.delete(agentRunId);
     this.companyStore.updateAgentRunStatus(agentRunId, 'aborted');
     return true;
+  }
+
+  // ─── Provider Switching ─────────────────────────────────────
+
+  /**
+   * Swap the master agent's provider/model. If the master runner is alive,
+   * performs a live swap so the next LLM call uses the new provider.
+   */
+  async swapMasterProvider(providerName: string, model?: string): Promise<{ provider: string; model: string }> {
+    const newProvider = await createChatProviderAsync(providerName, model);
+    if (this.masterHandle && !this.masterEnded) {
+      this.masterHandle.runner.swapProvider(newProvider);
+    }
+    return { provider: newProvider.name, model: newProvider.model };
+  }
+
+  /**
+   * Update role configs in memory so future subordinate spawns use the new defaults.
+   */
+  updateRoleConfigs(roleConfigs: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }>): void {
+    this.roleConfigs = roleConfigs;
   }
 
   abortAll(): void {
@@ -917,6 +1116,44 @@ export class CompanyOrchestrator {
     if (!this.metaBus.ended) {
       markEnded(this.metaBus, 'done', { reason: 'aborted' });
     }
+  }
+
+  // ─── Finalize ──────────────────────────────────────────────────
+
+  /** Gracefully shut down all subordinates and mark them completed.
+   *  Unlike abortAll(), this does NOT touch the master or session status. */
+  finalizeAllSubordinates(): { finalized: number; alreadyStopped: number } {
+    let finalized = 0;
+    let alreadyStopped = 0;
+    const runs = this.companyStore.listAgentRuns(this.companySessionId);
+    const subs = runs.filter((r) => r.role !== 'master');
+
+    for (const run of subs) {
+      const handle = this.subordinates.get(run.id);
+      if (this.runningSubordinateIds.has(run.id) && handle) {
+        handle.runner.abort();
+        this.runningSubordinateIds.delete(run.id);
+        finalized++;
+      } else {
+        alreadyStopped++;
+      }
+      try {
+        this.companyStore.updateAgentRunStatus(run.id, 'completed', 'Finalized by master');
+      } catch { /* ignore */ }
+    }
+
+    this.subordinates.clear();
+    this.runningSubordinateIds.clear();
+    this.pendingPlans.clear();
+    this.pendingQuestions.clear();
+    this.pendingTasks.clear();
+    this.postToBoard('system', null, 'message',
+      `All subordinates finalized: ${finalized} stopped, ${alreadyStopped} were already idle.`);
+    return { finalized, alreadyStopped };
+  }
+
+  getMasterAgentRunId(): number | null {
+    return this.masterAgentRunId;
   }
 
   // ─── Board ─────────────────────────────────────────────────────
@@ -974,9 +1211,12 @@ export class CompanyOrchestrator {
     agentRunId: number;
     role: string;
     status: AgentRunStatus;
+    statusMessage: string;
     projectIds: number[];
     provider: string;
     model: string;
+    coderSessionId: number;
+    isAlive: boolean;
   }> {
     const runs = this.companyStore.listAgentRuns(this.companySessionId);
     return runs
@@ -985,9 +1225,12 @@ export class CompanyOrchestrator {
         agentRunId: r.id,
         role: r.role,
         status: r.status as AgentRunStatus,
+        statusMessage: r.status_message ?? '',
         projectIds: JSON.parse(r.project_ids_json),
         provider: r.provider,
         model: r.model,
+        coderSessionId: r.coder_session_id,
+        isAlive: this.subordinates.has(r.id),
       }));
   }
 
@@ -1083,6 +1326,150 @@ export class CompanyOrchestrator {
   getSubordinateStatus(agentRunId: number): AgentRunStatus | null {
     const run = this.companyStore.getAgentRun(agentRunId);
     return run ? run.status as AgentRunStatus : null;
+  }
+
+  // ─── Kanban ────────────────────────────────────────────────────
+
+  kanbanCreateCard(input: {
+    title: string;
+    description?: string;
+    column?: import('./types.js').KanbanColumn;
+    tag?: import('./types.js').KanbanTag | null;
+    created_by?: string;
+    checklist?: string[];
+  }): import('./types.js').KanbanCardFull {
+    const card = this.companyStore.createKanbanCard(this.companySessionId, input);
+    if (input.checklist) {
+      for (let i = 0; i < input.checklist.length; i++) {
+        this.companyStore.addChecklistItem(card.id, input.checklist[i], i);
+      }
+    }
+    const full = this.companyStore.getKanbanCardFull(card.id)!;
+    publish(this.metaBus, 'kanban_card_created', full);
+    return full;
+  }
+
+  kanbanMoveCard(cardId: number, column: import('./types.js').KanbanColumn, position?: number): import('./types.js').KanbanCard {
+    const before = this.companyStore.getKanbanCard(cardId);
+    const card = this.companyStore.moveKanbanCard(cardId, column, position);
+    publish(this.metaBus, 'kanban_card_moved', {
+      cardId,
+      fromColumn: before?.column,
+      toColumn: column,
+      position: card.position,
+    });
+    return card;
+  }
+
+  kanbanUpdateCard(cardId: number, patch: { title?: string; description?: string; tag?: import('./types.js').KanbanTag | null }): import('./types.js').KanbanCard | null {
+    const card = this.companyStore.updateKanbanCard(cardId, patch);
+    if (card) publish(this.metaBus, 'kanban_card_updated', { cardId, patch });
+    return card;
+  }
+
+  kanbanDeleteCard(cardId: number): boolean {
+    const ok = this.companyStore.deleteKanbanCard(cardId);
+    if (ok) publish(this.metaBus, 'kanban_card_deleted', { cardId });
+    return ok;
+  }
+
+  kanbanAddComment(cardId: number, authorRole: string, agentRunId: number | null, content: string): import('./types.js').KanbanComment {
+    const comment = this.companyStore.addKanbanComment(cardId, authorRole, agentRunId, content);
+    publish(this.metaBus, 'kanban_comment_added', { cardId, comment });
+    return comment;
+  }
+
+  kanbanUpdateChecklist(cardId: number, items: Array<{ id?: number; text: string; checked: boolean }>): import('./types.js').KanbanChecklistItem[] {
+    const result: import('./types.js').KanbanChecklistItem[] = [];
+    for (const item of items) {
+      if (item.id) {
+        const updated = this.companyStore.updateChecklistItem(item.id, { text: item.text, checked: item.checked });
+        if (updated) result.push(updated);
+      } else {
+        result.push(this.companyStore.addChecklistItem(cardId, item.text));
+        if (item.checked) {
+          const last = result[result.length - 1];
+          this.companyStore.updateChecklistItem(last.id, { checked: true });
+          last.checked = true;
+        }
+      }
+    }
+    publish(this.metaBus, 'kanban_checklist_updated', { cardId, items: result });
+    return result;
+  }
+
+  kanbanAddDependency(cardId: number, dependsOnId: number): import('./types.js').KanbanCardDependency {
+    const dep = this.companyStore.addCardDependency(cardId, dependsOnId);
+    publish(this.metaBus, 'kanban_dependency_added', { cardId, dependsOnId });
+    return dep;
+  }
+
+  kanbanRemoveDependency(cardId: number, dependsOnId: number): boolean {
+    const ok = this.companyStore.removeCardDependency(cardId, dependsOnId);
+    if (ok) publish(this.metaBus, 'kanban_dependency_removed', { cardId, dependsOnId });
+    return ok;
+  }
+
+  kanbanAssignAgent(cardId: number, agentRunId: number, role: string): import('./types.js').KanbanCardAgent {
+    const assignment = this.companyStore.assignAgentToCard(cardId, agentRunId, role);
+    publish(this.metaBus, 'kanban_agent_assigned', { cardId, agentRunId, role });
+    return assignment;
+  }
+
+  kanbanUnassignAgent(cardId: number, agentRunId: number): void {
+    this.companyStore.unassignAgentFromCard(cardId, agentRunId);
+    publish(this.metaBus, 'kanban_agent_unassigned', { cardId, agentRunId });
+  }
+
+  kanbanListCards(opts?: { column?: import('./types.js').KanbanColumn }): import('./types.js').KanbanCard[] {
+    return this.companyStore.listKanbanCards(this.companySessionId, opts);
+  }
+
+  kanbanGetCard(cardId: number): import('./types.js').KanbanCardFull | null {
+    return this.companyStore.getKanbanCardFull(cardId);
+  }
+
+  kanbanListCardsFull(): import('./types.js').KanbanCardFull[] {
+    return this.companyStore.listKanbanCardsFull(this.companySessionId);
+  }
+
+  /** Build a context string from a card for subordinate injection. */
+  getCardContextForSubordinate(cardId: number): string {
+    const card = this.companyStore.getKanbanCardFull(cardId);
+    if (!card) return '';
+    const lines: string[] = [];
+    lines.push(`# Kanban Card: ${card.title}`);
+    if (card.tag) lines.push(`Tag: ${card.tag}`);
+    if (card.description) lines.push(`\n## Description\n${card.description}`);
+    if (card.checklist.length > 0) {
+      lines.push('\n## Objectives');
+      for (const item of card.checklist) {
+        lines.push(`- [${item.checked ? 'x' : ' '}] ${item.text}`);
+      }
+    }
+    if (card.dependencies.length > 0) {
+      lines.push('\n## Dependencies');
+      for (const dep of card.dependencies) {
+        const depCard = this.companyStore.getKanbanCard(dep.depends_on_id);
+        const status = depCard ? (depCard.column === 'done' ? 'DONE' : `IN ${depCard.column.toUpperCase()}`) : 'unknown';
+        lines.push(`- Blocked by card #${dep.depends_on_id} (${depCard?.title ?? '?'}) — ${status}`);
+      }
+    }
+    if (card.agents.length > 0) {
+      lines.push('\n## Agent History');
+      for (const a of card.agents) {
+        const status = a.unassigned_at ? `unassigned at ${a.unassigned_at}` : 'currently assigned';
+        lines.push(`- ${a.role} (run #${a.agent_run_id}) — ${status}`);
+      }
+    }
+    if (card.comments.length > 0) {
+      lines.push('\n## Context Log');
+      for (const c of card.comments) {
+        lines.push(`\n### ${c.author_role} (${c.created_at})`);
+        lines.push(c.content);
+      }
+    }
+    return lines.join('\n');
   }
 
   // ─── Meta-bus wiring ───────────────────────────────────────────

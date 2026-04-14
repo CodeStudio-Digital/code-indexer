@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Bold,
   Italic,
@@ -20,7 +21,7 @@ import type { MarkdownAction } from './useMarkdownShortcuts.js';
 interface ToolbarItem {
   action: MarkdownAction;
   icon: React.ElementType;
-  label: string;
+  labelKey: string;
   shortcut?: string;
 }
 
@@ -29,22 +30,22 @@ const mod = isMac ? '\u2318' : 'Ctrl';
 
 const GROUPS: ToolbarItem[][] = [
   [
-    { action: 'bold', icon: Bold, label: 'Bold', shortcut: `${mod}+B` },
-    { action: 'italic', icon: Italic, label: 'Italic', shortcut: `${mod}+I` },
-    { action: 'strikethrough', icon: Strikethrough, label: 'Strikethrough', shortcut: `${mod}+Shift+X` },
-    { action: 'inlineCode', icon: Code, label: 'Inline code', shortcut: `${mod}+E` },
-    { action: 'codeBlock', icon: FileCode2, label: 'Code block' },
+    { action: 'bold', icon: Bold, labelKey: 'markdownToolbar.bold', shortcut: `${mod}+B` },
+    { action: 'italic', icon: Italic, labelKey: 'markdownToolbar.italic', shortcut: `${mod}+I` },
+    { action: 'strikethrough', icon: Strikethrough, labelKey: 'markdownToolbar.strikethrough', shortcut: `${mod}+Shift+X` },
+    { action: 'inlineCode', icon: Code, labelKey: 'markdownToolbar.inlineCode', shortcut: `${mod}+E` },
+    { action: 'codeBlock', icon: FileCode2, labelKey: 'markdownToolbar.codeBlock' },
   ],
   [
-    { action: 'heading', icon: Heading2, label: 'Heading' },
-    { action: 'unorderedList', icon: List, label: 'Bullet list' },
-    { action: 'orderedList', icon: ListOrdered, label: 'Numbered list' },
-    { action: 'taskList', icon: ListChecks, label: 'Task list' },
-    { action: 'blockquote', icon: Quote, label: 'Blockquote', shortcut: `${mod}+Shift+.` },
+    { action: 'heading', icon: Heading2, labelKey: 'markdownToolbar.heading' },
+    { action: 'unorderedList', icon: List, labelKey: 'markdownToolbar.bulletList' },
+    { action: 'orderedList', icon: ListOrdered, labelKey: 'markdownToolbar.numberedList' },
+    { action: 'taskList', icon: ListChecks, labelKey: 'markdownToolbar.taskList' },
+    { action: 'blockquote', icon: Quote, labelKey: 'markdownToolbar.blockquote', shortcut: `${mod}+Shift+.` },
   ],
   [
-    { action: 'link', icon: Link, label: 'Link' },
-    { action: 'horizontalRule', icon: Minus, label: 'Horizontal rule' },
+    { action: 'link', icon: Link, labelKey: 'markdownToolbar.link' },
+    { action: 'horizontalRule', icon: Minus, labelKey: 'markdownToolbar.horizontalRule' },
   ],
 ];
 
@@ -54,6 +55,7 @@ interface MarkdownToolbarProps {
 }
 
 export const MarkdownToolbar = React.memo(function MarkdownToolbar({ onAction, disabled }: MarkdownToolbarProps) {
+  const { t } = useTranslation('chat');
   return (
     <div className="flex items-center gap-0.5 px-2 py-1 border-t border-dashed border-border/40">
       {GROUPS.map((group, gi) => (
@@ -61,13 +63,14 @@ export const MarkdownToolbar = React.memo(function MarkdownToolbar({ onAction, d
           {gi > 0 && <Separator orientation="vertical" className="mx-1 h-4" />}
           {group.map((item) => {
             const Icon = item.icon;
-            const tip = item.shortcut ? `${item.label} (${item.shortcut})` : item.label;
+            const label = t(item.labelKey);
+            const tip = item.shortcut ? `${label} (${item.shortcut})` : label;
             return (
               <Tooltip key={item.action}>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
-                    aria-label={item.label}
+                    aria-label={label}
                     disabled={disabled}
                     onMouseDown={(e) => {
                       e.preventDefault(); // keep textarea focused

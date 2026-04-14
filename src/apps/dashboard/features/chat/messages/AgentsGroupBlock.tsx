@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Bot, Check, ChevronDown, ChevronRight, Loader2, X } from 'lucide-react';
 import type { AgentsGroup, ParallelAgent } from '../../../hooks/useAgentStream.js';
 import { Badge } from '../../../components/ui/badge.js';
@@ -30,6 +31,7 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
 });
 
 function AgentsGroupBlockInner({ group }: AgentsGroupBlockProps) {
+  const { t } = useTranslation('chat');
   const [expanded, setExpanded] = useState(true);
   const [expandedAgents, setExpandedAgents] = useState<Set<number>>(new Set());
 
@@ -72,19 +74,19 @@ function AgentsGroupBlockInner({ group }: AgentsGroupBlockProps) {
         </div>
         <Bot className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <span className="font-medium text-foreground">
-          {group.agents.length} parallel agent{group.agents.length !== 1 ? 's' : ''}
+          {t('agentGroup.parallelAgents', { count: group.agents.length })}
         </span>
         <Badge variant="outline" className="shrink-0 tabular-nums">
-          {totalToolCalls} tool call{totalToolCalls !== 1 ? 's' : ''}
+          {t('agentGroup.toolCalls', { count: totalToolCalls })}
         </Badge>
         {!isRunning && (
           <span className="text-muted-foreground tabular-nums">
-            {completedCount}/{group.agents.length} completed
+            {t('agentGroup.completed', { completed: completedCount, total: group.agents.length })}
           </span>
         )}
         {group.totalUsage && (
           <span className="ml-auto text-muted-foreground tabular-nums shrink-0">
-            {formatTokens(group.totalUsage.input_tokens + group.totalUsage.output_tokens)} tokens
+            {t('agentGroup.tokens', { tokens: formatTokens(group.totalUsage.input_tokens + group.totalUsage.output_tokens) })}
           </span>
         )}
       </button>

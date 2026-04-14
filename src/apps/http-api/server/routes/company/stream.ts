@@ -5,7 +5,7 @@ import type { ServerDeps } from '../../deps.js';
 import { CompanyOrchestrator } from '../../../../../core/coder/company/orchestrator.js';
 
 /** Runtime map of active company orchestrators. */
-const activeOrchestrators = new Map<number, CompanyOrchestrator>();
+export const activeOrchestrators = new Map<number, CompanyOrchestrator>();
 
 interface StartBody {
   user_message: string;
@@ -215,6 +215,61 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     orchestrator.abortAll();
     activeOrchestrators.delete(id);
     return c.json({ ok: true });
+  });
+
+  /**
+   * Switch the master agent's provider/model and optionally update
+   * subordinate role defaults. Works both while running (live swap)
+   * and while idle (changes take effect on next start/resume).
+   */
+  app.post('/api/company/sessions/:id/switch', async (c) => {
+    const id = parseInt(c.req.param('id'), 10);
+    const session = companyStore.getCompanySession(id);
+    if (!session) return c.json({ error: 'Not found' }, 404);
+
+    const body = await c.req.json<{
+      provider: string;
+      model?: string;
+      role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }>;
+    }>().catch(() => ({} as { provider: string; model?: string; role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }> }));
+
+    if (!body.provider) return c.json({ error: 'provider required' }, 400);
+
+    // Update config_json in DB
+    let config: Record<string, unknown> = {};
+    try { config = JSON.parse(session.config_json); } catch { /* defaults */ }
+    config.master_provider = body.provider;
+    if (body.model) config.master_model = body.model;
+    if (body.role_assignments) config.role_assignments = body.role_assignments;
+    companyStore.updateCompanySessionConfig(id, JSON.stringify(config));
+
+    let resolvedProvider = body.provider;
+    let resolvedModel = body.model ?? '';
+
+    // Live swap if orchestrator is active
+    const orchestrator = activeOrchestrators.get(id);
+    if (orchestrator) {
+      try {
+        const result = await orchestrator.swapMasterProvider(body.provider, body.model);
+        resolvedProvider = result.provider;
+        resolvedModel = result.model;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return c.json({ error: `Provider swap failed: ${msg}` }, 500);
+      }
+      if (body.role_assignments) {
+        orchestrator.updateRoleConfigs(body.role_assignments);
+      }
+    }
+
+    // Update the master's agent_run record
+    const agentRuns = companyStore.listAgentRuns(id);
+    const masterRun = agentRuns.filter((r) => r.role === 'master').pop();
+    if (masterRun) {
+      companyStore.updateAgentRunProvider(masterRun.id, resolvedProvider, resolvedModel);
+    }
+
+    return c.json({ ok: true, provider: resolvedProvider, model: resolvedModel });
   });
 
   /**

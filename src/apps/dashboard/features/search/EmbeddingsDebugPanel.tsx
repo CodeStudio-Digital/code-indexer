@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { AlertCircle, ChevronDown, ChevronRight, FlaskConical, Loader2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -64,6 +65,7 @@ function CoverageStat({ label, value, total }: { label: string; value: number; t
 }
 
 export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
+  const { t } = useTranslation(['search', 'common']);
   const [open, setOpen] = useState(false);
   const [stats, setStats] = useState<EmbeddingStats | null>(null);
   const [loading, setLoading] = useState(false);
@@ -105,29 +107,29 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
       <CollapsibleTrigger className="flex items-center gap-2 w-full py-2 px-3 rounded-md hover:bg-muted/50 text-sm cursor-pointer">
         {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         <FlaskConical className="h-4 w-4 text-muted-foreground" />
-        <span className="font-medium">Debug Embeddings</span>
+        <span className="font-medium">{t('search:debug.title')}</span>
         {stats && (
           <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-            {stats.coverage.files_embedded}/{stats.coverage.files_total} files embedded
+            {t('search:debug.filesEmbedded', { embedded: stats.coverage.files_embedded, total: stats.coverage.files_total })}
           </span>
         )}
       </CollapsibleTrigger>
 
       <CollapsibleContent className="px-3 pb-3 space-y-4">
-        {loading && <div className="text-xs text-muted-foreground py-2">Loading...</div>}
+        {loading && <div className="text-xs text-muted-foreground py-2">{t('common:actions.loading')}</div>}
 
         {stats && (
           <>
             {/* Health */}
             <div className="flex flex-wrap gap-2">
               <Badge variant={stats.health.embeddingService === 'null' ? 'destructive' : 'outline'}>
-                Embedding: {stats.health.embeddingService}
+                {t('search:debug.embedding')} {stats.health.embeddingService}
               </Badge>
               <Badge variant={stats.health.vectorStore === 'null' ? 'destructive' : 'outline'}>
-                Vector store: {stats.health.vectorStore}
+                {t('search:debug.vectorStore')} {stats.health.vectorStore}
               </Badge>
               <Badge variant={stats.health.vectorStoreAvailable ? 'default' : 'destructive'}>
-                {stats.health.vectorStoreAvailable ? 'Available' : 'Unavailable'}
+                {stats.health.vectorStoreAvailable ? t('common:status.available') : t('common:status.unavailable')}
               </Badge>
             </div>
 
@@ -135,32 +137,32 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
             {stats.health.embeddingService === 'null' && (
               <div className="flex items-start gap-2 p-2 rounded-md bg-destructive/10 text-destructive text-xs">
                 <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <span>No embedding service configured. Vector search will always return empty. Configure in Admin &gt; Embeddings &amp; Vector Stores.</span>
+                <span>{t('search:debug.noEmbedding')}</span>
               </div>
             )}
             {stats.health.vectorStore === 'null' && (
               <div className="flex items-start gap-2 p-2 rounded-md bg-destructive/10 text-destructive text-xs">
                 <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <span>No vector store configured. Embeddings cannot be stored or searched.</span>
+                <span>{t('search:debug.noVectorStore')}</span>
               </div>
             )}
             {stats.coverage.files_embedded === 0 && stats.health.embeddingService !== 'null' && (
               <div className="flex items-start gap-2 p-2 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs">
                 <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <span>No files have been embedded yet. Run indexing with embeddings enabled to populate the vector store.</span>
+                <span>{t('search:debug.noFiles')}</span>
               </div>
             )}
 
             {/* Coverage */}
             <div className="space-y-2">
-              <CoverageStat label="Files" value={stats.coverage.files_embedded} total={stats.coverage.files_total} />
-              <CoverageStat label="Symbols" value={stats.coverage.symbols_embedded} total={stats.coverage.symbols_total} />
-              <CoverageStat label="Symbol Bodies" value={stats.coverage.symbol_bodies_embedded} total={stats.coverage.symbol_bodies_total} />
+              <CoverageStat label={t('search:debug.files')} value={stats.coverage.files_embedded} total={stats.coverage.files_total} />
+              <CoverageStat label={t('search:debug.symbols')} value={stats.coverage.symbols_embedded} total={stats.coverage.symbols_total} />
+              <CoverageStat label={t('search:debug.symbolBodies')} value={stats.coverage.symbol_bodies_embedded} total={stats.coverage.symbol_bodies_total} />
             </div>
 
             {/* Vector IDs by type */}
             <div className="text-xs space-y-0.5">
-              <div className="font-medium text-muted-foreground">Vector IDs in store: {stats.vectorIds.total}</div>
+              <div className="font-medium text-muted-foreground">{t('search:debug.vectorIds')} {stats.vectorIds.total}</div>
               <div className="flex gap-3 text-muted-foreground tabular-nums">
                 {Object.entries(stats.vectorIds.byType).map(([type, count]) => (
                   <span key={type}>{type}: {count}</span>
@@ -171,7 +173,7 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
             {/* Samples */}
             {stats.sampleEmbedded.length > 0 && (
               <div className="text-xs space-y-1">
-                <div className="font-medium text-muted-foreground">Sample embedded files:</div>
+                <div className="font-medium text-muted-foreground">{t('search:debug.sampleEmbedded')}</div>
                 {stats.sampleEmbedded.map((f, i) => (
                   <div key={i} className="font-mono text-[11px] truncate">
                     <span className="text-emerald-500">{f.embeddingHash}</span>{' '}
@@ -182,7 +184,7 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
             )}
             {stats.sampleNotEmbedded.length > 0 && (
               <div className="text-xs space-y-1">
-                <div className="font-medium text-muted-foreground">Sample NOT embedded:</div>
+                <div className="font-medium text-muted-foreground">{t('search:debug.sampleNotEmbedded')}</div>
                 {stats.sampleNotEmbedded.map((f, i) => (
                   <div key={i} className="font-mono text-[11px] text-muted-foreground truncate">{f.path}</div>
                 ))}
@@ -193,17 +195,17 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
 
         {/* Test query */}
         <div className="space-y-2 pt-2 border-t">
-          <div className="text-xs font-medium text-muted-foreground">Test vector query</div>
+          <div className="text-xs font-medium text-muted-foreground">{t('search:debug.testQuery')}</div>
           <div className="flex gap-2">
             <Input
-              placeholder="how create tools"
+              placeholder={t('search:debug.testPlaceholder')}
               value={testQuery}
               onChange={(e) => setTestQuery(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && runTest()}
               className="text-xs h-8"
             />
             <Button size="sm" onClick={runTest} disabled={testLoading} className="h-8">
-              {testLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Test'}
+              {testLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : t('common:actions.test')}
             </Button>
           </div>
 
@@ -224,7 +226,7 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
               {/* Matches */}
               {testResult.matches.length > 0 && (
                 <div className="space-y-1">
-                  <div className="text-xs font-medium text-muted-foreground">Matches:</div>
+                  <div className="text-xs font-medium text-muted-foreground">{t('search:debug.matches')}</div>
                   {testResult.matches.map((m, i) => (
                     <div key={i} className="flex items-center gap-2 text-[11px] font-mono">
                       <Badge variant={m.rehydrated ? 'default' : 'destructive'} className="h-4 text-[10px]">
@@ -232,13 +234,13 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
                       </Badge>
                       <span className="text-emerald-500 tabular-nums">{m.score.toFixed(3)}</span>
                       <span className="truncate">{m.path ?? `ref:${m.refId}`}{m.name ? `:${m.name}` : ''}</span>
-                      {!m.rehydrated && <span className="text-destructive">(missing in DB)</span>}
+                      {!m.rehydrated && <span className="text-destructive">{t('search:debug.missingInDb')}</span>}
                     </div>
                   ))}
                 </div>
               )}
               {testResult.matches.length === 0 && testResult.steps.length > 0 && (
-                <div className="text-xs text-muted-foreground">No matches returned from vector store.</div>
+                <div className="text-xs text-muted-foreground">{t('search:debug.noMatches')}</div>
               )}
               {/* Warn when unfiltered finds matches but filtered doesn't — metadata index missing */}
               {testResult.steps.find(s => s.step === 'search_unfiltered')?.ok &&
@@ -246,8 +248,7 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
                 <div className="flex items-start gap-2 p-2 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs">
                   <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                   <span>
-                    Vectors exist but metadata filter returned 0 results. This usually means Vectorize metadata indexes
-                    are missing. Run: <code className="bg-muted px-1 rounded">wrangler vectorize create-metadata-index &lt;index&gt; --propertyName=project_name --type=string</code> then re-index.
+                    {t('search:debug.vectorsExist')} <code className="bg-muted px-1 rounded">wrangler vectorize create-metadata-index &lt;index&gt; --propertyName=project_name --type=string</code> {t('search:debug.thenReindex')}
                   </span>
                 </div>
               )}

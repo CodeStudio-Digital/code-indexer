@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useConfirm } from '../../components/ui/dialog-provider.js';
 import { apiDelete, apiPost, useApi } from '../../hooks/useApi.js';
 
@@ -40,6 +41,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
+  const { t } = useTranslation(['projects', 'common']);
   const confirm = useConfirm();
   const [filterCategory, setFilterCategory] = useState<string>('');
   const categoryParam = filterCategory ? `?category=${filterCategory}` : '';
@@ -68,29 +70,29 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
 
   const handleDelete = async (id: number) => {
     const ok = await confirm({
-      title: 'Delete this snapshot?',
-      description: 'The snapshot and its version history will be permanently removed.',
+      title: t('projects:snapshots.deleteConfirm'),
+      description: t('projects:snapshots.deleteDescription'),
       variant: 'destructive',
-      confirmLabel: 'Delete',
+      confirmLabel: t('common:actions.delete'),
     });
     if (!ok) return;
     await apiDelete(`/snapshots/${id}`);
     refetch();
   };
 
-  if (loading) return <div className="text-gray-500">Loading...</div>;
+  if (loading) return <div className="text-gray-500">{t('common:actions.loading')}</div>;
 
   return (
     <div>
       <div className="flex flex-wrap justify-between items-center mb-4 gap-3">
-        <h3 className="font-semibold text-gray-700 dark:text-gray-300">Context Snapshots</h3>
+        <h3 className="font-semibold text-gray-700 dark:text-gray-300">{t('projects:snapshots.title')}</h3>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <button
               onClick={() => setFilterCategory('')}
               className={`px-2 py-1 text-xs rounded ${!filterCategory ? 'bg-indigo-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
             >
-              All
+              {t('projects:snapshots.all')}
             </button>
             {CATEGORIES.map((c) => (
               <button
@@ -106,7 +108,7 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
             onClick={() => setShowForm(!showForm)}
             className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700"
           >
-            {showForm ? 'Cancel' : '+ New Snapshot'}
+            {showForm ? t('common:actions.cancel') : t('projects:snapshots.newSnapshot')}
           </button>
         </div>
       </div>
@@ -118,7 +120,7 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Snapshot title"
+              placeholder={t('projects:snapshots.titlePlaceholder')}
               className="flex-1 px-3 py-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
             />
             <select
@@ -136,7 +138,7 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
           <textarea
             value={content}
             onChange={(e) => setContent(e.target.value)}
-            placeholder="Markdown content..."
+            placeholder={t('projects:snapshots.contentPlaceholder')}
             rows={8}
             className="w-full px-3 py-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white font-mono text-sm"
           />
@@ -145,7 +147,7 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
               type="text"
               value={tags}
               onChange={(e) => setTags(e.target.value)}
-              placeholder="Tags (comma-separated, optional)"
+              placeholder={t('projects:snapshots.tagsPlaceholder')}
               className="flex-1 px-3 py-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white text-sm"
             />
             <button
@@ -153,7 +155,7 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
               disabled={!title.trim() || !content.trim()}
               className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Save Snapshot
+              {t('projects:snapshots.saveSnapshot')}
             </button>
           </div>
         </div>
@@ -161,7 +163,7 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
 
       {!snapshots || snapshots.length === 0 ? (
         <p className="text-gray-500 text-sm">
-          {filterCategory ? `No snapshots in category "${filterCategory}".` : 'No snapshots yet.'}
+          {filterCategory ? t('projects:snapshots.noInCategory', { category: filterCategory }) : t('projects:snapshots.none')}
         </p>
       ) : (
         <div className="space-y-3">

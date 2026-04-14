@@ -1,6 +1,6 @@
 import type { ProviderDefinition, ResolvedCreds } from '../types.js';
 import type { ProviderConfig } from '../../../store/provider-store.js';
-import { resolveCopilotCreds, resolveChatGPTCreds } from './oauth.js';
+import { resolveCopilotCreds, resolveChatGPTCreds, resolveGoogleOAuthCreds } from './oauth.js';
 import { resolveBedrockCreds } from './aws.js';
 
 /**
@@ -42,6 +42,7 @@ export async function resolveCreds(
       }
       if (def.kind === 'copilot') return resolveCopilotCreds(cfg);
       if (def.kind === 'chatgpt') return resolveChatGPTCreds(cfg);
+      if (def.kind === 'google-oauth') return resolveGoogleOAuthCreds(cfg);
       throw new Error(`Unknown OAuth shape: ${def.kind}`);
 
     case 'aws':

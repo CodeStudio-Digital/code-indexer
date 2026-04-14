@@ -1,0 +1,9 @@
+{
+  "loading": "Carregando custos…",
+  "noData": "Sem dados de custo.",
+  "totalCost": "Custo Total",
+  "inputTokens": "Tokens de Entrada",
+  "outputTokens": "Tokens de Saída",
+  "runs": "Runs",
+  "costByProvider": "Custo por Provider"
+}

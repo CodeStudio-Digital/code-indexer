@@ -2,6 +2,12 @@ import { GoogleGenAI } from '@google/genai';
 import type { Content, Part, Tool, FunctionDeclaration } from '@google/genai';
 import type { ChatProvider, ChatRequest } from './adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '../core/messages.js';
+import { randomUUID } from 'node:crypto';
+import {
+  createAuthClient,
+  streamGenerateContent as cloudCodeStream,
+  type StreamChunk,
+} from '../../services/cloudcode.js';
 
 /**
  * Native Gemini chat adapter built on @google/genai (the unified SDK that
@@ -25,15 +31,41 @@ import type { AgentMessage, ChatDelta, ContentBlock } from '../core/messages.js'
 export class GeminiChatProvider implements ChatProvider {
   readonly name = 'gemini';
   model: string;
-  private client: GoogleGenAI;
+  private client: GoogleGenAI | null = null;
+  /** CloudCode OAuth mode (mirrors gemini-cli "Login with Google"). */
+  private cloudCode: {
+    authClient: ReturnType<typeof createAuthClient>;
+    projectId: string;
+    sessionId: string;
+  } | null = null;
 
-  constructor(opts: { apiKey?: string; model?: string }) {
+  constructor(opts: {
+    apiKey?: string;
+    accessToken?: string;
+    refreshToken?: string | null;
+    projectId?: string;
+    cloudCodeSessionId?: string;
+    model?: string;
+  }) {
     this.model = opts.model ?? 'gemini-2.5-flash';
-    const apiKey = opts.apiKey ?? process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error('GEMINI_API_KEY not set (pass via provider config or env var)');
+    if (opts.accessToken) {
+      // OAuth mode: route through CloudCode (cloudcode-pa.googleapis.com)
+      // like the Gemini CLI does. generativelanguage.googleapis.com does NOT
+      // accept cloud-platform scoped tokens.
+      // sessionId is persisted in coder_sessions.cloudcode_session_id so it
+      // survives reconnects and resume — same as gemini-cli's module-level UUID.
+      this.cloudCode = {
+        authClient: createAuthClient(opts.accessToken, opts.refreshToken),
+        projectId: opts.projectId ?? '',
+        sessionId: opts.cloudCodeSessionId ?? randomUUID(),
+      };
+    } else {
+      const apiKey = opts.apiKey ?? process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('GEMINI_API_KEY not set (pass via provider config or env var)');
+      }
+      this.client = new GoogleGenAI({ apiKey });
     }
-    this.client = new GoogleGenAI({ apiKey });
   }
 
   setModel(model: string): void {
@@ -41,20 +73,20 @@ export class GeminiChatProvider implements ChatProvider {
   }
 
   async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
+    // CloudCode path — route through cloudcode-pa.googleapis.com like gemini-cli.
+    if (this.cloudCode) {
+      yield* this.chatViaCloudCode(req);
+      return;
+    }
+
     const contents = toGeminiContents(req.messages);
     const tools: Tool[] | undefined = req.tools.length > 0
       ? [
           {
             functionDeclarations: req.tools.map(
               (t): FunctionDeclaration => ({
-                // Gemini's FunctionDeclaration.name must be ≤64 chars and match
-                // [a-zA-Z0-9_.:-]+. MCP bridge tools can exceed both, which
-                // makes Gemini reject the whole request with an opaque 400.
                 name: sanitizeToolName(t.name),
                 description: t.description,
-                // Schemas go through a sanitizer that strips JSON Schema
-                // features Gemini doesn't accept (`$ref`, `$defs`,
-                // `integer` type, nullable arrays, unknown formats, …).
                 parametersJsonSchema: sanitizeSchemaForGemini(t.parameters) as unknown,
               })
             ),
@@ -64,7 +96,7 @@ export class GeminiChatProvider implements ChatProvider {
 
     let stream;
     try {
-      stream = await this.client.models.generateContentStream({
+      stream = await this.client!.models.generateContentStream({
         model: this.model,
         contents,
         config: {
@@ -130,6 +162,88 @@ export class GeminiChatProvider implements ChatProvider {
     } catch (e) {
       throw new Error(humanizeGeminiError(e, this.model));
     }
+  }
+
+  /**
+   * Stream via CloudCode (cloudcode-pa.googleapis.com) — the same backend
+   * the Gemini CLI uses for OAuth. Translates the CloudCode SSE stream into
+   * the normalized ChatDelta shape the runner expects.
+   */
+  private async *chatViaCloudCode(req: ChatRequest): AsyncIterable<ChatDelta> {
+    const cc = this.cloudCode!;
+    const contents = toGeminiContents(req.messages);
+
+    const tools = req.tools.length > 0
+      ? [{
+          functionDeclarations: req.tools.map((t) => ({
+            name: sanitizeToolName(t.name),
+            description: t.description,
+            parameters: sanitizeSchemaForGemini(t.parameters),
+          })),
+        }]
+      : undefined;
+
+    const request = {
+      contents,
+      systemInstruction: req.system ? { parts: [{ text: req.system }] } : undefined,
+      tools,
+    };
+
+    let lastUsage: { input: number; output: number; thinking: number } | null = null;
+    let finishReason: string | undefined;
+
+    try {
+      for await (const chunk of cloudCodeStream(
+        cc.authClient,
+        cc.projectId,
+        this.model,
+        request,
+        req.signal,
+        cc.sessionId,
+        req.thinking,
+      )) {
+        if (chunk.thought) {
+          yield { type: 'thinking_delta', text: chunk.thought };
+        }
+        if (chunk.text) {
+          yield { type: 'text_delta', text: chunk.text };
+        }
+        if (chunk.functionCall) {
+          const fc = chunk.functionCall;
+          const id = fc.id ?? `gemini_${Math.random().toString(36).slice(2, 10)}`;
+          const name = fc.name ?? 'unknown';
+          const input = (fc.args ?? {}) as Record<string, unknown>;
+          yield { type: 'tool_call_start', id, name };
+          yield { type: 'tool_call_args', id, partial_json: JSON.stringify(input) };
+          yield { type: 'tool_call_end', id, name, input };
+        }
+        if (chunk.usageMetadata) {
+          lastUsage = {
+            input: chunk.usageMetadata.promptTokenCount ?? 0,
+            output: chunk.usageMetadata.candidatesTokenCount ?? 0,
+            thinking: chunk.usageMetadata.thoughtsTokenCount ?? 0,
+          };
+        }
+        if (chunk.finishReason) {
+          finishReason = chunk.finishReason;
+        }
+      }
+    } catch (e) {
+      throw new Error(humanizeGeminiError(e, this.model));
+    }
+
+    if (lastUsage) {
+      yield {
+        type: 'usage',
+        usage: {
+          input_tokens: lastUsage.input,
+          output_tokens: lastUsage.output,
+          cache_read_input_tokens: 0,
+          thinking_tokens: lastUsage.thinking || undefined,
+        },
+      };
+    }
+    yield { type: 'done', stop_reason: finishReason };
   }
 }
 

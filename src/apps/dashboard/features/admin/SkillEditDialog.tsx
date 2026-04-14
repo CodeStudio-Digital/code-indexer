@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import {
   Dialog,
@@ -26,11 +27,17 @@ interface SkillEditDialogProps {
   onSave: (s: Partial<AdminSkill>) => void;
 }
 
-const CONTEXT_MODES: { value: SkillContextMode; label: string; desc: string }[] = [
-  { value: 'inline', label: 'Inline', desc: 'Injected into system prompt' },
-  { value: 'tool', label: 'Tool', desc: 'Callable by the model via invoke_skill' },
-  { value: 'both', label: 'Both', desc: 'System prompt + callable tool' },
-];
+const CONTEXT_MODE_VALUES: SkillContextMode[] = ['inline', 'tool', 'both'];
+const CONTEXT_MODE_LABEL_KEYS: Record<SkillContextMode, string> = {
+  inline: 'skillEdit.contextInline',
+  tool: 'skillEdit.contextTool',
+  both: 'skillEdit.contextBoth',
+};
+const CONTEXT_MODE_DESC_KEYS: Record<SkillContextMode, string> = {
+  inline: 'skillEdit.contextInlineDesc',
+  tool: 'skillEdit.contextToolDesc',
+  both: 'skillEdit.contextBothDesc',
+};
 
 function slugify(name: string): string {
   return name
@@ -41,6 +48,7 @@ function slugify(name: string): string {
 }
 
 export function SkillEditDialog({ initial, isExisting, onClose, onSave }: SkillEditDialogProps) {
+  const { t } = useTranslation(['admin', 'common']);
   const isNew = !isExisting;
   const [form, setForm] = useState<Partial<AdminSkill>>({
     context_mode: 'inline',
@@ -92,34 +100,34 @@ export function SkillEditDialog({ initial, isExisting, onClose, onSave }: SkillE
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isNew ? 'Create Skill' : `Edit "${form.name}"`}</DialogTitle>
+          <DialogTitle>{isNew ? t('admin:skillEdit.createTitle') : t('admin:skillEdit.editTitle', { name: form.name })}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
           {/* Name */}
           <div>
-            <label className="text-sm font-medium">Name</label>
+            <label className="text-sm font-medium">{t('admin:skillEdit.name')}</label>
             <Input
               value={form.name ?? ''}
               onChange={(e) => update('name', e.target.value)}
-              placeholder="Simplify Code"
+              placeholder={t('admin:skillEdit.namePlaceholder')}
             />
           </div>
 
           {/* ID */}
           <div>
-            <label className="text-sm font-medium">ID</label>
+            <label className="text-sm font-medium">{t('admin:skillEdit.id')}</label>
             <div className="flex items-center gap-2">
               <Input
                 value={form.id ?? ''}
                 onChange={(e) => { setAutoId(false); setForm((f) => ({ ...f, id: e.target.value })); }}
-                placeholder="simplify-code"
+                placeholder={t('admin:skillEdit.idPlaceholder')}
                 disabled={isExisting}
                 className="font-mono text-sm"
               />
               {isNew && (
                 <span className="text-xs text-muted-foreground whitespace-nowrap">
-                  {autoId ? 'auto' : 'manual'}
+                  {autoId ? t('admin:skillEdit.idAuto') : t('admin:skillEdit.idManual')}
                 </span>
               )}
             </div>
@@ -127,23 +135,23 @@ export function SkillEditDialog({ initial, isExisting, onClose, onSave }: SkillE
 
           {/* Description */}
           <div>
-            <label className="text-sm font-medium">Description</label>
+            <label className="text-sm font-medium">{t('admin:skillEdit.description')}</label>
             <Input
               value={form.description ?? ''}
               onChange={(e) => update('description', e.target.value)}
-              placeholder="Review code for reuse, quality, and efficiency"
+              placeholder={t('admin:skillEdit.descriptionPlaceholder')}
             />
           </div>
 
           {/* Slash command */}
           <div>
-            <label className="text-sm font-medium">Slash Command</label>
+            <label className="text-sm font-medium">{t('admin:skillEdit.slashCommand')}</label>
             <div className="flex items-center gap-1">
               <span className="text-sm text-muted-foreground">/</span>
               <Input
                 value={form.slash_command ?? ''}
                 onChange={(e) => update('slash_command', e.target.value || null)}
-                placeholder="simplify"
+                placeholder={t('admin:skillEdit.slashPlaceholder')}
                 className="font-mono text-sm"
               />
             </div>
@@ -151,14 +159,14 @@ export function SkillEditDialog({ initial, isExisting, onClose, onSave }: SkillE
 
           {/* Prompt body */}
           <div>
-            <label className="text-sm font-medium">Prompt Body</label>
+            <label className="text-sm font-medium">{t('admin:skillEdit.promptBody')}</label>
             <p className="text-xs text-muted-foreground mb-1">
-              Markdown instructions. Use {'${PROJECT_NAME}'}, {'${SESSION_ID}'}, {'${USER_INPUT}'}, {'${OS}'}, {'${TIMESTAMP}'} as template variables.
+              {t('admin:skillEdit.promptHint')}
             </p>
             <Textarea
               value={form.prompt_body ?? ''}
               onChange={(e) => update('prompt_body', e.target.value)}
-              placeholder="Review the current codebase changes for..."
+              placeholder={t('admin:skillEdit.promptPlaceholder')}
               rows={10}
               className="font-mono text-sm"
             />
@@ -166,7 +174,7 @@ export function SkillEditDialog({ initial, isExisting, onClose, onSave }: SkillE
 
           {/* Context mode */}
           <div>
-            <label className="text-sm font-medium">Context Mode</label>
+            <label className="text-sm font-medium">{t('admin:skillEdit.contextMode')}</label>
             <Select
               value={form.context_mode ?? 'inline'}
               onValueChange={(v) => update('context_mode', v as SkillContextMode)}
@@ -175,9 +183,9 @@ export function SkillEditDialog({ initial, isExisting, onClose, onSave }: SkillE
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {CONTEXT_MODES.map((m) => (
-                  <SelectItem key={m.value} value={m.value}>
-                    {m.label} — {m.desc}
+                {CONTEXT_MODE_VALUES.map((mv) => (
+                  <SelectItem key={mv} value={mv}>
+                    {t(`admin:${CONTEXT_MODE_LABEL_KEYS[mv]}`)} — {t(`admin:${CONTEXT_MODE_DESC_KEYS[mv]}`)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -186,32 +194,32 @@ export function SkillEditDialog({ initial, isExisting, onClose, onSave }: SkillE
 
           {/* Scope */}
           <div>
-            <label className="text-sm font-medium">Scope</label>
+            <label className="text-sm font-medium">{t('admin:skillEdit.scope')}</label>
             <Input
               value={form.scope ?? 'global'}
               onChange={(e) => update('scope', e.target.value)}
-              placeholder="global (or project_id)"
+              placeholder={t('admin:skillEdit.scopePlaceholder')}
               className="font-mono text-sm"
             />
             <p className="text-xs text-muted-foreground mt-1">
-              Use "global" for all projects, or a numeric project ID to scope to one project.
+              {t('admin:skillEdit.scopeHint')}
             </p>
           </div>
 
           {/* Tags */}
           <div>
-            <label className="text-sm font-medium">Tags</label>
+            <label className="text-sm font-medium">{t('admin:skillEdit.tags')}</label>
             <Input
               value={(form.tags ?? []).join(', ')}
-              onChange={(e) => update('tags', e.target.value.split(',').map((t) => t.trim()).filter(Boolean))}
-              placeholder="review, quality, testing"
+              onChange={(e) => update('tags', e.target.value.split(',').map((tg) => tg.trim()).filter(Boolean))}
+              placeholder={t('admin:skillEdit.tagsPlaceholder')}
             />
           </div>
 
           {/* Sort order */}
           <div className="flex items-center gap-4">
             <div className="flex-1">
-              <label className="text-sm font-medium">Sort Order</label>
+              <label className="text-sm font-medium">{t('admin:skillEdit.sortOrder')}</label>
               <Input
                 type="number"
                 value={form.sort_order ?? 0}
@@ -223,75 +231,75 @@ export function SkillEditDialog({ initial, isExisting, onClose, onSave }: SkillE
                 checked={form.enabled ?? true}
                 onCheckedChange={(v) => update('enabled', v)}
               />
-              <label className="text-sm">Enabled</label>
+              <label className="text-sm">{t('admin:skillEdit.enabled')}</label>
             </div>
           </div>
 
           {/* Model override */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-sm font-medium">Provider Override</label>
+              <label className="text-sm font-medium">{t('admin:skillEdit.providerOverride')}</label>
               <Input
                 value={form.provider_override ?? ''}
                 onChange={(e) => update('provider_override', e.target.value || null)}
-                placeholder="(session default)"
+                placeholder={t('admin:skillEdit.sessionDefault')}
               />
             </div>
             <div>
-              <label className="text-sm font-medium">Model Override</label>
+              <label className="text-sm font-medium">{t('admin:skillEdit.modelOverride')}</label>
               <Input
                 value={form.model_override ?? ''}
                 onChange={(e) => update('model_override', e.target.value || null)}
-                placeholder="(session default)"
+                placeholder={t('admin:skillEdit.sessionDefault')}
               />
             </div>
           </div>
 
           {/* Allowed tools */}
           <div>
-            <label className="text-sm font-medium">Allowed Tools</label>
+            <label className="text-sm font-medium">{t('admin:skillEdit.allowedTools')}</label>
             <Input
               value={(form.allowed_tools ?? []).join(', ')}
               onChange={(e) => {
                 const val = e.target.value;
-                update('allowed_tools', val ? val.split(',').map((t) => t.trim()).filter(Boolean) : null);
+                update('allowed_tools', val ? val.split(',').map((tl) => tl.trim()).filter(Boolean) : null);
               }}
-              placeholder="(all tools — or comma-separated list)"
+              placeholder={t('admin:skillEdit.allowedToolsPlaceholder')}
               className="font-mono text-sm"
             />
             <p className="text-xs text-muted-foreground mt-1">
-              Leave empty for no restriction. Comma-separated tool names to limit.
+              {t('admin:skillEdit.allowedToolsHint')}
             </p>
           </div>
 
           {/* Author + Version */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-sm font-medium">Author</label>
+              <label className="text-sm font-medium">{t('admin:skillEdit.author')}</label>
               <Input
                 value={form.author ?? ''}
                 onChange={(e) => update('author', e.target.value || null)}
-                placeholder="Your name"
+                placeholder={t('admin:skillEdit.authorPlaceholder')}
               />
             </div>
             <div>
-              <label className="text-sm font-medium">Version</label>
+              <label className="text-sm font-medium">{t('admin:skillEdit.version')}</label>
               <Input
                 value={form.version ?? '1.0.0'}
                 onChange={(e) => update('version', e.target.value)}
-                placeholder="1.0.0"
+                placeholder={t('admin:skillEdit.versionPlaceholder')}
               />
             </div>
           </div>
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={onClose}>{t('common:actions.cancel')}</Button>
           <Button
             onClick={submit}
             disabled={!form.id || !form.name || !form.prompt_body}
           >
-            {isNew ? 'Create' : 'Save'}
+            {isNew ? t('common:actions.create') : t('common:actions.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

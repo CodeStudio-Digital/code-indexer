@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { Paperclip, Sparkles, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Brain, Paperclip, Sparkles, X } from 'lucide-react';
 import { Textarea } from '../../../components/ui/textarea.js';
 import type { AgentAttachment, EnrichedProviderModel, ProviderOption } from '../types.js';
 import { fileToAttachment } from '../utils.js';
@@ -37,10 +38,15 @@ interface ComposerProps {
   setMaxTurns: (v: number | null) => void;
   sessionId?: number | null;
   onInvokeSkill?: (skillId: string, input: string) => void;
+  /** Thinking mode toggle — only shown when provider supports it. */
+  thinking?: boolean;
+  setThinking?: (v: boolean) => void;
+  supportsThinking?: boolean;
 }
 
 export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
   function Composer(props, ref) {
+    const { t } = useTranslation('chat');
     const { streaming } = props;
     const [input, setInput] = useState('');
     const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
@@ -163,7 +169,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
                   <button
                     onClick={() => setAttachments((p) => p.filter((_, j) => j !== i))}
                     className="absolute -top-1 -right-1 h-5 w-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow"
-                    title="Remove"
+                    title={t('composer.remove')}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -240,12 +246,28 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
               // Markdown shortcuts and smart behaviors
               mdKeyDown(e);
             }}
-            placeholder="Describe a coding task…"
+            placeholder={t('composer.placeholder')}
             rows={3}
             disabled={streaming}
             className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent text-sm min-h-0"
           />
-          <MarkdownToolbar onAction={applyAction} disabled={streaming} />
+          <div className="flex items-center">
+            <MarkdownToolbar onAction={applyAction} disabled={streaming} />
+            {props.supportsThinking && props.setThinking && (
+              <button
+                type="button"
+                onClick={() => props.setThinking!(!props.thinking)}
+                title={props.thinking ? t('composer.thinkingOn') : t('composer.thinkingOff')}
+                className={`ml-1 p-1.5 rounded-md transition-colors ${
+                  props.thinking
+                    ? 'text-purple-600 bg-purple-100 dark:bg-purple-900/30'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                }`}
+              >
+                <Brain className="h-4 w-4" />
+              </button>
+            )}
+          </div>
           <ComposerToolbar
             hasInput={hasInput}
             autoSuggestText={debouncedInput}

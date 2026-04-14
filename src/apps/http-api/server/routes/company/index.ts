@@ -4,10 +4,12 @@ import { mountCompanyTemplateRoutes } from './templates.js';
 import { mountCompanySessionRoutes } from './sessions.js';
 import { mountCompanyStreamRoutes } from './stream.js';
 import { mountCompanyBoardRoutes } from './board.js';
+import { mountCompanyKanbanRoutes } from './kanban.js';
 
 export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyTemplateRoutes(app, deps);
   mountCompanySessionRoutes(app, deps);
   mountCompanyStreamRoutes(app, deps);
   mountCompanyBoardRoutes(app, deps);
+  mountCompanyKanbanRoutes(app, deps);
 }

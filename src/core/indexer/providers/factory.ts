@@ -17,6 +17,9 @@ import {
   refreshIfExpired as refreshOpenAIToken,
   CHATGPT_CODEX_BASE_URL,
 } from '../../services/oauth/openai.js';
+import {
+  refreshIfExpired as refreshGoogleToken,
+} from '../../services/oauth/google.js';
 import { extractAccountIdFromIdToken } from '../../coder/providers/chatgpt.js';
 
 let cachedStore: ProviderStore | null = null;
@@ -97,13 +100,35 @@ async function buildChatGPTAgentProvider(
 }
 
 /**
+ * Build a Google OAuth-backed Gemini provider for the indexer. Refreshes
+ * the access token, then returns a GeminiProvider using Bearer auth.
+ */
+async function buildGoogleOAuthAgentProvider(
+  store: ProviderStore,
+  cfg: ProviderConfig,
+  model?: string,
+): Promise<LLMProvider> {
+  let token = cfg.api_key ?? '';
+  try {
+    const fresh = await refreshGoogleToken(store, cfg.id);
+    if (fresh) token = fresh;
+  } catch (e) {
+    console.warn(`[google-oauth/indexer] refresh failed: ${(e as Error).message}`);
+  }
+  const tok = store.getOAuth(cfg.id);
+  const refreshToken = tok?.refresh_token ?? undefined;
+  const extra = (tok?.extra ?? {}) as { projectId?: string };
+  return new GeminiProvider(undefined, model, token, refreshToken, extra.projectId);
+}
+
+/**
  * Synchronous construction of a DB-backed LLMProvider. Callers that may
  * pass an OAuth kind (copilot/chatgpt) should use
  * createProviderFromConfigAsync instead — it handles the token refresh
  * step before instantiation. This sync path throws for OAuth kinds.
  */
 export function createProviderFromConfig(cfg: ProviderConfig, model?: string): LLMProvider {
-  if (cfg.kind === 'copilot' || cfg.kind === 'chatgpt') {
+  if (cfg.kind === 'copilot' || cfg.kind === 'chatgpt' || cfg.kind === 'google-oauth') {
     throw new Error(
       `Provider "${cfg.id}" (kind=${cfg.kind}) needs async construction ` +
         `(token refresh). Call createProviderFromConfigAsync instead.`
@@ -156,6 +181,11 @@ export async function createProviderFromConfigAsync(
     const store = getStore();
     if (!store) throw new Error('ChatGPT provider requires the ProviderStore');
     return buildChatGPTAgentProvider(store, cfg, model);
+  }
+  if (cfg.kind === 'google-oauth') {
+    const store = getStore();
+    if (!store) throw new Error('Google OAuth provider requires the ProviderStore');
+    return buildGoogleOAuthAgentProvider(store, cfg, model);
   }
   return createProviderFromConfig(cfg, model);
 }

@@ -17,6 +17,23 @@ export class CloudflareEmbeddingService implements EmbeddingService {
     this.authToken = authToken;
   }
 
+  private async fetchWithRetry(url: string, init: RequestInit, maxRetries = 3): Promise<Response> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const response = await fetch(url, init);
+      if (response.ok) return response;
+
+      // Only retry on 5xx (server/transient errors)
+      if (response.status < 500 || attempt === maxRetries) {
+        throw new Error(`Embedding API error: ${response.status} ${await response.text()}`);
+      }
+
+      const delay = Math.min(1000 * 2 ** attempt, 8000);
+      console.warn(`[embeddings] API returned ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+    throw new Error('Unreachable');
+  }
+
   private estimateTokens(text: string): number {
     return Math.ceil(text.length / 4);
   }
@@ -58,7 +75,7 @@ export class CloudflareEmbeddingService implements EmbeddingService {
     const batches = this.buildBatches(texts);
 
     for (const batch of batches) {
-      const response = await fetch(`${this.workerUrl}/embed`, {
+      const response = await this.fetchWithRetry(`${this.workerUrl}/embed`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -66,10 +83,6 @@ export class CloudflareEmbeddingService implements EmbeddingService {
         },
         body: JSON.stringify({ texts: batch }),
       });
-
-      if (!response.ok) {
-        throw new Error(`Embedding API error: ${response.status} ${await response.text()}`);
-      }
 
       const data = await response.json() as { vectors: number[][]; count: number };
       allVectors.push(...data.vectors);

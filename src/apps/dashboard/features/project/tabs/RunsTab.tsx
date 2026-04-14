@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   AlertCircle,
   CheckCircle2,
@@ -107,6 +108,7 @@ function formatDuration(ms: number): string {
  * events that drive the state reducer below.
  */
 export function RunsTab({ projectId }: RunsTabProps) {
+  const { t } = useTranslation(['projects', 'common']);
   const { data: runs, loading, refetch } = useApi<Run[]>(`/projects/${projectId}/runs`);
 
   // ── Provider/model state ───────────────────────────────────────
@@ -461,23 +463,22 @@ export function RunsTab({ projectId }: RunsTabProps) {
                 <Sparkles className="h-5 w-5" />
               </div>
               <div>
-                <CardTitle className="text-base">Run Index</CardTitle>
+                <CardTitle className="text-base">{t('projects:runs.title')}</CardTitle>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Analise o projeto com um provider/modelo LLM e veja o
-                  progresso em tempo real.
+                  {t('projects:runs.description')}
                 </p>
               </div>
             </div>
             <Badge variant={isRunning ? 'warning' : 'muted'}>
               {isRunning
-                ? 'running'
+                ? t('projects:runs.badge.running')
                 : progress.status === 'done'
-                  ? 'done'
+                  ? t('projects:runs.badge.done')
                   : progress.status === 'error'
-                    ? 'error'
+                    ? t('projects:runs.badge.error')
                     : progress.status === 'canceled'
-                      ? 'canceled'
-                      : 'idle'}
+                      ? t('projects:runs.badge.canceled')
+                      : t('projects:runs.badge.idle')}
             </Badge>
           </div>
         </CardHeader>
@@ -485,7 +486,7 @@ export function RunsTab({ projectId }: RunsTabProps) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Provider
+                {t('projects:runs.provider')}
               </label>
               <Select
                 value={kind || undefined}
@@ -496,10 +497,10 @@ export function RunsTab({ projectId }: RunsTabProps) {
                   <SelectValue
                     placeholder={
                       modelsLoading
-                        ? 'Carregando…'
+                        ? t('projects:runs.providerLoading')
                         : providerDisabled
-                          ? 'Configure providers em Admin'
-                          : 'Selecione um provider'
+                          ? t('projects:runs.providerDisabled')
+                          : t('projects:runs.providerPlaceholder')
                     }
                   />
                 </SelectTrigger>
@@ -514,7 +515,7 @@ export function RunsTab({ projectId }: RunsTabProps) {
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Modelo
+                {t('projects:runs.model')}
               </label>
               <Select
                 value={model || undefined}
@@ -530,10 +531,10 @@ export function RunsTab({ projectId }: RunsTabProps) {
                   <SelectValue
                     placeholder={
                       modelsLoading
-                        ? 'Carregando modelos…'
+                        ? t('projects:runs.modelLoading')
                         : availableModels.length === 0
-                          ? 'Nenhum modelo disponível'
-                          : 'Selecione um modelo'
+                          ? t('projects:runs.modelEmpty')
+                          : t('projects:runs.modelPlaceholder')
                     }
                   />
                 </SelectTrigger>
@@ -547,15 +548,14 @@ export function RunsTab({ projectId }: RunsTabProps) {
               </Select>
               {kind && !modelsLoading && availableModels.length === 0 && (
                 <p className="text-xs text-warning">
-                  Nenhum modelo cadastrado para <strong>{kind}</strong>.
-                  Adicione modelos na aba <strong>Admin</strong>.
+                  {t('projects:runs.noModels', { kind })}
                 </p>
               )}
             </div>
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Concurrent
+              {t('projects:runs.concurrent')}
             </label>
             <Input
                 onValueChange={(v: any) => setConcurrent(v)}
@@ -573,9 +573,9 @@ export function RunsTab({ projectId }: RunsTabProps) {
                 htmlFor="force-reindex"
                 className="text-sm cursor-pointer select-none"
               >
-                <span className="font-medium">Force re-index</span>
+                <span className="font-medium">{t('projects:runs.forceReindex')}</span>
                 <span className="text-muted-foreground ml-2 text-xs">
-                  Reanalisa arquivos inalterados (mais caro)
+                  {t('projects:runs.forceReindexHint')}
                 </span>
               </label>
             </div>
@@ -600,14 +600,14 @@ export function RunsTab({ projectId }: RunsTabProps) {
                   )}
                   <span>
                     {progress.status === 'starting'
-                      ? 'Iniciando…'
+                      ? t('projects:runs.status.starting')
                       : progress.status === 'running'
-                        ? 'Indexando'
+                        ? t('projects:runs.status.indexing')
                         : progress.status === 'done'
-                          ? 'Concluído'
+                          ? t('projects:runs.status.done')
                           : progress.status === 'error'
-                            ? 'Erro'
-                            : 'Cancelado'}
+                            ? t('projects:runs.status.error')
+                            : t('projects:runs.status.canceled')}
                   </span>
                 </div>
                 <div className="text-sm tabular-nums text-muted-foreground">
@@ -640,14 +640,14 @@ export function RunsTab({ projectId }: RunsTabProps) {
               )}
 
               <div className="flex items-center gap-4 text-xs text-muted-foreground tabular-nums pt-1 border-t">
-                <span>Tempo: {formatDuration(progress.elapsedMs || progress.result?.durationMs || 0)}</span>
-                <span>Custo: ${progress.costUsd.toFixed(4)}</span>
+                <span>{t('projects:runs.time', { duration: formatDuration(progress.elapsedMs || progress.result?.durationMs || 0) })}</span>
+                <span>{t('projects:runs.cost', { cost: progress.costUsd.toFixed(4) })}</span>
                 {progress.result && (
                   <>
-                    <span>Skipped: {progress.result.skipped}</span>
+                    <span>{t('projects:runs.skipped', { count: progress.result.skipped })}</span>
                     {progress.result.errors > 0 && (
                       <span className="text-destructive">
-                        Errors: {progress.result.errors}
+                        {t('projects:runs.errors', { count: progress.result.errors })}
                       </span>
                     )}
                   </>
@@ -670,7 +670,7 @@ export function RunsTab({ projectId }: RunsTabProps) {
                 onClick={cancelIndex}
                 className="gap-2"
               >
-                <CircleStop className="h-4 w-4" /> Cancelar
+                <CircleStop className="h-4 w-4" /> {t('common:actions.cancel')}
               </Button>
             ) : (
               <Button
@@ -682,20 +682,20 @@ export function RunsTab({ projectId }: RunsTabProps) {
                 {progress.status === 'done' ||
                 progress.status === 'error' ||
                 progress.status === 'canceled'
-                  ? 'Rodar de novo'
-                  : 'Rodar Index'}
+                  ? t('projects:runs.runAgain')
+                  : t('projects:runs.runIndex')}
               </Button>
             )}
             {(progress.status === 'done' ||
               progress.status === 'error' ||
               progress.status === 'canceled') && (
               <Button variant="ghost" onClick={resetProgress} className="gap-2">
-                <RefreshCw className="h-4 w-4" /> Limpar
+                <RefreshCw className="h-4 w-4" /> {t('common:actions.clear')}
               </Button>
             )}
             {providerDisabled && !isRunning && (
               <p className="text-xs text-muted-foreground">
-                Configure um provider na aba <strong>Admin</strong> primeiro.
+                {t('projects:runs.configureProvider')}
               </p>
             )}
           </div>
@@ -712,10 +712,9 @@ export function RunsTab({ projectId }: RunsTabProps) {
                   <Database className="h-5 w-5" />
                 </div>
                 <div>
-                  <CardTitle className="text-base">Embeddings</CardTitle>
+                  <CardTitle className="text-base">{t('projects:runs.embeddings.title')}</CardTitle>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Vetores para busca semântica. Retry re-embeda apenas os
-                    registros faltantes.
+                    {t('projects:runs.embeddings.description')}
                   </p>
                 </div>
               </div>
@@ -725,7 +724,7 @@ export function RunsTab({ projectId }: RunsTabProps) {
                 const pct = total > 0 ? Math.round((done / total) * 100) : 100;
                 return (
                   <Badge variant={pct >= 100 ? 'success' : pct > 0 ? 'warning' : 'destructive'}>
-                    {done}/{total} — {pct}%
+                    {t('projects:runs.embeddings.badge', { done, total, pct })}
                   </Badge>
                 );
               })()}
@@ -734,19 +733,19 @@ export function RunsTab({ projectId }: RunsTabProps) {
           <CardContent className="space-y-4">
             <div className="grid grid-cols-3 gap-3 text-sm">
               <div className="rounded-lg border bg-card px-3 py-2">
-                <span className="text-muted-foreground text-xs">Files</span>
+                <span className="text-muted-foreground text-xs">{t('projects:runs.embeddings.files')}</span>
                 <div className="font-medium tabular-nums">
                   {coverage.files_embedded}/{coverage.files_total}
                 </div>
               </div>
               <div className="rounded-lg border bg-card px-3 py-2">
-                <span className="text-muted-foreground text-xs">Symbols</span>
+                <span className="text-muted-foreground text-xs">{t('projects:runs.embeddings.symbols')}</span>
                 <div className="font-medium tabular-nums">
                   {coverage.symbols_embedded}/{coverage.symbols_total}
                 </div>
               </div>
               <div className="rounded-lg border bg-card px-3 py-2">
-                <span className="text-muted-foreground text-xs">Bodies</span>
+                <span className="text-muted-foreground text-xs">{t('projects:runs.embeddings.bodies')}</span>
                 <div className="font-medium tabular-nums">
                   {coverage.symbol_bodies_embedded}/{coverage.symbol_bodies_total}
                 </div>
@@ -769,12 +768,12 @@ export function RunsTab({ projectId }: RunsTabProps) {
                     )}
                     <span>
                       {embedProgress.status === 'starting'
-                        ? 'Iniciando…'
+                        ? t('projects:runs.embeddings.status.starting')
                         : embedProgress.status === 'running'
-                          ? 'Embedding'
+                          ? t('projects:runs.embeddings.status.embedding')
                           : embedProgress.status === 'done'
-                            ? 'Concluido'
-                            : 'Erro'}
+                            ? t('projects:runs.embeddings.status.done')
+                            : t('projects:runs.embeddings.status.error')}
                     </span>
                   </div>
                   <div className="text-sm tabular-nums text-muted-foreground">
@@ -801,8 +800,8 @@ export function RunsTab({ projectId }: RunsTabProps) {
 
                 {embedProgress.result && (
                   <div className="flex items-center gap-4 text-xs text-muted-foreground tabular-nums pt-1 border-t">
-                    <span>Embedded: {embedProgress.result.embedded}</span>
-                    <span>Tokens: {embedProgress.result.tokens.toLocaleString()}</span>
+                    <span>{t('projects:runs.embeddings.embedded', { count: embedProgress.result.embedded })}</span>
+                    <span>{t('projects:runs.embeddings.tokens', { count: embedProgress.result.tokens.toLocaleString() })}</span>
                   </div>
                 )}
 
@@ -823,7 +822,7 @@ export function RunsTab({ projectId }: RunsTabProps) {
                   onClick={() => embedAbortRef.current?.abort()}
                   className="gap-2"
                 >
-                  <CircleStop className="h-4 w-4" /> Cancelar
+                  <CircleStop className="h-4 w-4" /> {t('common:actions.cancel')}
                 </Button>
               ) : (
                 <Button
@@ -835,8 +834,8 @@ export function RunsTab({ projectId }: RunsTabProps) {
                 >
                   <RefreshCw className="h-4 w-4" />
                   {embedProgress.status === 'done' || embedProgress.status === 'error'
-                    ? 'Retry de novo'
-                    : 'Retry Embeddings'}
+                    ? t('projects:runs.embeddings.retryAgain')
+                    : t('projects:runs.embeddings.retry')}
                 </Button>
               )}
               {embedProgress.status !== 'idle' && !isEmbedRunning && (
@@ -846,7 +845,7 @@ export function RunsTab({ projectId }: RunsTabProps) {
                   onClick={() => setEmbedProgress(INITIAL_EMBED_PROGRESS)}
                   className="gap-2"
                 >
-                  <RefreshCw className="h-4 w-4" /> Limpar
+                  <RefreshCw className="h-4 w-4" /> {t('common:actions.clear')}
                 </Button>
               )}
             </div>
@@ -858,7 +857,7 @@ export function RunsTab({ projectId }: RunsTabProps) {
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            Histórico
+            {t('projects:runs.history')}
           </h3>
           <Button
             variant="ghost"
@@ -866,14 +865,14 @@ export function RunsTab({ projectId }: RunsTabProps) {
             onClick={refetch}
             className="h-7 gap-1.5"
           >
-            <RefreshCw className="h-3 w-3" /> Atualizar
+            <RefreshCw className="h-3 w-3" /> {t('common:actions.refresh')}
           </Button>
         </div>
         {loading ? (
-          <div className="text-muted-foreground text-sm">Carregando…</div>
+          <div className="text-muted-foreground text-sm">{t('common:actions.loading')}</div>
         ) : !runs || runs.length === 0 ? (
           <div className="text-muted-foreground text-sm border border-dashed rounded-lg px-4 py-8 text-center">
-            Nenhuma run ainda.
+            {t('projects:runs.noRuns')}
           </div>
         ) : (
           <div className="space-y-2">
@@ -893,14 +892,14 @@ export function RunsTab({ projectId }: RunsTabProps) {
                           : 'bg-destructive',
                     )}
                   />
-                  <span className="text-sm font-medium">Run #{r.id}</span>
+                  <span className="text-sm font-medium">{t('projects:runs.runLabel', { id: r.id })}</span>
                   <span className="text-xs text-muted-foreground">
                     {new Date(r.started_at).toLocaleString()}
                   </span>
                 </div>
                 <div className="flex items-center gap-4 text-sm text-muted-foreground tabular-nums">
                   <span>
-                    {r.indexed_files}/{r.total_files} files
+                    {t('projects:runs.filesCount', { indexed: r.indexed_files, total: r.total_files })}
                   </span>
                   <span>${r.estimated_cost_usd.toFixed(4)}</span>
                 </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { Badge } from '../../../components/ui/badge.js';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../components/ui/dialog.js';
 import { useApi } from '../../../hooks/useApi.js';
@@ -10,6 +11,7 @@ interface FileDetailModalProps {
 }
 
 export function FileDetailModal({ projectId, filePath, onClose }: FileDetailModalProps) {
+  const { t } = useTranslation(['projects', 'common']);
   const { data: file, loading } = useApi<FileDetail>(`/projects/${projectId}/files/${filePath}`);
   const concepts: string[] = (() => {
     try {
@@ -28,7 +30,7 @@ export function FileDetailModal({ projectId, filePath, onClose }: FileDetailModa
     >
       <DialogContent className="max-w-4xl">
         {loading || !file ? (
-          <div className="py-12 text-center text-sm text-muted-foreground">Loading…</div>
+          <div className="py-12 text-center text-sm text-muted-foreground">{t('common:actions.loading')}</div>
         ) : (
           <>
             <DialogHeader>
@@ -38,9 +40,9 @@ export function FileDetailModal({ projectId, filePath, onClose }: FileDetailModa
                 <Badge variant="info">{file.layer}</Badge>
                 <Badge variant={complexityVariant(file.complexity)}>{file.complexity}</Badge>
                 <Badge variant="muted">{file.line_count} lines</Badge>
-                {file.is_entry_point === 1 && <Badge variant="default">entry-point</Badge>}
-                {file.is_test === 1 && <Badge variant="warning">test</Badge>}
-                {file.is_generated === 1 && <Badge variant="muted">generated</Badge>}
+                {file.is_entry_point === 1 && <Badge variant="default">{t('projects:fileDetail.entryPoint')}</Badge>}
+                {file.is_test === 1 && <Badge variant="warning">{t('projects:fileDetail.test')}</Badge>}
+                {file.is_generated === 1 && <Badge variant="muted">{t('projects:fileDetail.generated')}</Badge>}
               </div>
             </DialogHeader>
 
@@ -48,7 +50,7 @@ export function FileDetailModal({ projectId, filePath, onClose }: FileDetailModa
               {file.summary && (
                 <section>
                   <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                    Summary
+                    {t('projects:fileDetail.summary')}
                   </h3>
                   <p className="text-sm text-foreground/90">{file.summary}</p>
                 </section>
@@ -57,7 +59,7 @@ export function FileDetailModal({ projectId, filePath, onClose }: FileDetailModa
               {concepts.length > 0 && (
                 <section>
                   <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                    Concepts
+                    {t('projects:fileDetail.concepts')}
                   </h3>
                   <div className="flex flex-wrap gap-1">
                     {concepts.map((c) => (
@@ -72,7 +74,7 @@ export function FileDetailModal({ projectId, filePath, onClose }: FileDetailModa
               {file.symbols.length > 0 && (
                 <section>
                   <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                    Symbols ({file.symbols.length})
+                    {t('projects:fileDetail.symbols', { count: file.symbols.length })}
                   </h3>
                   <div className="space-y-2">
                     {file.symbols.map((s) => {
@@ -92,7 +94,7 @@ export function FileDetailModal({ projectId, filePath, onClose }: FileDetailModa
                             <span className="font-mono text-sm font-medium">{s.name}</span>
                             {s.line && <span className="text-xs text-muted-foreground">L{s.line}</span>}
                             {s.parent && (
-                              <span className="text-xs text-muted-foreground">parent: {s.parent}</span>
+                              <span className="text-xs text-muted-foreground">{t('projects:fileDetail.parent')}{s.parent}</span>
                             )}
                           </div>
                           {s.signature && (
@@ -118,7 +120,7 @@ export function FileDetailModal({ projectId, filePath, onClose }: FileDetailModa
               {file.dependencies.length > 0 && (
                 <section>
                   <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                    Dependencies ({file.dependencies.length})
+                    {t('projects:fileDetail.deps', { count: file.dependencies.length })}
                   </h3>
                   <div className="space-y-1">
                     {file.dependencies.map((d, i) => (
@@ -137,7 +139,7 @@ export function FileDetailModal({ projectId, filePath, onClose }: FileDetailModa
               {file.dependents.length > 0 && (
                 <section>
                   <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                    Used by ({file.dependents.length} files)
+                    {t('projects:fileDetail.usedBy', { count: file.dependents.length })}
                   </h3>
                   <div className="space-y-1">
                     {file.dependents.map((d, i) => (

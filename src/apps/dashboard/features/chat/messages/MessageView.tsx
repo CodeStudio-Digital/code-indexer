@@ -1,5 +1,6 @@
-import React from 'react';
-import { Bot, GitBranch, Paperclip, User } from 'lucide-react';
+import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Bot, Brain, ChevronDown, ChevronRight, GitBranch, Paperclip, User } from 'lucide-react';
 import type { AgentsGroup, ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Avatar, AvatarFallback } from '../../../components/ui/avatar.js';
 import { cn } from '../../../lib/utils.js';
@@ -65,6 +66,7 @@ function MessageViewInner({
   onFork,
   tasksState,
 }: MessageViewProps) {
+  const { t } = useTranslation('chat');
   const cacheRead = usage?.cache_read_tokens ?? 0;
   const tokenBadge =
     usage && (usage.input_tokens > 0 || usage.output_tokens > 0) ? (
@@ -104,7 +106,7 @@ function MessageViewInner({
       </Avatar>
       <div className="flex-1 min-w-0 max-w-[100%]">
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
-          <span>assistant{tokenBadge}</span>
+          <span>{t('messages.assistant')}{tokenBadge}</span>
           {assistantMarkdown && <CopyMarkdownButton text={assistantMarkdown} />}
         </div>
         <div className="rounded-2xl rounded-tl-sm border bg-card px-4 py-3 shadow-sm max-h-[60vh] overflow-y-auto">
@@ -201,6 +203,9 @@ export function renderAssistantBlock(
   toolResultsById: Map<string, { content: string; isError: boolean }>,
   tasksState: PersistedTasksState | null | undefined,
 ) {
+  if (b.type === 'thinking') {
+    return <ThinkingBlockView key={`think-${i}`} text={b.text ?? ''} />;
+  }
   if (b.type === 'text') {
     return (
       <div key={i} className="text-sm text-foreground/90">
@@ -238,7 +243,7 @@ export function renderAssistantBlock(
     const inp = (b.input ?? {}) as { summary?: string; tasks?: Array<Record<string, unknown>> };
     const tasks = tasksState?.tasks
       ? tasksState.tasks
-      : (inp.tasks ?? []).map((t, ti) => ({
+      : (Array.isArray(inp.tasks) ? inp.tasks : []).map((t, ti) => ({
           id: String(t.id ?? `task_${ti}`),
           title: String(t.title ?? ''),
           description: String(t.description ?? ''),
@@ -312,6 +317,32 @@ export function renderAssistantBlock(
     status: result ? (result.isError ? 'error' : 'done') : 'running',
   };
   return <ToolCallBlock key={`tu-${b.id}-${i}`} call={tc} />;
+}
+
+/** Collapsible thinking block — shows model reasoning, like Gemini/Claude. */
+function ThinkingBlockView({ text }: { text: string }) {
+  const { t } = useTranslation('chat');
+  const [open, setOpen] = useState(false);
+  const preview = text.length > 80 ? text.slice(0, 80) + '...' : text;
+  return (
+    <div className="my-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <Brain className="h-3.5 w-3.5" />
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        <span className="font-medium">{t('messages.thinking')}</span>
+        {!open && <span className="italic truncate max-w-[300px]">{preview}</span>}
+      </button>
+      {open && (
+        <div className="mt-1 ml-5 rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground italic whitespace-pre-wrap max-h-[40vh] overflow-y-auto">
+          {text}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**

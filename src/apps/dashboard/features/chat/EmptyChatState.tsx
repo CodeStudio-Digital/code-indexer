@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { MessageSquareCode, PanelLeft, Plus, Sparkles } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -8,14 +9,9 @@ interface EmptyChatStateProps {
   onOpenSidebar?: () => void;
 }
 
-const SUGGESTIONS = [
-  'Explain the project architecture',
-  'Find and fix the most recent bug',
-  'Add tests for the main module',
-  'Refactor for clarity',
-];
-
 export function EmptyChatState({ onNew, projectName, onOpenSidebar }: EmptyChatStateProps) {
+  const { t } = useTranslation('chat');
+  const suggestions = [t('empty.suggestion1'), t('empty.suggestion2'), t('empty.suggestion3'), t('empty.suggestion4')];
   return (
     <div className="flex-1 flex flex-col">
       {onOpenSidebar && (
@@ -23,11 +19,11 @@ export function EmptyChatState({ onNew, projectName, onOpenSidebar }: EmptyChatS
           <button
             type="button"
             onClick={onOpenSidebar}
-            aria-label="Open sessions"
+            aria-label={t('openSessions')}
             className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground p-1.5 rounded-md hover:bg-muted transition-colors"
           >
             <PanelLeft className="h-4 w-4" />
-            Sessions
+            {t('sessions')}
           </button>
         </div>
       )}
@@ -37,20 +33,20 @@ export function EmptyChatState({ onNew, projectName, onOpenSidebar }: EmptyChatS
             <MessageSquareCode className="h-8 w-8" />
           </div>
           <div>
-            <h3 className="text-xl font-semibold">Start a conversation</h3>
+            <h3 className="text-xl font-semibold">{t('empty.startConversation')}</h3>
             <p className="text-sm text-muted-foreground mt-1.5">
-              Chat with the coder agent on <span className="font-medium text-foreground">{projectName}</span>.
+              {t('empty.chatWith', { name: projectName })}
             </p>
           </div>
           <Button onClick={onNew} size="lg">
-            <Plus className="h-4 w-4" /> New session
+            <Plus className="h-4 w-4" /> {t('empty.newSession')}
           </Button>
           <div className="pt-4">
             <div className="text-[10px] uppercase text-muted-foreground tracking-wider mb-2 flex items-center justify-center gap-1">
-              <Sparkles className="h-3 w-3" /> Try asking
+              <Sparkles className="h-3 w-3" /> {t('empty.tryAsking')}
             </div>
             <div className="flex flex-wrap gap-1.5 justify-center">
-              {SUGGESTIONS.map((s) => (
+              {suggestions.map((s) => (
                 <Badge key={s} variant="outline" className="text-[11px] font-normal normal-case py-1 px-2.5">
                   {s}
                 </Badge>

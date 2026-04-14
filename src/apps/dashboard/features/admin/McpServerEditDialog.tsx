@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import {
   Dialog,
@@ -25,28 +26,38 @@ interface McpServerEditDialogProps {
   onSave: (s: Partial<AdminMcpServer> & { auth_token?: string | null }) => void;
 }
 
-const TRANSPORTS: { value: McpTransport; label: string }[] = [
-  { value: 'stdio', label: 'stdio (local process)' },
-  { value: 'sse', label: 'SSE (Server-Sent Events)' },
-  { value: 'streamable_http', label: 'Streamable HTTP' },
-];
+const TRANSPORT_VALUES: McpTransport[] = ['stdio', 'sse', 'streamable_http'];
+const TRANSPORT_KEYS: Record<McpTransport, string> = {
+  stdio: 'mcpServer.transportStdio',
+  sse: 'mcpServer.transportSse',
+  streamable_http: 'mcpServer.transportHttp',
+};
 
-const AUTH_TYPES: { value: McpAuthType; label: string }[] = [
-  { value: 'none', label: 'None' },
-  { value: 'bearer', label: 'Bearer Token' },
-  { value: 'api_key', label: 'API Key (header)' },
-];
+const AUTH_TYPE_VALUES: McpAuthType[] = ['none', 'bearer', 'api_key'];
+const AUTH_TYPE_KEYS: Record<McpAuthType, string> = {
+  none: 'mcpServer.authNone',
+  bearer: 'mcpServer.authBearer',
+  api_key: 'mcpServer.authApiKey',
+};
 
-const CORE_TIERS: { value: string; label: string; desc: string }[] = [
-  { value: 'bootstrap', label: 'Bootstrap', desc: 'Always visible (turn 1)' },
-  { value: 'navigate', label: 'Navigate', desc: 'Visible after expand_toolset("navigate")' },
-  { value: 'admin', label: 'Admin', desc: 'Only with --profile full' },
-  { value: '__custom__', label: 'Custom tier', desc: 'On-demand: agent calls expand_toolset("<name>")' },
-];
+const CORE_TIER_VALUES = ['bootstrap', 'navigate', 'admin', '__custom__'] as const;
+const CORE_TIER_LABEL_KEYS: Record<string, string> = {
+  bootstrap: 'mcpServer.tierBootstrap',
+  navigate: 'mcpServer.tierNavigate',
+  admin: 'mcpServer.tierAdmin',
+  __custom__: 'mcpServer.tierCustom',
+};
+const CORE_TIER_DESC_KEYS: Record<string, string> = {
+  bootstrap: 'mcpServer.tierBootstrapDesc',
+  navigate: 'mcpServer.tierNavigateDesc',
+  admin: 'mcpServer.tierAdminDesc',
+  __custom__: 'mcpServer.tierCustomDesc',
+};
 
 const CORE_TIER_NAMES = new Set(['bootstrap', 'navigate', 'admin']);
 
 export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: McpServerEditDialogProps) {
+  const { t } = useTranslation(['admin', 'common']);
   const isNew = !isExisting;
   const [form, setForm] = useState<Partial<AdminMcpServer> & { auth_token?: string }>({
     ...initial,
@@ -96,33 +107,33 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>{isNew ? 'Add MCP Server' : `Edit ${initial.name}`}</DialogTitle>
+          <DialogTitle>{isNew ? t('admin:mcpServer.addTitle') : t('admin:mcpServer.editTitle', { name: initial.name })}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           {/* ID + Name */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium">ID (slug)</label>
+              <label className="text-xs font-medium">{t('admin:mcpServer.id')}</label>
               <Input
                 disabled={!isNew}
                 value={form.id ?? ''}
                 onChange={(e) => update('id', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-                placeholder="github"
+                placeholder={t('admin:mcpServer.idPlaceholder')}
               />
             </div>
             <div>
-              <label className="text-xs font-medium">Display name</label>
+              <label className="text-xs font-medium">{t('admin:mcpServer.nameLabel')}</label>
               <Input
                 value={form.name ?? ''}
                 onChange={(e) => update('name', e.target.value)}
-                placeholder="GitHub MCP"
+                placeholder={t('admin:mcpServer.namePlaceholder')}
               />
             </div>
           </div>
 
           {/* Transport */}
           <div>
-            <label className="text-xs font-medium">Transport</label>
+            <label className="text-xs font-medium">{t('admin:mcpServer.transport')}</label>
             <Select
               value={transport}
               onValueChange={(v) => update('transport', v as McpTransport)}
@@ -131,8 +142,8 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {TRANSPORTS.map((t) => (
-                  <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                {TRANSPORT_VALUES.map((tv) => (
+                  <SelectItem key={tv} value={tv}>{t(`admin:${TRANSPORT_KEYS[tv]}`)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -142,25 +153,25 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
           {transport === 'stdio' && (
             <>
               <div>
-                <label className="text-xs font-medium">Command</label>
+                <label className="text-xs font-medium">{t('admin:mcpServer.command')}</label>
                 <Input
                   value={form.command ?? ''}
                   onChange={(e) => update('command', e.target.value)}
-                  placeholder="npx"
+                  placeholder={t('admin:mcpServer.commandPlaceholder')}
                 />
               </div>
               <div>
-                <label className="text-xs font-medium">Arguments (space-separated)</label>
+                <label className="text-xs font-medium">{t('admin:mcpServer.args')}</label>
                 <Input
                   value={(form.args ?? []).join(' ')}
                   onChange={(e) =>
                     update('args', e.target.value.split(/\s+/).filter(Boolean) as unknown as string[])
                   }
-                  placeholder="-y @modelcontextprotocol/server-github"
+                  placeholder={t('admin:mcpServer.argsPlaceholder')}
                 />
               </div>
               <div>
-                <label className="text-xs font-medium">Environment variables (JSON)</label>
+                <label className="text-xs font-medium">{t('admin:mcpServer.envVars')}</label>
                 <Input
                   value={JSON.stringify(form.env ?? {})}
                   onChange={(e) => {
@@ -168,7 +179,7 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
                       update('env', JSON.parse(e.target.value));
                     } catch { /* invalid JSON, ignore */ }
                   }}
-                  placeholder='{"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."}'
+                  placeholder={t('admin:mcpServer.envVarsPlaceholder')}
                 />
               </div>
             </>
@@ -176,11 +187,11 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
 
           {(transport === 'sse' || transport === 'streamable_http') && (
             <div>
-              <label className="text-xs font-medium">URL</label>
+              <label className="text-xs font-medium">{t('admin:mcpServer.url')}</label>
               <Input
                 value={form.url ?? ''}
                 onChange={(e) => update('url', e.target.value)}
-                placeholder="https://mcp.example.com/sse"
+                placeholder={t('admin:mcpServer.urlPlaceholder')}
               />
             </div>
           )}
@@ -188,7 +199,7 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
           {/* Auth */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium">Auth type</label>
+              <label className="text-xs font-medium">{t('admin:mcpServer.authType')}</label>
               <Select
                 value={authType}
                 onValueChange={(v) => update('auth_type', v as McpAuthType)}
@@ -197,8 +208,8 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {AUTH_TYPES.map((a) => (
-                    <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>
+                  {AUTH_TYPE_VALUES.map((av) => (
+                    <SelectItem key={av} value={av}>{t(`admin:${AUTH_TYPE_KEYS[av]}`)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -206,13 +217,13 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
             {authType !== 'none' && (
               <div>
                 <label className="text-xs font-medium">
-                  Token {!isNew && '(leave blank to keep)'}
+                  {t('admin:mcpServer.token')} {!isNew && t('admin:mcpServer.tokenKeep')}
                 </label>
                 <Input
                   type="password"
                   value={form.auth_token ?? ''}
                   onChange={(e) => update('auth_token', e.target.value)}
-                  placeholder={isNew ? 'ghp_...' : '\u2022\u2022\u2022\u2022'}
+                  placeholder={isNew ? t('admin:mcpServer.tokenPlaceholder') : '\u2022\u2022\u2022\u2022'}
                 />
               </div>
             )}
@@ -220,7 +231,7 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
 
           {/* Tier */}
           <div>
-            <label className="text-xs font-medium">Default tool tier</label>
+            <label className="text-xs font-medium">{t('admin:mcpServer.defaultTier')}</label>
             <Select
               value={useCustomTier ? '__custom__' : (form.default_tier ?? 'navigate')}
               onValueChange={(v) => {
@@ -238,16 +249,16 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {CORE_TIERS.map((t) => (
-                  <SelectItem key={t.value} value={t.value}>
-                    {t.label} — {t.desc}
+                {CORE_TIER_VALUES.map((tv) => (
+                  <SelectItem key={tv} value={tv}>
+                    {t(`admin:${CORE_TIER_LABEL_KEYS[tv]}`)} — {t(`admin:${CORE_TIER_DESC_KEYS[tv]}`)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             {useCustomTier && (
               <div className="mt-2">
-                <label className="text-xs font-medium">Custom tier name</label>
+                <label className="text-xs font-medium">{t('admin:mcpServer.customTierName')}</label>
                 <Input
                   value={form.default_tier ?? form.id ?? ''}
                   onChange={(e) =>
@@ -266,16 +277,16 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
           <div className="flex items-center gap-6 pt-2">
             <label className="flex items-center gap-2 text-sm">
               <Switch checked={!!form.enabled} onCheckedChange={(v) => update('enabled', v)} />
-              Enabled
+              {t('admin:mcpServer.enabled')}
             </label>
           </div>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button onClick={submit} disabled={!form.id || !form.name}>
-            Save
+            {t('common:actions.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

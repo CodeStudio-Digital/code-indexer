@@ -1,8 +1,10 @@
 import React from 'react';
-import { Paperclip, Repeat, Send, Square } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Paperclip, Repeat, Send, Settings2, Square } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
+import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/popover.js';
 import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
@@ -46,8 +48,9 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   maxTurns,
   setMaxTurns,
 }: ComposerToolbarProps) {
+  const { t } = useTranslation(['chat', 'common']);
   return (
-    <div className="flex items-center gap-2 px-2 pb-2 flex-wrap">
+    <div className="flex items-center gap-2 px-2 pb-2 flex-wrap sm:flex-nowrap">
       <label className="cursor-pointer">
         <input
           type="file"
@@ -66,19 +69,19 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
 
       <AgentPicker value={agent} onChange={setAgent} autoSuggestFor={autoSuggestText} />
 
-      <div className="w-[110px]">
+      <div className="hidden sm:block w-[110px]">
         <Combobox
           value={provider}
           onChange={(v) => onSwitchProvider(v, '')}
           options={providerOptions.map((p) => ({ value: p.id, label: p.label }))}
-          placeholder="Provider"
-          searchPlaceholder="Search provider…"
-          emptyLabel="No provider"
+          placeholder={t('chat:toolbar.provider')}
+          searchPlaceholder={t('chat:toolbar.searchProvider')}
+          emptyLabel={t('chat:toolbar.noProvider')}
         />
       </div>
 
       {currentProviderModels.length > 0 ? (
-        <div className="w-40">
+        <div className="hidden sm:block w-40">
           <Combobox
             value={model}
             onChange={(v) => {
@@ -90,9 +93,9 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
               label: m.id,
               hint: m.mode,
             }))}
-            placeholder="(default)"
-            searchPlaceholder="Search model…"
-            emptyLabel="No model"
+            placeholder={t('chat:toolbar.defaultModel')}
+            searchPlaceholder={t('chat:toolbar.searchModel')}
+            emptyLabel={t('chat:toolbar.noModel')}
           />
         </div>
       ) : (
@@ -102,11 +105,11 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
           onChange={(e) => setModel(e.target.value)}
           onBlur={(e) => onSwitchProvider(provider, e.target.value)}
           placeholder={PROVIDERS.find((p) => p.id === provider)?.defaultModel}
-          className="h-8 w-32 text-xs font-mono"
+          className="hidden sm:block h-8 w-32 text-xs font-mono"
         />
       )}
 
-      <div className="flex items-center gap-1 text-muted-foreground" title="Max turns (empty = default)">
+      <div className="hidden sm:flex items-center gap-1 text-muted-foreground" title={t('chat:toolbar.maxTurns')}>
         <Repeat className="h-3.5 w-3.5" />
         <Input
           type="number"
@@ -124,13 +127,85 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
 
       <div className="ml-auto flex items-center gap-2">
         <span className="text-[10px] text-muted-foreground hidden sm:inline">⌘+Enter</span>
+
+        {/* Mobile-only settings popover */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="sm:hidden p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              title={t('chat:toolbar.modelSettings')}
+            >
+              <Settings2 className="h-4 w-4" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-64 p-3 space-y-3" align="end" side="top">
+            <p className="text-xs font-medium text-muted-foreground">{t('chat:toolbar.modelSettings')}</p>
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">{t('chat:toolbar.provider')}</label>
+              <Combobox
+                value={provider}
+                onChange={(v) => onSwitchProvider(v, '')}
+                options={providerOptions.map((p) => ({ value: p.id, label: p.label }))}
+                placeholder="Provider"
+                searchPlaceholder="Search provider…"
+                emptyLabel="No provider"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">{t('chat:toolbar.model')}</label>
+              {currentProviderModels.length > 0 ? (
+                <Combobox
+                  value={model}
+                  onChange={(v) => { setModel(v); onSwitchProvider(provider, v); }}
+                  options={currentProviderModels.map<ComboboxOption>((m) => ({
+                    value: m.mode ? `${m.id}::${m.mode}` : m.id,
+                    label: m.id,
+                    hint: m.mode,
+                  }))}
+                  placeholder="(default)"
+                  searchPlaceholder="Search model…"
+                  emptyLabel="No model"
+                />
+              ) : (
+                <Input
+                  type="text"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  onBlur={(e) => onSwitchProvider(provider, e.target.value)}
+                  placeholder={PROVIDERS.find((p) => p.id === provider)?.defaultModel}
+                  className="h-8 text-xs font-mono"
+                />
+              )}
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">{t('chat:toolbar.maxTurns')}</label>
+              <div className="flex items-center gap-2">
+                <Repeat className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <Input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={maxTurns ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setMaxTurns(v === '' ? null : Math.max(1, parseInt(v, 10) || 1));
+                  }}
+                  placeholder="50"
+                  className="h-7 text-xs font-mono px-1.5"
+                />
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
+
         {streaming ? (
           <Button onClick={onAbort} variant="destructive" size="sm">
-            <Square className="h-3.5 w-3.5" /> Stop
+            <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}
           </Button>
         ) : (
           <Button onClick={onSend} disabled={!hasInput} size="sm">
-            <Send className="h-3.5 w-3.5" /> Send
+            <Send className="h-3.5 w-3.5" /> {t('common:actions.send')}
           </Button>
         )}
       </div>

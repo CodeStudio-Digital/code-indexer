@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, ClipboardList, X } from 'lucide-react';
 import type { StreamTask, StreamTaskExecutionMode, TasksPrompt } from '../../../hooks/useAgentStream.js';
 import { Button } from '../../../components/ui/button.js';
@@ -34,6 +35,7 @@ const EXECUTION_MODES: readonly StreamTaskExecutionMode[] = [
  * Phase 3.
  */
 export function TaskListReview({ prompt, onResponse }: TaskListReviewProps) {
+  const { t } = useTranslation(['chat', 'common']);
   const [feedback, setFeedback] = useState('');
   const [executionMode, setExecutionMode] = useState<StreamTaskExecutionMode>('inline');
   const [resolved, setResolved] = useState<'approved' | 'rejected' | undefined>(prompt.resolved);
@@ -77,7 +79,7 @@ export function TaskListReview({ prompt, onResponse }: TaskListReviewProps) {
           <ClipboardList className="h-4 w-4" />
         </div>
         <div className="text-xs font-semibold text-info uppercase tracking-wider flex-1">
-          Task list — {tasksForRender.length} task{tasksForRender.length === 1 ? '' : 's'}
+          {t('chat:tasks.header', { count: tasksForRender.length })}
           {resolved && ` · ${resolved}`}
         </div>
       </div>
@@ -126,13 +128,13 @@ export function TaskListReview({ prompt, onResponse }: TaskListReviewProps) {
           <Textarea
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
-            placeholder="Optional feedback…"
+            placeholder={t('chat:plan.feedbackPlaceholder')}
             rows={2}
             className="mb-2 text-xs"
           />
           <div className="flex gap-2">
             <Button size="sm" variant="success" onClick={handleApprove}>
-              <Check className="h-3.5 w-3.5" /> Approve & execute
+              <Check className="h-3.5 w-3.5" /> {t('common:actions.approve')}
             </Button>
             <Button
               size="sm"
@@ -142,7 +144,7 @@ export function TaskListReview({ prompt, onResponse }: TaskListReviewProps) {
                 setResolved('rejected');
               }}
             >
-              <X className="h-3.5 w-3.5" /> Reject
+              <X className="h-3.5 w-3.5" /> {t('common:actions.reject')}
             </Button>
           </div>
         </>

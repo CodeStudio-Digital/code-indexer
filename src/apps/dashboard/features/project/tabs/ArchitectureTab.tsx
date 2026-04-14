@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useApi } from '../../../hooks/useApi.js';
 import { cn } from '../../../lib/utils.js';
 import type { LayerOverview } from '../types.js';
@@ -17,14 +18,15 @@ const LAYER_COLORS: Record<string, string> = {
 };
 
 export function ArchitectureTab({ projectId }: ArchitectureTabProps) {
+  const { t } = useTranslation(['projects', 'common']);
   const { data: layers, loading } = useApi<LayerOverview[]>(`/projects/${projectId}/architecture`);
-  if (loading) return <div className="text-muted-foreground text-sm">Loading…</div>;
+  if (loading) return <div className="text-muted-foreground text-sm">{t('common:actions.loading')}</div>;
   if (!layers || layers.length === 0)
-    return <div className="text-muted-foreground text-sm">No architecture data.</div>;
+    return <div className="text-muted-foreground text-sm">{t('projects:arch.noData')}</div>;
   const maxCount = Math.max(...layers.map((l) => l.count));
   return (
     <div className="space-y-3">
-      <h3 className="font-semibold mb-2">Files by Layer</h3>
+      <h3 className="font-semibold mb-2">{t('projects:arch.filesByLayer')}</h3>
       {layers.map((l) => (
         <div key={l.layer} className="flex items-center gap-3">
           <span className="w-32 text-sm font-medium capitalize">{l.layer}</span>

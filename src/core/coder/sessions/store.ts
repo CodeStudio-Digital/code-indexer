@@ -51,12 +51,16 @@ export class SessionStore {
     title: string;
     provider: string;
     model: string;
+    cloudcode_session_id?: string;
   }): CoderSession {
     const stmt = this.db.prepare(`
-      INSERT INTO coder_sessions (project_id, title, provider, model)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO coder_sessions (project_id, title, provider, model, cloudcode_session_id)
+      VALUES (?, ?, ?, ?, ?)
     `);
-    const r = stmt.run(input.project_id, input.title, input.provider, input.model);
+    const r = stmt.run(
+      input.project_id, input.title, input.provider, input.model,
+      input.cloudcode_session_id ?? null,
+    );
     return this.getSession(Number(r.lastInsertRowid))!;
   }
 
@@ -183,6 +187,20 @@ export class SessionStore {
     this.db
       .prepare('UPDATE coder_sessions SET worktree_path = ?, updated_at = datetime(\'now\') WHERE id = ?')
       .run(worktreePath, id);
+  }
+
+  /** Get existing cloudcode_session_id or generate + persist a new one. */
+  getOrCreateCloudCodeSessionId(id: number): string {
+    const row = this.db
+      .prepare('SELECT cloudcode_session_id FROM coder_sessions WHERE id = ?')
+      .get(id) as { cloudcode_session_id: string | null } | undefined;
+    if (row?.cloudcode_session_id) return row.cloudcode_session_id;
+    const { randomUUID } = require('node:crypto') as typeof import('node:crypto');
+    const sid = randomUUID();
+    this.db
+      .prepare('UPDATE coder_sessions SET cloudcode_session_id = ?, updated_at = datetime(\'now\') WHERE id = ?')
+      .run(sid, id);
+    return sid;
   }
 
   updateSessionStatus(id: number, status: CoderSession['status']): void {

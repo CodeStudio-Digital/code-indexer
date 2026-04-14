@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Copy,
   Download,
@@ -29,6 +30,7 @@ const MODE_COLOR: Record<string, string> = {
 };
 
 export function SkillsPanel() {
+  const { t } = useTranslation(['admin', 'common']);
   const { skills, loading, save, remove, duplicate, doExport, doImport } = useAdminSkills();
   const [editing, setEditing] = useState<Partial<AdminSkill> | null>(null);
   const [filter, setFilter] = useState('');
@@ -59,7 +61,7 @@ export function SkillsPanel() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter skills..."
+          placeholder={t('admin:skills.filterPlaceholder')}
           className="flex h-9 w-full max-w-xs rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
         <div className="flex items-center gap-2">
@@ -71,7 +73,7 @@ export function SkillsPanel() {
             className="hidden"
           />
           <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
-            <Upload className="h-4 w-4 mr-2" /> Import
+            <Upload className="h-4 w-4 mr-2" /> {t('common:actions.import')}
           </Button>
           <Button
             onClick={() =>
@@ -86,12 +88,12 @@ export function SkillsPanel() {
               })
             }
           >
-            <Plus className="h-4 w-4 mr-2" /> Add Skill
+            <Plus className="h-4 w-4 mr-2" /> {t('admin:skills.addSkill')}
           </Button>
         </div>
       </div>
 
-      {loading && <div className="text-sm text-muted-foreground">Loading...</div>}
+      {loading && <div className="text-sm text-muted-foreground">{t('common:actions.loading')}</div>}
 
       <div className="grid gap-3">
         {filtered.map((s) => (
@@ -110,13 +112,13 @@ export function SkillsPanel() {
                     </Badge>
                   )}
                   {s.scope !== 'global' && (
-                    <Badge variant="secondary">project:{s.scope}</Badge>
+                    <Badge variant="secondary">{t('admin:skills.project')}{s.scope}</Badge>
                   )}
                   {s.source === 'builtin' && (
-                    <Badge variant="secondary">builtin</Badge>
+                    <Badge variant="secondary">{t('admin:skills.builtin')}</Badge>
                   )}
                   {s.source === 'imported' && (
-                    <Badge variant="secondary">imported</Badge>
+                    <Badge variant="secondary">{t('admin:skills.imported')}</Badge>
                   )}
                   {(s.tags ?? []).map((tag) => (
                     <Badge key={tag} variant="outline" className="text-xs">
@@ -154,8 +156,8 @@ export function SkillsPanel() {
         {!loading && filtered.length === 0 && (
           <div className="text-sm text-muted-foreground border rounded-lg p-6 text-center">
             {filter
-              ? 'No skills match the filter.'
-              : 'No skills configured yet. Click "Add Skill" to create reusable prompt instructions.'}
+              ? t('admin:skills.noMatch')
+              : t('admin:skills.noSkills')}
           </div>
         )}
       </div>

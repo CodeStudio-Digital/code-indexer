@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import {
   Dialog,
@@ -17,6 +18,7 @@ interface CopilotConnectionDialogProps {
 }
 
 export function CopilotConnectionDialog({ onClose, onConnected }: CopilotConnectionDialogProps) {
+  const { t } = useTranslation(['admin', 'common']);
   const [flow, setFlow] = useState<CopilotFlowState>({ state: 'picker' });
   const [enterpriseHost, setEnterpriseHost] = useState('');
   const [enterpriseIntegrationId, setEnterpriseIntegrationId] = useState('');
@@ -97,12 +99,12 @@ export function CopilotConnectionDialog({ onClose, onConnected }: CopilotConnect
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Connect GitHub Copilot</DialogTitle>
+          <DialogTitle>{t('admin:copilot.title')}</DialogTitle>
         </DialogHeader>
         {flow.state === 'picker' && (
           <div className="space-y-3 text-sm">
             <p className="text-muted-foreground">
-              Choose which Copilot edition to connect. You can have both connected side-by-side.
+              {t('admin:copilot.description')}
             </p>
             <div className="grid gap-2">
               <Button
@@ -111,9 +113,9 @@ export function CopilotConnectionDialog({ onClose, onConnected }: CopilotConnect
                 onClick={() => void runFlow({ edition: 'individual' })}
               >
                 <div className="text-left">
-                  <div className="font-medium">Individual / Business</div>
+                  <div className="font-medium">{t('admin:copilot.individual')}</div>
                   <div className="text-xs text-muted-foreground">
-                    github.com · Copilot Individual or Business subscription
+                    {t('admin:copilot.individualDesc')}
                   </div>
                 </div>
               </Button>
@@ -123,9 +125,9 @@ export function CopilotConnectionDialog({ onClose, onConnected }: CopilotConnect
                 onClick={() => setFlow({ state: 'enterprise_form' })}
               >
                 <div className="text-left">
-                  <div className="font-medium">Enterprise (GHES)</div>
+                  <div className="font-medium">{t('admin:copilot.enterprise')}</div>
                   <div className="text-xs text-muted-foreground">
-                    GitHub Enterprise Server · custom host + integration id
+                    {t('admin:copilot.enterpriseDesc')}
                   </div>
                 </div>
               </Button>
@@ -135,23 +137,22 @@ export function CopilotConnectionDialog({ onClose, onConnected }: CopilotConnect
         {flow.state === 'enterprise_form' && (
           <div className="space-y-3 text-sm">
             <p className="text-xs text-muted-foreground">
-              Enter your GitHub Enterprise Server host. Device flow and token exchange will run against
-              this domain.
+              {t('admin:copilot.ghesHelp')}
             </p>
             <div>
-              <label className="text-xs font-medium">GHES host</label>
+              <label className="text-xs font-medium">{t('admin:copilot.ghesHost')}</label>
               <Input
                 value={enterpriseHost}
                 onChange={(e) => setEnterpriseHost(e.target.value)}
-                placeholder="github.acme.com"
+                placeholder={t('admin:copilot.ghesHostPlaceholder')}
               />
             </div>
             <div>
-              <label className="text-xs font-medium">Copilot-Integration-Id (optional)</label>
+              <label className="text-xs font-medium">{t('admin:copilot.integrationId')}</label>
               <Input
                 value={enterpriseIntegrationId}
                 onChange={(e) => setEnterpriseIntegrationId(e.target.value)}
-                placeholder="copilot-chat"
+                placeholder={t('admin:copilot.integrationIdPlaceholder')}
               />
             </div>
           </div>
@@ -159,7 +160,7 @@ export function CopilotConnectionDialog({ onClose, onConnected }: CopilotConnect
         {flow.state === 'waiting' && (
           <div className="space-y-3 text-sm">
             <p>
-              Open{' '}
+              {t('admin:copilot.openUrl')}{' '}
               <a
                 href={flow.verificationUri}
                 target="_blank"
@@ -168,32 +169,32 @@ export function CopilotConnectionDialog({ onClose, onConnected }: CopilotConnect
               >
                 {flow.verificationUri}
               </a>{' '}
-              and type the code below:
+              {t('admin:copilot.typeCode')}
             </p>
             <div className="font-mono text-2xl font-bold tracking-widest text-center py-4 bg-muted rounded-lg">
               {flow.userCode}
             </div>
             <p className="text-xs text-muted-foreground">
-              This page will update automatically once you authorize in GitHub.
+              {t('admin:copilot.autoUpdate')}
             </p>
           </div>
         )}
         {flow.state === 'success' && (
           <div className="text-sm text-emerald-600">
-            Copilot connected successfully
-            {typeof flow.modelCount === 'number' ? ` — ${flow.modelCount} models loaded` : ''}.
-            The provider is now available in the Chat tab.
+            {t('admin:copilot.connected')}
+            {typeof flow.modelCount === 'number' ? ` \u2014 ${flow.modelCount} models loaded` : ''}.
+            {' '}{t('admin:copilot.available')}
           </div>
         )}
         {flow.state === 'error' && <div className="text-sm text-red-600 break-all">{flow.message}</div>}
         <DialogFooter>
           {flow.state === 'enterprise_form' && (
             <Button onClick={submitEnterprise} disabled={!enterpriseHost.trim()}>
-              Continue
+              {t('admin:copilot.continue')}
             </Button>
           )}
           <Button variant="ghost" onClick={onClose}>
-            Close
+            {t('common:actions.close')}
           </Button>
         </DialogFooter>
       </DialogContent>

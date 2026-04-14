@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, ClipboardList, Copy, X } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Textarea } from '../../../components/ui/textarea.js';
@@ -11,6 +12,7 @@ interface PlanPromptViewProps {
 }
 
 export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
+  const { t } = useTranslation(['chat', 'common']);
   const [feedback, setFeedback] = useState('');
   const [resolved, setResolved] = useState<string | undefined>(plan.resolved);
   const [copied, setCopied] = useState(false);
@@ -30,16 +32,16 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
           <ClipboardList className="h-4 w-4" />
         </div>
         <div className="text-xs font-semibold text-warning uppercase tracking-wider flex-1">
-          Plan — awaiting approval
+          {t('chat:plan.awaitingApproval')}
         </div>
         <Button size="sm" variant="outline" onClick={handleCopy} className="h-7 px-2 text-[11px]">
           {copied ? (
             <>
-              <Check className="h-3 w-3" /> Copied
+              <Check className="h-3 w-3" /> {t('chat:plan.copied')}
             </>
           ) : (
             <>
-              <Copy className="h-3 w-3" /> Copy MD
+              <Copy className="h-3 w-3" /> {t('chat:plan.copyMd')}
             </>
           )}
         </Button>
@@ -52,7 +54,7 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
           <Textarea
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
-            placeholder="Optional feedback…"
+            placeholder={t('chat:plan.feedbackPlaceholder')}
             rows={2}
             className="mb-2 text-xs"
           />
@@ -65,7 +67,7 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
                 setResolved('approved');
               }}
             >
-              <Check className="h-3.5 w-3.5" /> Approve
+              <Check className="h-3.5 w-3.5" /> {t('common:actions.approve')}
             </Button>
             <Button
               size="sm"
@@ -75,7 +77,7 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
                 setResolved('rejected');
               }}
             >
-              <X className="h-3.5 w-3.5" /> Reject
+              <X className="h-3.5 w-3.5" /> {t('common:actions.reject')}
             </Button>
           </div>
         </>
@@ -87,7 +89,7 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
           )}
         >
           {resolved === 'approved' ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
-          {resolved}
+          {resolved === 'approved' ? t('chat:plan.approved') : t('chat:plan.rejected')}
         </div>
       )}
     </div>

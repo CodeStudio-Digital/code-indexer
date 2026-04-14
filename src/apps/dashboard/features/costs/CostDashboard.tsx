@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { Card, CardContent } from '../../components/ui/card.js';
 import { useApi } from '../../hooks/useApi.js';
 
@@ -15,10 +16,11 @@ interface CostDashboardProps {
 }
 
 export default function CostDashboard({ projectId }: CostDashboardProps) {
+  const { t } = useTranslation('costs');
   const { data: costs, loading } = useApi<CostSummary>(`/projects/${projectId}/costs`);
 
-  if (loading) return <div className="text-muted-foreground text-sm">Loading costs…</div>;
-  if (!costs) return <div className="text-muted-foreground text-sm">No cost data.</div>;
+  if (loading) return <div className="text-muted-foreground text-sm">{t('loading')}</div>;
+  if (!costs) return <div className="text-muted-foreground text-sm">{t('noData')}</div>;
 
   const providers = Object.entries(costs.by_provider);
   const maxCost = Math.max(...providers.map(([, v]) => v.cost_usd), 0.001);
@@ -26,15 +28,15 @@ export default function CostDashboard({ projectId }: CostDashboardProps) {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Total Cost" value={`$${costs.total_cost_usd.toFixed(4)}`} />
-        <StatCard label="Input Tokens" value={costs.total_input_tokens.toLocaleString()} />
-        <StatCard label="Output Tokens" value={costs.total_output_tokens.toLocaleString()} />
-        <StatCard label="Runs" value={String(costs.runs)} />
+        <StatCard label={t('totalCost')} value={`$${costs.total_cost_usd.toFixed(4)}`} />
+        <StatCard label={t('inputTokens')} value={costs.total_input_tokens.toLocaleString()} />
+        <StatCard label={t('outputTokens')} value={costs.total_output_tokens.toLocaleString()} />
+        <StatCard label={t('runs')} value={String(costs.runs)} />
       </div>
 
       {providers.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold mb-3">Cost by Provider</h3>
+          <h3 className="text-sm font-semibold mb-3">{t('costByProvider')}</h3>
           <div className="space-y-2">
             {providers.map(([name, data]) => (
               <div key={name} className="flex items-center gap-3">

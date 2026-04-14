@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Archive,
   ArchiveRestore,
@@ -104,6 +105,7 @@ export function SessionSidebar({
   mobileOpen = false,
   onMobileClose,
 }: SessionSidebarProps) {
+  const { t } = useTranslation(['chat', 'common']);
   const [selectMode, setSelectMode] = useState(false);
 
   // Close the drawer on Escape so mobile users aren't trapped.
@@ -193,7 +195,7 @@ export function SessionSidebar({
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-sm font-semibold flex items-center gap-2">
             <MessageSquareCode className="h-4 w-4 text-primary" />
-            Sessions
+            {t('chat:sidebar.sessions')}
           </h3>
           <div className="flex items-center gap-1">
             <Tooltip>
@@ -206,12 +208,12 @@ export function SessionSidebar({
                     if (selectMode) exitSelectMode();
                     else setSelectMode(true);
                   }}
-                  aria-label="Toggle selection mode"
+                  aria-label={t('chat:sidebar.toggleSelect')}
                 >
                   <CheckSquare className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{selectMode ? 'Exit select' : 'Select multiple'}</TooltipContent>
+              <TooltipContent>{selectMode ? t('chat:sidebar.exitSelect') : t('chat:sidebar.selectMultiple')}</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -220,12 +222,12 @@ export function SessionSidebar({
                   variant="ghost"
                   className="h-7 w-7"
                   onClick={onCreateGroup}
-                  aria-label="New group"
+                  aria-label={t('chat:sidebar.newGroup')}
                 >
                   <FolderPlus className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>New group</TooltipContent>
+              <TooltipContent>{t('chat:sidebar.newGroup')}</TooltipContent>
             </Tooltip>
             {onMobileClose && (
               <Button
@@ -233,13 +235,13 @@ export function SessionSidebar({
                 variant="ghost"
                 className="h-7 w-7 lg:hidden"
                 onClick={onMobileClose}
-                aria-label="Close sessions"
+                aria-label={t('chat:sidebar.closeSessions')}
               >
                 <X className="h-3.5 w-3.5" />
               </Button>
             )}
             <Button size="sm" onClick={onNew}>
-              <Plus className="h-3.5 w-3.5" /> New
+              <Plus className="h-3.5 w-3.5" /> {t('chat:sidebar.new')}
             </Button>
           </div>
         </div>
@@ -254,7 +256,7 @@ export function SessionSidebar({
               view === 'active' ? 'bg-accent text-accent-foreground' : 'hover:bg-muted',
             )}
           >
-            Active
+            {t('chat:sidebar.active')}
           </button>
           <button
             type="button"
@@ -264,7 +266,7 @@ export function SessionSidebar({
               view === 'archived' ? 'bg-accent text-accent-foreground' : 'hover:bg-muted',
             )}
           >
-            Archived
+            {t('chat:sidebar.archived')}
           </button>
         </div>
 
@@ -275,9 +277,9 @@ export function SessionSidebar({
             setModel('');
           }}
           options={providerOptions.map((p) => ({ value: p.id, label: p.label }))}
-          placeholder="Provider"
-          searchPlaceholder="Search provider…"
-          emptyLabel="No provider"
+          placeholder={t('chat:sidebar.provider')}
+          searchPlaceholder={t('chat:sidebar.searchProvider')}
+          emptyLabel={t('chat:sidebar.noProvider')}
         />
         {currentProviderModels.length > 0 ? (
           <Combobox
@@ -288,9 +290,9 @@ export function SessionSidebar({
               label: m.id,
               hint: m.mode,
             }))}
-            placeholder="(default model)"
-            searchPlaceholder="Search model…"
-            emptyLabel="No model"
+            placeholder={t('chat:sidebar.defaultModel')}
+            searchPlaceholder={t('chat:sidebar.searchModel')}
+            emptyLabel={t('chat:sidebar.noModel')}
           />
         ) : (
           <Input
@@ -306,7 +308,7 @@ export function SessionSidebar({
       {/* Batch-action bar */}
       {selectMode && selectedCount > 0 && (
         <div className="flex flex-wrap items-center gap-1 border-b bg-muted/40 px-2 py-1.5 text-xs">
-          <span className="font-medium">{selectedCount} selected</span>
+          <span className="font-medium">{t('chat:sidebar.selected', { count: selectedCount })}</span>
           <div className="ml-auto flex items-center gap-1">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -318,7 +320,7 @@ export function SessionSidebar({
                     await onBatchArchive(selectedArray, !isArchivedView);
                     exitSelectMode();
                   }}
-                  aria-label={isArchivedView ? 'Unarchive' : 'Archive'}
+                  aria-label={isArchivedView ? t('chat:sidebar.unarchive') : t('chat:sidebar.archive')}
                 >
                   {isArchivedView ? (
                     <ArchiveRestore className="h-3.5 w-3.5" />
@@ -327,17 +329,17 @@ export function SessionSidebar({
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{isArchivedView ? 'Unarchive' : 'Archive'}</TooltipContent>
+              <TooltipContent>{isArchivedView ? t('chat:sidebar.unarchive') : t('chat:sidebar.archive')}</TooltipContent>
             </Tooltip>
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button size="icon" variant="ghost" className="h-6 w-6" aria-label="Move to group">
+                <Button size="icon" variant="ghost" className="h-6 w-6" aria-label={t('chat:sidebar.moveToGroup')}>
                   <FolderPlus className="h-3.5 w-3.5" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Move to group</DropdownMenuLabel>
+                <DropdownMenuLabel>{t('chat:sidebar.moveToGroup')}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={async () => {
@@ -345,7 +347,7 @@ export function SessionSidebar({
                     exitSelectMode();
                   }}
                 >
-                  No group
+                  {t('chat:sidebar.noGroup')}
                 </DropdownMenuItem>
                 {(groups ?? []).map((g) => (
                   <DropdownMenuItem
@@ -371,12 +373,12 @@ export function SessionSidebar({
                     await onBatchDelete(selectedArray);
                     exitSelectMode();
                   }}
-                  aria-label="Delete selected"
+                  aria-label={t('chat:sidebar.deleteSelected')}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Delete selected</TooltipContent>
+              <TooltipContent>{t('chat:sidebar.deleteSelected')}</TooltipContent>
             </Tooltip>
           </div>
         </div>
@@ -387,8 +389,8 @@ export function SessionSidebar({
           {sessions?.length === 0 && (
             <div className="p-4 text-xs text-muted-foreground text-center">
               {isArchivedView
-                ? `No archived sessions for ${projectName}`
-                : `No sessions yet for ${projectName}`}
+                ? t('chat:sidebar.noArchived', { name: projectName })
+                : t('chat:sidebar.noSessions', { name: projectName })}
             </div>
           )}
 
@@ -408,7 +410,7 @@ export function SessionSidebar({
                       <ChevronDown className="h-3 w-3" />
                     )}
                     <span className="font-semibold">
-                      {group ? group.name : 'Ungrouped'}
+                      {group ? group.name : t('chat:sidebar.ungrouped')}
                     </span>
                     <span className="text-muted-foreground/60">({items.length})</span>
                   </button>
@@ -417,7 +419,7 @@ export function SessionSidebar({
                       <button
                         type="button"
                         onClick={() => onRenameGroup(group)}
-                        aria-label="Rename group"
+                        aria-label={t('chat:sidebar.renameGroup')}
                         className="rounded p-0.5 hover:bg-muted"
                       >
                         <Pencil className="h-3 w-3" />
@@ -425,7 +427,7 @@ export function SessionSidebar({
                       <button
                         type="button"
                         onClick={() => onDeleteGroup(group)}
-                        aria-label="Delete group"
+                        aria-label={t('chat:sidebar.deleteGroup')}
                         className="rounded p-0.5 hover:bg-muted text-destructive"
                       >
                         <FolderX className="h-3 w-3" />
@@ -488,6 +490,7 @@ function SessionRow({
   groups: CoderSessionGroup[];
   onMoveToGroup: (groupId: number | null) => void;
 }) {
+  const { t } = useTranslation(['chat', 'common']);
   const tokens = s.total_input_tokens + s.total_output_tokens;
   const handleClick = () => {
     if (selectMode) onToggle();
@@ -540,7 +543,7 @@ function SessionRow({
         {!selectMode && (
           <button
             type="button"
-            aria-label={s.is_favorite ? 'Unfavorite session' : 'Favorite session'}
+            aria-label={s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}
             onClick={(e) => {
               e.stopPropagation();
               onFavorite();
@@ -559,7 +562,7 @@ function SessionRow({
           <DropdownMenu>
             <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
               <button
-                aria-label="Session actions"
+                aria-label={t('chat:sidebar.sessionActions')}
                 className="shrink-0 text-muted-foreground hover:text-foreground hover:bg-background/60 rounded p-1 transition-colors"
               >
                 <MoreHorizontal className="h-3.5 w-3.5" />
@@ -570,26 +573,26 @@ function SessionRow({
                 <Star
                   className={cn('h-3.5 w-3.5', s.is_favorite && 'fill-current text-yellow-500')}
                 />
-                {s.is_favorite ? 'Unfavorite' : 'Favorite'}
+                {s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={onArchive}>
                 {isArchivedView ? (
                   <>
-                    <ArchiveRestore className="h-3.5 w-3.5" /> Unarchive
+                    <ArchiveRestore className="h-3.5 w-3.5" /> {t('chat:sidebar.unarchive')}
                   </>
                 ) : (
                   <>
-                    <Archive className="h-3.5 w-3.5" /> Archive
+                    <Archive className="h-3.5 w-3.5" /> {t('chat:sidebar.archive')}
                   </>
                 )}
               </DropdownMenuItem>
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
-                  <FolderPlus className="h-3.5 w-3.5" /> Move to group
+                  <FolderPlus className="h-3.5 w-3.5" /> {t('chat:sidebar.moveToGroup')}
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
                   <DropdownMenuItem onClick={() => onMoveToGroup(null)}>
-                    No group
+                    {t('chat:sidebar.noGroup')}
                   </DropdownMenuItem>
                   {groups.length > 0 && <DropdownMenuSeparator />}
                   {groups.map((g) => (
@@ -601,7 +604,7 @@ function SessionRow({
               </DropdownMenuSub>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={onDelete} className="text-destructive">
-                <Trash2 className="h-3.5 w-3.5" /> Delete
+                <Trash2 className="h-3.5 w-3.5" /> {t('common:actions.delete')}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

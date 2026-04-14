@@ -6,6 +6,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import type { Usage } from './agent-stream/types.js';
+import type { KanbanCardFull, KanbanComment, KanbanChecklistItem } from '../../../core/coder/company/types.js';
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -30,7 +31,7 @@ export interface AgentStreamState {
     status: 'running' | 'done' | 'error';
     durationMs?: number;
   }>;
-  status: 'idle' | 'running' | 'working' | 'waiting' | 'waiting_plan' | 'reviewing' | 'blocked' | 'completed' | 'error' | 'aborted';
+  status: 'idle' | 'running' | 'working' | 'waiting' | 'waiting_plan' | 'waiting_question' | 'waiting_tasks' | 'reviewing' | 'blocked' | 'completed' | 'error' | 'aborted';
   statusMessage?: string;
   usage?: Usage;
   doneReason?: string;
@@ -42,6 +43,7 @@ export interface CompanyStreamState {
   masterState: AgentStreamState | null;
   subordinateStates: Map<number, AgentStreamState>;
   boardMessages: BoardMessage[];
+  kanbanCards: Map<number, KanbanCardFull>;
   error: string | null;
   userMessage: string | null;
   /** Set when Master calls submit_plan — needs human approval. */
@@ -70,6 +72,7 @@ export function useCompanyStream(companySessionId: number | null) {
     masterState: null,
     subordinateStates: new Map(),
     boardMessages: [],
+    kanbanCards: new Map(),
     error: null,
     userMessage: null,
     pendingMasterPlan: null,
@@ -133,6 +136,26 @@ export function useCompanyStream(companySessionId: number | null) {
         }
         return { ...prev, subordinateStates: subs };
       });
+    } else if (eventType === 'subordinate_question_posted') {
+      const sq = data as { agentRunId: number };
+      setState((prev) => {
+        const subs = new Map(prev.subordinateStates);
+        const existing = subs.get(sq.agentRunId);
+        if (existing) {
+          subs.set(sq.agentRunId, { ...existing, status: 'waiting_question' });
+        }
+        return { ...prev, subordinateStates: subs };
+      });
+    } else if (eventType === 'subordinate_tasks_posted') {
+      const st = data as { agentRunId: number };
+      setState((prev) => {
+        const subs = new Map(prev.subordinateStates);
+        const existing = subs.get(st.agentRunId);
+        if (existing) {
+          subs.set(st.agentRunId, { ...existing, status: 'waiting_tasks' });
+        }
+        return { ...prev, subordinateStates: subs };
+      });
     } else if (eventType === 'agent_status') {
       const d = data as { agentRunId: number; role: string; status: string; message: string };
       setState((prev) => {
@@ -157,6 +180,8 @@ export function useCompanyStream(companySessionId: number | null) {
         allowFreeform?: boolean;
       };
       setState((prev) => ({ ...prev, pendingMasterQuestion: d }));
+    } else if (eventType.startsWith('kanban_')) {
+      handleKanbanEvent(eventType, data);
     } else if (eventType === 'session_idle') {
       // Session is waiting for user input — master finished but bus is alive.
       // Keep connected=true so the SSE stream survives and the user can send
@@ -251,6 +276,135 @@ export function useCompanyStream(companySessionId: number | null) {
     });
   }
 
+  function handleKanbanEvent(eventType: string, data: unknown) {
+    setState((prev) => {
+      const cards = new Map(prev.kanbanCards);
+
+      switch (eventType) {
+        case 'kanban_card_created': {
+          const card = data as KanbanCardFull;
+          cards.set(card.id, card);
+          break;
+        }
+        case 'kanban_card_moved': {
+          const d = data as { cardId: number; fromColumn: string; toColumn: string; position: number };
+          const existing = cards.get(d.cardId);
+          if (existing) {
+            cards.set(d.cardId, {
+              ...existing,
+              column: d.toColumn as KanbanCardFull['column'],
+              position: d.position,
+            });
+          }
+          break;
+        }
+        case 'kanban_card_updated': {
+          const d = data as { cardId: number; patch: Record<string, unknown> };
+          const existing = cards.get(d.cardId);
+          if (existing) {
+            cards.set(d.cardId, { ...existing, ...d.patch });
+          }
+          break;
+        }
+        case 'kanban_card_deleted': {
+          const d = data as { cardId: number };
+          cards.delete(d.cardId);
+          break;
+        }
+        case 'kanban_comment_added': {
+          const d = data as { cardId: number; comment: KanbanComment };
+          const existing = cards.get(d.cardId);
+          if (existing) {
+            cards.set(d.cardId, {
+              ...existing,
+              comments: [...existing.comments, d.comment],
+            });
+          }
+          break;
+        }
+        case 'kanban_checklist_updated': {
+          const d = data as { cardId: number; items: KanbanChecklistItem[] };
+          const existing = cards.get(d.cardId);
+          if (existing) {
+            const updated = [...existing.checklist];
+            for (const item of d.items) {
+              const idx = updated.findIndex((i) => i.id === item.id);
+              if (idx >= 0) updated[idx] = item;
+              else updated.push(item);
+            }
+            cards.set(d.cardId, { ...existing, checklist: updated });
+          }
+          break;
+        }
+        case 'kanban_dependency_added': {
+          const d = data as { cardId: number; dependsOnId: number };
+          const existing = cards.get(d.cardId);
+          if (existing) {
+            // Check if the dependency target is not done
+            const depCard = cards.get(d.dependsOnId);
+            const blockedBy = [...existing.blocked_by];
+            if (depCard && depCard.column !== 'done' && !blockedBy.includes(d.dependsOnId)) {
+              blockedBy.push(d.dependsOnId);
+            }
+            cards.set(d.cardId, {
+              ...existing,
+              dependencies: [...existing.dependencies, { id: 0, card_id: d.cardId, depends_on_id: d.dependsOnId, created_at: new Date().toISOString() }],
+              blocked_by: blockedBy,
+            });
+          }
+          break;
+        }
+        case 'kanban_dependency_removed': {
+          const d = data as { cardId: number; dependsOnId: number };
+          const existing = cards.get(d.cardId);
+          if (existing) {
+            cards.set(d.cardId, {
+              ...existing,
+              dependencies: existing.dependencies.filter((dep) => dep.depends_on_id !== d.dependsOnId),
+              blocked_by: existing.blocked_by.filter((id) => id !== d.dependsOnId),
+            });
+          }
+          break;
+        }
+        case 'kanban_agent_assigned': {
+          const d = data as { cardId: number; agentRunId: number; role: string };
+          const existing = cards.get(d.cardId);
+          if (existing) {
+            cards.set(d.cardId, {
+              ...existing,
+              agents: [...existing.agents, {
+                id: 0,
+                card_id: d.cardId,
+                agent_run_id: d.agentRunId,
+                role: d.role,
+                assigned_at: new Date().toISOString(),
+                unassigned_at: null,
+              }],
+            });
+          }
+          break;
+        }
+        case 'kanban_agent_unassigned': {
+          const d = data as { cardId: number; agentRunId: number };
+          const existing = cards.get(d.cardId);
+          if (existing) {
+            cards.set(d.cardId, {
+              ...existing,
+              agents: existing.agents.map((a) =>
+                a.agent_run_id === d.agentRunId && !a.unassigned_at
+                  ? { ...a, unassigned_at: new Date().toISOString() }
+                  : a
+              ),
+            });
+          }
+          break;
+        }
+      }
+
+      return { ...prev, kanbanCards: cards };
+    });
+  }
+
   /**
    * Start the company session — sends user message and opens SSE stream.
    */
@@ -268,6 +422,7 @@ export function useCompanyStream(companySessionId: number | null) {
       masterState: null,
       subordinateStates: new Map(),
       boardMessages: [],
+      kanbanCards: new Map(),
       pendingMasterPlan: null,
       pendingMasterQuestion: null,
     });
@@ -537,6 +692,27 @@ export function useCompanyStream(companySessionId: number | null) {
     }
   }, [companySessionId]);
 
+  const switchProvider = useCallback(async (
+    provider: string,
+    model?: string,
+    roleAssignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }>,
+  ) => {
+    if (!companySessionId) return;
+    try {
+      const res = await fetch(`/api/company/sessions/${companySessionId}/switch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, model, role_assignments: roleAssignments }),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        setState((prev) => ({ ...prev, error: `Switch failed: ${body}` }));
+      }
+    } catch (e) {
+      setState((prev) => ({ ...prev, error: `Switch error: ${(e as Error).message}` }));
+    }
+  }, [companySessionId]);
+
   const reset = useCallback(() => {
     abortRef.current?.abort();
     setState({
@@ -545,6 +721,7 @@ export function useCompanyStream(companySessionId: number | null) {
       masterState: null,
       subordinateStates: new Map(),
       boardMessages: [],
+      kanbanCards: new Map(),
       error: null,
       userMessage: null,
       pendingMasterPlan: null,
@@ -560,6 +737,7 @@ export function useCompanyStream(companySessionId: number | null) {
     abort,
     reset,
     sendMessage,
+    switchProvider,
     respondToMasterPlan,
     respondToMasterQuestion,
   };

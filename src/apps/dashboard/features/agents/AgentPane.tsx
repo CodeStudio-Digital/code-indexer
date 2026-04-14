@@ -1,5 +1,6 @@
 import React from 'react';
-import { Bot, Check, Clock, Loader2, X, Wrench, Crown, Pause, Eye, AlertTriangle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Bot, Check, Clock, Loader2, X, Wrench, Crown, Pause, Eye, AlertTriangle, MessageCircle, ListChecks } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { cn } from '../../lib/utils.js';
 import type { AgentStreamState } from '../../hooks/useCompanyStream.js';
@@ -9,20 +10,23 @@ interface AgentPaneProps {
   onClick?: () => void;
 }
 
-const STATUS_CONFIG: Record<string, { icon: React.FC<{ className?: string }>; color: string; label: string; spin?: boolean }> = {
-  idle: { icon: Clock, color: 'text-muted-foreground bg-muted/50', label: 'Idle' },
-  running: { icon: Loader2, color: 'text-warning bg-warning/10', label: 'Running', spin: true },
-  working: { icon: Loader2, color: 'text-blue-400 bg-blue-500/10', label: 'Working', spin: true },
-  waiting: { icon: Pause, color: 'text-yellow-400 bg-yellow-500/10', label: 'Waiting' },
-  waiting_plan: { icon: Clock, color: 'text-yellow-400 bg-yellow-500/10', label: 'Plan Review' },
-  reviewing: { icon: Eye, color: 'text-cyan-400 bg-cyan-500/10', label: 'Reviewing' },
-  blocked: { icon: AlertTriangle, color: 'text-orange-400 bg-orange-500/10', label: 'Blocked' },
-  completed: { icon: Check, color: 'text-success bg-success/10', label: 'Done' },
-  error: { icon: X, color: 'text-destructive bg-destructive/10', label: 'Error' },
-  aborted: { icon: X, color: 'text-muted-foreground bg-muted/50', label: 'Aborted' },
+const STATUS_CONFIG: Record<string, { icon: React.FC<{ className?: string }>; color: string; labelKey: string; spin?: boolean }> = {
+  idle: { icon: Clock, color: 'text-muted-foreground bg-muted/50', labelKey: 'status.idle' },
+  running: { icon: Loader2, color: 'text-warning bg-warning/10', labelKey: 'status.running', spin: true },
+  working: { icon: Loader2, color: 'text-blue-400 bg-blue-500/10', labelKey: 'status.working', spin: true },
+  waiting: { icon: Pause, color: 'text-yellow-400 bg-yellow-500/10', labelKey: 'status.waiting' },
+  waiting_plan: { icon: Clock, color: 'text-yellow-400 bg-yellow-500/10', labelKey: 'status.planReview' },
+  waiting_question: { icon: MessageCircle, color: 'text-purple-400 bg-purple-500/10', labelKey: 'status.question' },
+  waiting_tasks: { icon: ListChecks, color: 'text-yellow-400 bg-yellow-500/10', labelKey: 'status.tasksReview' },
+  reviewing: { icon: Eye, color: 'text-cyan-400 bg-cyan-500/10', labelKey: 'status.reviewing' },
+  blocked: { icon: AlertTriangle, color: 'text-orange-400 bg-orange-500/10', labelKey: 'status.blocked' },
+  completed: { icon: Check, color: 'text-success bg-success/10', labelKey: 'status.done' },
+  error: { icon: X, color: 'text-destructive bg-destructive/10', labelKey: 'status.error' },
+  aborted: { icon: X, color: 'text-muted-foreground bg-muted/50', labelKey: 'status.aborted' },
 };
 
 export function AgentPane({ agent, onClick }: AgentPaneProps) {
+  const { t } = useTranslation('agents');
   const statusCfg = STATUS_CONFIG[agent.status] ?? STATUS_CONFIG.idle;
   const StatusIcon = statusCfg.icon;
   const currentText = agent.textChunks.join('');
@@ -53,7 +57,7 @@ export function AgentPane({ agent, onClick }: AgentPaneProps) {
         )}
         <span className="text-[11px] font-medium capitalize truncate">{agent.role}</span>
         <Badge variant="outline" className="text-[9px] ml-auto shrink-0">
-          {statusCfg.label}
+          {t(statusCfg.labelKey)}
         </Badge>
       </div>
 

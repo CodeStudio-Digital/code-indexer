@@ -35,6 +35,9 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
     runner.on('text_delta', (text) => {
       publish(bus, 'text', { text });
     });
+    runner.on('thinking_delta', (text) => {
+      publish(bus, 'thinking', { text });
+    });
     runner.on('tool_call_start', (id, name, input) => {
       publish(bus, 'tool_call_start', { id, name, input });
     });

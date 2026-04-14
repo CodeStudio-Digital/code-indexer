@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { AlertCircle, Info, Search as SearchIcon } from 'lucide-react';
 import { EmbeddingsDebugPanel } from './EmbeddingsDebugPanel.js';
 import { Badge } from '../../components/ui/badge.js';
@@ -39,6 +40,7 @@ interface SearchPanelProps {
 type SearchMode = 'hybrid' | 'fts' | 'vector';
 
 export default function SearchPanel({ projectId }: SearchPanelProps) {
+  const { t } = useTranslation(['search', 'common']);
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<SearchMode>('hybrid');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -82,7 +84,7 @@ export default function SearchPanel({ projectId }: SearchPanelProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            placeholder="Search files and symbols…"
+            placeholder={t('search:placeholder')}
             className="pl-9"
           />
         </div>
@@ -91,13 +93,13 @@ export default function SearchPanel({ projectId }: SearchPanelProps) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="hybrid">Hybrid</SelectItem>
-            <SelectItem value="fts">FTS</SelectItem>
-            <SelectItem value="vector">Vector</SelectItem>
+            <SelectItem value="hybrid">{t('search:hybrid')}</SelectItem>
+            <SelectItem value="fts">{t('search:fts')}</SelectItem>
+            <SelectItem value="vector">{t('search:vector')}</SelectItem>
           </SelectContent>
         </Select>
         <Button onClick={handleSearch} disabled={loading}>
-          {loading ? '…' : 'Search'}
+          {loading ? '…' : t('common:actions.search')}
         </Button>
       </div>
 
@@ -110,10 +112,10 @@ export default function SearchPanel({ projectId }: SearchPanelProps) {
             <div className="flex items-start gap-2 p-2.5 rounded-md bg-destructive/10 text-destructive border border-destructive/20">
               <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <div>
-                {!diagnostics.vectorAvailable && <div>Vector store not configured. Configure in Admin &gt; Embeddings &amp; Vector Stores.</div>}
-                {!diagnostics.embeddingAvailable && <div>Embedding service not configured. Configure in Admin &gt; Embeddings &amp; Vector Stores.</div>}
+                {!diagnostics.vectorAvailable && <div>{t('search:vectorNotConfigured')}</div>}
+                {!diagnostics.embeddingAvailable && <div>{t('search:embeddingNotConfigured')}</div>}
                 {diagnostics.vectorError && diagnostics.vectorAvailable && diagnostics.embeddingAvailable && (
-                  <div>Vector search error: {diagnostics.vectorError}</div>
+                  <div>{t('search:vectorError')} {diagnostics.vectorError}</div>
                 )}
               </div>
             </div>
@@ -123,18 +125,18 @@ export default function SearchPanel({ projectId }: SearchPanelProps) {
               <Info className="h-3.5 w-3.5 shrink-0" />
               <div className="flex flex-wrap gap-x-3 gap-y-0.5">
                 {diagnostics.queryVariants && diagnostics.queryVariants.length > 1 && (
-                  <span>Variants: {diagnostics.queryVariants.map((v, i) => (
+                  <span>{t('search:variants')} {diagnostics.queryVariants.map((v, i) => (
                     <span key={i} className="font-mono">{i > 0 ? ', ' : ''}"{v}"</span>
                   ))}</span>
                 )}
                 {diagnostics.vectorRawMatches !== undefined && (
-                  <span>Raw matches: {diagnostics.vectorRawMatches}</span>
+                  <span>{t('search:rawMatches')} {diagnostics.vectorRawMatches}</span>
                 )}
                 {diagnostics.vectorRehydrated !== undefined && (
-                  <span>Rehydrated: {diagnostics.vectorRehydrated}</span>
+                  <span>{t('search:rehydrated')} {diagnostics.vectorRehydrated}</span>
                 )}
                 {diagnostics.ftsCount !== undefined && mode === 'hybrid' && (
-                  <span>FTS: {diagnostics.ftsCount}</span>
+                  <span>{t('search:ftsLabel')} {diagnostics.ftsCount}</span>
                 )}
               </div>
             </div>
@@ -154,7 +156,7 @@ export default function SearchPanel({ projectId }: SearchPanelProps) {
                 className="p-3 rounded-lg border hover:bg-accent/40 transition-colors"
               >
                 <div className="flex items-center gap-2 mb-1">
-                  <Badge variant={r.type === 'file' ? 'info' : 'secondary'}>{r.type}</Badge>
+                  <Badge variant={r.type === 'file' ? 'info' : 'secondary'}>{r.type === 'file' ? t('search:file') : r.type}</Badge>
                   <span className="font-mono text-sm truncate">
                     {path}
                     {name ? `:${name}` : ''}
@@ -172,7 +174,7 @@ export default function SearchPanel({ projectId }: SearchPanelProps) {
         </div>
       )}
       {results.length === 0 && query && !loading && (
-        <p className="text-muted-foreground text-sm">No results found.</p>
+        <p className="text-muted-foreground text-sm">{t('search:noResults')}</p>
       )}
     </div>
   );

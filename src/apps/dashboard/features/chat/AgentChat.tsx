@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAgentStream } from '../../hooks/useAgentStream.js';
 import { apiDelete, apiPatch, apiPost, useApi } from '../../hooks/useApi.js';
 import { Button } from '../../components/ui/button.js';
@@ -35,6 +36,7 @@ import { useAgentChatState } from './useAgentChatState.js';
 import type { AgentAttachment } from '../../hooks/useAgentStream.js';
 
 export default function AgentChat({ projectId, projectName, initialSessionId }: AgentChatProps) {
+  const { t } = useTranslation(['chat', 'common']);
   const confirm = useConfirm();
   const [view, setView] = useState<SessionView>('active');
   const { data: sessions, refetch: refetchSessions } = useApi<CoderSession[]>(
@@ -59,6 +61,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [toolConfigOpen, setToolConfigOpen] = useState(false);
   const [skillConfigOpen, setSkillConfigOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [thinking, setThinking] = useState(false);
 
   const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=120` : '';
   const { data: sessionData, refetch: refetchSession, update: updateSessionData } = useApi<SessionData>(sessionUrl);
@@ -72,6 +75,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     lastUsage,
     runDelta,
     todos,
+    indexStatus,
     sendMessage,
     reattach,
     abort,
@@ -168,11 +172,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
 
   const handleSend = useCallback(async (text: string, atts: AgentAttachment[]) => {
     if (!text.trim() || !selectedId) return;
-    // Single refetch path: onMessageComplete (from the stream) + the
-    // doneReason effect. Calling refetchSession() again here races and
-    // double-fetches on every turn.
-    await sendMessage(text, () => refetchSession(), { attachments: atts, agent, maxTurns });
-  }, [selectedId, sendMessage, refetchSession, agent, maxTurns]);
+    await sendMessage(text, () => refetchSession(), { attachments: atts, agent, maxTurns, thinking });
+  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking]);
 
 
   /**
@@ -210,10 +211,10 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
 
   const handleDelete = async (id: number) => {
     const ok = await confirm({
-      title: 'Delete this session?',
-      description: 'All messages, tool calls and stats persisted for this session will be removed.',
+      title: t('chat:deleteSession'),
+      description: t('chat:deleteSessionDescription'),
       variant: 'destructive',
-      confirmLabel: 'Delete',
+      confirmLabel: t('common:actions.delete'),
     });
     if (!ok) return;
     await apiDelete(`/coder/sessions/${id}`);
@@ -224,10 +225,10 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const handleBatchDelete = async (ids: number[]) => {
     if (ids.length === 0) return;
     const ok = await confirm({
-      title: `Delete ${ids.length} session${ids.length === 1 ? '' : 's'}?`,
-      description: 'All messages and tool calls for the selected sessions will be permanently removed.',
+      title: t('chat:deleteSessions', { count: ids.length }),
+      description: t('chat:deleteSessionsDescription'),
       variant: 'destructive',
-      confirmLabel: 'Delete',
+      confirmLabel: t('common:actions.delete'),
     });
     if (!ok) return;
     await apiPost('/coder/sessions/batch-delete', { ids });
@@ -315,10 +316,10 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
 
   const handleDeleteGroup = async (group: CoderSessionGroup) => {
     const ok = await confirm({
-      title: `Delete group "${group.name}"?`,
-      description: 'Sessions in this group will remain but become ungrouped.',
+      title: t('chat:deleteGroup', { name: group.name }),
+      description: t('chat:deleteGroupDescription'),
       variant: 'destructive',
-      confirmLabel: 'Delete',
+      confirmLabel: t('common:actions.delete'),
     });
     if (!ok) return;
     await apiDelete(`/coder/groups/${group.id}`);
@@ -346,12 +347,12 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
       <Dialog open={newSessionOpen} onOpenChange={setNewSessionOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>New Session</DialogTitle>
-            <DialogDescription>Enter a title for the new chat session.</DialogDescription>
+            <DialogTitle>{t('chat:newSessionTitle')}</DialogTitle>
+            <DialogDescription>{t('chat:newSessionDescription')}</DialogDescription>
           </DialogHeader>
           <Input
             autoFocus
-            placeholder="Session title"
+            placeholder={t('chat:sessionTitlePlaceholder')}
             value={newSessionTitle}
             onChange={(e) => setNewSessionTitle(e.target.value)}
             onKeyDown={(e) => {
@@ -360,21 +361,21 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => setNewSessionOpen(false)}>
-              Cancel
+              {t('common:actions.cancel')}
             </Button>
-            <Button onClick={confirmNewSession}>Create</Button>
+            <Button onClick={confirmNewSession}>{t('common:actions.create')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
       <Dialog open={newGroupOpen} onOpenChange={setNewGroupOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>New Group</DialogTitle>
-            <DialogDescription>Create a group to organize your chat sessions.</DialogDescription>
+            <DialogTitle>{t('chat:newGroup')}</DialogTitle>
+            <DialogDescription>{t('chat:newGroupDescription')}</DialogDescription>
           </DialogHeader>
           <Input
             autoFocus
-            placeholder="Group name"
+            placeholder={t('chat:groupNamePlaceholder')}
             value={newGroupName}
             onChange={(e) => setNewGroupName(e.target.value)}
             onKeyDown={(e) => {
@@ -383,10 +384,10 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => setNewGroupOpen(false)}>
-              Cancel
+              {t('common:actions.cancel')}
             </Button>
             <Button onClick={confirmCreateGroup} disabled={!newGroupName.trim()}>
-              Create
+              {t('common:actions.create')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -397,12 +398,12 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Rename Group</DialogTitle>
-            <DialogDescription>Choose a new name for this group.</DialogDescription>
+            <DialogTitle>{t('chat:renameGroup')}</DialogTitle>
+            <DialogDescription>{t('chat:renameGroupDescription')}</DialogDescription>
           </DialogHeader>
           <Input
             autoFocus
-            placeholder="Group name"
+            placeholder={t('chat:groupNamePlaceholder')}
             value={renameGroupName}
             onChange={(e) => setRenameGroupName(e.target.value)}
             onKeyDown={(e) => {
@@ -411,13 +412,13 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => setRenameGroupTarget(null)}>
-              Cancel
+              {t('common:actions.cancel')}
             </Button>
             <Button
               onClick={confirmRenameGroup}
               disabled={!renameGroupName.trim() || renameGroupName.trim() === renameGroupTarget?.name}
             >
-              Save
+              {t('common:actions.save')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -494,6 +495,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                   runDelta={runDelta}
                   lastUsage={lastUsage}
                   stats={stats}
+                  indexStatus={indexStatus}
                   onOpenDetails={() => setDetailsOpen(true)}
                   onOpenSidebar={() => setMobileSidebarOpen(true)}
                   onOpenToolConfig={() => setToolConfigOpen(true)}
@@ -533,6 +535,9 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 maxTurns={maxTurns}
                 setMaxTurns={setMaxTurns}
                 sessionId={selectedId}
+                thinking={thinking}
+                setThinking={setThinking}
+                supportsThinking={provider === 'google-oauth' || provider === 'gemini'}
                 onInvokeSkill={async (skillId, input) => {
                   if (!selectedId) return;
                   try {

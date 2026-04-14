@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Bot, Crown, X } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -35,6 +36,7 @@ interface AgentSessionModalProps {
 }
 
 export function AgentSessionModal({ coderSessionId, role, status, onClose }: AgentSessionModalProps) {
+  const { t } = useTranslation('agents');
   const { data: sessionData } = useApi<SessionData>(`/coder/sessions/${coderSessionId}?full=1`);
 
   return (

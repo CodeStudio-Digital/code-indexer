@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { FolderGit2 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import {
@@ -39,6 +40,7 @@ export default function ProjectCreateDialog({
   onOpenChange,
   onCreated,
 }: ProjectCreateDialogProps) {
+  const { t } = useTranslation(['projects', 'common']);
   const [rootPath, setRootPath] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -63,7 +65,7 @@ export default function ProjectCreateDialog({
     setError(null);
     const trimmedPath = rootPath.trim();
     if (!trimmedPath) {
-      setError('Informe a pasta do projeto.');
+      setError(t('projects:create.errorRequired'));
       return;
     }
     setSaving(true);
@@ -81,9 +83,9 @@ export default function ProjectCreateDialog({
       // simple and show the raw message.
       const raw = err instanceof Error ? err.message : String(err);
       if (raw.includes('409')) {
-        setError('Já existe um projeto com esse nome ou pasta.');
+        setError(t('projects:create.errorConflict'));
       } else if (raw.includes('400')) {
-        setError('Pasta inválida — confira se o caminho existe.');
+        setError(t('projects:create.errorInvalid'));
       } else {
         setError(raw);
       }
@@ -101,10 +103,9 @@ export default function ProjectCreateDialog({
               <FolderGit2 className="h-5 w-5" />
             </div>
             <div>
-              <DialogTitle>Novo projeto</DialogTitle>
+              <DialogTitle>{t('projects:create.title')}</DialogTitle>
               <DialogDescription>
-                Registre uma pasta local no índice. Depois use o botão
-                {' '}<strong>Run Index</strong> na aba Runs para analisar.
+                {t('projects:create.description')}
               </DialogDescription>
             </div>
           </div>
@@ -113,41 +114,40 @@ export default function ProjectCreateDialog({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-sm font-medium">
-              Pasta do projeto <span className="text-destructive">*</span>
+              {t('projects:create.folderLabel')} <span className="text-destructive">*</span>
             </label>
             <Input
               value={rootPath}
               onChange={(e) => setRootPath(e.target.value)}
-              placeholder="D:\\projetos\\meu-app"
+              placeholder={t('projects:create.folderPlaceholder')}
               className="font-mono text-xs"
               autoFocus
               required
             />
             <p className="text-xs text-muted-foreground">
-              Caminho absoluto. O servidor valida se a pasta existe antes de
-              salvar.
+              {t('projects:create.folderHint')}
             </p>
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Nome</label>
+            <label className="text-sm font-medium">{t('projects:create.nameLabel')}</label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Owner/Repo (auto se vazio)"
+              placeholder={t('projects:create.namePlaceholder')}
             />
             <p className="text-xs text-muted-foreground">
-              Deixe em branco para usar os dois últimos segmentos do caminho.
+              {t('projects:create.nameHint')}
             </p>
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Descrição</label>
+            <label className="text-sm font-medium">{t('projects:create.descLabel')}</label>
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
-              placeholder="Opcional"
+              placeholder={t('projects:create.descPlaceholder')}
             />
           </div>
 
@@ -164,10 +164,10 @@ export default function ProjectCreateDialog({
               onClick={() => handleOpenChange(false)}
               disabled={saving}
             >
-              Cancelar
+              {t('common:actions.cancel')}
             </Button>
             <Button type="submit" disabled={saving || !rootPath.trim()}>
-              {saving ? 'Criando…' : 'Criar projeto'}
+              {saving ? t('projects:create.creating') : t('projects:create.submit')}
             </Button>
           </DialogFooter>
         </form>

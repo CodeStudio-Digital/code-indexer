@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Boxes,
   ChevronRight,
@@ -54,6 +55,7 @@ interface ProjectCardProps {
 }
 
 function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) {
+  const { t } = useTranslation(['projects', 'common']);
   return (
     <Card
       onClick={onSelect}
@@ -66,7 +68,7 @@ function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) {
           </div>
           <div className="flex items-center gap-1">
             <Badge variant={p.last_indexed ? 'success' : 'muted'}>
-              {p.last_indexed ? 'indexed' : 'pending'}
+              {p.last_indexed ? t('common:status.indexed') : t('common:status.pending')}
             </Badge>
             <Button
               variant="ghost"
@@ -76,7 +78,7 @@ function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) {
                 e.stopPropagation();
                 onEdit();
               }}
-              aria-label="Edit project"
+              aria-label={t('projects:editProject')}
             >
               <Pencil className="h-3.5 w-3.5" />
             </Button>
@@ -90,19 +92,19 @@ function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) {
           <div className="flex items-center gap-2 text-muted-foreground">
             <FileCode2 className="h-3.5 w-3.5" />
             <span>
-              <strong className="text-foreground">{p.file_count}</strong> files
+              <strong className="text-foreground">{p.file_count}</strong> {t('projects:files')}
             </span>
           </div>
           <div className="flex items-center gap-2 text-muted-foreground">
             <Boxes className="h-3.5 w-3.5" />
             <span>
-              <strong className="text-foreground">{p.symbol_count}</strong> symbols
+              <strong className="text-foreground">{p.symbol_count}</strong> {t('projects:symbols')}
             </span>
           </div>
         </div>
         <div className="mt-3 pt-3 border-t flex items-center gap-1.5 text-xs text-muted-foreground">
           <Clock className="h-3 w-3" />
-          {p.last_indexed ? formatRelativeTime(p.last_indexed) : 'Never indexed'}
+          {p.last_indexed ? formatRelativeTime(p.last_indexed) : t('projects:neverIndexed')}
         </div>
       </CardContent>
     </Card>
@@ -110,6 +112,7 @@ function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) {
 }
 
 export default function ProjectList({ onSelectProject }: ProjectListProps) {
+  const { t } = useTranslation(['projects', 'common']);
   const { data: projects, loading, error, refetch } = useApi<Project[]>('/projects');
   const [editing, setEditing] = useState<Project | null>(null);
   const [creating, setCreating] = useState(false);
@@ -160,9 +163,9 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
       [...named.entries()].sort(([a], [b]) => a.localeCompare(b)),
     );
 
-    // "Sem grupo" always at the end
+    // Ungrouped always at the end
     if (ungrouped.length > 0) {
-      sorted.set('Sem grupo', ungrouped);
+      sorted.set('__ungrouped__', ungrouped);
     }
 
     return sorted;
@@ -196,16 +199,16 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
               <FolderGit2 className="h-7 w-7" />
             </div>
             <div>
-              <h2 className="text-xl font-semibold">Nenhum projeto ainda</h2>
+              <h2 className="text-xl font-semibold">{t('projects:empty.title')}</h2>
               <p className="text-sm text-muted-foreground mt-1">
-                Crie um projeto registrando uma pasta local.
+                {t('projects:empty.description')}
               </p>
             </div>
             <Button onClick={() => setCreating(true)}>
-              <Plus className="h-4 w-4" /> Novo projeto
+              <Plus className="h-4 w-4" /> {t('projects:newProject')}
             </Button>
             <p className="text-xs text-muted-foreground">
-              Ou use o CLI:{' '}
+              {t('projects:empty.cliHint')}{' '}
               <code className="bg-muted px-2 py-1 rounded-md font-mono">
                 mcp-code-indexer index /path/to/project
               </code>
@@ -230,11 +233,11 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Projects</h2>
+          <h2 className="text-2xl font-bold tracking-tight">{t('projects:title')}</h2>
           <p className="text-sm text-muted-foreground mt-1">
             {searchQuery.trim()
-              ? `${filteredProjects.length} of ${projects.length} projects`
-              : `${projects.length} indexed ${projects.length === 1 ? 'project' : 'projects'}`}
+              ? t('projects:searchFiltered', { filtered: filteredProjects.length, total: projects.length })
+              : t('projects:count', { count: projects.length })}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -243,14 +246,14 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search projects…"
+              placeholder={t('projects:searchPlaceholder')}
               className="pl-8 h-8 w-48 sm:w-64 text-sm"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label="Clear search"
+                aria-label={t('projects:clearSearch')}
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -260,14 +263,14 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
             variant={grouped ? 'secondary' : 'outline'}
             size="sm"
             onClick={() => setGrouped((g) => !g)}
-            title={grouped ? 'Flat view' : 'Group by group'}
+            title={grouped ? t('projects:flatView') : t('projects:groupByGroup')}
           >
             <Layers className="h-4 w-4" />
-            <span className="hidden sm:inline ml-1">{grouped ? 'Grouped' : 'Group'}</span>
+            <span className="hidden sm:inline ml-1">{grouped ? t('projects:grouped') : t('projects:group')}</span>
           </Button>
           <Button size="sm" onClick={() => setCreating(true)}>
             <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline ml-1">Novo projeto</span>
+            <span className="hidden sm:inline ml-1">{t('projects:newProject')}</span>
           </Button>
         </div>
       </div>
@@ -276,7 +279,7 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
         <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
           {filteredProjects.length === 0 ? (
             <p className="col-span-full text-center py-12 text-sm text-muted-foreground">
-              No projects match &ldquo;{searchQuery}&rdquo;
+              {t('projects:noMatch', { query: searchQuery })}
             </p>
           ) : (
             filteredProjects.map((p) => (
@@ -295,11 +298,11 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
         <div className="space-y-6">
           {groupedProjects.size === 0 && (
             <p className="text-center py-12 text-sm text-muted-foreground">
-              No projects match &ldquo;{searchQuery}&rdquo;
+              {t('projects:noMatch', { query: searchQuery })}
             </p>
           )}
           {[...groupedProjects.entries()].map(([group, groupProjects]) => {
-            const isUngrouped = group === 'Sem grupo';
+            const isUngrouped = group === '__ungrouped__';
             const isOpen = searchQuery.length > 0 || !collapsedGroups.has(group);
             return (
               <Collapsible key={group} open={isOpen} onOpenChange={() => toggleGroup(group)}>
@@ -310,7 +313,7 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
                         className={cn('h-4 w-4 transition-transform', isOpen && 'rotate-90')}
                       />
                       <span className={cn(isUngrouped && 'text-muted-foreground italic')}>
-                        {group}
+                        {isUngrouped ? t('projects:ungrouped') : group}
                       </span>
                     </button>
                   </CollapsibleTrigger>

@@ -87,6 +87,7 @@ export interface AgentsGroup {
 
 export type StreamBlock =
   | { type: 'text'; text: string }
+  | { type: 'thinking'; text: string }
   | { type: 'tool'; call: ToolCallEvent }
   | { type: 'plan'; plan: PlanPrompt }
   | { type: 'question'; question: QuestionPrompt }
@@ -132,6 +133,11 @@ export interface ContextStatus {
   auto_continue_max: number;
 }
 
+export interface IndexStatus {
+  isIndexed: boolean;
+  mcpAvailable: boolean;
+}
+
 export interface SessionState {
   streaming: boolean;
   currentTurn: AssistantTurn | null;
@@ -148,6 +154,8 @@ export interface SessionState {
   todos: TodoItem[];
   /** Per-turn context metrics for progress indicator. */
   contextStatus: ContextStatus | null;
+  /** Whether the project is indexed and MCP tools are available. */
+  indexStatus: IndexStatus | null;
 }
 
 export const ZERO_DELTA: RunDelta = {
@@ -168,6 +176,7 @@ export const EMPTY_STATE: SessionState = {
   reattached: false,
   todos: [],
   contextStatus: null,
+  indexStatus: null,
 };
 
 export type SessionPatch =

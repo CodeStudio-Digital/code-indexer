@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, HelpCircle } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
@@ -16,6 +17,7 @@ interface QuestionPromptViewProps {
 }
 
 export function QuestionPromptView({ question, onAnswer }: QuestionPromptViewProps) {
+  const { t } = useTranslation(['chat', 'common']);
   const [text, setText] = useState('');
   const [resolved, setResolved] = useState<string | undefined>(question.resolved);
   const submit = async (val: string) => {
@@ -28,14 +30,14 @@ export function QuestionPromptView({ question, onAnswer }: QuestionPromptViewPro
         <div className="h-7 w-7 rounded-md bg-info/15 text-info flex items-center justify-center">
           <HelpCircle className="h-4 w-4" />
         </div>
-        <div className="text-xs font-semibold text-info uppercase tracking-wider">Question</div>
+        <div className="text-xs font-semibold text-info uppercase tracking-wider">{t('chat:question.title')}</div>
       </div>
       <div className="text-sm text-foreground mb-3 px-1 prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ol:my-1 prose-ul:my-1 prose-li:my-0.5">
         <Markdown text={question.question} />
       </div>
       {resolved ? (
         <div className="text-xs text-info flex items-center gap-1.5 px-1">
-          <Check className="h-3.5 w-3.5" /> <span className="font-medium">Answered:</span> {resolved}
+          <Check className="h-3.5 w-3.5" /> <span className="font-medium">{t('chat:question.answered')}</span> {resolved}
         </div>
       ) : (
         <>
@@ -58,7 +60,7 @@ export function QuestionPromptView({ question, onAnswer }: QuestionPromptViewPro
           <div>
             {question.options && question.options.length > 0 && (
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 px-1">
-                Or type a custom answer
+                {t('chat:question.customAnswer')}
               </div>
             )}
             <div className="flex gap-2">
@@ -68,11 +70,11 @@ export function QuestionPromptView({ question, onAnswer }: QuestionPromptViewPro
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && text.trim()) submit(text.trim());
                 }}
-                placeholder="Type your answer…"
+                placeholder={t('chat:question.answerPlaceholder')}
                 className="text-sm"
               />
               <Button size="sm" onClick={() => text.trim() && submit(text.trim())} disabled={!text.trim()}>
-                Send
+                {t('common:actions.send')}
               </Button>
             </div>
           </div>

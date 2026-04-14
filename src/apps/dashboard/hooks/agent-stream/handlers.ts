@@ -41,6 +41,18 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       flush();
     },
 
+    thinking: (data) => {
+      const t = String((data as { text?: string }).text ?? '');
+      if (!t) return;
+      const last = blocks[blocks.length - 1];
+      if (last && last.type === 'thinking') {
+        last.text += t;
+      } else {
+        blocks.push({ type: 'thinking', text: t });
+      }
+      flush();
+    },
+
     tool_call_start: (data) => {
       const d = data as { id: string; name: string; input?: Record<string, unknown> };
       const call: ToolCallEvent = { id: d.id, name: d.name, input: d.input, status: 'running' };
@@ -184,6 +196,11 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         auto_continue_max: number;
       };
       updateSession(sid, { contextStatus: d });
+    },
+
+    index_status: (data) => {
+      const d = data as { isIndexed: boolean; mcpAvailable: boolean };
+      updateSession(sid, { indexStatus: d });
     },
 
     todos_updated: (data) => {

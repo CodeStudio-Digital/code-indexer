@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import {
   Dialog,
@@ -15,6 +16,7 @@ interface BedrockCredentialsDialogProps {
 }
 
 export function BedrockCredentialsDialog({ onClose, onSaved }: BedrockCredentialsDialogProps) {
+  const { t } = useTranslation(['admin', 'common']);
   const [accessKeyId, setAccessKeyId] = useState('');
   const [secretAccessKey, setSecretAccessKey] = useState('');
   const [sessionToken, setSessionToken] = useState('');
@@ -52,19 +54,18 @@ export function BedrockCredentialsDialog({ onClose, onSaved }: BedrockCredential
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>AWS Bedrock credentials</DialogTitle>
+          <DialogTitle>{t('admin:bedrock.title')}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 text-sm">
           <p className="text-xs text-muted-foreground">
-            Stored locally in the SQLite admin database. Used by the Bedrock coder adapter and model
-            discovery.
+            {t('admin:bedrock.description')}
           </p>
           <div>
-            <label className="text-xs font-medium">Access Key ID</label>
-            <Input value={accessKeyId} onChange={(e) => setAccessKeyId(e.target.value)} placeholder="AKIA…" />
+            <label className="text-xs font-medium">{t('admin:bedrock.accessKeyId')}</label>
+            <Input value={accessKeyId} onChange={(e) => setAccessKeyId(e.target.value)} placeholder={t('admin:bedrock.accessKeyPlaceholder')} />
           </div>
           <div>
-            <label className="text-xs font-medium">Secret Access Key</label>
+            <label className="text-xs font-medium">{t('admin:bedrock.secretAccessKey')}</label>
             <Input
               type="password"
               value={secretAccessKey}
@@ -72,21 +73,21 @@ export function BedrockCredentialsDialog({ onClose, onSaved }: BedrockCredential
             />
           </div>
           <div>
-            <label className="text-xs font-medium">Session Token (optional, for STS)</label>
+            <label className="text-xs font-medium">{t('admin:bedrock.sessionToken')}</label>
             <Input type="password" value={sessionToken} onChange={(e) => setSessionToken(e.target.value)} />
           </div>
           <div>
-            <label className="text-xs font-medium">Region</label>
-            <Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="us-east-1" />
+            <label className="text-xs font-medium">{t('admin:bedrock.region')}</label>
+            <Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder={t('admin:bedrock.regionPlaceholder')} />
           </div>
           {error && <div className="text-xs text-red-600 break-all">{error}</div>}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button onClick={submit} disabled={saving || !accessKeyId || !secretAccessKey || !region}>
-            {saving ? 'Saving…' : 'Save credentials'}
+            {saving ? t('common:actions.saving') : t('admin:bedrock.saveCredentials')}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, ChevronRight, Loader2, Wrench, X } from 'lucide-react';
 import type { ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Badge } from '../../../components/ui/badge.js';
@@ -25,6 +26,7 @@ export const ToolCallBlock = React.memo(ToolCallBlockInner, (prev, next) => {
 });
 
 function ToolCallBlockInner({ call }: ToolCallBlockProps) {
+  const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
   const isMcp = call.name.startsWith('mcp__');
   const display = isMcp ? call.name.replace(/^mcp__[^_]*__/, '').replace(/^mcp__/, '') : call.name;
@@ -64,7 +66,7 @@ function ToolCallBlockInner({ call }: ToolCallBlockProps) {
         <div className="px-3 pb-3 pt-1 space-y-2 border-t bg-background/50">
           {call.input !== undefined && call.input !== null && (
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-2 mb-1">input</div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-2 mb-1">{t('messages.toolInput')}</div>
               <pre className="font-mono text-[11px] bg-card border rounded-md p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
                 {typeof call.input === 'string' ? call.input : JSON.stringify(call.input, null, 2)}
               </pre>
@@ -73,7 +75,7 @@ function ToolCallBlockInner({ call }: ToolCallBlockProps) {
           {call.result && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
-                result{call.result.isError ? ' (error)' : ''}
+                {call.result.isError ? t('messages.toolResultError') : t('messages.toolResult')}
               </div>
               <pre
                 className={cn(

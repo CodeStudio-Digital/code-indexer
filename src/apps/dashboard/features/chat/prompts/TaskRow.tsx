@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import type { StreamTask, StreamTaskExecutionMode } from '../../../hooks/useAgentStream.js';
 import { cn } from '../../../lib/utils.js';
 
@@ -29,6 +30,7 @@ export function TaskRow({
   perTaskMode,
   onPerTaskModeChange,
 }: TaskRowProps) {
+  const { t } = useTranslation('chat');
   const statusBadgeClass = STATUS_BADGE[task.status] ?? 'bg-muted text-muted-foreground';
   return (
     <div className="rounded-lg border border-border/60 bg-background/60 p-2.5">
@@ -37,7 +39,7 @@ export function TaskRow({
           type="button"
           onClick={onToggle}
           className="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors mt-0.5"
-          title={isExpanded ? 'Collapse' : 'Expand'}
+          title={isExpanded ? t('tasks.collapse') : t('tasks.expand')}
         >
           {isExpanded ? '▾' : '▸'}
         </button>
@@ -62,8 +64,8 @@ export function TaskRow({
                 onChange={(e) => onPerTaskModeChange(e.target.value as 'inline' | 'subagent')}
                 className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-foreground border border-border cursor-pointer"
               >
-                <option value="inline">inline</option>
-                <option value="subagent">subagent</option>
+                <option value="inline">{t('tasks.inline')}</option>
+                <option value="subagent">{t('tasks.subagent')}</option>
               </select>
             ) : (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
@@ -81,13 +83,13 @@ export function TaskRow({
               <div className="text-xs text-foreground/80 whitespace-pre-wrap">{task.description}</div>
               {task.files.length > 0 && (
                 <div className="text-[11px]">
-                  <span className="text-muted-foreground">files:</span>{' '}
+                  <span className="text-muted-foreground">{t('tasks.files')}</span>{' '}
                   <span className="font-mono">{task.files.join(', ')}</span>
                 </div>
               )}
               {task.references && task.references.length > 0 && (
                 <div className="text-[11px]">
-                  <span className="text-muted-foreground">refs:</span>{' '}
+                  <span className="text-muted-foreground">{t('tasks.refs')}</span>{' '}
                   <span className="font-mono">
                     {task.references.map((r) => {
                       let label = `${r.type}:${r.value}`;
@@ -99,11 +101,11 @@ export function TaskRow({
               )}
               {task.result && (
                 <div className="text-[11px] border-l-2 border-success/60 pl-2">
-                  <div className="text-muted-foreground">result:</div>
+                  <div className="text-muted-foreground">{t('tasks.result')}</div>
                   <div className="text-foreground/80">{task.result.summary}</div>
                   {task.result.files_modified.length > 0 && (
                     <div className="font-mono text-muted-foreground mt-0.5">
-                      modified: {task.result.files_modified.join(', ')}
+                      {t('tasks.modified')} {task.result.files_modified.join(', ')}
                     </div>
                   )}
                   {task.result.errors && (
@@ -111,7 +113,7 @@ export function TaskRow({
                   )}
                   {task.result.sandbox_violations && task.result.sandbox_violations.length > 0 && (
                     <div className="text-warning mt-0.5">
-                      sandbox warnings: {task.result.sandbox_violations.join(', ')}
+                      {t('tasks.sandboxWarnings')} {task.result.sandbox_violations.join(', ')}
                     </div>
                   )}
                 </div>

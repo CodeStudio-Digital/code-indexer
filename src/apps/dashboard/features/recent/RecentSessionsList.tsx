@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { MessageSquareCode } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
 import { cn, formatRelativeTime } from '../../lib/utils.js';
@@ -21,6 +22,7 @@ interface RecentSessionsListProps {
  * dispatched by AgentChat after send/create/archive/favorite/fork/delete.
  */
 export function RecentSessionsList({ onSelect, activeSessionId, limit = 8 }: RecentSessionsListProps) {
+  const { t } = useTranslation('common');
   const { data, refetch } = useApi<RecentSession[]>(`/coder/sessions/recent?limit=${limit}`);
 
   useEffect(() => {
@@ -35,7 +37,7 @@ export function RecentSessionsList({ onSelect, activeSessionId, limit = 8 }: Rec
     <div className="pt-2">
       <div className="px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
         <MessageSquareCode className="h-3 w-3" />
-        Recent
+        {t('recent')}
       </div>
       <div className="space-y-0.5">
         {data.map((s) => {

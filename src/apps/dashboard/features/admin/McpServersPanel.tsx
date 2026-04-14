@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CheckCircle2, ChevronDown, ChevronRight, Loader2, Pencil, Plus, Server, Trash2, XCircle, Zap } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -24,6 +25,7 @@ function tierLabel(tier: string): string {
 }
 
 function TestBadge({ tr }: { tr: McpServerTestResult | undefined }) {
+  const { t } = useTranslation('admin');
   if (!tr) return null;
   if (tr.error === 'testing\u2026' || tr.error === 'testing…') {
     return <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />;
@@ -32,13 +34,13 @@ function TestBadge({ tr }: { tr: McpServerTestResult | undefined }) {
     return (
       <span className="flex items-center gap-1 text-xs text-emerald-600">
         <CheckCircle2 className="h-3 w-3" />
-        {tr.toolCount} tools &middot; {tr.latencyMs}ms
+        {tr.toolCount}{t('mcpServers.tools')}{tr.latencyMs}{t('mcpServers.ms')}
       </span>
     );
   }
   return (
     <span className="flex items-center gap-1 text-xs text-red-600" title={tr.error}>
-      <XCircle className="h-3 w-3" /> fail
+      <XCircle className="h-3 w-3" /> {t('mcpServers.fail')}
     </span>
   );
 }
@@ -58,6 +60,7 @@ function ToolsList({ tools }: { tools: McpServerToolInfo[] }) {
 }
 
 export function McpServersPanel() {
+  const { t } = useTranslation(['admin', 'common']);
   const { servers, loading, testResults, load, save, remove, test } = useAdminMcpServers();
   const [editing, setEditing] = useState<Partial<AdminMcpServer> | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -87,11 +90,11 @@ export function McpServersPanel() {
             })
           }
         >
-          <Plus className="h-4 w-4 mr-2" /> Add MCP Server
+          <Plus className="h-4 w-4 mr-2" /> {t('admin:mcpServers.addServer')}
         </Button>
       </div>
 
-      {loading && <div className="text-sm text-muted-foreground">Loading...</div>}
+      {loading && <div className="text-sm text-muted-foreground">{t('common:actions.loading')}</div>}
 
       <div className="grid gap-3">
         {servers.map((s) => {
@@ -119,17 +122,17 @@ export function McpServersPanel() {
                     <CardTitle className="text-base truncate">{s.name}</CardTitle>
                     <Badge variant="outline">{TRANSPORT_LABEL[s.transport] ?? s.transport}</Badge>
                     <Badge variant="secondary">{tierLabel(s.default_tier)}</Badge>
-                    {!s.enabled && <Badge variant="secondary">disabled</Badge>}
+                    {!s.enabled && <Badge variant="secondary">{t('admin:mcpServers.disabled')}</Badge>}
                     {s.has_token ? (
                       <span className="text-xs text-muted-foreground font-mono">{s.auth_token_masked}</span>
                     ) : s.auth_type !== 'none' ? (
-                      <span className="text-xs text-amber-600">no token</span>
+                      <span className="text-xs text-amber-600">{t('admin:mcpServers.noToken')}</span>
                     ) : null}
                     <TestBadge tr={tr} />
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <Button size="sm" variant="ghost" onClick={() => test(s.id)}>
-                      <Zap className="h-4 w-4 mr-1" /> Test
+                      <Zap className="h-4 w-4 mr-1" /> {t('common:actions.test')}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => setEditing(s)}>
                       <Pencil className="h-4 w-4" />
@@ -154,7 +157,7 @@ export function McpServersPanel() {
         })}
         {!loading && servers.length === 0 && (
           <div className="text-sm text-muted-foreground border rounded-lg p-6 text-center">
-            No external MCP servers configured yet. Click "Add MCP Server" to connect tools from GitHub, Linear, and more.
+            {t('admin:mcpServers.noServers')}
           </div>
         )}
       </div>

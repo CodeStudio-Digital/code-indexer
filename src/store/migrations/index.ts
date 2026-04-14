@@ -38,6 +38,8 @@ import { companyStatusMessage019 } from './019_company_status_message.js';
 import { structureHash020 } from './020_structure_hash.js';
 import { structureEmbedding021 } from './021_structure_embedding.js';
 import { projectGroup022 } from './022_project_group.js';
+import { cloudcodeSession023 } from './023_cloudcode_session.js';
+import { kanban024 } from './024_kanban.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -70,6 +72,8 @@ export const MIGRATIONS: Migration[] = [
   structureHash020,
   structureEmbedding021,
   projectGroup022,
+  cloudcodeSession023,
+  kanban024,
 ];
 
 /**

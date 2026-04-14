@@ -12,6 +12,9 @@ import {
   refreshIfExpired as refreshOpenAIToken,
   CHATGPT_CODEX_BASE_URL,
 } from '../../services/oauth/openai.js';
+import {
+  refreshIfExpired as refreshGoogleToken,
+} from '../../services/oauth/google.js';
 import { ChatGPTCodexProvider, extractAccountIdFromIdToken } from './chatgpt.js';
 import { ProviderStore, type ProviderConfig } from '../../../store/provider-store.js';
 import { loadConfig } from '../../../utils/config.js';
@@ -61,7 +64,7 @@ function parseModelWithMode(raw: string | undefined): { model: string | undefine
   return { model: m || undefined, mode: mode || undefined };
 }
 
-export function createChatProviderFromConfig(cfg: ProviderConfig, model?: string, mode?: string): ChatProvider {
+export function createChatProviderFromConfig(cfg: ProviderConfig, model?: string, mode?: string, cloudCodeSessionId?: string): ChatProvider {
   // Accept `${modelId}::${mode}` in the `model` arg so callers that don't
   // track mode separately (the session record, /switch endpoint) still work.
   const parsed = parseModelWithMode(model);
@@ -163,6 +166,27 @@ export function createChatProviderFromConfig(cfg: ProviderConfig, model?: string
         model: effectiveModel ?? 'gemini-2.5-flash',
       });
 
+    case 'google-oauth': {
+      // Google OAuth — route through CloudCode (cloudcode-pa.googleapis.com)
+      // like the Gemini CLI does. Needs accessToken, refreshToken, projectId.
+      let refreshToken: string | undefined;
+      let projectId: string | undefined;
+      try {
+        const store = getStore();
+        const tok = store.getOAuth(cfg.id);
+        refreshToken = tok?.refresh_token ?? undefined;
+        const extra = (tok?.extra ?? {}) as { projectId?: string };
+        projectId = extra.projectId;
+      } catch { /* DB unavailable */ }
+      return new GeminiChatProvider({
+        accessToken: cfg.api_key ?? undefined,
+        refreshToken,
+        projectId,
+        cloudCodeSessionId,
+        model: effectiveModel ?? 'gemini-2.5-flash',
+      });
+    }
+
     case 'bedrock': {
       // AWS credentials are stashed in oauth_tokens.extra (see
       // src/api/admin.ts POST /oauth/bedrock/credentials). The legacy AWS
@@ -212,7 +236,7 @@ export function createChatProviderFromConfig(cfg: ProviderConfig, model?: string
  * original hardcoded switch. This keeps the coder agent working during the
  * rollout without any config migration step.
  */
-export function createChatProvider(name: CoderProviderName | string, model?: string): ChatProvider {
+export function createChatProvider(name: CoderProviderName | string, model?: string, cloudCodeSessionId?: string): ChatProvider {
   // Strip "::mode" suffix encoded by the dashboard. Both the DB path
   // (createChatProviderFromConfig) and the legacy path below need the bare
   // model id before they can instantiate an adapter — otherwise the vendor
@@ -222,7 +246,7 @@ export function createChatProvider(name: CoderProviderName | string, model?: str
   try {
     const store = getStore();
     const cfg = store.getProvider(name);
-    if (cfg && cfg.enabled) return createChatProviderFromConfig(cfg, bareModel, encodedMode);
+    if (cfg && cfg.enabled) return createChatProviderFromConfig(cfg, bareModel, encodedMode, cloudCodeSessionId);
   } catch {
     // DB unavailable (e.g. unit test with no filesystem) — fall through.
   }
@@ -282,7 +306,8 @@ export const SUPPORTED_CODER_PROVIDERS: CoderProviderName[] = ['anthropic', 'ope
  */
 export async function createChatProviderAsync(
   name: CoderProviderName | string,
-  model?: string
+  model?: string,
+  cloudCodeSessionId?: string,
 ): Promise<ChatProvider> {
   // Refresh Copilot tokens before instantiation. We re-resolve the cfg here
   // so the synced api_key (which createChatProviderFromConfig uses) is the
@@ -305,10 +330,16 @@ export async function createChatProviderAsync(
         store.upsertProvider({ ...cfg, api_key: fresh });
       }
     }
+    if (cfg?.kind === 'google-oauth' && cfg.enabled) {
+      const fresh = await refreshGoogleToken(store, cfg.id);
+      if (fresh && fresh !== cfg.api_key) {
+        store.upsertProvider({ ...cfg, api_key: fresh });
+      }
+    }
   } catch (e) {
     // Don't block the run on a refresh failure — the existing token may
     // still be valid for a few minutes. Surface to logs only.
     console.warn(`[copilot] token refresh failed: ${(e as Error).message}`);
   }
-  return createChatProvider(name, model);
+  return createChatProvider(name, model, cloudCodeSessionId);
 }

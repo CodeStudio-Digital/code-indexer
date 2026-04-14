@@ -26,6 +26,8 @@ interface SendMessageBody {
    * git worktree and scopes the session into it. Ignored on resume runs.
    */
   worktree?: { name?: string; branch?: string };
+  /** Enable thinking/reasoning mode for providers that support it. */
+  thinking?: boolean;
 }
 
 interface ContinueBody {
@@ -100,10 +102,12 @@ export function mountCoderStreamRoutes(
           agent: body.agent,
           profile: body.profile,
           worktree: body.worktree,
+          thinking: body.thinking,
           signal: ctrl.signal,
         });
         bus.runner = handle.runner;
         publish(bus, 'session', handle.session);
+        publish(bus, 'index_status', handle.indexStatus);
         wireRunnerToBus(handle.runner, bus);
         await handle.done;
       } catch (e) {
@@ -177,6 +181,7 @@ export function mountCoderStreamRoutes(
         });
         bus.runner = handle.runner;
         publish(bus, 'session', handle.session);
+        publish(bus, 'index_status', handle.indexStatus);
         wireRunnerToBus(handle.runner, bus);
         await handle.done;
       } catch (e) {

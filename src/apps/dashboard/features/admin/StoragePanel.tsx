@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Pencil, Plus, Sparkles } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -51,6 +52,7 @@ function summarizeConfig(config: Record<string, unknown>): string {
 }
 
 export function StoragePanel() {
+  const { t } = useTranslation(['admin', 'common']);
   const [embeddings, setEmbeddings] = useState<EmbeddingConfig[]>([]);
   const [vectorStores, setVectorStores] = useState<VectorStoreConfig[]>([]);
   const [loading, setLoading] = useState(true);
@@ -81,10 +83,10 @@ export function StoragePanel() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Sparkles className="h-4 w-4" /> Embedding models
+              <Sparkles className="h-4 w-4" /> {t('admin:storage.embeddingModels')}
             </h2>
             <p className="text-xs text-muted-foreground">
-              Which provider generates vectors when the indexer processes files and snapshots.
+              {t('admin:storage.embeddingDesc')}
             </p>
           </div>
           <Button
@@ -98,18 +100,18 @@ export function StoragePanel() {
               })
             }
           >
-            <Plus className="h-4 w-4 mr-2" /> Add
+            <Plus className="h-4 w-4 mr-2" /> {t('common:actions.add')}
           </Button>
         </div>
 
         <div className="grid gap-2">
           {loading && embeddings.length === 0 && (
-            <div className="text-sm text-muted-foreground">Loading…</div>
+            <div className="text-sm text-muted-foreground">{t('common:actions.loading')}</div>
           )}
           {!loading && embeddings.length === 0 && (
             <Card>
               <CardContent className="py-6 text-sm text-muted-foreground text-center">
-                No embedding configs yet. Add one to enable vector search.
+                {t('admin:storage.noEmbeddings')}
               </CardContent>
             </Card>
           )}
@@ -119,13 +121,13 @@ export function StoragePanel() {
                 <CardTitle className="flex items-center gap-2 text-base">
                   {e.name}
                   <Badge variant={e.enabled ? 'success' : 'muted'}>
-                    {e.enabled ? 'enabled' : 'disabled'}
+                    {e.enabled ? t('common:status.enabled') : t('common:status.disabled')}
                   </Badge>
-                  {e.is_default && <Badge variant="info">default</Badge>}
+                  {e.is_default && <Badge variant="info">{t('common:status.default')}</Badge>}
                   <Badge variant="outline">{e.kind}</Badge>
                 </CardTitle>
                 <Button variant="ghost" size="sm" onClick={() => setEditingEmbedding(e)}>
-                  <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
+                  <Pencil className="h-3.5 w-3.5 mr-1" /> {t('common:actions.edit')}
                 </Button>
               </CardHeader>
               <CardContent className="p-4 pt-0 text-xs text-muted-foreground font-mono break-all">
@@ -140,9 +142,9 @@ export function StoragePanel() {
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold">Vector stores</h2>
+            <h2 className="text-lg font-semibold">{t('admin:storage.vectorStores')}</h2>
             <p className="text-xs text-muted-foreground">
-              Where vectors are persisted. Can be mixed with any embedding provider.
+              {t('admin:storage.vectorDesc')}
             </p>
           </div>
           <Button
@@ -156,18 +158,18 @@ export function StoragePanel() {
               })
             }
           >
-            <Plus className="h-4 w-4 mr-2" /> Add
+            <Plus className="h-4 w-4 mr-2" /> {t('common:actions.add')}
           </Button>
         </div>
 
         <div className="grid gap-2">
           {loading && vectorStores.length === 0 && (
-            <div className="text-sm text-muted-foreground">Loading…</div>
+            <div className="text-sm text-muted-foreground">{t('common:actions.loading')}</div>
           )}
           {!loading && vectorStores.length === 0 && (
             <Card>
               <CardContent className="py-6 text-sm text-muted-foreground text-center">
-                No vector stores yet. Add one to enable semantic search.
+                {t('admin:storage.noVectors')}
               </CardContent>
             </Card>
           )}
@@ -177,13 +179,13 @@ export function StoragePanel() {
                 <CardTitle className="flex items-center gap-2 text-base">
                   {v.name}
                   <Badge variant={v.enabled ? 'success' : 'muted'}>
-                    {v.enabled ? 'enabled' : 'disabled'}
+                    {v.enabled ? t('common:status.enabled') : t('common:status.disabled')}
                   </Badge>
-                  {v.is_default && <Badge variant="info">default</Badge>}
+                  {v.is_default && <Badge variant="info">{t('common:status.default')}</Badge>}
                   <Badge variant="outline">{v.kind}</Badge>
                 </CardTitle>
                 <Button variant="ghost" size="sm" onClick={() => setEditingVectorStore(v)}>
-                  <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
+                  <Pencil className="h-3.5 w-3.5 mr-1" /> {t('common:actions.edit')}
                 </Button>
               </CardHeader>
               <CardContent className="p-4 pt-0 text-xs text-muted-foreground font-mono break-all">

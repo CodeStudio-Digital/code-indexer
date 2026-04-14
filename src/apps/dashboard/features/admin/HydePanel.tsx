@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Star } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -19,6 +20,7 @@ function defaultFor(kind: string): string {
 }
 
 function ProviderRow({ provider, onSaved }: { provider: AdminProvider; onSaved: () => void }) {
+  const { t } = useTranslation(['admin', 'common']);
   const [model, setModel] = useState<string>((provider.extra?.hyde_model as string) ?? '');
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
@@ -69,7 +71,7 @@ function ProviderRow({ provider, onSaved }: { provider: AdminProvider; onSaved: 
           onClick={() => void handleSave()}
           disabled={saving}
         >
-          {saving ? 'Saving…' : savedOk ? 'Saved' : 'Save'}
+          {saving ? t('common:actions.saving') : savedOk ? t('common:actions.saved') : t('common:actions.save')}
         </Button>
       </div>
 
@@ -79,6 +81,7 @@ function ProviderRow({ provider, onSaved }: { provider: AdminProvider; onSaved: 
 }
 
 export function HydePanel() {
+  const { t } = useTranslation('admin');
   const [providers, setProviders] = useState<AdminProvider[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -100,20 +103,18 @@ export function HydePanel() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Configure which model each provider uses for HyDE (Hypothetical Document Embeddings) query
-        expansion during hybrid search. Leave blank to use the provider default.{' '}
+        {t('hyde.description')}{' '}
         <span className="inline-flex items-center gap-1">
-          HyDE uses the default provider{' '}
+          {t('hyde.defaultProvider')}{' '}
           <Star className="h-3 w-3 fill-yellow-400 text-yellow-400 inline" />.
         </span>
       </p>
 
-      {loading && <div className="text-sm text-muted-foreground">Loading providers…</div>}
+      {loading && <div className="text-sm text-muted-foreground">{t('hyde.loadingProviders')}</div>}
 
       {!loading && eligible.length === 0 && (
         <div className="text-sm text-muted-foreground border rounded-lg p-6 text-center">
-          No eligible providers configured. Add an Anthropic, OpenAI, DeepSeek, ZAI, or Gemini
-          provider in the Providers &amp; Models tab.
+          {t('hyde.noProviders')}
         </div>
       )}
 

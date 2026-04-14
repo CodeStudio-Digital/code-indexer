@@ -44,6 +44,8 @@ export interface RunnerOptions {
    * so external tools respect tier filtering without polluting the static Sets.
    */
   externalToolTiers?: ReadonlyMap<string, ToolTier>;
+  /** Enable thinking/reasoning mode for providers that support it (Gemini thinkingConfig). */
+  thinking?: boolean;
 }
 
 // Tools blocked outright in plan mode until the user approves a submitted
@@ -366,6 +368,7 @@ export function compactHistoryForLLM(messages: AgentMessage[]): AgentMessage[] {
  */
 export interface RunnerEvents {
   text_delta: (text: string) => void;
+  thinking_delta: (text: string) => void;
   tool_call_start: (id: string, name: string, input: Record<string, unknown>) => void;
   tool_call_result: (id: string, name: string, result: { content: string; isError?: boolean; subUsage?: ChatUsage }, durationMs: number) => void;
   message_complete: (message: AgentMessage, usage: ChatUsage | null) => void;
@@ -843,6 +846,7 @@ export class CoderRunner extends EventEmitter {
       const pendingToolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
       const usageBox: { value: ChatUsage | null } = { value: null };
       let retriedThisTurn = false;
+      let pendingThinking = '';
       void assistantContent;
 
       try {
@@ -850,6 +854,7 @@ export class CoderRunner extends EventEmitter {
           system: this.opts.systemPrompt,
           messages: compactHistoryForLLM(this.messages),
           tools,
+          thinking: this.opts.thinking,
         });
         for await (const delta of stream) {
           if (this.aborted) break;
@@ -857,6 +862,10 @@ export class CoderRunner extends EventEmitter {
             onText: (t) => {
               pendingText += t;
               this.emit('text_delta', t);
+            },
+            onThinking: (t) => {
+              pendingThinking += t;
+              this.emit('thinking_delta', t);
             },
             onToolCall: (id, name, input) => {
               pendingToolCalls.set(id, { name, input });
@@ -883,7 +892,10 @@ export class CoderRunner extends EventEmitter {
         return { totalUsage, reason: 'error' };
       }
 
-      // Build assistant message in correct block order: text first, then tool_uses
+      // Build assistant message in correct block order: thinking first, text, then tool_uses
+      if (pendingThinking) {
+        assistantContent.push({ type: 'thinking', text: pendingThinking });
+      }
       if (pendingText) {
         assistantContent.push({ type: 'text', text: pendingText });
       }
@@ -1108,6 +1120,7 @@ export class CoderRunner extends EventEmitter {
     delta: ChatDelta,
     handlers: {
       onText: (t: string) => void;
+      onThinking: (t: string) => void;
       onToolCall: (id: string, name: string, input: Record<string, unknown>) => void;
       onUsage: (u: ChatUsage) => void;
     }
@@ -1115,6 +1128,9 @@ export class CoderRunner extends EventEmitter {
     switch (delta.type) {
       case 'text_delta':
         handlers.onText(delta.text);
+        break;
+      case 'thinking_delta':
+        handlers.onThinking(delta.text);
         break;
       case 'tool_call_end':
         handlers.onToolCall(delta.id, delta.name, delta.input);

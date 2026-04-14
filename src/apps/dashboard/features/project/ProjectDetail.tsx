@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   BookOpen,
   Boxes,
@@ -38,15 +39,15 @@ interface ProjectDetailProps {
 }
 
 const TABS = [
-  { id: 'chat', label: 'Chat', icon: MessageSquareCode },
-  { id: 'search', label: 'Search', icon: Search },
-  { id: 'files', label: 'Files', icon: Files },
-  { id: 'dependencies', label: 'Deps', icon: Network },
-  { id: 'architecture', label: 'Arch', icon: Layers },
-  { id: 'snapshots', label: 'Snapshots', icon: BookOpen },
-  { id: 'diff', label: 'Diff', icon: GitCompare },
-  { id: 'costs', label: 'Costs', icon: DollarSign },
-  { id: 'runs', label: 'Runs', icon: History },
+  { id: 'chat', labelKey: 'detail.tabs.chat', icon: MessageSquareCode },
+  { id: 'search', labelKey: 'detail.tabs.search', icon: Search },
+  { id: 'files', labelKey: 'detail.tabs.files', icon: Files },
+  { id: 'dependencies', labelKey: 'detail.tabs.deps', icon: Network },
+  { id: 'architecture', labelKey: 'detail.tabs.arch', icon: Layers },
+  { id: 'snapshots', labelKey: 'detail.tabs.snapshots', icon: BookOpen },
+  { id: 'diff', labelKey: 'detail.tabs.diff', icon: GitCompare },
+  { id: 'costs', labelKey: 'detail.tabs.costs', icon: DollarSign },
+  { id: 'runs', labelKey: 'detail.tabs.runs', icon: History },
 ] as const;
 
 export default function ProjectDetail({
@@ -54,6 +55,7 @@ export default function ProjectDetail({
   projectName,
   initialSessionId,
 }: ProjectDetailProps) {
+  const { t } = useTranslation('projects');
   const [tab, setTab] = useState<string>('chat');
   const { data: stats } = useApi<Stats>(`/projects/${projectId}/stats`);
 
@@ -64,31 +66,22 @@ export default function ProjectDetail({
 
   return (
     <div className="space-y-6">
-      {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <StatCard icon={FileCode2} label="Files" value={stats.file_count.toLocaleString()} />
-          <StatCard icon={Boxes} label="Symbols" value={stats.symbol_count.toLocaleString()} />
-          <StatCard icon={Hash} label="Lines" value={stats.total_lines.toLocaleString()} />
-          <StatCard icon={PlayCircle} label="Runs" value={stats.run_count} />
-        </div>
-      )}
-
       <Tabs value={tab} onValueChange={setTab} className="w-full">
         {/* Segmented pill navigation. Horizontal scroll on narrow viewports
             instead of wrapping, so the selected pill stays at a predictable
             vertical position. */}
         <div className="overflow-x-auto scrollbar-thin pb-1 -mx-1">
           <TabsList className="h-11 gap-1 p-1 bg-muted rounded-full w-fit mx-1">
-            {TABS.map((t) => {
-              const Icon = t.icon;
+            {TABS.map((tabDef) => {
+              const Icon = tabDef.icon;
               return (
                 <TabsTrigger
-                  key={t.id}
-                  value={t.id}
+                  key={tabDef.id}
+                  value={tabDef.id}
                   className="rounded-full h-9 px-4 gap-2 text-sm font-medium data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md"
                 >
                   <Icon className="h-4 w-4" />
-                  {t.label}
+                  {t(tabDef.labelKey)}
                 </TabsTrigger>
               );
             })}
@@ -105,6 +98,16 @@ export default function ProjectDetail({
         <TabsContent value="search">
           <Card>
             <CardContent className="p-6">
+              {stats && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                    <StatCard icon={FileCode2} label={t('detail.stats.files')} value={stats.file_count.toLocaleString()} />
+                    <StatCard icon={Boxes} label={t('detail.stats.symbols')} value={stats.symbol_count.toLocaleString()} />
+                    <StatCard icon={Hash} label={t('detail.stats.lines')} value={stats.total_lines.toLocaleString()} />
+                    <StatCard icon={PlayCircle} label={t('detail.stats.runs')} value={stats.run_count} />
+                  </div>
+              )}
+              <hr/>
+
               <SearchPanel projectId={projectId} projectName={projectName} />
             </CardContent>
           </Card>

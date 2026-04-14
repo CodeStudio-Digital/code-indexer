@@ -37,6 +37,12 @@ export interface PromptContext {
   skills?: ResolvedSkill[];
   /** Session ID for skill template variable interpolation. */
   sessionId?: string;
+  /**
+   * Whether MCP tools were successfully registered. When false, the system
+   * prompt instructs the agent to use native tools only, avoiding wasted
+   * turns on `mcp__*` calls that would fail.
+   */
+  mcpAvailable?: boolean;
 }
 
 /**
@@ -111,12 +117,13 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   const preamble = providerPreamble(ctx.providerFamily ?? 'generic');
 
   // Main body — loaded from src/core/coder/prompts/base.txt. Placeholders:
-  //   {{projectName}}, {{projectRoot}}, {{os}}, {{tierHint}}
+  //   {{projectName}}, {{projectRoot}}, {{os}}, {{tierHint}}, {{mcpSection}}
   const base = interpolate(loadPrompt('base'), {
     projectName: ctx.projectName,
     projectRoot: ctx.projectRoot,
     os: ctx.os,
     tierHint: tierHint(ctx.profile, ctx.customTiers),
+    mcpSection: mcpSection(ctx.mcpAvailable),
   });
 
   // Plan section — optional, only when planMode is true. Loaded from plan.txt.
@@ -202,5 +209,39 @@ ${customBlock}
   return `# Tool tiers
 You started in the **navigate** tier. Bootstrap + write/edit/shell/git-read/deep-navigation tools are visible. Admin tools (git_commit, add_snapshot, index_project, costs/models, snapshot mutations) are HIDDEN — call \`expand_toolset({tier: "admin"})\` ONLY when the user explicitly asks for them.
 ${customBlock}
+`;
+}
+
+/**
+ * Conditional MCP tool strategy section. When MCP tools are available,
+ * returns the full semantic navigation guide. When unavailable (project not
+ * indexed or bridge failed), tells the agent to stick to native tools.
+ */
+function mcpSection(mcpAvailable?: boolean): string {
+  if (mcpAvailable === false) {
+    return `# Tool strategy — native only (project not indexed)
+MCP semantic tools (\`mcp__*\`) are NOT available this session. Do NOT call any \`mcp__\` prefixed tool — they will error with "Unknown tool".
+
+Use native tools for all code exploration:
+1. \`list_directory\` — browse project structure.
+2. \`read_file\` — read file contents (use line ranges for large files).
+3. \`run_command\` with \`grep -rn\` or \`rg\` — text search across files.
+4. \`run_command\` with \`find\` (or \`dir /s\` on Windows) — file discovery by name/pattern.
+
+To enable the full 41-tool MCP suite, ask the user to index the project via the admin panel.
+`;
+  }
+  return `# Tool strategy — token economy
+This project ships with 41 MCP tools (prefixed \`mcp__\`) for semantic codebase navigation. ALWAYS prefer them over native file reads:
+
+1. Start exploration with \`mcp__get_project_pulse\` (~100 tokens) — never \`mcp__get_project_overview\` without a token budget. Check the \`vector_coverage\` line: if it says "none (search will use FTS only)" or shows very low %, prefer \`mcp__grep_code\`/FTS-mode searches over vector/semantic tools on this project.
+2. Search existing knowledge with \`mcp__query_snapshots\` BEFORE exploring code manually.
+3. For "how does X work?" questions use \`mcp__get_context_for\` (curated bundle). For short NL questions where the first attempt returns weak recall, retry with \`hyde: true\` — it runs an LLM-generated hypothetical-document expansion that dramatically improves recall for questions the codebase never phrases the same way.
+4. To understand a file, use \`mcp__get_file_skeleton\` (NOT \`mcp__read_file\` of the whole file, NOT \`mcp__get_file_structure\`).
+5. To read just one function/class body, use \`mcp__get_symbol_body\`.
+6. Before editing a symbol, use \`mcp__prepare_edit\` — it returns body + callers + neighbors + imports + tests in one call.
+7. To find where something is used: \`mcp__find_references\` or \`mcp__trace_usage\`. NEVER grep for that.
+8. For text search across files: \`mcp__grep_code\` with filters (\`language\`, \`layer\`, \`glob\`).
+9. To find symbols that *behave* similarly to a known one (wrappers, alternative implementations, helpers with different names), use \`mcp__semantic_neighbors\` with the seed symbol_id — it queries body embeddings, so it catches cases where names diverge but logic is alike. Requires \`expand_toolset('navigate')\`. Complements \`mcp__grep_code\` (literal) and \`mcp__find_references\` (syntactic).
 `;
 }

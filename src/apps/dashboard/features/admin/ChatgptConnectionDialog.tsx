@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import {
@@ -16,6 +17,7 @@ interface ChatgptConnectionDialogProps {
 }
 
 export function ChatgptConnectionDialog({ onClose, onConnected }: ChatgptConnectionDialogProps) {
+  const { t } = useTranslation(['admin', 'common']);
   const [flow, setFlow] = useState<ChatgptFlowState>({ state: 'idle' });
 
   useEffect(() => {
@@ -76,42 +78,41 @@ export function ChatgptConnectionDialog({ onClose, onConnected }: ChatgptConnect
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Connect ChatGPT</DialogTitle>
+          <DialogTitle>{t('admin:chatgpt.title')}</DialogTitle>
         </DialogHeader>
         {flow.state === 'waiting' && (
           <div className="space-y-3 text-sm">
             <p>
-              A new tab was opened to sign in at <span className="font-mono">auth.openai.com</span>. After you
-              authorize, this dialog will update automatically.
+              {t('admin:chatgpt.tabOpened')}<span className="font-mono">auth.openai.com</span>{t('admin:chatgpt.afterAuth')}
             </p>
             <p className="text-xs text-muted-foreground">
-              If the tab didn't open,{' '}
+              {t('admin:chatgpt.tabNotOpened')}{' '}
               <a
                 href={flow.authorizeUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="text-primary underline"
               >
-                click here
+                {t('admin:chatgpt.clickHere')}
               </a>
               .
             </p>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" /> Waiting for authorization…
+              <Loader2 className="h-3 w-3 animate-spin" /> {t('admin:chatgpt.waiting')}
             </div>
           </div>
         )}
         {flow.state === 'success' && (
           <div className="text-sm text-emerald-600">
-            ChatGPT connected successfully
-            {typeof flow.modelCount === 'number' ? ` — ${flow.modelCount} models loaded` : ''}.
-            The provider is now available in the Chat tab.
+            {t('admin:chatgpt.connected')}
+            {typeof flow.modelCount === 'number' ? t('admin:chatgpt.modelsLoaded', { count: flow.modelCount }) : ''}.
+            {' '}{t('admin:chatgpt.available')}
           </div>
         )}
         {flow.state === 'error' && <div className="text-sm text-red-600 break-all">{flow.message}</div>}
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
-            Close
+            {t('common:actions.close')}
           </Button>
         </DialogFooter>
       </DialogContent>

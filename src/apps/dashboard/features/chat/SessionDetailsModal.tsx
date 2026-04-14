@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { BarChart3, Check, ChevronDown, ChevronRight, Circle, ClipboardList, Copy, ListChecks, Loader2 } from 'lucide-react';
@@ -66,12 +67,7 @@ const STATUS_STYLES: Record<CoderPlanRow['status'], string> = {
   aborted: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
 };
 
-const STATUS_LABELS: Record<CoderPlanRow['status'], string> = {
-  pending: 'Pendente',
-  approved: 'Aprovado',
-  rejected: 'Rejeitado',
-  aborted: 'Abortado',
-};
+// STATUS_LABELS is now provided via i18n t('details.planStatus.*')
 
 export function SessionDetailsModal({
   open,
@@ -80,6 +76,7 @@ export function SessionDetailsModal({
   session,
   stats,
 }: SessionDetailsModalProps) {
+  const { t } = useTranslation(['chat', 'common']);
   const plansUrl = open && sessionId ? `/coder/sessions/${sessionId}/plans` : '';
   const { data: plans, loading } = useApi<CoderPlanRow[]>(plansUrl);
   const todoHistoryUrl = open && sessionId ? `/coder/sessions/${sessionId}/todo-history` : '';
@@ -89,15 +86,15 @@ export function SessionDetailsModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Detalhes da sessão</DialogTitle>
+          <DialogTitle>{t('chat:details.title')}</DialogTitle>
         </DialogHeader>
         <Tabs defaultValue="summary" className="flex-1 flex flex-col min-h-0">
           <TabsList className="w-full justify-start">
             <TabsTrigger value="summary" className="gap-1.5">
-              <BarChart3 className="h-3.5 w-3.5" /> Resumo
+              <BarChart3 className="h-3.5 w-3.5" /> {t('chat:details.summary')}
             </TabsTrigger>
             <TabsTrigger value="plans" className="gap-1.5">
-              <ClipboardList className="h-3.5 w-3.5" /> Planos
+              <ClipboardList className="h-3.5 w-3.5" /> {t('chat:details.plans')}
               {plans && plans.length > 0 && (
                 <Badge variant="muted" className="h-4 text-[10px] ml-1">
                   {plans.length}
@@ -105,7 +102,7 @@ export function SessionDetailsModal({
               )}
             </TabsTrigger>
             <TabsTrigger value="todos" className="gap-1.5">
-              <ListChecks className="h-3.5 w-3.5" /> Tarefas
+              <ListChecks className="h-3.5 w-3.5" /> {t('chat:details.tasks')}
               {todoHistory && todoHistory.length > 0 && (
                 <Badge variant="muted" className="h-4 text-[10px] ml-1">
                   {todoHistory.length}
@@ -118,27 +115,25 @@ export function SessionDetailsModal({
             {session ? (
               <SummaryTab session={session} stats={stats} />
             ) : (
-              <div className="text-xs text-muted-foreground">Sem dados.</div>
+              <div className="text-xs text-muted-foreground">{t('chat:details.noData')}</div>
             )}
           </TabsContent>
 
           <TabsContent value="plans" className="flex-1 overflow-y-auto mt-4">
-            {loading && <div className="text-xs text-muted-foreground">Carregando…</div>}
+            {loading && <div className="text-xs text-muted-foreground">{t('common:actions.loading')}</div>}
             {!loading && (!plans || plans.length === 0) && (
               <div className="text-xs text-muted-foreground py-8 text-center">
-                Nenhum plano persistido ainda. Eles aparecerão aqui assim que o agente
-                chamar <code className="text-[11px]">submit_plan</code>.
+                {t('chat:details.noPlans')}
               </div>
             )}
             <div className="space-y-2">{plans?.map((p) => <PlanItem key={p.id} plan={p} />)}</div>
           </TabsContent>
 
           <TabsContent value="todos" className="flex-1 overflow-y-auto mt-4">
-            {todoHistoryLoading && <div className="text-xs text-muted-foreground">Carregando…</div>}
+            {todoHistoryLoading && <div className="text-xs text-muted-foreground">{t('common:actions.loading')}</div>}
             {!todoHistoryLoading && (!todoHistory || todoHistory.length === 0) && (
               <div className="text-xs text-muted-foreground py-8 text-center">
-                Nenhuma tarefa registrada. Elas aparecerão aqui quando o agente
-                chamar <code className="text-[11px]">todo_write</code>.
+                {t('chat:details.noTasks')}
               </div>
             )}
             <div className="space-y-2">
@@ -152,6 +147,7 @@ export function SessionDetailsModal({
 }
 
 function SummaryTab({ session, stats }: { session: SessionLike; stats: SessionStatsLike | null }) {
+  const { t } = useTranslation('chat');
   const totalIn = session.total_input_tokens;
   const totalOut = session.total_output_tokens;
   const totalCR = session.total_cache_read_tokens ?? 0;
@@ -164,17 +160,17 @@ function SummaryTab({ session, stats }: { session: SessionLike; stats: SessionSt
       <section>
         <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Tokens</h4>
         <div className="grid grid-cols-2 gap-x-6 gap-y-1 tabular-nums">
-          <span className="text-muted-foreground">Input</span>
+          <span className="text-muted-foreground">{t('header.input')}</span>
           <span className="text-right">{totalIn.toLocaleString()}</span>
-          <span className="text-muted-foreground">Output</span>
+          <span className="text-muted-foreground">{t('header.output')}</span>
           <span className="text-right">{totalOut.toLocaleString()}</span>
-          <span className="text-muted-foreground">Cache read</span>
+          <span className="text-muted-foreground">{t('header.cacheRead')}</span>
           <span className="text-right text-emerald-600 dark:text-emerald-400">{totalCR.toLocaleString()}</span>
-          <span className="text-muted-foreground">Cache write</span>
+          <span className="text-muted-foreground">{t('header.cacheWrite')}</span>
           <span className="text-right">{totalCW.toLocaleString()}</span>
-          <span className="text-muted-foreground">Hit rate</span>
+          <span className="text-muted-foreground">{t('header.hitRate')}</span>
           <span className="text-right text-emerald-600 dark:text-emerald-400">{hitRate}%</span>
-          <span className="text-muted-foreground">~Tokens economizados</span>
+          <span className="text-muted-foreground">{t('header.tokensSaved')}</span>
           <span className="text-right text-emerald-600 dark:text-emerald-400">{savedTokens.toLocaleString()}</span>
         </div>
       </section>
@@ -183,29 +179,29 @@ function SummaryTab({ session, stats }: { session: SessionLike; stats: SessionSt
         <section>
           <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Atividade</h4>
           <div className="grid grid-cols-2 gap-x-6 gap-y-1 tabular-nums">
-            <span className="text-muted-foreground">Mensagens</span>
+            <span className="text-muted-foreground">{t('header.messages')}</span>
             <span className="text-right">{stats.message_count}</span>
-            <span className="text-muted-foreground">Turnos assistente</span>
+            <span className="text-muted-foreground">{t('header.assistantTurns')}</span>
             <span className="text-right">{stats.assistant_turns}</span>
-            <span className="text-muted-foreground">Tool calls</span>
+            <span className="text-muted-foreground">{t('header.toolCalls')}</span>
             <span className="text-right">{stats.tool_call_count}</span>
-            <span className="text-muted-foreground">Tools distintas</span>
+            <span className="text-muted-foreground">{t('header.distinctTools')}</span>
             <span className="text-right">{stats.distinct_tools}</span>
             {stats.tool_error_count > 0 && (
               <>
-                <span className="text-muted-foreground">Tool errors</span>
+                <span className="text-muted-foreground">{t('header.toolErrors')}</span>
                 <span className="text-right text-red-500">{stats.tool_error_count}</span>
               </>
             )}
             {stats.subagent_call_count > 0 && (
               <>
-                <span className="text-muted-foreground">Subagentes</span>
+                <span className="text-muted-foreground">{t('header.subagents')}</span>
                 <span className="text-right">{stats.subagent_call_count}</span>
               </>
             )}
-            <span className="text-muted-foreground">Tempo em tools</span>
+            <span className="text-muted-foreground">{t('header.timeInTools')}</span>
             <span className="text-right">{(stats.total_tool_duration_ms / 1000).toFixed(1)}s</span>
-            <span className="text-muted-foreground">Duração total</span>
+            <span className="text-muted-foreground">{t('header.duration')}</span>
             <span className="text-right">{formatDuration(stats.duration_ms)}</span>
           </div>
         </section>
@@ -215,6 +211,7 @@ function SummaryTab({ session, stats }: { session: SessionLike; stats: SessionSt
 }
 
 function PlanItem({ plan }: { plan: CoderPlanRow }) {
+  const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -248,12 +245,12 @@ function PlanItem({ plan }: { plan: CoderPlanRow }) {
             <span
               className={cn('text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded', STATUS_STYLES[plan.status])}
             >
-              {STATUS_LABELS[plan.status]}
+              {t(`details.planStatus.${plan.status}`)}
             </span>
             <span className="text-[11px] text-muted-foreground">{formatRelativeTime(plan.created_at)}</span>
             {plan.resolved_at && plan.resolved_at !== plan.created_at && (
               <span className="text-[11px] text-muted-foreground">
-                · resolvido {formatRelativeTime(plan.resolved_at)}
+                · {t('details.resolvedAt', { time: formatRelativeTime(plan.resolved_at) })}
               </span>
             )}
           </div>
@@ -271,7 +268,7 @@ function PlanItem({ plan }: { plan: CoderPlanRow }) {
               aria-label="Copy plan markdown"
             >
               {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-              {copied ? 'Copiado' : 'Copiar markdown'}
+              {copied ? t('details.copiedPlan') : t('details.copyPlan')}
             </button>
           </div>
           <div className="prose prose-sm dark:prose-invert max-w-none prose-pre:bg-card prose-pre:border prose-pre:rounded-lg prose-pre:p-3 prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-headings:mt-3 prose-headings:mb-1.5 prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5">
@@ -279,7 +276,7 @@ function PlanItem({ plan }: { plan: CoderPlanRow }) {
           </div>
           {plan.feedback && (
             <div className="mt-2 text-xs border-l-2 border-amber-500/50 pl-2 text-muted-foreground">
-              <span className="font-semibold">Feedback:</span> {plan.feedback}
+              <span className="font-semibold">{t('details.feedback')}</span> {plan.feedback}
             </div>
           )}
         </div>
@@ -289,6 +286,7 @@ function PlanItem({ plan }: { plan: CoderPlanRow }) {
 }
 
 function TodoHistoryItem({ entry }: { entry: TodoHistoryEntry }) {
+  const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
 
   let todos: TodoItem[] = [];
@@ -322,7 +320,7 @@ function TodoHistoryItem({ entry }: { entry: TodoHistoryEntry }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">
             <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-              {completed}/{total} completed
+              {t('details.tasksCompleted', { completed, total })}
             </span>
             <span className="text-[11px] text-muted-foreground">{formatRelativeTime(entry.created_at)}</span>
           </div>
