@@ -47,12 +47,12 @@ export class OpenAIChatProvider implements ChatProvider {
 
     try {
       // DEBUG LOGGING
-      const fs = await import('node:fs');
+      /*const fs = await import('node:fs');
       const path = await import('node:path');
       fs.writeFileSync(
         path.join(process.cwd(), 'zai-debug-request.json'),
         JSON.stringify({ model: this.model, messages, tools: tools.length > 0 ? tools : undefined }, null, 2)
-      );
+      );*/
     } catch {}
 
     let stream;
@@ -66,12 +66,12 @@ export class OpenAIChatProvider implements ChatProvider {
       });
     } catch (apiErr: any) {
       try {
-        const fs = await import('node:fs');
+        /*const fs = await import('node:fs');
         const path = await import('node:path');
         fs.writeFileSync(
           path.join(process.cwd(), 'zai-debug-error.json'),
           JSON.stringify({ error: apiErr, response: apiErr.response?.data || apiErr.error }, null, 2)
-        );
+        );*/
       } catch {}
       throw apiErr;
     }
