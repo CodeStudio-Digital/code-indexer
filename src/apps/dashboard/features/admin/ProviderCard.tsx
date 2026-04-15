@@ -5,10 +5,12 @@ import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
 import { Switch } from '../../components/ui/switch.js';
 import { GoogleQuotaPanel } from './GoogleQuotaPanel.js';
+import { FallbackChainPanel } from './FallbackChainPanel.js';
 import type { AdminModel, AdminProvider, TestResult } from './types.js';
 
 interface ProviderCardProps {
   provider: AdminProvider;
+  allProviders: AdminProvider[];
   isExpanded: boolean;
   models: AdminModel[];
   testResult: TestResult | undefined;
@@ -19,10 +21,12 @@ interface ProviderCardProps {
   onEdit: () => void;
   onRemove: () => void;
   onToggleModel: (modelId: string, mode: string, enabled: boolean) => void;
+  onSetFallback: (providerId: string, fallbackProviderId: string | null) => void;
 }
 
 export function ProviderCard({
   provider: p,
+  allProviders,
   isExpanded,
   models,
   testResult: tr,
@@ -33,6 +37,7 @@ export function ProviderCard({
   onEdit,
   onRemove,
   onToggleModel,
+  onSetFallback,
 }: ProviderCardProps) {
   const { t } = useTranslation(['admin', 'common']);
   return (
@@ -113,6 +118,14 @@ export function ProviderCard({
               ))}
             </div>
           )}
+          {/* Fallback chain configuration */}
+          <div className="pt-3 mt-3 border-t">
+            <FallbackChainPanel
+              provider={p}
+              allProviders={allProviders}
+              onSetFallback={onSetFallback}
+            />
+          </div>
         </CardContent>
       )}
     </Card>

@@ -13,6 +13,7 @@ export interface AdminProvider {
   use_for_coder: boolean;
   is_default: boolean;
   extra: Record<string, unknown>;
+  fallback_provider_id: string | null;
 }
 
 export interface AdminModel {

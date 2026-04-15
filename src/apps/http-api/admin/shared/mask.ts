@@ -26,6 +26,7 @@ export function publicProvider(p: ProviderConfig) {
     use_for_coder: p.use_for_coder,
     is_default: p.is_default,
     extra: p.extra,
+    fallback_provider_id: p.fallback_provider_id ?? null,
     created_at: p.created_at,
     updated_at: p.updated_at,
   };

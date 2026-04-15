@@ -88,7 +88,7 @@ function validateTaskInput(raw: unknown, idx: number): CoderTask | string {
   };
 }
 
-function validateTasksInput(raw: unknown): { summary: string; tasks: CoderTask[] } | string {
+export function validateTasksInput(raw: unknown): { summary: string; tasks: CoderTask[] } | string {
   if (!raw || typeof raw !== 'object') return 'input must be an object';
   const o = raw as Record<string, unknown>;
   const summary = String(o.summary ?? '').trim();

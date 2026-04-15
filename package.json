@@ -1,6 +1,6 @@
 {
   "name": "mcp-code-indexer",
-  "version": "3.14.0",
+  "version": "3.15.1",
   "description": "Codebase indexing platform powered by LLMs with hybrid search, MCP Server, and web dashboard",
   "type": "module",
   "engines": {

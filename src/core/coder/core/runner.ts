@@ -46,6 +46,12 @@ export interface RunnerOptions {
   externalToolTiers?: ReadonlyMap<string, ToolTier>;
   /** Enable thinking/reasoning mode for providers that support it (Gemini thinkingConfig). */
   thinking?: boolean;
+  /** Fallback chain for automatic provider recovery on persistent errors. */
+  fallbackChain?: import('./fallback.js').FallbackChain;
+  /** Factory function to create a new provider for fallback. */
+  createProvider?: (name: string, model: string) => Promise<ChatProvider>;
+  /** Runtime hook registry for lifecycle events (tool calls, errors, fallback, completion). */
+  hookRegistry?: import('./hook-registry.js').RuntimeHookRegistry;
 }
 
 // Tools blocked outright in plan mode until the user approves a submitted
@@ -436,6 +442,12 @@ export interface RunnerEvents {
     max_turns: number;
     auto_continue_count: number;
     auto_continue_max: number;
+  }) => void;
+  /** Emitted when a fallback provider is activated due to persistent errors. */
+  fallback_activated: (payload: {
+    from: { provider: string; model: string };
+    to: { provider: string; model: string };
+    error: string;
   }) => void;
 }
 
@@ -888,6 +900,49 @@ export class CoderRunner extends EventEmitter {
           console.warn(`[coder] provider returned 400 at turn ${turn}, retrying once`);
           continue;
         }
+
+        // Fallback: on persistent errors (400 after retry, 429, 5xx, timeout),
+        // try switching to the next provider in the fallback chain.
+        const is429 = status === 429;
+        const isTimeout = error.message?.includes('timeout') || status === 504 || status === 408;
+        const is5xx = status !== undefined && status >= 500 && status < 600;
+        const shouldFallback = (is400 && retriedThisTurn) || is429 || isTimeout || is5xx;
+
+        if (shouldFallback && this.opts.fallbackChain && this.opts.createProvider) {
+          const { nextFallback } = await import('./fallback.js');
+          const next = nextFallback(this.opts.fallbackChain);
+          if (next) {
+            const oldProvider = { provider: this.opts.provider.name ?? 'unknown', model: this.opts.provider.model ?? 'unknown' };
+            try {
+              const newProvider = await this.opts.createProvider(next.provider, next.model);
+              this.swapProvider(newProvider);
+              console.warn(`[coder] Fallback activated: ${oldProvider.provider}/${oldProvider.model} → ${next.provider}/${next.model} (error: ${error.message})`);
+              this.emit('fallback_activated', {
+                from: oldProvider,
+                to: next,
+                error: error.message,
+              });
+              // Fire hook
+              await this.opts.hookRegistry?.fireFallback({
+                sessionId: 0, projectName: '', provider: next.provider, model: next.model, turn,
+                from: oldProvider,
+                to: next,
+                triggerError: error.message,
+              });
+              continue; // retry the turn with the new provider
+            } catch (fallbackErr) {
+              console.error(`[coder] Fallback provider creation failed: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+            }
+          }
+        }
+
+        // Fire error hook before giving up
+        await this.opts.hookRegistry?.fireError({
+          sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
+          model: this.opts.provider.model ?? 'unknown', turn,
+          error, errorType: 'provider', willRetry: false, willFallback: false,
+        });
+
         this.emit('done', 'error', error);
         return { totalUsage, reason: 'error' };
       }
@@ -949,6 +1004,12 @@ export class CoderRunner extends EventEmitter {
       // was user-hostile and added noise with zero safety benefit.
       if (toolUseBlocks.length === 0) {
         this.recentTurnSignatures.length = 0;
+        // Hook: completion
+        await this.opts.hookRegistry?.fireCompletion({
+          sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
+          model: this.opts.provider.model ?? 'unknown', turn,
+          reason: 'completed', totalUsage, turnCount: turn,
+        });
         this.emit('done', 'completed');
         return { totalUsage, reason: 'completed' };
       }
@@ -984,6 +1045,12 @@ export class CoderRunner extends EventEmitter {
       for (const block of toolUseBlocks) {
         if (this.aborted) break;
         this.emit('tool_call_start', block.id, block.name, block.input);
+        // Hook: before tool call
+        await this.opts.hookRegistry?.fireToolCall({
+          sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
+          model: this.opts.provider.model ?? 'unknown', turn,
+          toolName: block.name, toolArgs: block.input, phase: 'before',
+        });
         const start = Date.now();
         let result;
         if (this.opts.planMode && !this.planApproved && MUTATING_TOOLS.has(block.name)) {
@@ -1032,6 +1099,13 @@ export class CoderRunner extends EventEmitter {
           );
         }
         this.emit('tool_call_result', block.id, block.name, result, durationMs);
+        // Hook: after tool call
+        await this.opts.hookRegistry?.fireToolCall({
+          sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
+          model: this.opts.provider.model ?? 'unknown', turn,
+          toolName: block.name, toolArgs: block.input, phase: 'after',
+          result, durationMs,
+        });
         // Side-file truncation: if the content is too large AND the runner
         // has a tool output store wired in, persist the full content and
         // include the output_id in the truncation marker. This lets the

@@ -5,7 +5,47 @@ Todas as mudancas notaveis deste projeto sao documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 e o projeto adere a [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.15.0] - 2026-04-14
+## [3.15.1]
+
+Dashboard i18n — suporte multi-idioma com **pt-BR como default** e ingles como secundario.
+
+### Added
+
+- **Infraestrutura i18n** com `i18next` + `react-i18next` + `i18next-browser-languagedetector`.
+  - Inicializacao em `src/apps/dashboard/i18n/index.ts` com deteccao automatica
+    de idioma via `localStorage` (`i18n-lang`) e fallback para `navigator.language`.
+  - 14 arquivos de traducao organizados em 7 namespaces (`common`, `admin`,
+    `projects`, `chat`, `agents`, `costs`, `search`) x 2 idiomas (`pt-BR`, `en`).
+
+- **Language Switcher** (`src/apps/dashboard/components/LanguageSwitcher.tsx`).
+  - Botao toggle com icone `Globe` + label `PT`/`EN` no header do dashboard,
+    ao lado do theme toggle.
+  - Idioma persiste em `localStorage` entre reloads.
+
+- **~600 strings traduzidas** em ~50 componentes do dashboard:
+  - `App.tsx` — nav labels, breadcrumbs, footer.
+  - `lib/utils.ts` — `formatRelativeTime` localizado com `i18n.t()`.
+  - `features/project/` — ProjectList, ProjectDetail, Create/Edit dialogs,
+    FilesTab, ArchitectureTab, DependenciesTab, FileDetailModal, RunsTab.
+  - `features/chat/` — AgentChat, ChatHeader, EmptyChatState, Composer,
+    ComposerToolbar, SessionSidebar, SessionDetailsModal, TodosSidebar,
+    ToolConfigDialog, SkillConfigDialog, MessageView, ToolCallBlock,
+    GroupedToolBubble, PlanPromptView, QuestionPromptView, TaskListReview,
+    TaskRow, AgentsGroupBlock, AgentPicker, MarkdownToolbar, CopyMarkdownButton.
+  - `features/admin/` — Admin, ProviderCard, EditDialog, BedrockCredentialsDialog,
+    ChatgptConnectionDialog, CopilotConnectionDialog, GoogleConnectionDialog,
+    GoogleQuotaPanel, HydePanel, McpServerEditDialog, McpServersPanel,
+    SkillsPanel, SkillEditDialog, StoragePanel, StorageConfigDialog, ToolsPanel.
+  - `features/agents/` — AgentsTab, AgentPane, AgentSessionModal,
+    CompanySessionView, BoardPanel, KanbanTab, KanbanColumn, KanbanCardItem,
+    KanbanCardModal, NewCompanyDialog, TemplateBuilderModal, TemplateListPanel.
+  - `features/costs/` — CostDashboard.
+  - `features/search/` — SearchPanel, EmbeddingsDebugPanel.
+  - `features/snapshots/` — SnapshotEditor.
+  - `features/diff/` — DiffViewer.
+  - `features/recent/` — RecentSessionsList.
+
+## [3.15.0]
 
 Overhaul do **Company Agents Mode** — multi-agent orchestration com master/subordinados.
 Correcao de diversos bugs descobertos em uso real e adicao de features de interacao.
@@ -79,7 +119,7 @@ Correcao de diversos bugs descobertos em uso real e adicao de features de intera
 - **Crash null `sessionData.projects`** — acesso protegido com optional chaining
   `sessionData?.projects.length ?? 0` na sidebar de configuracao.
 
-## [3.14.0] - 2026-04-08
+## [3.14.0]
 
 Rodada 3 do overhaul do coder agent — comparativo contra
 [yasasbanukaofficial/claude-code](https://github.com/yasasbanukaofficial/claude-code)
@@ -264,7 +304,7 @@ capacidades foram avaliadas e rejeitadas por ora:
 - **Aggregate turn output cap** — ganho marginal sobre o cap por bloco
   atual. Adiado.
 
-## [3.13.0] - 2026-04-08
+## [3.13.0]
 
 Overhaul da camada de **embeddings e vector search**. Torna o backend
 vetorial totalmente modular (Cloudflare/Qdrant/OpenSearch/Pinecone),
@@ -386,7 +426,7 @@ qualidade de busca.
 - O benchmark **nao e cientifico** com o set built-in (so 5 queries);
   use `--file queries.jsonl` pra ter numeros comparaveis entre runs.
 
-## [3.12.0] - 2026-04-08
+## [3.12.0]
 
 Overhaul de UX do **dashboard chat** com foco em performance de streaming
 e produtividade de navegacao entre sessoes.
@@ -470,7 +510,7 @@ e produtividade de navegacao entre sessoes.
   `idx_coder_sessions_project_favorite_updated(project_id, is_favorite DESC, updated_at DESC)`.
   Idempotente via `addColumnIfMissing()`.
 
-## [3.11.0] - 2026-04-08
+## [3.11.0]
 
 Overhaul do **coder agent** inspirado no opencode, mantendo os diferenciais
 do indexer (cache telemetry, snapshots, session overlay). Principal ganho:
@@ -668,7 +708,7 @@ superiores sob demanda com `expand_toolset`.
   tokens de resumo estruturado. Reducao de ~50x no footprint, preservando
   decisions / files touched / next steps.
 
-## [3.10.0] - 2026-04-08
+## [3.10.0]
 
 OAuth para provedores de assinatura (**GitHub Copilot Individual/Business/
 Enterprise** e **ChatGPT Plus/Pro/Team via Codex PKCE**), com suporte
@@ -762,7 +802,7 @@ UI exibe, eliminando a divergência entre os dois.
   aceitava `anthropic`/`openai`/`gemini`/`bedrock(throw)`. Agora os
   kinds OAuth são resolvidos assincronamente com token refresh.
 
-## [3.9.0] - 2026-04-08
+## [3.9.0]
 
 Refator estrutural completo do **frontend do dashboard** seguindo regras
 feature-first com cap de **300 linhas por arquivo**. Os 4 ofensores
@@ -944,7 +984,7 @@ de detalhes da sessão.
 - **`done` event do runner com erro**: o hook agora extrai `error` do
   payload do `done` (a UI ficava silenciosa antes).
 
-## [3.7.0] - 2026-04-07
+## [3.7.0]
 
 Foco em **visibilidade de cache e métricas de sessão no dashboard**. Os ganhos
 de cache da v3.5/3.6 (78-99% de hit rate em ZAI/GLM) agora são persistidos e
@@ -1000,7 +1040,7 @@ antigas.
 
 ---
 
-## [3.6.0] - 2026-04-07
+## [3.6.0]
 
 Foco em **resiliência da camada interativa do Coder Agent** e em corrigir o
 bug de duplicação no stream do dashboard.
@@ -1042,7 +1082,7 @@ bug de duplicação no stream do dashboard.
 
 ---
 
-## [3.5.0] - 2026-04-06
+## [3.5.0]
 
 ### Changed
 - **Truncamento monótono no push-time** dos `tool_results`
@@ -1063,7 +1103,7 @@ bug de duplicação no stream do dashboard.
 
 ---
 
-## [3.4.0] - 2026-04-05
+## [3.4.0]
 
 ### Added
 - **Coder Agent** (`src/coder/`) — agente de programação multi-provider sobre
@@ -1084,7 +1124,7 @@ bug de duplicação no stream do dashboard.
 
 ---
 
-## [3.3.0] - 2026-04-06
+## [3.3.0]
 
 Ciclo focado em confianca (versao unica, testes), corretude (precisao de simbolos,
 invalidacao de snapshots, limpeza de abstracoes) e eficiencia (limites de token

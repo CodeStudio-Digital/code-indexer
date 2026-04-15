@@ -6,6 +6,7 @@ import {
   fetchProviders,
   refreshProviderModels,
   saveProvider,
+  setFallbackProvider as setFallbackProviderApi,
   testProvider,
   toggleModelEnabled,
 } from '../api.js';
@@ -94,6 +95,19 @@ export function useAdminProviders() {
     await loadModels(providerId);
   };
 
+  const setFallback = async (providerId: string, fallbackProviderId: string | null) => {
+    try {
+      await setFallbackProviderApi(providerId, fallbackProviderId);
+      await load();
+    } catch (e) {
+      await notify({
+        title: 'Fallback update failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
   return {
     providers,
     loading,
@@ -109,5 +123,6 @@ export function useAdminProviders() {
     test,
     refresh,
     toggleModel,
+    setFallback,
   };
 }

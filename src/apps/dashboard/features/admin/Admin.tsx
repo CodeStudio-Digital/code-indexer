@@ -34,6 +34,7 @@ export default function Admin() {
     test,
     refresh,
     toggleModel,
+    setFallback,
   } = useAdminProviders();
 
   const [editing, setEditing] = useState<Partial<AdminProvider> | null>(null);
@@ -105,6 +106,7 @@ export default function Admin() {
               <ProviderCard
                 key={p.id}
                 provider={p}
+                allProviders={providers}
                 isExpanded={expanded === p.id}
                 models={models[p.id] ?? []}
                 testResult={testResults[p.id]}
@@ -119,6 +121,7 @@ export default function Admin() {
                 onEdit={() => setEditing(p)}
                 onRemove={() => remove(p.id)}
                 onToggleModel={(modelId, mode, enabled) => toggleModel(p.id, modelId, mode, enabled)}
+                onSetFallback={setFallback}
               />
             ))}
             {!loading && providers.length === 0 && (

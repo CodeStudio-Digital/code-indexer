@@ -11,7 +11,7 @@ import { fsTools } from './tools/fs.js';
 import { shellTools } from './tools/shell.js';
 import { gitTools } from './tools/git.js';
 import { planTools } from './tools/plan.js';
-import { tasksTools } from './tools/tasks.js';
+import { tasksTools, executeTask, taskComplete } from './tools/tasks.js';
 import { interactionTools } from './tools/interaction.js';
 import { buildExpandTools } from './tools/expand.js';
 import { McpToolBridge } from './tools/mcp-bridge.js';
@@ -21,6 +21,11 @@ import { buildSubagentTool, buildSpawnAgentsTool } from './tools/subagent.js';
 import { buildMasterTools } from './tools/company/master-tools.js';
 import { buildKanbanTools } from './tools/company/kanban-tools.js';
 import { buildBoardTools } from './tools/company/board-tools.js';
+import { buildSubordinateTools } from './tools/company/subordinate-tools.js';
+import { buildSubordinateKanbanTools } from './tools/company/subordinate-kanban-tools.js';
+import { isMasterAllowed } from './tools/company/master-filter.js';
+import { RuntimeHookRegistry } from './core/hook-registry.js';
+import { registerCompanyHooks } from './core/company-hooks.js';
 import { inferProfileFromMessage, profileToTiers, type CoderProfile } from './tools/tiers.js';
 import { AGENTS, type AgentId } from './agents/index.js';
 import { SessionOverlay } from './overlay/session-overlay.js';
@@ -188,9 +193,19 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(fsTools);
   registry.registerAll(shellTools);
   registry.registerAll(gitTools);
-  registry.registerAll(planTools);
-  registry.registerAll(tasksTools);
-  registry.registerAll(interactionTools);
+
+  // Company subordinates get master-directed communication tools instead of
+  // the human-facing ask_user / submit_plan / submit_tasks. The replacement
+  // tools emit the same runner events so orchestrator interception is unchanged.
+  if (opts.companyContext && !opts.companyContext.isMaster) {
+    registry.registerAll(buildSubordinateTools());
+    registry.register(executeTask);
+    registry.register(taskComplete);
+  } else {
+    registry.registerAll(planTools);
+    registry.registerAll(tasksTools);
+    registry.registerAll(interactionTools);
+  }
   // expand_toolset registered AFTER external MCP servers (see below) so its
   // tier enum can include custom tiers dynamically.
   registry.registerAll(toolOutputTools);
@@ -313,9 +328,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (opts.companyContext) {
     const { orchestrator, agentRole, isMaster, agentRunId } = opts.companyContext;
     registry.registerAll(buildBoardTools(orchestrator, agentRole, agentRunId));
+    // Subordinate kanban tools: self-service card updates (comment, checklist, move-to-review)
+    if (!isMaster && agentRunId != null) {
+      registry.registerAll(buildSubordinateKanbanTools(orchestrator, agentRole, agentRunId));
+    }
     if (isMaster) {
       registry.registerAll(buildMasterTools(orchestrator));
       registry.registerAll(buildKanbanTools(orchestrator));
+      // Strip code-level tools from Master — it should only orchestrate, not read code
+      registry.filterInPlace(isMasterAllowed);
+      console.log(`[coder] Master: filtered to ${registry.list().length} tools (orchestration-only)`);
     }
   }
 
@@ -465,6 +487,43 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     );
   }
 
+  // ─── Runtime hooks ─────────────────────────────────────────────
+  const hookRegistry = new RuntimeHookRegistry();
+  if (opts.companyContext && !opts.companyContext.isMaster && opts.companyContext.agentRunId != null) {
+    registerCompanyHooks(
+      hookRegistry,
+      opts.companyContext.orchestrator,
+      opts.companyContext.agentRunId,
+      opts.companyContext.agentRole,
+    );
+  }
+
+  // ─── Fallback chain ───────────────────────────────────────────
+  let fallbackChain: import('./core/fallback.js').FallbackChain | undefined;
+  let createProviderForFallback: ((name: string, model: string) => Promise<import('./providers/adapter.js').ChatProvider>) | undefined;
+  try {
+    const { buildFallbackChain } = await import('./core/fallback.js');
+    const providerStore = new ProviderStore(config.dbPath);
+    const sessionFallback = store.getSessionFallback(session.id);
+    const providerChain = providerStore.getFallbackChain(session.provider);
+    providerStore.close();
+    const chain = buildFallbackChain(
+      sessionFallback,
+      providerChain,
+      process.env.CODER_FALLBACK_CHAIN,
+    );
+    if (chain.entries.length > 0) {
+      fallbackChain = chain;
+      createProviderForFallback = async (name: string, model: string) => {
+        const p = await createChatProviderAsync(name as CoderProviderName, model);
+        return p;
+      };
+      console.log(`[coder] Fallback chain: ${chain.entries.map((e) => `${e.provider}:${e.model}`).join(' → ')}`);
+    }
+  } catch {
+    // Fallback config not available (migration not run yet) — skip silently
+  }
+
   const runner = new CoderRunner({
     provider,
     registry,
@@ -478,6 +537,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     globalDisabledTools,
     sessionDisabledTools: sessionDisabledTools.size > 0 ? sessionDisabledTools : undefined,
     externalToolTiers,
+    fallbackChain,
+    createProvider: createProviderForFallback,
+    hookRegistry: hookRegistry.hasHandlers ? hookRegistry : undefined,
   });
 
   // Rehydrate the lightweight todo list from the DB so a session resume

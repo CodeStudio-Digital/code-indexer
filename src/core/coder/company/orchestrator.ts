@@ -351,7 +351,7 @@ export class CompanyOrchestrator {
    * If master is still alive → pushUserMessage (immediate).
    * If master already exited → resumeMasterWithMessage (re-run on same session).
    */
-  private notifyMasterAboutSubordinate(message: string): void {
+  notifyMasterAboutSubordinate(message: string): void {
     let enrichedMessage = message;
     try {
       const recentBoard = this.companyStore.readBoard(this.companySessionId, {
@@ -695,6 +695,14 @@ export class CompanyOrchestrator {
             `Use forward_to_agent to give it another task (keeps full context), ` +
             `or spawn_subordinate_agent for unrelated work.`,
           );
+          // Kanban auto-comment on successful completion
+          try {
+            const cardId = this.findCardForAgent(agentRun.id);
+            if (cardId) {
+              this.kanbanAddComment(cardId, spec.role, agentRun.id,
+                `[AUTO] Agent completed successfully. Status: waiting for next instructions.`);
+            }
+          } catch { /* kanban update is best-effort */ }
         } else {
           const detail = error ? ` — ${error}` : '';
           try { this.companyStore.updateAgentRunStatus(agentRun.id, 'error', `Ended: ${reason}${detail}`); } catch { /* ignore */ }
@@ -703,6 +711,14 @@ export class CompanyOrchestrator {
             `[SYSTEM] @${spec.role} (agent_run_id=${agentRun.id}) ended with: ${reason}${detail}. ` +
             `Use resume_subordinate to retry.`,
           );
+          // Kanban auto-comment on error/abnormal end
+          try {
+            const cardId = this.findCardForAgent(agentRun.id);
+            if (cardId) {
+              this.kanbanAddComment(cardId, spec.role, agentRun.id,
+                `[AUTO] Agent ended: ${reason}${detail}. Card may need attention.`);
+            }
+          } catch { /* kanban update is best-effort */ }
         }
       })
       .catch((err) => {
@@ -713,6 +729,14 @@ export class CompanyOrchestrator {
           `[SYSTEM] @${spec.role} (agent_run_id=${agentRun.id}) FAILED: ${errorDetail}. ` +
           `Use resume_subordinate to retry or spawn_subordinate_agent for fresh start.`,
         );
+        // Kanban auto-comment on fatal error
+        try {
+          const cardId = this.findCardForAgent(agentRun.id);
+          if (cardId) {
+            this.kanbanAddComment(cardId, spec.role, agentRun.id,
+              `[AUTO] Agent FAILED: ${errorDetail}`);
+          }
+        } catch { /* kanban update is best-effort */ }
       })
       .finally(() => {
         // Remove from running set and check if we can close the bus
@@ -967,6 +991,14 @@ export class CompanyOrchestrator {
             `[SYSTEM] @${agentRun.role} (agent_run_id=${agentRun.id}, resumed) completed and is WAITING. ` +
             `Use forward_to_agent to give it another task (keeps full context).`,
           );
+          // Kanban auto-comment on successful completion
+          try {
+            const cardId = this.findCardForAgent(agentRun.id);
+            if (cardId) {
+              this.kanbanAddComment(cardId, agentRun.role, agentRun.id,
+                `[AUTO] Agent completed successfully (resumed session). Status: waiting.`);
+            }
+          } catch { /* kanban update is best-effort */ }
         } else {
           const detail = error ? ` — ${error}` : '';
           try { this.companyStore.updateAgentRunStatus(agentRun.id, 'error', `Ended: ${reason}${detail}`); } catch { /* ignore */ }
@@ -975,6 +1007,14 @@ export class CompanyOrchestrator {
             `[SYSTEM] @${agentRun.role} (agent_run_id=${agentRun.id}, resumed) ended with: ${reason}${detail}. ` +
             `Use resume_subordinate to retry.`,
           );
+          // Kanban auto-comment on error/abnormal end
+          try {
+            const cardId = this.findCardForAgent(agentRun.id);
+            if (cardId) {
+              this.kanbanAddComment(cardId, agentRun.role, agentRun.id,
+                `[AUTO] Agent ended (resumed session): ${reason}${detail}. Card may need attention.`);
+            }
+          } catch { /* kanban update is best-effort */ }
         }
       })
       .catch((err) => {
@@ -986,6 +1026,14 @@ export class CompanyOrchestrator {
           `[SYSTEM] @${agentRun.role} (agent_run_id=${agentRun.id}, resumed) FAILED: ${errorDetail}. ` +
           `Use resume_subordinate to retry or spawn_subordinate_agent for fresh start.`,
         );
+        // Kanban auto-comment on fatal error
+        try {
+          const cardId = this.findCardForAgent(agentRun.id);
+          if (cardId) {
+            this.kanbanAddComment(cardId, agentRun.role, agentRun.id,
+              `[AUTO] Agent FAILED (resumed session): ${errorDetail}`);
+          }
+        } catch { /* kanban update is best-effort */ }
       })
       .finally(() => {
         this.runningSubordinateIds.delete(agentRun.id);
@@ -1190,6 +1238,24 @@ export class CompanyOrchestrator {
       mentions: entry.mentions,
       created_at: entry.created_at,
     });
+
+    // Kanban auto-hook: when a subordinate posts a deliverable, auto-move
+    // their card to "review" if it's currently in "in_progress".
+    if (kind === 'deliverable' && agentRunId != null && authorRole !== 'system' && authorRole !== 'master') {
+      try {
+        const cardId = this.findCardForAgent(agentRunId);
+        if (cardId) {
+          const card = this.kanbanGetCard(cardId);
+          if (card && card.column === 'in_progress') {
+            this.kanbanMoveCard(cardId, 'review');
+            this.kanbanAddComment(cardId, authorRole, agentRunId,
+              `[AUTO] Deliverable posted to board. Card moved to review.`);
+          }
+        }
+      } catch {
+        // Kanban auto-move is best-effort — never break the board post
+      }
+    }
   }
 
   readBoard(opts?: { sinceId?: number; limit?: number; mentionsRole?: string }) {
@@ -1431,6 +1497,18 @@ export class CompanyOrchestrator {
 
   kanbanListCardsFull(): import('./types.js').KanbanCardFull[] {
     return this.companyStore.listKanbanCardsFull(this.companySessionId);
+  }
+
+  /**
+   * Find the kanban card currently assigned to an agent run.
+   * Returns the card ID or null if no card is assigned.
+   */
+  findCardForAgent(agentRunId: number): number | null {
+    const cards = this.companyStore.listKanbanCardsFull(this.companySessionId);
+    const myCard = cards.find(c =>
+      c.agents.some(a => a.agent_run_id === agentRunId && !a.unassigned_at),
+    );
+    return myCard?.id ?? null;
   }
 
   /** Build a context string from a card for subordinate injection. */

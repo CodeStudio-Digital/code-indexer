@@ -50,6 +50,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [model, setModel] = useState('');
   const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin'>('explore');
   const [maxTurns, setMaxTurns] = useState<number | null>(null);
+  const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
+  const [fallbackModel, setFallbackModel] = useState<string | null>(null);
   const composerRef = useRef<ComposerHandle>(null);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState('');
@@ -86,7 +88,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     switchProvider,
   } = stream;
 
-  const { providerOptions, currentProviderModels, tasksState, stats, liveTurnDuplicatedInHistory } =
+  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, stats, liveTurnDuplicatedInHistory } =
     useAgentChatState({
       selectedId,
       doneReason,
@@ -206,6 +208,30 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
       await switchProvider(newProvider, newModel || undefined);
       refetchSession();
       refetchSessions();
+    }
+  };
+
+  // Fallback: load from session when selected, save when changed
+  useEffect(() => {
+    if (!selectedId) return;
+    fetch(`/api/coder/sessions/${selectedId}/fallback`)
+      .then((r) => r.json())
+      .then((data: { fallback_provider: string | null; fallback_model: string | null }) => {
+        setFallbackProvider(data.fallback_provider);
+        setFallbackModel(data.fallback_model);
+      })
+      .catch(() => {});
+  }, [selectedId]);
+
+  const handleFallbackChange = async (fbProvider: string | null, fbModel: string | null) => {
+    setFallbackProvider(fbProvider);
+    setFallbackModel(fbModel);
+    if (selectedId) {
+      await fetch(`/api/coder/sessions/${selectedId}/fallback`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: fbProvider, model: fbModel }),
+      });
     }
   };
 
@@ -538,6 +564,10 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 thinking={thinking}
                 setThinking={setThinking}
                 supportsThinking={provider === 'google-oauth' || provider === 'gemini'}
+                fallbackProvider={fallbackProvider}
+                fallbackModel={fallbackModel}
+                onFallbackChange={handleFallbackChange}
+                getModelsForProvider={getModelsForProvider}
                 onInvokeSkill={async (skillId, input) => {
                   if (!selectedId) return;
                   try {

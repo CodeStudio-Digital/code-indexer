@@ -40,6 +40,7 @@ import { structureEmbedding021 } from './021_structure_embedding.js';
 import { projectGroup022 } from './022_project_group.js';
 import { cloudcodeSession023 } from './023_cloudcode_session.js';
 import { kanban024 } from './024_kanban.js';
+import { fallbackConfig025 } from './025_fallback_config.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -74,6 +75,7 @@ export const MIGRATIONS: Migration[] = [
   projectGroup022,
   cloudcodeSession023,
   kanban024,
+  fallbackConfig025,
 ];
 
 /**

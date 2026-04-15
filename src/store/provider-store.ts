@@ -43,6 +43,8 @@ export interface ProviderConfig {
   is_default: boolean;
   /** Parsed JSON blob. Free-form per-kind (aws_region, zai_has_coding_mode, ...). */
   extra: Record<string, unknown>;
+  /** ID of the fallback provider to switch to on persistent errors. */
+  fallback_provider_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -117,6 +119,7 @@ interface ProviderConfigRaw {
   use_for_coder: number;
   is_default: number;
   extra: string | null;
+  fallback_provider_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -187,6 +190,7 @@ function hydrateProvider(r: ProviderConfigRaw): ProviderConfig {
     use_for_coder: !!r.use_for_coder,
     is_default: !!r.is_default,
     extra: parseJson<Record<string, unknown>>(r.extra, {}),
+    fallback_provider_id: r.fallback_provider_id ?? null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -309,6 +313,47 @@ export class ProviderStore {
       .prepare('SELECT * FROM provider_configs WHERE id = ?')
       .get(id) as ProviderConfigRaw | undefined;
     return row ? hydrateProvider(row) : null;
+  }
+
+  /**
+   * Walk the fallback_provider_id chain starting from `providerId`.
+   * Returns an ordered list of {provider, model} entries for fallback.
+   * Stops at null, cycles, or max depth (10) to prevent infinite loops.
+   */
+  getFallbackChain(providerId: string): Array<{ provider: string; model: string }> {
+    const chain: Array<{ provider: string; model: string }> = [];
+    const visited = new Set<string>();
+    let currentId: string | null = providerId;
+    const maxDepth = 10;
+
+    for (let i = 0; i < maxDepth && currentId; i++) {
+      const cfg = this.getProvider(currentId);
+      if (!cfg || !cfg.fallback_provider_id) break;
+
+      const fallbackId = cfg.fallback_provider_id;
+      if (visited.has(fallbackId)) break; // cycle detection
+      visited.add(fallbackId);
+
+      const fallbackCfg = this.getProvider(fallbackId);
+      if (!fallbackCfg || !fallbackCfg.enabled) break;
+
+      // Get the default model for this provider
+      const models = this.listModels(fallbackId);
+      const defaultModel = models[0]; // first model as default
+      if (!defaultModel) break;
+
+      chain.push({ provider: fallbackId, model: defaultModel.model_id });
+      currentId = fallbackId;
+    }
+
+    return chain;
+  }
+
+  /** Set or clear the fallback provider for a given provider. */
+  setFallbackProvider(providerId: string, fallbackProviderId: string | null): void {
+    this.db
+      .prepare('UPDATE provider_configs SET fallback_provider_id = ?, updated_at = ? WHERE id = ?')
+      .run(fallbackProviderId, new Date().toISOString(), providerId);
   }
 
   upsertProvider(input: UpsertProviderInput): ProviderConfig {

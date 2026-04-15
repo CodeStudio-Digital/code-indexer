@@ -191,6 +191,25 @@ export function mountCoderInteractionRoutes(
     return c.json({ ok: true, resumed: true });
   });
 
+  // Set/clear fallback provider+model for a session
+  app.patch('/api/coder/sessions/:id/fallback', async (c) => {
+    const id = parseInt(c.req.param('id'), 10);
+    const session = sessionStore.getSession(id);
+    if (!session) return c.json({ error: 'Not found' }, 404);
+    const body = await c.req.json<{ provider: string | null; model: string | null }>();
+    sessionStore.setSessionFallback(id, body.provider ?? null, body.model ?? null);
+    return c.json({ ok: true, fallback_provider: body.provider, fallback_model: body.model });
+  });
+
+  // Get session fallback config
+  app.get('/api/coder/sessions/:id/fallback', (c) => {
+    const id = parseInt(c.req.param('id'), 10);
+    const session = sessionStore.getSession(id);
+    if (!session) return c.json({ error: 'Not found' }, 404);
+    const fb = sessionStore.getSessionFallback(id);
+    return c.json({ fallback_provider: fb?.provider ?? null, fallback_model: fb?.model ?? null });
+  });
+
   app.post('/api/coder/sessions/:id/switch', async (c) => {
     const id = parseInt(c.req.param('id'), 10);
     const body = await c.req.json<SwitchProviderBody>();

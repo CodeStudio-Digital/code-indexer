@@ -385,15 +385,15 @@ export async function* streamGenerateContent(
       ...(request.generationConfig as Record<string, unknown> | undefined),
       thinkingConfig: { includeThoughts: true },
     };
-    // Inject thoughtSignature on functionCall parts in conversation history.
-    // The Gemini API requires this when thinking is active — without it,
-    // requests with tool calls in history fail with "missing thought_signature".
-    // Uses the same synthetic value the Gemini CLI uses as a bypass.
-    if (Array.isArray(requestWithSession.contents)) {
-      requestWithSession.contents = ensureThoughtSignatures(
-        requestWithSession.contents as unknown[],
-      );
-    }
+  }
+  // ALWAYS inject thoughtSignature on functionCall parts — Gemini 3.x models
+  // enable thinking by default even without thinkingConfig, and the API rejects
+  // requests where function calls lack a signature. The synthetic value is
+  // harmless when thinking isn't active (API ignores it).
+  if (Array.isArray(requestWithSession.contents)) {
+    requestWithSession.contents = ensureThoughtSignatures(
+      requestWithSession.contents as unknown[],
+    );
   }
 
   const res = await withRetry(

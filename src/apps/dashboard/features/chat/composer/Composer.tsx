@@ -42,6 +42,11 @@ interface ComposerProps {
   thinking?: boolean;
   setThinking?: (v: boolean) => void;
   supportsThinking?: boolean;
+  /** Fallback configuration. */
+  fallbackProvider?: string | null;
+  fallbackModel?: string | null;
+  onFallbackChange?: (provider: string | null, model: string | null) => void;
+  getModelsForProvider?: (providerId: string) => EnrichedProviderModel[];
 }
 
 export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
@@ -285,6 +290,10 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             currentProviderModels={props.currentProviderModels}
             maxTurns={props.maxTurns}
             setMaxTurns={props.setMaxTurns}
+            fallbackProvider={props.fallbackProvider ?? null}
+            fallbackModel={props.fallbackModel ?? null}
+            onFallbackChange={props.onFallbackChange ?? (() => {})}
+            getModelsForProvider={props.getModelsForProvider ?? (() => [])}
           />
         </div>
       </div>

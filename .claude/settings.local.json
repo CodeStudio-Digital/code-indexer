@@ -25,7 +25,9 @@
       "Bash(echo \"EXIT: $?\")",
       "Bash(xargs grep:*)",
       "Bash(npm ls:*)",
-      "Bash(npx --prefix \"D:/MCP\" tsc --noEmit --skipLibCheck --project \"D:/MCP/tsconfig.json\")"
+      "Bash(npx --prefix \"D:/MCP\" tsc --noEmit --skipLibCheck --project \"D:/MCP/tsconfig.json\")",
+      "Bash(node node_modules/typescript/bin/tsc --noEmit)",
+      "Bash(ls D:/MCP/node_modules/.bin/tsc*)"
     ]
   }
 }

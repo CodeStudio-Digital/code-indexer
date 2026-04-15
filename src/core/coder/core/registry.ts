@@ -31,6 +31,18 @@ export class ToolRegistry {
     return Array.from(this.tools.values());
   }
 
+  /**
+   * Remove all tools that do not satisfy the predicate.
+   * Used by the Master agent filter to strip code-level tools.
+   */
+  filterInPlace(predicate: (tool: CoderTool) => boolean): void {
+    for (const [name, tool] of this.tools) {
+      if (!predicate(tool)) {
+        this.tools.delete(name);
+      }
+    }
+  }
+
   async invoke(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const tool = this.tools.get(name);
     if (!tool) {

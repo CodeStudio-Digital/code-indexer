@@ -171,13 +171,7 @@ function kanbanReadMyCard(
 
         // If no card_id provided, look up the card assigned to this agent run
         if (!cardId && agentRunId) {
-          const context = orchestrator.getCardContextForSubordinate(0); // dummy — we need to find the card first
-          // Use the store method directly via orchestrator
-          const cards = orchestrator.kanbanListCardsFull();
-          const myCard = cards.find(c =>
-            c.agents.some(a => a.agent_run_id === agentRunId && !a.unassigned_at)
-          );
-          if (myCard) cardId = myCard.id;
+          cardId = orchestrator.findCardForAgent(agentRunId) ?? undefined;
         }
 
         if (!cardId) {

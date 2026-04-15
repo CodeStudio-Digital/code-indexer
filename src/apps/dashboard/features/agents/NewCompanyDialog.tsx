@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import { useApi, apiPost } from '../../hooks/useApi.js';
 import { useProviders } from '../../hooks/useProviders.js';
+import { FallbackPicker } from '../../components/FallbackPicker.js';
 
 interface Template {
   id: number;
@@ -33,6 +34,8 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   const [selectedProjectIds, setSelectedProjectIds] = useState<number[]>([]);
   const [masterProvider, setMasterProvider] = useState(providerOptions[0]?.id ?? 'anthropic');
   const [masterModel, setMasterModel] = useState('claude-sonnet-4-6');
+  const [masterFallbackProvider, setMasterFallbackProvider] = useState<string | null>(null);
+  const [masterFallbackModel, setMasterFallbackModel] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
   const selectedTemplate = templates?.find((t) => t.id === selectedTemplateId);
@@ -60,6 +63,8 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
         project_ids: selectedProjectIds,
         master_provider: masterProvider,
         master_model: masterModel,
+        master_fallback_provider: masterFallbackProvider,
+        master_fallback_model: masterFallbackModel,
         role_assignments: selectedTemplate?.roles.filter((r) => r.role !== 'master') ?? [],
       });
       onCreated(res.session.id);
@@ -172,6 +177,15 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
               )}
             </div>
           </div>
+
+          {/* Master fallback provider+model */}
+          <FallbackPicker
+            fallbackProvider={masterFallbackProvider}
+            fallbackModel={masterFallbackModel}
+            providerOptions={providerOptions}
+            getModelsForProvider={getModelsForProvider}
+            onChange={(p, m) => { setMasterFallbackProvider(p); setMasterFallbackModel(m); }}
+          />
         </div>
 
         {/* Footer */}

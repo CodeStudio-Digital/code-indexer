@@ -55,6 +55,14 @@ const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'ask_user',
   'submit_plan',
   'submit_tasks',
+  // Subordinate variants (company mode — same events, master-directed names)
+  'ask_master',
+  'submit_plan_to_master',
+  'submit_tasks_to_master',
+  // Subordinate kanban tools (company mode — self-service card updates)
+  'kanban_my_comment',
+  'kanban_my_checklist',
+  'kanban_move_to_review',
   'expand_toolset',
   'get_tool_output',
   'glob',
@@ -229,6 +237,10 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   glob: 'Find files matching a glob pattern',
   todo_write: 'Update the lightweight todo list sidebar',
   invoke_skill: 'Invoke a reusable skill by ID',
+  // ─── Subordinate kanban ──────────────────────────────────────
+  kanban_my_comment: 'Add a comment to your assigned Kanban card',
+  kanban_my_checklist: 'Check off or add objectives on your card',
+  kanban_move_to_review: 'Move your card to Review (done working)',
   // ─── Bootstrap MCP ────────────────────────────────────────────
   mcp__get_project_pulse: 'Ultra-compact project overview (~100 tokens)',
   mcp__query_snapshots: 'Full-text search over project snapshots',

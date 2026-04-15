@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Paperclip, Repeat, Send, Settings2, Square } from 'lucide-react';
+import { Paperclip, Repeat, Send, Settings2, Shield, Square } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/
 import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
+import { FallbackPicker } from '../../../components/FallbackPicker.js';
 
 type AgentId = 'explore' | 'plan' | 'build' | 'admin';
 
@@ -28,6 +29,10 @@ interface ComposerToolbarProps {
   currentProviderModels: EnrichedProviderModel[];
   maxTurns: number | null;
   setMaxTurns: (v: number | null) => void;
+  fallbackProvider: string | null;
+  fallbackModel: string | null;
+  onFallbackChange: (provider: string | null, model: string | null) => void;
+  getModelsForProvider: (providerId: string) => EnrichedProviderModel[];
 }
 
 export const ComposerToolbar = React.memo(function ComposerToolbar({
@@ -47,6 +52,10 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   currentProviderModels,
   maxTurns,
   setMaxTurns,
+  fallbackProvider,
+  fallbackModel,
+  onFallbackChange,
+  getModelsForProvider,
 }: ComposerToolbarProps) {
   const { t } = useTranslation(['chat', 'common']);
   return (
@@ -125,6 +134,37 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
         />
       </div>
 
+      {/* Desktop fallback popover */}
+      <div className="hidden sm:block">
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className={`p-1.5 rounded-md hover:bg-muted transition-colors ${
+                fallbackProvider
+                  ? 'text-amber-500 hover:text-amber-600'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title={fallbackProvider
+                ? `Fallback: ${fallbackProvider} / ${fallbackModel ?? '?'}`
+                : 'Configurar fallback'
+              }
+            >
+              <Shield className="h-4 w-4" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-72 p-3" align="end" side="top">
+            <FallbackPicker
+              fallbackProvider={fallbackProvider}
+              fallbackModel={fallbackModel}
+              providerOptions={providerOptions}
+              getModelsForProvider={getModelsForProvider}
+              onChange={onFallbackChange}
+            />
+          </PopoverContent>
+        </Popover>
+      </div>
+
       <div className="ml-auto flex items-center gap-2">
         <span className="text-[10px] text-muted-foreground hidden sm:inline">⌘+Enter</span>
 
@@ -196,6 +236,13 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
                 />
               </div>
             </div>
+            <FallbackPicker
+              fallbackProvider={fallbackProvider}
+              fallbackModel={fallbackModel}
+              providerOptions={providerOptions}
+              getModelsForProvider={getModelsForProvider}
+              onChange={onFallbackChange}
+            />
           </PopoverContent>
         </Popover>
 

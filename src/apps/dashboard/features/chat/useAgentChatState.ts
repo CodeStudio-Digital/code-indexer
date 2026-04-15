@@ -135,9 +135,14 @@ export function useAgentChatState({
     return persistedText === liveText;
   })();
 
+  const getModelsForProvider = (providerId: string): EnrichedProviderModel[] => {
+    return providerOptions.find((p) => p.id === providerId)?.models ?? [];
+  };
+
   return {
     providerOptions,
     currentProviderModels,
+    getModelsForProvider,
     tasksState,
     stats,
     liveTurnDuplicatedInHistory,

@@ -25,6 +25,10 @@ export interface CoderSession {
   todos_json: string | null;
   /** Absolute path of the git worktree this session is scoped to (set by `enter_worktree`). */
   worktree_path: string | null;
+  /** Fallback provider to use when the primary provider fails persistently. */
+  fallback_provider: string | null;
+  /** Fallback model to use with the fallback provider. */
+  fallback_model: string | null;
   /** CloudCode session UUID — persisted so the same ID is reused across reconnects. */
   cloudcode_session_id: string | null;
   created_at: string;

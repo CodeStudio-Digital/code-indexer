@@ -215,6 +215,22 @@ export class SessionStore {
       .run(provider, model, id);
   }
 
+  /** Get the per-session fallback provider/model override (if configured). */
+  getSessionFallback(id: number): { provider: string; model: string } | null {
+    const row = this.db
+      .prepare('SELECT fallback_provider, fallback_model FROM coder_sessions WHERE id = ?')
+      .get(id) as { fallback_provider: string | null; fallback_model: string | null } | undefined;
+    if (!row || !row.fallback_provider || !row.fallback_model) return null;
+    return { provider: row.fallback_provider, model: row.fallback_model };
+  }
+
+  /** Set or clear the per-session fallback provider/model override. */
+  setSessionFallback(id: number, provider: string | null, model: string | null): void {
+    this.db
+      .prepare('UPDATE coder_sessions SET fallback_provider = ?, fallback_model = ?, updated_at = datetime(\'now\') WHERE id = ?')
+      .run(provider, model, id);
+  }
+
   bumpUsage(
     id: number,
     inputTokens: number,

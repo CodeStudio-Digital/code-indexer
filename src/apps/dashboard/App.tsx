@@ -75,16 +75,6 @@ export default function App() {
               <Home className="h-4 w-4" />
               {t('nav.projects')}
             </button>
-            {view.page === 'project' && (
-              <div className="px-3 py-2 rounded-lg bg-primary/10 text-primary flex items-center gap-2 text-sm font-medium">
-                <FolderGit2 className="h-4 w-4" />
-                <span className="truncate">{view.name}</span>
-              </div>
-            )}
-            <RecentSessionsList
-              activeSessionId={view.page === 'project' ? view.sessionId ?? null : null}
-              onSelect={(id, name, sessionId) => setView({ page: 'project', id, name, sessionId })}
-            />
             <button
               onClick={() => { setView({ page: 'agents' }); setMobileSidebarOpen(false); }}
               className={cn(
@@ -109,6 +99,16 @@ export default function App() {
               <Settings className="h-4 w-4" />
               {t('nav.admin')}
             </button>
+            {view.page === 'project' && (
+                <div className="px-3 py-2 rounded-lg bg-primary/10 text-primary flex items-center gap-2 text-sm font-medium">
+                  <FolderGit2 className="h-4 w-4" />
+                  <span className="truncate">{view.name}</span>
+                </div>
+            )}
+            <RecentSessionsList
+                activeSessionId={view.page === 'project' ? view.sessionId ?? null : null}
+                onSelect={(id, name, sessionId) => setView({ page: 'project', id, name, sessionId })}
+            />
           </nav>
           <div className="p-3 border-t text-[10px] text-muted-foreground">
             <div className="px-3">{t('footer.title')} Dashboard</div>

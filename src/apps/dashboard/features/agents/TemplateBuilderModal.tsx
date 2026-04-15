@@ -6,6 +6,7 @@ import { Textarea } from '../../components/ui/textarea.js';
 import { Badge } from '../../components/ui/badge.js';
 import { apiPost, apiPatch, useApi } from '../../hooks/useApi.js';
 import { useProviders } from '../../hooks/useProviders.js';
+import { FallbackPicker } from '../../components/FallbackPicker.js';
 import { MarkdownToolbar } from '../chat/composer/MarkdownToolbar.js';
 import { useMarkdownShortcuts } from '../chat/composer/useMarkdownShortcuts.js';
 
@@ -17,6 +18,10 @@ interface RoleConfig {
   systemPromptOverride?: string;
   /** Skill IDs enabled for this role. */
   skills?: string[];
+  /** Fallback provider for auto-recovery. */
+  fallback_provider?: string;
+  /** Fallback model for auto-recovery. */
+  fallback_model?: string;
 }
 
 interface SkillDef {
@@ -142,6 +147,15 @@ function RoleEditModal({
               )}
             </div>
           </div>
+
+          {/* Fallback provider+model */}
+          <FallbackPicker
+            fallbackProvider={role.fallback_provider ?? null}
+            fallbackModel={role.fallback_model ?? null}
+            providerOptions={providerOptions}
+            getModelsForProvider={getModelsForProvider}
+            onChange={(p, m) => onUpdate({ fallback_provider: p ?? undefined, fallback_model: m ?? undefined })}
+          />
 
           {/* Tier */}
           <div className="space-y-1.5">
