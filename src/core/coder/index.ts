@@ -522,8 +522,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
 
   // ─── Fallback chain ───────────────────────────────────────────
+  // Always defined so the runner can refresh OAuth credentials (e.g. the
+  // Copilot 25-min token) on 401 even when no fallback chain is configured.
+  const createProviderForFallback = async (name: string, model: string) => {
+    return createCoderProvider(name, model);
+  };
   let fallbackChain: import('./core/fallback.js').FallbackChain | undefined;
-  let createProviderForFallback: ((name: string, model: string) => Promise<import('./providers/adapter.js').ChatProvider>) | undefined;
   try {
     const { buildFallbackChain } = await import('./core/fallback.js');
     const providerStore = new ProviderStore(config.dbPath);
@@ -537,10 +541,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     );
     if (chain.entries.length > 0) {
       fallbackChain = chain;
-      createProviderForFallback = async (name: string, model: string) => {
-        const p = await createCoderProvider(name, model);
-        return p;
-      };
       console.log(`[coder] Fallback chain: ${chain.entries.map((e) => `${e.provider}:${e.model}`).join(' → ')}`);
     }
   } catch {

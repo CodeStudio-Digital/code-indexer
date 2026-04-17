@@ -61,21 +61,32 @@ export async function openStream(
   // 50+/s; without batching every token triggers a full React re-render of
   // the persisted history. rAF collapses bursts into a single commit.
   let flushHandle: number | null = null;
+  let flushTimeout: ReturnType<typeof setTimeout> | null = null;
   const doFlush = () => updateSession(sid, { currentTurn: { blocks: [...blocks] } });
   const flush = () => {
     if (flushHandle !== null) return;
     flushHandle = requestAnimationFrame(() => {
       flushHandle = null;
+      if (flushTimeout !== null) { clearTimeout(flushTimeout); flushTimeout = null; }
       doFlush();
     });
+    // Fallback: rAF is throttled/suspended in background tabs or on machines
+    // where the browser suspends the rendering pipeline (no GPU, power-saving
+    // mode). The timeout guarantees the flush still happens in those cases.
+    flushTimeout = setTimeout(() => {
+      flushTimeout = null;
+      if (flushHandle !== null) {
+        cancelAnimationFrame(flushHandle);
+        flushHandle = null;
+        doFlush();
+      }
+    }, 50);
   };
   // Terminal events (message_complete/done/error) call flushNow to guarantee
   // the final state is committed synchronously before the buffer is cleared.
   const flushNow = () => {
-    if (flushHandle !== null) {
-      cancelAnimationFrame(flushHandle);
-      flushHandle = null;
-    }
+    if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
+    if (flushTimeout !== null) { clearTimeout(flushTimeout); flushTimeout = null; }
     doFlush();
   };
   doFlush();
@@ -121,10 +132,8 @@ export async function openStream(
       updateSession(sid, { error: e instanceof Error ? e.message : String(e) });
     }
   } finally {
-    if (flushHandle !== null) {
-      cancelAnimationFrame(flushHandle);
-      flushHandle = null;
-    }
+    if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
+    if (flushTimeout !== null) { clearTimeout(flushTimeout); flushTimeout = null; }
     updateSession(sid, { streaming: false });
     // Only delete if we're still the active controller — a subsequent
     // openStream for this sid may have replaced us.
