@@ -169,18 +169,25 @@ function kanbanMoveToReview(
       try {
         const cardId = orchestrator.findCardForAgent(agentRunId);
         if (!cardId) {
-          return err('No Kanban card is currently assigned to you.');
+          return err(
+            'No Kanban card is currently assigned to you. ' +
+            'Ask the master to assign you a card via post_to_board, or use kanban_read_my_card to check your assignment status.',
+          );
         }
 
         const card = orchestrator.kanbanGetCard(cardId);
         if (!card) {
-          return err(`Card #${cardId} not found.`);
+          return err(
+            `Card #${cardId} not found (it may have been deleted by the master). ` +
+            `Notify the master via post_to_board requesting a new assignment.`,
+          );
         }
 
         if (card.column !== 'in_progress') {
           return err(
             `Card #${cardId} is in "${card.column}" — can only move to review from "in_progress". ` +
-            `Current column: ${card.column}`,
+            `If you believe work is complete, notify the master via post_to_board ` +
+            `so they can move the card through the correct transitions.`,
           );
         }
 

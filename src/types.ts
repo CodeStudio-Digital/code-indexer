@@ -51,6 +51,8 @@ export interface Project {
   group_name: string | null;
   provider: string | null;
   model: string | null;
+  embeddings_enabled: number;
+  search_mode: SearchMode;
   created_at: string;
   updated_at: string;
   last_indexed: string | null;

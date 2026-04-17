@@ -268,6 +268,35 @@ export class CompanyStore {
     }
   }
 
+  /**
+   * Sweep stale agent runs and company sessions left in an active state by
+   * a crashed/restarted server. Should be called once at bootstrap, BEFORE
+   * the HTTP listener accepts connections.
+   *
+   * Any row with status `running`/`working` is marked `interrupted` — the
+   * in-memory orchestrator that owned it is gone, so the runner cannot
+   * possibly still be alive. Company sessions in `running` transition to
+   * `paused` so the user can resume via a follow-up message.
+   *
+   * Returns the count of rows touched (for logging).
+   */
+  recoverStaleAgentRuns(): { agentRuns: number; companySessions: number } {
+    const agentRuns = this.db.prepare(`
+      UPDATE company_agent_runs
+      SET status = 'interrupted',
+          status_message = COALESCE(status_message, '') || ' [recovered on server restart]',
+          updated_at = datetime('now')
+      WHERE status IN ('running', 'working')
+    `).run().changes;
+    const companySessions = this.db.prepare(`
+      UPDATE company_sessions
+      SET status = 'paused',
+          updated_at = datetime('now')
+      WHERE status = 'running'
+    `).run().changes;
+    return { agentRuns, companySessions };
+  }
+
   // ─── Board ─────────────────────────────────────────────────────
 
   postToBoard(

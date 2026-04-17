@@ -56,11 +56,12 @@ export const googleOAuth = defineProvider({
       creds.extra?.refreshToken as string | undefined,       // refreshToken
       creds.extra?.projectId as string | undefined,          // projectId
     ),
-  createCoder: (creds, model) =>
+  createCoder: (creds, model, opts) =>
     new GeminiChatProvider({
       accessToken: creds.apiKey,
       refreshToken: creds.extra?.refreshToken as string | undefined,
       projectId: creds.extra?.projectId as string | undefined,
+      cloudCodeSessionId: opts?.cloudCodeSessionId,
       model: model ?? 'gemini-2.5-flash',
     }),
 });

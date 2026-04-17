@@ -68,6 +68,17 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
     runner.on('provider_swapped', (provider, model) => {
       publish(bus, 'provider_swapped', { provider, model });
     });
+    runner.on('fallback_activated', (payload) => {
+      // Dashboard needs {from, to, reason} to render a visible badge explaining
+      // why the provider changed — the silent provider_swapped event alone
+      // leaves users wondering whether they got rate-limited or misconfigured.
+      publish(bus, 'fallback_activated', payload);
+    });
+    runner.on('history_compacted', (payload) => {
+      // Surfaces auto-continue summarization so the user can audit which turns
+      // were silently dropped — previously only visible via server console logs.
+      publish(bus, 'history_compacted', payload);
+    });
     runner.on('agents_group_start', (payload) => {
       publish(bus, 'agents_group_start', payload);
     });

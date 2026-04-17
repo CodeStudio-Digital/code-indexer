@@ -50,7 +50,7 @@ export interface CompanySessionProject {
 
 // ─── Agent Run ─────────────────────────────────────────────────
 
-export type AgentRunStatus = 'idle' | 'running' | 'working' | 'waiting' | 'waiting_plan' | 'waiting_question' | 'waiting_tasks' | 'reviewing' | 'blocked' | 'completed' | 'error' | 'aborted';
+export type AgentRunStatus = 'idle' | 'running' | 'working' | 'waiting' | 'waiting_plan' | 'waiting_question' | 'waiting_tasks' | 'reviewing' | 'blocked' | 'completed' | 'error' | 'aborted' | 'interrupted';
 
 export interface CompanyAgentRun {
   id: number;

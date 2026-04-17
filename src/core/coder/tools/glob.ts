@@ -1,9 +1,10 @@
 import { glob as fastGlob } from 'glob';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, resolve as pathResolve, isAbsolute } from 'node:path';
+import { join, relative } from 'node:path';
 import ignore from 'ignore';
 import type { CoderTool, ToolContext, ToolResult } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
+import { resolveSafe } from './paths.js';
 
 /**
  * glob — fast filename pattern matching across the project tree.
@@ -23,13 +24,6 @@ import { ok, err } from '../core/tool.js';
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
-
-function resolveSafe(relPath: string, cwd: string): string | null {
-  const abs = isAbsolute(relPath) ? relPath : pathResolve(cwd, relPath);
-  const rel = relative(cwd, abs);
-  if (rel.startsWith('..') || isAbsolute(rel)) return null;
-  return abs;
-}
 
 function loadIgnore(cwd: string): ignore.Ignore {
   const ig = ignore();

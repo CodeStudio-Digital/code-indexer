@@ -13,6 +13,8 @@ import type { McpServerConfig } from '../../../store/mcp-server-store.js';
 import type { CoderTool, ToolResult, JsonSchema } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
 import { CORE_TIER_NAMES, type ToolTier } from './tiers.js';
+import type { ResolveMcpBearer } from '../../mcp-client/auth/use-cases/resolve-mcp-bearer.js';
+import { mcpAuthClientErrorMessage } from '../../mcp-client/auth/domain/errors.js';
 
 /** Per-server connection state. */
 export type McpConnectionState = 'connected' | 'disconnected' | 'error';
@@ -28,9 +30,39 @@ interface ServerConnection {
 const CONNECT_TIMEOUT_MS = 10_000;
 
 /**
- * Build auth headers from config. Returns empty object for auth_type=none.
+ * Heuristic for recognising an OAuth-related error from the transport.
+ * The MCP SDK surfaces these as JS Errors with the HTTP status in the
+ * message; matching on 401/403 gives us a safe "try refresh & retry" signal.
  */
-function buildAuthHeaders(config: McpServerConfig): Record<string, string> {
+function looksLikeAuthError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /\b401\b|\b403\b|unauthori[sz]ed|forbidden/i.test(msg);
+}
+
+/**
+ * Build auth headers from config. Async because OAuth requires a resolver
+ * that may refresh the access token from a remote AS.
+ *
+ * Returns empty object when auth_type=none OR when OAuth has no tokens
+ * yet — connection then proceeds unauthenticated and the server's 401
+ * prompts the user to connect via the dashboard.
+ */
+async function buildAuthHeaders(
+  config: McpServerConfig,
+  resolver: ResolveMcpBearer | null,
+): Promise<Record<string, string>> {
+  if (config.auth_type === 'oauth2') {
+    if (!resolver) return {};
+    const result = await resolver.execute(config.id);
+    if (!result.ok) {
+      console.warn(
+        `[mcp-ext] OAuth bearer unavailable for "${config.id}": ${mcpAuthClientErrorMessage(result.error)}`,
+      );
+      return {};
+    }
+    return { Authorization: `Bearer ${result.value}` };
+  }
+
   if (!config.auth_token) return {};
   switch (config.auth_type) {
     case 'bearer':
@@ -48,9 +80,10 @@ function buildAuthHeaders(config: McpServerConfig): Record<string, string> {
 }
 
 /**
- * Create the appropriate transport for a server config.
+ * Create the appropriate transport for a server config. Async because
+ * auth header resolution (OAuth) may require remote calls.
  */
-function createTransport(config: McpServerConfig) {
+async function createTransport(config: McpServerConfig, resolver: ResolveMcpBearer | null) {
   switch (config.transport) {
     case 'stdio': {
       if (!config.command) throw new Error(`stdio server "${config.id}" requires a command`);
@@ -62,7 +95,7 @@ function createTransport(config: McpServerConfig) {
     }
     case 'sse': {
       if (!config.url) throw new Error(`sse server "${config.id}" requires a url`);
-      const authHeaders = buildAuthHeaders(config);
+      const authHeaders = await buildAuthHeaders(config, resolver);
       const extraHeaders = (config.config as Record<string, unknown>).headers as
         | Record<string, string>
         | undefined ?? {};
@@ -85,7 +118,7 @@ function createTransport(config: McpServerConfig) {
     }
     case 'streamable_http': {
       if (!config.url) throw new Error(`streamable_http server "${config.id}" requires a url`);
-      const authHeaders = buildAuthHeaders(config);
+      const authHeaders = await buildAuthHeaders(config, resolver);
       const extraHeaders = (config.config as Record<string, unknown>).headers as
         | Record<string, string>
         | undefined ?? {};
@@ -102,6 +135,14 @@ function createTransport(config: McpServerConfig) {
 
 export class McpServerManager {
   private connections = new Map<string, ServerConnection>();
+
+  /**
+   * @param bearerResolver  Optional resolver for auth_type='oauth2' servers.
+   *                        When null (e.g., transient "test" button), OAuth
+   *                        servers attempt to connect unauthenticated and
+   *                        the dashboard guides re-auth on failure.
+   */
+  constructor(private readonly bearerResolver: ResolveMcpBearer | null = null) {}
 
   /**
    * Connect to all provided server configs in parallel, with per-server timeout.
@@ -126,7 +167,7 @@ export class McpServerManager {
    * Connect to a single external MCP server.
    */
   async connectServer(config: McpServerConfig): Promise<void> {
-    const transport = createTransport(config);
+    const transport = await createTransport(config, this.bearerResolver);
     const client = new Client(
       { name: `coder-ext-${config.id}`, version: '0.1.0' },
       { capabilities: {} },
@@ -217,15 +258,25 @@ export class McpServerManager {
       }
 
       try {
-        const result = await conn.client.callTool({ name: toolName, arguments: args });
-        const text = (result.content as Array<{ type: string; text?: string }> | undefined)
-          ?.filter((c) => c.type === 'text' && typeof c.text === 'string')
-          .map((c) => c.text!)
-          .join('\n') ?? '';
-        if (result.isError) return err(text || 'External MCP tool returned error');
-        return ok(text);
+        return await this.callToolOnce(conn, toolName, args);
       } catch (e) {
-        // Mark server as disconnected on transport errors
+        // OAuth 401/403: the access token is likely expired. Try ONE reconnect
+        // with a fresh resolver call (the resolver itself will refresh if it
+        // can) before giving up. Any other failure goes straight to the
+        // disconnected path.
+        if (conn.config.auth_type === 'oauth2' && this.bearerResolver && looksLikeAuthError(e)) {
+          try {
+            await this.reconnectServer(conn);
+            return await this.callToolOnce(conn, toolName, args);
+          } catch (e2) {
+            conn.state = 'disconnected';
+            conn.error = e2 instanceof Error ? e2.message : String(e2);
+            return err(
+              `External MCP server "${serverId}" OAuth reconnect failed: ${conn.error}. ` +
+              'Please reconnect via the dashboard.',
+            );
+          }
+        }
         conn.state = 'disconnected';
         conn.error = e instanceof Error ? e.message : String(e);
         return err(
@@ -234,6 +285,33 @@ export class McpServerManager {
         );
       }
     };
+  }
+
+  /** Single tool call with no retry logic — used by createHandler. */
+  private async callToolOnce(
+    conn: ServerConnection,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
+    const result = await conn.client.callTool({ name: toolName, arguments: args });
+    const text = (result.content as Array<{ type: string; text?: string }> | undefined)
+      ?.filter((c) => c.type === 'text' && typeof c.text === 'string')
+      .map((c) => c.text!)
+      .join('\n') ?? '';
+    if (result.isError) return err(text || 'External MCP tool returned error');
+    return ok(text);
+  }
+
+  /** Close and re-open the connection for a server (used on OAuth auth error). */
+  private async reconnectServer(conn: ServerConnection): Promise<void> {
+    try { await conn.client.close(); } catch { /* ignore */ }
+    await this.connectServer(conn.config);
+    const refreshed = this.connections.get(conn.config.id);
+    if (refreshed) {
+      conn.client = refreshed.client;
+      conn.state = refreshed.state;
+      conn.error = refreshed.error;
+    }
   }
 
   /**

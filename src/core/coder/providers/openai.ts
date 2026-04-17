@@ -7,10 +7,13 @@ import type { AgentMessage, ChatDelta, ContentBlock } from '../core/messages.js'
  * provider that implements the OpenAI chat completions schema with function
  * calling and streaming).
  */
+export type OpenAICompatVendor = 'openai' | 'zai' | 'deepseek' | 'copilot';
+
 export class OpenAIChatProvider implements ChatProvider {
   readonly name: string;
   model: string;
   private client: OpenAI;
+  private vendor: OpenAICompatVendor;
 
   constructor(opts: {
     name?: string;
@@ -18,16 +21,16 @@ export class OpenAIChatProvider implements ChatProvider {
     baseURL?: string;
     model: string;
     defaultHeaders?: Record<string, string>;
+    vendor?: OpenAICompatVendor;
   }) {
     this.name = opts.name ?? 'openai';
     this.model = opts.model;
+    this.vendor = opts.vendor ?? 'openai';
     this.client = new OpenAI({
       apiKey: opts.apiKey ?? process.env.OPENAI_API_KEY,
       ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
       ...(opts.defaultHeaders ? { defaultHeaders: opts.defaultHeaders } : {}),
     });
-
-    console.log(opts.baseURL)
   }
 
   setModel(model: string): void {
@@ -45,34 +48,38 @@ export class OpenAIChatProvider implements ChatProvider {
       },
     }));
 
-    try {
-      // DEBUG LOGGING
-      /*const fs = await import('node:fs');
-      const path = await import('node:path');
-      fs.writeFileSync(
-        path.join(process.cwd(), 'zai-debug-request.json'),
-        JSON.stringify({ model: this.model, messages, tools: tools.length > 0 ? tools : undefined }, null, 2)
-      );*/
-    } catch {}
+    // Z.AI / GLM extensions. These fields are not in the OpenAI SDK type but
+    // the wire protocol is OpenAI-compatible; cast at the call site. Gated on
+    // vendor+model family so DeepSeek/Copilot/OpenAI don't receive unknown params.
+    const zaiExtras: Record<string, unknown> = {};
+    if (this.vendor === 'zai') {
+      zaiExtras.tool_stream = true;
+      // Only glm-5.x accepts the `thinking` parameter; glm-4.* rejects it with 400.
+      if (/^glm-5(\.|-)/.test(this.model)) {
+        zaiExtras.thinking = { type: req.thinking ? 'enabled' : 'disabled' };
+      }
+      const maxTokensEnv = process.env.ZAI_MAX_TOKENS;
+      const parsed = maxTokensEnv ? Number(maxTokensEnv) : NaN;
+      zaiExtras.max_tokens = Number.isFinite(parsed) && parsed > 0 ? parsed : 32_000;
+    }
 
     let stream;
     try {
-      stream = await this.client.chat.completions.create({
+      // Pass stream:true as a typed literal so the overload resolves to the
+      // streaming return type; spread vendor extras via an untyped cast since
+      // the SDK types don't know about GLM-specific fields.
+      const params = {
         model: this.model,
         messages,
         tools: tools.length > 0 ? tools : undefined,
-        stream: true,
+        stream: true as const,
         stream_options: { include_usage: true },
-      });
+        ...zaiExtras,
+      };
+      stream = await this.client.chat.completions.create(
+        params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming
+      );
     } catch (apiErr: any) {
-      try {
-        /*const fs = await import('node:fs');
-        const path = await import('node:path');
-        fs.writeFileSync(
-          path.join(process.cwd(), 'zai-debug-error.json'),
-          JSON.stringify({ error: apiErr, response: apiErr.response?.data || apiErr.error }, null, 2)
-        );*/
-      } catch {}
       throw apiErr;
     }
 
@@ -84,6 +91,12 @@ export class OpenAIChatProvider implements ChatProvider {
       const delta = choice?.delta;
       if (delta?.content) {
         yield { type: 'text_delta', text: delta.content };
+      }
+      // GLM / DeepSeek-R1 expose chain-of-thought via reasoning_content on the
+      // delta. Field is absent on vanilla OpenAI responses.
+      const reasoning = (delta as { reasoning_content?: unknown })?.reasoning_content;
+      if (typeof reasoning === 'string' && reasoning.length > 0) {
+        yield { type: 'thinking_delta', text: reasoning };
       }
       if (delta?.tool_calls) {
         for (const tc of delta.tool_calls) {
@@ -113,14 +126,17 @@ export class OpenAIChatProvider implements ChatProvider {
           completion_tokens?: number;
           prompt_tokens_details?: { cached_tokens?: number };
           prompt_cache_hit_tokens?: number;
+          completion_tokens_details?: { reasoning_tokens?: number };
         };
         const cachedRead = u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0;
+        const reasoningTokens = u.completion_tokens_details?.reasoning_tokens;
         yield {
           type: 'usage',
           usage: {
             input_tokens: u.prompt_tokens ?? 0,
             output_tokens: u.completion_tokens ?? 0,
             cache_read_input_tokens: cachedRead,
+            ...(reasoningTokens ? { thinking_tokens: reasoningTokens } : {}),
           },
         };
       }

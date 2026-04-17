@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
+import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 
 interface CreateSessionBody {
   template_id?: number;
@@ -26,9 +27,9 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.get('/api/company/sessions/:id', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const full = companyStore.getCompanySessionFull(id);
-    if (!full) return c.json({ error: 'Not found' }, 404);
+    if (!full) return notFound(c);
 
     // Enrich projects with names
     const enrichedProjects = full.projects.map((p) => {
@@ -47,7 +48,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions', async (c) => {
-    const body = await c.req.json<CreateSessionBody>().catch(() => ({}) as CreateSessionBody);
+    const body = await parseJsonBody<CreateSessionBody>(c);
     if (!body.name || !body.project_ids?.length) {
       return c.json({ error: 'name and project_ids required' }, 400);
     }
@@ -82,9 +83,8 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.delete('/api/company/sessions/:id', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const deleted = companyStore.deleteCompanySession(id);
-    if (!deleted) return c.json({ error: 'Not found' }, 404);
+    const deleted = companyStore.deleteCompanySession(parseIdParam(c));
+    if (!deleted) return notFound(c);
     return c.json({ ok: true });
   });
 }

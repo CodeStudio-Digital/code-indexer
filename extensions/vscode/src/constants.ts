@@ -1,0 +1,9 @@
+export const DEFAULT_PORT = 3333;
+export const DEFAULT_HOST = 'localhost';
+export const SERVER_HEALTH_TIMEOUT_MS = 3000;
+export const SERVER_START_TIMEOUT_MS = 15_000;
+export const SERVER_POLL_INTERVAL_MS = 500;
+export const SEARCH_DEBOUNCE_MS = 300;
+export const STATUS_POLL_INTERVAL_MS = 5_000;
+export const SERVER_ENTRY_RELATIVE = 'dist/apps/http-api/server.js';
+export const ENV_PORT_KEY = 'MCP_INDEX_PORT';

@@ -3,6 +3,7 @@ import type { ServerDeps } from '../../deps.js';
 import { publish } from '../../../coder-bus.js';
 import { activeOrchestrators } from './stream.js';
 import type { KanbanColumn, KanbanTag } from '../../../../../core/coder/company/types.js';
+import { parseIdParam, notFound } from '../_helpers.js';
 
 export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   const { companyStore } = deps;
@@ -18,7 +19,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── List all cards (full) ──────────────────────────────────
 
   app.get('/api/company/sessions/:id/kanban', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const column = c.req.query('column') as KanbanColumn | undefined;
     if (column) {
       const cards = companyStore.listKanbanCardsFull(id).filter(c => c.column === column);
@@ -30,16 +31,16 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Get single card (full) ─────────────────────────────────
 
   app.get('/api/company/sessions/:id/kanban/:cardId', (c) => {
-    const cardId = parseInt(c.req.param('cardId'), 10);
+    const cardId = parseIdParam(c, 'cardId');
     const card = companyStore.getKanbanCardFull(cardId);
-    if (!card) return c.json({ error: 'Card not found' }, 404);
+    if (!card) return notFound(c, 'Card not found');
     return c.json(card);
   });
 
   // ─── Create card ────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban', async (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
+    const sessionId = parseIdParam(c);
     const body = await c.req.json<{
       title: string;
       description?: string;
@@ -73,8 +74,8 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Update card ────────────────────────────────────────────
 
   app.patch('/api/company/sessions/:id/kanban/:cardId', async (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
-    const cardId = parseInt(c.req.param('cardId'), 10);
+    const sessionId = parseIdParam(c);
+    const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{
       title?: string;
       description?: string;
@@ -82,7 +83,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
     }>();
 
     const card = companyStore.updateKanbanCard(cardId, body);
-    if (!card) return c.json({ error: 'Card not found' }, 404);
+    if (!card) return notFound(c, 'Card not found');
 
     publishKanbanEvent(sessionId, 'kanban_card_updated', { cardId, patch: body });
     return c.json(card);
@@ -91,8 +92,8 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Move card ──────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/move', async (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
-    const cardId = parseInt(c.req.param('cardId'), 10);
+    const sessionId = parseIdParam(c);
+    const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{
       column: KanbanColumn;
       position?: number;
@@ -129,10 +130,10 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Delete card ────────────────────────────────────────────
 
   app.delete('/api/company/sessions/:id/kanban/:cardId', (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
-    const cardId = parseInt(c.req.param('cardId'), 10);
+    const sessionId = parseIdParam(c);
+    const cardId = parseIdParam(c, 'cardId');
     const ok = companyStore.deleteKanbanCard(cardId);
-    if (!ok) return c.json({ error: 'Card not found' }, 404);
+    if (!ok) return notFound(c, 'Card not found');
 
     publishKanbanEvent(sessionId, 'kanban_card_deleted', { cardId });
     return c.json({ ok: true });
@@ -141,8 +142,8 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Add comment ────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/comments', async (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
-    const cardId = parseInt(c.req.param('cardId'), 10);
+    const sessionId = parseIdParam(c);
+    const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{ content: string }>();
 
     if (!body.content) return c.json({ error: 'content is required' }, 400);
@@ -155,15 +156,15 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── List comments ──────────────────────────────────────────
 
   app.get('/api/company/sessions/:id/kanban/:cardId/comments', (c) => {
-    const cardId = parseInt(c.req.param('cardId'), 10);
+    const cardId = parseIdParam(c, 'cardId');
     return c.json(companyStore.listKanbanComments(cardId));
   });
 
   // ─── Add checklist item ─────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/checklist', async (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
-    const cardId = parseInt(c.req.param('cardId'), 10);
+    const sessionId = parseIdParam(c);
+    const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{ text: string }>();
 
     if (!body.text) return c.json({ error: 'text is required' }, 400);
@@ -176,15 +177,15 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Update checklist item ──────────────────────────────────
 
   app.patch('/api/company/sessions/:id/kanban/checklist/:itemId', async (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
-    const itemId = parseInt(c.req.param('itemId'), 10);
+    const sessionId = parseIdParam(c);
+    const itemId = parseIdParam(c, 'itemId');
     const body = await c.req.json<{
       text?: string;
       checked?: boolean;
     }>();
 
     const item = companyStore.updateChecklistItem(itemId, body);
-    if (!item) return c.json({ error: 'Item not found' }, 404);
+    if (!item) return notFound(c, 'Item not found');
 
     publishKanbanEvent(sessionId, 'kanban_checklist_updated', { cardId: item.card_id, items: [item] });
     return c.json(item);
@@ -193,10 +194,10 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Delete checklist item ──────────────────────────────────
 
   app.delete('/api/company/sessions/:id/kanban/checklist/:itemId', (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
-    const itemId = parseInt(c.req.param('itemId'), 10);
+    const sessionId = parseIdParam(c);
+    const itemId = parseIdParam(c, 'itemId');
     const ok = companyStore.removeChecklistItem(itemId);
-    if (!ok) return c.json({ error: 'Item not found' }, 404);
+    if (!ok) return notFound(c, 'Item not found');
 
     return c.json({ ok: true });
   });
@@ -204,8 +205,8 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Add dependency ─────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/dependencies', async (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
-    const cardId = parseInt(c.req.param('cardId'), 10);
+    const sessionId = parseIdParam(c);
+    const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{ depends_on_card_id: number }>();
 
     if (!body.depends_on_card_id) return c.json({ error: 'depends_on_card_id is required' }, 400);
@@ -222,11 +223,11 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Remove dependency ──────────────────────────────────────
 
   app.delete('/api/company/sessions/:id/kanban/:cardId/dependencies/:depCardId', (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
-    const cardId = parseInt(c.req.param('cardId'), 10);
-    const depCardId = parseInt(c.req.param('depCardId'), 10);
+    const sessionId = parseIdParam(c);
+    const cardId = parseIdParam(c, 'cardId');
+    const depCardId = parseIdParam(c, 'depCardId');
     const ok = companyStore.removeCardDependency(cardId, depCardId);
-    if (!ok) return c.json({ error: 'Dependency not found' }, 404);
+    if (!ok) return notFound(c, 'Dependency not found');
 
     publishKanbanEvent(sessionId, 'kanban_dependency_removed', { cardId, dependsOnId: depCardId });
     return c.json({ ok: true });

@@ -1,0 +1,90 @@
+<idea-plugin>
+  <id>com.mcp.indexer</id>
+  <name>MCP Code Indexer</name>
+  <version>1.0.0</version>
+  <vendor email="support@mcp-indexer.dev" url="https://github.com/your-org/mcp-code-indexer">
+    MCP Code Indexer
+  </vendor>
+
+  <description><![CDATA[
+    <p>Codebase indexing, AI-powered hybrid search, and agent chat powered by MCP Code Indexer.</p>
+    <ul>
+      <li>Open the AI Agent Chat dashboard directly inside your IDE</li>
+      <li>Search code with semantic + full-text hybrid search</li>
+      <li>Index your project with one click</li>
+      <li>Live status bar showing server health and indexing progress</li>
+    </ul>
+  ]]></description>
+
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.intellij.modules.lang</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+
+    <!-- Tool window: Agent Chat dashboard (JCEF browser) -->
+    <toolWindow
+      id="MCP Indexer"
+      anchor="right"
+      secondary="false"
+      icon="AllIcons.Nodes.DataSchema"
+      factoryClass="com.mcp.indexer.ui.DashboardWindowFactory"/>
+
+    <!-- Status bar widget -->
+    <statusBarWidgetFactory
+      id="McpStatusWidget"
+      implementation="com.mcp.indexer.ui.StatusWidgetFactory"
+      order="last"/>
+
+    <!-- Application-level service (server process lifecycle) -->
+    <applicationService
+      serviceImplementation="com.mcp.indexer.server.ServerManager"/>
+
+    <!-- Application-level settings persistence -->
+    <applicationService
+      serviceImplementation="com.mcp.indexer.settings.McpSettings"/>
+
+    <!-- Settings UI under File > Settings > Tools -->
+    <applicationConfigurable
+      parentId="tools"
+      instance="com.mcp.indexer.settings.McpSettingsConfigurable"
+      id="com.mcp.indexer.settings"
+      displayName="MCP Code Indexer"/>
+
+    <!-- Auto-start server on project open -->
+    <postStartupActivity implementation="com.mcp.indexer.McpStartupActivity"/>
+
+  </extensions>
+
+  <actions>
+    <group id="McpActionsGroup" text="MCP Code Indexer" popup="true">
+      <add-to-group group-id="ToolsMenu" anchor="last"/>
+
+      <action
+        id="mcp.openChat"
+        class="com.mcp.indexer.actions.OpenChatAction"
+        text="Open Agent Chat"
+        description="Open the MCP Agent Chat dashboard"
+        icon="AllIcons.General.Balloon">
+        <keyboard-shortcut keymap="$default" first-keystroke="alt shift M"/>
+      </action>
+
+      <action
+        id="mcp.search"
+        class="com.mcp.indexer.actions.SearchAction"
+        text="Search Codebase…"
+        description="Hybrid semantic + full-text codebase search"
+        icon="AllIcons.Actions.Search">
+        <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift M"/>
+      </action>
+
+      <action
+        id="mcp.indexProject"
+        class="com.mcp.indexer.actions.IndexProjectAction"
+        text="Index Current Project"
+        description="Index the current project using MCP Code Indexer"
+        icon="AllIcons.Actions.BuildLoadChanges"/>
+
+    </group>
+  </actions>
+
+</idea-plugin>

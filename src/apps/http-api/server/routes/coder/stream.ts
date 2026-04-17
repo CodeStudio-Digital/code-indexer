@@ -1,16 +1,15 @@
 import type { Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
 import { runCoder } from '../../../../../core/coder/index.js';
 import type { CoderAttachment } from '../../../../../core/coder/index.js';
 import {
   createBus,
   publish,
   markEnded,
-  subscribe,
-  waitEnded,
 } from '../../../coder-bus.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
+import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
+import { parseIdParam, notFound } from '../_helpers.js';
 
 interface SendMessageBody {
   content: string;
@@ -51,36 +50,15 @@ export function mountCoderStreamRoutes(
    * or the client disconnects.
    */
   app.get('/api/coder/sessions/:id/attach', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const bus = activeRuns.get(id);
     if (!bus) return c.json({ error: 'no active run' }, 404);
 
-    const sinceHeader = c.req.header('Last-Event-ID');
-    const since = sinceHeader ? parseInt(sinceHeader, 10) : -1;
-
-    return streamSSE(c, async (stream) => {
-      const unsubscribe = subscribe(
-        bus,
-        (ev) => {
-          void stream.writeSSE({
-            id: String(ev.seq),
-            event: ev.event,
-            data: JSON.stringify(ev.data),
-          });
-        },
-        Number.isFinite(since) ? since : -1,
-      );
-      try {
-        await waitEnded(bus);
-      } finally {
-        unsubscribe();
-        await stream.close();
-      }
-    });
+    return pumpBusToSSE(c, bus, { since: parseLastEventId(c), heartbeat: false });
   });
 
   app.post('/api/coder/sessions/:id/messages', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const body = await c.req.json<SendMessageBody>();
     if (!body.content?.trim()) return c.json({ error: 'content required' }, 400);
 
@@ -104,6 +82,7 @@ export function mountCoderStreamRoutes(
           worktree: body.worktree,
           thinking: body.thinking,
           signal: ctrl.signal,
+          mcpBearerResolver: deps.mcpBearerResolver,
         });
         bus.runner = handle.runner;
         publish(bus, 'session', handle.session);
@@ -123,21 +102,7 @@ export function mountCoderStreamRoutes(
       }
     })();
 
-    return streamSSE(c, async (stream) => {
-      const unsubscribe = subscribe(bus, (ev) => {
-        void stream.writeSSE({
-          id: String(ev.seq),
-          event: ev.event,
-          data: JSON.stringify(ev.data),
-        });
-      });
-      try {
-        await waitEnded(bus);
-      } finally {
-        unsubscribe();
-        await stream.close();
-      }
-    });
+    return pumpBusToSSE(c, bus, { heartbeat: false });
   });
 
   /**
@@ -148,7 +113,7 @@ export function mountCoderStreamRoutes(
    * with the just-appended tool_result) and runs the next turn.
    */
   app.post('/api/coder/sessions/:id/continue', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     let body: ContinueBody = {};
     try {
       body = await c.req.json();
@@ -157,7 +122,7 @@ export function mountCoderStreamRoutes(
     }
 
     const data = sessionStore.loadSessionWithMessages(id);
-    if (!data) return c.json({ error: 'Not found' }, 404);
+    if (!data) return notFound(c);
     const last = data.messages[data.messages.length - 1];
     if (!last || last.role !== 'tool') {
       return c.json({ error: 'session not in resumable state' }, 409);
@@ -178,6 +143,7 @@ export function mountCoderStreamRoutes(
           profile: body.profile,
           resume: true,
           signal: ctrl.signal,
+          mcpBearerResolver: deps.mcpBearerResolver,
         });
         bus.runner = handle.runner;
         publish(bus, 'session', handle.session);
@@ -195,20 +161,6 @@ export function mountCoderStreamRoutes(
       }
     })();
 
-    return streamSSE(c, async (stream) => {
-      const unsubscribe = subscribe(bus, (ev) => {
-        void stream.writeSSE({
-          id: String(ev.seq),
-          event: ev.event,
-          data: JSON.stringify(ev.data),
-        });
-      });
-      try {
-        await waitEnded(bus);
-      } finally {
-        unsubscribe();
-        await stream.close();
-      }
-    });
+    return pumpBusToSSE(c, bus, { heartbeat: false });
   });
 }

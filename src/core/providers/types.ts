@@ -46,6 +46,21 @@ export interface DiscoveredModel {
   provider: string;
 }
 
+/**
+ * Extra options for coder construction that don't belong on credentials.
+ * Currently only carries `cloudCodeSessionId` (used by Google OAuth / Gemini
+ * CloudCode to keep context-cache affinity across requests). Kept as an
+ * interface so new fields are additive without breaking all definitions.
+ */
+export interface CreateCoderOpts {
+  /**
+   * Gemini CloudCode session id — when set, the Google OAuth backend
+   * reuses server-side context cache across requests, cutting token cost.
+   * Unused by every other shape.
+   */
+  cloudCodeSessionId?: string;
+}
+
 export interface ProviderDefinition {
   /** SHAPE / API format. Registry key. */
   kind: string;
@@ -68,7 +83,7 @@ export interface ProviderDefinition {
   /** Build an async indexer (OAuth shapes that need token refresh). */
   createIndexerAsync?(creds: ResolvedCreds, model?: string): Promise<LLMProvider>;
   /** Build a coder (streaming) client for this shape. */
-  createCoder?(creds: ResolvedCreds, model?: string): ChatProvider;
+  createCoder?(creds: ResolvedCreds, model?: string, opts?: CreateCoderOpts): ChatProvider;
 }
 
 export function defineProvider(def: ProviderDefinition): ProviderDefinition {

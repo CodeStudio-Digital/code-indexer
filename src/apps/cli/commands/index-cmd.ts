@@ -7,6 +7,7 @@ import { IndexAgent } from '../../../core/indexer/indexer.js';
 import { CostTracker } from '../../../core/services/costs.js';
 import { WebhookDispatcher } from '../../../core/services/webhooks.js';
 import { getEmbeddingService, getVectorStore } from '../helpers.js';
+import { createAndSeedProviderStore } from '../../../core/bootstrap/index.js';
 import type { ProviderName } from '../../../types.js';
 
 export function register(program: Command): void {
@@ -23,8 +24,8 @@ export function register(program: Command): void {
       const config = loadConfig();
       if (opts.budget !== undefined) config.budget = opts.budget;
       const db = new CodeIndexDB(config.dbPath);
-      const embeddingService = getEmbeddingService(config);
-      const vectorStore = getVectorStore(config);
+      const embeddingService = getEmbeddingService(config.dbPath);
+      const vectorStore = getVectorStore(config.dbPath);
       const costTracker = new CostTracker(db);
       const webhookDispatcher = new WebhookDispatcher(db);
       const projectPath = resolve(path ?? process.cwd());
@@ -51,7 +52,9 @@ export function register(program: Command): void {
         return;
       }
 
-      const provider = await createProviderAsync((opts.provider ?? config.provider) as ProviderName, opts.model ?? config.model);
+      const providerStore = createAndSeedProviderStore(config.dbPath);
+      const defaults = providerStore.getDefaultProviderAndModel();
+      const provider = await createProviderAsync((opts.provider ?? defaults.kind) as ProviderName, opts.model ?? defaults.model);
       const agent = new IndexAgent(db, provider, embeddingService, vectorStore, costTracker, webhookDispatcher, config);
 
       console.log(`Indexing ${projectPath} with ${provider.name}/${provider.model}...`);

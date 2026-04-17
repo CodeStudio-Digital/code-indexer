@@ -128,10 +128,19 @@ const handleListDirectory: OverlayHandler = {
     const overlayFiles = overlay.filterDirty(prefix);
     if (overlayFiles.length === 0) return ok(mcpText);
 
-    // Only add files not already listed by the MCP server
+    // Only add files not already listed by the MCP server.
+    // Matching by basename alone caused false positives: a dirty
+    // `src/foo/index.ts` would be skipped if the listing contained
+    // `src/bar/index.ts` at a different indent. Match on the exact
+    // indent+basename line shape the MCP server produces.
+    const prefixDepth = prefix ? prefix.split('/').filter(Boolean).length : 0;
     const extras = overlayFiles.filter((p) => {
-      const base = p.split('/').pop() ?? p;
-      return !mcpText.includes(base);
+      const parts = p.split('/');
+      const indent = '  '.repeat(Math.max(0, parts.length - prefixDepth - 1));
+      const base = parts[parts.length - 1];
+      const escaped = (indent + base).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`^${escaped}($|[\\s(])`, 'm');
+      return !re.test(mcpText);
     });
     if (extras.length === 0) return ok(mcpText);
 
@@ -178,7 +187,18 @@ const handleGrepCode: OverlayHandler = {
     const hits = grepInFiles(projectRoot, existingDirty, re, maxResults);
     if (hits.length === 0) return ok(mcpText);
 
-    const overlayLines = hits.map((h) => `${h.file}:${h.line}: ${h.text} ${OVERLAY_TAG}`);
+    // Dedupe against hits already present in the MCP result — otherwise an
+    // indexed-but-also-dirty file shows up twice (once from the DB grep, once
+    // from the overlay disk grep). Key: `file:line`.
+    const existingHits = new Set<string>();
+    for (const line of mcpText.split('\n')) {
+      const m = line.match(/^([^\s:]+):(\d+):/);
+      if (m) existingHits.add(`${m[1]}:${m[2]}`);
+    }
+    const newHits = hits.filter((h) => !existingHits.has(`${h.file}:${h.line}`));
+    if (newHits.length === 0) return ok(mcpText);
+
+    const overlayLines = newHits.map((h) => `${h.file}:${h.line}: ${h.text} ${OVERLAY_TAG}`);
     const body = mcpText === 'No matches.' ? '' : mcpText;
     return ok([body, ...overlayLines].filter(Boolean).join('\n'));
   },

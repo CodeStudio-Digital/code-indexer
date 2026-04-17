@@ -91,7 +91,13 @@ function kanbanMoveCard(orchestrator: CompanyOrchestrator): CoderTool {
         if (['in_progress', 'review', 'done'].includes(column)) {
           const full = orchestrator.kanbanGetCard(cardId);
           if (full && full.blocked_by.length > 0) {
-            return err(`Card #${cardId} is blocked by cards: ${full.blocked_by.join(', ')}. Resolve blockers first.`);
+            return err(
+              `Card #${cardId} is blocked by cards: ${full.blocked_by.join(', ')}. ` +
+              `Resolve blockers first by either:\n` +
+              `  1. Moving blocker(s) to done (use kanban_move_card on each blocker), or\n` +
+              `  2. Removing the dependency (use kanban_remove_dependency card_id=${cardId}, depends_on_card_id=<blocker>), or\n` +
+              `  3. Inspecting each blocker with kanban_get_card to decide next action.`,
+            );
           }
         }
 
@@ -131,7 +137,7 @@ function kanbanUpdateCard(orchestrator: CompanyOrchestrator): CoderTool {
           description: args.description as string | undefined,
           tag,
         });
-        return card ? ok(`Card #${card.id} updated`) : err('Card not found');
+        return card ? ok(`Card #${card.id} updated`) : err(`Card #${args.card_id} not found. Use kanban_list_cards to see valid ids.`);
       } catch (e) {
         return err(`Failed to update card: ${(e as Error).message}`);
       }
@@ -358,7 +364,7 @@ function kanbanGetCard(orchestrator: CompanyOrchestrator): CoderTool {
     handler: async (args) => {
       try {
         const card = orchestrator.kanbanGetCard(args.card_id as number);
-        return card ? ok(JSON.stringify(card, null, 2)) : err('Card not found');
+        return card ? ok(JSON.stringify(card, null, 2)) : err(`Card #${args.card_id} not found. Use kanban_list_cards to see available cards.`);
       } catch (e) {
         return err(`Failed to get card: ${(e as Error).message}`);
       }

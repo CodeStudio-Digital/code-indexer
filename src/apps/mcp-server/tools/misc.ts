@@ -1,6 +1,7 @@
 import { defineTool, type McpTool } from '../tool.js';
 import { resolveProject } from '../utils.js';
 import type { ProviderName, ExportSection } from '../../../types.js';
+import { withProject } from './_helpers.js';
 
 const get_costs = defineTool({
   name: 'get_costs',
@@ -30,17 +31,18 @@ const estimate_cost = defineTool({
     },
     required: ['project_name'],
   },
-  handler: (args, { db, config, costTracker }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db, providerStore, costTracker }, project) => {
     const stats = db.getStats(project.id);
+    const defaults = providerStore.getDefaultProviderAndModel();
+    const embeddingCfg = providerStore.getDefaultEmbedding();
     const estimate = costTracker.estimateCost({
       fileCount: stats.file_count || 100,
-      provider: (args.provider as string) ?? config.provider ?? 'zai',
-      model: (args.model as string) ?? config.model ?? 'glm-5.1',
-      embeddingsEnabled: config.embeddings.enabled,
+      provider: (args.provider as string) ?? defaults.kind,
+      model: (args.model as string) ?? defaults.model ?? 'glm-5.1',
+      embeddingsEnabled: !!embeddingCfg,
     });
     return `Estimated cost: $${estimate.estimatedCostUsd.toFixed(4)}\nAnalysis tokens: ${estimate.analysisTokens.toLocaleString()}\nEmbedding tokens: ${estimate.embeddingTokens.toLocaleString()}`;
-  },
+  }),
 });
 
 const get_diff = defineTool({
@@ -55,14 +57,13 @@ const get_diff = defineTool({
     },
     required: ['project_name'],
   },
-  handler: (args, { db, diffService }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { diffService }, project) => {
     const diff = args.run_before && args.run_after
       ? diffService.diff(project.id, args.run_before as number, args.run_after as number)
       : diffService.diffLatest(project.id);
     if (!diff) return 'Not enough runs to compare.';
     return diffService.formatDiff(diff);
-  },
+  }),
 });
 
 const export_docs = defineTool({
@@ -77,8 +78,7 @@ const export_docs = defineTool({
     },
     required: ['project_name'],
   },
-  handler: (args, { db, exportService }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { exportService }, project) => {
     return exportService.export({
       projectId: project.id,
       projectName: project.name,
@@ -87,7 +87,7 @@ const export_docs = defineTool({
       includeSnapshots: true,
       includeCosts: true,
     });
-  },
+  }),
 });
 
 const list_models = defineTool({

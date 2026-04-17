@@ -131,6 +131,10 @@ export interface ContextStatus {
   max_turns: number;
   auto_continue_count: number;
   auto_continue_max: number;
+  /** Actual input tokens for the most recent turn — represents real context window usage. */
+  last_turn_input_tokens: number;
+  /** Model context window size in tokens, or null when unknown. */
+  context_window: number | null;
 }
 
 export interface IndexStatus {

@@ -1,43 +1,43 @@
 import 'dotenv/config';
-import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
-export interface EmbeddingsConfig {
+export interface McpHttpConfig {
   enabled: boolean;
-  workerUrl: string;
-  workerToken: string;
-  model: string;
-  dimensions: number;
+  path: string;
+  stateful: boolean;
+  corsOrigins: string[];
 }
 
-export interface WatcherConfig {
+export interface McpAuthConfig {
   enabled: boolean;
-  debounce: number;
-  autoIndex: boolean;
+  rateLimitPerMin: number;
 }
 
-export interface WebhookConfigEntry {
-  url: string;
-  events: string[];
-  secret?: string;
+export interface McpOAuthConfig {
+  enabled: boolean;
+  issuer: string;
+  jwtSecret: string;
+  accessTtlSec: number;
+  refreshTtlSec: number;
+  allowDcr: boolean;
 }
 
 export interface IndexerConfig {
   dbPath: string;
-  provider?: string;
-  model?: string;
   concurrency: number;
   maxFileSize: number;
   ignorePatterns: string[];
-  embeddings: EmbeddingsConfig;
-  watcher: WatcherConfig;
-  webhooks: WebhookConfigEntry[];
-  costTracking: boolean;
   budget?: number;
   dashboard: {
     port: number;
     host: string;
+  };
+  mcp: {
+    http: McpHttpConfig;
+    auth: McpAuthConfig;
+    oauth: McpOAuthConfig;
   };
 }
 
@@ -48,65 +48,87 @@ const DEFAULT_CONFIG: IndexerConfig = {
   concurrency: 5,
   maxFileSize: 200,
   ignorePatterns: [],
-  embeddings: {
-    enabled: false,
-    workerUrl: '',
-    workerToken: '',
-    model: '@cf/baai/bge-m3',
-    dimensions: 1024,
-  },
-  watcher: {
-    enabled: false,
-    debounce: 2000,
-    autoIndex: true,
-  },
-  webhooks: [],
-  costTracking: true,
   dashboard: {
     port: 3333,
     host: '0.0.0.0',
   },
+  mcp: {
+    http: {
+      enabled: false,
+      path: '/mcp',
+      stateful: false,
+      corsOrigins: [],
+    },
+    auth: {
+      enabled: false,
+      rateLimitPerMin: 120,
+    },
+    oauth: {
+      enabled: false,
+      issuer: '',
+      jwtSecret: '',
+      accessTtlSec: 3600,
+      refreshTtlSec: 30 * 24 * 3600,
+      allowDcr: true,
+    },
+  },
 };
-
-function loadJsonFile(filePath: string): Record<string, unknown> | null {
-  if (!existsSync(filePath)) return null;
-  try {
-    const content = readFileSync(filePath, 'utf-8');
-    return JSON.parse(content) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
 
 function applyEnvOverrides(config: IndexerConfig): void {
   if (process.env.MCP_INDEX_DB) {
     config.dbPath = process.env.MCP_INDEX_DB;
   }
-  if (process.env.MCP_INDEX_PROVIDER) {
-    config.provider = process.env.MCP_INDEX_PROVIDER;
-  }
-  if (process.env.MCP_INDEX_MODEL) {
-    config.model = process.env.MCP_INDEX_MODEL;
-  }
   if (process.env.MCP_INDEX_PORT) {
     config.dashboard.port = parseInt(process.env.MCP_INDEX_PORT, 10);
-  }
-  if (process.env.MCP_INDEX_WORKER_URL) {
-    config.embeddings.workerUrl = process.env.MCP_INDEX_WORKER_URL;
-  }
-  if (process.env.MCP_INDEX_WORKER_TOKEN) {
-    config.embeddings.workerToken = process.env.MCP_INDEX_WORKER_TOKEN;
-  }
-  if (process.env.MCP_INDEX_EMBEDDINGS === 'true') {
-    config.embeddings.enabled = true;
-  } else if (process.env.MCP_INDEX_EMBEDDINGS === 'false') {
-    config.embeddings.enabled = false;
   }
   if (process.env.MCP_INDEX_CONCURRENCY) {
     config.concurrency = parseInt(process.env.MCP_INDEX_CONCURRENCY, 10);
   }
   if (process.env.MCP_INDEX_BUDGET) {
     config.budget = parseFloat(process.env.MCP_INDEX_BUDGET);
+  }
+
+  // MCP HTTP
+  if (process.env.MCP_HTTP_ENABLED) {
+    config.mcp.http.enabled = process.env.MCP_HTTP_ENABLED === 'true';
+  }
+  if (process.env.MCP_HTTP_PATH) {
+    config.mcp.http.path = process.env.MCP_HTTP_PATH;
+  }
+  if (process.env.MCP_HTTP_STATEFUL) {
+    config.mcp.http.stateful = process.env.MCP_HTTP_STATEFUL === 'true';
+  }
+  if (process.env.MCP_HTTP_CORS_ORIGINS) {
+    config.mcp.http.corsOrigins = process.env.MCP_HTTP_CORS_ORIGINS
+      .split(',').map((s) => s.trim()).filter(Boolean);
+  }
+
+  // MCP auth (API tokens)
+  if (process.env.MCP_AUTH_ENABLED) {
+    config.mcp.auth.enabled = process.env.MCP_AUTH_ENABLED === 'true';
+  }
+  if (process.env.MCP_AUTH_RATE_LIMIT) {
+    config.mcp.auth.rateLimitPerMin = parseInt(process.env.MCP_AUTH_RATE_LIMIT, 10);
+  }
+
+  // MCP OAuth
+  if (process.env.MCP_OAUTH_ENABLED) {
+    config.mcp.oauth.enabled = process.env.MCP_OAUTH_ENABLED === 'true';
+  }
+  if (process.env.MCP_OAUTH_ISSUER) {
+    config.mcp.oauth.issuer = process.env.MCP_OAUTH_ISSUER;
+  }
+  if (process.env.MCP_OAUTH_JWT_SECRET) {
+    config.mcp.oauth.jwtSecret = process.env.MCP_OAUTH_JWT_SECRET;
+  }
+  if (process.env.MCP_OAUTH_ACCESS_TTL) {
+    config.mcp.oauth.accessTtlSec = parseInt(process.env.MCP_OAUTH_ACCESS_TTL, 10);
+  }
+  if (process.env.MCP_OAUTH_REFRESH_TTL) {
+    config.mcp.oauth.refreshTtlSec = parseInt(process.env.MCP_OAUTH_REFRESH_TTL, 10);
+  }
+  if (process.env.MCP_OAUTH_ALLOW_DCR) {
+    config.mcp.oauth.allowDcr = process.env.MCP_OAUTH_ALLOW_DCR === 'true';
   }
 }
 
@@ -121,22 +143,13 @@ export function ensureDataDir(): string {
 export function loadConfig(cliOverrides?: Partial<IndexerConfig>): IndexerConfig {
   const config: IndexerConfig = structuredClone(DEFAULT_CONFIG);
 
-  // Load from cwd first, then home dir
-  const cwdConfig = loadJsonFile(join(process.cwd(), '.mcp-indexer.json'));
-  const homeConfig = loadJsonFile(join(homedir(), '.mcp-indexer.json'));
-
-  const fileConfig = cwdConfig ?? homeConfig;
-  if (fileConfig) {
-    Object.assign(config, fileConfig);
-    if (fileConfig.embeddings && typeof fileConfig.embeddings === 'object') {
-      Object.assign(config.embeddings, fileConfig.embeddings);
-    }
-    if (fileConfig.watcher && typeof fileConfig.watcher === 'object') {
-      Object.assign(config.watcher, fileConfig.watcher);
-    }
-    if (fileConfig.dashboard && typeof fileConfig.dashboard === 'object') {
-      Object.assign(config.dashboard, fileConfig.dashboard);
-    }
+  // Deprecation warning — .mcp-indexer.json is no longer read.
+  const legacyPath = join(process.cwd(), '.mcp-indexer.json');
+  if (existsSync(legacyPath)) {
+    console.warn(
+      '[deprecation] .mcp-indexer.json is no longer read. ' +
+      'Settings are managed via the admin dashboard. You can safely delete this file.'
+    );
   }
 
   applyEnvOverrides(config);
@@ -152,44 +165,4 @@ export function loadConfig(cliOverrides?: Partial<IndexerConfig>): IndexerConfig
   }
 
   return config;
-}
-
-export interface InitOverrides {
-  description?: string;
-  provider?: string;
-  model?: string;
-  embeddingsEnabled?: boolean;
-}
-
-export function getDefaultConfigTemplate(overrides: InitOverrides = {}): string {
-  return JSON.stringify(
-    {
-      ...(overrides.description ? { description: overrides.description } : {}),
-      provider: overrides.provider ?? 'zai',
-      model: overrides.model ?? 'glm-5.1',
-      concurrency: 5,
-      maxFileSize: 200,
-      ignorePatterns: ['*.test.*', '*.spec.*'],
-      embeddings: {
-        enabled: overrides.embeddingsEnabled ?? false,
-        workerUrl: '',
-        workerToken: '',
-        model: '@cf/baai/bge-m3',
-        dimensions: 1024,
-      },
-      watcher: {
-        enabled: false,
-        debounce: 2000,
-        autoIndex: true,
-      },
-      webhooks: [],
-      costTracking: true,
-      dashboard: {
-        port: 3333,
-        host: '0.0.0.0',
-      },
-    },
-    null,
-    2
-  );
 }

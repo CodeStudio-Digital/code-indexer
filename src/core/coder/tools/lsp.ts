@@ -1,8 +1,7 @@
-import { existsSync } from 'node:fs';
-import { resolve, relative, isAbsolute } from 'node:path';
 import type { CoderTool, ToolContext, ToolResult } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
 import { getTsService, isTsFile } from '../lsp/ts-service.js';
+import { resolveProjectFile as resolveProjectFilePath } from './paths.js';
 
 /**
  * LSP tools (TypeScript/JavaScript only in Phase 2).
@@ -22,11 +21,7 @@ import { getTsService, isTsFile } from '../lsp/ts-service.js';
  */
 
 function resolveProjectFile(filePath: string, ctx: ToolContext): { abs: string; rel: string } | null {
-  const abs = isAbsolute(filePath) ? filePath : resolve(ctx.cwd, filePath);
-  const rel = relative(ctx.cwd, abs);
-  if (rel.startsWith('..') || isAbsolute(rel)) return null;
-  if (!existsSync(abs)) return null;
-  return { abs, rel: rel.split('\\').join('/') };
+  return resolveProjectFilePath(filePath, ctx.cwd);
 }
 
 function formatPosition(p: { file: string; line: number; column: number }): string {

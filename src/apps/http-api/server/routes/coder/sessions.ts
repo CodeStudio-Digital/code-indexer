@@ -2,16 +2,50 @@ import type { Hono } from 'hono';
 import type { CoderProviderName } from '../../../../../core/coder/index.js';
 import { AGENTS } from '../../../../../core/coder/agents/index.js';
 import { getAllKnownToolsMeta, getToolTier, inferProfileFromMessage, TIER_COUNTS } from '../../../../../core/coder/tools/tiers.js';
+import { getModelContextWindow } from '../../../../../core/coder/providers/capabilities.js';
 import { enumerateExternalTools } from '../../../admin/mcp-servers.routes.js';
 import { loadConfig } from '../../../../../utils/config.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
+import { parseIdParam, parseIntQuery, parseJsonBody, notFound } from '../_helpers.js';
+
+/**
+ * Trim heavy inline content (tool_result strings and image/document base64)
+ * before serializing to the dashboard. Originals stay in the DB.
+ * Extracted so both the session-detail and paginated-messages endpoints use
+ * exactly the same shape.
+ */
+const TRIM_TOOL_RESULT = 4000;
+function trimMessageBlocks<M extends { content: unknown[] }>(messages: M[]): M[] {
+  return messages.map((m) => ({
+    ...m,
+    content: m.content.map((block) => {
+      const b = block as Record<string, unknown>;
+      if (b.type === 'tool_result' && typeof b.content === 'string' && b.content.length > TRIM_TOOL_RESULT) {
+        return {
+          ...b,
+          content: (b.content as string).slice(0, TRIM_TOOL_RESULT),
+          _truncated: true,
+          _originalLength: (b.content as string).length,
+        };
+      }
+      if ((b.type === 'image' || b.type === 'document') && typeof b.base64 === 'string') {
+        const { base64: _omit, ...rest } = b;
+        void _omit;
+        return { ...rest, _hasBase64: true };
+      }
+      return b;
+    }),
+  }));
+}
 
 interface CreateSessionBody {
   project_id: number;
   title: string;
   provider: CoderProviderName;
   model?: string;
+  /** Initial agent preset (explore | plan | build | admin). Persisted on the session row. */
+  agent?: 'explore' | 'plan' | 'build' | 'admin';
 }
 
 export function mountCoderSessionsRoutes(
@@ -29,8 +63,7 @@ export function mountCoderSessionsRoutes(
    * an id parameter.
    */
   app.get('/api/coder/sessions/recent', (c) => {
-    const rawLimit = parseInt(c.req.query('limit') ?? '10', 10);
-    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(50, rawLimit)) : 10;
+    const limit = Math.max(1, Math.min(50, parseIntQuery(c, 'limit', 10)));
     return c.json(sessionStore.listRecentSessionsGlobal(limit));
   });
 
@@ -78,7 +111,7 @@ export function mountCoderSessionsRoutes(
   });
 
   app.get('/api/coder/sessions', (c) => {
-    const projectId = parseInt(c.req.query('project_id') ?? '0', 10);
+    const projectId = parseIntQuery(c, 'project_id', 0);
     if (!projectId) return c.json({ error: 'project_id required' }, 400);
 
     const archivedQ = c.req.query('archived');
@@ -95,7 +128,7 @@ export function mountCoderSessionsRoutes(
   });
 
   app.post('/api/coder/sessions/batch-delete', async (c) => {
-    const body = await c.req.json<{ ids?: number[] }>().catch(() => ({}) as { ids?: number[] });
+    const body = await parseJsonBody<{ ids?: number[] }>(c);
     const ids = Array.isArray(body.ids) ? body.ids.filter((n) => Number.isFinite(n)) : [];
     if (ids.length === 0) return c.json({ error: 'ids required' }, 400);
     const deleted = sessionStore.deleteSessionsBatch(ids);
@@ -103,36 +136,32 @@ export function mountCoderSessionsRoutes(
   });
 
   app.patch('/api/coder/sessions/:id/archive', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const body = await c.req.json<{ archived?: boolean }>().catch(() => ({}) as { archived?: boolean });
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ archived?: boolean }>(c);
     if (typeof body.archived !== 'boolean') {
       return c.json({ error: 'archived:boolean required' }, 400);
     }
     sessionStore.setSessionArchived(id, body.archived);
     const session = sessionStore.getSession(id);
-    if (!session) return c.json({ error: 'Not found' }, 404);
+    if (!session) return notFound(c);
     return c.json(session);
   });
 
   app.patch('/api/coder/sessions/:id/favorite', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const body = await c.req
-      .json<{ favorite?: boolean }>()
-      .catch(() => ({}) as { favorite?: boolean });
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ favorite?: boolean }>(c);
     if (typeof body.favorite !== 'boolean') {
       return c.json({ error: 'favorite:boolean required' }, 400);
     }
     sessionStore.setSessionFavorite(id, body.favorite);
     const session = sessionStore.getSession(id);
-    if (!session) return c.json({ error: 'Not found' }, 404);
+    if (!session) return notFound(c);
     return c.json(session);
   });
 
   app.post('/api/coder/sessions/:id/fork', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const body = await c.req
-      .json<{ before_message_id?: number }>()
-      .catch(() => ({}) as { before_message_id?: number });
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ before_message_id?: number }>(c);
     const beforeId = body.before_message_id;
     if (typeof beforeId !== 'number' || !Number.isFinite(beforeId)) {
       return c.json({ error: 'before_message_id:number required' }, 400);
@@ -147,16 +176,14 @@ export function mountCoderSessionsRoutes(
   });
 
   app.patch('/api/coder/sessions/:id/group', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const body = await c.req
-      .json<{ group_id?: number | null }>()
-      .catch(() => ({}) as { group_id?: number | null });
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ group_id?: number | null }>(c);
     if (body.group_id !== null && !Number.isFinite(body.group_id)) {
       return c.json({ error: 'group_id:number|null required' }, 400);
     }
     sessionStore.setSessionGroup(id, body.group_id ?? null);
     const session = sessionStore.getSession(id);
-    if (!session) return c.json({ error: 'Not found' }, 404);
+    if (!session) return notFound(c);
     return c.json(session);
   });
 
@@ -170,12 +197,13 @@ export function mountCoderSessionsRoutes(
       title: body.title,
       provider: body.provider,
       model: body.model ?? '',
+      agent: body.agent ?? null,
     });
     return c.json(session, 201);
   });
 
   app.get('/api/coder/sessions/:id', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const full = c.req.query('full') === '1';
     const tailQ = c.req.query('tail');
     const tail = tailQ ? Math.max(1, parseInt(tailQ, 10) || 60) : 0;
@@ -185,35 +213,13 @@ export function mountCoderSessionsRoutes(
     const data = tail
       ? sessionStore.loadSessionMessagesTail(id, tail)
       : sessionStore.loadSessionWithMessages(id);
-    if (!data) return c.json({ error: 'Not found' }, 404);
+    if (!data) return notFound(c);
 
     const total_messages = sessionStore.getMessageCount(id);
 
     if (full) return c.json({ ...data, total_messages });
 
-    // Trim heavy content for the dashboard list view. Originals stay in the DB.
-    const TRIM_TOOL_RESULT = 4000;
-    const trimmedMessages = data.messages.map((m) => ({
-      ...m,
-      content: m.content.map((block) => {
-        const b = block as unknown as Record<string, unknown>;
-        if (b.type === 'tool_result' && typeof b.content === 'string' && b.content.length > TRIM_TOOL_RESULT) {
-          return {
-            ...b,
-            content: (b.content as string).slice(0, TRIM_TOOL_RESULT),
-            _truncated: true,
-            _originalLength: (b.content as string).length,
-          };
-        }
-        if ((b.type === 'image' || b.type === 'document') && typeof b.base64 === 'string') {
-          const { base64: _omit, ...rest } = b;
-          void _omit;
-          return { ...rest, _hasBase64: true };
-        }
-        return b;
-      }),
-    }));
-    return c.json({ ...data, messages: trimmedMessages, total_messages });
+    return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages });
   });
 
   /**
@@ -221,59 +227,43 @@ export function mountCoderSessionsRoutes(
    * Used by the dashboard "Load earlier" button.
    */
   app.get('/api/coder/sessions/:id/messages', (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
+    const sessionId = parseIdParam(c);
     const session = sessionStore.getSession(sessionId);
-    if (!session) return c.json({ error: 'Not found' }, 404);
+    if (!session) return notFound(c);
 
-    const beforeId = parseInt(c.req.query('before_id') ?? '0', 10);
-    const limit = Math.max(1, Math.min(100, parseInt(c.req.query('limit') ?? '40', 10)));
+    const beforeId = parseIntQuery(c, 'before_id', 0);
+    const limit = Math.max(1, Math.min(100, parseIntQuery(c, 'limit', 40)));
 
     if (!beforeId) return c.json({ error: 'before_id required' }, 400);
 
     const data = sessionStore.loadMessagesBefore(sessionId, beforeId, limit);
-
-    // Apply same trimming as the main endpoint
-    const TRIM_TOOL_RESULT = 4000;
-    const trimmedMessages = data.messages.map((m) => ({
-      ...m,
-      content: m.content.map((block) => {
-        const b = block as unknown as Record<string, unknown>;
-        if (b.type === 'tool_result' && typeof b.content === 'string' && b.content.length > TRIM_TOOL_RESULT) {
-          return {
-            ...b,
-            content: (b.content as string).slice(0, TRIM_TOOL_RESULT),
-            _truncated: true,
-            _originalLength: (b.content as string).length,
-          };
-        }
-        if ((b.type === 'image' || b.type === 'document') && typeof b.base64 === 'string') {
-          const { base64: _omit, ...rest } = b;
-          void _omit;
-          return { ...rest, _hasBase64: true };
-        }
-        return b;
-      }),
-    }));
-    return c.json({ messages: trimmedMessages, message_rows: data.message_rows });
+    return c.json({ messages: trimMessageBlocks(data.messages), message_rows: data.message_rows });
   });
 
   app.get('/api/coder/sessions/:id/stats', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const stats = sessionStore.getSessionStats(id);
-    if (!stats) return c.json({ error: 'Not found' }, 404);
-    return c.json(stats);
+    if (!stats) return notFound(c);
+    // Resolve context window DB-first, then fall back to static registry.
+    const session = sessionStore.getSession(id);
+    let context_window: number | null = null;
+    if (session) {
+      const dbModel = deps.providerStore.listModels(session.provider).find((m) => m.model_id === session.model);
+      context_window = dbModel?.context_window ?? getModelContextWindow(session.model);
+    }
+    return c.json({ ...stats, context_window });
   });
 
   app.get('/api/coder/sessions/:id/messages/:mid/full', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const mid = parseInt(c.req.param('mid'), 10);
+    const id = parseIdParam(c);
+    const mid = parseIdParam(c, 'mid');
     const msg = sessionStore.getMessageById(id, mid);
-    if (!msg) return c.json({ error: 'message not found' }, 404);
+    if (!msg) return notFound(c, 'message not found');
     return c.json({ id: msg.row.id, role: msg.role, content: msg.content });
   });
 
   app.delete('/api/coder/sessions/:id', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     sessionStore.deleteSession(id);
     return c.json({ ok: true });
   });
@@ -285,7 +275,7 @@ export function mountCoderSessionsRoutes(
    * POST /messages from the user.
    */
   app.get('/api/coder/sessions/:id/status', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const bus = activeRuns.get(id);
     return c.json({
       active: !!bus && !bus.ended,
@@ -297,9 +287,9 @@ export function mountCoderSessionsRoutes(
 
   /** List all tools (built-in + external MCP) with global + session disabled state. */
   app.get('/api/coder/sessions/:id/tools', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const session = sessionStore.getSession(id);
-    if (!session) return c.json({ error: 'session not found' }, 404);
+    if (!session) return notFound(c, 'session not found');
 
     const allTools = getAllKnownToolsMeta();
     const globalDisabled = new Set(deps.providerStore.listGlobalDisabledTools());
@@ -328,7 +318,7 @@ export function mountCoderSessionsRoutes(
 
   /** Toggle a single tool for a session. */
   app.put('/api/coder/sessions/:id/tools/:name/disabled', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const toolName = c.req.param('name');
     const body = await c.req.json<{ disabled: boolean }>();
     if (typeof body.disabled !== 'boolean') {
@@ -340,7 +330,7 @@ export function mountCoderSessionsRoutes(
 
   /** Batch toggle tools for a session. */
   app.put('/api/coder/sessions/:id/tools/bulk-disabled', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const body = await c.req.json<{
       tools: Array<{ name: string; disabled: boolean }>;
     }>();
@@ -358,8 +348,8 @@ export function mountCoderSessionsRoutes(
 
   /** Copy tool config from another session. */
   app.post('/api/coder/sessions/:id/tools/copy-from/:sourceId', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const sourceId = parseInt(c.req.param('sourceId'), 10);
+    const id = parseIdParam(c);
+    const sourceId = parseIdParam(c, 'sourceId');
     const copiedCount = sessionStore.copyToolConfig(sourceId, id);
     return c.json({ ok: true, copiedCount });
   });

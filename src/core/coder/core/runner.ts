@@ -7,7 +7,7 @@ import type { ToolContext } from './tool.js';
 import {compactMessages, PRUNE_PROTECT, computeCutoffIndex, totalChars, PRUNE_MINIMUM, snapCutoffToRoleBoundary} from "./compaction.js";
 import { isSummarizerEnabled, summarizeSpan, renderSummary } from './summarizer.js';
 import { filterByTiers, profileToTiers, type ToolTier, type CoderProfile } from '../tools/tiers.js';
-import { getModelMaxTools, getModelCapabilityNote } from '../providers/capabilities.js';
+import { getModelMaxTools, getModelCapabilityNote, getModelContextWindow } from '../providers/capabilities.js';
 import { runToolFilterHook } from './hooks.js';
 
 export interface RunnerOptions {
@@ -52,6 +52,12 @@ export interface RunnerOptions {
   createProvider?: (name: string, model: string) => Promise<ChatProvider>;
   /** Runtime hook registry for lifecycle events (tool calls, errors, fallback, completion). */
   hookRegistry?: import('./hook-registry.js').RuntimeHookRegistry;
+  /**
+   * Pre-resolved context window for this session's model (tokens).
+   * Resolved from the provider_models DB row at session start so the value
+   * is DB-accurate even for models not in the static registry.
+   */
+  context_window?: number | null;
 }
 
 // Tools blocked outright in plan mode until the user approves a submitted
@@ -94,6 +100,15 @@ const TURN_BUDGET_CHARS = Number(process.env.CODER_TURN_BUDGET_CHARS ?? 30_000);
  */
 const DOOM_LOOP_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_THRESHOLD ?? 3);
 /**
+ * Fuzzy doom-loop threshold: catches "same tool names, slightly different args"
+ * patterns that the strict signature misses (e.g., agent keeps calling
+ * `read_file` with subtly different line ranges, or `edit_file` with tweaked
+ * replacements that never land). Higher than the strict threshold because the
+ * false-positive risk is larger — a legitimate iterative workflow may legally
+ * call the same tool set many turns in a row.
+ */
+const DOOM_LOOP_FUZZY_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_FUZZY_THRESHOLD ?? 6);
+/**
  * Auto-continue: when the runner exhausts maxTurns, instead of dying it
  * compacts the history (summarizer → deterministic fallback) and resets the
  * turn counter. This mirrors Claude Code's behaviour where the agent never
@@ -124,6 +139,16 @@ export function toolCallsSignature(
     .map((b) => `${b.name}:${JSON.stringify(stable(b.input))}`)
     .sort();
   return items.join('|');
+}
+
+/**
+ * Loose signature: just the sorted tool names. Ignores argument differences
+ * so the fuzzy doom-loop guard can catch near-repeats where the model keeps
+ * calling the same tools with tweaked arguments without making progress.
+ */
+export function toolNamesSignature(blocks: Array<{ name: string }>): string {
+  if (blocks.length === 0) return '';
+  return blocks.map((b) => b.name).sort().join('|');
 }
 
 export function approxChars(messages: AgentMessage[]): number {
@@ -442,12 +467,24 @@ export interface RunnerEvents {
     max_turns: number;
     auto_continue_count: number;
     auto_continue_max: number;
+    last_turn_input_tokens: number;
+    context_window: number | null;
   }) => void;
   /** Emitted when a fallback provider is activated due to persistent errors. */
   fallback_activated: (payload: {
     from: { provider: string; model: string };
     to: { provider: string; model: string };
     error: string;
+  }) => void;
+  /** Emitted when the runner compacts history during auto-continue so the
+   *  dashboard can show the user which turns were summarized away. */
+  history_compacted: (payload: {
+    strategy: 'summarizer' | 'deterministic' | 'none';
+    pruned_messages: number;
+    pruned_chars: number;
+    total_chars_before: number;
+    total_chars_after: number;
+    auto_continue: number;
   }) => void;
 }
 
@@ -464,6 +501,7 @@ export class CoderRunner extends EventEmitter {
   private readonly maxTurns: number;
   private aborted = false;
   private pendingResolve: ((value: string) => void) | null = null;
+  private pendingUserMessages: string[] = [];
   private planApproved = false;
   /**
    * Plan-mode enforcement: when the model finishes a turn (no tool calls)
@@ -491,6 +529,8 @@ export class CoderRunner extends EventEmitter {
    * next turn is refused to break the loop.
    */
   private recentTurnSignatures: string[] = [];
+  /** Ring of loose (tool-name-only) signatures for the fuzzy guard. */
+  private recentTurnNamesSignatures: string[] = [];
   /**
    * Lightweight todo list maintained by the `todo_write` tool. Distinct from
    * the heavyweight `submit_tasks` flow — todos never pause the run; they
@@ -643,6 +683,25 @@ export class CoderRunner extends EventEmitter {
     return true;
   }
 
+  /** True while the runner is blocked inside waitForUserInput(). */
+  isWaitingForInput(): boolean {
+    return this.pendingResolve !== null;
+  }
+
+  /**
+   * Break a pending waitForUserInput() by resolving it with an interrupt
+   * signal. The blocked tool receives { interrupted: true } and should
+   * return an error result so the master can handle the urgent request
+   * (e.g. a subordinate blocked on ask_master) before re-asking.
+   */
+  interruptWait(): boolean {
+    if (!this.pendingResolve) return false;
+    const r = this.pendingResolve;
+    this.pendingResolve = null;
+    r(JSON.stringify({ interrupted: true }));
+    return true;
+  }
+
   /** Marks the latest plan as approved so mutating tools become unblocked. */
   approvePlan(): void {
     this.planApproved = true;
@@ -709,9 +768,21 @@ export class CoderRunner extends EventEmitter {
     return super.emit(event, ...args);
   }
 
-  /** Append a user message (text only) to the history. */
+  /**
+   * Append a user message (text only). Messages are buffered and flushed at
+   * the start of the next turn so they never land mid-turn between an
+   * assistant tool_use block and its tool_result — which would produce an
+   * invalid message sequence for the LLM API.
+   */
   pushUserMessage(text: string): void {
-    this.messages.push({ role: 'user', content: [{ type: 'text', text }] });
+    this.pendingUserMessages.push(text);
+  }
+
+  private flushPendingMessages(): void {
+    while (this.pendingUserMessages.length > 0) {
+      const text = this.pendingUserMessages.shift()!;
+      this.messages.push({ role: 'user', content: [{ type: 'text', text }] });
+    }
   }
 
   /** Append a user message with arbitrary content blocks (text + image + document). */
@@ -797,6 +868,7 @@ export class CoderRunner extends EventEmitter {
     // eslint-disable-next-line no-constant-condition
     while (true) {
     while (turn < this.maxTurns) {
+      this.flushPendingMessages();
       if (this.aborted) {
         this.emit('done', 'aborted');
         return { totalUsage, reason: 'aborted' };
@@ -993,6 +1065,8 @@ export class CoderRunner extends EventEmitter {
         max_turns: this.maxTurns,
         auto_continue_count: autoContinueCount,
         auto_continue_max: MAX_AUTO_CONTINUES,
+        last_turn_input_tokens: lastUsage?.input_tokens ?? 0,
+        context_window: this.opts.context_window ?? getModelContextWindow(this.opts.provider.model ?? ''),
       });
 
       // No tool calls → conversation finished. In plan mode this is fine:
@@ -1004,6 +1078,7 @@ export class CoderRunner extends EventEmitter {
       // was user-hostile and added noise with zero safety benefit.
       if (toolUseBlocks.length === 0) {
         this.recentTurnSignatures.length = 0;
+        this.recentTurnNamesSignatures.length = 0;
         // Hook: completion
         await this.opts.hookRegistry?.fireCompletion({
           sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
@@ -1035,6 +1110,29 @@ export class CoderRunner extends EventEmitter {
               `Aborting to avoid cost runaway — fix the underlying issue (wrong args, missing file, bad permission) before retrying.`,
           );
           console.warn(`[coder] doom-loop aborted at turn ${turn}: ${sig.slice(0, 120)}`);
+          this.emit('done', 'error', err);
+          return { totalUsage, reason: 'error' };
+        }
+      }
+
+      // Fuzzy doom-loop guard: catches "same tool names, tweaked args"
+      // patterns the strict sig misses. Uses a higher threshold to keep
+      // false-positive risk low on legitimate iterative workflows.
+      if (DOOM_LOOP_FUZZY_THRESHOLD >= 2) {
+        const loose = toolNamesSignature(toolUseBlocks.map((b) => ({ name: b.name })));
+        this.recentTurnNamesSignatures.push(loose);
+        if (this.recentTurnNamesSignatures.length > DOOM_LOOP_FUZZY_THRESHOLD) {
+          this.recentTurnNamesSignatures.shift();
+        }
+        if (
+          this.recentTurnNamesSignatures.length === DOOM_LOOP_FUZZY_THRESHOLD &&
+          this.recentTurnNamesSignatures.every((s) => s === loose && s !== '')
+        ) {
+          const err = new Error(
+            `Doom loop detected (fuzzy): the same tool set (${loose}) ran ${DOOM_LOOP_FUZZY_THRESHOLD} turns in a row with tweaked arguments and no progress. ` +
+              `Aborting to avoid cost runaway — the model is likely retrying with minor variations instead of adjusting strategy.`,
+          );
+          console.warn(`[coder] fuzzy doom-loop aborted at turn ${turn}: ${loose.slice(0, 120)}`);
           this.emit('done', 'error', err);
           return { totalUsage, reason: 'error' };
         }
@@ -1144,6 +1242,9 @@ export class CoderRunner extends EventEmitter {
       // back to deterministic compaction if the summarizer is unavailable.
       const histTotal = totalChars(this.messages);
       const cutoff = snapCutoffToRoleBoundary(this.messages, computeCutoffIndex(this.messages, PRUNE_PROTECT));
+      let strategy: 'summarizer' | 'deterministic' | 'none' = 'none';
+      let prunedMessages = 0;
+      let prunedChars = 0;
       if (cutoff > 1) {
         const span = this.messages.slice(0, cutoff);
         let replaced = false;
@@ -1156,6 +1257,9 @@ export class CoderRunner extends EventEmitter {
             };
             this.messages.splice(0, cutoff, synthetic);
             replaced = true;
+            strategy = 'summarizer';
+            prunedMessages = cutoff - 1; // cutoff original msgs replaced by 1 synthetic
+            prunedChars = histTotal - totalChars(this.messages);
             console.log(
               `[coder] summarizer collapsed ${cutoff} messages (~${histTotal} chars) into 1 synthetic summary`,
             );
@@ -1169,12 +1273,23 @@ export class CoderRunner extends EventEmitter {
             // compactMessages returns a new array — swap in-place.
             this.messages.length = 0;
             this.messages.push(...compacted.messages);
+            strategy = 'deterministic';
+            prunedMessages = compacted.prunedBlocks;
+            prunedChars = compacted.prunedChars;
             console.log(
               `[coder] deterministic compaction pruned ${compacted.prunedBlocks} blocks (~${compacted.prunedChars} chars)`,
             );
           }
         }
       }
+      this.emit('history_compacted', {
+        strategy,
+        pruned_messages: prunedMessages,
+        pruned_chars: prunedChars,
+        total_chars_before: histTotal,
+        total_chars_after: totalChars(this.messages),
+        auto_continue: autoContinueCount,
+      });
       // Allow the summarizer to run again in the next continuation window.
       this.summarizedOnce = false;
       // Reset turn counter so the inner while gets a full maxTurns budget.

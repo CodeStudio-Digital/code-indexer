@@ -12,6 +12,14 @@ import {
 } from '../../components/ui/dialog.js';
 import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
+import { Switch } from '../../components/ui/switch.js';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../../components/ui/select.js';
 import { apiDelete, apiPatch } from '../../hooks/useApi.js';
 
 interface Project {
@@ -20,6 +28,8 @@ interface Project {
   root_path: string;
   description?: string | null;
   group_name?: string | null;
+  embeddings_enabled?: number;
+  search_mode?: string;
 }
 
 interface ProjectEditDialogProps {
@@ -44,6 +54,8 @@ export default function ProjectEditDialog({
   const [rootPath, setRootPath] = useState(project.root_path);
   const [description, setDescription] = useState(project.description ?? '');
   const [groupName, setGroupName] = useState(project.group_name ?? '');
+  const [embeddingsEnabled, setEmbeddingsEnabled] = useState(project.embeddings_enabled !== 0);
+  const [searchMode, setSearchMode] = useState(project.search_mode ?? 'hybrid');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -70,12 +82,16 @@ export default function ProjectEditDialog({
     setError(null);
     setSaving(true);
     try {
-      const body: Record<string, string | null> = {};
+      const body: Record<string, string | number | null> = {};
       if (name !== project.name) body.name = name;
       if (rootPath !== project.root_path) body.root_path = rootPath;
       if (description !== (project.description ?? '')) body.description = description;
       const newGroup = groupName.trim() || null;
       if (newGroup !== (project.group_name ?? null)) body.group_name = newGroup;
+
+      const newEmbeddings = embeddingsEnabled ? 1 : 0;
+      if (newEmbeddings !== (project.embeddings_enabled ?? 1)) body.embeddings_enabled = newEmbeddings;
+      if (searchMode !== (project.search_mode ?? 'hybrid')) body.search_mode = searchMode;
 
       if (Object.keys(body).length === 0) {
         onOpenChange(false);
@@ -147,6 +163,44 @@ export default function ProjectEditDialog({
               rows={3}
             />
           </div>
+
+          {/* ── Search Settings ── */}
+          <div className="border-t pt-4 space-y-4">
+            <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              {t('projects:edit.searchSettingsTitle')}
+            </h4>
+
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <label className="text-sm font-medium">{t('projects:edit.embeddingsLabel')}</label>
+                <p className="text-xs text-muted-foreground">
+                  {t('projects:edit.embeddingsHint')}
+                </p>
+              </div>
+              <Switch
+                checked={embeddingsEnabled}
+                onCheckedChange={setEmbeddingsEnabled}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">{t('projects:edit.searchModeLabel')}</label>
+              <Select value={searchMode} onValueChange={setSearchMode}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hybrid">{t('projects:edit.searchModeHybrid')}</SelectItem>
+                  <SelectItem value="fts">{t('projects:edit.searchModeFts')}</SelectItem>
+                  <SelectItem value="vector">{t('projects:edit.searchModeVector')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {t('projects:edit.searchModeHint')}
+              </p>
+            </div>
+          </div>
+
           {error && <div className="text-sm text-destructive">{error}</div>}
 
           {confirmDelete ? (

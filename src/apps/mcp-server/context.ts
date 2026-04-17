@@ -7,18 +7,19 @@ import { DiffService } from '../../core/services/differ.js';
 import { ExportService } from '../../core/services/exporter.js';
 import { WebhookDispatcher } from '../../core/services/webhooks.js';
 import { HybridSearch } from '../../core/search/hybrid.js';
-import { HyDEService } from '../../core/search/hyde.js';
 import { createReranker } from '../../core/search/reranker.js';
 import { ModelDiscovery } from '../../core/indexer/providers/model-discovery.js';
+import type { EmbeddingService } from '../../core/search/embeddings.js';
+import type { VectorStore } from '../../store/vectors.js';
 import {
-  createEmbeddingService,
-  type EmbeddingService,
-} from '../../core/search/embeddings.js';
-import { createVectorStore, NullVectorStore, type VectorStore } from '../../store/vectors.js';
+  createAndSeedProviderStore,
+  createSearchBundle,
+} from '../../core/bootstrap/index.js';
 
 export interface ToolContext {
   config: IndexerConfig;
   db: CodeIndexDB;
+  providerStore: ProviderStore;
   costTracker: CostTracker;
   snapshotService: SnapshotService;
   diffService: DiffService;
@@ -35,31 +36,16 @@ export function buildContext(): ToolContext {
   const db = new CodeIndexDB(config.dbPath);
 
   // ProviderStore is the source of truth for embedding + vector-store backends.
-  // seedFromEnvIfEmpty() migrates legacy .env vars on first run so existing
-  // users don't lose their Cloudflare config.
-  const providerStore = new ProviderStore(config.dbPath);
-  providerStore.seedFromEnvIfEmpty();
+  // seedFromEnvIfEmpty() migrates legacy .env vars on first run.
+  const providerStore = createAndSeedProviderStore(config.dbPath);
 
-  const envFallback =
-    config.embeddings.enabled && config.embeddings.workerUrl
-      ? { workerUrl: config.embeddings.workerUrl, workerToken: config.embeddings.workerToken }
-      : undefined;
-
-  const embeddingService = createEmbeddingService(providerStore, envFallback);
-  const vectorStore = createVectorStore(providerStore, envFallback);
-
-  // HybridSearch accepts any VectorStore (including NullVectorStore, which
-  // cleanly degrades to FTS-only). Kept as non-null for simpler call sites.
-  const searchableVectorStore = vectorStore instanceof NullVectorStore ? null : vectorStore;
-
-  // HyDE is lazy — the service reads the provider row on first call, so we
-  // wire it in unconditionally. The HybridSearch only invokes it when the
-  // caller asks for `hyde: true` via get_context_for.
-  const hydeService = new HyDEService(providerStore);
+  const { embeddingService, vectorStore, searchableVectorStore, hybridSearch } =
+    createSearchBundle(db, providerStore, createReranker());
 
   return {
     config,
     db,
+    providerStore,
     costTracker: new CostTracker(db),
     snapshotService: new SnapshotService(db, embeddingService, searchableVectorStore),
     diffService: new DiffService(db),
@@ -68,6 +54,6 @@ export function buildContext(): ToolContext {
     modelDiscovery: new ModelDiscovery(db),
     embeddingService,
     vectorStore,
-    hybridSearch: new HybridSearch(db, searchableVectorStore, embeddingService, hydeService, createReranker()),
+    hybridSearch,
   };
 }

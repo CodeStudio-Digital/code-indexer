@@ -7,6 +7,7 @@ import { CostTracker } from '../../../core/services/costs.js';
 import { WebhookDispatcher } from '../../../core/services/webhooks.js';
 import { FileWatcherService } from '../../../core/services/watcher.js';
 import { getEmbeddingService, getVectorStore } from '../helpers.js';
+import { createAndSeedProviderStore } from '../../../core/bootstrap/index.js';
 import type { ProviderName } from '../../../types.js';
 
 export function register(program: Command): void {
@@ -17,9 +18,11 @@ export function register(program: Command): void {
       const config = loadConfig();
       const db = new CodeIndexDB(config.dbPath);
       const watcher = new FileWatcherService();
-      const provider = await createProviderAsync((config.provider) as ProviderName, config.model);
-      const embeddingService = getEmbeddingService(config);
-      const vectorStore = getVectorStore(config);
+      const providerStore = createAndSeedProviderStore(config.dbPath);
+      const defaults = providerStore.getDefaultProviderAndModel();
+      const provider = await createProviderAsync(defaults.kind as ProviderName, defaults.model);
+      const embeddingService = getEmbeddingService(config.dbPath);
+      const vectorStore = getVectorStore(config.dbPath);
       const costTracker = new CostTracker(db);
       const webhookDispatcher = new WebhookDispatcher(db);
       const agent = new IndexAgent(db, provider, embeddingService, vectorStore, costTracker, webhookDispatcher, config);
@@ -34,13 +37,11 @@ export function register(program: Command): void {
       for (const project of projectsToWatch) {
         watcher.startWatching(project.id, {
           rootPath: project.root_path,
-          debounce: config.watcher.debounce,
+          debounce: 2000,
         }, {
           onFileChanged: async (files) => {
             console.log(`[watch] ${project.name}: ${files.length} files changed, re-indexing...`);
-            if (config.watcher.autoIndex) {
-              await agent.indexProject(project.root_path);
-            }
+            await agent.indexProject(project.root_path);
             try {
               await webhookDispatcher.dispatch('watch.changed', project, { files });
             } catch { /* ignore */ }

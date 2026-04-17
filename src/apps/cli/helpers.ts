@@ -5,7 +5,7 @@ import { CodeIndexDB } from '../../store/db.js';
 import { createEmbeddingService, NullEmbeddingService } from '../../core/search/embeddings.js';
 import type { EmbeddingService } from '../../core/search/embeddings.js';
 import { createVectorStore, NullVectorStore, type VectorStore } from '../../store/vectors.js';
-import { ProviderStore } from '../../store/provider-store.js';
+import { createAndSeedProviderStore } from '../../core/bootstrap/index.js';
 
 export function getDB(): CodeIndexDB {
   const config = loadConfig();
@@ -13,39 +13,23 @@ export function getDB(): CodeIndexDB {
 }
 
 /**
- * Build embedding + vector services for CLI commands. Prefers the admin-managed
- * configs in ProviderStore and falls back to legacy .env values so existing
- * users keep working without reconfiguring.
+ * Build embedding + vector services for CLI commands. Uses the admin-managed
+ * configs in ProviderStore as the single source of truth. Legacy .env vars
+ * are migrated into the store via seedFromEnvIfEmpty().
  */
-function buildProviderStore(config: ReturnType<typeof loadConfig>): ProviderStore {
-  const store = new ProviderStore(config.dbPath);
-  store.seedFromEnvIfEmpty();
-  return store;
-}
-
-export function getEmbeddingService(config: ReturnType<typeof loadConfig>): EmbeddingService {
+export function getEmbeddingService(dbPath: string): EmbeddingService {
   try {
-    const store = buildProviderStore(config);
-    return createEmbeddingService(
-      store,
-      config.embeddings.enabled && config.embeddings.workerUrl
-        ? { workerUrl: config.embeddings.workerUrl, workerToken: config.embeddings.workerToken }
-        : undefined
-    );
+    const store = createAndSeedProviderStore(dbPath);
+    return createEmbeddingService(store);
   } catch {
     return new NullEmbeddingService();
   }
 }
 
-export function getVectorStore(config: ReturnType<typeof loadConfig>): VectorStore | null {
+export function getVectorStore(dbPath: string): VectorStore | null {
   try {
-    const store = buildProviderStore(config);
-    const vs = createVectorStore(
-      store,
-      config.embeddings.enabled && config.embeddings.workerUrl
-        ? { workerUrl: config.embeddings.workerUrl, workerToken: config.embeddings.workerToken }
-        : undefined
-    );
+    const store = createAndSeedProviderStore(dbPath);
+    const vs = createVectorStore(store);
     return vs instanceof NullVectorStore ? null : vs;
   } catch {
     return null;

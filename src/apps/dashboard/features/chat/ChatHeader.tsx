@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Bot, Info, PanelLeft, Sparkles, Wrench } from 'lucide-react';
-import type { IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
+import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
@@ -8,12 +8,20 @@ import { providerAccent, providerLabel } from './constants.js';
 import type { CoderSession, CoderSessionStats } from './types.js';
 import { formatDuration } from './utils.js';
 
+/** Format token counts in a compact human-readable form (e.g. 180k, 1.2M). */
+function formatK(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1000)}k`;
+  return String(n);
+}
+
 interface ChatHeaderProps {
   session: CoderSession;
   streaming: boolean;
   runDelta: RunDelta;
   lastUsage: Usage | null;
   stats: CoderSessionStats | null;
+  contextStatus: ContextStatus | null;
   indexStatus: IndexStatus | null;
   onOpenDetails: () => void;
   onOpenSidebar?: () => void;
@@ -21,16 +29,18 @@ interface ChatHeaderProps {
   onOpenSkillConfig?: () => void;
 }
 
-export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig }: ChatHeaderProps) {
+export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig }: ChatHeaderProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Persisted (from DB) + runtime delta (current run, if streaming).
-  // For active sessions the runDelta is already counted in the DB
-  // because bumpUsage runs synchronously per turn — but during the
-  // active turn before refetch, it provides immediate feedback.
   const totalIn = session.total_input_tokens;
   const totalOut = session.total_output_tokens;
-  const totalCacheRead =
-    (session.total_cache_read_tokens ?? 0) + (streaming ? runDelta.cache_read_input_tokens : 0);
+
+  // Context window usage: prefer live SSE data, fall back to persisted stats.
+  const lastTurnInput = lastUsage?.input_tokens ?? session.last_turn_input_tokens ?? 0;
+  const contextWindow = contextStatus?.context_window ?? stats?.context_window ?? null;
+  const ctxPct = contextWindow && lastTurnInput > 0
+    ? Math.min(Math.round((lastTurnInput / contextWindow) * 100), 100)
+    : null;
 
   return (
     <div className="border-b px-3 sm:px-5 py-3 flex items-center gap-2 sm:gap-3 bg-card/80 backdrop-blur">
@@ -83,22 +93,39 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, ind
       <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="hidden sm:block text-right tabular-nums cursor-help">
-              <div>
-                ↑ <span className="text-foreground font-medium">{totalIn.toLocaleString()}</span>
-              </div>
-              <div>
-                ↓ <span className="text-foreground font-medium">{totalOut.toLocaleString()}</span>
-              </div>
-              {totalCacheRead > 0 && (
-                <div className="text-emerald-600 dark:text-emerald-400 mt-0.5">
-                  ⚡ {totalCacheRead.toLocaleString()}
-                </div>
+            <div className="hidden sm:flex flex-col items-end gap-0.5 tabular-nums cursor-help">
+              {ctxPct !== null && contextWindow ? (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className={cn(
+                          'h-full rounded-full transition-all',
+                          ctxPct > 90 ? 'bg-red-500' : ctxPct > 70 ? 'bg-amber-500' : 'bg-emerald-500',
+                        )}
+                        style={{ width: `${ctxPct}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-foreground font-medium">{ctxPct}%</span>
+                  </div>
+                  <div className="text-[10px]">
+                    {formatK(lastTurnInput)} / {formatK(contextWindow)}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-[10px]">
+                    ↑ <span className="text-foreground font-medium">{formatK(totalIn)}</span>
+                  </div>
+                  <div className="text-[10px]">
+                    ↓ <span className="text-foreground font-medium">{formatK(totalOut)}</span>
+                  </div>
+                </>
               )}
             </div>
           </TooltipTrigger>
           <TooltipContent className="max-w-sm">
-            <StatsTooltip session={session} lastUsage={lastUsage} stats={stats} />
+            <StatsTooltip session={session} lastUsage={lastUsage} stats={stats} contextWindow={contextWindow} lastTurnInput={lastTurnInput} ctxPct={ctxPct} />
           </TooltipContent>
         </Tooltip>
         {onOpenSkillConfig && (
@@ -153,25 +180,58 @@ function StatsTooltip({
   session,
   lastUsage,
   stats,
+  contextWindow,
+  lastTurnInput,
+  ctxPct,
 }: {
   session: CoderSession;
   lastUsage: Usage | null;
   stats: CoderSessionStats | null;
+  contextWindow: number | null;
+  lastTurnInput: number;
+  ctxPct: number | null;
 }) {
   const totalIn = session.total_input_tokens;
   const totalOut = session.total_output_tokens;
   const totalCR = session.total_cache_read_tokens ?? 0;
   const totalCW = session.total_cache_creation_tokens ?? 0;
   const hitRate = totalIn > 0 ? Math.round((totalCR / totalIn) * 100) : 0;
-  // Estimated savings: cached tokens are billed at ~50% of standard
-  // (per ZAI/GLM and Anthropic docs). So saved ≈ cached × 0.5.
   const savedTokens = Math.round(totalCR * 0.5);
   const { t } = useTranslation('chat');
   return (
     <div className="space-y-1.5 text-xs">
-      <div className="font-semibold">{t('header.session')}</div>
+      {/* Context Window section */}
+      {ctxPct !== null && contextWindow && (
+        <>
+          <div className="font-semibold">{t('header.contextWindow')}</div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums">
+            <span>{t('header.currentContext')}</span>
+            <span className="text-right">{lastTurnInput.toLocaleString()}</span>
+            <span>{t('header.windowSize')}</span>
+            <span className="text-right">{contextWindow.toLocaleString()}</span>
+            <span>{t('header.contextUsage')}</span>
+            <span className={cn('text-right font-medium', ctxPct > 90 ? 'text-red-400' : ctxPct > 70 ? 'text-amber-400' : 'text-emerald-400')}>
+              {ctxPct}%
+            </span>
+          </div>
+          <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              className={cn(
+                'h-full rounded-full transition-all',
+                ctxPct > 90 ? 'bg-red-500' : ctxPct > 70 ? 'bg-amber-500' : 'bg-emerald-500',
+              )}
+              style={{ width: `${ctxPct}%` }}
+            />
+          </div>
+        </>
+      )}
+
+      {/* API Totals (billing) section */}
+      <div className={cn('font-semibold', ctxPct !== null && 'mt-1 pt-1 border-t border-border/40')}>
+        {t('header.apiTotals')}
+      </div>
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums">
-        <span>{t('header.input')}</span>
+        <span>{t('header.totalInput')}</span>
         <span className="text-right">{totalIn.toLocaleString()}</span>
         <span>{t('header.output')}</span>
         <span className="text-right">{totalOut.toLocaleString()}</span>
@@ -184,11 +244,19 @@ function StatsTooltip({
         <span>{t('header.tokensSaved')}</span>
         <span className="text-right text-emerald-300">{savedTokens.toLocaleString()}</span>
       </div>
+
+      {/* Last turn */}
       {lastUsage && (
         <div className="mt-1 pt-1 border-t border-border/40 text-emerald-300">
-          {t('header.lastTurn', { input: lastUsage.input_tokens.toLocaleString(), cache: (lastUsage.cache_read_input_tokens ?? 0).toLocaleString() })}
+          {t('header.lastTurn', {
+            context: lastUsage.input_tokens.toLocaleString(),
+            output: lastUsage.output_tokens.toLocaleString(),
+            cache: (lastUsage.cache_read_input_tokens ?? 0).toLocaleString(),
+          })}
         </div>
       )}
+
+      {/* Activity */}
       {stats && (
         <div className="mt-1 pt-1 border-t border-border/40 grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums">
           <span>{t('header.messages')}</span>

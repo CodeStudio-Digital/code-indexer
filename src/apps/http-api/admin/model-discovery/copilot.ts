@@ -19,6 +19,7 @@ import {
   getStoredCopilotOpts,
 } from '../../../../core/services/oauth/copilot.js';
 import { resolveCopilotApiBase } from '../shared/copilot-opts.js';
+import { getRegistryContextWindow } from '../../../../core/coder/providers/capabilities.js';
 
 export async function discoverCopilot(
   store: ProviderStore,
@@ -50,6 +51,7 @@ export async function discoverCopilot(
   return data.data.map((m) => ({
     model_id: m.id,
     name: m.name ?? m.id,
-    source: 'live',
+    context_window: getRegistryContextWindow(m.id),
+    source: 'live' as const,
   }));
 }

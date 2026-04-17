@@ -11,7 +11,7 @@ export function mountCoderProvidersRoutes(app: Hono, deps: ServerDeps): void {
     // older clients that read the flat array keep working via `legacy`.
     const rows = providerStore.listProviders({ enabled: true, use_for_coder: true });
     if (rows.length === 0) {
-      return c.json({ providers: SUPPORTED_CODER_PROVIDERS, legacy: true });
+      return c.json({ providers: SUPPORTED_CODER_PROVIDERS(), legacy: true });
     }
     const enriched = rows.map((p) => ({
       id: p.id,

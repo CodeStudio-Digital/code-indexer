@@ -1,27 +1,22 @@
 import type { Command } from 'commander';
 import { join } from 'node:path';
 import { writeFileSync, existsSync } from 'node:fs';
-import { getDefaultConfigTemplate } from '../../../utils/config.js';
-import { runInitWizard } from '../wizard.js';
-import type { InitOverrides } from '../../../utils/config.js';
 
 export function register(program: Command): void {
   program
     .command('init [dir]')
-    .description('Create default config file and .mcpindexignore')
-    .option('-i, --interactive', 'Run an interactive wizard to choose description, provider, model and embeddings')
-    .option('-y, --yes', 'Accept DB-backed defaults without prompting (useful with --interactive in CI)')
-    .action(async (dir: string | undefined, opts: { interactive?: boolean; yes?: boolean }) => {
+    .description('Create .mcpindexignore file for a project')
+    .action(async (dir: string | undefined) => {
       const base = dir ?? process.cwd();
-      const configTarget = join(base, '.mcp-indexer.json');
 
-      let overrides: InitOverrides = {};
-      if (opts.interactive) {
-        overrides = await runInitWizard(opts.yes === true);
+      // Warn if legacy config exists
+      const legacyConfig = join(base, '.mcp-indexer.json');
+      if (existsSync(legacyConfig)) {
+        console.warn(
+          '[deprecation] .mcp-indexer.json is no longer used. ' +
+          'Settings are managed via the admin dashboard. You can safely delete this file.'
+        );
       }
-
-      writeFileSync(configTarget, getDefaultConfigTemplate(overrides), 'utf-8');
-      console.log(`Config created: ${configTarget}`);
 
       const ignoreTarget = join(base, '.mcpindexignore');
       if (!existsSync(ignoreTarget)) {

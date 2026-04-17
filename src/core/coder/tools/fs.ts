@@ -1,8 +1,9 @@
 import { promises as fs } from 'node:fs';
-import { resolve, relative, isAbsolute, dirname } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import type { CoderTool, ToolContext, ToolResult } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
 import { CASCADING_REPLACERS, type ReplacerHit } from './edit-replacers.js';
+import { resolveSafe as resolveSafePath } from './paths.js';
 import {
   WRITE_FILE_DESC,
   CREATE_FILE_DESC,
@@ -13,15 +14,8 @@ import {
   maybeTerse,
 } from './descriptions.js';
 
-/**
- * Resolve a project-relative path against the agent cwd and reject if it
- * escapes the project root. Returns the absolute path on success.
- */
 function resolveSafe(filePath: string, ctx: ToolContext): string | null {
-  const abs = isAbsolute(filePath) ? filePath : resolve(ctx.cwd, filePath);
-  const rel = relative(ctx.cwd, abs);
-  if (rel.startsWith('..') || isAbsolute(rel)) return null;
-  return abs;
+  return resolveSafePath(filePath, ctx.cwd);
 }
 
 const writeFile: CoderTool = {

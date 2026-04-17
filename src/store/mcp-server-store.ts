@@ -12,7 +12,7 @@ const Database = require('better-sqlite3') as typeof DatabaseConstructor;
 type DB = InstanceType<typeof Database>;
 
 export type McpTransport = 'stdio' | 'sse' | 'streamable_http';
-export type McpAuthType = 'none' | 'api_key' | 'bearer';
+export type McpAuthType = 'none' | 'api_key' | 'bearer' | 'oauth2';
 /**
  * Default tier for a server's tools. Can be a core tier ('bootstrap',
  * 'navigate', 'admin') or a custom tier name (e.g., 'cloudflare').

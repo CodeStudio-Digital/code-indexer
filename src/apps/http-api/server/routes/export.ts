@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import type { ExportSection } from '../../../../types.js';
 import type { ServerDeps } from '../deps.js';
+import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
 
 interface ExportBody {
   format?: string;
@@ -12,13 +13,11 @@ export function mountExportRoutes(app: Hono, deps: ServerDeps): void {
   const { db, exportService } = deps;
 
   app.post('/api/projects/:id/export', async (c) => {
-    const projectId = parseInt(c.req.param('id'), 10);
+    const projectId = parseIdParam(c);
     const project = db.getProject(projectId);
-    if (!project) return c.json({ error: 'Not found' }, 404);
+    if (!project) return notFound(c);
 
-    const body = await c.req
-      .json<ExportBody>()
-      .catch((): Record<string, never> => ({}));
+    const body = await parseJsonBody<ExportBody>(c);
     const output = exportService.export({
       projectId,
       projectName: project.name,

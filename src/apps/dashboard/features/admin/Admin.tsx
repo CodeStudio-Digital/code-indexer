@@ -14,6 +14,7 @@ import { SkillsPanel } from './SkillsPanel.js';
 import { StoragePanel } from './StoragePanel.js';
 import { HydePanel } from './HydePanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
+import { AuthPanel } from './AuthPanel.js';
 import { useAdminProviders } from './hooks/useAdminProviders.js';
 import type { AdminProvider } from './types.js';
 
@@ -68,6 +69,7 @@ export default function Admin() {
           <TabsTrigger value="tools">{t('admin:tabs.tools')}</TabsTrigger>
           <TabsTrigger value="mcp-servers">{t('admin:tabs.mcpServers')}</TabsTrigger>
           <TabsTrigger value="skills">{t('admin:tabs.skills')}</TabsTrigger>
+          <TabsTrigger value="auth">{t('admin:tabs.auth')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="providers" className="space-y-4">
@@ -150,6 +152,10 @@ export default function Admin() {
 
         <TabsContent value="skills">
           <SkillsPanel />
+        </TabsContent>
+
+        <TabsContent value="auth">
+          <AuthPanel />
         </TabsContent>
       </Tabs>
 

@@ -2,19 +2,20 @@ import type { Hono } from 'hono';
 import { NullVectorStore } from '../../../../store/vectors.js';
 import { NullEmbeddingService } from '../../../../core/search/embeddings.js';
 import type { ServerDeps } from '../deps.js';
+import { parseIdParam, notFound } from './_helpers.js';
 
 export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
   const { db, embeddingService, vectorStore, embeddingKind, vectorStoreKind } = deps;
 
   app.get('/api/projects/:id/stats', (c) => {
-    return c.json(db.getStats(parseInt(c.req.param('id'), 10)));
+    return c.json(db.getStats(parseIdParam(c)));
   });
 
   /** Embedding diagnostics for the debug panel. */
   app.get('/api/projects/:id/embeddings/stats', async (c) => {
-    const projectId = parseInt(c.req.param('id'), 10);
+    const projectId = parseIdParam(c);
     const project = db.getProject(projectId);
-    if (!project) return c.json({ error: 'Not found' }, 404);
+    if (!project) return notFound(c);
 
     const coverage = db.getEmbeddingCoverage(projectId);
     const vectorIds = db.getVectorIdStats(projectId);
@@ -51,9 +52,9 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
 
   /** Step-by-step test query for debugging vector search. */
   app.post('/api/projects/:id/embeddings/test-query', async (c) => {
-    const projectId = parseInt(c.req.param('id'), 10);
+    const projectId = parseIdParam(c);
     const project = db.getProject(projectId);
-    if (!project) return c.json({ error: 'Not found' }, 404);
+    if (!project) return notFound(c);
 
     const body = await c.req.json<{ query: string }>();
     const query = body.query?.trim();

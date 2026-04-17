@@ -1,8 +1,8 @@
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { defineTool, type McpTool } from '../tool.js';
-import { resolveProject } from '../utils.js';
 import { readFileSlice, extractSkeletonFromFile } from '../../../core/services/code-reader.js';
+import { normalizeFilePath, withProject, formatOutput } from './_helpers.js';
 
 const get_file_structure = defineTool({
   name: 'get_file_structure',
@@ -16,11 +16,11 @@ const get_file_structure = defineTool({
     },
     required: ['project_name', 'file_path'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
-    const file = db.getFile(project.id, args.file_path as string);
-    if (!file) throw new Error(`File "${args.file_path}" not found in index. Use list_directory or search to find the correct path. Do not retry with the same file_path.`);
-    const symbols = db.getSymbolsByFile(project.id, args.file_path as string);
+  handler: withProject((args, { db }, project) => {
+    const filePath = normalizeFilePath(args.file_path as string, project.root_path);
+    const file = db.getFile(project.id, filePath);
+    if (!file) throw new Error(`File "${filePath}" not found in index. Use list_directory or search to find the correct path. Do not retry with the same file_path.`);
+    const symbols = db.getSymbolsByFile(project.id, filePath);
     const concepts = JSON.parse(file.concepts) as string[];
     const deps = db.getDependencies(file.id);
     const dependents = db.getDependents(project.id, file.id);
@@ -44,11 +44,11 @@ const get_file_structure = defineTool({
     if (dependents.length > 0) {
       sections.push('', '## Dependents (imported by)', dependents.map(d => `- ${d.source_file_path} (via ${d.import_path})`).join('\n'));
     }
-    
+
     if (symbols.length > 0) {
       const maxSymbols = (args.max_symbols as number) ?? 50;
       const shownSymbols = symbols.slice(0, maxSymbols);
-      
+
       sections.push('', `## Symbols (${symbols.length})`);
       if (symbols.length > maxSymbols) {
           sections.push(`[truncated: showing ${maxSymbols}/${symbols.length} symbols — file has too many symbols. Use get_file_skeleton or grep_code for deeper exploration without context bloat.]`);
@@ -66,7 +66,7 @@ const get_file_structure = defineTool({
       }
     }
     return sections.join('\n');
-  },
+  }),
 });
 
 const get_file_skeleton = defineTool({
@@ -84,9 +84,8 @@ const get_file_skeleton = defineTool({
     },
     required: ['project_name', 'file_path'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
-    const filePath = args.file_path as string;
+  handler: withProject((args, { db }, project) => {
+    const filePath = normalizeFilePath(args.file_path as string, project.root_path);
     const file = db.getFile(project.id, filePath);
     if (!file) {
       throw new Error(`File "${filePath}" not found in index. Use list_directory or search to find the correct path. Do not retry with the same file_path.`);
@@ -168,7 +167,7 @@ const get_file_skeleton = defineTool({
       }
     }
     return [header, summary, cline, truncateNote, fallbackNote, '', ...symLines].filter(Boolean).join('\n');
-  },
+  }),
 });
 
 const read_file = defineTool({
@@ -187,12 +186,11 @@ const read_file = defineTool({
     },
     required: ['project_name', 'file_path'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
-    const filePath = args.file_path as string;
+  handler: withProject((args, { db }, project) => {
+    const filePath = normalizeFilePath(args.file_path as string, project.root_path);
     const file = db.getFile(project.id, filePath);
     if (!file) throw new Error(`File "${filePath}" not found in index. Use list_directory or search to find the correct path. Do not retry with the same file_path.`);
-    
+
     const startLine = args.start_line as number | undefined;
     const endLine = args.end_line as number | undefined;
     const maxLines = (args.max_lines as number) ?? 100;
@@ -233,7 +231,7 @@ const read_file = defineTool({
     } catch (e) {
       return `Failed: ${(e as Error).message}`;
     }
-  },
+  }),
 });
 
 const list_directory = defineTool({
@@ -244,8 +242,7 @@ const list_directory = defineTool({
     properties: { project_name: { type: 'string' }, path: { type: 'string' }, depth: { type: 'number' } },
     required: ['project_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const prefix = (args.path as string | undefined) ?? '';
     const depth = (args.depth as number) ?? 2;
     const files = db.listFiles(project.id);
@@ -255,11 +252,10 @@ const list_directory = defineTool({
     for (const f of filtered) {
       const parts = f.path.split('/');
       if (parts.length - baseDepth > depth + 1) continue;
-      const indent = '  '.repeat(Math.max(0, parts.length - baseDepth - 1));
-      out.push(`${indent}${parts[parts.length - 1]} (${f.line_count}L)`);
+      out.push(`${f.path} (${f.line_count}L)`);
     }
     return out.slice(0, 200).join('\n') || 'Empty.';
-  },
+  }),
 });
 
 const get_recently_modified_files = defineTool({
@@ -270,14 +266,13 @@ const get_recently_modified_files = defineTool({
     properties: { project_name: { type: 'string' }, limit: { type: 'number' } },
     required: ['project_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const limit = (args.limit as number) ?? 20;
     const files = db.listFiles(project.id)
       .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
       .slice(0, limit);
     return files.map(f => `${f.updated_at} ${f.path} (${f.line_count}L)`).join('\n') || 'No files.';
-  },
+  }),
 });
 
 const get_dependencies = defineTool({
@@ -288,13 +283,13 @@ const get_dependencies = defineTool({
     properties: { project_name: { type: 'string' }, file_path: { type: 'string' } },
     required: ['project_name', 'file_path'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
-    const file = db.getFile(project.id, args.file_path as string);
-    if (!file) throw new Error(`File "${args.file_path}" not found in index. Use list_directory or search to find the correct path. Do not retry with the same file_path.`);
+  handler: withProject((args, { db }, project) => {
+    const filePath = normalizeFilePath(args.file_path as string, project.root_path);
+    const file = db.getFile(project.id, filePath);
+    if (!file) throw new Error(`File "${filePath}" not found in index. Use list_directory or search to find the correct path. Do not retry with the same file_path.`);
     const deps = db.getDependencies(file.id);
     return deps.map(d => `${d.dep_type} ${d.import_path}${d.target_file_path ? ` → ${d.target_file_path}` : ''}`).join('\n') || 'No dependencies found.';
-  },
+  }),
 });
 
 const get_dependents = defineTool({
@@ -305,13 +300,13 @@ const get_dependents = defineTool({
     properties: { project_name: { type: 'string' }, file_path: { type: 'string' } },
     required: ['project_name', 'file_path'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
-    const file = db.getFile(project.id, args.file_path as string);
-    if (!file) throw new Error(`File "${args.file_path}" not found in index. Use list_directory or search to find the correct path. Do not retry with the same file_path.`);
+  handler: withProject((args, { db }, project) => {
+    const filePath = normalizeFilePath(args.file_path as string, project.root_path);
+    const file = db.getFile(project.id, filePath);
+    if (!file) throw new Error(`File "${filePath}" not found in index. Use list_directory or search to find the correct path. Do not retry with the same file_path.`);
     const deps = db.getDependents(project.id, file.id);
     return deps.map(d => `${d.source_file_path} (${d.import_path})`).join('\n') || 'No dependents found.';
-  },
+  }),
 });
 
 export const fileTools: McpTool[] = [

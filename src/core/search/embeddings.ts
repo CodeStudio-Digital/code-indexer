@@ -217,15 +217,17 @@ export class NullEmbeddingService implements EmbeddingService {
  * Build an EmbeddingService from the admin-managed embedding_configs table.
  * Priority:
  *   1. Row marked is_default=1 and enabled=1 in provider_store.
- *   2. The legacy fallback (Cloudflare Vectorize via .env) if provided.
- *   3. NullEmbeddingService (no embeddings, search falls back to FTS-only).
+ *   2. NullEmbeddingService (no embeddings, search falls back to FTS-only).
+ *
+ * Legacy .env vars (MCP_INDEX_WORKER_URL/TOKEN) are migrated into the
+ * ProviderStore via seedFromEnvIfEmpty() at startup, so they are covered
+ * by case 1 after the first run.
  *
  * The function is sync — it only queries SQLite via better-sqlite3 which is
  * synchronous — so callers don't need await.
  */
 export function createEmbeddingService(
   store: ProviderStore | null,
-  fallback?: { workerUrl?: string; workerToken?: string }
 ): EmbeddingService {
   if (store) {
     const cfg = store.getDefaultEmbedding();
@@ -255,8 +257,5 @@ export function createEmbeddingService(
     }
   }
 
-  if (fallback?.workerUrl) {
-    return new CloudflareEmbeddingService(fallback.workerUrl, fallback.workerToken ?? '');
-  }
   return new NullEmbeddingService();
 }

@@ -194,7 +194,7 @@ function applyOutputCap(text: string): string {
   if (text.length <= MCP_OUTPUT_HARD_CAP) return text;
   return (
     text.slice(0, MCP_OUTPUT_HARD_CAP) +
-    `\n\n[output truncado em ${MCP_OUTPUT_HARD_CAP} chars — refine sua query, use max_tokens/limit, ou pagine via offset]`
+    `\n\n[output truncated at ${MCP_OUTPUT_HARD_CAP} chars — refine your query, use max_tokens/limit, or paginate via offset]`
   );
 }
 

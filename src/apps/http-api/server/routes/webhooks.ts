@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../deps.js';
+import { parseIdParam } from './_helpers.js';
 
 interface CreateWebhookBody {
   project_id?: number;
@@ -27,12 +28,12 @@ export function mountWebhooksRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.delete('/api/webhooks/:id', (c) => {
-    db.deleteWebhook(parseInt(c.req.param('id'), 10));
+    db.deleteWebhook(parseIdParam(c));
     return c.json({ ok: true });
   });
 
   app.post('/api/webhooks/:id/test', async (c) => {
-    const result = await webhookDispatcher.testWebhook(parseInt(c.req.param('id'), 10));
+    const result = await webhookDispatcher.testWebhook(parseIdParam(c));
     return c.json(result);
   });
 }

@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
+import { parseIdParam, parseIntQuery, parseJsonBody, notFound } from '../_helpers.js';
 
 interface CreateGroupBody {
   project_id: number;
@@ -21,13 +22,13 @@ export function mountCoderGroupsRoutes(app: Hono, deps: ServerDeps): void {
   const { sessionStore } = deps;
 
   app.get('/api/coder/groups', (c) => {
-    const projectId = parseInt(c.req.query('project_id') ?? '0', 10);
+    const projectId = parseIntQuery(c, 'project_id', 0);
     if (!projectId) return c.json({ error: 'project_id required' }, 400);
     return c.json(sessionStore.listGroups(projectId));
   });
 
   app.post('/api/coder/groups', async (c) => {
-    const body = await c.req.json<CreateGroupBody>().catch(() => ({}) as CreateGroupBody);
+    const body = await parseJsonBody<CreateGroupBody>(c);
     if (!body.project_id || !body.name) {
       return c.json({ error: 'project_id and name required' }, 400);
     }
@@ -40,16 +41,15 @@ export function mountCoderGroupsRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.patch('/api/coder/groups/:id', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const body = await c.req.json<UpdateGroupBody>().catch(() => ({}) as UpdateGroupBody);
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<UpdateGroupBody>(c);
     const updated = sessionStore.updateGroup(id, body);
-    if (!updated) return c.json({ error: 'Not found' }, 404);
+    if (!updated) return notFound(c);
     return c.json(updated);
   });
 
   app.delete('/api/coder/groups/:id', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    sessionStore.deleteGroup(id);
+    sessionStore.deleteGroup(parseIdParam(c));
     return c.json({ ok: true });
   });
 }

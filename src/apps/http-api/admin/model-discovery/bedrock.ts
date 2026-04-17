@@ -10,6 +10,7 @@ import type {
   ProviderConfig,
   UpsertModelInput,
 } from '../../../../store/provider-store.js';
+import { getRegistryContextWindow } from '../../../../core/coder/providers/capabilities.js';
 
 type BedrockExtra = {
   region?: string;
@@ -66,7 +67,8 @@ export async function discoverBedrock(store: ProviderStore, cfg: ProviderConfig)
         (m): UpsertModelInput => ({
           model_id: m.modelId ?? 'unknown',
           name: `${m.providerName ?? ''} ${m.modelName ?? m.modelId ?? ''}`.trim(),
-          source: 'live',
+          context_window: getRegistryContextWindow(m.modelId ?? ''),
+          source: 'live' as const,
         })
       );
   } catch (e) {

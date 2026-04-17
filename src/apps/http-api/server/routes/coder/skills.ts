@@ -7,6 +7,7 @@ import { SkillStore } from '../../../../../store/skill-store.js';
 import { loadConfig } from '../../../../../utils/config.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
+import { parseIdParam, notFound } from '../_helpers.js';
 
 function getSkillStore() {
   const config = loadConfig();
@@ -25,7 +26,7 @@ export function mountCoderSkillsRoutes(
    * Returns the final merged list (global + project + session overrides).
    */
   app.get('/api/coder/sessions/:id/skills', (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
+    const sessionId = parseIdParam(c);
     if (!Number.isFinite(sessionId)) return c.json({ error: 'invalid session id' }, 400);
 
     const session = sessionStore.getSession(sessionId);
@@ -62,7 +63,7 @@ export function mountCoderSkillsRoutes(
    * PUT /api/coder/sessions/:id/skills/:skillId — toggle skill for session.
    */
   app.put('/api/coder/sessions/:id/skills/:skillId', async (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
+    const sessionId = parseIdParam(c);
     const skillId = c.req.param('skillId');
     if (!Number.isFinite(sessionId)) return c.json({ error: 'invalid session id' }, 400);
 
@@ -106,7 +107,7 @@ export function mountCoderSkillsRoutes(
    * Wraps the skill prompt as a user message with a skill prefix.
    */
   app.post('/api/coder/sessions/:id/invoke-skill', async (c) => {
-    const sessionId = parseInt(c.req.param('id'), 10);
+    const sessionId = parseIdParam(c);
     if (!Number.isFinite(sessionId)) return c.json({ error: 'invalid session id' }, 400);
 
     const session = sessionStore.getSession(sessionId);

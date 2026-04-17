@@ -1,8 +1,39 @@
 import { minimatch } from 'minimatch';
+import { glob as fastGlob } from 'glob';
 import { defineTool, type McpTool } from '../tool.js';
-import { resolveProject } from '../utils.js';
 import { grepInFiles } from '../../../core/services/code-reader.js';
 import type { SearchMode, SearchType } from '../../../types.js';
+import { withProject } from './_helpers.js';
+
+const DISK_FALLBACK_MAX_FILES = 2000;
+const DISK_FALLBACK_IGNORE = [
+  'node_modules/**',
+  '.git/**',
+  'dist/**',
+  'build/**',
+  'out/**',
+  '.next/**',
+  '.mcp-indexer/**',
+  '**/*.min.js',
+  '**/*.map',
+];
+
+async function scanDiskForGrep(rootPath: string, glob: string | undefined): Promise<string[]> {
+  const pattern = glob && glob.length > 0 ? glob : '**/*';
+  try {
+    const matches = await fastGlob(pattern, {
+      cwd: rootPath,
+      nodir: true,
+      dot: false,
+      absolute: false,
+      ignore: DISK_FALLBACK_IGNORE,
+    });
+    // Normalize to forward slashes (Windows) and cap.
+    return matches.slice(0, DISK_FALLBACK_MAX_FILES).map(p => p.split('\\').join('/'));
+  } catch {
+    return [];
+  }
+}
 
 const search = defineTool({
   name: 'search',
@@ -18,8 +49,7 @@ const search = defineTool({
     },
     required: ['project_name', 'query'],
   },
-  handler: async (args, { db, hybridSearch }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject(async (args, { hybridSearch }, project) => {
     const results = await hybridSearch.search(project.id, project.name, args.query as string, {
       mode: (args.mode as SearchMode) ?? 'hybrid',
       type: (args.type as SearchType) ?? 'all',
@@ -44,7 +74,7 @@ const search = defineTool({
         d.parent ? `Parent: ${d.parent}` : '',
       ].filter(Boolean).join('\n');
     }).join('\n\n') || 'No results found.';
-  },
+  }),
 });
 
 const search_global = defineTool({
@@ -91,11 +121,10 @@ const search_concepts = defineTool({
     properties: { project_name: { type: 'string' }, concept: { type: 'string' } },
     required: ['project_name', 'concept'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const files = db.getFilesByConcept(project.id, args.concept as string);
     return files.map(f => `- **${f.path}** (${f.language}, ${f.line_count} lines) — ${f.summary}`).join('\n') || 'No files found.';
-  },
+  }),
 });
 
 const search_by_kind = defineTool({
@@ -106,15 +135,14 @@ const search_by_kind = defineTool({
     properties: { project_name: { type: 'string' }, kind: { type: 'string' }, limit: { type: 'number' } },
     required: ['project_name', 'kind'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const kind = args.kind as string;
     const symbols = db.listSymbolsByKind(project.id, kind, (args.limit as number) ?? 20);
     if (symbols.length === 0) {
       return `No symbols found with kind "${kind}". Common kinds: function, class, interface, type, enum, method, property, variable, constant.`;
     }
     return symbols.map(s => `${s.kind} ${s.name} — ${s.file_path}:${s.line ?? '?'} | ${s.signature}`).join('\n');
-  },
+  }),
 });
 
 const grep_code = defineTool({
@@ -134,18 +162,24 @@ const grep_code = defineTool({
     },
     required: ['project_name', 'pattern'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject(async (args, { db }, project) => {
     const pattern = args.pattern as string;
     let literal = args.literal === true;
     const ci = !args.case_sensitive;
     const lang = args.language as string | undefined;
     const layer = args.layer as string | undefined;
-    const glob = args.glob as string | undefined;
+    const rawGlob = args.glob as string | undefined;
+    // Normalize Windows backslashes — paths in the DB are forward-slash (see
+    // scanner normalization), and fast-glob/minimatch expect forward slashes.
+    const glob = rawGlob ? rawGlob.replace(/\\/g, '/') : undefined;
     const maxResults = (args.max_results as number) ?? 20;
+
     let files = db.listFiles(project.id, lang);
+    const totalIndexed = files.length;
     if (layer) files = files.filter(f => f.layer === layer);
     if (glob) files = files.filter(f => minimatch(f.path, glob));
+    const globMatched = files.length;
+
     const escaped = literal ? pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : pattern;
     let re: RegExp;
     let fallbackNote = '';
@@ -157,12 +191,34 @@ const grep_code = defineTool({
       literal = true;
       fallbackNote = `[note: pattern was not valid regex, searched as literal string]\n`;
     }
-    const hits = grepInFiles(project.root_path, files.map(f => f.path), re, maxResults);
-    if (hits.length === 0) return fallbackNote + 'No matches.';
+
+    let hits = grepInFiles(project.root_path, files.map(f => f.path), re, maxResults);
+
+    // Disk fallback: when the index can't satisfy the search (empty index,
+    // glob filtered everything out, or no hits in indexed set), scan disk
+    // directly. Catches files created outside the session or not re-indexed.
+    let usedFallback = false;
+    let diskScanned = 0;
+    if (hits.length === 0) {
+      const diskFiles = await scanDiskForGrep(project.root_path, glob);
+      diskScanned = diskFiles.length;
+      if (diskFiles.length > 0) {
+        hits = grepInFiles(project.root_path, diskFiles, re, maxResults);
+        usedFallback = hits.length > 0;
+      }
+    }
+
+    if (hits.length === 0) {
+      const diag = ` [indexed: ${totalIndexed}${glob ? `, glob-matched: ${globMatched}` : ''}, disk-scanned: ${diskScanned}]`;
+      return fallbackNote + 'No matches.' + diag;
+    }
     const results = hits.map(h => `${h.file}:${h.line}: ${h.text}`).join('\n');
     const capNote = hits.length >= maxResults ? `\n... [capped at ${maxResults} results]` : '';
-    return fallbackNote + results + capNote;
-  },
+    const fallbackTag = usedFallback
+      ? '\n[note: results from disk fallback — some files may not be indexed yet, consider re-indexing]'
+      : '';
+    return fallbackNote + results + capNote + fallbackTag;
+  }),
 });
 
 export const searchTools: McpTool[] = [search, search_global, search_concepts, search_by_kind, grep_code];

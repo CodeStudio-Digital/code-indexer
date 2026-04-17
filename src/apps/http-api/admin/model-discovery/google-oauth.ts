@@ -4,6 +4,14 @@
 import type { ProviderStore, ProviderConfig, UpsertModelInput } from '../../../../store/provider-store.js';
 import { refreshIfExpired } from '../../../../core/services/oauth/google.js';
 
+type GeminiModel = {
+  name: string;
+  displayName?: string;
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+  supportedGenerationMethods?: string[];
+};
+
 export async function discoverGoogleOAuth(
   store: ProviderStore,
   cfg: ProviderConfig,
@@ -18,10 +26,14 @@ export async function discoverGoogleOAuth(
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const data = (await r.json()) as { models: { name: string; displayName?: string }[] };
-  return data.models.map((m) => ({
-    model_id: m.name.replace(/^models\//, ''),
-    name: m.displayName ?? m.name,
-    source: 'live' as const,
-  }));
+  const data = (await r.json()) as { models: GeminiModel[] };
+  return data.models
+    .filter((m) => m.supportedGenerationMethods?.includes('generateContent') ?? true)
+    .map((m) => ({
+      model_id: m.name.replace(/^models\//, ''),
+      name: m.displayName ?? m.name,
+      context_window: m.inputTokenLimit ?? null,
+      default_max_tokens: m.outputTokenLimit ?? null,
+      source: 'live' as const,
+    }));
 }

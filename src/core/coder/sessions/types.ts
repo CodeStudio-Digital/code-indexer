@@ -31,6 +31,10 @@ export interface CoderSession {
   fallback_model: string | null;
   /** CloudCode session UUID — persisted so the same ID is reused across reconnects. */
   cloudcode_session_id: string | null;
+  /** Most recent turn's input_tokens — represents actual context window usage. */
+  last_turn_input_tokens: number;
+  /** Selected agent preset (explore | plan | build | admin). Sticky across turns so resume paths honour the user's choice. */
+  agent: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -72,6 +76,8 @@ export interface CoderSessionStats {
   total_output_tokens: number;
   total_cache_read_tokens: number;
   total_cache_creation_tokens: number;
+  /** Most recent turn's input_tokens — represents actual context window usage. */
+  last_turn_input_tokens: number;
   message_count: number;
   assistant_turns: number;
   tool_call_count: number;

@@ -43,6 +43,8 @@ interface SessionStatsLike {
   subagent_call_count: number;
   total_tool_duration_ms: number;
   duration_ms: number;
+  last_turn_input_tokens?: number;
+  context_window?: number | null;
 }
 
 interface SessionLike {
@@ -50,6 +52,7 @@ interface SessionLike {
   total_output_tokens: number;
   total_cache_read_tokens?: number;
   total_cache_creation_tokens?: number;
+  last_turn_input_tokens?: number;
 }
 
 interface SessionDetailsModalProps {
@@ -146,6 +149,13 @@ export function SessionDetailsModal({
   );
 }
 
+/** Format token counts compactly (e.g. 180k, 1.2M). */
+function formatK(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1000)}k`;
+  return String(n);
+}
+
 function SummaryTab({ session, stats }: { session: SessionLike; stats: SessionStatsLike | null }) {
   const { t } = useTranslation('chat');
   const totalIn = session.total_input_tokens;
@@ -155,12 +165,49 @@ function SummaryTab({ session, stats }: { session: SessionLike; stats: SessionSt
   const hitRate = totalIn > 0 ? Math.round((totalCR / totalIn) * 100) : 0;
   const savedTokens = Math.round(totalCR * 0.5);
 
+  const lastTurnInput = session.last_turn_input_tokens ?? stats?.last_turn_input_tokens ?? 0;
+  const contextWindow = stats?.context_window ?? null;
+  const ctxPct = contextWindow && lastTurnInput > 0
+    ? Math.min(Math.round((lastTurnInput / contextWindow) * 100), 100)
+    : null;
+
   return (
     <div className="space-y-4 text-sm">
+      {/* Context Window section */}
+      {ctxPct !== null && contextWindow && (
+        <section>
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+            {t('header.contextWindow')}
+          </h4>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1 tabular-nums">
+            <span className="text-muted-foreground">{t('header.currentContext')}</span>
+            <span className="text-right">{lastTurnInput.toLocaleString()} ({formatK(lastTurnInput)})</span>
+            <span className="text-muted-foreground">{t('header.windowSize')}</span>
+            <span className="text-right">{contextWindow.toLocaleString()} ({formatK(contextWindow)})</span>
+            <span className="text-muted-foreground">{t('header.contextUsage')}</span>
+            <span className={cn('text-right font-medium', ctxPct > 90 ? 'text-red-500' : ctxPct > 70 ? 'text-amber-500' : 'text-emerald-600 dark:text-emerald-400')}>
+              {ctxPct}%
+            </span>
+          </div>
+          <div className="mt-2 w-full h-2 bg-muted rounded-full overflow-hidden">
+            <div
+              className={cn(
+                'h-full rounded-full transition-all',
+                ctxPct > 90 ? 'bg-red-500' : ctxPct > 70 ? 'bg-amber-500' : 'bg-emerald-500',
+              )}
+              style={{ width: `${ctxPct}%` }}
+            />
+          </div>
+        </section>
+      )}
+
+      {/* API Totals (billing) */}
       <section>
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Tokens</h4>
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+          {t('header.apiTotals')}
+        </h4>
         <div className="grid grid-cols-2 gap-x-6 gap-y-1 tabular-nums">
-          <span className="text-muted-foreground">{t('header.input')}</span>
+          <span className="text-muted-foreground">{t('header.totalInput')}</span>
           <span className="text-right">{totalIn.toLocaleString()}</span>
           <span className="text-muted-foreground">{t('header.output')}</span>
           <span className="text-right">{totalOut.toLocaleString()}</span>

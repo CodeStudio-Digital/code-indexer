@@ -432,7 +432,7 @@ export class CodeIndexDB {
     return this.db.prepare('SELECT * FROM projects ORDER BY name').all() as Project[];
   }
 
-  updateProject(id: number, updates: Partial<Pick<Project, 'name' | 'description' | 'group_name' | 'root_path' | 'provider' | 'model' | 'last_indexed' | 'file_count' | 'symbol_count'>>): void {
+  updateProject(id: number, updates: Partial<Pick<Project, 'name' | 'description' | 'group_name' | 'root_path' | 'provider' | 'model' | 'last_indexed' | 'file_count' | 'symbol_count' | 'embeddings_enabled' | 'search_mode'>>): void {
     const fields: string[] = [];
     const values: unknown[] = [];
 

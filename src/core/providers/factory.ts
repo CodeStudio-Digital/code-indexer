@@ -1,4 +1,4 @@
-import type { LLMProvider, ChatProvider, ProviderDefinition } from './types.js';
+import type { LLMProvider, ChatProvider, ProviderDefinition, CreateCoderOpts } from './types.js';
 import type { ProviderConfig } from '../../store/provider-store.js';
 import { getRegistry, getDefinition } from './registry.js';
 import { getStore } from './shared/store.js';
@@ -7,6 +7,36 @@ import { resolveCreds } from './shared/resolver.js';
 export interface LookupResult {
   def: ProviderDefinition;
   cfg: ProviderConfig | null;
+}
+
+/**
+ * Legacy ProviderStore rows encoded Z.AI as `kind='openai'` with the marker
+ * `extra.zai_has_coding_mode=true` (because the old coder factory had no
+ * dedicated ZAI case in its switch — it detected this flag inside the
+ * OpenAI branch). New seeds use `kind='zai'` directly, but existing DBs
+ * need this rewrite so dispatch reaches the proper ZAI definition.
+ */
+function effectiveKind(cfg: ProviderConfig): string {
+  if (cfg.kind === 'openai' && (cfg.id === 'zai' || cfg.extra?.zai_has_coding_mode === true)) {
+    return 'zai';
+  }
+  return cfg.kind;
+}
+
+function lookupByCfg(
+  registry: Map<string, ProviderDefinition>,
+  cfg: ProviderConfig,
+  hint: string,
+): LookupResult {
+  const kind = effectiveKind(cfg);
+  const def = registry.get(kind);
+  if (!def) {
+    throw new Error(
+      `Instance '${hint}' declares kind='${cfg.kind}', but that shape is not ` +
+        `registered. Available shapes: ${[...registry.keys()].join(', ')}.`,
+    );
+  }
+  return { def, cfg };
 }
 
 /**
@@ -27,16 +57,7 @@ export async function lookupProvider(name?: string): Promise<LookupResult> {
   // 1. Name is an instance id in the ProviderStore.
   if (name && store) {
     const cfg = store.getProvider(name);
-    if (cfg && cfg.enabled) {
-      const def = registry.get(cfg.kind);
-      if (!def) {
-        throw new Error(
-          `Instance '${name}' declares kind='${cfg.kind}', but that shape is not ` +
-            `registered. Available shapes: ${[...registry.keys()].join(', ')}.`,
-        );
-      }
-      return { def, cfg };
-    }
+    if (cfg && cfg.enabled) return lookupByCfg(registry, cfg, name);
   }
 
   // 2. Unnamed: pick the default-flagged row.
@@ -44,8 +65,11 @@ export async function lookupProvider(name?: string): Promise<LookupResult> {
     const rows = store.listProviders({ enabled: true, use_for_agent: true });
     const defRow = rows.find((r) => r.is_default) ?? rows[0];
     if (defRow) {
-      const def = registry.get(defRow.kind);
-      if (def) return { def, cfg: defRow };
+      try {
+        return lookupByCfg(registry, defRow, defRow.id);
+      } catch {
+        // Fall through to legacy paths if the default row has an unregistered kind.
+      }
     }
   }
 
@@ -83,13 +107,14 @@ export async function createIndexerProvider(
 export async function createCoderProvider(
   name?: string,
   model?: string,
+  opts?: CreateCoderOpts,
 ): Promise<ChatProvider> {
   const { def, cfg } = await lookupProvider(name);
   if (!def.createCoder) {
     throw new Error(`Shape '${def.kind}' does not support the coder`);
   }
   const creds = await resolveCreds(def, cfg);
-  return def.createCoder(creds, model);
+  return def.createCoder(creds, model, opts);
 }
 
 // ─── Back-compat re-exports ──────────────────────────────────────
@@ -111,7 +136,7 @@ export function createProvider(name?: string, model?: string): LLMProvider {
   if (name && store) {
     const row = store.getProvider(name);
     if (row && row.enabled) {
-      def = registry.get(row.kind);
+      def = registry.get(effectiveKind(row));
       cfg = row;
     }
   }
@@ -138,4 +163,10 @@ export function createProvider(name?: string, model?: string): LLMProvider {
   return def.createIndexer(creds, model);
 }
 
-export { getDefinition, listDefinitions, getRegistry } from './registry.js';
+export {
+  getDefinition,
+  listDefinitions,
+  getRegistry,
+  listCoderKinds,
+  listIndexerKinds,
+} from './registry.js';

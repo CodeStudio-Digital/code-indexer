@@ -10,6 +10,7 @@ import { formatAskUserResult } from '../../../../../core/coder/tools/interaction
 import { createChatProviderAsync } from '../../../../../core/providers/factory.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
+import { parseIdParam, notFound } from '../_helpers.js';
 
 interface AnswerBody {
   answer: string;
@@ -41,7 +42,7 @@ export function mountCoderInteractionRoutes(
   const { activeRuns, findPendingInteraction } = runtime;
 
   app.post('/api/coder/sessions/:id/abort', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const bus = activeRuns.get(id);
     if (!bus) return c.json({ error: 'no active run' }, 404);
     bus.ctrl.abort();
@@ -50,7 +51,7 @@ export function mountCoderInteractionRoutes(
   });
 
   app.post('/api/coder/sessions/:id/answer', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const body = await c.req.json<AnswerBody>();
     const answer = body.answer ?? '';
     const entry = activeRuns.get(id);
@@ -76,7 +77,7 @@ export function mountCoderInteractionRoutes(
   });
 
   app.post('/api/coder/sessions/:id/plan-response', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const body = await c.req.json<PlanResponseBody>();
     const approved = !!body.approved;
     const entry = activeRuns.get(id);
@@ -114,13 +115,13 @@ export function mountCoderInteractionRoutes(
    * coder_plans table (migration 007).
    */
   app.get('/api/coder/sessions/:id/plans', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     return c.json(sessionStore.listPlans(id));
   });
 
   /** Chronological trace of every todo_write call in a session. */
   app.get('/api/coder/sessions/:id/todo-history', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     return c.json(sessionStore.listTodoHistory(id));
   });
 
@@ -130,7 +131,7 @@ export function mountCoderInteractionRoutes(
    * (b) the user reopens the session tab.
    */
   app.get('/api/coder/sessions/:id/tasks', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const state = sessionStore.getTasksState(id);
     if (!state) return c.json(null);
     return c.json(state);
@@ -143,7 +144,7 @@ export function mountCoderInteractionRoutes(
    * picks up where we left off.
    */
   app.post('/api/coder/sessions/:id/tasks-response', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const body = await c.req.json<TasksResponseBody>();
     const approved = !!body.approved;
 
@@ -193,9 +194,9 @@ export function mountCoderInteractionRoutes(
 
   // Set/clear fallback provider+model for a session
   app.patch('/api/coder/sessions/:id/fallback', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const session = sessionStore.getSession(id);
-    if (!session) return c.json({ error: 'Not found' }, 404);
+    if (!session) return notFound(c);
     const body = await c.req.json<{ provider: string | null; model: string | null }>();
     sessionStore.setSessionFallback(id, body.provider ?? null, body.model ?? null);
     return c.json({ ok: true, fallback_provider: body.provider, fallback_model: body.model });
@@ -203,19 +204,19 @@ export function mountCoderInteractionRoutes(
 
   // Get session fallback config
   app.get('/api/coder/sessions/:id/fallback', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const session = sessionStore.getSession(id);
-    if (!session) return c.json({ error: 'Not found' }, 404);
+    if (!session) return notFound(c);
     const fb = sessionStore.getSessionFallback(id);
     return c.json({ fallback_provider: fb?.provider ?? null, fallback_model: fb?.model ?? null });
   });
 
   app.post('/api/coder/sessions/:id/switch', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const body = await c.req.json<SwitchProviderBody>();
     if (!body.provider) return c.json({ error: 'provider required' }, 400);
     const session = sessionStore.getSession(id);
-    if (!session) return c.json({ error: 'Not found' }, 404);
+    if (!session) return notFound(c);
     const newProvider = await createChatProviderAsync(body.provider, body.model);
     sessionStore.updateSessionProvider(id, body.provider, newProvider.model);
     const entry = activeRuns.get(id);

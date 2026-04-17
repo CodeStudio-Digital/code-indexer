@@ -1,11 +1,20 @@
 import type { Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
-import { subscribe, waitEnded } from '../../../coder-bus.js';
 import type { ServerDeps } from '../../deps.js';
 import { CompanyOrchestrator } from '../../../../../core/coder/company/orchestrator.js';
+import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
+import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 
-/** Runtime map of active company orchestrators. */
-export const activeOrchestrators = new Map<number, CompanyOrchestrator>();
+/**
+ * Backwards-compatible accessor used by sibling routes (kanban.ts).
+ * Prefer importing `orchestratorRegistry` directly in new code.
+ */
+export const activeOrchestrators = {
+  get: (id: number) => orchestratorRegistry.get(id),
+  has: (id: number) => orchestratorRegistry.has(id),
+  delete: (id: number) => orchestratorRegistry.delete(id),
+  set: (id: number, o: CompanyOrchestrator) => orchestratorRegistry.set(id, o),
+};
 
 interface StartBody {
   user_message: string;
@@ -30,14 +39,14 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * events emitted during startMaster() are never lost.
    */
   app.post('/api/company/sessions/:id/start', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const session = companyStore.getCompanySession(id);
-    if (!session) return c.json({ error: 'Not found' }, 404);
+    if (!session) return notFound(c);
     if (session.status === 'running') {
       return c.json({ error: 'Already running' }, 409);
     }
 
-    const body = await c.req.json<StartBody>().catch(() => ({}) as StartBody);
+    const body = await parseJsonBody<StartBody>(c);
     if (!body.user_message) {
       return c.json({ error: 'user_message required' }, 400);
     }
@@ -59,7 +68,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       companyStore,
       db,
     });
-    activeOrchestrators.set(id, orchestrator);
+    orchestratorRegistry.set(id, orchestrator);
 
     // Await startMaster — if it fails, return JSON error (not a broken SSE stream)
     try {
@@ -73,7 +82,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[company] Master start failed:`, msg);
-      activeOrchestrators.delete(id);
+      orchestratorRegistry.delete(id);
       companyStore.updateCompanySessionStatus(id, 'error');
       return c.json({ error: `Master start failed: ${msg}` }, 500);
     }
@@ -81,58 +90,23 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     // Persist the user message so it survives page reload
     companyStore.setLastUserMessage(id, body.user_message);
 
-    // Now open SSE — subscribe with -1 replays all events from buffer
-    return streamSSE(c, async (stream) => {
-      const unsubscribe = subscribe(
-        orchestrator.metaBus,
-        (ev) => {
-          void stream.writeSSE({
-            id: String(ev.seq),
-            event: ev.event,
-            data: JSON.stringify(ev.data),
-          });
-        },
-        -1,
-      );
-      try {
-        await waitEnded(orchestrator.metaBus);
-      } finally {
-        unsubscribe();
-        await stream.close();
-        setTimeout(() => activeOrchestrators.delete(id), 30_000);
-      }
+    return pumpBusToSSE(c, orchestrator.metaBus, {
+      since: -1,
+      onDone: () => orchestratorRegistry.scheduleEviction(id),
     });
   });
 
   /**
    * Reattach to an in-flight company session's SSE stream.
+   * Uses Last-Event-ID header for replay from the client's last seen seq.
    */
   app.get('/api/company/sessions/:id/attach', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const orchestrator = activeOrchestrators.get(id);
+    const id = parseIdParam(c);
+    const orchestrator = orchestratorRegistry.get(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
-    const sinceHeader = c.req.header('Last-Event-ID');
-    const since = sinceHeader ? parseInt(sinceHeader, 10) : -1;
-
-    return streamSSE(c, async (stream) => {
-      const unsubscribe = subscribe(
-        orchestrator.metaBus,
-        (ev) => {
-          void stream.writeSSE({
-            id: String(ev.seq),
-            event: ev.event,
-            data: JSON.stringify(ev.data),
-          });
-        },
-        Number.isFinite(since) ? since : -1,
-      );
-      try {
-        await waitEnded(orchestrator.metaBus);
-      } finally {
-        unsubscribe();
-        await stream.close();
-      }
+    return pumpBusToSSE(c, orchestrator.metaBus, {
+      since: parseLastEventId(c),
     });
   });
 
@@ -142,29 +116,23 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * session, preserving full conversation history and board context.
    */
   app.post('/api/company/sessions/:id/resume', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
 
     // If there's already an active orchestrator, use sendMessage instead
-    if (activeOrchestrators.has(id)) {
-      const orchestrator = activeOrchestrators.get(id)!;
-      const body = await c.req.json<{ message: string }>().catch(() => ({}) as { message: string });
-      if (body.message) orchestrator.sendMessageToMaster(body.message);
+    const existing = orchestratorRegistry.get(id);
+    if (existing) {
+      const body = await parseJsonBody<{ message: string }>(c);
+      if (body.message) existing.sendMessageToMaster(body.message);
 
-      // Reattach to the existing stream
-      const sinceHeader = c.req.header('Last-Event-ID');
-      const since = sinceHeader ? parseInt(sinceHeader, 10) : -1;
-      return streamSSE(c, async (stream) => {
-        const unsubscribe = subscribe(orchestrator.metaBus, (ev) => {
-          void stream.writeSSE({ id: String(ev.seq), event: ev.event, data: JSON.stringify(ev.data) });
-        }, Number.isFinite(since) ? since : -1);
-        try { await waitEnded(orchestrator.metaBus); } finally { unsubscribe(); await stream.close(); }
+      return pumpBusToSSE(c, existing.metaBus, {
+        since: parseLastEventId(c),
       });
     }
 
     const session = companyStore.getCompanySession(id);
-    if (!session) return c.json({ error: 'Not found' }, 404);
+    if (!session) return notFound(c);
 
-    const body = await c.req.json<{ message: string }>().catch(() => ({}) as { message: string });
+    const body = await parseJsonBody<{ message: string }>(c);
     if (!body.message) return c.json({ error: 'message required' }, 400);
 
     // Check that there's a master run to resume
@@ -178,7 +146,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const roleConfigs = config.role_assignments ?? [];
 
     const orchestrator = new CompanyOrchestrator({ companySessionId: id, companyStore, db });
-    activeOrchestrators.set(id, orchestrator);
+    orchestratorRegistry.set(id, orchestrator);
 
     try {
       await orchestrator.resumeExistingMaster({
@@ -189,19 +157,13 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[company] Resume failed:`, msg);
-      activeOrchestrators.delete(id);
+      orchestratorRegistry.delete(id);
       return c.json({ error: `Resume failed: ${msg}` }, 500);
     }
 
-    return streamSSE(c, async (stream) => {
-      const unsubscribe = subscribe(orchestrator.metaBus, (ev) => {
-        void stream.writeSSE({ id: String(ev.seq), event: ev.event, data: JSON.stringify(ev.data) });
-      }, -1);
-      try { await waitEnded(orchestrator.metaBus); } finally {
-        unsubscribe();
-        await stream.close();
-        setTimeout(() => activeOrchestrators.delete(id), 30_000);
-      }
+    return pumpBusToSSE(c, orchestrator.metaBus, {
+      since: -1,
+      onDone: () => orchestratorRegistry.scheduleEviction(id),
     });
   });
 
@@ -209,11 +171,11 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * Abort the entire company session — stops all runners.
    */
   app.post('/api/company/sessions/:id/abort', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const orchestrator = activeOrchestrators.get(id);
+    const id = parseIdParam(c);
+    const orchestrator = orchestratorRegistry.get(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
     orchestrator.abortAll();
-    activeOrchestrators.delete(id);
+    orchestratorRegistry.delete(id);
     return c.json({ ok: true });
   });
 
@@ -223,15 +185,15 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * and while idle (changes take effect on next start/resume).
    */
   app.post('/api/company/sessions/:id/switch', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
+    const id = parseIdParam(c);
     const session = companyStore.getCompanySession(id);
-    if (!session) return c.json({ error: 'Not found' }, 404);
+    if (!session) return notFound(c);
 
-    const body = await c.req.json<{
+    const body = await parseJsonBody<{
       provider: string;
       model?: string;
       role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }>;
-    }>().catch(() => ({} as { provider: string; model?: string; role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }> }));
+    }>(c);
 
     if (!body.provider) return c.json({ error: 'provider required' }, 400);
 
@@ -247,7 +209,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     let resolvedModel = body.model ?? '';
 
     // Live swap if orchestrator is active
-    const orchestrator = activeOrchestrators.get(id);
+    const orchestrator = orchestratorRegistry.get(id);
     if (orchestrator) {
       try {
         const result = await orchestrator.swapMasterProvider(body.provider, body.model);
@@ -277,11 +239,11 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * This unblocks the Master's waitForUserInput() call.
    */
   app.post('/api/company/sessions/:id/plan-response', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const orchestrator = activeOrchestrators.get(id);
+    const id = parseIdParam(c);
+    const orchestrator = orchestratorRegistry.get(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
-    const body = await c.req.json<PlanResponseBody>().catch(() => ({}) as PlanResponseBody);
+    const body = await parseJsonBody<PlanResponseBody>(c);
     if (body.approved === undefined) {
       return c.json({ error: 'approved field required' }, 400);
     }
@@ -300,15 +262,15 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * Message is also posted to the board as "human" for visibility.
    */
   app.post('/api/company/sessions/:id/message', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const orchestrator = activeOrchestrators.get(id);
+    const id = parseIdParam(c);
+    const orchestrator = orchestratorRegistry.get(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
     if (orchestrator.metaBus.ended) {
       return c.json({ error: 'Session has ended. Please start a new session.' }, 410);
     }
 
-    const body = await c.req.json<{ message: string }>().catch(() => ({}) as { message: string });
+    const body = await parseJsonBody<{ message: string }>(c);
     if (!body.message) {
       return c.json({ error: 'message required' }, 400);
     }
@@ -322,11 +284,11 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * This unblocks the Master's waitForUserInput() call.
    */
   app.post('/api/company/sessions/:id/answer', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const orchestrator = activeOrchestrators.get(id);
+    const id = parseIdParam(c);
+    const orchestrator = orchestratorRegistry.get(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
-    const body = await c.req.json<{ answer: string }>().catch(() => ({}) as { answer: string });
+    const body = await parseJsonBody<{ answer: string }>(c);
     if (!body.answer) {
       return c.json({ error: 'answer required' }, 400);
     }
@@ -343,8 +305,8 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * Check if there's an active orchestrator for a company session.
    */
   app.get('/api/company/sessions/:id/status', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const orchestrator = activeOrchestrators.get(id);
+    const id = parseIdParam(c);
+    const orchestrator = orchestratorRegistry.get(id);
     return c.json({
       active: !!orchestrator,
       company_session_id: id,

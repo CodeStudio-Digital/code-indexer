@@ -151,22 +151,31 @@ export function useAgentStream(sessionId: number | null) {
   );
 
   const answerQuestion = useCallback(
-    (answer: string, onMessageComplete?: () => void) =>
+    (
+      answer: string,
+      onMessageComplete?: () => void,
+      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' },
+    ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/answer`,
         { answer },
-        {},
+        extras?.agent ? { agent: extras.agent } : {},
         onMessageComplete,
       ),
     [sessionId, postAndResume],
   );
 
   const respondToPlan = useCallback(
-    (approved: boolean, feedback?: string, onMessageComplete?: () => void) =>
+    (
+      approved: boolean,
+      feedback?: string,
+      onMessageComplete?: () => void,
+      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' },
+    ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/plan-response`,
         { approved, feedback },
-        { plan_mode: true },
+        { plan_mode: true, ...(extras?.agent ? { agent: extras.agent } : {}) },
         onMessageComplete,
       ),
     [sessionId, postAndResume],
@@ -181,11 +190,12 @@ export function useAgentStream(sessionId: number | null) {
         execution_mode?: StreamTaskExecutionMode;
       },
       onMessageComplete?: () => void,
+      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' },
     ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/tasks-response`,
         verdict as Record<string, unknown>,
-        { plan_mode: true },
+        { plan_mode: true, ...(extras?.agent ? { agent: extras.agent } : {}) },
         onMessageComplete,
       ),
     [sessionId, postAndResume],
@@ -212,6 +222,7 @@ export function useAgentStream(sessionId: number | null) {
     runDelta: active.runDelta,
     reattached: active.reattached,
     todos: active.todos,
+    contextStatus: active.contextStatus,
     indexStatus: active.indexStatus,
     sendMessage,
     reattach,

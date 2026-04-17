@@ -1,6 +1,7 @@
 import { createEventHandlers } from './handlers.js';
 import type { StreamBlock, UpdateSession } from './types.js';
 import { ZERO_DELTA } from './types.js';
+import { ReconnectingSSEClient } from '../../../../shared/sse/ReconnectingSSEClient.js';
 
 export interface OpenStreamOpts {
   url: string;
@@ -20,6 +21,10 @@ export interface OpenStreamDeps {
  * state slot. Used by sendMessage (POST /messages), the plan/question resume
  * path (POST /continue) AND reattach (GET /attach with Last-Event-ID) so
  * every entry point shares the same live rendering pipeline.
+ *
+ * Transport concerns (SSE framing, Last-Event-ID, reconnect, heartbeat) are
+ * delegated to the shared ReconnectingSSEClient — this function only wires
+ * the event pipeline into the session state slot.
  */
 export async function openStream(
   sid: number,
@@ -46,6 +51,11 @@ export async function openStream(
 
   const blocks: StreamBlock[] = [];
   const toolIndex = new Map<string, number>();
+
+  // Track the most recent SSE id so reconnects resume from the right point.
+  let lastSeenSeq = typeof opts.lastEventId === 'number' && opts.lastEventId >= 0
+    ? opts.lastEventId
+    : -1;
 
   // Batch flushes to at most one per animation frame. Tokens arrive at
   // 50+/s; without batching every token triggers a full React re-render of
@@ -80,60 +90,32 @@ export async function openStream(
     onMessageComplete,
   });
 
-  try {
-    const headers: Record<string, string> = {};
-    if (opts.method === 'POST') headers['Content-Type'] = 'application/json';
-    if (typeof opts.lastEventId === 'number' && opts.lastEventId >= 0) {
-      headers['Last-Event-ID'] = String(opts.lastEventId);
-    }
-    const res = await fetch(opts.url, {
-      method: opts.method,
-      headers,
-      body: opts.method === 'POST' ? JSON.stringify(opts.body ?? {}) : undefined,
-      signal: ctrl.signal,
-    });
-    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      // Parse SSE events (separated by blank line)
-      const events = buffer.split('\n\n');
-      buffer = events.pop() ?? '';
-      for (const raw of events) {
-        const lines = raw.split('\n');
-        let eventName = 'message';
-        let dataStr = '';
-        let eventId: number | null = null;
-        for (const ln of lines) {
-          if (ln.startsWith('event:')) eventName = ln.slice(6).trim();
-          else if (ln.startsWith('data:')) dataStr += ln.slice(5).trim();
-          else if (ln.startsWith('id:')) {
-            const n = parseInt(ln.slice(3).trim(), 10);
-            if (Number.isFinite(n)) eventId = n;
-          }
-        }
-        if (!dataStr) continue;
-        let data: Record<string, unknown>;
-        try {
-          data = JSON.parse(dataStr);
-        } catch {
-          continue;
-        }
-        if (eventId !== null) {
-          const seq = eventId;
-          updateSession(sid, (cur) => (seq > cur.lastSeenSeq ? { lastSeenSeq: seq } : {}));
-        }
-        const handler = handlers[eventName];
-        if (handler) handler(data, eventName);
+  const client = new ReconnectingSSEClient({
+    url: opts.url,
+    method: opts.method,
+    body: opts.body,
+    signal: ctrl.signal,
+    getLastEventId: () => lastSeenSeq,
+    onEvent: (ev) => {
+      if (ev.id !== undefined && ev.id > lastSeenSeq) {
+        lastSeenSeq = ev.id;
+        updateSession(sid, (cur) => (ev.id! > cur.lastSeenSeq ? { lastSeenSeq: ev.id! } : {}));
       }
-    }
+      if (!ev.data) return;
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      const handler = handlers[ev.event];
+      if (handler) handler(data, ev.event);
+    },
+    isTerminal: (ev) => ev.event === 'done' || ev.event === 'error',
+  });
+
+  try {
+    await client.run();
   } catch (e) {
     if ((e as Error).name !== 'AbortError') {
       updateSession(sid, { error: e instanceof Error ? e.message : String(e) });

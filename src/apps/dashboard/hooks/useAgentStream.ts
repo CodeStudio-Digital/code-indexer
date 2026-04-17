@@ -6,6 +6,7 @@ export type {
   AgentsGroup,
   AgentStatus,
   AssistantTurn,
+  ContextStatus,
   IndexStatus,
   ParallelAgent,
   PlanPrompt,

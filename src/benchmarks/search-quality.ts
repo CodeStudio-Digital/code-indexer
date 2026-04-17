@@ -216,12 +216,8 @@ async function main(): Promise<void> {
 
   const providerStore = new ProviderStore(config.dbPath);
   providerStore.seedFromEnvIfEmpty();
-  const envFallback =
-    config.embeddings.enabled && config.embeddings.workerUrl
-      ? { workerUrl: config.embeddings.workerUrl, workerToken: config.embeddings.workerToken }
-      : undefined;
-  const embeddingService = createEmbeddingService(providerStore, envFallback);
-  const vectorStore = createVectorStore(providerStore, envFallback);
+  const embeddingService = createEmbeddingService(providerStore);
+  const vectorStore = createVectorStore(providerStore);
   const searchable = vectorStore instanceof NullVectorStore ? null : vectorStore;
   const hyde = values['no-hyde'] ? null : new HyDEService(providerStore);
   const search = new HybridSearch(db, searchable, embeddingService, hyde);

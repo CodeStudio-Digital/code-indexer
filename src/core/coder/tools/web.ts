@@ -1,3 +1,6 @@
+import TurndownService from 'turndown';
+// @ts-expect-error — turndown-plugin-gfm ships no TS types.
+import { gfm } from 'turndown-plugin-gfm';
 import type { CoderTool, ToolContext, ToolResult } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
 
@@ -49,49 +52,40 @@ function cachePut(key: string, text: string): void {
 }
 
 /**
- * Minimal HTML → plaintext/markdown converter. Intentionally not pulling
- * turndown as a dep — most of what the agent needs from a page is readable
- * text + link targets, and a focused regex pipeline does that in ~50 lines
- * without adding 200KB to the install.
+ * HTML → markdown converter built on turndown + the GFM plugin. Covers
+ * tables, nested lists, code fences, strikethrough, and HTML entities that
+ * the previous regex pipeline silently mangled (MDN tables, nested docs,
+ * `&#8212;` style numeric entities, etc).
+ *
+ * The instance is lazy + cached — turndown builds a rule table on construction
+ * and we want that to happen once per process, not per fetch.
  */
+let turndownInstance: TurndownService | null = null;
+function getTurndown(): TurndownService {
+  if (turndownInstance) return turndownInstance;
+  const td = new TurndownService({
+    codeBlockStyle: 'fenced',
+    headingStyle: 'atx',
+    bulletListMarker: '-',
+  });
+  td.use(gfm);
+  // Drop script/style/noscript entirely — turndown would otherwise leak their
+  // text content into the output.
+  td.remove(['script', 'style', 'noscript']);
+  turndownInstance = td;
+  return td;
+}
+
 function htmlToMarkdown(html: string): string {
-  // Strip <script> and <style> blocks entirely.
-  let s = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
-  s = s.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
-  s = s.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, '');
-  // Drop HTML comments.
-  s = s.replace(/<!--[\s\S]*?-->/g, '');
-  // Headings → markdown.
-  s = s.replace(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n');
-  s = s.replace(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi, '\n\n## $1\n\n');
-  s = s.replace(/<h3\b[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n');
-  s = s.replace(/<h4\b[^>]*>([\s\S]*?)<\/h4>/gi, '\n\n#### $1\n\n');
-  // Code blocks.
-  s = s.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, '\n\n```\n$1\n```\n\n');
-  s = s.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, '`$1`');
-  // Links: keep both text and href.
-  s = s.replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)');
-  // Lists.
-  s = s.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, '\n- $1');
-  // Line breaks and paragraphs.
-  s = s.replace(/<br\s*\/?>/gi, '\n');
-  s = s.replace(/<\/p>/gi, '\n\n');
-  s = s.replace(/<p\b[^>]*>/gi, '');
-  // Strip every remaining tag.
-  s = s.replace(/<[^>]+>/g, '');
-  // Decode the common HTML entities.
-  s = s
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'");
-  // Collapse excessive whitespace.
-  s = s.replace(/\n{3,}/g, '\n\n');
-  s = s.replace(/[ \t]{2,}/g, ' ');
-  return s.trim();
+  try {
+    const md = getTurndown().turndown(html);
+    // Collapse runs of 3+ blank lines turndown sometimes leaves behind.
+    return md.replace(/\n{3,}/g, '\n\n').trim();
+  } catch {
+    // Malformed HTML shouldn't kill the whole fetch — strip tags and return
+    // plain text as a last resort.
+    return html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  }
 }
 
 function applyCap(text: string): string {

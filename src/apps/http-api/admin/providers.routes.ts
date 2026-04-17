@@ -26,6 +26,7 @@ import {
 } from '../../../core/services/oauth/google.js';
 import { publicProvider } from './shared/mask.js';
 import { resolveCopilotApiBase } from './shared/copilot-opts.js';
+import { refreshAllProviderModels } from '../../../core/indexer/providers/scheduled-refresh.js';
 
 export function providersRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -226,6 +227,19 @@ export function providersRouter(store: ProviderStore): Hono {
       return c.json({ ok: true, latencyMs: Date.now() - started });
     } catch (e) {
       return c.json({ ok: false, latencyMs: Date.now() - started, error: (e as Error).message });
+    }
+  });
+
+  /**
+   * POST /providers/refresh-all — trigger immediate live discovery for all
+   * enabled providers. Useful to force-refresh context_window values.
+   */
+  app.post('/providers/refresh-all', async (c) => {
+    try {
+      await refreshAllProviderModels(store);
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
     }
   });
 

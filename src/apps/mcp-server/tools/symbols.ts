@@ -1,6 +1,5 @@
 import { join } from 'node:path';
 import { defineTool, type McpTool } from '../tool.js';
-import { resolveProject } from '../utils.js';
 import {
   extractSymbolBody,
   grepInFiles,
@@ -8,6 +7,7 @@ import {
   locateSymbolInFiles,
 } from '../../../core/services/code-reader.js';
 import type { DBSymbol } from '../../../types.js';
+import { withProject } from './_helpers.js';
 
 const get_symbol_details = defineTool({
   name: 'get_symbol_details',
@@ -51,11 +51,10 @@ const get_class_members = defineTool({
     properties: { class_name: { type: 'string' }, project_name: { type: 'string' } },
     required: ['class_name', 'project_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const members = db.getClassMembers(args.class_name as string, project.id);
     return members.map(m => `  ${m.kind} ${m.name} — ${m.signature}`).join('\n') || 'No members found.';
-  },
+  }),
 });
 
 const find_references = defineTool({
@@ -71,8 +70,7 @@ const find_references = defineTool({
     },
     required: ['project_name', 'symbol_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const symbolName = args.symbol_name as string;
     const filePath = args.file_path as string | undefined;
     const asJson = args.format === 'json';
@@ -131,7 +129,7 @@ const find_references = defineTool({
     if (hits.length === 0) return 'No references found.';
     return `[grep fallback — symbol_references DB empty]\n` +
       hits.map(h => `${h.file}:${h.line}: ${h.text}`).join('\n');
-  },
+  }),
 });
 
 const get_hierarchy = defineTool({
@@ -142,8 +140,7 @@ const get_hierarchy = defineTool({
     properties: { project_name: { type: 'string' }, symbol_name: { type: 'string' } },
     required: ['project_name', 'symbol_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const hierarchy = db.getSymbolHierarchy(project.id, args.symbol_name as string);
     const lines: string[] = [];
     if (hierarchy.extends_chain.length > 0) lines.push(`Extends: ${hierarchy.extends_chain.join(' → ')}`);
@@ -151,7 +148,7 @@ const get_hierarchy = defineTool({
     if (hierarchy.subclasses.length > 0) lines.push(`Subclasses: ${hierarchy.subclasses.join(', ')}`);
     if (hierarchy.implementors.length > 0) lines.push(`Implementors: ${hierarchy.implementors.join(', ')}`);
     return lines.join('\n') || 'No hierarchy information found.';
-  },
+  }),
 });
 
 const find_implementations = defineTool({
@@ -162,11 +159,10 @@ const find_implementations = defineTool({
     properties: { project_name: { type: 'string' }, interface_name: { type: 'string' } },
     required: ['project_name', 'interface_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const impls = db.getImplementors(project.id, args.interface_name as string);
     return impls.map(s => `${s.kind} ${s.name} — ${s.file_path}:${s.line ?? '?'}`).join('\n') || 'No implementations found.';
-  },
+  }),
 });
 
 const trace_usage = defineTool({
@@ -181,8 +177,7 @@ const trace_usage = defineTool({
     },
     required: ['project_name', 'symbol_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const depth = (args.depth as number) ?? 3;
     const tree = db.traceSymbolUsage(project.id, args.symbol_name as string, depth);
 
@@ -221,7 +216,7 @@ const trace_usage = defineTool({
       sections.push(formatTree(tree.callers, ''));
     }
     return sections.join('\n');
-  },
+  }),
 });
 
 const get_symbol_body = defineTool({
@@ -237,8 +232,7 @@ const get_symbol_body = defineTool({
     },
     required: ['project_name', 'symbol_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const symbolName = args.symbol_name as string;
     const filePath = args.file_path as string | undefined;
     const asJson = args.format === 'json';
@@ -305,7 +299,7 @@ const get_symbol_body = defineTool({
         ? JSON.stringify({ error: 'read_failed', message: msg })
         : `Failed to read body: ${msg}`;
     }
-  },
+  }),
 });
 
 const prepare_edit = defineTool({
@@ -322,8 +316,7 @@ const prepare_edit = defineTool({
     },
     required: ['project_name', 'symbol_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const symbolName = args.symbol_name as string;
     const filePath = args.file_path as string | undefined;
     const maxCallers = (args.max_callers as number) ?? 10;
@@ -460,7 +453,7 @@ const prepare_edit = defineTool({
     }
 
     return sections.join('\n');
-  },
+  }),
 });
 
 const semantic_neighbors = defineTool({

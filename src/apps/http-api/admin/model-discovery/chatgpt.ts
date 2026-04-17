@@ -8,11 +8,13 @@
  */
 import type { UpsertModelInput } from '../../../../store/provider-store.js';
 import { CHATGPT_SEED_MODELS } from '../../../../core/services/oauth/openai.js';
+import { getRegistryContextWindow } from '../../../../core/coder/providers/capabilities.js';
 
 export async function discoverChatgpt(): Promise<UpsertModelInput[]> {
   return CHATGPT_SEED_MODELS.map((m) => ({
     model_id: m.model_id,
     name: m.name,
+    context_window: getRegistryContextWindow(m.model_id),
     source: 'live' as const,
   }));
 }

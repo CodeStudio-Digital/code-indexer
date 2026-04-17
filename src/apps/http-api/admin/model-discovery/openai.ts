@@ -5,6 +5,7 @@
  * duplicate each model as normal+coding so the UI can pick a mode.
  */
 import type { ProviderConfig, UpsertModelInput } from '../../../../store/provider-store.js';
+import { getRegistryContextWindow } from '../../../../core/coder/providers/capabilities.js';
 
 export async function discoverOpenai(cfg: ProviderConfig): Promise<UpsertModelInput[]> {
   const { api_key, base_url } = cfg;
@@ -16,7 +17,8 @@ export async function discoverOpenai(cfg: ProviderConfig): Promise<UpsertModelIn
   const base_list: UpsertModelInput[] = data.data.map((m) => ({
     model_id: m.id,
     name: m.id,
-    source: 'live',
+    context_window: getRegistryContextWindow(m.id),
+    source: 'live' as const,
   }));
   if (cfg.extra?.zai_has_coding_mode === true) {
     return base_list.flatMap((m) => [

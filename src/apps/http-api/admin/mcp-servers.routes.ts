@@ -52,6 +52,26 @@ export function enumerateExternalTools(dbPath: string): {
   }
 }
 
+const RESERVED_HEADER_NAMES = new Set(['authorization', 'cookie', 'mcp-session-id']);
+
+/**
+ * Reject attempts to set reserved HTTP headers via the admin API.
+ * Returns the offending name (lowercased) if one is found.
+ *
+ * Authorization is driven by auth_type; Cookie and Mcp-Session-Id are
+ * owned by the MCP transport. Allowing overrides here would cause either
+ * silent breakage or subtle auth bugs.
+ */
+function findReservedHeader(config: unknown): string | null {
+  if (!config || typeof config !== 'object') return null;
+  const headers = (config as Record<string, unknown>).headers;
+  if (!headers || typeof headers !== 'object') return null;
+  for (const key of Object.keys(headers as Record<string, unknown>)) {
+    if (RESERVED_HEADER_NAMES.has(key.trim().toLowerCase())) return key;
+  }
+  return null;
+}
+
 function publicServer(s: McpServerConfig) {
   return {
     id: s.id,
@@ -118,6 +138,10 @@ export function mcpServersRouter(): Hono {
     if (!body.id || !body.name || !body.transport) {
       return c.json({ error: 'id, name, transport required' }, 400);
     }
+    const reserved = findReservedHeader(body.config);
+    if (reserved) {
+      return c.json({ error: `reserved header "${reserved}" cannot be set` }, 400);
+    }
     const store = getStore();
     try {
       const server = store.upsertServer(body);
@@ -150,6 +174,10 @@ export function mcpServersRouter(): Hono {
         config?: Record<string, unknown>;
       }>();
 
+      const reserved = body.config !== undefined ? findReservedHeader(body.config) : null;
+      if (reserved) {
+        return c.json({ error: `reserved header "${reserved}" cannot be set` }, 400);
+      }
       const server = store.upsertServer({
         id,
         name: body.name ?? existing.name,

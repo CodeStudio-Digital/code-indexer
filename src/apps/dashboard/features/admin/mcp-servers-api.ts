@@ -1,5 +1,5 @@
 export type McpTransport = 'stdio' | 'sse' | 'streamable_http';
-export type McpAuthType = 'none' | 'api_key' | 'bearer';
+export type McpAuthType = 'none' | 'api_key' | 'bearer' | 'oauth2';
 /** Core tiers or a custom tier name (e.g., 'cloudflare', 'github'). */
 export type McpDefaultTier = string;
 
@@ -71,4 +71,82 @@ export async function fetchServerTools(id: string): Promise<McpServerToolInfo[]>
   if (!r.ok) return [];
   const j = (await r.json()) as { tools: McpServerToolInfo[] };
   return j.tools;
+}
+
+// ── OAuth 2.1 client flow ──────────────────────────────────────────────
+
+export interface McpOAuthStatus {
+  server_id: string;
+  status: 'registered' | 'not_registered';
+  registration: {
+    issuer: string;
+    client_id: string;
+    scopes: string[];
+    redirect_uri: string;
+    source: 'dcr' | 'manual';
+  } | null;
+}
+
+export async function fetchOAuthStatus(serverId: string): Promise<McpOAuthStatus> {
+  const r = await fetch(`/api/admin/mcp-servers/${serverId}/oauth/status`);
+  return (await r.json()) as McpOAuthStatus;
+}
+
+/**
+ * Runs discovery + DCR in one shot. Returns the newly registered client_id.
+ * For manual registration (AS does not support DCR), pass a pre-obtained
+ * client_id (and optional secret) and the resolved AS metadata in `manual`.
+ */
+export async function registerOAuthClient(
+  serverId: string,
+  input:
+    | { mode: 'dcr'; resource_url: string; client_name?: string; scopes?: string[] }
+    | {
+        mode: 'manual';
+        as: Record<string, unknown>;
+        client_id: string;
+        client_secret?: string;
+        scopes?: string[];
+      },
+): Promise<{ client_id: string; source: 'dcr' | 'manual' }> {
+  const body =
+    input.mode === 'dcr'
+      ? {
+          resource_url: input.resource_url,
+          client_name: input.client_name,
+          scopes: input.scopes,
+        }
+      : {
+          as: input.as,
+          client_id: input.client_id,
+          client_secret: input.client_secret,
+          scopes: input.scopes,
+        };
+  const r = await fetch(`/api/admin/mcp-servers/${serverId}/oauth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const e = (await r.json().catch(() => ({}))) as { error_description?: string; error?: string };
+    throw new Error(e.error_description ?? e.error ?? 'register failed');
+  }
+  return (await r.json()) as { client_id: string; source: 'dcr' | 'manual' };
+}
+
+export async function startOAuthAuthorize(
+  serverId: string,
+): Promise<{ authorization_url: string; state: string }> {
+  const r = await fetch(`/api/admin/mcp-servers/${serverId}/oauth/authorize`, {
+    method: 'POST',
+  });
+  if (!r.ok) {
+    const e = (await r.json().catch(() => ({}))) as { error_description?: string };
+    throw new Error(e.error_description ?? 'authorize failed');
+  }
+  return (await r.json()) as { authorization_url: string; state: string };
+}
+
+export async function revokeMcpOAuth(serverId: string): Promise<void> {
+  await fetch(`/api/admin/mcp-servers/${serverId}/oauth`, { method: 'DELETE' });
 }

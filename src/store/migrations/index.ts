@@ -41,6 +41,12 @@ import { projectGroup022 } from './022_project_group.js';
 import { cloudcodeSession023 } from './023_cloudcode_session.js';
 import { kanban024 } from './024_kanban.js';
 import { fallbackConfig025 } from './025_fallback_config.js';
+import { lastTurnTokens026 } from './026_last_turn_tokens.js';
+import { projectSettings027 } from './027_project_settings.js';
+import { apiTokens028 } from './028_api_tokens.js';
+import { oauthServer029 } from './029_oauth_server.js';
+import { mcpClientOauth030 } from './030_mcp_client_oauth.js';
+import { coderSessionAgent031 } from './031_coder_session_agent.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -76,6 +82,12 @@ export const MIGRATIONS: Migration[] = [
   cloudcodeSession023,
   kanban024,
   fallbackConfig025,
+  lastTurnTokens026,
+  projectSettings027,
+  apiTokens028,
+  oauthServer029,
+  mcpClientOauth030,
+  coderSessionAgent031,
 ];
 
 /**

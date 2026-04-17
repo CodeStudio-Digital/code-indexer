@@ -25,6 +25,8 @@ export interface CoderSession {
   total_output_tokens: number;
   total_cache_read_tokens: number;
   total_cache_creation_tokens: number;
+  /** Most recent turn's input tokens — actual context window usage. */
+  last_turn_input_tokens: number;
   /** Optional group (folder) this session belongs to (migration 009). */
   group_id: number | null;
   is_archived: boolean;
@@ -51,6 +53,9 @@ export interface CoderSessionStats {
   total_output_tokens: number;
   total_cache_read_tokens: number;
   total_cache_creation_tokens: number;
+  last_turn_input_tokens: number;
+  /** Model context window size — returned by the stats API. */
+  context_window?: number | null;
   message_count: number;
   assistant_turns: number;
   tool_call_count: number;

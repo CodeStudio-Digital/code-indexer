@@ -15,36 +15,46 @@
  * they appear in the registry — so the critical discovery tools always
  * survive the cut.
  *
- * Override the built-in map via env var CODER_MODEL_CAPS (JSON):
- *   CODER_MODEL_CAPS='{"my-custom-model": {"maxTools": 20}}'
+ * Runtime priority (highest → lowest):
+ *   1. CODER_MODEL_CAPS env var  (JSON: {"model-id": {"maxTools": N, "contextWindow": N}})
+ *   2. DB layer loaded via mergeDBCapabilities() on server startup
+ *   3. MODEL_REGISTRY static file (model-registry.ts)
  */
+
+import { MODEL_REGISTRY } from './model-registry.js';
 
 export interface ModelCapability {
   /** Hard cap on the number of tools in the tools array. */
   maxTools: number;
+  /** Context window size in tokens. Used by the dashboard to show usage vs capacity. */
+  contextWindow?: number;
   /** Short human-readable note shown in logs. */
   note?: string;
 }
 
-const BUILTIN: Record<string, ModelCapability> = {
-  // Anthropic — no known issues with large tool lists
-  'claude-opus-4-6': { maxTools: 200 },
-  'claude-sonnet-4-6': { maxTools: 200 },
-  'claude-haiku-4-5-20251001': { maxTools: 120, note: 'Haiku prefers tighter catalogs' },
-  // OpenAI
-  'gpt-4o': { maxTools: 128 },
-  'gpt-4o-mini': { maxTools: 64, note: 'Smaller context = tighter tool catalog' },
-  // ZAI / GLM — sensitive to tool-count drift
-  'glm-5.1': { maxTools: 50, note: 'GLM-5.1 tool-name confusion rises past ~50 tools' },
-  'glm-4.6': { maxTools: 40 },
-  // DeepSeek
-  'deepseek-chat': { maxTools: 40 },
-  'deepseek-coder': { maxTools: 40 },
-  // Gemini
-  'gemini-2.5-flash': { maxTools: 64 },
-  'gemini-2.5-pro': { maxTools: 128 },
-};
+// ── DB layer ─────────────────────────────────────────────────────────────────
+// Populated once on server startup by mergeDBCapabilities(). Keyed by model_id.
+// Only contextWindow is stored here — maxTools lives only in the registry.
+let dbLayer: Record<string, number> = {};
 
+/**
+ * Load context-window values from the provider_models DB rows into the
+ * in-memory lookup. Call this after the DB is ready and after any model
+ * refresh so getModelContextWindow() returns up-to-date values.
+ */
+export function mergeDBCapabilities(
+  models: ReadonlyArray<{ model_id: string; context_window: number | null }>
+): void {
+  const next: Record<string, number> = {};
+  for (const m of models) {
+    if (m.context_window != null) {
+      next[m.model_id] = m.context_window;
+    }
+  }
+  dbLayer = next;
+}
+
+// ── Env override ─────────────────────────────────────────────────────────────
 let cachedOverride: Record<string, ModelCapability> | null = null;
 
 function loadOverride(): Record<string, ModelCapability> {
@@ -60,14 +70,37 @@ function loadOverride(): Record<string, ModelCapability> {
   return cachedOverride;
 }
 
+// ── Public API ────────────────────────────────────────────────────────────────
+
 /** Look up the max-tools cap for a model. Falls back to 200 when unknown. */
 export function getModelMaxTools(model: string): number {
   const override = loadOverride();
-  const cap = override[model] ?? BUILTIN[model];
+  const cap = override[model] ?? MODEL_REGISTRY[model];
   return cap?.maxTools ?? 200;
+}
+
+/**
+ * Look up the context window size for a model.
+ * Priority: env var > DB > static registry.
+ * Returns null when unknown.
+ */
+export function getModelContextWindow(model: string): number | null {
+  const override = loadOverride();
+  if (override[model]?.contextWindow != null) return override[model].contextWindow!;
+  if (dbLayer[model] != null) return dbLayer[model];
+  return MODEL_REGISTRY[model]?.contextWindow ?? null;
 }
 
 export function getModelCapabilityNote(model: string): string | undefined {
   const override = loadOverride();
-  return (override[model] ?? BUILTIN[model])?.note;
+  return (override[model] ?? MODEL_REGISTRY[model])?.note;
+}
+
+/**
+ * Look up context-window from the static registry only (no DB, no env).
+ * Used by live discovery to seed DB rows for providers whose APIs don't
+ * expose context-window.
+ */
+export function getRegistryContextWindow(model: string): number | null {
+  return MODEL_REGISTRY[model]?.contextWindow ?? null;
 }

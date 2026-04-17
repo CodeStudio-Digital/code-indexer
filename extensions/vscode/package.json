@@ -1,0 +1,101 @@
+{
+  "name": "mcp-code-indexer",
+  "displayName": "MCP Code Indexer",
+  "description": "Codebase indexing, hybrid search, and AI agent chat powered by MCP Code Indexer",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other", "Programming Languages"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mcp.openChat",
+        "title": "MCP: Open Agent Chat",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "mcp.search",
+        "title": "MCP: Search Codebase",
+        "icon": "$(search)"
+      },
+      {
+        "command": "mcp.indexProject",
+        "title": "MCP: Index Current Project",
+        "icon": "$(sync)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mcp-sidebar",
+          "title": "MCP Indexer",
+          "icon": "$(database)"
+        }
+      ]
+    },
+    "views": {
+      "mcp-sidebar": [
+        {
+          "id": "mcp.dashboardView",
+          "name": "Dashboard",
+          "type": "webview"
+        }
+      ]
+    },
+    "menus": {
+      "commandPalette": [
+        { "command": "mcp.openChat" },
+        { "command": "mcp.search" },
+        { "command": "mcp.indexProject" }
+      ],
+      "editor/context": [
+        {
+          "command": "mcp.search",
+          "when": "editorHasSelection",
+          "group": "mcp"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "mcp.search",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m"
+      }
+    ],
+    "configuration": {
+      "title": "MCP Code Indexer",
+      "properties": {
+        "mcp.serverPort": {
+          "type": "number",
+          "default": 3333,
+          "description": "Port used by the MCP Code Indexer HTTP server"
+        },
+        "mcp.autoStartServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the MCP server when VS Code opens"
+        },
+        "mcp.serverBinaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the compiled server JS file. Leave empty to auto-detect from workspace."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -watch -p tsconfig.json",
+    "package": "vsce package",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

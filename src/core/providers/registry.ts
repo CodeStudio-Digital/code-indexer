@@ -62,3 +62,22 @@ export function listDefinitions(): ProviderDefinition[] {
 export function getDefinition(kind: string): ProviderDefinition | undefined {
   return getRegistry().get(kind);
 }
+
+/**
+ * List the kinds registered with a `createCoder` builder — i.e. all shapes
+ * usable by the coder runner. Replaces the hardcoded SUPPORTED_CODER_PROVIDERS
+ * constant from the legacy coder factory; derived dynamically so adding a
+ * new coder-capable shape automatically surfaces it to the HTTP list route.
+ */
+export function listCoderKinds(): string[] {
+  return listDefinitions().filter((d) => !!d.createCoder).map((d) => d.kind);
+}
+
+/**
+ * List the kinds registered with an indexer builder (sync or async).
+ */
+export function listIndexerKinds(): string[] {
+  return listDefinitions()
+    .filter((d) => !!d.createIndexer || !!d.createIndexerAsync)
+    .map((d) => d.kind);
+}

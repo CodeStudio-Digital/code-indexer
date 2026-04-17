@@ -194,6 +194,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         max_turns: number;
         auto_continue_count: number;
         auto_continue_max: number;
+        last_turn_input_tokens: number;
+        context_window: number | null;
       };
       updateSession(sid, { contextStatus: d });
     },

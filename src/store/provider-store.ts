@@ -308,6 +308,34 @@ export class ProviderStore {
     return rows.map(hydrateProvider);
   }
 
+  /**
+   * Return the default enabled provider, or the first enabled provider if none
+   * is explicitly marked as default. Returns null when no providers are configured.
+   */
+  getDefaultProvider(): ProviderConfig | null {
+    const row = this.db
+      .prepare('SELECT * FROM provider_configs WHERE is_default = 1 AND enabled = 1 LIMIT 1')
+      .get() as ProviderConfigRaw | undefined;
+    if (row) return hydrateProvider(row);
+    // Fallback: first enabled provider
+    const first = this.db
+      .prepare('SELECT * FROM provider_configs WHERE enabled = 1 ORDER BY name LIMIT 1')
+      .get() as ProviderConfigRaw | undefined;
+    return first ? hydrateProvider(first) : null;
+  }
+
+  /**
+   * Convenience: return `{ kind, model }` for the default provider, picking
+   * the first enabled model when available. Returns `{ kind: 'zai', model: undefined }`
+   * as ultimate fallback.
+   */
+  getDefaultProviderAndModel(): { kind: string; model: string | undefined } {
+    const prov = this.getDefaultProvider();
+    if (!prov) return { kind: 'zai', model: undefined };
+    const models = this.listModels(prov.id, true);
+    return { kind: prov.kind, model: models[0]?.model_id };
+  }
+
   getProvider(id: string): ProviderConfig | null {
     const row = this.db
       .prepare('SELECT * FROM provider_configs WHERE id = ?')
@@ -429,6 +457,14 @@ export class ProviderStore {
     const rows = this.db
       .prepare(`SELECT * FROM provider_models WHERE provider_id = ? ${where} ORDER BY name, mode`)
       .all(providerId) as ProviderModelRaw[];
+    return rows.map(hydrateModel);
+  }
+
+  /** Return every model row across all providers. Used to hydrate the in-memory capability cache on startup. */
+  listAllModels(): ProviderModel[] {
+    const rows = this.db
+      .prepare('SELECT * FROM provider_models ORDER BY provider_id, name, mode')
+      .all() as ProviderModelRaw[];
     return rows.map(hydrateModel);
   }
 

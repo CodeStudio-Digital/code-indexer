@@ -77,6 +77,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     lastUsage,
     runDelta,
     todos,
+    contextStatus,
     indexStatus,
     sendMessage,
     reattach,
@@ -521,6 +522,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                   runDelta={runDelta}
                   lastUsage={lastUsage}
                   stats={stats}
+                  contextStatus={contextStatus}
                   indexStatus={indexStatus}
                   onOpenDetails={() => setDetailsOpen(true)}
                   onOpenSidebar={() => setMobileSidebarOpen(true)}
@@ -563,7 +565,11 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 sessionId={selectedId}
                 thinking={thinking}
                 setThinking={setThinking}
-                supportsThinking={provider === 'google-oauth' || provider === 'gemini'}
+                supportsThinking={
+                  provider === 'google-oauth' ||
+                  provider === 'gemini' ||
+                  (provider === 'zai' && /^glm-5(\.|-)/.test((model ?? '').split('::')[0]))
+                }
                 fallbackProvider={fallbackProvider}
                 fallbackModel={fallbackModel}
                 onFallbackChange={handleFallbackChange}

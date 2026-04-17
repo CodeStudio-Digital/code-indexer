@@ -446,9 +446,16 @@ function finalizeSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
       });
 
       const answer = await runner.waitForUserInput();
-      let parsed: { aborted?: boolean; answer?: string };
+      let parsed: { aborted?: boolean; interrupted?: boolean; answer?: string };
       try { parsed = JSON.parse(answer); } catch { parsed = { answer }; }
       if (parsed.aborted) return err('Finalization cancelled by user.');
+      if (parsed.interrupted) {
+        return err(
+          'finalize_subordinates was interrupted: a subordinate agent is blocked waiting for your response. ' +
+          'Use answer_subordinate_question() or approve_subordinate_tasks() to unblock them first, ' +
+          'then call finalize_subordinates again when ready.',
+        );
+      }
 
       const userAnswer = (parsed.answer ?? answer).toLowerCase().trim();
       const isYes = userAnswer.startsWith('yes') || userAnswer === 'y' || userAnswer.includes('finalize');

@@ -18,8 +18,8 @@ export function register(program: Command): void {
     .action(async (query: string, opts: { project?: string; mode: string; type: string; limit: number; global?: boolean }) => {
       const config = loadConfig();
       const db = new CodeIndexDB(config.dbPath);
-      const embeddingService = getEmbeddingService(config);
-      const vectorStore = getVectorStore(config);
+      const embeddingService = getEmbeddingService(config.dbPath);
+      const vectorStore = getVectorStore(config.dbPath);
       const search = new HybridSearch(db, vectorStore, embeddingService);
 
       if (opts.global) {

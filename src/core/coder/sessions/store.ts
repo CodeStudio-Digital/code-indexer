@@ -52,16 +52,25 @@ export class SessionStore {
     provider: string;
     model: string;
     cloudcode_session_id?: string;
+    agent?: string | null;
   }): CoderSession {
     const stmt = this.db.prepare(`
-      INSERT INTO coder_sessions (project_id, title, provider, model, cloudcode_session_id)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO coder_sessions (project_id, title, provider, model, cloudcode_session_id, agent)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
     const r = stmt.run(
       input.project_id, input.title, input.provider, input.model,
       input.cloudcode_session_id ?? null,
+      input.agent ?? null,
     );
     return this.getSession(Number(r.lastInsertRowid))!;
+  }
+
+  /** Update the sticky agent preset. Called when the user switches modes mid-session. */
+  setSessionAgent(id: number, agent: string | null): void {
+    this.db
+      .prepare("UPDATE coder_sessions SET agent = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(agent, id);
   }
 
   getSession(id: number): CoderSession | null {
@@ -245,10 +254,11 @@ export class SessionStore {
                total_output_tokens = total_output_tokens + ?,
                total_cache_read_tokens = total_cache_read_tokens + ?,
                total_cache_creation_tokens = total_cache_creation_tokens + ?,
+               last_turn_input_tokens = ?,
                updated_at = datetime('now')
          WHERE id = ?
       `)
-      .run(inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, id);
+      .run(inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, inputTokens, id);
   }
 
   // ─── Messages ─────────────────────────────────────────────────
@@ -296,6 +306,7 @@ export class SessionStore {
           total_output_tokens,
           total_cache_read_tokens,
           total_cache_creation_tokens,
+          last_turn_input_tokens,
           CAST((julianday(updated_at) - julianday(created_at)) * 86400000 AS INTEGER) AS duration_ms
         FROM coder_sessions
         WHERE id = ?
@@ -306,6 +317,7 @@ export class SessionStore {
           total_output_tokens: number;
           total_cache_read_tokens: number;
           total_cache_creation_tokens: number;
+          last_turn_input_tokens: number;
           duration_ms: number;
         }
       | undefined;
@@ -346,6 +358,7 @@ export class SessionStore {
       total_output_tokens: session.total_output_tokens,
       total_cache_read_tokens: session.total_cache_read_tokens,
       total_cache_creation_tokens: session.total_cache_creation_tokens,
+      last_turn_input_tokens: session.last_turn_input_tokens ?? 0,
       message_count: messages.message_count ?? 0,
       assistant_turns: messages.assistant_turns ?? 0,
       tool_call_count: tools.tool_call_count ?? 0,
@@ -381,6 +394,110 @@ export class SessionStore {
         input.is_error ? 1 : 0,
         input.duration_ms
       );
+  }
+
+  /**
+   * Persist an entire assistant turn (message + tool calls + usage bump) in a
+   * single SQLite transaction. Either the whole turn lands or none of it does
+   * — prevents orphaned tool rows if the process dies mid-write.
+   *
+   * Accumulated subagent usage (summed from each tool call's subUsage) is
+   * included in the bumpUsage call so dashboard cost totals stay consistent.
+   */
+  persistAssistantTurn(input: {
+    session_id: number;
+    message: AgentMessage;
+    usage: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    } | null;
+    tool_calls: Array<{
+      tool_use_id: string;
+      tool_name: string;
+      args: Record<string, unknown>;
+      result_text: string;
+      is_error: boolean;
+      duration_ms: number;
+    }>;
+    subagent_usage?: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
+  }): number {
+    const insertMsg = this.db.prepare(`
+      INSERT INTO coder_messages
+        (session_id, role, content_json, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const touchSession = this.db.prepare(
+      "UPDATE coder_sessions SET updated_at = datetime('now') WHERE id = ?",
+    );
+    const insertTool = this.db.prepare(`
+      INSERT INTO coder_tool_calls
+        (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const bumpStmt = this.db.prepare(`
+      UPDATE coder_sessions
+         SET total_input_tokens = total_input_tokens + ?,
+             total_output_tokens = total_output_tokens + ?,
+             total_cache_read_tokens = total_cache_read_tokens + ?,
+             total_cache_creation_tokens = total_cache_creation_tokens + ?,
+             last_turn_input_tokens = ?,
+             updated_at = datetime('now')
+       WHERE id = ?
+    `);
+
+    const tx = this.db.transaction(() => {
+      const r = insertMsg.run(
+        input.session_id,
+        input.message.role,
+        JSON.stringify(input.message.content),
+        input.usage?.input_tokens ?? 0,
+        input.usage?.output_tokens ?? 0,
+        input.usage?.cache_read_input_tokens ?? 0,
+        input.usage?.cache_creation_input_tokens ?? 0,
+      );
+      const messageId = Number(r.lastInsertRowid);
+      touchSession.run(input.session_id);
+      for (const tc of input.tool_calls) {
+        insertTool.run(
+          messageId,
+          tc.tool_use_id,
+          tc.tool_name,
+          JSON.stringify(tc.args),
+          tc.result_text,
+          tc.is_error ? 1 : 0,
+          tc.duration_ms,
+        );
+      }
+      if (input.usage) {
+        bumpStmt.run(
+          input.usage.input_tokens,
+          input.usage.output_tokens,
+          input.usage.cache_read_input_tokens ?? 0,
+          input.usage.cache_creation_input_tokens ?? 0,
+          input.usage.input_tokens,
+          input.session_id,
+        );
+      }
+      if (input.subagent_usage) {
+        bumpStmt.run(
+          input.subagent_usage.input_tokens,
+          input.subagent_usage.output_tokens,
+          input.subagent_usage.cache_read_input_tokens ?? 0,
+          input.subagent_usage.cache_creation_input_tokens ?? 0,
+          input.subagent_usage.input_tokens,
+          input.session_id,
+        );
+      }
+      return messageId;
+    });
+    return tx() as number;
   }
 
   /**

@@ -63,9 +63,16 @@ export const askUser: CoderTool = {
     });
 
     const answer = await runner.waitForUserInput();
-    let parsed: { aborted?: boolean; answer?: string };
+    let parsed: { aborted?: boolean; interrupted?: boolean; answer?: string };
     try { parsed = JSON.parse(answer); } catch { parsed = { answer }; }
     if (parsed.aborted) return err('Question aborted by user.');
+    if (parsed.interrupted) {
+      return err(
+        'ask_user was interrupted: a subordinate agent is blocked waiting for your response. ' +
+        'Use answer_subordinate_question() or approve_subordinate_tasks() to unblock them first, ' +
+        'then call ask_user again when ready.',
+      );
+    }
     return ok(formatAskUserResult(parsed.answer ?? answer));
   },
 };

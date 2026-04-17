@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import type { CompanyRoleConfig } from '../../../../../core/coder/company/types.js';
+import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 
 interface CreateTemplateBody {
   name: string;
@@ -22,14 +23,13 @@ export function mountCompanyTemplateRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.get('/api/company/templates/:id', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const template = companyStore.getTemplate(id);
-    if (!template) return c.json({ error: 'Not found' }, 404);
+    const template = companyStore.getTemplate(parseIdParam(c));
+    if (!template) return notFound(c);
     return c.json(template);
   });
 
   app.post('/api/company/templates', async (c) => {
-    const body = await c.req.json<CreateTemplateBody>().catch(() => ({}) as CreateTemplateBody);
+    const body = await parseJsonBody<CreateTemplateBody>(c);
     if (!body.name || !body.roles?.length) {
       return c.json({ error: 'name and roles required' }, 400);
     }
@@ -46,17 +46,16 @@ export function mountCompanyTemplateRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.patch('/api/company/templates/:id', async (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const body = await c.req.json<UpdateTemplateBody>().catch(() => ({}) as UpdateTemplateBody);
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<UpdateTemplateBody>(c);
     const updated = companyStore.updateTemplate(id, body);
-    if (!updated) return c.json({ error: 'Not found' }, 404);
+    if (!updated) return notFound(c);
     return c.json(updated);
   });
 
   app.delete('/api/company/templates/:id', (c) => {
-    const id = parseInt(c.req.param('id'), 10);
-    const deleted = companyStore.deleteTemplate(id);
-    if (!deleted) return c.json({ error: 'Not found' }, 404);
+    const deleted = companyStore.deleteTemplate(parseIdParam(c));
+    if (!deleted) return notFound(c);
     return c.json({ ok: true });
   });
 }

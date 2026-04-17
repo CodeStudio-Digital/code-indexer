@@ -1,9 +1,10 @@
 import { defineTool, type McpTool } from '../tool.js';
-import { resolveProject, truncateToTokens } from '../utils.js';
+import { truncateToTokens } from '../utils.js';
 import { createProviderAsync } from '../../../core/providers/factory.js';
 import { IndexAgent } from '../../../core/indexer/indexer.js';
 import { buildRepoMap } from '../../../core/services/repo-map.js';
 import type { ProviderName } from '../../../types.js';
+import { withProject } from './_helpers.js';
 
 const list_projects = defineTool({
   name: 'list_projects',
@@ -25,11 +26,10 @@ const delete_project = defineTool({
     properties: { project_name: { type: 'string' } },
     required: ['project_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     db.deleteProject(project.id);
     return `Project "${project.name}" deleted.`;
-  },
+  }),
 });
 
 const index_project = defineTool({
@@ -46,10 +46,11 @@ const index_project = defineTool({
     required: ['project_path'],
   },
   handler: async (args, ctx) => {
-    const { db, config, embeddingService, vectorStore, costTracker, webhookDispatcher } = ctx;
+    const { db, config, providerStore, embeddingService, vectorStore, costTracker, webhookDispatcher } = ctx;
+    const defaults = providerStore.getDefaultProviderAndModel();
     const provider = await createProviderAsync(
-      ((args.provider as string) ?? config.provider) as ProviderName,
-      (args.model as string) ?? config.model,
+      ((args.provider as string) ?? defaults.kind) as ProviderName,
+      (args.model as string) ?? defaults.model,
     );
     const agent = new IndexAgent(db, provider, embeddingService, vectorStore, costTracker, webhookDispatcher, config);
     const result = await agent.indexProject(args.project_path as string, { force: args.force as boolean });
@@ -65,10 +66,9 @@ const get_project_stats = defineTool({
     properties: { project_name: { type: 'string' } },
     required: ['project_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     return JSON.stringify(db.getStats(project.id), null, 2);
-  },
+  }),
 });
 
 const get_project_overview = defineTool({
@@ -84,8 +84,7 @@ const get_project_overview = defineTool({
     },
     required: ['project_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const stats = db.getStats(project.id);
     const concepts = db.listConcepts(project.id);
     const files = db.listFiles(project.id);
@@ -123,7 +122,7 @@ const get_project_overview = defineTool({
     }
     sections.push('', '## Files', files.map(f => `- ${f.path} (${f.language}, ${f.line_count} lines, ${f.complexity})`).join('\n'));
     return truncateToTokens(sections.join('\n'), args.max_tokens as number | undefined);
-  },
+  }),
 });
 
 const get_project_pulse = defineTool({
@@ -137,8 +136,7 @@ const get_project_pulse = defineTool({
     },
     required: ['project_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const stats = db.getStats(project.id);
     const arch = db.getArchitectureOverview(project.id);
     const files = db.listFiles(project.id);
@@ -205,7 +203,7 @@ const get_project_pulse = defineTool({
       costLine,
     ].filter(Boolean);
     return lines.join('\n');
-  },
+  }),
 });
 
 const get_architecture = defineTool({
@@ -216,11 +214,10 @@ const get_architecture = defineTool({
     properties: { project_name: { type: 'string' } },
     required: ['project_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const overview = db.getArchitectureOverview(project.id);
     return overview.map(l => `${l.layer}: ${l.count} files`).join('\n') || 'No architecture data.';
-  },
+  }),
 });
 
 const get_repo_map = defineTool({
@@ -234,11 +231,10 @@ const get_repo_map = defineTool({
     },
     required: ['project_name'],
   },
-  handler: (args, { db }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { db }, project) => {
     const maxTokens = (args.max_tokens as number) ?? 2000;
     return buildRepoMap(db, project.id, maxTokens);
-  },
+  }),
 });
 
 export const projectTools: McpTool[] = [

@@ -692,19 +692,18 @@ export class NullVectorStore implements VectorStore {
 
 /**
  * Build a VectorStore from the admin-managed vector_store_configs table,
- * with a legacy .env fallback (Cloudflare) for users upgrading from <v3.11.
- *
  * Priority:
  *   1. Row marked is_default=1, enabled=1 in provider_store.vector_store_configs
- *   2. The legacy Cloudflare fallback if workerUrl is provided
- *   3. NullVectorStore — search degrades to FTS-only
+ *   2. NullVectorStore — search degrades to FTS-only
+ *
+ * Legacy .env vars are migrated into the ProviderStore via seedFromEnvIfEmpty()
+ * at startup, so they are covered by case 1 after the first run.
  *
  * Returning `null` is no longer needed: callers should check isAvailable() or
  * instanceof NullVectorStore if they need to branch.
  */
 export function createVectorStore(
   store: ProviderStore | null,
-  fallback?: { workerUrl?: string; workerToken?: string }
 ): VectorStore {
   if (store && typeof (store as unknown as { getDefaultVectorStore?: unknown }).getDefaultVectorStore === 'function') {
     const cfg = (store as unknown as { getDefaultVectorStore: () => { kind: string; config: Record<string, unknown> } | null }).getDefaultVectorStore();
@@ -752,8 +751,5 @@ export function createVectorStore(
     }
   }
 
-  if (fallback?.workerUrl) {
-    return new CloudflareVectorStore(fallback.workerUrl, fallback.workerToken ?? '');
-  }
   return new NullVectorStore();
 }

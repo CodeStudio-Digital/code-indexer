@@ -1,0 +1,427 @@
+/**
+ * Tests for the unified provider registry and its definitions.
+ *
+ * Strategy: mock the adapter constructors (OpenAIChatProvider, GeminiChatProvider)
+ * so tests can capture the exact arguments they receive. The real adapters
+ * construct SDK clients that would otherwise hit the network.
+ *
+ * Scope:
+ *   - parseModelWithMode pure helper
+ *   - Z.AI definition: base URL switching based on `::coding` mode
+ *   - Google OAuth definition: cloudCodeSessionId propagation
+ *   - Copilot/ChatGPT/Google resolve*Creds: api_key mirror writeback on refresh
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// ─── Mocks ──────────────────────────────────────────────────────────────
+// Record constructor args so definition-level tests can inspect them.
+const openAICalls: Array<Record<string, unknown>> = [];
+const geminiCalls: Array<Record<string, unknown>> = [];
+const zaiIndexerCalls: Array<Record<string, unknown>> = [];
+
+vi.mock('../core/coder/providers/openai.js', () => ({
+  OpenAIChatProvider: vi.fn().mockImplementation(function (
+    this: Record<string, unknown>,
+    opts: Record<string, unknown>,
+  ) {
+    openAICalls.push(opts);
+    Object.assign(this, opts, { name: (opts.name as string) ?? 'openai' });
+  }),
+}));
+
+vi.mock('../core/coder/providers/gemini.js', () => ({
+  GeminiChatProvider: vi.fn().mockImplementation(function (
+    this: Record<string, unknown>,
+    opts: Record<string, unknown>,
+  ) {
+    geminiCalls.push(opts);
+    Object.assign(this, opts, { name: 'gemini' });
+  }),
+}));
+
+vi.mock('../core/indexer/providers/zai.js', () => ({
+  ZAIProvider: vi.fn().mockImplementation(function (
+    this: Record<string, unknown>,
+    apiKey?: string,
+    model?: string,
+    baseURL?: string,
+  ) {
+    zaiIndexerCalls.push({ apiKey, model, baseURL });
+    Object.assign(this, { apiKey, model, baseURL });
+  }),
+}));
+
+// Mock OAuth refresh endpoints so tests never hit the network.
+vi.mock('../core/services/oauth/copilot.js', () => ({
+  refreshIfExpired: vi.fn().mockResolvedValue('fresh-copilot-token'),
+  copilotHeaders: () => ({ 'Editor-Version': 'vscode/1.0' }),
+  getStoredCopilotOpts: () => ({ edition: 'individual' }),
+}));
+vi.mock('../core/services/oauth/openai.js', () => ({
+  refreshIfExpired: vi.fn().mockResolvedValue('fresh-chatgpt-token'),
+  CHATGPT_CODEX_BASE_URL: 'https://chatgpt.com/backend-api/codex',
+}));
+vi.mock('../core/services/oauth/google.js', () => ({
+  refreshIfExpired: vi.fn().mockResolvedValue('fresh-google-token'),
+}));
+vi.mock('../core/coder/providers/chatgpt.js', async () => {
+  const actual = await vi.importActual<typeof import('../core/coder/providers/chatgpt.js')>(
+    '../core/coder/providers/chatgpt.js',
+  );
+  return { ...actual, extractAccountIdFromIdToken: () => 'acct-123' };
+});
+
+import type { ProviderConfig, ProviderStore } from '../store/provider-store.js';
+import type { ResolvedCreds } from '../core/providers/types.js';
+import { parseModelWithMode } from '../core/providers/shared/model-mode.js';
+import { zai } from '../core/providers/definitions/zai.js';
+import { googleOAuth } from '../core/providers/definitions/google-oauth.js';
+
+beforeEach(() => {
+  openAICalls.length = 0;
+  geminiCalls.length = 0;
+  zaiIndexerCalls.length = 0;
+});
+
+// ─── parseModelWithMode ──────────────────────────────────────────────────
+describe('parseModelWithMode', () => {
+  it('returns undefined for empty and nullish input', () => {
+    expect(parseModelWithMode(undefined)).toEqual({ model: undefined, mode: undefined });
+    expect(parseModelWithMode('')).toEqual({ model: undefined, mode: undefined });
+  });
+
+  it('returns model only when no :: separator is present', () => {
+    expect(parseModelWithMode('glm-5.1')).toEqual({ model: 'glm-5.1', mode: undefined });
+    expect(parseModelWithMode('gpt-4o-mini')).toEqual({ model: 'gpt-4o-mini', mode: undefined });
+  });
+
+  it('splits model and mode when :: is present', () => {
+    expect(parseModelWithMode('glm-5.1::coding')).toEqual({ model: 'glm-5.1', mode: 'coding' });
+    expect(parseModelWithMode('glm-4::general')).toEqual({ model: 'glm-4', mode: 'general' });
+  });
+
+  it('leaves undefined halves when either side is empty', () => {
+    expect(parseModelWithMode('::coding')).toEqual({ model: undefined, mode: 'coding' });
+    expect(parseModelWithMode('glm-5.1::')).toEqual({ model: 'glm-5.1', mode: undefined });
+  });
+});
+
+// ─── Z.AI definition: createCoder URL switching ─────────────────────────
+describe('zai.createCoder — URL switching', () => {
+  const creds: ResolvedCreds = { apiKey: 'test-key' };
+  const origBaseURL = process.env.ZAI_BASE_URL;
+  beforeEach(() => { delete process.env.ZAI_BASE_URL; });
+  afterEach(() => {
+    if (origBaseURL !== undefined) process.env.ZAI_BASE_URL = origBaseURL;
+    else delete process.env.ZAI_BASE_URL;
+  });
+
+  it('routes glm-5.1 (no mode) to the coding URL (heuristic)', () => {
+    zai.createCoder!(creds, 'glm-5.1');
+    expect(openAICalls[0].baseURL).toBe('https://api.z.ai/api/coding/paas/v4/');
+  });
+
+  it('routes glm-4-air (no mode, not in coding set) to the general URL', () => {
+    zai.createCoder!(creds, 'glm-4-air');
+    expect(openAICalls[0].baseURL).toBe('https://api.z.ai/api/paas/v4/');
+  });
+
+  it('routes "glm-4-air::coding" to the coding URL (explicit mode wins)', () => {
+    zai.createCoder!(creds, 'glm-4-air::coding');
+    expect(openAICalls[0].baseURL).toBe('https://api.z.ai/api/coding/paas/v4/');
+  });
+
+  it('routes "glm-5.1::general" to the general URL (explicit mode wins)', () => {
+    zai.createCoder!(creds, 'glm-5.1::general');
+    expect(openAICalls[0].baseURL).toBe('https://api.z.ai/api/paas/v4/');
+  });
+
+  it('ignores creds.baseURL and forces the coding URL for coding-capable models (legacy parity)', () => {
+    // Legacy factory always overrode cfg.base_url with the heuristic for the
+    // coder path. A stale cfg.base_url pointing at the general URL would
+    // otherwise break glm-5.1::coding sessions after a DB seed from v3.7.
+    zai.createCoder!({ ...creds, baseURL: 'https://api.z.ai/api/paas/v4' }, 'glm-5.1');
+    expect(openAICalls[0].baseURL).toBe('https://api.z.ai/api/coding/paas/v4/');
+  });
+
+  it('honors ZAI_BASE_URL env var over everything', () => {
+    process.env.ZAI_BASE_URL = 'https://env-override.example/v1';
+    zai.createCoder!(creds, 'glm-5.1');
+    expect(openAICalls[0].baseURL).toBe('https://env-override.example/v1');
+  });
+
+  it('strips the "::mode" suffix from the model passed to the adapter', () => {
+    zai.createCoder!(creds, 'glm-5.1::coding');
+    expect(openAICalls[0].model).toBe('glm-5.1');
+  });
+
+  it('picks default model glm-5.1 when model is undefined', () => {
+    zai.createCoder!(creds, undefined);
+    expect(openAICalls[0].model).toBe('glm-5.1');
+  });
+});
+
+// ─── Z.AI definition: createIndexer parity with legacy ─────────────────
+describe('zai.createIndexer — parity with legacy', () => {
+  const creds: ResolvedCreds = { apiKey: 'test-key', baseURL: 'https://api.z.ai/api/paas/v4' };
+
+  it('strips "::mode" suffix from the model passed to ZAIProvider', () => {
+    zai.createIndexer!(creds, 'glm-5.1::coding');
+    expect(zaiIndexerCalls[0].model).toBe('glm-5.1');
+  });
+
+  it('respects creds.baseURL (legacy: always used cfg.base_url directly)', () => {
+    zai.createIndexer!(creds, 'glm-5.1');
+    // Legacy indexer path passed cfg.base_url through unchanged — mode heuristic
+    // was coder-only. This keeps single-shot analysis hitting the general URL.
+    expect(zaiIndexerCalls[0].baseURL).toBe('https://api.z.ai/api/paas/v4');
+  });
+});
+
+// ─── lookupProvider — ZAI masquerade rewrite ────────────────────────────
+describe('lookupProvider — ZAI masquerade rewrite', () => {
+  const origBaseURL = process.env.ZAI_BASE_URL;
+  beforeEach(() => { delete process.env.ZAI_BASE_URL; });
+  afterEach(() => {
+    if (origBaseURL !== undefined) process.env.ZAI_BASE_URL = origBaseURL;
+    else delete process.env.ZAI_BASE_URL;
+  });
+
+  it('rewrites cfg.kind="openai" + id="zai" to the zai shape', async () => {
+    const store = {
+      getProvider: (): ProviderConfig => ({
+        id: 'zai',
+        name: 'Z.AI',
+        kind: 'openai', // legacy shape
+        base_url: 'https://api.z.ai/api/paas/v4',
+        api_key: 'ztoken',
+        auth_mode: 'api_key',
+        enabled: true,
+        use_for_agent: true,
+        use_for_coder: true,
+        is_default: false,
+        extra: {},
+        fallback_provider_id: null,
+        created_at: '',
+        updated_at: '',
+      }),
+      listProviders: () => [],
+    } as unknown as ProviderStore;
+
+    const { lookupProvider } = await import('../core/providers/factory.js');
+    await withMockedStore(store, async () => {
+      const { def } = await lookupProvider('zai');
+      // Must dispatch to the zai shape so the coder URL heuristic runs.
+      expect(def.kind).toBe('zai');
+    });
+  });
+
+  it('rewrites cfg.kind="openai" + extra.zai_has_coding_mode=true to zai', async () => {
+    const store = {
+      getProvider: (): ProviderConfig => ({
+        id: 'my-zai',
+        name: 'Custom Z.AI',
+        kind: 'openai',
+        base_url: 'https://api.z.ai/api/paas/v4',
+        api_key: 'ztoken',
+        auth_mode: 'api_key',
+        enabled: true,
+        use_for_agent: true,
+        use_for_coder: true,
+        is_default: false,
+        extra: { zai_has_coding_mode: true },
+        fallback_provider_id: null,
+        created_at: '',
+        updated_at: '',
+      }),
+      listProviders: () => [],
+    } as unknown as ProviderStore;
+
+    const { lookupProvider } = await import('../core/providers/factory.js');
+    await withMockedStore(store, async () => {
+      const { def } = await lookupProvider('my-zai');
+      expect(def.kind).toBe('zai');
+    });
+  });
+
+  it('leaves a genuine openai provider alone (id != "zai", no zai flag)', async () => {
+    const store = {
+      getProvider: (): ProviderConfig => ({
+        id: 'openai',
+        name: 'OpenAI',
+        kind: 'openai',
+        base_url: null,
+        api_key: 'sk-real',
+        auth_mode: 'api_key',
+        enabled: true,
+        use_for_agent: true,
+        use_for_coder: true,
+        is_default: false,
+        extra: {},
+        fallback_provider_id: null,
+        created_at: '',
+        updated_at: '',
+      }),
+      listProviders: () => [],
+    } as unknown as ProviderStore;
+
+    const { lookupProvider } = await import('../core/providers/factory.js');
+    await withMockedStore(store, async () => {
+      const { def } = await lookupProvider('openai');
+      expect(def.kind).toBe('openai');
+    });
+  });
+});
+
+// ─── Google OAuth definition: cloudCodeSessionId propagation ─────────────
+describe('google-oauth.createCoder — cloudCodeSessionId', () => {
+  const creds: ResolvedCreds = {
+    apiKey: 'access-token',
+    extra: { refreshToken: 'rtoken', projectId: 'proj-123' },
+  };
+
+  it('forwards cloudCodeSessionId into the GeminiChatProvider', () => {
+    googleOAuth.createCoder!(creds, 'gemini-2.5-pro', { cloudCodeSessionId: 'session-abc' });
+    expect(geminiCalls[0].cloudCodeSessionId).toBe('session-abc');
+  });
+
+  it('works without opts (backwards compat)', () => {
+    googleOAuth.createCoder!(creds, 'gemini-2.5-pro');
+    expect(geminiCalls[0].cloudCodeSessionId).toBeUndefined();
+  });
+
+  it('exposes refreshToken and projectId from creds.extra', () => {
+    googleOAuth.createCoder!(creds, 'gemini-2.5-pro');
+    expect(geminiCalls[0].refreshToken).toBe('rtoken');
+    expect(geminiCalls[0].projectId).toBe('proj-123');
+    expect(geminiCalls[0].accessToken).toBe('access-token');
+  });
+});
+
+// ─── resolve*Creds — api_key mirror writeback ────────────────────────────
+/**
+ * Minimal in-memory fake of ProviderStore — implements only the methods
+ * exercised by resolve*Creds. Tracks upsertProvider calls so tests can
+ * assert the api_key mirror was refreshed.
+ */
+function fakeStore(): {
+  store: Pick<ProviderStore, 'getOAuth' | 'upsertProvider'>;
+  upsertCalls: Array<Partial<ProviderConfig>>;
+} {
+  const upsertCalls: Array<Partial<ProviderConfig>> = [];
+  const store = {
+    getOAuth: () => ({
+      provider_id: 'test',
+      access_token: 'fresh-copilot-token',
+      refresh_token: 'rt',
+      expires_at: Date.now() + 60_000,
+      scope: null,
+      extra: { id_token: 'jwt-here', projectId: 'proj-1' },
+      updated_at: new Date().toISOString(),
+    }),
+    upsertProvider: (cfg: ProviderConfig) => { upsertCalls.push({ ...cfg }); return cfg; },
+  } as unknown as Pick<ProviderStore, 'getOAuth' | 'upsertProvider'>;
+  return { store, upsertCalls };
+}
+
+async function withMockedStore(
+  store: Pick<ProviderStore, 'getOAuth' | 'upsertProvider'>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const shared = await import('../core/providers/shared/store.js');
+  shared.__setStoreForTests(store as unknown as ProviderStore);
+  try {
+    await fn();
+  } finally {
+    shared.__setStoreForTests(null);
+  }
+}
+
+const baseCfg: ProviderConfig = {
+  id: 'copilot-inst',
+  name: 'copilot',
+  kind: 'copilot',
+  base_url: null,
+  api_key: 'stale-token',
+  auth_mode: 'oauth',
+  enabled: true,
+  use_for_agent: true,
+  use_for_coder: true,
+  is_default: false,
+  extra: {},
+  fallback_provider_id: null,
+  created_at: '',
+  updated_at: '',
+};
+
+describe('resolveCopilotCreds — api_key mirror writeback', () => {
+  it('writes the fresh token back to providers.api_key when it changed', async () => {
+    const { store, upsertCalls } = fakeStore();
+    const { resolveCopilotCreds } = await import('../core/providers/shared/oauth.js');
+    await withMockedStore(store, async () => {
+      const creds = await resolveCopilotCreds({ ...baseCfg, api_key: 'stale-token' });
+      expect(creds.apiKey).toBe('fresh-copilot-token');
+      expect(upsertCalls).toHaveLength(1);
+      expect(upsertCalls[0].api_key).toBe('fresh-copilot-token');
+    });
+  });
+
+  it('does not write back when the refresh returned the same token', async () => {
+    const { store, upsertCalls } = fakeStore();
+    const { resolveCopilotCreds } = await import('../core/providers/shared/oauth.js');
+    await withMockedStore(store, async () => {
+      const creds = await resolveCopilotCreds({ ...baseCfg, api_key: 'fresh-copilot-token' });
+      expect(creds.apiKey).toBe('fresh-copilot-token');
+      expect(upsertCalls).toHaveLength(0);
+    });
+  });
+});
+
+describe('resolveChatGPTCreds — api_key mirror writeback', () => {
+  it('writes the fresh token back to providers.api_key when it changed', async () => {
+    const { store, upsertCalls } = fakeStore();
+    const { resolveChatGPTCreds } = await import('../core/providers/shared/oauth.js');
+    await withMockedStore(store, async () => {
+      const cfg: ProviderConfig = { ...baseCfg, kind: 'chatgpt', api_key: 'stale-token' };
+      const creds = await resolveChatGPTCreds(cfg);
+      expect(creds.apiKey).toBe('fresh-chatgpt-token');
+      expect(upsertCalls).toHaveLength(1);
+      expect(upsertCalls[0].api_key).toBe('fresh-chatgpt-token');
+    });
+  });
+
+  it('also surfaces the extracted accountId', async () => {
+    const { store } = fakeStore();
+    const { resolveChatGPTCreds } = await import('../core/providers/shared/oauth.js');
+    await withMockedStore(store, async () => {
+      const cfg: ProviderConfig = { ...baseCfg, kind: 'chatgpt', api_key: 'stale-token' };
+      const creds = await resolveChatGPTCreds(cfg);
+      expect(creds.extra?.accountId).toBe('acct-123');
+    });
+  });
+});
+
+describe('resolveGoogleOAuthCreds — api_key mirror writeback', () => {
+  it('writes the fresh token back to providers.api_key when it changed', async () => {
+    const { store, upsertCalls } = fakeStore();
+    const { resolveGoogleOAuthCreds } = await import('../core/providers/shared/oauth.js');
+    await withMockedStore(store, async () => {
+      const cfg: ProviderConfig = { ...baseCfg, kind: 'google-oauth', api_key: 'stale-token' };
+      const creds = await resolveGoogleOAuthCreds(cfg);
+      expect(creds.apiKey).toBe('fresh-google-token');
+      expect(upsertCalls).toHaveLength(1);
+      expect(upsertCalls[0].api_key).toBe('fresh-google-token');
+    });
+  });
+
+  it('exposes refreshToken and projectId from oauth_tokens row', async () => {
+    const { store } = fakeStore();
+    const { resolveGoogleOAuthCreds } = await import('../core/providers/shared/oauth.js');
+    await withMockedStore(store, async () => {
+      const cfg: ProviderConfig = { ...baseCfg, kind: 'google-oauth', api_key: 'stale-token' };
+      const creds = await resolveGoogleOAuthCreds(cfg);
+      expect(creds.extra?.refreshToken).toBe('rt');
+      expect(creds.extra?.projectId).toBe('proj-1');
+    });
+  });
+});

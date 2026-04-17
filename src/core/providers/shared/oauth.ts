@@ -24,6 +24,11 @@ import { getStore } from './store.js';
  * Consolidates the duplication in:
  *   - indexer/providers/factory.ts::buildCopilotAgentProvider
  *   - coder/providers/factory.ts (copilot case)
+ *
+ * The api_key column on `providers` is kept in sync with the freshly minted
+ * OAuth token (mirror writeback). Required because the fallback path reads
+ * `cfg.api_key` when refresh fails — without this, the fallback would serve
+ * a token from the first session forever.
  */
 export async function resolveCopilotCreds(cfg: ProviderConfig): Promise<ResolvedCreds> {
   const store = getStore();
@@ -32,7 +37,12 @@ export async function resolveCopilotCreds(cfg: ProviderConfig): Promise<Resolved
   let token = cfg.api_key ?? '';
   try {
     const fresh = await refreshCopilotToken(store, cfg.id);
-    if (fresh) token = fresh;
+    if (fresh && fresh !== cfg.api_key) {
+      token = fresh;
+      store.upsertProvider({ ...cfg, api_key: fresh });
+    } else if (fresh) {
+      token = fresh;
+    }
   } catch (e) {
     console.warn(`[copilot] refresh failed: ${(e as Error).message}`);
   }
@@ -65,7 +75,12 @@ export async function resolveChatGPTCreds(cfg: ProviderConfig): Promise<Resolved
   let token = cfg.api_key ?? '';
   try {
     const fresh = await refreshOpenAIToken(store, cfg.id);
-    if (fresh) token = fresh;
+    if (fresh && fresh !== cfg.api_key) {
+      token = fresh;
+      store.upsertProvider({ ...cfg, api_key: fresh });
+    } else if (fresh) {
+      token = fresh;
+    }
   } catch (e) {
     console.warn(`[chatgpt] refresh failed: ${(e as Error).message}`);
   }
@@ -93,7 +108,12 @@ export async function resolveGoogleOAuthCreds(cfg: ProviderConfig): Promise<Reso
   let token = cfg.api_key ?? '';
   try {
     const fresh = await refreshGoogleToken(store, cfg.id);
-    if (fresh) token = fresh;
+    if (fresh && fresh !== cfg.api_key) {
+      token = fresh;
+      store.upsertProvider({ ...cfg, api_key: fresh });
+    } else if (fresh) {
+      token = fresh;
+    }
   } catch (e) {
     console.warn(`[google-oauth] refresh failed: ${(e as Error).message}`);
   }

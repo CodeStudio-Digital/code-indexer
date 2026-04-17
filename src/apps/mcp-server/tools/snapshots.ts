@@ -1,6 +1,7 @@
 import { defineTool, type McpTool } from '../tool.js';
-import { resolveProject, truncateToTokens } from '../utils.js';
+import { truncateToTokens } from '../utils.js';
 import type { SnapshotCategory } from '../../../types.js';
+import { withProject } from './_helpers.js';
 
 const add_snapshot = defineTool({
   name: 'add_snapshot',
@@ -21,8 +22,7 @@ const add_snapshot = defineTool({
     },
     required: ['project_name', 'title', 'category', 'content'],
   },
-  handler: (args, { db, snapshotService }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { snapshotService }, project) => {
     const snap = snapshotService.create(project.id, {
       title: args.title as string,
       category: args.category as SnapshotCategory,
@@ -33,7 +33,7 @@ const add_snapshot = defineTool({
     const refCount = (args.referenced_files as string[] | undefined)?.length ?? 0;
     const refNote = refCount > 0 ? ` (tracking ${refCount} referenced file${refCount === 1 ? '' : 's'} for staleness)` : '';
     return `Snapshot #${snap.id} "${snap.title}" created.${refNote}`;
-  },
+  }),
 });
 
 const list_snapshots = defineTool({
@@ -49,8 +49,7 @@ const list_snapshots = defineTool({
     },
     required: ['project_name'],
   },
-  handler: (args, { db, snapshotService }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { snapshotService }, project) => {
     const list = snapshotService.list(project.id, args.category as SnapshotCategory | undefined);
     const annotated = snapshotService.annotateStaleMany(project.id, list);
     const compact = args.compact !== false;
@@ -72,7 +71,7 @@ const list_snapshots = defineTool({
       ].filter(Boolean).join('\n');
     }).join('\n\n---\n\n');
     return truncateToTokens(out, args.max_tokens as number | undefined);
-  },
+  }),
 });
 
 const update_snapshot = defineTool({
@@ -139,11 +138,10 @@ const get_project_context = defineTool({
     properties: { project_name: { type: 'string' }, max_tokens: { type: 'number' } },
     required: ['project_name'],
   },
-  handler: (args, { db, snapshotService }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject((args, { snapshotService }, project) => {
     const ctx = snapshotService.getForContext(project.id) || 'No context snapshots available.';
     return truncateToTokens(ctx, args.max_tokens as number | undefined);
-  },
+  }),
 });
 
 const query_snapshots = defineTool({
@@ -161,8 +159,7 @@ const query_snapshots = defineTool({
     },
     required: ['project_name', 'query'],
   },
-  handler: async (args, { db, snapshotService, hybridSearch }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject(async (args, { db, snapshotService, hybridSearch }, project) => {
     const query = args.query as string;
     const limit = (args.limit as number) ?? 5;
     const compact = args.compact !== false;
@@ -205,7 +202,7 @@ const query_snapshots = defineTool({
       return `## ${s.title} [${s.category}]${staleTag}${staleNote}\n${body}`;
     }).join('\n\n---\n\n');
     return truncateToTokens(out, args.max_tokens as number | undefined);
-  },
+  }),
 });
 
 const get_context_for = defineTool({
@@ -221,8 +218,7 @@ const get_context_for = defineTool({
     },
     required: ['project_name', 'question'],
   },
-  handler: async (args, { db, hybridSearch }) => {
-    const project = resolveProject(db, args.project_name as string);
+  handler: withProject(async (args, { db, hybridSearch }, project) => {
     const question = args.question as string;
     const hyde = args.hyde === true;
     const sections: string[] = [`=== Context for: "${question}"${hyde ? ' (expanded)' : ''} ===`];
@@ -280,7 +276,7 @@ const get_context_for = defineTool({
     }
 
     return truncateToTokens(sections.join('\n'), (args.max_tokens as number | undefined) ?? 2000);
-  },
+  }),
 });
 
 export const snapshotTools: McpTool[] = [

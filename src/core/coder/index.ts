@@ -2,7 +2,7 @@ import { resolve as resolvePath } from 'node:path';
 import { existsSync } from 'node:fs';
 import { CodeIndexDB } from '../../store/db.js';
 import { loadConfig } from '../../utils/config.js';
-import { createChatProviderAsync } from './providers/factory.js';
+import { createCoderProvider } from '../providers/factory.js';
 import type { CoderProviderName } from './providers/adapter.js';
 import { ToolRegistry } from './core/registry.js';
 import { CoderRunner } from './core/runner.js';
@@ -27,7 +27,7 @@ import { isMasterAllowed } from './tools/company/master-filter.js';
 import { RuntimeHookRegistry } from './core/hook-registry.js';
 import { registerCompanyHooks } from './core/company-hooks.js';
 import { inferProfileFromMessage, profileToTiers, type CoderProfile } from './tools/tiers.js';
-import { AGENTS, type AgentId } from './agents/index.js';
+import { AGENTS, isAgentId, type AgentId } from './agents/index.js';
 import { SessionOverlay } from './overlay/session-overlay.js';
 import { ToolOutputStore } from './overlay/tool-output-store.js';
 import { toolOutputTools } from './tools/tool-output.js';
@@ -115,6 +115,14 @@ export interface RunCoderOptions {
   companyContext?: import('./company/types.js').CompanyContext;
   /** Extra system prompt block for company agents (master/subordinate). Appended to the base prompt. */
   companyPromptBlock?: string;
+  /**
+   * Resolver for OAuth bearer tokens of external MCP servers. When provided,
+   * external servers with `auth_type='oauth2'` automatically receive
+   * `Authorization: Bearer <access>` (with auto-refresh). When null/omitted,
+   * OAuth servers connect unauthenticated — the dashboard then prompts the
+   * user to complete the OAuth flow.
+   */
+  mcpBearerResolver?: import('../mcp-client/auth/use-cases/resolve-mcp-bearer.js').ResolveMcpBearer | null;
 }
 
 export interface IndexStatus {
@@ -138,20 +146,13 @@ export interface RunCoderHandle {
  * to `handle.runner` BEFORE awaiting `handle.done`.
  */
 export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
-  // Agent preset: when provided, its profile/planMode/maxTurns override
-  // unspecified opts but leave explicit ones alone. This way `--agent build
-  // --plan` means "build defaults EXCEPT plan mode forced on".
-  const agentDef = opts.agent ? AGENTS[opts.agent] : null;
-  if (agentDef) {
-    if (opts.profile === undefined) opts = { ...opts, profile: agentDef.profile };
-    if (opts.planMode === undefined) opts = { ...opts, planMode: agentDef.planMode };
-    if (opts.maxTurns === undefined && agentDef.maxTurns) opts = { ...opts, maxTurns: agentDef.maxTurns };
-  }
   const config = loadConfig();
   const db = new CodeIndexDB(config.dbPath);
   const store = new SessionStore(config.dbPath);
 
-  // Resolve or create the session
+  // Resolve or create the session. `agent` is persisted on the session row so
+  // resume paths (/continue, reattach) honour the user's preset even when the
+  // request body doesn't re-send it.
   let session: CoderSession;
   if ('id' in opts.session) {
     const found = store.getSession(opts.session.id);
@@ -163,7 +164,28 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       title: opts.session.create.title,
       provider: opts.session.create.provider,
       model: opts.session.create.model ?? defaultModelFor(opts.session.create.provider),
+      agent: opts.agent ?? null,
     });
+  }
+
+  // Sticky agent: if the caller didn't specify one, fall back to the value
+  // stored on the session. If they did and it differs, persist the new choice.
+  const storedAgent: AgentId | null =
+    session.agent && isAgentId(session.agent) ? session.agent : null;
+  const effectiveAgentId: AgentId | null = opts.agent ?? storedAgent;
+  if (opts.agent && opts.agent !== storedAgent) {
+    store.setSessionAgent(session.id, opts.agent);
+    session = { ...session, agent: opts.agent };
+  }
+
+  // Apply agent defaults for any unspecified knob. This way explicit opts win
+  // over presets (e.g. `--agent build --plan` keeps plan mode on), but resume
+  // requests with no opts still inherit the preset's profile/planMode.
+  const agentDef = effectiveAgentId ? AGENTS[effectiveAgentId] : null;
+  if (agentDef) {
+    if (opts.profile === undefined) opts = { ...opts, profile: agentDef.profile };
+    if (opts.planMode === undefined) opts = { ...opts, planMode: agentDef.planMode };
+    if (opts.maxTurns === undefined && agentDef.maxTurns) opts = { ...opts, maxTurns: agentDef.maxTurns };
   }
 
   const project = db.getProject(session.project_id);
@@ -176,10 +198,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
 
   // Provider — async path so Copilot tokens get refreshed before the run.
-  const provider = await createChatProviderAsync(
-    session.provider as CoderProviderName,
+  const provider = await createCoderProvider(
+    session.provider,
     session.model,
-    cloudCodeSessionId,
+    cloudCodeSessionId ? { cloudCodeSessionId } : undefined,
   );
 
   // Session overlay — tracks files touched this run so MCP read tools
@@ -262,7 +284,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // External MCP servers — configured via admin panel (migration 015).
   // Connected AFTER internal bridge so external tools are at the tail of the
   // registry, meaning they are trimmed first when the model tool cap kicks in.
-  const mcpServerManager = new McpServerManager();
+  const mcpServerManager = new McpServerManager(opts.mcpBearerResolver ?? null);
   let externalToolTiers: ReadonlyMap<string, import('./tools/tiers.js').ToolTier> | undefined;
   try {
     const mcpServerStore = new McpServerStore(config.dbPath);
@@ -417,6 +439,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const rawProfile0 =
     opts.profile ??
     (process.env.CODER_PROFILE as CoderProfile | 'auto' | undefined) ??
+    (agentDef?.profile) ??
     (hasHistory0 ? 'full' : 'bootstrap');
   const preResolvedProfile: CoderProfile =
     rawProfile0 === 'auto' ? inferProfileFromMessage(opts.userMessage ?? '') : rawProfile0;
@@ -483,7 +506,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const activeTiers = profileToTiers(preResolvedProfile);
   if (process.env.CODER_LOG_TOOLS_COUNT === '1') {
     console.log(
-      `[coder] profile=${preResolvedProfile} active_tiers=${Array.from(activeTiers).sort().join(',')}`,
+      `[coder] agent=${effectiveAgentId ?? 'none'} profile=${preResolvedProfile} planMode=${opts.planMode ?? false} active_tiers=${Array.from(activeTiers).sort().join(',')}`,
     );
   }
 
@@ -515,13 +538,24 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     if (chain.entries.length > 0) {
       fallbackChain = chain;
       createProviderForFallback = async (name: string, model: string) => {
-        const p = await createChatProviderAsync(name as CoderProviderName, model);
+        const p = await createCoderProvider(name, model);
         return p;
       };
       console.log(`[coder] Fallback chain: ${chain.entries.map((e) => `${e.provider}:${e.model}`).join(' → ')}`);
     }
   } catch {
     // Fallback config not available (migration not run yet) — skip silently
+  }
+
+  // ─── Context window (DB-first) ───────────────────────────────────
+  let sessionContextWindow: number | null = null;
+  try {
+    const ps = new ProviderStore(config.dbPath);
+    const dbModel = ps.listModels(session.provider).find((m) => m.model_id === session.model);
+    ps.close();
+    sessionContextWindow = dbModel?.context_window ?? null;
+  } catch {
+    // Non-fatal — runner falls back to static registry lookup
   }
 
   const runner = new CoderRunner({
@@ -540,6 +574,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     fallbackChain,
     createProvider: createProviderForFallback,
     hookRegistry: hookRegistry.hasHandlers ? hookRegistry : undefined,
+    context_window: sessionContextWindow,
   });
 
   // Rehydrate the lightweight todo list from the DB so a session resume
@@ -657,35 +692,72 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // Persist assistant messages and tool results as the runner emits them.
   // We need to map tool_call_results back to the message they belong to,
-  // so we capture the message id at message_complete time.
-  let lastAssistantMessageId: number | null = null;
+  // Per-turn buffer: accumulate assistant message + all its tool results, then
+  // flush to the DB in a single transaction at turn boundary. Prevents orphaned
+  // tool rows if the process crashes mid-turn.
   let lastToolMessageId: number | null = null;
   const pendingToolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
+
+  interface PendingTurn {
+    message: AgentMessage;
+    usage: ChatUsage | null;
+    toolCalls: Array<{
+      tool_use_id: string;
+      tool_name: string;
+      args: Record<string, unknown>;
+      result_text: string;
+      is_error: boolean;
+      duration_ms: number;
+    }>;
+    subagentUsage: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_input_tokens: number;
+      cache_creation_input_tokens: number;
+    };
+  }
+  let pendingTurn: PendingTurn | null = null;
+
+  const flushPendingTurn = () => {
+    if (!pendingTurn) return;
+    const hasSubUsage = pendingTurn.subagentUsage.input_tokens > 0
+      || pendingTurn.subagentUsage.output_tokens > 0;
+    store.persistAssistantTurn({
+      session_id: session.id,
+      message: pendingTurn.message,
+      usage: pendingTurn.usage,
+      tool_calls: pendingTurn.toolCalls,
+      subagent_usage: hasSubUsage ? pendingTurn.subagentUsage : undefined,
+    });
+    pendingTurn = null;
+  };
 
   runner.on('tool_call_start', (id, name, input) => {
     pendingToolCalls.set(id, { name, input });
   });
 
   runner.on('message_complete', (message, usage) => {
-    if (message.role === 'assistant') {
-      lastAssistantMessageId = store.appendMessage(session.id, message, usage ?? undefined);
-      if (usage) {
-        store.bumpUsage(
-          session.id,
-          usage.input_tokens,
-          usage.output_tokens,
-          usage.cache_read_input_tokens ?? 0,
-          usage.cache_creation_input_tokens ?? 0,
-        );
-      }
-    }
+    if (message.role !== 'assistant') return;
+    // A new assistant message replaces any prior buffered turn that had no
+    // tool calls (e.g., a pure-text turn). Persist the prior one first.
+    flushPendingTurn();
+    pendingTurn = {
+      message,
+      usage: usage ?? null,
+      toolCalls: [],
+      subagentUsage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+    };
   });
 
   runner.on('tool_call_result', (id, name, result, durationMs) => {
-    if (lastAssistantMessageId === null) return;
+    if (!pendingTurn) return;
     const pending = pendingToolCalls.get(id);
-    store.appendToolCall({
-      message_id: lastAssistantMessageId,
+    pendingTurn.toolCalls.push({
       tool_use_id: id,
       tool_name: name,
       args: pending?.input ?? {},
@@ -693,16 +765,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       is_error: Boolean(result.isError),
       duration_ms: durationMs,
     });
-    // Subagent usage must show up in the session counters too — otherwise
-    // the dashboard would mask the real cost of delegated work.
+    // Accumulate subagent usage for this turn — flushed with the transaction
+    // so dashboard cost totals can never show partial spend.
     if (result.subUsage) {
-      store.bumpUsage(
-        session.id,
-        result.subUsage.input_tokens,
-        result.subUsage.output_tokens,
-        result.subUsage.cache_read_input_tokens ?? 0,
-        result.subUsage.cache_creation_input_tokens ?? 0,
-      );
+      pendingTurn.subagentUsage.input_tokens += result.subUsage.input_tokens;
+      pendingTurn.subagentUsage.output_tokens += result.subUsage.output_tokens;
+      pendingTurn.subagentUsage.cache_read_input_tokens += result.subUsage.cache_read_input_tokens ?? 0;
+      pendingTurn.subagentUsage.cache_creation_input_tokens += result.subUsage.cache_creation_input_tokens ?? 0;
     }
     pendingToolCalls.delete(id);
   });
@@ -728,7 +797,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
     lastPersistedIdx = runner.messages.length;
   };
-  runner.on('turn_start', flushToolMessages);
+  // Order matters: flush the assistant turn (message + tool rows) BEFORE the
+  // 'tool' role message, so the FK chain stays consistent on resume.
+  runner.on('turn_start', () => {
+    flushPendingTurn();
+    flushToolMessages();
+  });
 
   // Capture the last error emitted by the runner so we can propagate it
   // through the done promise. The runner emits `done('error', Error)` but
@@ -739,11 +813,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const donePromise = runner
     .run()
     .then((res) => {
+      flushPendingTurn();
       flushToolMessages();
       store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
       return { reason: res.reason, usage: res.totalUsage, error: lastRunnerError?.message };
     })
     .catch((e) => {
+      flushPendingTurn();
+      flushToolMessages();
       store.updateSessionStatus(session.id, 'error');
       throw e;
     })
@@ -780,4 +857,8 @@ function defaultModelFor(provider: CoderProviderName): string {
 export { SessionStore } from './sessions/store.js';
 export type { CoderSession } from './sessions/types.js';
 export type { CoderProviderName } from './providers/adapter.js';
-export { SUPPORTED_CODER_PROVIDERS } from './providers/factory.js';
+/**
+ * Backwards-compatible alias used by HTTP admin routes. Derived dynamically
+ * from the unified registry — all kinds that declare `createCoder`.
+ */
+export { listCoderKinds as SUPPORTED_CODER_PROVIDERS } from '../providers/factory.js';
