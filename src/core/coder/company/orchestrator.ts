@@ -112,7 +112,14 @@ export class CompanyOrchestrator {
     const master = new MasterLifecycle(masterDeps);
     (this as unknown as { master: MasterLifecycle }).master = master;
 
-    const humanInLoop = new HumanInTheLoop(this.publisher, this.board, this.status, master, this.attention);
+    const humanInLoop = new HumanInTheLoop(
+      this.publisher,
+      this.board,
+      this.status,
+      master,
+      this.attention,
+      this.ctx,
+    );
     (this as unknown as { humanInLoop: HumanInTheLoop }).humanInLoop = humanInLoop;
     masterDeps.humanInLoop = humanInLoop;
 
@@ -189,12 +196,12 @@ export class CompanyOrchestrator {
     this.master.notify(message);
   }
 
-  respondToMasterPlan(approved: boolean, feedback?: string): boolean {
-    return this.humanInLoop.respondToMasterPlan(approved, feedback);
+  respondToMasterPlan(approved: boolean, feedback?: string, promptId?: number) {
+    return this.humanInLoop.respondToMasterPlan(approved, feedback, promptId);
   }
 
-  respondToMasterQuestion(answer: string): boolean {
-    return this.humanInLoop.respondToMasterQuestion(answer);
+  respondToMasterQuestion(answer: string, promptId?: number) {
+    return this.humanInLoop.respondToMasterQuestion(answer, promptId);
   }
 
   async swapMasterProvider(providerName: string, model?: string): Promise<{ provider: string; model: string }> {
@@ -375,6 +382,9 @@ export class CompanyOrchestrator {
     this.idle.clear();
     this.subordinates.abortAll();
     this.master.abort();
+    try {
+      this.humanInLoop.cancelPendingMasterPrompts();
+    } catch { /* best-effort */ }
     try {
       this.ctx.companyStore.updateCompanySessionStatus(this.companySessionId, 'error');
     } catch { /* ignore */ }

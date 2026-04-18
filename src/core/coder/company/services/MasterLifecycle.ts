@@ -425,6 +425,13 @@ export class MasterLifecycle implements IMasterNotifier {
       })
       .finally(() => {
         this._ended = true;
+        // If the master ended while a master_prompt was still pending
+        // (errored / aborted while inside ask_user or submit_plan), mark
+        // those prompts as cancelled so the dashboard transitions them
+        // out of "pending" instead of leaving them dangling forever.
+        try {
+          this.deps.humanInLoop.cancelPendingMasterPrompts();
+        } catch { /* best-effort */ }
         this.deps.idle.onMasterEnded();
       });
   }

@@ -24,6 +24,10 @@ import type {
   KanbanCardAgent,
   KanbanCardDependency,
   KanbanCardFull,
+  MasterPrompt,
+  MasterPromptKind,
+  MasterPromptOption,
+  MasterPromptStatus,
 } from '../core/coder/company/types.js';
 
 const require = createRequire(import.meta.url);
@@ -39,6 +43,42 @@ interface BoardRow {
   content: string;
   mentions_json: string;
   created_at: string;
+}
+
+interface MasterPromptRow {
+  id: number;
+  company_session_id: number;
+  agent_run_id: number | null;
+  kind: string;
+  runner_block_id: string | null;
+  body: string;
+  options_json: string | null;
+  allow_freeform: number;
+  status: string;
+  answer: string | null;
+  approved: number | null;
+  feedback: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+function mapMasterPromptRow(row: MasterPromptRow): MasterPrompt {
+  return {
+    id: row.id,
+    company_session_id: row.company_session_id,
+    agent_run_id: row.agent_run_id,
+    kind: row.kind as MasterPromptKind,
+    runner_block_id: row.runner_block_id,
+    body: row.body,
+    options: row.options_json ? (JSON.parse(row.options_json) as MasterPromptOption[]) : null,
+    allow_freeform: row.allow_freeform !== 0,
+    status: row.status as MasterPromptStatus,
+    answer: row.answer,
+    approved: row.approved == null ? null : row.approved !== 0,
+    feedback: row.feedback,
+    created_at: row.created_at,
+    resolved_at: row.resolved_at,
+  };
 }
 
 function mapBoardRow(row: BoardRow): BoardEntry {
@@ -355,6 +395,7 @@ export class CompanyStore {
     projects: CompanySessionProject[];
     agentRuns: CompanyAgentRun[];
     recentBoard: BoardEntry[];
+    masterPrompts: MasterPrompt[];
   } | null {
     const session = this.getCompanySession(id);
     if (!session) return null;
@@ -363,7 +404,134 @@ export class CompanyStore {
       projects: this.listCompanySessionProjects(id),
       agentRuns: this.listAgentRuns(id),
       recentBoard: this.readBoard(id, { limit: 50 }),
+      masterPrompts: this.listMasterPrompts(id, { limit: 50 }),
     };
+  }
+
+  // ─── Master Prompts ────────────────────────────────────────────
+
+  createMasterPrompt(input: {
+    company_session_id: number;
+    agent_run_id: number | null;
+    kind: MasterPromptKind;
+    runner_block_id?: string | null;
+    body: string;
+    options?: MasterPromptOption[] | null;
+    allow_freeform?: boolean;
+  }): MasterPrompt {
+    const stmt = this.db.prepare(`
+      INSERT INTO company_master_prompts
+        (company_session_id, agent_run_id, kind, runner_block_id, body,
+         options_json, allow_freeform)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const r = stmt.run(
+      input.company_session_id,
+      input.agent_run_id,
+      input.kind,
+      input.runner_block_id ?? null,
+      input.body,
+      input.options ? JSON.stringify(input.options) : null,
+      input.allow_freeform === false ? 0 : 1,
+    );
+    return this.getMasterPrompt(Number(r.lastInsertRowid))!;
+  }
+
+  getMasterPrompt(id: number): MasterPrompt | null {
+    const row = this.db
+      .prepare('SELECT * FROM company_master_prompts WHERE id = ?')
+      .get(id) as MasterPromptRow | undefined;
+    return row ? mapMasterPromptRow(row) : null;
+  }
+
+  listMasterPrompts(
+    companySessionId: number,
+    opts?: { limit?: number; status?: MasterPromptStatus },
+  ): MasterPrompt[] {
+    const clauses: string[] = ['company_session_id = ?'];
+    const params: unknown[] = [companySessionId];
+    if (opts?.status) { clauses.push('status = ?'); params.push(opts.status); }
+    const limit = opts?.limit ?? 100;
+    params.push(limit);
+    const sql =
+      `SELECT * FROM (
+         SELECT * FROM company_master_prompts
+         WHERE ${clauses.join(' AND ')}
+         ORDER BY id DESC LIMIT ?
+       ) ORDER BY id ASC`;
+    const rows = this.db.prepare(sql).all(...params) as MasterPromptRow[];
+    return rows.map(mapMasterPromptRow);
+  }
+
+  /**
+   * Resolve a pending prompt with the human's answer. Returns the updated
+   * prompt, or null if the prompt is not pending (already answered or
+   * cancelled — wins-the-race semantics for concurrent shutdown).
+   */
+  resolveMasterPrompt(
+    id: number,
+    resolution:
+      | { kind: 'question'; answer: string }
+      | { kind: 'plan'; approved: boolean; feedback?: string },
+  ): MasterPrompt | null {
+    const stmt = resolution.kind === 'question'
+      ? this.db.prepare(`
+          UPDATE company_master_prompts
+             SET status = 'answered',
+                 answer = ?,
+                 resolved_at = datetime('now')
+           WHERE id = ? AND status = 'pending' AND kind = 'question'
+        `)
+      : this.db.prepare(`
+          UPDATE company_master_prompts
+             SET status = 'answered',
+                 approved = ?,
+                 feedback = ?,
+                 resolved_at = datetime('now')
+           WHERE id = ? AND status = 'pending' AND kind = 'plan'
+        `);
+    const result = resolution.kind === 'question'
+      ? stmt.run(resolution.answer, id)
+      : stmt.run(resolution.approved ? 1 : 0, resolution.feedback ?? null, id);
+    if (result.changes === 0) return null;
+    return this.getMasterPrompt(id);
+  }
+
+  /**
+   * Mark every still-pending prompt for the session as cancelled.
+   * Returns the list of cancelled prompts (so callers can publish
+   * `master_prompt_cancelled` events).
+   */
+  cancelPendingMasterPrompts(companySessionId: number): MasterPrompt[] {
+    const pending = this.listMasterPrompts(companySessionId, { status: 'pending' });
+    if (pending.length === 0) return [];
+    const stmt = this.db.prepare(`
+      UPDATE company_master_prompts
+         SET status = 'cancelled', resolved_at = datetime('now')
+       WHERE company_session_id = ? AND status = 'pending'
+    `);
+    stmt.run(companySessionId);
+    // Re-read to get fresh resolved_at.
+    return pending
+      .map((p) => this.getMasterPrompt(p.id))
+      .filter((p): p is MasterPrompt => p !== null);
+  }
+
+  /** Get the most recent pending prompt of a given kind, if any. */
+  getPendingMasterPrompt(
+    companySessionId: number,
+    kind?: MasterPromptKind,
+  ): MasterPrompt | null {
+    const sql = kind
+      ? `SELECT * FROM company_master_prompts
+         WHERE company_session_id = ? AND status = 'pending' AND kind = ?
+         ORDER BY id DESC LIMIT 1`
+      : `SELECT * FROM company_master_prompts
+         WHERE company_session_id = ? AND status = 'pending'
+         ORDER BY id DESC LIMIT 1`;
+    const params = kind ? [companySessionId, kind] : [companySessionId];
+    const row = this.db.prepare(sql).get(...params) as MasterPromptRow | undefined;
+    return row ? mapMasterPromptRow(row) : null;
   }
 
   // ─── Kanban ─────────────────────────────────────────────────────

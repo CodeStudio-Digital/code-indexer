@@ -24,6 +24,8 @@ interface StartBody {
 interface PlanResponseBody {
   approved: boolean;
   feedback?: string;
+  /** Optional id of the master_prompt being resolved (idempotent across replay). */
+  prompt_id?: number;
 }
 
 export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
@@ -248,12 +250,15 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ error: 'approved field required' }, 400);
     }
 
-    const resolved = orchestrator.respondToMasterPlan(body.approved, body.feedback);
+    const resolved = orchestrator.respondToMasterPlan(body.approved, body.feedback, body.prompt_id);
     if (!resolved) {
-      return c.json({ error: 'No pending master plan to respond to' }, 409);
+      return c.json(
+        { error: 'No pending master plan to respond to (already resolved or session ended)' },
+        409,
+      );
     }
 
-    return c.json({ ok: true });
+    return c.json({ ok: true, prompt: resolved });
   });
 
   /**
@@ -288,17 +293,20 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const orchestrator = orchestratorRegistry.get(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
-    const body = await parseJsonBody<{ answer: string }>(c);
+    const body = await parseJsonBody<{ answer: string; prompt_id?: number }>(c);
     if (!body.answer) {
       return c.json({ error: 'answer required' }, 400);
     }
 
-    const resolved = orchestrator.respondToMasterQuestion(body.answer);
+    const resolved = orchestrator.respondToMasterQuestion(body.answer, body.prompt_id);
     if (!resolved) {
-      return c.json({ error: 'No pending question to answer' }, 409);
+      return c.json(
+        { error: 'No pending question to answer (already resolved or session ended)' },
+        409,
+      );
     }
 
-    return c.json({ ok: true });
+    return c.json({ ok: true, prompt: resolved });
   });
 
   /**

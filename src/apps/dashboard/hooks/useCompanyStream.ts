@@ -10,7 +10,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import type { Usage } from './agent-stream/types.js';
-import type { KanbanCardFull, KanbanComment, KanbanChecklistItem } from '../../../core/coder/company/types.js';
+import type { KanbanCardFull, KanbanComment, KanbanChecklistItem, MasterPrompt } from '../../../core/coder/company/types.js';
 import { ReconnectingSSEClient } from '../../../shared/sse/ReconnectingSSEClient.js';
 import type { SSEEvent } from '../../../shared/sse/SSEFramer.js';
 
@@ -60,14 +60,13 @@ export interface CompanyStreamState {
   kanbanCards: Map<number, KanbanCardFull>;
   error: string | null;
   userMessage: string | null;
-  /** Set when Master calls submit_plan — needs human approval. */
-  pendingMasterPlan: { plan: string } | null;
-  /** Set when Master calls ask_user — needs human answer. */
-  pendingMasterQuestion: {
-    question: string;
-    options?: Array<{ label: string; value: string }>;
-    allowFreeform?: boolean;
-  } | null;
+  /**
+   * All master↔human prompts (ask_user / submit_plan) for this session,
+   * keyed by their persistent DB id. Survives navigation/reload because
+   * it's rehydrated from the DB on reattach. Status (pending/answered/
+   * cancelled) is updated in place via SSE.
+   */
+  masterPrompts: Map<number, MasterPrompt>;
   /** Master error details when session_idle reports `master_error`. */
   masterErrorDetail: string | null;
   /** Recent fallback activations (most recent first, max 5 kept). */
@@ -92,8 +91,7 @@ const INITIAL_STATE: CompanyStreamState = {
   kanbanCards: new Map(),
   error: null,
   userMessage: null,
-  pendingMasterPlan: null,
-  pendingMasterQuestion: null,
+  masterPrompts: new Map(),
   masterErrorDetail: null,
   fallbackNotices: [],
 };
@@ -157,20 +155,25 @@ export function useCompanyStream(companySessionId: number | null) {
         }
         return { ...prev, subordinateStates: subs };
       });
-    } else if (eventType === 'master_plan_posted') {
-      const d = data as { plan: string };
-      setState((prev) => ({ ...prev, pendingMasterPlan: { plan: d.plan } }));
-    } else if (eventType === 'master_question_posted') {
-      const d = data as {
-        question: string;
-        options?: Array<{ label: string; value: string }>;
-        allowFreeform?: boolean;
-      };
-      setState((prev) => ({ ...prev, pendingMasterQuestion: d }));
-    } else if (eventType === 'master_plan_resolved') {
-      setState((prev) => ({ ...prev, pendingMasterPlan: null }));
-    } else if (eventType === 'master_question_resolved') {
-      setState((prev) => ({ ...prev, pendingMasterQuestion: null }));
+    } else if (
+      eventType === 'master_plan_posted' ||
+      eventType === 'master_question_posted' ||
+      eventType === 'master_plan_resolved' ||
+      eventType === 'master_question_resolved' ||
+      eventType === 'master_prompt_cancelled'
+    ) {
+      // All master_prompt events carry { prompt: MasterPrompt }. Upsert by
+      // id — idempotent across SSE replay so already-answered prompts
+      // never reopen, and rehydration on reattach merges cleanly.
+      const d = data as { prompt?: MasterPrompt };
+      if (d.prompt) {
+        const incoming = d.prompt;
+        setState((prev) => {
+          const next = new Map(prev.masterPrompts);
+          next.set(incoming.id, incoming);
+          return { ...prev, masterPrompts: next };
+        });
+      }
     } else if (eventType.startsWith('kanban_')) {
       handleKanbanEvent(eventType, data);
     } else if (eventType === 'session_idle') {
@@ -502,12 +505,19 @@ export function useCompanyStream(companySessionId: number | null) {
             subs.set(run.id, agentState);
           }
         }
+        // Master prompts — rehydrate from DB so questions/plans persist
+        // across navigation/reload, with their resolution state intact.
+        const dbPrompts = (data.masterPrompts ?? []) as MasterPrompt[];
+        const mergedPrompts = new Map(prev.masterPrompts);
+        for (const p of dbPrompts) mergedPrompts.set(p.id, p);
+
         return {
           ...prev,
           started: true,
           boardMessages: dbBoard.length > 0 ? dbBoard : prev.boardMessages,
           masterState: master,
           subordinateStates: subs.size > 0 ? subs : prev.subordinateStates,
+          masterPrompts: mergedPrompts,
         };
       });
     } catch { /* ignore fetch errors */ }
@@ -590,8 +600,6 @@ export function useCompanyStream(companySessionId: number | null) {
       started: true,
       connected: true,
       error: null,
-      pendingMasterPlan: null,
-      pendingMasterQuestion: null,
       masterErrorDetail: null,
     }));
     await openStream({
@@ -636,15 +644,34 @@ export function useCompanyStream(companySessionId: number | null) {
     setState((prev) => ({ ...prev, connected: false }));
   }, [companySessionId]);
 
-  const respondToMasterPlan = useCallback(async (approved: boolean, feedback?: string) => {
+  const respondToMasterPlan = useCallback(async (
+    promptId: number,
+    approved: boolean,
+    feedback?: string,
+  ) => {
     if (!companySessionId) return;
     try {
-      await fetch(`/api/company/sessions/${companySessionId}/plan-response`, {
+      const res = await fetch(`/api/company/sessions/${companySessionId}/plan-response`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved, feedback }),
+        body: JSON.stringify({ approved, feedback, prompt_id: promptId }),
       });
-      setState((prev) => ({ ...prev, pendingMasterPlan: null }));
+      if (res.ok) {
+        const body = await res.json().catch(() => null) as { prompt?: MasterPrompt } | null;
+        if (body?.prompt) {
+          setState((prev) => {
+            const next = new Map(prev.masterPrompts);
+            next.set(body.prompt!.id, body.prompt!);
+            return { ...prev, masterPrompts: next };
+          });
+        }
+      } else if (res.status === 409) {
+        // Already resolved/cancelled — silent: the SSE event already
+        // updated our local state, no error to surface to the user.
+      } else {
+        const body = await res.text().catch(() => '');
+        setState((prev) => ({ ...prev, error: `Failed to respond to plan (${res.status}): ${body}` }));
+      }
     } catch (e) {
       console.error('Failed to respond to master plan:', e);
     }
@@ -671,16 +698,26 @@ export function useCompanyStream(companySessionId: number | null) {
     }
   }, [companySessionId]);
 
-  const respondToMasterQuestion = useCallback(async (answer: string) => {
+  const respondToMasterQuestion = useCallback(async (promptId: number, answer: string) => {
     if (!companySessionId) return;
     try {
       const res = await fetch(`/api/company/sessions/${companySessionId}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answer }),
+        body: JSON.stringify({ answer, prompt_id: promptId }),
       });
       if (res.ok) {
-        setState((prev) => ({ ...prev, pendingMasterQuestion: null }));
+        const body = await res.json().catch(() => null) as { prompt?: MasterPrompt } | null;
+        if (body?.prompt) {
+          setState((prev) => {
+            const next = new Map(prev.masterPrompts);
+            next.set(body.prompt!.id, body.prompt!);
+            return { ...prev, masterPrompts: next };
+          });
+        }
+      } else if (res.status === 409) {
+        // Already resolved (e.g. session ended, or answered in another tab) —
+        // the SSE event will reconcile state. No error to user.
       } else {
         const body = await res.text().catch(() => '');
         const errorMsg = res.status === 404

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, CheckCircle, XCircle, HelpCircle, PanelRight, PanelRightClose, MessageSquare, KanbanSquare, Check, Plus } from 'lucide-react';
+import { Send, StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, CheckCircle, XCircle, HelpCircle, PanelRight, PanelRightClose, MessageSquare, KanbanSquare, Check, Plus, Ban } from 'lucide-react';
+import type { MasterPrompt } from '../../../../core/coder/company/types.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
@@ -174,26 +175,21 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
             </div>
           )}
 
-          {/* Plan approval */}
-          {stream.pendingMasterPlan && (
-            <div className="mx-3 mt-3">
-              <PlanApprovalCard
-                plan={stream.pendingMasterPlan.plan}
-                onApprove={(fb) => stream.respondToMasterPlan(true, fb)}
-                onReject={(fb) => stream.respondToMasterPlan(false, fb)}
-              />
-            </div>
-          )}
-
-          {/* Master question — ask_user routed through board */}
-          {stream.pendingMasterQuestion && (
-            <div className="mx-3 mt-3">
-              <QuestionCard
-                question={stream.pendingMasterQuestion.question}
-                options={stream.pendingMasterQuestion.options}
-                allowFreeform={stream.pendingMasterQuestion.allowFreeform}
-                onAnswer={(answer) => stream.respondToMasterQuestion(answer)}
-              />
+          {/* Master ↔ human prompts (ask_user / submit_plan) — chronological,
+              persistent across navigation/reload, with answered/cancelled
+              history visible inline. */}
+          {stream.masterPrompts.size > 0 && (
+            <div className="mx-3 mt-3 space-y-2">
+              {Array.from(stream.masterPrompts.values())
+                .sort((a, b) => a.id - b.id)
+                .map((prompt) => (
+                  <MasterPromptCard
+                    key={prompt.id}
+                    prompt={prompt}
+                    onAnswerQuestion={(answer) => stream.respondToMasterQuestion(prompt.id, answer)}
+                    onRespondPlan={(approved, fb) => stream.respondToMasterPlan(prompt.id, approved, fb)}
+                  />
+                ))}
             </div>
           )}
 
@@ -449,68 +445,82 @@ function parseConfig(json: string): Record<string, unknown> | null {
   try { return JSON.parse(json); } catch { return null; }
 }
 
-function PlanApprovalCard({ plan, onApprove, onReject }: {
-  plan: string;
-  onApprove: (feedback?: string) => void;
-  onReject: (feedback?: string) => void;
+/**
+ * Unified card for master↔human prompts. Renders three states:
+ *   - pending   → interactive (answer / approve+reject + freeform feedback)
+ *   - answered  → read-only summary of what the human chose
+ *   - cancelled → neutral note ("session ended before you answered")
+ *
+ * The prompt itself comes from the persisted DB row, so this card looks
+ * the same whether it was just emitted via SSE or rehydrated on reload.
+ */
+function MasterPromptCard({
+  prompt,
+  onAnswerQuestion,
+  onRespondPlan,
+}: {
+  prompt: MasterPrompt;
+  onAnswerQuestion: (answer: string) => void;
+  onRespondPlan: (approved: boolean, feedback?: string) => void;
 }) {
   const { t } = useTranslation(['agents', 'common']);
-  const [feedback, setFeedback] = useState('');
-  return (
-    <div className="rounded-lg border-2 border-yellow-500/40 bg-yellow-500/5 p-4">
-      <div className="flex items-center gap-2 mb-2">
-        <Crown className="h-4 w-4 text-yellow-400" />
-        <span className="text-sm font-medium">{t('agents:company.planApproval')}</span>
-      </div>
-      <div className="bg-background rounded-md border p-3 mb-3 text-xs whitespace-pre-wrap max-h-60 overflow-y-auto">
-        {plan}
-      </div>
-      <textarea
-        value={feedback}
-        onChange={(e) => setFeedback(e.target.value)}
-        placeholder={t('agents:company.feedbackPlaceholder')}
-        className="w-full rounded-md border bg-background px-3 py-1.5 text-xs resize-none mb-2"
-        rows={2}
-      />
-      <div className="flex gap-2">
-        <Button size="sm" variant="default" onClick={() => onApprove(feedback || undefined)} className="gap-1">
-          <CheckCircle className="h-3.5 w-3.5" /> {t('common:actions.approve')}
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => onReject(feedback || undefined)} className="gap-1 text-destructive">
-          <XCircle className="h-3.5 w-3.5" /> {t('common:actions.reject')}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function QuestionCard({ question, options, allowFreeform, onAnswer }: {
-  question: string;
-  options?: Array<{ label: string; value: string }>;
-  allowFreeform?: boolean;
-  onAnswer: (answer: string) => void;
-}) {
   const [text, setText] = useState('');
-  const { t } = useTranslation(['agents', 'common']);
-  const showTextInput = !options || allowFreeform;
+  const [feedback, setFeedback] = useState('');
+
+  const isPlan = prompt.kind === 'plan';
+  const isPending = prompt.status === 'pending';
+  const isAnswered = prompt.status === 'answered';
+  const isCancelled = prompt.status === 'cancelled';
+
+  const accent = isPlan ? 'yellow' : 'blue';
+  const tone = isPending
+    ? `border-${accent}-500/40 bg-${accent}-500/5`
+    : isAnswered
+      ? 'border-emerald-500/30 bg-emerald-500/5'
+      : 'border-muted bg-muted/20';
+  const Icon = isPlan ? Crown : HelpCircle;
+  const iconColor = isPlan ? 'text-yellow-400' : 'text-blue-400';
+  const headerLabel = isPlan
+    ? t('agents:company.planApproval')
+    : t('agents:company.masterQuestion');
 
   return (
-    <div className="rounded-lg border-2 border-blue-500/40 bg-blue-500/5 p-4">
+    <div className={cn('rounded-lg border-2 p-4', tone)}>
       <div className="flex items-center gap-2 mb-2">
-        <HelpCircle className="h-4 w-4 text-blue-400" />
-        <span className="text-sm font-medium">{t('agents:company.masterQuestion')}</span>
+        <Icon className={cn('h-4 w-4', iconColor)} />
+        <span className="text-sm font-medium">{headerLabel}</span>
+        {isAnswered && (
+          <Badge variant="outline" className="text-[10px] gap-1 border-emerald-500/40 text-emerald-500">
+            <CheckCircle className="h-2.5 w-2.5" /> {t('common:actions.answered', 'Answered')}
+          </Badge>
+        )}
+        {isCancelled && (
+          <Badge variant="outline" className="text-[10px] gap-1 text-muted-foreground">
+            <Ban className="h-2.5 w-2.5" /> {t('agents:company.promptCancelled', 'Cancelled')}
+          </Badge>
+        )}
+        <span className="ml-auto text-[10px] text-muted-foreground">
+          {new Date(prompt.created_at + 'Z').toLocaleString()}
+        </span>
       </div>
-      <p className="text-sm mb-3 whitespace-pre-wrap">{question}</p>
 
-      {/* Option buttons */}
-      {options && options.length > 0 && (
+      {isPlan ? (
+        <div className="bg-background rounded-md border p-3 mb-3 text-xs whitespace-pre-wrap max-h-60 overflow-y-auto">
+          {prompt.body}
+        </div>
+      ) : (
+        <p className="text-sm mb-3 whitespace-pre-wrap">{prompt.body}</p>
+      )}
+
+      {/* Option buttons (questions only, when pending) */}
+      {isPending && !isPlan && prompt.options && prompt.options.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-3">
-          {options.map((opt) => (
+          {prompt.options.map((opt) => (
             <Button
               key={opt.value}
               size="sm"
               variant="outline"
-              onClick={() => onAnswer(opt.value)}
+              onClick={() => onAnswerQuestion(opt.value)}
             >
               {opt.label}
             </Button>
@@ -518,8 +528,8 @@ function QuestionCard({ question, options, allowFreeform, onAnswer }: {
         </div>
       )}
 
-      {/* Free-form text input */}
-      {showTextInput && (
+      {/* Pending — questions: freeform answer */}
+      {isPending && !isPlan && (prompt.allow_freeform || !prompt.options || prompt.options.length === 0) && (
         <div className="flex gap-2">
           <textarea
             value={text}
@@ -530,20 +540,69 @@ function QuestionCard({ question, options, allowFreeform, onAnswer }: {
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && text.trim()) {
                 e.preventDefault();
-                onAnswer(text.trim());
+                onAnswerQuestion(text.trim());
               }
             }}
           />
           <Button
             size="sm"
             variant="default"
-            onClick={() => text.trim() && onAnswer(text.trim())}
+            onClick={() => text.trim() && onAnswerQuestion(text.trim())}
             disabled={!text.trim()}
             className="self-end gap-1"
           >
             <Send className="h-3.5 w-3.5" /> {t('agents:company.answer')}
           </Button>
         </div>
+      )}
+
+      {/* Pending — plans: approve/reject + feedback */}
+      {isPending && isPlan && (
+        <>
+          <textarea
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            placeholder={t('agents:company.feedbackPlaceholder')}
+            className="w-full rounded-md border bg-background px-3 py-1.5 text-xs resize-none mb-2"
+            rows={2}
+          />
+          <div className="flex gap-2">
+            <Button size="sm" variant="default" onClick={() => onRespondPlan(true, feedback || undefined)} className="gap-1">
+              <CheckCircle className="h-3.5 w-3.5" /> {t('common:actions.approve')}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => onRespondPlan(false, feedback || undefined)} className="gap-1 text-destructive">
+              <XCircle className="h-3.5 w-3.5" /> {t('common:actions.reject')}
+            </Button>
+          </div>
+        </>
+      )}
+
+      {/* Answered — show what the human chose */}
+      {isAnswered && !isPlan && prompt.answer != null && (
+        <div className="rounded-md bg-background border px-3 py-2 text-xs whitespace-pre-wrap">
+          <span className="text-muted-foreground mr-1">›</span>
+          {prompt.answer}
+        </div>
+      )}
+      {isAnswered && isPlan && (
+        <div className="rounded-md bg-background border px-3 py-2 text-xs">
+          <span className={cn('font-medium', prompt.approved ? 'text-emerald-500' : 'text-destructive')}>
+            {prompt.approved ? t('common:actions.approved', 'Approved') : t('common:actions.rejected', 'Rejected')}
+          </span>
+          {prompt.feedback && (
+            <span className="text-muted-foreground"> — {prompt.feedback}</span>
+          )}
+        </div>
+      )}
+
+      {/* Cancelled — neutral note */}
+      {isCancelled && (
+        <p className="text-xs text-muted-foreground italic">
+          {t(
+            'agents:company.promptCancelledNote',
+            'Session ended before this was answered.',
+          )}
+        </p>
       )}
     </div>
   );

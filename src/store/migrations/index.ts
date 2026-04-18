@@ -47,6 +47,7 @@ import { apiTokens028 } from './028_api_tokens.js';
 import { oauthServer029 } from './029_oauth_server.js';
 import { mcpClientOauth030 } from './030_mcp_client_oauth.js';
 import { coderSessionAgent031 } from './031_coder_session_agent.js';
+import { masterPrompts032 } from './032_master_prompts.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -88,6 +89,7 @@ export const MIGRATIONS: Migration[] = [
   oauthServer029,
   mcpClientOauth030,
   coderSessionAgent031,
+  masterPrompts032,
 ];
 
 /**

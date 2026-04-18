@@ -21,6 +21,8 @@ import type {
   IMetaBusPublisher,
 } from './ports.js';
 import type { MasterAttention } from './MasterAttention.js';
+import type { SessionContext } from './SessionContext.js';
+import type { MasterPrompt } from '../types.js';
 
 interface PendingPlan {
   agentRunId: number;
@@ -55,12 +57,22 @@ export class HumanInTheLoop {
   /** Set while the master itself is waiting on a human plan/question. */
   private masterShouldContinue = false;
 
+  /**
+   * Persistent prompt ids the master is currently blocked on.
+   * Used so HTTP responders can resolve a specific prompt by id (idempotent
+   * across reconnect/replay) and so we know which prompt to mark on
+   * `respondTo*` when the caller doesn't supply an id.
+   */
+  private currentMasterPlanPromptId: number | null = null;
+  private currentMasterQuestionPromptId: number | null = null;
+
   constructor(
     private readonly bus: IMetaBusPublisher,
     private readonly board: IBoardPoster,
     private readonly status: IAgentStatusUpdater,
     private readonly master: IMasterNotifier,
     private readonly attention: MasterAttention,
+    private readonly ctx: SessionContext,
   ) {}
 
   // ─── Master plan / question ─────────────────────────────────────
@@ -70,9 +82,15 @@ export class HumanInTheLoop {
       if (this.master.agentRunId != null) {
         this.status.setStatus(this.master.agentRunId, 'waiting_plan');
       }
-      this.bus.publish('master_plan_posted', { plan: block.plan });
-      this.board.post('master', this.master.agentRunId, 'question',
-        `[Master submitted plan for human review]`);
+      const prompt = this.ctx.companyStore.createMasterPrompt({
+        company_session_id: this.ctx.companySessionId,
+        agent_run_id: this.master.agentRunId,
+        kind: 'plan',
+        body: block.plan,
+        allow_freeform: true,
+      });
+      this.currentMasterPlanPromptId = prompt.id;
+      this.bus.publish('master_plan_posted', { prompt });
     });
   }
 
@@ -86,50 +104,111 @@ export class HumanInTheLoop {
       if (this.master.agentRunId != null) {
         this.status.setStatus(this.master.agentRunId, 'waiting_question');
       }
-      this.board.post('master', this.master.agentRunId, 'question',
-        `[Master asks human]: ${block.question}`);
-      this.bus.publish('master_question_posted', {
-        questionId: block.id,
-        question: block.question,
-        options: block.options,
-        allowFreeform: block.allowFreeform,
+      const prompt = this.ctx.companyStore.createMasterPrompt({
+        company_session_id: this.ctx.companySessionId,
+        agent_run_id: this.master.agentRunId,
+        kind: 'question',
+        runner_block_id: block.id,
+        body: block.question,
+        options: block.options ?? null,
+        allow_freeform: block.allowFreeform !== false,
       });
+      this.currentMasterQuestionPromptId = prompt.id;
+      this.bus.publish('master_question_posted', { prompt });
     });
   }
 
-  respondToMasterPlan(approved: boolean, feedback?: string): boolean {
+  /**
+   * Resolve the current master plan prompt with the human's decision.
+   * `promptId` is optional: when omitted, resolves the most-recent pending
+   * plan (back-compat path). Returns the resolved prompt, or null when
+   * the prompt is not pending (already answered/cancelled — race with
+   * shutdown) or the master runner is gone.
+   */
+  respondToMasterPlan(
+    approved: boolean,
+    feedback?: string,
+    promptId?: number,
+  ): MasterPrompt | null {
     const handle = this.master.handle;
-    if (!handle) return false;
+    if (!handle) return null;
+
+    const targetId = promptId
+      ?? this.currentMasterPlanPromptId
+      ?? this.ctx.companyStore.getPendingMasterPrompt(this.ctx.companySessionId, 'plan')?.id
+      ?? null;
+    if (targetId == null) return null;
+
+    const updated = this.ctx.companyStore.resolveMasterPrompt(targetId, {
+      kind: 'plan', approved, feedback,
+    });
+    if (!updated) return null; // Already resolved/cancelled — don't double-deliver.
+
     const response = JSON.stringify({ approved, feedback: feedback ?? '' });
-    const resolved = handle.runner.provideUserInput(response);
-    if (resolved) {
-      this.masterShouldContinue = true;
-      this.master.setShouldContinue(true);
-      if (this.master.agentRunId != null) {
-        this.status.setStatus(this.master.agentRunId, 'running');
-      }
-      this.board.post('human', null, 'decision',
-        `Plan ${approved ? 'APPROVED' : 'REJECTED'}${feedback ? `: ${feedback}` : ''}`);
-      this.bus.publish('master_plan_resolved', { approved, feedback: feedback ?? '' });
+    const delivered = handle.runner.provideUserInput(response);
+    if (!delivered) {
+      // Runner wasn't actually waiting (rare). Persisted state is correct;
+      // just publish the resolution event for clients.
     }
-    return resolved;
+    if (this.currentMasterPlanPromptId === targetId) this.currentMasterPlanPromptId = null;
+
+    this.masterShouldContinue = true;
+    this.master.setShouldContinue(true);
+    if (this.master.agentRunId != null) {
+      this.status.setStatus(this.master.agentRunId, 'running');
+    }
+    this.board.post('human', null, 'decision',
+      `Plan ${approved ? 'APPROVED' : 'REJECTED'}${feedback ? `: ${feedback}` : ''}`);
+    this.bus.publish('master_plan_resolved', { prompt: updated });
+    return updated;
   }
 
-  respondToMasterQuestion(answer: string): boolean {
+  respondToMasterQuestion(answer: string, promptId?: number): MasterPrompt | null {
     const handle = this.master.handle;
-    if (!handle) return false;
+    if (!handle) return null;
+
+    const targetId = promptId
+      ?? this.currentMasterQuestionPromptId
+      ?? this.ctx.companyStore.getPendingMasterPrompt(this.ctx.companySessionId, 'question')?.id
+      ?? null;
+    if (targetId == null) return null;
+
+    const updated = this.ctx.companyStore.resolveMasterPrompt(targetId, {
+      kind: 'question', answer,
+    });
+    if (!updated) return null;
+
     const response = JSON.stringify({ answer });
-    const resolved = handle.runner.provideUserInput(response);
-    if (resolved) {
-      this.masterShouldContinue = true;
-      this.master.setShouldContinue(true);
-      if (this.master.agentRunId != null) {
-        this.status.setStatus(this.master.agentRunId, 'running');
-      }
-      this.board.post('human', null, 'decision', `Human answered: ${answer}`);
-      this.bus.publish('master_question_resolved', { answer });
+    handle.runner.provideUserInput(response);
+    if (this.currentMasterQuestionPromptId === targetId) {
+      this.currentMasterQuestionPromptId = null;
     }
-    return resolved;
+
+    this.masterShouldContinue = true;
+    this.master.setShouldContinue(true);
+    if (this.master.agentRunId != null) {
+      this.status.setStatus(this.master.agentRunId, 'running');
+    }
+    this.board.post('human', null, 'decision', `Human answered: ${answer}`);
+    this.bus.publish('master_question_resolved', { prompt: updated });
+    return updated;
+  }
+
+  /**
+   * Cancel every still-pending master prompt for this session and emit
+   * `master_prompt_cancelled` events. Called on session abort / master end
+   * so dashboards can transition cards from "pending" to "cancelled".
+   */
+  cancelPendingMasterPrompts(): MasterPrompt[] {
+    const cancelled = this.ctx.companyStore.cancelPendingMasterPrompts(this.ctx.companySessionId);
+    for (const p of cancelled) {
+      this.bus.publish('master_prompt_cancelled', { prompt: p });
+    }
+    if (cancelled.length > 0) {
+      this.currentMasterPlanPromptId = null;
+      this.currentMasterQuestionPromptId = null;
+    }
+    return cancelled;
   }
 
   consumeMasterShouldContinue(): boolean {
