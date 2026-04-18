@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, CheckCircle, XCircle, HelpCircle, PanelRight, PanelRightClose, MessageSquare, KanbanSquare, Check } from 'lucide-react';
+import { Send, StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, CheckCircle, XCircle, HelpCircle, PanelRight, PanelRightClose, MessageSquare, KanbanSquare, Check, Plus } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
 import { cn } from '../../lib/utils.js';
-import { useApi } from '../../hooks/useApi.js';
+import { useApi, apiPost } from '../../hooks/useApi.js';
 import { useCompanyStream } from '../../hooks/useCompanyStream.js';
 import { useProviders } from '../../hooks/useProviders.js';
 import { AgentPane } from './AgentPane.js';
@@ -14,6 +14,12 @@ import { KanbanTab } from './KanbanTab.js';
 import { AgentSessionModal } from './AgentSessionModal.js';
 import { MarkdownToolbar } from '../chat/composer/MarkdownToolbar.js';
 import { useMarkdownShortcuts } from '../chat/composer/useMarkdownShortcuts.js';
+
+interface Project {
+  id: number;
+  name: string;
+  root_path: string;
+}
 
 interface CompanySessionViewProps {
   sessionId: number;
@@ -36,6 +42,9 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
   const [modalSession, setModalSession] = useState<{ coderSessionId: number; role: string; status: string } | null>(null);
   const [editingRoleIdx, setEditingRoleIdx] = useState<number | null>(null);
+  const [addingProject, setAddingProject] = useState(false);
+  const [newProjectId, setNewProjectId] = useState('');
+  const { data: allProjects } = useApi<Project[]>('/projects');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { handleKeyDown: mdHandleKeyDown, applyAction } = useMarkdownShortcuts(textareaRef, input, setInput);
   const { providerOptions, getModelsForProvider, getDefaultModel } = useProviders();
@@ -248,20 +257,62 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
             <p className="text-sm font-medium"></p>
 
             {/* Projects */}
-            {(sessionData?.projects.length ?? 0) > 0 && (
-                <div>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5">{t('agents:company.projects')}</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {sessionData?.projects.map((p) => (
-                        <Badge key={p.project_id} variant="outline" className="text-[10px] gap-1">
-                          <FolderGit2 className="h-2.5 w-2.5" />
-                          {p.project_name}
-                          {p.label && <span className="text-muted-foreground">({p.label})</span>}
-                        </Badge>
-                    ))}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide">{t('agents:company.projects')}</p>
+                <button
+                  type="button"
+                  onClick={() => { setAddingProject((v) => !v); setNewProjectId(''); }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Add project"
+                >
+                  <Plus className="h-3 w-3" />
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {sessionData?.projects.map((p) => (
+                  <Badge key={p.project_id} variant="outline" className="text-[10px] gap-1">
+                    <FolderGit2 className="h-2.5 w-2.5" />
+                    {p.project_name}
+                    {p.label && <span className="text-muted-foreground">({p.label})</span>}
+                  </Badge>
+                ))}
+              </div>
+              {addingProject && (() => {
+                const available = (allProjects ?? []).filter(
+                  (p) => !sessionData?.projects.some((sp) => sp.project_id === p.id),
+                );
+                return available.length > 0 ? (
+                  <div className="flex gap-1 mt-1.5">
+                    <select
+                      value={newProjectId}
+                      onChange={(e) => setNewProjectId(e.target.value)}
+                      className="flex-1 rounded border bg-background px-1 py-0.5 text-[10px]"
+                    >
+                      <option value="">Select...</option>
+                      {available.map((p) => (
+                        <option key={p.id} value={String(p.id)}>{p.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!newProjectId}
+                      className="disabled:opacity-40 text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={async () => {
+                        await apiPost(`/company/sessions/${sessionId}/projects`, { project_id: Number(newProjectId) });
+                        setNewProjectId('');
+                        setAddingProject(false);
+                        refetch();
+                      }}
+                    >
+                      <Check className="h-3 w-3" />
+                    </button>
                   </div>
-                </div>
-            )}
+                ) : (
+                  <p className="text-[10px] text-muted-foreground mt-1">{t('agents:company.noMoreProjects', 'No more projects available')}</p>
+                );
+              })()}
+            </div>
 
             {/* Roles — editable provider/model */}
             {config?.role_assignments && (config.role_assignments as unknown[]).length > 0 && (

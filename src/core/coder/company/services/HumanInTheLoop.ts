@@ -20,6 +20,7 @@ import type {
   IMasterNotifier,
   IMetaBusPublisher,
 } from './ports.js';
+import type { MasterAttention } from './MasterAttention.js';
 
 interface PendingPlan {
   agentRunId: number;
@@ -59,6 +60,7 @@ export class HumanInTheLoop {
     private readonly board: IBoardPoster,
     private readonly status: IAgentStatusUpdater,
     private readonly master: IMasterNotifier,
+    private readonly attention: MasterAttention,
   ) {}
 
   // ─── Master plan / question ─────────────────────────────────────
@@ -155,6 +157,16 @@ export class HumanInTheLoop {
           this.status.setStatus(agentRunId, 'running');
         },
       });
+
+      // Wake the master in real time so `wait_for_subordinates` returns
+      // instead of polling until the subordinate eventually completes.
+      this.master.handle?.runner.interruptWait();
+      this.master.notify(
+        `[SYSTEM] @${role} (agent_run_id=${agentRunId}) submitted a plan for approval and is BLOCKED.\n` +
+        `Plan:\n${block.plan}\n` +
+        `Use approve_subordinate_plan(agent_run_id=${agentRunId}, approved=true/false, feedback="...") to respond.`,
+      );
+      this.attention.signal({ kind: 'plan', agentRunId, role });
     });
   }
 
@@ -199,6 +211,7 @@ export class HumanInTheLoop {
         `Use answer_subordinate_question(agent_run_id=${agentRunId}, answer="...") to respond. ` +
         `If you cannot answer, use ask_user to escalate the question to the human, then relay the human's response.`,
       );
+      this.attention.signal({ kind: 'question', agentRunId, role });
     });
   }
 
@@ -231,6 +244,7 @@ export class HumanInTheLoop {
         `Summary: "${summary}"\n` +
         `Use approve_subordinate_tasks(agent_run_id=${agentRunId}, approved=true/false, feedback="...") to respond.`,
       );
+      this.attention.signal({ kind: 'tasks', agentRunId, role });
     });
   }
 

@@ -116,22 +116,56 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
     source: 'native',
     handler: async (args) => {
       const timeoutMs = ((args.timeout_minutes as number | undefined) ?? 30) * 60 * 1000;
-      const pollMs = 3_000;
       const deadline = Date.now() + timeoutMs;
 
       if (!orchestrator.hasRunningSubordinates()) {
         return ok('No subordinates currently running — all done.');
       }
 
+      // Event-driven wait: we sleep until a subordinate signals it needs the
+      // master's attention (question / plan / tasks) or transitions to a
+      // terminal status (finished). Attention-triggering events make us
+      // return immediately so the master can run a turn and consume the
+      // `pushUserMessage` notification that HumanInTheLoop already queued.
       while (orchestrator.hasRunningSubordinates()) {
-        if (Date.now() >= deadline) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
           const subs = orchestrator.listSubordinates().filter((s) => s.status === 'running');
           return err(
             `Timed out after ${args.timeout_minutes ?? 30}min. Still running: ${subs.map((s) => s.role).join(', ')}. ` +
             `Use list_subordinates to check status or abort_subordinate_agent if needed.`,
           );
         }
-        await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+
+        const event = await new Promise<
+          | { kind: 'question' | 'plan' | 'tasks' | 'finished'; agentRunId: number; role: string }
+          | { kind: 'timeout' }
+        >((resolve) => {
+          let done = false;
+          const off = orchestrator.onSubordinateAttention((ev) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            off();
+            resolve(ev);
+          });
+          const timer = setTimeout(() => {
+            if (done) return;
+            done = true;
+            off();
+            resolve({ kind: 'timeout' });
+          }, remaining);
+        });
+
+        if (event.kind === 'question' || event.kind === 'plan' || event.kind === 'tasks') {
+          return ok(
+            `Subordinate @${event.role} (run=${event.agentRunId}) needs your attention: posted a ${event.kind}. ` +
+            `The notification with full details was already pushed to your message queue — read it next and respond with ` +
+            `${event.kind === 'question' ? 'answer_subordinate_question' : event.kind === 'plan' ? 'approve_subordinate_plan' : 'approve_subordinate_tasks'}. ` +
+            `Call wait_for_subordinates again after you respond to keep waiting for the others.`,
+          );
+        }
+        // 'finished' or 'timeout' → re-check the loop condition.
       }
 
       const summary = orchestrator

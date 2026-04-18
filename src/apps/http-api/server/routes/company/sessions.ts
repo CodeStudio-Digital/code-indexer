@@ -82,6 +82,21 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     return c.json(companyStore.getCompanySessionFull(session.id), 201);
   });
 
+  app.post('/api/company/sessions/:id/projects', async (c) => {
+    const sessionId = parseIdParam(c);
+    const body = await parseJsonBody<{ project_id: number; label?: string }>(c);
+    if (!body.project_id) return c.json({ error: 'project_id required' }, 400);
+
+    const session = companyStore.getCompanySession(sessionId);
+    if (!session) return notFound(c);
+
+    const proj = db.getProject(body.project_id);
+    if (!proj) return c.json({ error: `Project ${body.project_id} not found` }, 404);
+
+    companyStore.addProjectToCompanySession(sessionId, body.project_id, body.label);
+    return c.json({ ok: true });
+  });
+
   app.delete('/api/company/sessions/:id', (c) => {
     const deleted = companyStore.deleteCompanySession(parseIdParam(c));
     if (!deleted) return notFound(c);

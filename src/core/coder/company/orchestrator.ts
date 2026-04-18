@@ -46,6 +46,7 @@ import { HumanInTheLoop } from './services/HumanInTheLoop.js';
 import { IdleController } from './services/IdleController.js';
 import { SubordinateLifecycle, type SpawnSubordinateSpec } from './services/SubordinateLifecycle.js';
 import { MasterLifecycle, type RoleConfig } from './services/MasterLifecycle.js';
+import { MasterAttention, type AttentionListener } from './services/MasterAttention.js';
 
 export type { SpawnSubordinateSpec };
 
@@ -69,6 +70,7 @@ export class CompanyOrchestrator {
   private readonly kanban: KanbanService;
   private readonly board: BoardBridge;
   private readonly status: AgentStatusUpdater;
+  private readonly attention: MasterAttention;
   // These four have a small construction cycle (Master ↔ HumanInTheLoop,
   // Subordinates ↔ Idle); they're assigned inside the constructor body.
   private readonly humanInLoop!: HumanInTheLoop;
@@ -92,6 +94,7 @@ export class CompanyOrchestrator {
     this.kanban = new KanbanService(this.ctx, this.publisher);
     this.board = new BoardBridge(this.ctx, this.publisher, this.kanban);
     this.status = new AgentStatusUpdater(this.ctx, this.publisher);
+    this.attention = new MasterAttention();
 
     // Construction has small cycles (Master ↔ HumanInTheLoop wire each
     // other; Subordinates ↔ IdleController query each other). We resolve
@@ -109,7 +112,7 @@ export class CompanyOrchestrator {
     const master = new MasterLifecycle(masterDeps);
     (this as unknown as { master: MasterLifecycle }).master = master;
 
-    const humanInLoop = new HumanInTheLoop(this.publisher, this.board, this.status, master);
+    const humanInLoop = new HumanInTheLoop(this.publisher, this.board, this.status, master, this.attention);
     (this as unknown as { humanInLoop: HumanInTheLoop }).humanInLoop = humanInLoop;
     masterDeps.humanInLoop = humanInLoop;
 
@@ -123,6 +126,7 @@ export class CompanyOrchestrator {
       wirer: this.wirer,
       idle: undefined as unknown as IdleController,
       orchestratorRef: this,
+      attention: this.attention,
     };
     const subordinates = new SubordinateLifecycle(subordinateDeps);
     (this as unknown as { subordinates: SubordinateLifecycle }).subordinates = subordinates;
@@ -249,6 +253,16 @@ export class CompanyOrchestrator {
 
   hasRunningSubordinates(): boolean {
     return this.subordinates.runningCount > 0;
+  }
+
+  /**
+   * Subscribe to master-attention events (subordinate posted a
+   * question/plan/tasks, or transitioned to a terminal status).
+   * Used by `wait_for_subordinates` so the master wakes in real time
+   * instead of polling. Returns an unsubscribe function.
+   */
+  onSubordinateAttention(listener: AttentionListener): () => void {
+    return this.attention.on(listener);
   }
 
   isSubordinateRunning(agentRunId: number): boolean {

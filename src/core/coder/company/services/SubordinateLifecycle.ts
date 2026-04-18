@@ -34,6 +34,7 @@ import type {
 } from '../types.js';
 import type { SessionContext } from './SessionContext.js';
 import type { HumanInTheLoop } from './HumanInTheLoop.js';
+import type { MasterAttention } from './MasterAttention.js';
 import type {
   IAgentStatusUpdater,
   IBoardPoster,
@@ -66,6 +67,7 @@ export interface SubordinateLifecycleDeps {
   idle: IIdleController;
   /** Facade passed into CompanyContext so tools can reach the orchestrator. */
   orchestratorRef: unknown;
+  attention: MasterAttention;
 }
 
 export class SubordinateLifecycle implements ISubordinateQuery {
@@ -377,6 +379,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     sub.runner.abort();
     this.deps.humanInLoop.clearForAgent(agentRunId);
     this.deps.status.setStatus(agentRunId, 'aborted');
+    this.deps.attention.signal({ kind: 'finished', agentRunId, role: sub.role });
     return true;
   }
 
@@ -384,6 +387,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     for (const sub of this.subordinates.values()) {
       sub.runner.abort();
       this.deps.status.setStatus(sub.agentRunId, 'aborted');
+      this.deps.attention.signal({ kind: 'finished', agentRunId: sub.agentRunId, role: sub.role });
     }
   }
 
@@ -404,6 +408,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
         alreadyStopped++;
       }
       this.deps.status.setStatus(run.id, 'completed', 'Finalized by master');
+      this.deps.attention.signal({ kind: 'finished', agentRunId: run.id, role: run.role });
     }
 
     this.subordinates.clear();
@@ -428,6 +433,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     errorDetail: string | null,
   ): void {
     this.deps.status.setStatus(agentRunId, 'error', `Ended: ${summary}`);
+    this.deps.attention.signal({ kind: 'finished', agentRunId, role });
     this.deps.board.post('system', agentRunId, 'message', `@${role} ${summary}`);
 
     if (this.retryPolicy.shouldRetry(agentRunId, errorDetail)) {
@@ -492,6 +498,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
         if (reason === 'completed') {
           this.retryPolicy.clear(agentRunId);
           this.deps.status.setStatus(agentRunId, 'waiting', 'Task done. Ready for next task.');
+          this.deps.attention.signal({ kind: 'finished', agentRunId, role });
           this.deps.board.post('system', agentRunId, 'deliverable',
             `@${role}${resumedTag} finished task. Status: **waiting** for next instructions.`);
           this.deps.master.notify(
