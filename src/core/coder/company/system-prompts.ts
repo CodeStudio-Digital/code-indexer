@@ -4,6 +4,42 @@
  * buildSystemPrompt() — they supplement rather than replace.
  */
 
+/**
+ * Builder-mode context. When present, the prompt gets a dedicated
+ * section explaining the sandbox environment and — critically — the
+ * reserved files the agent must not modify (vite.config.ts, because
+ * the preview proxy relies on its exact shape).
+ */
+export interface BuilderPromptContext {
+  /** Container-side workdir (typically `/app`). */
+  workdir: string;
+  /** Stack name (`react-ts`, `vue-ts`, etc.). */
+  stack: string;
+  /** Public URL of the live preview iframe. */
+  previewUrl: string;
+  /**
+   * Siblings on the same session — every container reachable on the
+   * shared docker network. Rendered as a dedicated block so subordinates
+   * know which microservices exist without having to introspect env
+   * vars or ask the master. `isSelf` marks the agent's own container
+   * so the agent understands which entry is "me".
+   *
+   * Populated by the caller from `SandboxService.listServiceBindings`
+   * + `getSandboxBinding`. Empty array (or omitted) when the session
+   * runs a single container.
+   */
+  peers?: Array<{
+    serviceId: string;
+    stack: string;
+    /** e.g. `http://api:5173` — reachable container-to-container. */
+    internalUrl: string;
+    /** Public preview URL (dashboard iframe). */
+    previewUrl: string;
+    /** True for the container this agent is running inside. */
+    isSelf: boolean;
+  }>;
+}
+
 export interface MasterPromptContext {
   roster: Array<{
     role: string;
@@ -11,13 +47,41 @@ export interface MasterPromptContext {
     model: string;
     tier: string;
     projectHints?: string[];
+    /**
+     * Concrete project ids this role is bound to in this session. When
+     * set, the master prompt renders the Project → Roles index so the
+     * master can delegate project-first, and `spawn_subordinate_agent`
+     * auto-resolves / enforces the binding.
+     */
+    projectIds?: number[];
     skills?: string[];
+    /**
+     * Full systemPromptOverride for this role. Rendered (truncated) into
+     * the master's YOUR TEAM section so the master knows each role's
+     * specialty — without this, "cloudflare" is just a role name and the
+     * master would hallucinate Node/Express instead of Workers/Hono/D1.
+     */
+    systemPromptOverride?: string;
   }>;
   projects: Array<{
     id: number;
     name: string;
     rootPath: string;
     label?: string;
+  }>;
+  builder?: BuilderPromptContext;
+  /**
+   * Curated pool of (provider, model) tuples the master is allowed to
+   * spawn subordinates with. When non-empty, the prompt includes a
+   * dedicated section so the master knows the valid options and the
+   * error it will receive if it picks outside the list.
+   */
+  allowedModels?: Array<{
+    provider: string;
+    model: string;
+    label?: string;
+    notes?: string;
+    is_default?: boolean;
   }>;
 }
 
@@ -29,6 +93,148 @@ export interface SubordinatePromptContext {
     rootPath: string;
   }>;
   overridePrompt?: string;
+  builder?: BuilderPromptContext;
+}
+
+/**
+ * Shared builder-mode instructions appended to both master and
+ * subordinate prompts when a sandbox binding is active.
+ *
+ * The MOST IMPORTANT line is about `vite.config.ts`: agents have a
+ * habit of rewriting it with a plain-template config, which strips
+ * `base`, `server.host: '0.0.0.0'`, and `server.watch.usePolling` —
+ * breaking the preview iframe (ECONNREFUSED at the proxy) and HMR.
+ */
+function buildBuilderInstructions(b: BuilderPromptContext): string {
+  const isAngular = b.stack === 'angular';
+  const reservedFiles = isAngular
+    ? `- **\`${b.workdir}/angular.json\` → \`projects.*.architect.serve.options\`** —
+  managed by the MCP SandboxService. It contains proxy-specific settings
+  (\`host\`, \`port\`, \`allowedHosts\`, \`servePath\`, \`poll\`). Changing
+  them BREAKS the preview iframe and the file watcher. You MAY edit the
+  \`build.options\` block (styles, assets, scripts) freely.`
+    : `- **\`${b.workdir}/vite.config.ts\`** — managed by the MCP SandboxService.
+  It contains proxy-specific settings (\`base\`, \`server.host\`,
+  \`server.watch.usePolling\`, \`server.hmr\`) that, if changed, BREAK
+  the preview iframe and HMR immediately. If you need app-level Vite
+  customization (aliases, plugins), add a NEW file (e.g.
+  \`vite.user.config.ts\`) — never overwrite the managed one.`;
+
+  const devServerText = isAngular
+    ? `\`ng serve\` is already running in the background inside the container
+on the configured port. Do NOT restart it manually, and do NOT run
+\`ng serve\` yourself — just write code; the watcher picks up changes
+automatically.`
+    : `Vite is already running in the background on port 5173 inside the
+container. Do NOT restart it manually, and do NOT run \`npm run dev\`
+yourself — just write code; HMR picks up changes automatically.`;
+
+  const peersBlock =
+    b.peers && b.peers.length > 1
+      ? (() => {
+          const lines = b.peers!.map((p) => {
+            const self = p.isSelf ? ' **[you]**' : '';
+            const preview = p.previewUrl ? ` preview=\`${p.previewUrl}\`` : '';
+            return `  - \`${p.serviceId}\` (${p.stack}) → internal \`${p.internalUrl}\`${preview}${self}`;
+          });
+          return `
+
+### Peer services on this session
+
+Your container shares a docker network with the services below. Reach
+any peer from inside your container by its \`internalUrl\` — use those,
+NOT \`localhost\`, when your code calls a sibling. The \`previewUrl\` is
+only meant for the browser / dashboard iframe; don't use it for
+container-to-container traffic.
+
+${lines.join('\n')}
+
+The same URLs are also exposed as env vars \`SERVICE_URL_<ID>\` (internal)
+and \`PREVIEW_URL_<ID>\` (public). Read them with \`env_read\` or
+\`env_list\` when you need the value dynamically. Call \`list_services\`
+for the live status snapshot.
+`;
+        })()
+      : '';
+
+  return `
+
+## BUILDER MODE — Live-preview sandbox
+
+This session is running inside an ephemeral **${b.stack}** container.
+Your working directory is \`${b.workdir}\`. The project is served live
+via the dashboard preview at \`${b.previewUrl}\` with hot reload enabled.
+${peersBlock}
+### Stack guidance lives in project snapshots
+
+Before writing code for this stack, call \`query_snapshots\` on the
+attached project with queries like \`"stack conventions"\`, \`"forms"\`,
+\`"styling"\`, \`"components"\`, and stack-specific terms (\`"signals"\` for
+Angular, \`"actions"\` for React, \`"composition"\` for Vue). These
+snapshots were seeded specifically for this builder session and reflect
+current (2026) idiomatic patterns for **${b.stack}** — they OVERRIDE any
+older conventions you may remember from training data.
+
+### Reserved files (DO NOT MODIFY)
+
+${reservedFiles}
+
+### Paths
+
+All write_file / read_file / run_command calls operate INSIDE the
+container; paths like \`src/App.tsx\` resolve against \`${b.workdir}\`.
+There is no host filesystem to worry about. If a file "disappears"
+after you wrote it, you are probably writing to the wrong path —
+use \`list_directory\` to verify.
+
+### Dev server
+
+${devServerText}
+
+### Documentation discipline
+
+The sandbox exposes dedicated **docs_*** tools (\`docs_write\`, \`docs_read\`,
+\`docs_list\`, \`docs_index_update\`, \`docs_delete\`). ALL documentation lives
+under \`${b.workdir}/docs/\`. Use them — not \`write_file\` — to keep the
+dashboard's Docs tab in sync.
+
+Expected structure:
+  - \`docs/index.json\` — navigable table of contents. Update after
+    creating or moving a doc so the UI reflects it.
+  - \`docs/decisions/NNNN-short-slug.md\` — ADRs (Architecture Decision
+    Records). One per non-trivial design choice. Include context,
+    options considered, decision, consequences.
+  - \`docs/api/*.md\` — endpoint and contract references for this service.
+  - \`docs/runbooks/*.md\` — "what to do when X fails" notes.
+
+Open every non-trivial task by calling \`docs_list\` to see what's already
+documented. Close every architectural decision by writing or updating an
+ADR. Multi-service sessions: pass \`service: '<service_id>'\` to target a
+specific container's docs.
+`;
+}
+
+/**
+ * Master-only appendix (added after the shared builder block) that
+ * points the master at its container-diagnostics tools. Subordinates
+ * don't receive these tools, so this guidance is intentionally not in
+ * `buildBuilderInstructions`.
+ */
+function buildMasterContainerOversight(): string {
+  return `
+
+### Container oversight (master-only)
+
+After any subordinate finishes work that could affect a service's build
+or runtime (scaffolder changes, dependency installs, dev-server config,
+config files), call \`list_containers\` to confirm the relevant service
+is \`running\` with no non-zero exit code. If a container is \`stopped\`,
+\`gone\`, or shows \`oomKilled=true\` / \`exitCode\` ≠ 0, call
+\`read_container_logs(service_id='<that-service>', tail=200)\`, then
+spawn a fix subordinate with the log tail and the failing service id
+included verbatim in the task description. Don't trust a subordinate's
+"task complete" report over what the container actually says.
+`;
 }
 
 function projectSlug(name: string): string {
@@ -36,26 +242,89 @@ function projectSlug(name: string): string {
 }
 
 export function buildMasterCompanyBlock(ctx: MasterPromptContext): string {
+  // Project-first index: for each project, list the roles bound to it via
+  // `CompanyRoleConfig.projectIds`. This is the master's primary decision
+  // aid — "I need to change X in the frontend → who works there?" — and
+  // it mirrors how the operator configured the session in the "Agents per
+  // project" UI. Roles with no binding don't appear here; they're still
+  // in YOUR TEAM below and spawnable with an explicit project_id.
+  const rolesByProject = new Map<number, string[]>();
+  for (const r of ctx.roster) {
+    if (!Array.isArray(r.projectIds)) continue;
+    for (const pid of r.projectIds) {
+      const arr = rolesByProject.get(pid) ?? [];
+      arr.push(r.role);
+      rolesByProject.set(pid, arr);
+    }
+  }
+  const anyBindings = rolesByProject.size > 0;
+
   const projectList = ctx.projects
     .map((p) => {
       const slug = projectSlug(p.name);
+      const boundRoles = rolesByProject.get(p.id) ?? [];
+      const agentsLine = anyBindings
+        ? boundRoles.length > 0
+          ? `\n    Agents working here: ${boundRoles.map((r) => `\`${r}\``).join(', ')}`
+          : `\n    Agents working here: (none — delegate to a role with an explicit project_id, or bind one in the UI)`
+        : '';
       return `  - id=${p.id} **${p.name}**${p.label ? ` [${p.label}]` : ''}
-    Path: \`${p.rootPath}\`
     MCP tools prefix: \`mcp__${slug}__*\`
-    Example: \`mcp__${slug}__get_project_pulse\`, \`mcp__${slug}__get_project_stats\`, \`mcp__${slug}__get_architecture\``;
+    Example: \`mcp__${slug}__get_project_pulse\`, \`mcp__${slug}__get_project_stats\`, \`mcp__${slug}__get_architecture\`${agentsLine}`;
     })
     .join('\n\n');
 
   const hasRoster = ctx.roster.length > 0;
+  const hasPool = Array.isArray(ctx.allowedModels) && ctx.allowedModels.length > 0;
+  // Fast lookup: project id → rendered name (with optional label), used to
+  // turn each role's `projectIds` into a human-readable "works on: …" line.
+  const projectNameById = new Map<number, string>();
+  for (const p of ctx.projects) {
+    projectNameById.set(p.id, p.label ? `${p.name} [${p.label}]` : p.name);
+  }
   const rosterList = hasRoster
     ? ctx.roster
         .map((r) => {
           const hints = r.projectHints?.length ? ` (project hints: ${r.projectHints.join(', ')})` : '';
-          const skills = r.skills?.length ? ` [skills: ${r.skills.join(', ')}]` : '';
-          return `  - **${r.role}**: provider=${r.provider}, model=${r.model}, tier=${r.tier}${hints}${skills}`;
+          const skills = r.skills?.length ? `\n    Skills: ${r.skills.join(', ')}` : '';
+          const bindings = Array.isArray(r.projectIds) && r.projectIds.length > 0
+            ? `\n    Works on: ${r.projectIds
+                .map((pid) => {
+                  const name = projectNameById.get(pid) ?? `project-${pid}`;
+                  return `${name} (id=${pid})`;
+                })
+                .join(', ')}`
+            : `\n    Works on: (unbound — pass project_id when delegating)`;
+          // Surface the role's systemPromptOverride so the master knows
+          // the specialty (e.g. Cloudflare Workers vs. Node/Express).
+          // Indented as a fenced block and truncated to keep the master
+          // prompt from ballooning past context; 2k chars is enough for
+          // stack + conventions but short enough to stay cheap.
+          const override = r.systemPromptOverride?.trim();
+          const specialty = override
+            ? `\n    Specialty & stack (from template — THIS is the tech this role uses; do NOT plan alternatives):\n    \`\`\`\n${override.slice(0, 2000).split('\n').map((l) => `    ${l}`).join('\n')}${override.length > 2000 ? '\n    …(truncated — the full prompt is attached to the subordinate on spawn)' : ''}\n    \`\`\``
+            : '';
+          return `  - **${r.role}**: provider=${r.provider}, model=${r.model}, tier=${r.tier}${hints}${bindings}${skills}${specialty}`;
         })
-        .join('\n')
-    : '  (No pre-configured roles — you can spawn any role dynamically)';
+        .join('\n\n')
+    : hasPool
+      ? '  (No pre-configured roles — spawn any role dynamically but the provider/model MUST come from the Allowed subordinate models list below.)'
+      : '  (No pre-configured roles — you can spawn any role dynamically)';
+
+  // Curated (provider, model) pool. Rendered as a dedicated section so
+  // the master reads it once and reliably picks from it. When absent,
+  // the previous free-form behavior is preserved.
+  const allowedModelsBlock = hasPool
+    ? `\n## ALLOWED SUBORDINATE MODELS (STRICT)\n\n` +
+      `When calling \`spawn_subordinate_agent\`, the \`provider\` and \`model\` arguments MUST match one of these entries. The tool rejects anything outside this list with an error message that includes the valid options.\n\n` +
+      ctx.allowedModels!.map((m) => {
+        const defTag = m.is_default ? ' [DEFAULT]' : '';
+        const label = m.label ? ` — ${m.label}` : '';
+        const notes = m.notes ? ` (${m.notes})` : '';
+        return `  - \`${m.provider}\` / \`${m.model}\`${defTag}${label}${notes}`;
+      }).join('\n') +
+      `\n\nIf you omit \`provider\`/\`model\` when spawning, the DEFAULT entry above is used. Use cheaper models for trivial tasks when that hint is given in the notes.\n`
+    : '';
 
   return `
 # COMPANY ORCHESTRATOR — MULTI-PROJECT MASTER
@@ -76,10 +345,12 @@ The **board** is your primary output channel. The user sees the board, not your 
 8. **ALWAYS CALL \`ask_user\` BEFORE ENDING ANY PHASE.** Your session TERMINATES if you produce text without calling any tool. After posting content to the board, call \`ask_user\` with a SHORT question to get user direction. This keeps your session alive.
 9. **NEVER END WITHOUT USER DISMISSAL.** Only end your session when the user explicitly says done/finished/looks good. Until then, keep orchestrating.
 10. **CHECK BEFORE SPAWNING.** Always call \`list_subordinates(filter="available")\` before spawning. If an existing subordinate with the right role is waiting, use \`forward_to_agent\` to reuse it — this preserves context and is faster than spawning fresh.
+11. **NEVER WRITE PATHS OR "PROJECT PATH: …" IN TASKS.** Each subordinate's session is already opened INSIDE its own project — that is literally the point of the multi-agent design. You never need to tell a subordinate where to work; passing \`project_id\` to \`spawn_subordinate_agent\` already does that. Do NOT include \`D:\\...\`, \`/app/...\`, \`data/virtual-projects/...\`, a \`Project Path:\` / \`CRITICAL: Work ONLY in this directory\` preamble, or any other absolute/host/container path in the \`task\` field, on the board, or in Kanban comments. Only project-relative paths (\`src/...\`, \`docs/...\`) are allowed, and only when you're pointing at a specific file. Copying the wrong path from another project is the #1 way to send a subordinate to corrupt the wrong workdir.
+12. **DELEGATE PROJECT-FIRST.** Pick the project that needs the change, then pick a role from that project's "Agents working here" list. When a role is bound to exactly one project, OMIT \`project_id\` — \`spawn_subordinate_agent\` auto-resolves. When bound to multiple, pass \`project_id\`. If you pass a \`project_id\` that isn't in the role's binding, the tool rejects with the allowed ids — don't try to override the binding, pick a different role instead.
 
-## YOUR PROJECTS (multi-project access)
+## PROJECTS AND THEIR AGENTS
 
-You have high-level MCP tools for each project, prefixed by project name. Use them for overview and structure — NOT for reading code directly. Delegate all code reading to subordinates.
+You have high-level MCP tools for each project, prefixed by project name. Use them for overview and structure — NOT for reading code directly. Delegate all code reading to subordinates. Each project lists the agents bound to it: those are your go-to choices when work lands in that project.
 
 ${projectList}
 
@@ -105,18 +376,32 @@ ${hasRoster ? `These are the subordinate agents you can spawn. Each runs as a SE
 
 ${rosterList}
 
-When spawning, use these exact role names, providers, and models. Pass the correct \`project_id\` from the project list above.` : `You can spawn subordinate agents with any role name. Choose descriptive roles like "backend", "frontend", "qa", "reviewer".`}
+When spawning a role from this list, its \`provider\`, \`model\`, \`tier\`, and \`skills\` are **LOCKED by the template** — you do not need to pass them; if you do, they are ignored and a warning is logged. Pass \`role\` and \`task\`. Pass \`project_id\` only when the role's "Works on" line shows more than one project; otherwise omit it and let auto-resolve handle it. The template is a commitment from the operator, not a suggestion.
+
+**CRITICAL — RESPECT EACH ROLE'S STACK.** The "Specialty & stack" block shown above for each role tells you the EXACT tech this role is built to use (e.g. Cloudflare Workers + Hono + D1 + Drizzle, or React + Vite + FSD). Plan your Kanban cards, architecture decisions, and task descriptions around that stack. If the \`cloudflare\` role is configured for Workers/Hono/D1, you do NOT get to plan "Node + Express + JWT" for it — that stack is not in the template and the subordinate will reject or do the wrong thing. Read each role's specialty BEFORE drafting the plan, and make your delegated tasks align with the stack the operator chose.` : `You can spawn subordinate agents with any role name. Choose descriptive roles like "backend", "frontend", "qa", "reviewer".`}
+${allowedModelsBlock}
 
 ## DELEGATION TOOLS
 
 \`spawn_subordinate_agent\` — **YOUR PRIMARY TOOL**
-  Required: \`role\` (string), \`task\` (detailed instructions with YOUR findings), \`project_id\` (from project list)
-  Optional: \`provider\`, \`model\`, \`tier\`, \`skills\`, \`wait\` (block until done, default false)
+  Required: \`role\` (string), \`task\` (detailed instructions with YOUR findings)
+  Optional: \`project_id\` (omit when the role has a single binding; pass it otherwise), \`provider\`, \`model\`, \`tier\`, \`skills\`, \`wait\` (block until done, default false)
 
   ❌ BAD task (copy-paste of user request):
   \`\`\`
   "Investigate the campaign flow and fix error handling so users see clear error messages."
   \`\`\`
+
+  ❌ BAD task (tells the subordinate where to work — the session ALREADY opens in that project):
+  \`\`\`
+  "Task: Scaffold Backend Project.
+   Project Path: D:\\MCP\\data\\virtual-projects\\dee2959b-...
+   CRITICAL: Work ONLY in this project directory. Never create files in the frontend project."
+  \`\`\`
+  (Reason: the subordinate is spawned with \`project_id\` already scoped to the right project.
+  Its filesystem tools are anchored there. Quoting an absolute path — especially one that
+  actually belongs to ANOTHER project in the session — is exactly how work lands in the wrong
+  workdir. Just describe WHAT to build, using project-relative paths at most.)
 
   ✅ GOOD task (synthesized from your research):
   \`\`\`
@@ -270,22 +555,42 @@ The system also auto-updates cards:
 - Always check dependencies before moving cards
 
 BEGIN by exploring the projects to understand the request. Create Kanban cards for your plan, then post your findings to the board and ask the user for approval via \`ask_user\` before delegating any implementation work.
-`;
+${ctx.builder ? buildBuilderInstructions(ctx.builder) : ''}${ctx.builder ? buildMasterContainerOversight() : ''}`;
 
 }
 
 export function buildSubordinateCompanyBlock(ctx: SubordinatePromptContext): string {
+  // Intentionally NOT listing rootPath here: the session is already
+  // anchored to this project's filesystem — every read/write/run tool
+  // resolves against the correct root automatically. Printing a path
+  // would only tempt the agent (or a confused master that quoted one
+  // in the task text) to concatenate it with project-relative paths
+  // and land writes in the wrong workdir.
   const projectList = ctx.projects
-    .map((p) => `  - **${p.name}** (id=${p.id}): \`${p.rootPath}\``)
+    .map((p) => `  - **${p.name}** (id=${p.id})`)
     .join('\n');
 
   return `
 # Company Agent — ${ctx.role}
 
-You are the **${ctx.role}** agent in a company session orchestrated by a Master agent.
-You have full code access to your assigned project(s). Do the work assigned to you.
+╔══════════════════════════════════════════════════════════════╗
+║  CRITICAL — MANDATORY BEFORE YOU STOP                       ║
+║  Your LAST action MUST be post_to_board with kind=          ║
+║  "deliverable". Never finish silently. The master agent     ║
+║  depends ENTIRELY on your board posts — it cannot read      ║
+║  your code or git diffs. No exceptions.                     ║
+╚══════════════════════════════════════════════════════════════╝
 
-## Your assigned project(s)
+You are the **${ctx.role}** agent in a company session orchestrated by a Master agent.
+You have full code access to your assigned project. Your session is already
+anchored to that project's filesystem — use project-relative paths only
+(\`src/…\`, \`docs/…\`). Never prefix them with any absolute path (\`D:\\…\`,
+\`/app/…\`, \`data/virtual-projects/…\`). If the task description from the
+master quotes an absolute path, IGNORE it — it was written in error.
+Your read_file / write_file / run_command tools already know the correct
+root.
+
+## Your assigned project
 
 ${projectList}
 
@@ -354,5 +659,8 @@ The system automatically:
 - Post deliverables to the board when done.
 - Stay within your project scope.
 ${ctx.overridePrompt ? `\n## Additional instructions\n\n${ctx.overridePrompt}` : ''}
-`;
+${ctx.builder ? buildBuilderInstructions(ctx.builder) : ''}
+
+---
+**REMINDER: Before you stop — call \`post_to_board\` with kind="deliverable". This is mandatory. The master cannot see your work any other way.**`;
 }

@@ -28,6 +28,7 @@ import type {
   MasterPromptKind,
   MasterPromptOption,
   MasterPromptStatus,
+  CompanySessionArchive,
 } from '../core/coder/company/types.js';
 
 const require = createRequire(import.meta.url);
@@ -43,6 +44,7 @@ interface BoardRow {
   content: string;
   mentions_json: string;
   created_at: string;
+  archive_id: number | null;
 }
 
 interface MasterPromptRow {
@@ -91,6 +93,7 @@ function mapBoardRow(row: BoardRow): BoardEntry {
     content: row.content,
     mentions: JSON.parse(row.mentions_json || '[]'),
     created_at: row.created_at,
+    archive_id: row.archive_id ?? null,
   };
 }
 
@@ -241,6 +244,40 @@ export class CompanyStore {
     `).run(companySessionId, projectId, label ?? null);
   }
 
+  /**
+   * Unlink a project from a session. Does NOT delete the project row
+   * itself — that's the caller's choice (virtual `_builder_*` rows are
+   * deleted alongside; external projects are kept for reuse).
+   *
+   * The link table has no ON DELETE CASCADE toward `projects`, so
+   * without this explicit cleanup deleting a service's virtual project
+   * leaves an orphan row that shows up as `project-<id>` in the UI
+   * (the enrichment falls back to a synthetic name when `db.getProject`
+   * returns null).
+   */
+  removeProjectFromCompanySession(companySessionId: number, projectId: number): void {
+    this.db.prepare(
+      `DELETE FROM company_session_projects
+       WHERE company_session_id = ? AND project_id = ?`,
+    ).run(companySessionId, projectId);
+  }
+
+  /**
+   * One-shot cleanup for orphan rows — link rows whose `project_id` no
+   * longer exists in the `projects` table. Called from the session full
+   * read so stale rows from past bugs disappear on their own as soon as
+   * the user opens the session, without a migration that blindly
+   * deletes history. Returns the number of rows removed.
+   */
+  pruneOrphanCompanySessionProjects(companySessionId: number): number {
+    const res = this.db.prepare(
+      `DELETE FROM company_session_projects
+       WHERE company_session_id = ?
+         AND project_id NOT IN (SELECT id FROM projects)`,
+    ).run(companySessionId);
+    return res.changes;
+  }
+
   listCompanySessionProjects(companySessionId: number): CompanySessionProject[] {
     return this.db
       .prepare('SELECT * FROM company_session_projects WHERE company_session_id = ?')
@@ -278,10 +315,20 @@ export class CompanyStore {
       .get(id) as CompanyAgentRun | undefined ?? null;
   }
 
+  /**
+   * List ACTIVE agent runs (archive_id IS NULL). To list an archived
+   * snapshot's runs, use `listArchivedAgentRuns(archiveId)` instead.
+   */
   listAgentRuns(companySessionId: number): CompanyAgentRun[] {
     return this.db
-      .prepare('SELECT * FROM company_agent_runs WHERE company_session_id = ? ORDER BY created_at ASC')
+      .prepare('SELECT * FROM company_agent_runs WHERE company_session_id = ? AND archive_id IS NULL ORDER BY created_at ASC')
       .all(companySessionId) as CompanyAgentRun[];
+  }
+
+  listArchivedAgentRuns(archiveId: number): CompanyAgentRun[] {
+    return this.db
+      .prepare('SELECT * FROM company_agent_runs WHERE archive_id = ? ORDER BY created_at ASC')
+      .all(archiveId) as CompanyAgentRun[];
   }
 
   updateCompanySessionConfig(id: number, configJson: string): void {
@@ -321,12 +368,13 @@ export class CompanyStore {
    * Returns the count of rows touched (for logging).
    */
   recoverStaleAgentRuns(): { agentRuns: number; companySessions: number } {
+    // Skip archived rows — they're historical snapshots, not live runs.
     const agentRuns = this.db.prepare(`
       UPDATE company_agent_runs
       SET status = 'interrupted',
           status_message = COALESCE(status_message, '') || ' [recovered on server restart]',
           updated_at = datetime('now')
-      WHERE status IN ('running', 'working')
+      WHERE status IN ('running', 'working') AND archive_id IS NULL
     `).run().changes;
     const companySessions = this.db.prepare(`
       UPDATE company_sessions
@@ -373,7 +421,8 @@ export class CompanyStore {
     companySessionId: number,
     opts?: { sinceId?: number; limit?: number; kind?: BoardKind },
   ): BoardEntry[] {
-    const clauses: string[] = ['company_session_id = ?'];
+    // Active board only (archived snapshots read via readArchivedBoard).
+    const clauses: string[] = ['company_session_id = ?', 'archive_id IS NULL'];
     const params: unknown[] = [companySessionId];
     if (opts?.sinceId != null) { clauses.push('id > ?'); params.push(opts.sinceId); }
     if (opts?.kind) { clauses.push('kind = ?'); params.push(opts.kind); }
@@ -386,6 +435,14 @@ export class CompanyStore {
       ? `SELECT * FROM company_board WHERE ${whereClause} ORDER BY id ASC LIMIT ?`
       : `SELECT * FROM (SELECT * FROM company_board WHERE ${whereClause} ORDER BY id DESC LIMIT ?) ORDER BY id ASC`;
     const rows = this.db.prepare(sql).all(...params) as BoardRow[];
+    return rows.map(mapBoardRow);
+  }
+
+  /** Read all board entries belonging to a specific archive snapshot. */
+  readArchivedBoard(archiveId: number): BoardEntry[] {
+    const rows = this.db
+      .prepare('SELECT * FROM company_board WHERE archive_id = ? ORDER BY id ASC')
+      .all(archiveId) as BoardRow[];
     return rows.map(mapBoardRow);
   }
 
@@ -448,7 +505,7 @@ export class CompanyStore {
     companySessionId: number,
     opts?: { limit?: number; status?: MasterPromptStatus },
   ): MasterPrompt[] {
-    const clauses: string[] = ['company_session_id = ?'];
+    const clauses: string[] = ['company_session_id = ?', 'archive_id IS NULL'];
     const params: unknown[] = [companySessionId];
     if (opts?.status) { clauses.push('status = ?'); params.push(opts.status); }
     const limit = opts?.limit ?? 100;
@@ -612,14 +669,21 @@ export class CompanyStore {
   }
 
   listKanbanCards(sessionId: number, opts?: { column?: KanbanColumn }): KanbanCard[] {
+    // Active cards only — archived cards are exposed via listArchivedKanbanCards.
     if (opts?.column) {
       return this.db
-        .prepare(`SELECT * FROM kanban_cards WHERE company_session_id = ? AND "column" = ? ORDER BY position ASC`)
+        .prepare(`SELECT * FROM kanban_cards WHERE company_session_id = ? AND "column" = ? AND archive_id IS NULL ORDER BY position ASC`)
         .all(sessionId, opts.column) as KanbanCard[];
     }
     return this.db
-      .prepare(`SELECT * FROM kanban_cards WHERE company_session_id = ? ORDER BY "column" ASC, position ASC`)
+      .prepare(`SELECT * FROM kanban_cards WHERE company_session_id = ? AND archive_id IS NULL ORDER BY "column" ASC, position ASC`)
       .all(sessionId) as KanbanCard[];
+  }
+
+  listArchivedKanbanCards(archiveId: number): KanbanCard[] {
+    return this.db
+      .prepare(`SELECT * FROM kanban_cards WHERE archive_id = ? ORDER BY "column" ASC, position ASC`)
+      .all(archiveId) as KanbanCard[];
   }
 
   listKanbanCardsFull(sessionId: number): KanbanCardFull[] {
@@ -835,4 +899,165 @@ export class CompanyStore {
       WHERE c.company_session_id = ?
     `).all(sessionId) as KanbanCard[];
   }
+
+  // ─── Session Archives (Reset) ──────────────────────────────────
+
+  /**
+   * Archive all currently-active conversation state for a session and
+   * flip it back to `idle`. After this call:
+   *   - `listAgentRuns`, `readBoard`, `listMasterPrompts` return empty
+   *     (the rows still exist but carry `archive_id` now).
+   *   - If `opts.includeKanban`, kanban_cards are archived too.
+   *   - Any agent_runs that were `running`/`waiting*`/`working` are
+   *     forced to `aborted` BEFORE stamping so the archive shows the
+   *     real outcome.
+   *   - Session status → `idle`, `master_session_id` cleared, so the
+   *     next `/start` creates a fresh master.
+   * The orchestrator eviction and sandbox teardown are done by the
+   * HTTP handler (see archives.ts); this method only touches the DB.
+   */
+  archiveCompanySession(
+    companySessionId: number,
+    opts: { reason?: string; includeKanban: boolean; includeSandbox: boolean },
+  ): CompanySessionArchive {
+    const tx = this.db.transaction(() => {
+      // 1. Create archive row.
+      const insert = this.db.prepare(`
+        INSERT INTO company_session_archives
+          (company_session_id, reason, included_kanban, included_sandbox, stats_json)
+        VALUES (?, ?, ?, ?, '{}')
+      `);
+      const r = insert.run(
+        companySessionId,
+        opts.reason ?? null,
+        opts.includeKanban ? 1 : 0,
+        opts.includeSandbox ? 1 : 0,
+      );
+      const archiveId = Number(r.lastInsertRowid);
+
+      // 2. Force still-live agent runs to 'aborted' first so the
+      //    archived snapshot reflects reality, not an impossible
+      //    "running" state for rows whose runner is already gone.
+      this.db.prepare(`
+        UPDATE company_agent_runs
+           SET status = 'aborted',
+               status_message = COALESCE(status_message, '') || ' [aborted by session reset]',
+               updated_at = datetime('now')
+         WHERE company_session_id = ?
+           AND archive_id IS NULL
+           AND status IN ('running','working','waiting','waiting_plan','waiting_question','waiting_tasks','reviewing','blocked','idle')
+      `).run(companySessionId);
+
+      // 3. Stamp archive_id on every active row that belongs to this
+      //    session's conversation state. ORDER of updates matters only
+      //    for referential clarity — all rows are independent.
+      const agentRunsCount = this.db.prepare(`
+        UPDATE company_agent_runs SET archive_id = ?
+        WHERE company_session_id = ? AND archive_id IS NULL
+      `).run(archiveId, companySessionId).changes;
+
+      const boardCount = this.db.prepare(`
+        UPDATE company_board SET archive_id = ?
+        WHERE company_session_id = ? AND archive_id IS NULL
+      `).run(archiveId, companySessionId).changes;
+
+      const masterPromptCount = this.db.prepare(`
+        UPDATE company_master_prompts SET archive_id = ?
+        WHERE company_session_id = ? AND archive_id IS NULL
+      `).run(archiveId, companySessionId).changes;
+
+      const kanbanCount = opts.includeKanban
+        ? this.db.prepare(`
+            UPDATE kanban_cards SET archive_id = ?
+            WHERE company_session_id = ? AND archive_id IS NULL
+          `).run(archiveId, companySessionId).changes
+        : 0;
+
+      // 4. Reset session to idle so /start can be called again. Keep
+      //    `template_id`, `config_json`, projects, sandboxes untouched.
+      this.db.prepare(`
+        UPDATE company_sessions
+           SET status = 'idle',
+               master_session_id = NULL,
+               updated_at = datetime('now')
+         WHERE id = ?
+      `).run(companySessionId);
+
+      // 5. Cache stats so the list endpoint is cheap.
+      const stats = {
+        agent_runs: agentRunsCount,
+        board_entries: boardCount,
+        master_prompts: masterPromptCount,
+        kanban_cards: kanbanCount,
+      };
+      this.db.prepare(`
+        UPDATE company_session_archives SET stats_json = ? WHERE id = ?
+      `).run(JSON.stringify(stats), archiveId);
+
+      return this.getArchive(archiveId)!;
+    });
+    return tx();
+  }
+
+  getArchive(id: number): CompanySessionArchive | null {
+    const row = this.db
+      .prepare('SELECT * FROM company_session_archives WHERE id = ?')
+      .get(id) as
+      | {
+          id: number;
+          company_session_id: number;
+          archived_at: string;
+          reason: string | null;
+          included_kanban: number;
+          included_sandbox: number;
+          stats_json: string;
+        }
+      | undefined;
+    if (!row) return null;
+    return mapArchiveRow(row);
+  }
+
+  listArchives(companySessionId: number): CompanySessionArchive[] {
+    const rows = this.db
+      .prepare(
+        'SELECT * FROM company_session_archives WHERE company_session_id = ? ORDER BY archived_at DESC, id DESC',
+      )
+      .all(companySessionId) as Array<{
+        id: number;
+        company_session_id: number;
+        archived_at: string;
+        reason: string | null;
+        included_kanban: number;
+        included_sandbox: number;
+        stats_json: string;
+      }>;
+    return rows.map(mapArchiveRow);
+  }
+}
+
+function mapArchiveRow(row: {
+  id: number;
+  company_session_id: number;
+  archived_at: string;
+  reason: string | null;
+  included_kanban: number;
+  included_sandbox: number;
+  stats_json: string;
+}): CompanySessionArchive {
+  let stats = { agent_runs: 0, board_entries: 0, master_prompts: 0, kanban_cards: 0 };
+  try {
+    const parsed = JSON.parse(row.stats_json);
+    stats = { ...stats, ...parsed };
+  } catch {
+    // fall back to zeros
+  }
+  return {
+    id: row.id,
+    company_session_id: row.company_session_id,
+    archived_at: row.archived_at,
+    reason: row.reason,
+    included_kanban: row.included_kanban === 1,
+    included_sandbox: row.included_sandbox === 1,
+    stats,
+  };
 }

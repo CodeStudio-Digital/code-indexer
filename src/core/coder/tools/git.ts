@@ -1,6 +1,6 @@
-import { spawnSync } from 'node:child_process';
 import type { CoderTool, ToolContext, ToolResult } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
+import { defaultLocalShellPort } from '../ports/shell-port.js';
 import {
   GIT_STATUS_DESC,
   GIT_DIFF_DESC,
@@ -11,13 +11,18 @@ import {
   maybeTerse,
 } from './descriptions.js';
 
-function git(args: string[], ctx: ToolContext): ToolResult {
-  const r = spawnSync('git', args, { cwd: ctx.cwd, encoding: 'utf-8' });
-  if (r.error) return err(`git ${args.join(' ')} failed to spawn: ${r.error.message}`);
+async function git(args: string[], ctx: ToolContext): Promise<ToolResult> {
+  const shell = ctx.ports?.shell ?? defaultLocalShellPort();
+  const r = await shell.run('git', args, { cwd: ctx.cwd, encoding: 'utf-8' });
+  // `run()` surfaces spawn errors via stderr+exitCode=null, matching the
+  // pre-refactor spawnSync branch that reported `r.error.message`.
+  if (r.exitCode === null && !r.stdout && r.stderr) {
+    return err(r.stderr);
+  }
   const out = (r.stdout ?? '').trim();
   const errOut = (r.stderr ?? '').trim();
-  if (r.status !== 0) {
-    return err([`git ${args.join(' ')} exited ${r.status}`, errOut, out].filter(Boolean).join('\n'));
+  if (r.exitCode !== 0) {
+    return err([`git ${args.join(' ')} exited ${r.exitCode}`, errOut, out].filter(Boolean).join('\n'));
   }
   return ok(out || '(no output)');
 }

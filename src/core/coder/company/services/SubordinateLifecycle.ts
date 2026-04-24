@@ -48,12 +48,68 @@ import type {
 export interface SpawnSubordinateSpec {
   role: string;
   task: string;
-  projectId: number;
+  /**
+   * Project id to run the subordinate in. Optional when the role has a
+   * single-project binding (`CompanyRoleConfig.projectIds.length === 1`):
+   * in that case the spawn auto-resolves to that project id. Required
+   * otherwise, and enforced against the role's `projectIds` (if any).
+   */
+  projectId?: number;
   provider?: string;
   model?: string;
   tier?: 'bootstrap' | 'navigate' | 'full';
   wait?: boolean;
   skills?: string[];
+  roleOverride?: string;
+}
+
+/**
+ * Resolve the effective project id for a spawn given the role's session
+ * bindings. Pure function — extracted so the four branches can be tested
+ * in isolation without spinning up the orchestrator, sandbox, and DB.
+ *
+ * Throws on invalid combinations with messages that name the allowed ids,
+ * because the tool wraps those errors into the master's `spawn_subordinate_agent`
+ * reply so it can autocorrect on retry.
+ */
+export function resolveSpawnProjectBinding(args: {
+  role: string;
+  specProjectId: number | undefined;
+  boundProjectIds: number[];
+}): number {
+  const { role, specProjectId, boundProjectIds } = args;
+  if (boundProjectIds.length === 0) {
+    if (typeof specProjectId !== 'number') {
+      throw new Error(
+        `Role '${role}' has no project binding — pass project_id explicitly. ` +
+          `Use list_company_projects to see available ids.`,
+      );
+    }
+    return specProjectId;
+  }
+  if (boundProjectIds.length === 1) {
+    if (typeof specProjectId !== 'number') return boundProjectIds[0];
+    if (!boundProjectIds.includes(specProjectId)) {
+      throw new Error(
+        `Role '${role}' is bound to project ${boundProjectIds[0]}; ` +
+          `project_id=${specProjectId} is not allowed. Omit project_id or delegate to a role bound to that project.`,
+      );
+    }
+    return specProjectId;
+  }
+  if (typeof specProjectId !== 'number') {
+    throw new Error(
+      `Role '${role}' is bound to multiple projects [${boundProjectIds.join(', ')}]. ` +
+        `Pass project_id to choose one.`,
+    );
+  }
+  if (!boundProjectIds.includes(specProjectId)) {
+    throw new Error(
+      `Role '${role}' is bound to projects [${boundProjectIds.join(', ')}]; ` +
+        `project_id=${specProjectId} is not allowed. Use one of the bound ids.`,
+    );
+  }
+  return specProjectId;
 }
 
 export interface SubordinateLifecycleDeps {
@@ -121,6 +177,41 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     return run ? (run.status as AgentRunStatus) : null;
   }
 
+  /**
+   * Pick the sandbox binding a subordinate should operate against.
+   *
+   * Microservice projects are linked to the session via
+   * `company_session_projects.label = serviceId`; each has its own
+   * container whose bind-mount is a distinct `data/virtual-projects/
+   * <uuid>` host dir. If a subordinate uses the primary master
+   * binding when its project is actually a secondary service, every
+   * `write_file` / `run_command` lands in the master's workdir —
+   * silently corrupting it while leaving the service workdir empty.
+   *
+   * Resolution:
+   *   project has label + that label has a live service binding
+   *     → use the service binding
+   *   otherwise (primary project, or service container not yet up)
+   *     → fall back to the master binding
+   */
+  private resolveBindingForProject(
+    projectId: number,
+  ): import('../types.js').SandboxBinding | null {
+    const orchestrator = this.deps.orchestratorRef as {
+      getSandboxBinding?: () => import('../types.js').SandboxBinding | null;
+      getSandboxServiceBinding?: (
+        serviceId: string,
+      ) => import('../types.js').SandboxBinding | null;
+    };
+    const project = this.deps.ctx.projects.find((p) => p.project_id === projectId);
+    const label = project?.label ?? null;
+    if (label && orchestrator.getSandboxServiceBinding) {
+      const svc = orchestrator.getSandboxServiceBinding(label);
+      if (svc) return svc;
+    }
+    return orchestrator.getSandboxBinding ? orchestrator.getSandboxBinding() : null;
+  }
+
   // ─── Spawn ──────────────────────────────────────────────────────
 
   async spawn(spec: SpawnSubordinateSpec): Promise<{
@@ -129,11 +220,34 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     status: AgentRunStatus;
   }> {
     const ctx = this.deps.ctx;
-    if (!ctx.projects.some((p) => p.project_id === spec.projectId)) {
+
+    // ── Project binding resolution ────────────────────────────────────
+    //
+    // Each role can declare `projectIds` in its session config (set via
+    // the "Agents per project" UI). The master is meant to think
+    // project-first: it sees Project → Roles and picks a role known to
+    // work on that project. We enforce the binding here so a wrong
+    // project id surfaces as a clear tool-level error instead of silently
+    // landing in the wrong workdir. See `resolveSpawnProjectBinding` for
+    // the (pure, unit-tested) branch logic.
+    const orchestratorForBinding = this.deps.orchestratorRef as unknown as {
+      getProjectIdsForRole?: (role: string) => number[];
+    };
+    const boundProjectIds = orchestratorForBinding.getProjectIdsForRole?.(spec.role) ?? [];
+    const projectId = resolveSpawnProjectBinding({
+      role: spec.role,
+      specProjectId: spec.projectId,
+      boundProjectIds,
+    });
+
+    if (!ctx.projects.some((p) => p.project_id === projectId)) {
       throw new Error(
-        `Project ${spec.projectId} is not linked to company session ${ctx.companySessionId}`,
+        `Project ${projectId} is not linked to company session ${ctx.companySessionId}`,
       );
     }
+    // Freeze the resolved id onto spec so the rest of the method stays
+    // unchanged (reads spec.projectId for session creation, etc.).
+    spec.projectId = projectId;
 
     // Concurrency cap — protects against unbounded parallel spawns.
     const check = this.concurrencyPolicy.check(this.runningIds.size);
@@ -150,8 +264,65 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     const config = loadConfig();
     const store = new SessionStore(config.dbPath);
 
-    const provider = spec.provider ?? 'anthropic';
-    const model = spec.model ?? 'claude-sonnet-4-6';
+    // Resolve (provider, model) with a priority chain:
+    //   1. spec explicit (master passed it to spawn_subordinate_agent)
+    //   2. pool default (allowed_models[is_default] || allowed_models[0])
+    //      when the caller is silent AND a pool exists
+    //   3. hardcoded legacy defaults
+    //
+    // Then, if a pool is configured, REJECT any (provider, model) not
+    // present — this is the enforcement that keeps the master from
+    // hallucinating model names when the operator has curated a list.
+    const orchestratorForPool = this.deps.orchestratorRef as unknown as {
+      getAllowedModels?: () => readonly import('../types.js').AllowedModel[];
+      getPoolDefault?: () => import('../types.js').AllowedModel | null;
+    };
+    const allowedModels = orchestratorForPool.getAllowedModels?.() ?? [];
+    const poolDefault = orchestratorForPool.getPoolDefault?.() ?? null;
+
+    let provider = spec.provider;
+    let model = spec.model;
+    if ((!provider || !model) && poolDefault) {
+      provider = provider ?? poolDefault.provider;
+      model = model ?? poolDefault.model;
+    }
+    // Last-resort fallback: inherit from the MASTER's provider/model
+    // rather than the hardcoded anthropic/sonnet. This prevents the
+    // "master is zai but subordinates spawn anthropic" mismatch when
+    // the operator configured neither a template role nor a model pool.
+    if (!provider || !model) {
+      try {
+        const masterRun = ctx.companyStore
+          .listAgentRuns(ctx.companySessionId)
+          .filter((r) => r.role === 'master')
+          .pop();
+        if (masterRun) {
+          provider = provider ?? masterRun.provider;
+          model = model ?? masterRun.model;
+        }
+      } catch {
+        // fall through to the legacy hardcode on any failure — never
+        // block a spawn just because the master lookup glitched.
+      }
+    }
+    provider = provider ?? 'anthropic';
+    model = model ?? 'claude-sonnet-4-6';
+
+    if (allowedModels.length > 0) {
+      const matched = allowedModels.some(
+        (a) => a.provider === provider && a.model === model,
+      );
+      if (!matched) {
+        const options = allowedModels
+          .map((a) => `${a.provider}/${a.model}${a.is_default ? ' (default)' : ''}`)
+          .join(', ');
+        throw new Error(
+          `Model '${provider}/${model}' is not in this session's allowed_models pool. ` +
+            `Retry with one of: ${options}.`,
+        );
+      }
+    }
+
     const project = ctx.db.getProject(spec.projectId);
     const projectName = project?.name ?? `project-${spec.projectId}`;
 
@@ -198,6 +369,14 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       model,
     });
 
+    const subordinateBinding = this.resolveBindingForProject(spec.projectId);
+    const subordinateLabel =
+      this.deps.ctx.projects.find((p) => p.project_id === spec.projectId)?.label ?? null;
+    const subordinateStack = (
+      this.deps.orchestratorRef as unknown as {
+        getSandboxStackForService?: (serviceId?: string | null) => string | null;
+      }
+    ).getSandboxStackForService?.(subordinateLabel) ?? 'react-ts';
     const companyContext: CompanyContext = {
       orchestrator: this.deps.orchestratorRef as never,
       companySessionId: ctx.companySessionId,
@@ -205,6 +384,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       agentRunId: agentRun.id,
       allowedProjectIds: [spec.projectId],
       isMaster: false,
+      sandbox: subordinateBinding ?? undefined,
     };
 
     const subordinateBlock = buildSubordinateCompanyBlock({
@@ -214,6 +394,25 @@ export class SubordinateLifecycle implements ISubordinateQuery {
         name: projectName,
         rootPath: project?.root_path ?? '',
       }],
+      builder: subordinateBinding
+        ? {
+            workdir: subordinateBinding.workdir,
+            stack: subordinateStack,
+            previewUrl: subordinateBinding.previewUrl,
+            peers: (this.deps.orchestratorRef as unknown as {
+              listSandboxPeers?: (
+                selfServiceId?: string | null,
+              ) => Array<{
+                serviceId: string;
+                stack: string;
+                internalUrl: string;
+                previewUrl: string;
+                isSelf: boolean;
+              }>;
+            }).listSandboxPeers?.(subordinateBinding.serviceId ?? subordinateLabel) ?? undefined,
+          }
+        : undefined,
+      overridePrompt: spec.roleOverride,
     });
 
     const handle = await runCoder({
@@ -223,6 +422,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       profile: spec.tier ?? 'navigate',
       companyContext,
       companyPromptBlock: subordinateBlock,
+      companyRoleOverride: spec.roleOverride,
     } as RunCoderOptions & { companyPromptBlock: string });
 
     this.wireInterceptions(handle, agentRun.id, spec.role);
@@ -257,7 +457,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
 
   // ─── Resume ─────────────────────────────────────────────────────
 
-  async resume(agentRunId: number, message?: string): Promise<{
+  async resume(agentRunId: number, message?: string, roleOverride?: string): Promise<{
     agentRunId: number;
     coderSessionId: number;
     status: AgentRunStatus;
@@ -281,6 +481,23 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     const projectId = projectIds[0];
     const project = ctx.db.getProject(projectId);
 
+    // Re-read the sandbox binding at resume time, not at spawn time.
+    // A subordinate pauses between turns (submit_plan, ask_user, submit_tasks);
+    // each resume is a fresh `runCoder` call whose `companyContext.sandbox`
+    // must point at the CURRENT container. If we omitted this, runCoder
+    // would fall back to LocalFilesystemAdapter and writes would land on
+    // the host virtual-project dir instead of `/app` in the sandbox —
+    // exactly the bug that made the preview pane keep showing the Vite
+    // default template.
+    const resumeBinding = this.resolveBindingForProject(projectId);
+    const resumeLabel =
+      this.deps.ctx.projects.find((p) => p.project_id === projectId)?.label ?? null;
+    const resumeStack = (
+      this.deps.orchestratorRef as unknown as {
+        getSandboxStackForService?: (serviceId?: string | null) => string | null;
+      }
+    ).getSandboxStackForService?.(resumeLabel) ?? 'react-ts';
+
     const companyContext: CompanyContext = {
       orchestrator: this.deps.orchestratorRef as never,
       companySessionId: ctx.companySessionId,
@@ -288,6 +505,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       agentRunId: agentRun.id,
       allowedProjectIds: projectIds,
       isMaster: false,
+      sandbox: resumeBinding ?? undefined,
     };
 
     const subordinateBlock = buildSubordinateCompanyBlock({
@@ -297,6 +515,25 @@ export class SubordinateLifecycle implements ISubordinateQuery {
         name: project?.name ?? `project-${projectId}`,
         rootPath: project?.root_path ?? '',
       }],
+      builder: resumeBinding
+        ? {
+            workdir: resumeBinding.workdir,
+            stack: resumeStack,
+            previewUrl: resumeBinding.previewUrl,
+            peers: (this.deps.orchestratorRef as unknown as {
+              listSandboxPeers?: (
+                selfServiceId?: string | null,
+              ) => Array<{
+                serviceId: string;
+                stack: string;
+                internalUrl: string;
+                previewUrl: string;
+                isSelf: boolean;
+              }>;
+            }).listSandboxPeers?.(resumeBinding.serviceId ?? resumeLabel) ?? undefined,
+          }
+        : undefined,
+      overridePrompt: roleOverride,
     });
 
     const resumeMessage = message ?? 'Continue your task from where you left off. Check the board for context.';
@@ -311,6 +548,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
         maxTurns: 50,
         companyContext,
         companyPromptBlock: subordinateBlock,
+        companyRoleOverride: roleOverride,
       } as RunCoderOptions & { companyPromptBlock: string });
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
@@ -433,6 +671,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     errorDetail: string | null,
   ): void {
     this.deps.status.setStatus(agentRunId, 'error', `Ended: ${summary}`);
+    this.runningIds.delete(agentRunId);
     this.deps.attention.signal({ kind: 'finished', agentRunId, role });
     this.deps.board.post('system', agentRunId, 'message', `@${role} ${summary}`);
 
@@ -478,6 +717,33 @@ export class SubordinateLifecycle implements ISubordinateQuery {
 
   // ─── Internal: wiring helpers ───────────────────────────────────
 
+  private readFinalAssistantText(sessionId: number): string | null {
+    try {
+      const config = loadConfig();
+      const store = new SessionStore(config.dbPath);
+      try {
+        const loaded = store.loadSessionMessagesTail(sessionId, 3);
+        if (!loaded) return null;
+        for (let i = loaded.messages.length - 1; i >= 0; i--) {
+          const msg = loaded.messages[i];
+          if (msg.role !== 'assistant') continue;
+          const text = msg.content
+            .filter((b): b is { type: 'text'; text: string } =>
+              (b as { type?: string }).type === 'text')
+            .map((b) => b.text)
+            .join('\n')
+            .trim();
+          if (text) return text;
+        }
+        return null;
+      } finally {
+        store.close();
+      }
+    } catch {
+      return null;
+    }
+  }
+
   private wireInterceptions(handle: RunCoderHandle, agentRunId: number, role: string): void {
     this.deps.humanInLoop.wireSubordinatePlan(handle, agentRunId, role);
     this.deps.humanInLoop.wireSubordinateQuestion(handle, agentRunId, role);
@@ -498,13 +764,21 @@ export class SubordinateLifecycle implements ISubordinateQuery {
         if (reason === 'completed') {
           this.retryPolicy.clear(agentRunId);
           this.deps.status.setStatus(agentRunId, 'waiting', 'Task done. Ready for next task.');
+          this.runningIds.delete(agentRunId);
           this.deps.attention.signal({ kind: 'finished', agentRunId, role });
           this.deps.board.post('system', agentRunId, 'deliverable',
             `@${role}${resumedTag} finished task. Status: **waiting** for next instructions.`);
+
+          const finalText = this.readFinalAssistantText(handle.session.id);
+          const finalBlock = finalText
+            ? `\n\n--- Final message from @${role} ---\n${finalText}`
+            : `\n\n--- Final message from @${role} ---\n(no final assistant text message)`;
+
           this.deps.master.notify(
             `[SYSTEM] @${role} (agent_run_id=${agentRunId}${resumedTag}) completed and is WAITING. ` +
             `Use forward_to_agent to give it another task (keeps full context), ` +
-            `or spawn_subordinate_agent for unrelated work.`,
+            `or spawn_subordinate_agent for unrelated work.` +
+            finalBlock,
           );
           try {
             const cardId = this.deps.kanban.findCardForAgent(agentRunId);

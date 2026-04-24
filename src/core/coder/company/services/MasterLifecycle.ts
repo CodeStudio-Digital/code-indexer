@@ -16,9 +16,10 @@
 import { runCoder, type RunCoderOptions, type RunCoderHandle } from '../../index.js';
 import { createCoderProvider } from '../../../providers/factory.js';
 import { SessionStore } from '../../sessions/store.js';
+import { SkillStore } from '../../../../store/skill-store.js';
 import { loadConfig } from '../../../../utils/config.js';
 import { buildMasterCompanyBlock } from '../system-prompts.js';
-import type { CompanyContext } from '../types.js';
+import type { AllowedModel, CompanyContext } from '../types.js';
 import type { SessionContext } from './SessionContext.js';
 import type { HumanInTheLoop } from './HumanInTheLoop.js';
 import type {
@@ -36,6 +37,14 @@ export type RoleConfig = {
   tier: string;
   projectHints?: string[];
   skills?: string[];
+  systemPromptOverride?: string;
+  /**
+   * Concrete project ids this role is bound to in THIS session.
+   * Set via the "Agents per project" UI; used by `SubordinateLifecycle.spawn`
+   * for auto-resolve (when length === 1) and enforcement (rejects spawns to
+   * project ids outside this list).
+   */
+  projectIds?: number[];
 };
 
 export interface MasterLifecycleDeps {
@@ -58,6 +67,13 @@ export class MasterLifecycle implements IMasterNotifier {
   private _promptBlock = '';
 
   private _roleConfigs: RoleConfig[] = [];
+  /**
+   * Curated pool of (provider, model) tuples the master is allowed to
+   * spawn subordinates with. Loaded from `CompanySession.config_json`
+   * on start()/resumeExisting(). Empty = no restriction (backward
+   * compat for sessions that predate this feature).
+   */
+  private _allowedModels: AllowedModel[] = [];
 
   /** Flag consumed by IdleController to trigger auto-continue. */
   private _shouldContinue = false;
@@ -94,9 +110,70 @@ export class MasterLifecycle implements IMasterNotifier {
     this._roleConfigs = configs;
   }
 
-  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: string[] } | null {
+  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: string[]; systemPromptOverride?: string; projectIds?: number[] } | null {
     const cfg = this._roleConfigs.find((r) => r.role === role);
-    return cfg ? { provider: cfg.provider, model: cfg.model, tier: cfg.tier, skills: cfg.skills } : null;
+    return cfg ? { provider: cfg.provider, model: cfg.model, tier: cfg.tier, skills: cfg.skills, systemPromptOverride: cfg.systemPromptOverride, projectIds: cfg.projectIds } : null;
+  }
+
+  /** Current allowed-models pool. Empty array = no restriction. */
+  getAllowedModels(): readonly AllowedModel[] {
+    return this._allowedModels;
+  }
+
+  /**
+   * When the master calls spawn without explicit provider/model AND the
+   * role isn't in the template, pick a sensible default from the pool:
+   *   1. Entry marked `is_default: true`
+   *   2. First entry
+   *   3. null when the pool is empty (caller falls back to hardcoded)
+   */
+  getPoolDefault(): AllowedModel | null {
+    if (this._allowedModels.length === 0) return null;
+    return (
+      this._allowedModels.find((m) => m.is_default) ??
+      this._allowedModels[0] ??
+      null
+    );
+  }
+
+  /**
+   * Parse `CompanySession.config_json` and populate `_roleConfigs`
+   * (legacy field) + `_allowedModels` (new). Called from start() and
+   * resumeExisting() so the master sees the same constraints across
+   * a server restart.
+   */
+  private loadConfigFromDb(): void {
+    const ctx = this.deps.ctx;
+    const row = ctx.companyStore.getCompanySession(ctx.companySessionId);
+    if (!row?.config_json) return;
+    try {
+      const cfg = JSON.parse(row.config_json) as {
+        role_assignments?: RoleConfig[];
+        allowed_models?: AllowedModel[];
+      };
+      if (Array.isArray(cfg.allowed_models)) {
+        this._allowedModels = cfg.allowed_models.filter(
+          (m) => typeof m.provider === 'string' && typeof m.model === 'string',
+        );
+      }
+      // Merge DB-persisted role_assignments with whatever opts provided.
+      // opts.roleConfigs (set before this call) wins for roles present in
+      // both, but DB-only roles are kept — covers the case where a template
+      // was configured but stream.ts was given a subset.
+      if (Array.isArray(cfg.role_assignments) && cfg.role_assignments.length > 0) {
+        const seen = new Set(this._roleConfigs.map((r) => r.role));
+        for (const r of cfg.role_assignments) {
+          if (r && typeof r.role === 'string' && !seen.has(r.role)) {
+            this._roleConfigs.push(r);
+            seen.add(r.role);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(
+        `[master] config_json parse failed for session=${ctx.companySessionId}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   // ─── Notifications ──────────────────────────────────────────────
@@ -179,9 +256,39 @@ export class MasterLifecycle implements IMasterNotifier {
     });
     this._agentRunId = masterRun.id;
     this._roleConfigs = (opts.roleConfigs ?? []) as RoleConfig[];
+    // Populate `_allowedModels` from the persisted session config. Must
+    // happen before any `spawn_subordinate_agent` call, so we do it
+    // here (start + resume) alongside role configs.
+    this.loadConfigFromDb();
 
     ctx.companyStore.setMasterSessionId(ctx.companySessionId, masterSession.id);
     ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'running');
+
+    const masterRoleConfig = opts.roleConfigs?.find((r) => r.role === 'master');
+    if (masterRoleConfig?.skills && masterRoleConfig.skills.length > 0) {
+      try {
+        const skillStore = new SkillStore(config.dbPath);
+        const allSkills = skillStore.resolveActiveSkills(masterSession.id, primaryProjectId);
+        for (const skill of allSkills) {
+          skillStore.setSessionSkillEnabled(masterSession.id, skill.id, masterRoleConfig.skills.includes(skill.id));
+        }
+        skillStore.close();
+      } catch (e) {
+        console.warn(`[company] Failed to configure skills for master: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    // Builder mode: provision the sandbox BEFORE runCoder so the binding
+    // can be woven into the master's CompanyContext. For non-builder
+    // sessions this call is a no-op that returns null (the SandboxService
+    // inspects `config_json.builder` and bails out cleanly).
+    const orchestrator = this.deps.orchestratorRef as unknown as {
+      provisionSandboxIfNeeded?: (signal?: AbortSignal) => Promise<import('../types.js').SandboxBinding | null>;
+      getSandboxStackForService?: (serviceId?: string | null) => string | null;
+    };
+    const sandboxBinding = orchestrator.provisionSandboxIfNeeded
+      ? await orchestrator.provisionSandboxIfNeeded(opts.signal)
+      : null;
 
     const companyContext: CompanyContext = {
       orchestrator: this.deps.orchestratorRef as never,
@@ -190,6 +297,7 @@ export class MasterLifecycle implements IMasterNotifier {
       agentRunId: masterRun.id,
       allowedProjectIds: ctx.projects.map((p) => p.project_id),
       isMaster: true,
+      sandbox: sandboxBinding ?? undefined,
     };
 
     const projectInfos = ctx.projects.map((p) => {
@@ -205,6 +313,19 @@ export class MasterLifecycle implements IMasterNotifier {
     const promptBlock = buildMasterCompanyBlock({
       roster: opts.roleConfigs ?? [],
       projects: projectInfos,
+      // Builder-mode awareness: tell the master it's running inside a
+      // sandbox AND which files are MCP-managed (vite.config.ts) so it
+      // doesn't overwrite them during delegation planning.
+      builder: sandboxBinding
+        ? {
+            workdir: sandboxBinding.workdir,
+            stack: orchestrator.getSandboxStackForService?.() ?? 'react-ts',
+            previewUrl: sandboxBinding.previewUrl,
+          }
+        : undefined,
+      // Curated pool — when non-empty, the master prompt gains a strict
+      // "ALLOWED SUBORDINATE MODELS" section + tool rejection guidance.
+      allowedModels: this._allowedModels.length > 0 ? this._allowedModels : undefined,
     });
 
     this._companyContext = companyContext;
@@ -249,9 +370,44 @@ export class MasterLifecycle implements IMasterNotifier {
 
     this._agentRunId = masterRun.id;
     this._roleConfigs = (opts.roleConfigs ?? []) as RoleConfig[];
+    // Populate `_allowedModels` from the persisted session config. Must
+    // happen before any `spawn_subordinate_agent` call, so we do it
+    // here (start + resume) alongside role configs.
+    this.loadConfigFromDb();
 
     ctx.companyStore.updateAgentRunStatus(masterRun.id, 'running');
     ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'running');
+
+    const masterRoleConfigResume = opts.roleConfigs?.find((r) => r.role === 'master');
+    if (masterRoleConfigResume?.skills && masterRoleConfigResume.skills.length > 0) {
+      const resumeConfig = loadConfig();
+      const primaryProjectIdResume = ctx.projects[0]?.project_id;
+      if (primaryProjectIdResume) {
+        try {
+          const skillStore = new SkillStore(resumeConfig.dbPath);
+          const allSkills = skillStore.resolveActiveSkills(masterRun.coder_session_id, primaryProjectIdResume);
+          for (const skill of allSkills) {
+            skillStore.setSessionSkillEnabled(masterRun.coder_session_id, skill.id, masterRoleConfigResume.skills.includes(skill.id));
+          }
+          skillStore.close();
+        } catch (e) {
+          console.warn(`[company] Failed to configure skills for master (resume): ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    }
+
+    // Same builder-provisioning hook as `start()` — resumes that were
+    // kicked off in builder mode get their sandbox re-provisioned here
+    // (the manager's in-memory state is lost on API restart, so the
+    // container is rebuilt fresh; persisting workdir contents across
+    // restarts is a Phase 5 item).
+    const orchestratorResume = this.deps.orchestratorRef as unknown as {
+      provisionSandboxIfNeeded?: () => Promise<import('../types.js').SandboxBinding | null>;
+      getSandboxStackForService?: (serviceId?: string | null) => string | null;
+    };
+    const sandboxBindingResume = orchestratorResume.provisionSandboxIfNeeded
+      ? await orchestratorResume.provisionSandboxIfNeeded()
+      : null;
 
     const companyContext: CompanyContext = {
       orchestrator: this.deps.orchestratorRef as never,
@@ -260,6 +416,7 @@ export class MasterLifecycle implements IMasterNotifier {
       agentRunId: masterRun.id,
       allowedProjectIds: ctx.projects.map((p) => p.project_id),
       isMaster: true,
+      sandbox: sandboxBindingResume ?? undefined,
     };
 
     const projectInfos = ctx.projects.map((p) => {
@@ -275,6 +432,14 @@ export class MasterLifecycle implements IMasterNotifier {
     const promptBlock = buildMasterCompanyBlock({
       roster: opts.roleConfigs ?? [],
       projects: projectInfos,
+      builder: sandboxBindingResume
+        ? {
+            workdir: sandboxBindingResume.workdir,
+            stack: orchestratorResume.getSandboxStackForService?.() ?? 'react-ts',
+            previewUrl: sandboxBindingResume.previewUrl,
+          }
+        : undefined,
+      allowedModels: this._allowedModels.length > 0 ? this._allowedModels : undefined,
     });
 
     this._companyContext = companyContext;

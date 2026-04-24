@@ -1,11 +1,22 @@
-import { spawn } from 'node:child_process';
-import { resolve, isAbsolute, relative } from 'node:path';
 import type { CoderTool, ToolContext, ToolResult } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
 import { RUN_COMMAND_DESC, maybeTerse } from './descriptions.js';
+import { defaultLocalShellPort, type IShellPort } from '../ports/shell-port.js';
+import { pathFor } from './paths.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_BYTES = 100_000;
+
+/**
+ * Resolve the shell port for a tool invocation. Falls back to the
+ * process-wide local adapter when no port is wired. The local adapter's
+ * `exec()` preserves the exact behavior of the pre-refactor `runCommand()`:
+ * same shell (bash on POSIX, cmd on Windows), same SIGKILL on timeout/abort,
+ * same per-stream byte cap.
+ */
+function shellPort(ctx: ToolContext): IShellPort {
+  return ctx.ports?.shell ?? defaultLocalShellPort();
+}
 
 /**
  * Plan-mode read-only allowlist for run_command. When the user has plan
@@ -92,61 +103,9 @@ function isReadOnlyCommand(cmd: string): { ok: true } | { ok: false; reason: str
   return { ok: false, reason: `'${head}' is not in the read-only command allowlist` };
 }
 
-interface RunResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  timedOut: boolean;
-}
-
-function runCommand(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<RunResult> {
-  return new Promise((resolvePromise) => {
-    const isWin = process.platform === 'win32';
-    const child = spawn(command, {
-      cwd,
-      shell: isWin ? true : '/bin/bash',
-      env: process.env,
-    });
-
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-    let killed = false;
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killed = true;
-      child.kill('SIGKILL');
-    }, timeoutMs);
-
-    const onAbort = () => {
-      killed = true;
-      child.kill('SIGKILL');
-    };
-    signal?.addEventListener('abort', onAbort);
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      if (stdout.length < MAX_OUTPUT_BYTES) {
-        stdout += chunk.toString('utf-8');
-      }
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      if (stderr.length < MAX_OUTPUT_BYTES) {
-        stderr += chunk.toString('utf-8');
-      }
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', onAbort);
-      resolvePromise({ stdout, stderr, exitCode: killed ? null : code, timedOut });
-    });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', onAbort);
-      resolvePromise({ stdout, stderr: stderr + (e instanceof Error ? e.message : String(e)), exitCode: null, timedOut });
-    });
-  });
-}
+// The concrete streaming/timeout/abort loop lives in LocalShellAdapter.exec().
+// The tool layer only owns policy (plan-mode gate, cwd validation, output
+// formatting). See ../ports/shell-port.ts for implementation invariants.
 
 function truncate(s: string, max = MAX_OUTPUT_BYTES): string {
   return s.length > max ? s.slice(0, max) + `\n... [truncated, ${s.length - max} bytes omitted]` : s;
@@ -187,16 +146,22 @@ const runCommandTool: CoderTool = {
     let cwd = ctx.cwd;
     if (args.cwd) {
       const sub = String(args.cwd);
-      const abs = isAbsolute(sub) ? sub : resolve(ctx.cwd, sub);
-      const rel = relative(ctx.cwd, abs);
-      if (rel.startsWith('..') || isAbsolute(rel)) {
+      const p = pathFor(ctx.cwd);
+      const abs = p.isAbsolute(sub) ? sub : p.resolve(ctx.cwd, sub);
+      const rel = p.relative(ctx.cwd, abs);
+      if (rel.startsWith('..') || p.isAbsolute(rel)) {
         return err(`cwd '${sub}' is outside project root`);
       }
       cwd = abs;
     }
 
     const timeout = typeof args.timeout_ms === 'number' ? args.timeout_ms : DEFAULT_TIMEOUT_MS;
-    const result = await runCommand(command, cwd, timeout, ctx.signal);
+    const result = await shellPort(ctx).exec(command, {
+      cwd,
+      timeoutMs: timeout,
+      signal: ctx.signal,
+      maxOutputBytes: MAX_OUTPUT_BYTES,
+    });
 
     const lines: string[] = [];
     lines.push(`$ ${command}`);

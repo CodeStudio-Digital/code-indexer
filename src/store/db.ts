@@ -107,6 +107,16 @@ export class CodeIndexDB {
     return getSchemaVersion(this.db);
   }
 
+  /**
+   * Expose the underlying better-sqlite3 handle for stores that need
+   * direct prepared-statement access (e.g. CompanySandboxStore). Avoids
+   * re-opening the same file from a second `new Database()` which would
+   * cause lock contention and WAL mode confusion.
+   */
+  raw(): DB {
+    return this.db;
+  }
+
   close(): void {
     this.db.close();
   }

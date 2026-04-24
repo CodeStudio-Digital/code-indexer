@@ -47,6 +47,8 @@ import { IdleController } from './services/IdleController.js';
 import { SubordinateLifecycle, type SpawnSubordinateSpec } from './services/SubordinateLifecycle.js';
 import { MasterLifecycle, type RoleConfig } from './services/MasterLifecycle.js';
 import { MasterAttention, type AttentionListener } from './services/MasterAttention.js';
+import { SandboxService } from './services/SandboxService.js';
+import type { SandboxBinding } from './types.js';
 
 export type { SpawnSubordinateSpec };
 
@@ -71,6 +73,8 @@ export class CompanyOrchestrator {
   private readonly board: BoardBridge;
   private readonly status: AgentStatusUpdater;
   private readonly attention: MasterAttention;
+  /** Builder-mode sandbox bridge. Dormant when the session has no `builder` config. */
+  readonly sandboxService: SandboxService;
   // These four have a small construction cycle (Master ↔ HumanInTheLoop,
   // Subordinates ↔ Idle); they're assigned inside the constructor body.
   private readonly humanInLoop!: HumanInTheLoop;
@@ -91,6 +95,10 @@ export class CompanyOrchestrator {
 
     this.publisher = new MetaBusPublisher(this.metaBus);
     this.wirer = new MetaBusWirer(this.publisher);
+    // Dormant for non-builder sessions. `provisionIfNeeded` inspects
+    // `CompanySession.config_json` and returns null when `builder` is
+    // absent — so existing sessions feel zero overhead.
+    this.sandboxService = new SandboxService(this.ctx, this.publisher);
     this.kanban = new KanbanService(this.ctx, this.publisher);
     this.board = new BoardBridge(this.ctx, this.publisher, this.kanban);
     this.status = new AgentStatusUpdater(this.ctx, this.publisher);
@@ -212,12 +220,95 @@ export class CompanyOrchestrator {
     this.master.updateRoleConfigs(roleConfigs);
   }
 
+  /**
+   * Apply a partial config patch to a running session and persist it.
+   * Reuses `updateRoleConfigs` for the runtime propagation of
+   * role_assignments, then merges the new values into `config_json` so
+   * a server restart surfaces the edit. Skills and allowed_models do
+   * not require a restart — they affect future subordinate spawns
+   * (which read the pool from the session row on each `spawn_subordinate_agent`
+   * call) and the master's rendered roster on its next refresh.
+   *
+   * `role_assignments` is the authoritative update path for running
+   * agents; swapping provider/model for already-spawned subordinates is
+   * still done via `master.swapProvider` / the in-memory master API.
+   */
+  applyConfigPatch(patch: {
+    role_assignments?: RoleConfig[];
+    skills?: Record<string, string[]>;
+    allowed_models?: import('./types.js').AllowedModel[];
+  }): void {
+    const sessionId = this.ctx.companySessionId;
+    const row = this.ctx.companyStore.getCompanySession(sessionId);
+    if (!row) throw new Error(`Company session ${sessionId} not found`);
+    let cfg: Record<string, unknown> = {};
+    try {
+      cfg = JSON.parse(row.config_json || '{}');
+    } catch {
+      cfg = {};
+    }
+    if (patch.role_assignments) cfg.role_assignments = patch.role_assignments;
+    if (patch.skills) cfg.skills = patch.skills;
+    if (patch.allowed_models) cfg.allowed_models = patch.allowed_models;
+    this.ctx.companyStore.updateCompanySessionConfig(sessionId, JSON.stringify(cfg));
+
+    if (patch.role_assignments) {
+      this.master.updateRoleConfigs(patch.role_assignments);
+    }
+    this.publisher.publish('session.config_updated', {
+      company_session_id: sessionId,
+      keys: Object.keys(patch),
+      at: Date.now(),
+    });
+  }
+
   sendMessageToMaster(message: string): boolean {
     return this.master.sendUserMessage(message);
   }
 
-  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: string[] } | null {
+  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: string[]; systemPromptOverride?: string; projectIds?: number[] } | null {
     return this.master.getRoleDefaults(role);
+  }
+
+  /**
+   * Project-first view: for a given project id, returns the roles bound to
+   * it via `CompanyRoleConfig.projectIds`. Used by the master prompt to
+   * render the "Project → Roles" section and by consumers that want to
+   * think project-first ("who works here?") instead of role-first.
+   */
+  getRolesForProject(projectId: number): string[] {
+    return this.master.roleConfigs
+      .filter((r) => Array.isArray(r.projectIds) && r.projectIds.includes(projectId))
+      .map((r) => r.role);
+  }
+
+  /**
+   * Project bindings for a role in this session. Returns an empty array
+   * when the role has no bindings (legacy free-form behaviour).
+   */
+  getProjectIdsForRole(role: string): number[] {
+    const entry = this.master.roleConfigs.find((r) => r.role === role);
+    return Array.isArray(entry?.projectIds) ? [...entry!.projectIds] : [];
+  }
+
+  /**
+   * Curated pool of (provider, model) tuples the master is allowed to
+   * spawn subordinates with. Consulted by `SubordinateLifecycle.spawn`
+   * as a guard and rendered in the master's prompt. Empty = no
+   * restriction (session predates the feature or operator left it off).
+   */
+  getAllowedModels(): readonly import('./types.js').AllowedModel[] {
+    return this.master.getAllowedModels();
+  }
+
+  /**
+   * Default (provider, model) pair the master should use when it
+   * spawns WITHOUT specifying one and the role isn't in the template.
+   * Returns null when the pool is empty — caller falls back to the
+   * historical hardcoded defaults.
+   */
+  getPoolDefault(): import('./types.js').AllowedModel | null {
+    return this.master.getPoolDefault();
   }
 
   // ─── Subordinate lifecycle ──────────────────────────────────────
@@ -235,7 +326,9 @@ export class CompanyOrchestrator {
     coderSessionId: number;
     status: AgentRunStatus;
   }> {
-    return this.subordinates.resume(agentRunId, message);
+    const agentRun = this.ctx.companyStore.getAgentRun(agentRunId);
+    const roleOverride = agentRun ? this.master.getRoleDefaults(agentRun.role)?.systemPromptOverride : undefined;
+    return this.subordinates.resume(agentRunId, message, roleOverride);
   }
 
   async reactivateSubordinate(agentRunId: number, message: string): Promise<boolean> {
@@ -377,7 +470,103 @@ export class CompanyOrchestrator {
 
   // ─── Shutdown ──────────────────────────────────────────────────
 
-  abortAll(): void {
+  /**
+   * Returns the active builder sandbox binding for this session, or null
+   * when the session runs in traditional mode. Master/Subordinate
+   * lifecycles read this to enrich their `CompanyContext`.
+   */
+  getSandboxBinding(): SandboxBinding | null {
+    return this.sandboxService.getBinding();
+  }
+
+  /**
+   * Returns the secondary-service binding for `serviceId`, or null when
+   * this session has no service by that id. Subordinates working on a
+   * microservice project MUST use this instead of `getSandboxBinding`
+   * (which returns the primary/master container) — otherwise their
+   * tool writes land in the master's workdir rather than the service's
+   * own bind-mounted host dir.
+   */
+  getSandboxServiceBinding(serviceId: string): SandboxBinding | null {
+    return this.sandboxService.getServiceBinding(serviceId);
+  }
+
+  /**
+   * Stack name for the prompt builders. When `serviceId` is given and
+   * the session is multi-container, returns that service's configured
+   * stack; otherwise returns the primary/legacy stack. `null` when the
+   * session isn't in builder mode.
+   */
+  getSandboxStackForService(serviceId?: string | null): string | null {
+    return this.sandboxService.getStackForService(serviceId ?? null);
+  }
+
+  /**
+   * Snapshot of all sandbox containers alive on this session (primary +
+   * secondaries) annotated with the `internalUrl` siblings use to reach
+   * each other on the shared docker network. Used by both the
+   * system-prompt builder (so every subordinate knows which peers
+   * exist) and the read-only `list_services` tool. `selfServiceId`
+   * marks the caller's own container — pass `null` when no particular
+   * service is "self" (e.g. master perspective).
+   *
+   * The internal port matches the dev-server convention (5173 by
+   * default; MCP_SANDBOX_DEV_PORT overrides). Hostname is the
+   * service_id — `main` for the primary legacy/multi service.
+   */
+  listSandboxPeers(
+    selfServiceId?: string | null,
+  ): Array<{
+    serviceId: string;
+    stack: string;
+    internalUrl: string;
+    previewUrl: string;
+    isSelf: boolean;
+  }> {
+    const devPort = Number(process.env.MCP_SANDBOX_DEV_PORT ?? 5173);
+    const peers: Array<{
+      serviceId: string;
+      stack: string;
+      internalUrl: string;
+      previewUrl: string;
+      isSelf: boolean;
+    }> = [];
+    const primary = this.sandboxService.getBinding();
+    if (primary) {
+      const id = primary.serviceId ?? 'main';
+      peers.push({
+        serviceId: id,
+        stack: this.sandboxService.getStackForService(null) ?? 'unknown',
+        internalUrl: `http://${id}:${devPort}`,
+        previewUrl: primary.previewUrl,
+        isSelf: (selfServiceId ?? 'main') === id,
+      });
+    }
+    for (const { serviceId, binding } of this.sandboxService.listServiceBindings()) {
+      peers.push({
+        serviceId,
+        stack: this.sandboxService.getStackForService(serviceId) ?? 'unknown',
+        internalUrl: `http://${serviceId}:${devPort}`,
+        previewUrl: binding.previewUrl,
+        isSelf: (selfServiceId ?? null) === serviceId,
+      });
+    }
+    return peers;
+  }
+
+  /**
+   * Provision the sandbox on demand. Safe to call multiple times — the
+   * service is idempotent. Meant to be called by `MasterLifecycle.start`
+   * before `runCoder` so the binding is available to weave into the
+   * master's (and subsequently subordinates') `CompanyContext`.
+   */
+  async provisionSandboxIfNeeded(signal?: AbortSignal): Promise<SandboxBinding | null> {
+    return await this.sandboxService.provisionIfNeeded({ signal });
+  }
+
+  abortAll(opts: { teardownSandbox?: boolean; finalStatus?: 'error' | 'idle' } = {}): void {
+    const teardownSandbox = opts.teardownSandbox ?? true;
+    const finalStatus = opts.finalStatus ?? 'error';
     this.ctx.markAborted();
     this.idle.clear();
     this.subordinates.abortAll();
@@ -386,8 +575,15 @@ export class CompanyOrchestrator {
       this.humanInLoop.cancelPendingMasterPrompts();
     } catch { /* best-effort */ }
     try {
-      this.ctx.companyStore.updateCompanySessionStatus(this.companySessionId, 'error');
+      this.ctx.companyStore.updateCompanySessionStatus(this.companySessionId, finalStatus);
     } catch { /* ignore */ }
+    if (teardownSandbox) {
+      // Best-effort sandbox teardown. Fire-and-forget: abortAll is often
+      // called from signal handlers where we can't block on a container
+      // removal round-trip. The manager's reaper + process shutdown hook
+      // provide a safety net for anything left over.
+      void this.sandboxService.teardown('aborted').catch(() => void 0);
+    }
     this.publisher.markEnded('done', { reason: 'aborted' });
   }
 

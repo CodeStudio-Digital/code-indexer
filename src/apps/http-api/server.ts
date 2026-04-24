@@ -17,6 +17,16 @@ import { mountExportRoutes } from './server/routes/export.js';
 import { mountModelsRoutes } from './server/routes/models.js';
 import { mountStatsRoutes } from './server/routes/stats.js';
 import { mountCoderRoutes } from './server/routes/coder/index.js';
+import { mountPreviewRoutes, attachPreviewUpgrade } from './server/routes/preview.js';
+import { mountWorkspaceRoutes } from './server/routes/workspace/index.js';
+import {
+  setCompanySandboxStore,
+  setCompanySandboxServicesStore,
+  setCompanySessionEnvStore,
+} from '../../core/sandbox/sandbox-manager.js';
+import { setCompanyLocalProjectStore } from '../../core/sandbox/local-process/LocalProcessManager.js';
+import { setEnvToolStore } from '../../core/coder/tools/company/env-tools.js';
+import { setDatabaseToolStores } from '../../core/coder/tools/company/database-tools.js';
 import { createMcpHttpApp } from '../mcp-server/http/mcp-http-transport.js';
 import { composeAuth } from './auth/composition.js';
 import { bearerMiddleware, getAuthCtx } from './auth/bearer-middleware.js';
@@ -32,6 +42,45 @@ import { startProviderRefreshScheduler } from '../../core/indexer/providers/sche
 
 export function createApp() {
   const deps = createDeps();
+
+  // Wire the sandbox persistence store into the SandboxManager module
+  // so its reconcile-on-boot + pause/resume paths can read/write DB.
+  // Without this the manager falls back to in-memory-only behavior
+  // (still works, but API restart wipes container mappings).
+  setCompanySandboxStore(deps.companySandboxStore);
+  setCompanySandboxServicesStore(deps.companySandboxServicesStore);
+  setCompanySessionEnvStore(deps.companySessionEnvStore);
+  setCompanyLocalProjectStore(deps.companyLocalProjectStore);
+  setEnvToolStore(deps.companySessionEnvStore);
+  setDatabaseToolStores(deps.companySessionDatabaseStore, deps.companySessionEnvStore);
+
+  // Boot reconciliation for host-process runs. Anything left in a live
+  // state by the previous server instance is impossible to re-attach
+  // (PIDs can't be safely reclaimed across restarts), so we mark those
+  // rows `destroyed` with error='server-restart'. The UI uses this to
+  // show a Retry affordance with the same persisted command.
+  try {
+    const { cleaned, orphanedPids } = deps.companyLocalProjectStore.reconcileOnBoot();
+    for (const pid of orphanedPids) {
+      try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+    }
+    if (orphanedPids.length > 0) {
+      setTimeout(() => {
+        for (const pid of orphanedPids) {
+          try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+        }
+      }, 3_000).unref();
+    }
+    if (cleaned > 0) {
+      console.log(
+        `[local-project] Boot: ${cleaned} row(s) → destroyed, ${orphanedPids.length} PID(s) SIGTERM'd`,
+      );
+    }
+  } catch (e) {
+    console.warn(
+      `[local-project] Startup reconciliation failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
 
   // Hydrate the in-memory capability cache with DB-stored context_windows so
   // getModelContextWindow() returns accurate values from the very first request.
@@ -125,6 +174,10 @@ export function createApp() {
   mountStatsRoutes(app, deps);
   app.route('/api/admin', createAdminRouter(deps.providerStore));
   mountCoderRoutes(app, deps);
+  // Builder-mode sandbox preview proxy. Dormant for non-builder sessions
+  // (the route 404s when no sandbox is registered for the sessionId).
+  mountPreviewRoutes(app, deps);
+  mountWorkspaceRoutes(app, deps);
 
   return { app, db: deps.db };
 }
@@ -132,7 +185,11 @@ export function createApp() {
 export async function startServer(port: number, host: string) {
   const { app } = createApp();
   console.log(`MCP Code Indexer API running at http://${host}:${port}`);
-  serve({ fetch: app.fetch, port, hostname: host });
+  // `serve()` returns the underlying Node http.Server. We need that
+  // reference to attach the WebSocket upgrade handler for the preview
+  // proxy (Vite HMR uses WS). Hono itself has no notion of upgrades.
+  const server = serve({ fetch: app.fetch, port, hostname: host });
+  attachPreviewUpgrade(server as unknown as import('node:http').Server);
 }
 
 // ── Periodic heap monitor ──────────────────────────────

@@ -63,13 +63,7 @@ export function SkillConfigDialog({ sessionId, open, onOpenChange }: SkillConfig
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
     });
-    // Optimistic update
-    setSkills((prev) =>
-      prev.map((s) =>
-        s.id === skillId ? { ...s, session_enabled: enabled, is_active: enabled } : s,
-      ),
-    );
-    setActiveCount((prev) => prev + (enabled ? 1 : -1));
+    void load();
   };
 
   return (

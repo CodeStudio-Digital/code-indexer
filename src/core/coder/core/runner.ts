@@ -58,6 +58,16 @@ export interface RunnerOptions {
    * is DB-accurate even for models not in the static registry.
    */
   context_window?: number | null;
+  /**
+   * When true, the runner periodically injects a reminder to post a deliverable
+   * to the board before stopping. Set for company subordinate agents.
+   */
+  isCompanySubordinate?: boolean;
+  /**
+   * Role identity text from the template's systemPromptOverride. When set, re-injected
+   * as a user message reminder alongside the deliverable reminder to survive compaction.
+   */
+  companyRoleOverride?: string;
 }
 
 // Tools blocked outright in plan mode until the user approves a submitted
@@ -86,10 +96,10 @@ const MUTATING_TOOLS = new Set([
  * The legacy sliding-window logic (KEEP_LAST_TOOL_TURNS, HARD_CAP_CHARS) is
  * removed because it mutated old blocks every turn, busting the cache.
  */
-const PUSH_TIME_CAP = Number(process.env.CODER_PUSH_TIME_CAP ?? 8_000);
+const PUSH_TIME_CAP = Number(process.env.CODER_PUSH_TIME_CAP ?? 24_000);
 /** Tighter per-block cap used inside subagents — they accumulate many small
- *  tool results in a short window, so a 4k cap fits ~10 turns under the budget. */
-const SUBAGENT_PUSH_TIME_CAP = Number(process.env.CODER_SUBAGENT_PUSH_TIME_CAP ?? 4_000);
+ *  tool results in a short window, so a 12k cap fits ~10 turns under the budget. */
+const SUBAGENT_PUSH_TIME_CAP = Number(process.env.CODER_SUBAGENT_PUSH_TIME_CAP ?? 12_000);
 /** Per-turn safety budget — emits a warning when the about-to-send payload exceeds this. */
 const TURN_BUDGET_CHARS = Number(process.env.CODER_TURN_BUDGET_CHARS ?? 30_000);
 /**
@@ -98,7 +108,7 @@ const TURN_BUDGET_CHARS = Number(process.env.CODER_TURN_BUDGET_CHARS ?? 30_000);
  * latches onto a failing tool call and keeps retrying it verbatim. Set to 0
  * (or any N<2) to disable. Default 3 matches opencode's processor.ts.
  */
-const DOOM_LOOP_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_THRESHOLD ?? 3);
+const DOOM_LOOP_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_THRESHOLD ?? 0);
 /**
  * Fuzzy doom-loop threshold: catches "same tool names, slightly different args"
  * patterns that the strict signature misses (e.g., agent keeps calling
@@ -107,7 +117,7 @@ const DOOM_LOOP_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_THRESHOLD ?? 3);
  * false-positive risk is larger — a legitimate iterative workflow may legally
  * call the same tool set many turns in a row.
  */
-const DOOM_LOOP_FUZZY_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_FUZZY_THRESHOLD ?? 6);
+const DOOM_LOOP_FUZZY_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_FUZZY_THRESHOLD ?? 0);
 /**
  * Auto-continue: when the runner exhausts maxTurns, instead of dying it
  * compacts the history (summarizer → deterministic fallback) and resets the
@@ -116,6 +126,13 @@ const DOOM_LOOP_FUZZY_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_FUZZY_THRES
  * Set to 0 to disable (legacy hard-stop at maxTurns).
  */
 const MAX_AUTO_CONTINUES = Number(process.env.CODER_MAX_AUTO_CONTINUES ?? 3);
+
+/** How often (in turns) to re-inject the deliverable reminder for subordinate agents. */
+const SUBORDINATE_REMINDER_INTERVAL = Number(process.env.CODER_SUBORDINATE_REMINDER_INTERVAL ?? 8);
+const SUBORDINATE_REMINDER_MSG =
+  '[System reminder] Before you stop or consider the task done, your LAST action MUST be ' +
+  '`post_to_board` with kind="deliverable" summarizing your work. Never finish silently — ' +
+  'the master is waiting for your report and cannot see your work any other way.';
 
 /**
  * Deterministic signature of a turn's tool calls. Two turns with the same
@@ -192,7 +209,7 @@ export function buildToolResultBlock(
   // block is created, its content never changes across turns — preserves
   // prefix-cache stability.
   const idSuffix = outputId
-    ? `; output_id=${outputId}, call get_tool_output("${outputId}") to retrieve the full content`
+    ? `; output_id=${outputId}, call get_tool_output("${outputId}") to retrieve the full content (supports offset/limit for pagination)`
     : '';
   return {
     type: 'tool_result',
@@ -877,6 +894,14 @@ export class CoderRunner extends EventEmitter {
       turn++;
       this.emit('turn_start', turn);
 
+      // Periodically remind subordinate agents to post a deliverable before stopping.
+      if (this.opts.isCompanySubordinate && turn > 1 && turn % SUBORDINATE_REMINDER_INTERVAL === 0) {
+        this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }] });
+        if (this.opts.companyRoleOverride) {
+          this.messages.push({ role: 'user', content: [{ type: 'text', text: `[System reminder — Role identity] ${this.opts.companyRoleOverride}` }] });
+        }
+      }
+
       // LLM summarizer — opt-in via CODER_SUMMARIZER_ENABLE=1. Runs ONCE
       // per session the first turn the history grows big enough to trigger
       // compaction. Replaces the pre-cutoff span with a single synthetic
@@ -1312,6 +1337,14 @@ export class CoderRunner extends EventEmitter {
       });
       // Allow the summarizer to run again in the next continuation window.
       this.summarizedOnce = false;
+      // After compaction, re-inject the deliverable reminder for subordinates so
+      // the instruction survives context suppression regardless of what was pruned.
+      if (this.opts.isCompanySubordinate) {
+        this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }] });
+        if (this.opts.companyRoleOverride) {
+          this.messages.push({ role: 'user', content: [{ type: 'text', text: `[System reminder — Role identity] ${this.opts.companyRoleOverride}` }] });
+        }
+      }
       // Reset turn counter so the inner while gets a full maxTurns budget.
       turn = 0;
       continue; // → back to outer while(true)

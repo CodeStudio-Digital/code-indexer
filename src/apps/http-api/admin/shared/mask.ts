@@ -24,6 +24,7 @@ export function publicProvider(p: ProviderConfig) {
     enabled: p.enabled,
     use_for_agent: p.use_for_agent,
     use_for_coder: p.use_for_coder,
+    use_for_general: p.use_for_general,
     is_default: p.is_default,
     extra: p.extra,
     fallback_provider_id: p.fallback_provider_id ?? null,

@@ -11,6 +11,7 @@ export interface AdminProvider {
   enabled: boolean;
   use_for_agent: boolean;
   use_for_coder: boolean;
+  use_for_general: boolean;
   is_default: boolean;
   extra: Record<string, unknown>;
   fallback_provider_id: string | null;

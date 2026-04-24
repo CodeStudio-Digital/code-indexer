@@ -5,6 +5,8 @@
 import type { Hono } from 'hono';
 import { SkillStore } from '../../../../../store/skill-store.js';
 import { loadConfig } from '../../../../../utils/config.js';
+import { interpolateSkillVars } from '../../../../../core/coder/skills/prompt-injector.js';
+import type { SkillTemplateContext } from '../../../../../core/coder/skills/types.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseIdParam, notFound } from '../_helpers.js';
@@ -129,11 +131,22 @@ export function mountCoderSkillsRoutes(
         input_text: body.input,
       });
 
+      const project = deps.db.getProject(session.project_id);
+      const templateCtx: SkillTemplateContext = {
+        SESSION_ID: String(sessionId),
+        PROJECT_NAME: project?.name ?? '',
+        PROJECT_ROOT: project?.root_path ?? '',
+        OS: process.platform,
+        TIMESTAMP: new Date().toISOString(),
+        USER_INPUT: body.input ?? '',
+      };
+      const interpolated = interpolateSkillVars(skill.prompt_body, templateCtx);
+
       // Return the skill-wrapped message for the frontend to send via the
       // normal stream endpoint. The frontend composes this into the user message.
       const message = body.input
-        ? `[Skill: ${skill.name}]\n\n${skill.prompt_body}\n\nUser input: ${body.input}`
-        : `[Skill: ${skill.name}]\n\n${skill.prompt_body}`;
+        ? `[Skill: ${skill.name}]\n\n${interpolated}\n\nUser input: ${body.input}`
+        : `[Skill: ${skill.name}]\n\n${interpolated}`;
 
       return c.json({ message, skill_name: skill.name });
     } finally {

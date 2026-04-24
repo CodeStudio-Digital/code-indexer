@@ -1,10 +1,13 @@
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Cloud,
   Copy,
   Download,
+  FolderOpen,
   Pencil,
   Plus,
+  RefreshCw,
   Sparkles,
   Trash2,
   Upload,
@@ -14,8 +17,16 @@ import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
 import { Switch } from '../../components/ui/switch.js';
 import { SkillEditDialog } from './SkillEditDialog.js';
+import { SkillsInstallDialog } from './SkillsInstallDialog.js';
+import { SkillsInstallLocalDialog } from './SkillsInstallLocalDialog.js';
 import { useAdminSkills } from './hooks/useAdminSkills.js';
-import type { AdminSkill } from './skills-api.js';
+import {
+  listSkillNamespaces,
+  updateSkillNamespace,
+  uninstallSkillNamespace,
+  type AdminSkill,
+  type InstalledNamespace,
+} from './skills-api.js';
 
 const MODE_LABEL: Record<string, string> = {
   inline: 'Inline',
@@ -31,10 +42,54 @@ const MODE_COLOR: Record<string, string> = {
 
 export function SkillsPanel() {
   const { t } = useTranslation(['admin', 'common']);
-  const { skills, loading, save, remove, duplicate, doExport, doImport } = useAdminSkills();
+  const { skills, loading, save, remove, duplicate, doExport, doImport, load: reload } =
+    useAdminSkills();
   const [editing, setEditing] = useState<Partial<AdminSkill> | null>(null);
   const [filter, setFilter] = useState('');
+  const [installOpen, setInstallOpen] = useState(false);
+  const [localInstallOpen, setLocalInstallOpen] = useState(false);
+  const [namespaces, setNamespaces] = useState<InstalledNamespace[]>([]);
+  const [nsBusy, setNsBusy] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadNamespaces = useCallback(async () => {
+    try {
+      setNamespaces(await listSkillNamespaces());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadNamespaces();
+  }, [loadNamespaces]);
+
+  const handleUpdateNamespace = async (ns: string) => {
+    setNsBusy(ns);
+    try {
+      await updateSkillNamespace(ns);
+      await loadNamespaces();
+      await reload();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setNsBusy(null);
+    }
+  };
+
+  const handleUninstallNamespace = async (ns: string) => {
+    if (!confirm(`Uninstall all skills from namespace "${ns}"?`)) return;
+    setNsBusy(ns);
+    try {
+      await uninstallSkillNamespace(ns);
+      await loadNamespaces();
+      await reload();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setNsBusy(null);
+    }
+  };
 
   const filtered = filter
     ? skills.filter(
@@ -75,6 +130,12 @@ export function SkillsPanel() {
           <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
             <Upload className="h-4 w-4 mr-2" /> {t('common:actions.import')}
           </Button>
+          <Button variant="outline" onClick={() => setInstallOpen(true)}>
+            <Cloud className="h-4 w-4 mr-2" /> Install from GitHub
+          </Button>
+          <Button variant="outline" onClick={() => setLocalInstallOpen(true)}>
+            <FolderOpen className="h-4 w-4 mr-2" /> Install from Local Folder
+          </Button>
           <Button
             onClick={() =>
               setEditing({
@@ -92,6 +153,56 @@ export function SkillsPanel() {
           </Button>
         </div>
       </div>
+
+      {namespaces.length > 0 && (
+        <div className="border rounded-lg p-3 space-y-2">
+          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Installed namespaces
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {namespaces.map((ns) => (
+              <div
+                key={ns.namespace}
+                className="flex items-center gap-2 border rounded px-2 py-1 text-xs"
+              >
+                <Badge variant="secondary">{ns.namespace}</Badge>
+                {ns.repo && (
+                  <span className="text-muted-foreground font-mono">{ns.repo}</span>
+                )}
+                {ns.commit && (
+                  <span className="text-muted-foreground font-mono">
+                    @{ns.commit.slice(0, 7)}
+                  </span>
+                )}
+                <span className="text-muted-foreground">
+                  {ns.skillCount} skills · {ns.commandCount} cmds
+                  {ns.mcpCount > 0 && ` · ${ns.mcpCount} mcps`}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 w-6 p-0"
+                  disabled={nsBusy === ns.namespace}
+                  onClick={() => void handleUpdateNamespace(ns.namespace)}
+                  title="Update (re-fetch latest)"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 w-6 p-0"
+                  disabled={nsBusy === ns.namespace}
+                  onClick={() => void handleUninstallNamespace(ns.namespace)}
+                  title="Uninstall namespace"
+                >
+                  <Trash2 className="h-3 w-3 text-red-600" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading && <div className="text-sm text-muted-foreground">{t('common:actions.loading')}</div>}
 
@@ -161,6 +272,24 @@ export function SkillsPanel() {
           </div>
         )}
       </div>
+
+      <SkillsInstallDialog
+        open={installOpen}
+        onOpenChange={setInstallOpen}
+        onInstalled={() => {
+          void loadNamespaces();
+          void reload();
+        }}
+      />
+
+      <SkillsInstallLocalDialog
+        open={localInstallOpen}
+        onOpenChange={setLocalInstallOpen}
+        onInstalled={() => {
+          void loadNamespaces();
+          void reload();
+        }}
+      />
 
       {editing && (
         <SkillEditDialog

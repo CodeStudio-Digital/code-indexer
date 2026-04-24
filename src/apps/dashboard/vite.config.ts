@@ -25,6 +25,20 @@ export default defineConfig({
         target: 'http://localhost:3333',
         changeOrigin: true,
       },
+      // Builder sandbox preview proxy. Without this, `/preview/:id/*`
+      // would hit Vite's SPA fallback and serve the dashboard's own
+      // `index.html` — exactly what you saw when the iframe kept
+      // rendering the Projetos page on top of itself.
+      //
+      // `ws: true` is critical: the Vite dev-server inside the sandbox
+      // container upgrades to WebSocket for HMR at
+      // `/preview/:id/@vite/hmr`. Without WS proxying you'd see the
+      // page load once but never hot-reload on code changes.
+      '/preview': {
+        target: 'http://localhost:3333',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
 });

@@ -198,6 +198,17 @@ export function useCompanyStream(companySessionId: number | null) {
         connected: false,
         error: d.error ?? 'Unknown error from server',
       }));
+    } else if (eventType === 'sandbox.file_changed') {
+      // Builder mode: an agent just wrote/edited a file in the sandbox.
+      // Broadcast a scoped window event so `BuilderView`'s PreviewPanel
+      // can force an iframe reload. Keeps this hook's state shape
+      // unchanged and avoids plumbing a new return value up to callers
+      // that don't care about the preview pane.
+      if (typeof window !== 'undefined' && companySessionId != null) {
+        window.dispatchEvent(
+          new CustomEvent(`sandbox:file-changed:${companySessionId}`, { detail: data }),
+        );
+      }
     } else if (eventType === 'done') {
       receivedDoneRef.current = true;
       setState((prev) => ({ ...prev, connected: false }));
@@ -538,6 +549,8 @@ export function useCompanyStream(companySessionId: number | null) {
     body?: unknown;
     /** Called on reconnect to refresh kanban state after missed window. */
     onReconnect?: (attempt: number) => void | Promise<void>;
+    /** If provided and returns true, the error is swallowed silently. */
+    suppressError?: (err: Error) => boolean;
   }): Promise<void> {
     abortRef.current?.abort();
     const ctrl = new AbortController();
@@ -565,6 +578,7 @@ export function useCompanyStream(companySessionId: number | null) {
       await client.run();
     } catch (e) {
       if ((e as Error).name === 'AbortError') return;
+      if (opts.suppressError?.(e as Error)) return;
       setState((prev) => ({
         ...prev,
         error: `Connection error: ${(e as Error).message}`,
@@ -627,6 +641,7 @@ export function useCompanyStream(companySessionId: number | null) {
       await openStream({
         url: `/api/company/sessions/${companySessionId}/attach`,
         method: 'GET',
+        suppressError: (e) => e.message === 'HTTP 404',
       });
     } finally {
       // Stream ended — either naturally (done) or after exhausting retries.

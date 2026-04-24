@@ -75,6 +75,19 @@ export interface ToolContext {
   getTasksState?: () => import('../sessions/types.js').TasksState | null;
   /** Company orchestrator context — present when this runner is part of a company session. */
   companyContext?: import('../company/types.js').CompanyContext;
+  /**
+   * Optional execution ports — when provided, filesystem/shell tools
+   * route through these instead of talking to `node:fs` / `child_process`
+   * directly. Left undefined, tools fall back to process-wide local
+   * adapters (identical to pre-refactor behavior).
+   *
+   * Injected by SandboxService when a session runs in builder mode so the
+   * same tool code writes into an ephemeral container instead of the host.
+   */
+  ports?: {
+    fs?: import('../ports/filesystem-port.js').IFilesystemPort;
+    shell?: import('../ports/shell-port.js').IShellPort;
+  };
 }
 
 export interface ToolResult {

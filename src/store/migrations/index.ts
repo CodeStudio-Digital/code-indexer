@@ -48,6 +48,16 @@ import { oauthServer029 } from './029_oauth_server.js';
 import { mcpClientOauth030 } from './030_mcp_client_oauth.js';
 import { coderSessionAgent031 } from './031_coder_session_agent.js';
 import { masterPrompts032 } from './032_master_prompts.js';
+import { skillSourceRef033 } from './033_skill_source_ref.js';
+import { companySandboxes034 } from './034_company_sandboxes.js';
+import { companySandboxServices035 } from './035_company_sandbox_services.js';
+import { companySessionEnvs036 } from './036_company_session_envs.js';
+import { serviceHostWorkdir037 } from './037_service_host_workdir.js';
+import { companyArchives038 } from './038_company_archives.js';
+import { companySessionEnvSource039 } from './039_company_session_env_source.js';
+import { generalAi041 } from './041_general_ai.js';
+import { companySessionDatabases040 } from './040_company_session_databases.js';
+import { companyLocalProjects042 } from './042_company_local_projects.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -90,6 +100,16 @@ export const MIGRATIONS: Migration[] = [
   mcpClientOauth030,
   coderSessionAgent031,
   masterPrompts032,
+  skillSourceRef033,
+  companySandboxes034,
+  companySandboxServices035,
+  companySessionEnvs036,
+  serviceHostWorkdir037,
+  companyArchives038,
+  companySessionEnvSource039,
+  companySessionDatabases040,
+  generalAi041,
+  companyLocalProjects042,
 ];
 
 /**

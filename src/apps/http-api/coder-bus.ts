@@ -82,14 +82,16 @@ export function subscribe(
 }
 
 /**
- * Wait until the bus is marked ended. Used by SSE handlers to keep the
- * response open until the underlying run finishes (or the client aborts).
+ * Wait until the bus is marked ended or the optional signal fires (e.g. SSE
+ * client disconnected). Resolves in both cases so the caller's finally block
+ * always runs and can clean up subscriptions / schedule orchestrator eviction.
  */
-export function waitEnded(bus: CoderRunBus, pollMs = 200): Promise<void> {
+export function waitEnded(bus: CoderRunBus, signal?: AbortSignal, pollMs = 200): Promise<void> {
   return new Promise<void>((resolve) => {
-    if (bus.ended) return resolve();
+    if (bus.ended || signal?.aborted) return resolve();
     const t = setInterval(() => {
-      if (bus.ended) { clearInterval(t); resolve(); }
+      if (bus.ended || signal?.aborted) { clearInterval(t); resolve(); }
     }, pollMs);
+    signal?.addEventListener('abort', () => { clearInterval(t); resolve(); }, { once: true });
   });
 }

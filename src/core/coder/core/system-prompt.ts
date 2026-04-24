@@ -16,8 +16,6 @@
  */
 import { loadPrompt, interpolate } from '../prompts/loader.js';
 import { runSystemPromptHook } from './hooks.js';
-import type { ResolvedSkill, SkillTemplateContext } from '../skills/types.js';
-import { buildSkillsPromptSection } from '../skills/prompt-injector.js';
 export type ProviderFamily = 'anthropic' | 'openai' | 'zai' | 'gemini' | 'deepseek' | 'generic';
 
 export interface PromptContext {
@@ -33,8 +31,6 @@ export interface PromptContext {
    * agent knows which external tool groups are available for on-demand expansion.
    */
   customTiers?: Array<{ tier: string; displayName: string; toolCount: number }>;
-  /** Resolved skills for the session (inline ones get injected into the prompt). */
-  skills?: ResolvedSkill[];
   /** Session ID for skill template variable interpolation. */
   sessionId?: string;
   /**
@@ -153,19 +149,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   });
   const extraBlock = extra ? `\n\n# Project-specific instructions\n${extra}` : '';
 
-  // Skills section — inline skills are appended between interaction and hook sections.
-  // Resolved once at session start so the prefix stays byte-stable across turns.
-  const skillsSection = ctx.skills?.length
-    ? buildSkillsPromptSection(ctx.skills, {
-        PROJECT_NAME: ctx.projectName,
-        PROJECT_ROOT: ctx.projectRoot,
-        SESSION_ID: ctx.sessionId ?? '0',
-        OS: ctx.os,
-        TIMESTAMP: new Date().toISOString(),
-      })
-    : '';
-
-  return `${preamble}${base}${planSection}${interactionSection}${skillsSection}${extraBlock}`;
+  return `${preamble}${base}${planSection}${interactionSection}${extraBlock}`;
 }
 
 /**

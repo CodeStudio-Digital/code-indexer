@@ -117,11 +117,11 @@ describe('buildToolResultBlock — push-time monotone truncation', () => {
   });
 
   it('truncates content above PUSH_TIME_CAP with a deterministic marker', () => {
-    const big = 'x'.repeat(20_000);
+    const big = 'x'.repeat(30_000);
     const b = buildToolResultBlock('id1', big, false);
     expect(b.truncated).toBe(true);
-    expect(b.originalSize).toBe(20_000);
-    expect(b.content).toContain('[truncated: original_size=20000');
+    expect(b.originalSize).toBe(30_000);
+    expect(b.content).toContain('[truncated: original_size=30000');
   });
 
   it('produces the same content for the same input across calls (cache-stable)', () => {
@@ -136,19 +136,27 @@ describe('buildToolResultBlock — push-time monotone truncation', () => {
 });
 
 describe('compactHistoryForLLM — pass-through (legacy compat)', () => {
-  it('returns the same messages reference and does not mutate (below compaction threshold)', () => {
-    // 6 turns × 5000 chars = 30k total — below PRUNE_PROTECT (40k), so no pruning.
+  it('does not compact messages below the threshold (content equivalent, input not mutated)', () => {
+    // 6 turns × 5000 chars = 30k total — below PRUNE_MINIMUM (60k), so no compaction.
     const msgs = buildSyntheticHistory({ toolTurns: 6, toolResultSize: 5000 });
     const snapshot = JSON.stringify(msgs);
     const out = compactHistoryForLLM(msgs);
+    // Input must not be mutated
     expect(JSON.stringify(msgs)).toBe(snapshot);
-    expect(out).toBe(msgs);
+    // No tool_result should be replaced with a [compacted:] marker
+    for (const m of out) {
+      for (const b of m.content) {
+        if (b.type === 'tool_result' && typeof b.content === 'string') {
+          expect(b.content).not.toMatch(/^\[compacted:/);
+        }
+      }
+    }
   });
 });
 
 describe('normalizeMessageForCache — legacy resume normalization', () => {
   it('truncates legacy uncapped tool_result blocks on session resume', () => {
-    const big = 'y'.repeat(20_000);
+    const big = 'y'.repeat(30_000);
     const legacy: AgentMessage = {
       role: 'tool',
       content: [{ type: 'tool_result', tool_use_id: 'old', content: big }],
@@ -157,11 +165,11 @@ describe('normalizeMessageForCache — legacy resume normalization', () => {
     const block = normalized.content[0];
     if (block.type !== 'tool_result') throw new Error('expected tool_result');
     expect(block.truncated).toBe(true);
-    expect(block.originalSize).toBe(20_000);
+    expect(block.originalSize).toBe(30_000);
   });
 
   it('is idempotent — second normalization does not change a truncated block', () => {
-    const big = 'z'.repeat(20_000);
+    const big = 'z'.repeat(30_000);
     const legacy: AgentMessage = {
       role: 'tool',
       content: [{ type: 'tool_result', tool_use_id: 'old', content: big }],

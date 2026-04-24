@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, CheckCircle, XCircle, HelpCircle, PanelRight, PanelRightClose, MessageSquare, KanbanSquare, Check, Plus, Ban } from 'lucide-react';
-import type { MasterPrompt } from '../../../../core/coder/company/types.js';
+import { StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, PanelLeft, PanelLeftClose, MessageSquare, KanbanSquare, Check, Plus, BookText, KeyRound, X, Archive, RotateCcw, Database } from 'lucide-react';
+import DocsTab from './DocsTab.js';
+import DatabasesTab from './DatabasesTab.js';
+import ServicesSidebar from './ServicesSidebar.js';
+import EnvTab from './EnvTab.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
@@ -13,8 +16,10 @@ import { AgentPane } from './AgentPane.js';
 import { BoardPanel } from './BoardPanel.js';
 import { KanbanTab } from './KanbanTab.js';
 import { AgentSessionModal } from './AgentSessionModal.js';
-import { MarkdownToolbar } from '../chat/composer/MarkdownToolbar.js';
-import { useMarkdownShortcuts } from '../chat/composer/useMarkdownShortcuts.js';
+import { MasterComposer } from './MasterComposer.js';
+import { ResetSessionDialog } from './ResetSessionDialog.js';
+import { ArchivedTab } from './ArchivedTab.js';
+import { RoleEditModal, type RoleConfig, type SkillDef } from './RoleEditModal.js';
 
 interface Project {
   id: number;
@@ -39,15 +44,16 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
   const { t } = useTranslation(['agents', 'common']);
   const stream = useCompanyStream(sessionId);
   const { data: sessionData, refetch } = useApi<SessionFullData>(`/company/sessions/${sessionId}`);
-  const [input, setInput] = useState('');
-  const [agentPanelOpen, setAgentPanelOpen] = useState(false);
+  const [agentPanelOpen, setAgentPanelOpen] = useState(true);
   const [modalSession, setModalSession] = useState<{ coderSessionId: number; role: string; status: string } | null>(null);
   const [editingRoleIdx, setEditingRoleIdx] = useState<number | null>(null);
   const [addingProject, setAddingProject] = useState(false);
   const [newProjectId, setNewProjectId] = useState('');
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [newRoleDraft, setNewRoleDraft] = useState<RoleConfig | null>(null);
+  const [newRoleError, setNewRoleError] = useState<string | null>(null);
   const { data: allProjects } = useApi<Project[]>('/projects');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { handleKeyDown: mdHandleKeyDown, applyAction } = useMarkdownShortcuts(textareaRef, input, setInput);
+  const { data: skillsList } = useApi<{ skills: SkillDef[] }>('/admin/skills');
   const { providerOptions, getModelsForProvider, getDefaultModel } = useProviders();
 
   // Reset stream state when switching sessions
@@ -73,10 +79,7 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
   // Session already has a run if status is not idle/draft — use sendMessage, not start
   const sessionAlreadyRan = sessionStatus === 'running' || sessionStatus === 'completed' || sessionStatus === 'paused' || sessionStatus === 'error';
 
-  async function handleSend() {
-    const text = input.trim();
-    if (!text) return;
-    setInput('');
+  async function handleSend(text: string) {
     if (!stream.connected && (sessionAlreadyRan || stream.started)) {
       // Session ran before but is now disconnected — resume the master
       // from its existing coder session to keep full conversation history.
@@ -87,14 +90,6 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
       refetch();
     } else {
       await stream.sendMessage(text);
-    }
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    mdHandleKeyDown(e);
-    if (e.key === 'Enter' && !e.shiftKey && !e.defaultPrevented) {
-      e.preventDefault();
-      handleSend();
     }
   }
 
@@ -146,11 +141,23 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
             <RefreshCw className="h-3.5 w-3.5 mr-1" /> {t('agents:company.reconnect')}
           </Button>
         )}
-        {/* Mobile toggle for agents panel */}
+        {/* Reset: archives the current conversation state and flips the
+            session back to idle so the next prompt starts fresh with
+            current system prompts. Useful after template/prompt updates. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setResetDialogOpen(true)}
+          className="h-7 px-2 text-muted-foreground"
+          title="Resetar sessão — arquiva conversas e permite recomeçar do zero"
+        >
+          <RotateCcw className="h-3.5 w-3.5 mr-1" /> Reset
+        </Button>
+        {/* Toggle for agents panel */}
         <button
           type="button"
           className={cn(
-            'md:hidden p-1.5 rounded-md transition-colors shrink-0',
+            'p-1.5 rounded-md transition-colors shrink-0',
             !stream.masterState && 'ml-auto',
             agentPanelOpen
               ? 'bg-muted text-foreground'
@@ -159,91 +166,16 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
           onClick={() => setAgentPanelOpen((v) => !v)}
           title={t('agents:company.toggleAgents')}
         >
-          {agentPanelOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRight className="h-4 w-4" />}
+          {agentPanelOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
         </button>
       </div>
 
-      {/* INVERTED LAYOUT: Board (main) | Agents (sidebar right) */}
+      {/* LAYOUT: Agents (sidebar left) | Board (main) */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Board — main area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Error */}
-          {stream.error && (
-            <div className="mx-3 mt-3 p-3 rounded-lg border border-destructive/30 bg-destructive/5 text-xs text-destructive flex items-start gap-2">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <p>{stream.error}</p>
-            </div>
-          )}
-
-          {/* Master ↔ human prompts (ask_user / submit_plan) — chronological,
-              persistent across navigation/reload, with answered/cancelled
-              history visible inline. */}
-          {stream.masterPrompts.size > 0 && (
-            <div className="mx-3 mt-3 space-y-2">
-              {Array.from(stream.masterPrompts.values())
-                .sort((a, b) => a.id - b.id)
-                .map((prompt) => (
-                  <MasterPromptCard
-                    key={prompt.id}
-                    prompt={prompt}
-                    onAnswerQuestion={(answer) => stream.respondToMasterQuestion(prompt.id, answer)}
-                    onRespondPlan={(approved, fb) => stream.respondToMasterPlan(prompt.id, approved, fb)}
-                  />
-                ))}
-            </div>
-          )}
-
-          {/* Loading */}
-          {stream.started && !stream.masterState && !stream.error && (
-            <div className="flex items-center justify-center py-8">
-              <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
-              <span className="ml-2 text-sm text-muted-foreground">{t('agents:company.startingMaster')}</span>
-            </div>
-          )}
-
-          {/* Board + Kanban tabs — takes remaining space */}
-          <Tabs defaultValue="board" className="flex-1 flex flex-col overflow-hidden">
-            <TabsList className="mx-3 mt-2 w-fit">
-              <TabsTrigger value="board" className="text-xs gap-1">
-                <MessageSquare className="h-3 w-3" /> {t('agents:company.board')}
-              </TabsTrigger>
-              <TabsTrigger value="kanban" className="text-xs gap-1">
-                <KanbanSquare className="h-3 w-3" /> {t('agents:company.kanban')}
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="board" className="flex-1 overflow-hidden mt-0">
-              <BoardPanel messages={boardMessages} />
-            </TabsContent>
-            <TabsContent value="kanban" className="flex-1 overflow-hidden mt-0">
-              <KanbanTab companySessionId={sessionId} streamCards={stream.kanbanCards} />
-            </TabsContent>
-          </Tabs>
-
-          {/* Composer */}
-          <div className="border-t p-3">
-            <div className="flex gap-2 items-end">
-              <div className="flex-1 rounded-md border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={!stream.started && !sessionAlreadyRan ? t('agents:company.inputPlaceholder') : t('agents:company.inputPlaceholderMaster')}
-                  className="w-full resize-y px-3 py-2 text-sm min-h-[60px] max-h-[300px] bg-transparent focus:outline-none"
-                  rows={3}
-                />
-                <MarkdownToolbar onAction={applyAction} />
-              </div>
-              <Button onClick={handleSend} disabled={!input.trim()} size="sm" className="h-9 shrink-0">
-                <Send className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          </div>
-        </div>
-        {/* Agent sidebar — right (hidden on mobile by default, toggle via PanelRight button) */}
+        {/* Agent sidebar — LEFT (collapsible on all breakpoints) */}
         <div className={cn(
-          'w-64 border-l flex-shrink-0 overflow-y-auto bg-muted/10 flex-col',
-          agentPanelOpen ? 'flex' : 'hidden md:flex',
+          'w-64 border-r flex-shrink-0 overflow-y-auto bg-muted/10 flex-col',
+          agentPanelOpen ? 'flex' : 'hidden',
         )}>
           <div className="px-2.5 py-2 border-b flex items-center gap-1.5">
             <Bot className="h-3.5 w-3.5 text-muted-foreground" />
@@ -267,11 +199,31 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {sessionData?.projects.map((p) => (
-                  <Badge key={p.project_id} variant="outline" className="text-[10px] gap-1">
-                    <FolderGit2 className="h-2.5 w-2.5" />
-                    {p.project_name}
-                    {p.label && <span className="text-muted-foreground">({p.label})</span>}
-                  </Badge>
+                  <ProjectBadge
+                    key={p.project_id}
+                    projectId={p.project_id}
+                    name={p.project_name}
+                    label={p.label}
+                    onRenamed={refetch}
+                    canDelete={(sessionData?.projects.length ?? 0) > 1}
+                    onDelete={async () => {
+                      const isService = !!p.label;
+                      const confirmMsg = isService
+                        ? `Remover microserviço '${p.label}'? O container e os arquivos serão destruídos.`
+                        : `Desvincular '${p.project_name}' desta sessão? O projeto continua disponível em outras sessões.`;
+                      if (!confirm(confirmMsg)) return;
+                      const r = await fetch(
+                        `/api/company/sessions/${sessionId}/projects/${p.project_id}`,
+                        { method: 'DELETE' },
+                      );
+                      if (!r.ok) {
+                        const body = (await r.json().catch(() => ({}))) as { error?: string };
+                        alert(body.error ?? `HTTP ${r.status}`);
+                        return;
+                      }
+                      refetch();
+                    }}
+                  />
                 ))}
               </div>
               {addingProject && (() => {
@@ -310,10 +262,54 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
               })()}
             </div>
 
+            {/* Agents per project — source of truth for the master's
+                "which role works on which project" routing. Rendered
+                project-first because that's how the operator thinks
+                ("this project is the frontend → who works here?"). */}
+            {sessionData?.projects.length && config?.role_assignments && (config.role_assignments as unknown[]).length > 0 ? (
+              <ProjectRolesBinding
+                projects={sessionData.projects}
+                roleAssignments={config.role_assignments as RoleAssignmentRaw[]}
+                onUpdate={async (updated) => {
+                  try {
+                    await fetch(`/api/company/sessions/${sessionId}/config`, {
+                      method: 'PATCH',
+                      headers: { 'content-type': 'application/json' },
+                      body: JSON.stringify({ role_assignments: updated }),
+                    });
+                  } catch { /* non-fatal; user will see stale state on next refetch */ }
+                  refetch();
+                }}
+              />
+            ) : null}
+
             {/* Roles — editable provider/model */}
             {config?.role_assignments && (config.role_assignments as unknown[]).length > 0 && (
                 <div>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5">{t('agents:company.configuredRoles')}</p>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide">{t('agents:company.configuredRoles')}</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const pool = (config.allowed_models as Array<{ provider: string; model: string; is_default?: boolean }> | undefined) ?? [];
+                        const poolPick = pool.find((e) => e.is_default) ?? pool[0] ?? null;
+                        const masterRow = (config.role_assignments as Array<Record<string, string>>).find((x) => x.role === 'master');
+                        const defaultProvider = poolPick?.provider ?? masterRow?.provider ?? providerOptions[0]?.id ?? 'anthropic';
+                        const defaultModel = poolPick?.model ?? masterRow?.model ?? getDefaultModel(defaultProvider);
+                        setNewRoleDraft({
+                          role: '',
+                          provider: defaultProvider,
+                          model: defaultModel,
+                          tier: 'navigate',
+                        });
+                        setNewRoleError(null);
+                      }}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                      title={t('agents:company.addRole')}
+                    >
+                      <Plus className="h-3 w-3" />
+                    </button>
+                  </div>
                   <div className="space-y-1">
                     {(config.role_assignments as Array<Record<string, string>>).map((r, i) => (
                         <div key={i} className="rounded border p-1.5 space-y-1">
@@ -347,6 +343,25 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
                                   isMaster ? model : (config.master_model as string) ?? roles.find((x) => x.role === 'master')?.model,
                                   updated as Array<{ role: string; provider: string; model: string; tier: string }>,
                                 );
+                                // Persist via PATCH /config so the edit
+                                // survives server restart and is the
+                                // source of truth on next boot. The
+                                // orchestrator.applyConfigPatch path
+                                // also re-broadcasts to running agents
+                                // — harmless when switchProvider above
+                                // already handled the live swap.
+                                try {
+                                  await fetch(
+                                    `/api/company/sessions/${sessionId}/config`,
+                                    {
+                                      method: 'PATCH',
+                                      headers: { 'content-type': 'application/json' },
+                                      body: JSON.stringify({ role_assignments: updated }),
+                                    },
+                                  );
+                                } catch {
+                                  /* non-fatal: runtime swap already happened */
+                                }
                                 setEditingRoleIdx(null);
                                 refetch();
                               }}
@@ -358,6 +373,8 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
                 </div>
             )}
           </div>
+
+          <ServicesSidebar sessionId={sessionId} />
 
           <div className="px-2.5 py-2 border-b border-t flex items-center gap-1.5">
             <Bot className="h-3.5 w-3.5 text-muted-foreground" />
@@ -426,6 +443,81 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
             )}
           </div>
         </div>
+
+        {/* Board — main area */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Error */}
+          {stream.error && (
+            <div className="mx-3 mt-3 p-3 rounded-lg border border-destructive/30 bg-destructive/5 text-xs text-destructive flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+              <p>{stream.error}</p>
+            </div>
+          )}
+
+
+          {/* Loading */}
+          {stream.started && !stream.masterState && !stream.error && (
+            <div className="flex items-center justify-center py-8">
+              <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-sm text-muted-foreground">{t('agents:company.startingMaster')}</span>
+            </div>
+          )}
+
+          {/* Board + Kanban tabs — takes remaining space */}
+          <Tabs defaultValue="board" className="flex-1 flex flex-col overflow-hidden">
+            <TabsList className="mx-3 mt-2 w-fit">
+              <TabsTrigger value="board" className="text-xs gap-1">
+                <MessageSquare className="h-3 w-3" /> {t('agents:company.board')}
+              </TabsTrigger>
+              <TabsTrigger value="kanban" className="text-xs gap-1">
+                <KanbanSquare className="h-3 w-3" /> {t('agents:company.kanban')}
+              </TabsTrigger>
+              <TabsTrigger value="docs" className="text-xs gap-1">
+                <BookText className="h-3 w-3" /> {t('agents:company.docs')}
+              </TabsTrigger>
+              <TabsTrigger value="env" className="text-xs gap-1">
+                <KeyRound className="h-3 w-3" /> {t('agents:company.env')}
+              </TabsTrigger>
+              <TabsTrigger value="databases" className="text-xs gap-1">
+                <Database className="h-3 w-3" /> {t('agents:company.databases')}
+              </TabsTrigger>
+              <TabsTrigger value="archived" className="text-xs gap-1">
+                <Archive className="h-3 w-3" /> {t('agents:company.archived')}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="board" className="flex-1 overflow-hidden mt-0">
+              <BoardPanel
+                messages={boardMessages}
+                masterPrompts={Array.from(stream.masterPrompts.values())}
+                onAnswerQuestion={(promptId, answer) => stream.respondToMasterQuestion(promptId, answer)}
+                onRespondPlan={(promptId, approved, fb) => stream.respondToMasterPlan(promptId, approved, fb)}
+              />
+            </TabsContent>
+            <TabsContent value="kanban" className="flex-1 overflow-hidden mt-0">
+              <KanbanTab companySessionId={sessionId} streamCards={stream.kanbanCards} />
+            </TabsContent>
+            <TabsContent value="docs" className="flex-1 overflow-hidden mt-0">
+              <DocsTab companySessionId={sessionId} />
+            </TabsContent>
+            <TabsContent value="env" className="flex-1 overflow-hidden mt-0">
+              <EnvTab companySessionId={sessionId} />
+            </TabsContent>
+            <TabsContent value="databases" className="flex-1 overflow-hidden mt-0">
+              <DatabasesTab companySessionId={sessionId} />
+            </TabsContent>
+            <TabsContent value="archived" className="flex-1 overflow-hidden mt-0">
+              <ArchivedTab companySessionId={sessionId} />
+            </TabsContent>
+          </Tabs>
+
+          {/* Composer */}
+          <div className="border-t p-3">
+            <MasterComposer
+              onSend={handleSend}
+              placeholder={!stream.started && !sessionAlreadyRan ? t('agents:company.inputPlaceholder') : t('agents:company.inputPlaceholderMaster')}
+            />
+          </div>
+        </div>
       </div>
 
       {/* Agent session modal */}
@@ -437,6 +529,108 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
           onClose={() => setModalSession(null)}
         />
       )}
+
+      {/* Reset confirmation dialog */}
+      {resetDialogOpen && (
+        <ResetSessionDialog
+          sessionId={sessionId}
+          sessionName={sessionName}
+          builderMode={!!(config && typeof config === 'object' && 'builder' in config && (config as { builder?: unknown }).builder)}
+          onClose={() => setResetDialogOpen(false)}
+          onResetDone={() => {
+            // Full reload of session + stream state so the Board/Kanban
+            // tabs go empty and next prompt hits /start (idle) instead
+            // of /resume.
+            stream.reset();
+            refetch();
+          }}
+        />
+      )}
+
+      {/* Add-role modal — reuses the same form as the template builder.
+          The Master learns about the new role immediately via
+          updateRoleConfigs and decides when to spawn the subordinate. */}
+      {newRoleDraft && (
+        <div className="fixed inset-0 z-[55] flex flex-col items-center justify-end sm:justify-center">
+          <RoleEditModal
+            role={newRoleDraft}
+            roleIdx={-1}
+            availableSkills={skillsList?.skills ?? []}
+            providerOptions={providerOptions}
+            getModelsForProvider={getModelsForProvider}
+            onCancel={() => {
+              setNewRoleDraft(null);
+              setNewRoleError(null);
+            }}
+            onUpdate={(patch) => {
+              setNewRoleDraft((prev) => {
+                if (!prev) return prev;
+                const updated = { ...prev, ...patch };
+                if (patch.provider && patch.provider !== prev.provider) {
+                  updated.model = getDefaultModel(patch.provider);
+                }
+                return updated;
+              });
+            }}
+            onClose={async () => {
+              if (!newRoleDraft || !config) {
+                setNewRoleDraft(null);
+                return;
+              }
+              const roleName = newRoleDraft.role.trim();
+              if (!roleName) {
+                setNewRoleError(t('agents:company.roleNameRequired'));
+                return;
+              }
+              if (roleName === 'master') {
+                setNewRoleError(t('agents:company.reservedRoleName', { name: roleName }));
+                return;
+              }
+              const existing = (config.role_assignments as Array<Record<string, string>>) ?? [];
+              if (existing.some((r) => r.role === roleName)) {
+                setNewRoleError(t('agents:company.duplicateRoleName', { name: roleName }));
+                return;
+              }
+              const pool = (config.allowed_models as Array<{ provider: string; model: string }> | undefined) ?? [];
+              if (pool.length > 0) {
+                const inPool = pool.some((e) => e.provider === newRoleDraft.provider && e.model === newRoleDraft.model);
+                if (!inPool) {
+                  setNewRoleError(t('agents:company.modelNotInPool', {
+                    provider: newRoleDraft.provider,
+                    model: newRoleDraft.model,
+                    options: pool.map((e) => `${e.provider}/${e.model}`).join(', '),
+                  }));
+                  return;
+                }
+              }
+              const updatedRoles = [...existing, { ...newRoleDraft, role: roleName }];
+              try {
+                const res = await fetch(`/api/company/sessions/${sessionId}/config`, {
+                  method: 'PATCH',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ role_assignments: updatedRoles }),
+                });
+                if (!res.ok) {
+                  const body = (await res.json().catch(() => ({}))) as { error?: string };
+                  setNewRoleError(body.error ?? `HTTP ${res.status}`);
+                  return;
+                }
+              } catch (e) {
+                setNewRoleError(e instanceof Error ? e.message : String(e));
+                return;
+              }
+              setNewRoleDraft(null);
+              setNewRoleError(null);
+              refetch();
+            }}
+          />
+          {newRoleError && (
+            <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[61] max-w-md rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive shadow-lg">
+              {newRoleError}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -446,163 +640,177 @@ function parseConfig(json: string): Record<string, unknown> | null {
 }
 
 /**
- * Unified card for master↔human prompts. Renders three states:
- *   - pending   → interactive (answer / approve+reject + freeform feedback)
- *   - answered  → read-only summary of what the human chose
- *   - cancelled → neutral note ("session ended before you answered")
- *
- * The prompt itself comes from the persisted DB row, so this card looks
- * the same whether it was just emitted via SSE or rehydrated on reload.
+ * Shape used when we roundtrip `role_assignments` through the PATCH
+ * endpoint. We only read/write a handful of fields here — the other
+ * optionals (tier, skills, systemPromptOverride, etc.) pass through
+ * untouched via object spread, so adding fields to the backend
+ * interface later doesn't require changes here.
  */
-function MasterPromptCard({
-  prompt,
-  onAnswerQuestion,
-  onRespondPlan,
+type RoleAssignmentRaw = {
+  role: string;
+  provider: string;
+  model: string;
+  tier?: string;
+  skills?: string[];
+  projectHints?: string[];
+  projectIds?: number[];
+  systemPromptOverride?: string;
+  [k: string]: unknown;
+};
+
+/**
+ * "Agents per project" panel. Pivots the role_assignments array (where
+ * the binding lives as `role.projectIds`) into a project-first view so
+ * the operator thinks "who works on this project?" instead of "which
+ * projects does this role touch?". The master's prompt mirrors this
+ * view, and `spawn_subordinate_agent` enforces the binding.
+ */
+function ProjectRolesBinding({
+  projects,
+  roleAssignments,
+  onUpdate,
 }: {
-  prompt: MasterPrompt;
-  onAnswerQuestion: (answer: string) => void;
-  onRespondPlan: (approved: boolean, feedback?: string) => void;
+  projects: Array<{ project_id: number; project_name: string; label: string | null }>;
+  roleAssignments: RoleAssignmentRaw[];
+  onUpdate: (updated: RoleAssignmentRaw[]) => void | Promise<void>;
 }) {
-  const { t } = useTranslation(['agents', 'common']);
-  const [text, setText] = useState('');
-  const [feedback, setFeedback] = useState('');
+  const { t } = useTranslation(['agents']);
+  const nonMasterRoles = roleAssignments.filter((r) => r.role !== 'master');
 
-  const isPlan = prompt.kind === 'plan';
-  const isPending = prompt.status === 'pending';
-  const isAnswered = prompt.status === 'answered';
-  const isCancelled = prompt.status === 'cancelled';
+  function rolesBoundTo(projectId: number): string[] {
+    return nonMasterRoles
+      .filter((r) => Array.isArray(r.projectIds) && r.projectIds!.includes(projectId))
+      .map((r) => r.role);
+  }
 
-  const accent = isPlan ? 'yellow' : 'blue';
-  const tone = isPending
-    ? `border-${accent}-500/40 bg-${accent}-500/5`
-    : isAnswered
-      ? 'border-emerald-500/30 bg-emerald-500/5'
-      : 'border-muted bg-muted/20';
-  const Icon = isPlan ? Crown : HelpCircle;
-  const iconColor = isPlan ? 'text-yellow-400' : 'text-blue-400';
-  const headerLabel = isPlan
-    ? t('agents:company.planApproval')
-    : t('agents:company.masterQuestion');
+  function unboundForProject(projectId: number): string[] {
+    const bound = new Set(rolesBoundTo(projectId));
+    return nonMasterRoles.filter((r) => !bound.has(r.role)).map((r) => r.role);
+  }
+
+  function setBinding(roleName: string, nextIds: number[]) {
+    const updated = roleAssignments.map((r) => {
+      if (r.role !== roleName) return r;
+      const trimmed = nextIds.length > 0 ? nextIds : undefined;
+      const { projectIds: _drop, ...rest } = r;
+      return trimmed ? { ...rest, projectIds: trimmed } : rest;
+    });
+    void onUpdate(updated);
+  }
+
+  function addRoleToProject(roleName: string, projectId: number) {
+    const role = roleAssignments.find((r) => r.role === roleName);
+    if (!role) return;
+    const current = Array.isArray(role.projectIds) ? role.projectIds : [];
+    if (current.includes(projectId)) return;
+    setBinding(roleName, [...current, projectId]);
+  }
+
+  function removeRoleFromProject(roleName: string, projectId: number) {
+    const role = roleAssignments.find((r) => r.role === roleName);
+    if (!role || !Array.isArray(role.projectIds)) return;
+    setBinding(roleName, role.projectIds.filter((id) => id !== projectId));
+  }
+
+  if (nonMasterRoles.length === 0) return null;
 
   return (
-    <div className={cn('rounded-lg border-2 p-4', tone)}>
-      <div className="flex items-center gap-2 mb-2">
-        <Icon className={cn('h-4 w-4', iconColor)} />
-        <span className="text-sm font-medium">{headerLabel}</span>
-        {isAnswered && (
-          <Badge variant="outline" className="text-[10px] gap-1 border-emerald-500/40 text-emerald-500">
-            <CheckCircle className="h-2.5 w-2.5" /> {t('common:actions.answered', 'Answered')}
-          </Badge>
-        )}
-        {isCancelled && (
-          <Badge variant="outline" className="text-[10px] gap-1 text-muted-foreground">
-            <Ban className="h-2.5 w-2.5" /> {t('agents:company.promptCancelled', 'Cancelled')}
-          </Badge>
-        )}
-        <span className="ml-auto text-[10px] text-muted-foreground">
-          {new Date(prompt.created_at + 'Z').toLocaleString()}
-        </span>
+    <div>
+      <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5">
+        {t('agents:projectAgents.title', 'Agents per project')}
+      </p>
+      <div className="space-y-1.5">
+        {projects.map((p) => {
+          const bound = rolesBoundTo(p.project_id);
+          const available = unboundForProject(p.project_id);
+          return (
+            <div key={p.project_id} className="rounded border p-1.5 space-y-1">
+              <div className="flex items-center gap-1 text-[10px] font-medium">
+                <FolderGit2 className="h-2.5 w-2.5 text-muted-foreground" />
+                <span className="truncate">{p.project_name}</span>
+                {p.label && <span className="text-muted-foreground">[{p.label}]</span>}
+              </div>
+              <div className="flex flex-wrap gap-1 items-center">
+                {bound.length === 0 && (
+                  <span className="text-[9px] text-muted-foreground">
+                    {t('agents:projectAgents.noRoles', 'No roles bound')}
+                  </span>
+                )}
+                {bound.map((roleName) => (
+                  <span
+                    key={roleName}
+                    className="inline-flex items-center gap-0.5 text-[9px] rounded-full border bg-muted/50 px-1.5 py-0.5"
+                  >
+                    <span className="capitalize">{roleName}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeRoleFromProject(roleName, p.project_id)}
+                      className="text-muted-foreground hover:text-destructive transition-colors"
+                      title={t('agents:projectAgents.removeRole', 'Unbind')}
+                    >
+                      <X className="h-2 w-2" />
+                    </button>
+                  </span>
+                ))}
+                {available.length > 0 && (
+                  <AddRoleToProjectMenu
+                    available={available}
+                    onPick={(roleName) => addRoleToProject(roleName, p.project_id)}
+                  />
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
+    </div>
+  );
+}
 
-      {isPlan ? (
-        <div className="bg-background rounded-md border p-3 mb-3 text-xs whitespace-pre-wrap max-h-60 overflow-y-auto">
-          {prompt.body}
-        </div>
-      ) : (
-        <p className="text-sm mb-3 whitespace-pre-wrap">{prompt.body}</p>
-      )}
+function AddRoleToProjectMenu({
+  available,
+  onPick,
+}: {
+  available: string[];
+  onPick: (roleName: string) => void;
+}) {
+  const { t } = useTranslation('agents');
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
 
-      {/* Option buttons (questions only, when pending) */}
-      {isPending && !isPlan && prompt.options && prompt.options.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-3">
-          {prompt.options.map((opt) => (
-            <Button
-              key={opt.value}
-              size="sm"
-              variant="outline"
-              onClick={() => onAnswerQuestion(opt.value)}
+  React.useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-0.5 text-[9px] rounded-full border border-dashed px-1.5 py-0.5 text-muted-foreground hover:text-foreground hover:border-solid transition-colors"
+        title={t('agents:projectAgents.addRole', 'Add role')}
+      >
+        <Plus className="h-2 w-2" />
+        <span>{t('agents:projectAgents.addRole', 'Add role')}</span>
+      </button>
+      {open && (
+        <div className="absolute z-10 mt-1 min-w-[120px] rounded-md border bg-popover shadow-md py-1 text-[10px]">
+          {available.map((roleName) => (
+            <button
+              key={roleName}
+              type="button"
+              onClick={() => { onPick(roleName); setOpen(false); }}
+              className="w-full text-left px-2 py-1 hover:bg-muted capitalize"
             >
-              {opt.label}
-            </Button>
+              {roleName}
+            </button>
           ))}
         </div>
-      )}
-
-      {/* Pending — questions: freeform answer */}
-      {isPending && !isPlan && (prompt.allow_freeform || !prompt.options || prompt.options.length === 0) && (
-        <div className="flex gap-2">
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder={t('agents:company.answerPlaceholder')}
-            className="flex-1 rounded-md border bg-background px-3 py-1.5 text-xs resize-none"
-            rows={2}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && text.trim()) {
-                e.preventDefault();
-                onAnswerQuestion(text.trim());
-              }
-            }}
-          />
-          <Button
-            size="sm"
-            variant="default"
-            onClick={() => text.trim() && onAnswerQuestion(text.trim())}
-            disabled={!text.trim()}
-            className="self-end gap-1"
-          >
-            <Send className="h-3.5 w-3.5" /> {t('agents:company.answer')}
-          </Button>
-        </div>
-      )}
-
-      {/* Pending — plans: approve/reject + feedback */}
-      {isPending && isPlan && (
-        <>
-          <textarea
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            placeholder={t('agents:company.feedbackPlaceholder')}
-            className="w-full rounded-md border bg-background px-3 py-1.5 text-xs resize-none mb-2"
-            rows={2}
-          />
-          <div className="flex gap-2">
-            <Button size="sm" variant="default" onClick={() => onRespondPlan(true, feedback || undefined)} className="gap-1">
-              <CheckCircle className="h-3.5 w-3.5" /> {t('common:actions.approve')}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => onRespondPlan(false, feedback || undefined)} className="gap-1 text-destructive">
-              <XCircle className="h-3.5 w-3.5" /> {t('common:actions.reject')}
-            </Button>
-          </div>
-        </>
-      )}
-
-      {/* Answered — show what the human chose */}
-      {isAnswered && !isPlan && prompt.answer != null && (
-        <div className="rounded-md bg-background border px-3 py-2 text-xs whitespace-pre-wrap">
-          <span className="text-muted-foreground mr-1">›</span>
-          {prompt.answer}
-        </div>
-      )}
-      {isAnswered && isPlan && (
-        <div className="rounded-md bg-background border px-3 py-2 text-xs">
-          <span className={cn('font-medium', prompt.approved ? 'text-emerald-500' : 'text-destructive')}>
-            {prompt.approved ? t('common:actions.approved', 'Approved') : t('common:actions.rejected', 'Rejected')}
-          </span>
-          {prompt.feedback && (
-            <span className="text-muted-foreground"> — {prompt.feedback}</span>
-          )}
-        </div>
-      )}
-
-      {/* Cancelled — neutral note */}
-      {isCancelled && (
-        <p className="text-xs text-muted-foreground italic">
-          {t(
-            'agents:company.promptCancelledNote',
-            'Session ended before this was answered.',
-          )}
-        </p>
       )}
     </div>
   );
@@ -666,5 +874,119 @@ function RoleModelEditor({ role, providerOptions, getModelsForProvider, getDefau
         <Check className="h-2.5 w-2.5" /> {t('agents:kanban.card.apply')}
       </Button>
     </div>
+  );
+}
+
+/**
+ * Project chip with inline rename — click the name, edit, Enter/blur
+ * commits via PATCH /api/projects/:id. Keeps the synthetic
+ * `_BUILDER_<uuid>` IDs in the DB (they're used as idempotency keys
+ * by the session delete cleanup) while letting users give them human
+ * names they actually recognize.
+ *
+ * On double-click anywhere on the chip, and on the pencil icon, the
+ * input takes focus. Escape discards; empty strings are rejected at
+ * the API layer (projects.name has a NOT NULL + UNIQUE constraint).
+ */
+function ProjectBadge({
+  projectId,
+  name,
+  label,
+  onRenamed,
+  onDelete,
+  canDelete,
+}: {
+  projectId: number;
+  name: string;
+  label: string | null;
+  onRenamed: () => void;
+  onDelete: () => void | Promise<void>;
+  canDelete: boolean;
+}) {
+  const [editing, setEditing] = React.useState(false);
+  const [value, setValue] = React.useState(name);
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => setValue(name), [name]);
+
+  async function save() {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === name) {
+      setEditing(false);
+      setValue(name);
+      return;
+    }
+    setSaving(true);
+    try {
+      const r = await fetch(`/api/projects/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (r.ok) {
+        onRenamed();
+        setEditing(false);
+      } else {
+        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        alert(body.error ?? `HTTP ${r.status}`);
+        setValue(name);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 bg-background">
+        <FolderGit2 className="h-2.5 w-2.5 text-muted-foreground" />
+        <input
+          className="text-[10px] bg-transparent outline-none w-40"
+          value={value}
+          autoFocus
+          disabled={saving}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void save();
+            else if (e.key === 'Escape') {
+              setValue(name);
+              setEditing(false);
+            }
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <Badge
+      variant="outline"
+      className="text-[10px] gap-1 group/badge hover:bg-muted/50"
+    >
+      <FolderGit2
+        className="h-2.5 w-2.5 cursor-pointer"
+        onClick={() => setEditing(true)}
+      />
+      <span
+        className="truncate max-w-[180px] cursor-pointer"
+        title="Click to rename"
+        onClick={() => setEditing(true)}
+        onDoubleClick={() => setEditing(true)}
+      >
+        {name}
+      </span>
+      {label && <span className="text-muted-foreground">({label})</span>}
+      {canDelete && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); void onDelete(); }}
+          className="ml-0.5 opacity-0 group-hover/badge:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+          title={label ? 'Remove microservice (destroys container)' : 'Unlink project from session'}
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      )}
+    </Badge>
   );
 }

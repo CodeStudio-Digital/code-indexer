@@ -16,6 +16,16 @@ export interface CompanyRoleConfig {
   /** Skill IDs to enable for this role. When set, configures session-level
    *  skill overrides so only these skills are active during the agent's run. */
   skills?: string[];
+  /**
+   * Concrete project ids this role is bound to in THIS session. When set,
+   * `spawn_subordinate_agent` auto-resolves `project_id` (single binding) or
+   * enforces that the master-supplied id is one of them (multi-binding).
+   * Empty/undefined = unbound (legacy free-form behaviour).
+   *
+   * Session-level only; never persisted in `company_templates.roles_json`
+   * because project ids don't exist until a session is created.
+   */
+  projectIds?: number[];
 }
 
 export interface CompanyTemplate {
@@ -30,6 +40,23 @@ export interface CompanyTemplate {
 // ─── Company Session ───────────────────────────────────────────
 
 export type CompanySessionStatus = 'idle' | 'running' | 'paused' | 'completed' | 'error';
+
+/**
+ * Entry in the per-session "allowed models" pool. When non-empty, the
+ * master can only spawn subordinates using (provider, model) tuples
+ * listed here. Replaces the previous free-form picking that let the
+ * master hallucinate provider/model strings.
+ */
+export interface AllowedModel {
+  provider: string;
+  model: string;
+  /** Short human label shown in the master's prompt (e.g. "Sonnet 4 — balanced"). */
+  label?: string;
+  /** Hint rendered to the master to guide selection (e.g. "cheap, use for trivia"). */
+  notes?: string;
+  /** When true, this entry is used when the master spawns without specifying provider/model. */
+  is_default?: boolean;
+}
 
 export interface CompanySession {
   id: number;
@@ -64,6 +91,8 @@ export interface CompanyAgentRun {
   status_message: string;
   created_at: string;
   updated_at: string;
+  /** Null = active; non-null = belongs to that archived snapshot (migration 038). */
+  archive_id: number | null;
 }
 
 // ─── Board ─────────────────────────────────────────────────────
@@ -79,6 +108,8 @@ export interface BoardEntry {
   content: string;
   mentions: string[];
   created_at: string;
+  /** Null = active; non-null = belongs to that archived snapshot. */
+  archive_id: number | null;
 }
 
 // ─── Master Prompts (master ↔ human ask_user / submit_plan) ───
@@ -89,6 +120,21 @@ export type MasterPromptStatus = 'pending' | 'answered' | 'cancelled';
 export interface MasterPromptOption {
   label: string;
   value: string;
+}
+
+export interface CompanySessionArchive {
+  id: number;
+  company_session_id: number;
+  archived_at: string;
+  reason: string | null;
+  included_kanban: boolean;
+  included_sandbox: boolean;
+  stats: {
+    agent_runs: number;
+    board_entries: number;
+    master_prompts: number;
+    kanban_cards: number;
+  };
 }
 
 export interface MasterPrompt {
@@ -125,6 +171,68 @@ export interface CompanyContext {
   agentRunId: number | null;
   allowedProjectIds: number[];
   isMaster: boolean;
+  /**
+   * Builder-mode sandbox binding. When present, filesystem/shell tools
+   * are routed into the container referenced here instead of touching
+   * the host filesystem. Populated by `SandboxService` after a successful
+   * provision; absent for normal (non-builder) company sessions.
+   */
+  sandbox?: SandboxBinding;
+}
+
+/**
+ * What a `CompanyContext` carries for builder mode. Consumed by
+ * `runCoder` to swap the default local filesystem/shell ports for
+ * sandbox adapters — transparent to every tool.
+ */
+export interface SandboxBinding {
+  driver: import('../../sandbox/ports/sandbox-driver.js').ISandboxDriver;
+  /**
+   * Current container id for the bound (session, serviceId?) pair.
+   *
+   * Implemented as a live getter by `SandboxService` so that reads
+   * always reflect the latest id known to `SandboxManager`. When a
+   * container is destroyed and recreated (retry, orphan recovery,
+   * `forceRecreate`), long-lived agents keep their binding reference
+   * and automatically pick up the new id on their next tool call —
+   * no rehydrate event or binding invalidation required. Fallback is
+   * the id captured at construction time, preserving behavior when the
+   * manager hasn't rehydrated yet.
+   */
+  containerId: string;
+  /** Absolute container-side workdir (e.g. `/app`). Used as cwd for tools. */
+  workdir: string;
+  /** Public URL the dashboard iframes — kept here so tools/prompts can reference it. */
+  previewUrl: string;
+  /**
+   * Stable per-session service identifier (e.g. 'main', 'frontend', 'api').
+   * Present when the session runs multiple microservices; legacy single-
+   * container sessions default to `'main'`. Used by tools and event
+   * publishers to distinguish which container an action targeted.
+   */
+  serviceId?: string;
+}
+
+/**
+ * One entry in `BuilderSessionConfig.services` — the multi-microservice
+ * form. Each describes a container to provision for the session, joined
+ * into a shared docker network so they can address each other by hostname.
+ */
+export interface BuilderServiceConfig {
+  /** Stable identifier; doubles as the in-network hostname. */
+  serviceId: string;
+  /** Human-readable label shown in the dashboard; falls back to serviceId. */
+  name?: string;
+  /** Free-form stack key validated by the scaffolder registry at runtime. */
+  stack: string;
+  /** Optional per-service CPU/memory/pids override. */
+  limits?: {
+    memory?: string;
+    cpus?: string;
+    pids?: number;
+  };
+  /** When true, this service is the default preview iframe shown by the UI. */
+  primary?: boolean;
 }
 
 // ─── Kanban ───────────────────────────────────────────────────
@@ -145,6 +253,8 @@ export interface KanbanCard {
   created_by: string;
   created_at: string;
   updated_at: string;
+  /** Null = active; non-null = belongs to that archived snapshot. */
+  archive_id: number | null;
 }
 
 export interface KanbanChecklistItem {

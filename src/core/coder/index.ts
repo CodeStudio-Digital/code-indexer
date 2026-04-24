@@ -10,6 +10,12 @@ import { buildSystemPrompt } from './core/system-prompt.js';
 import { fsTools } from './tools/fs.js';
 import { shellTools } from './tools/shell.js';
 import { gitTools } from './tools/git.js';
+import {
+  defaultLocalFilesystemPort,
+  defaultLocalShellPort,
+} from './ports/index.js';
+import { SandboxFilesystemAdapter } from '../sandbox/adapters/sandbox-filesystem-adapter.js';
+import { SandboxShellAdapter } from '../sandbox/adapters/sandbox-shell-adapter.js';
 import { planTools } from './tools/plan.js';
 import { tasksTools, executeTask, taskComplete } from './tools/tasks.js';
 import { interactionTools } from './tools/interaction.js';
@@ -22,6 +28,10 @@ import { buildMasterTools } from './tools/company/master-tools.js';
 import { buildKanbanTools } from './tools/company/kanban-tools.js';
 import { buildBoardTools } from './tools/company/board-tools.js';
 import { buildSubordinateTools } from './tools/company/subordinate-tools.js';
+import { sandboxTools } from './tools/company/sandbox-tools.js';
+import { docsTools } from './tools/company/docs-tools.js';
+import { envTools } from './tools/company/env-tools.js';
+import { databaseTools } from './tools/company/database-tools.js';
 import { buildSubordinateKanbanTools } from './tools/company/subordinate-kanban-tools.js';
 import { isMasterAllowed } from './tools/company/master-filter.js';
 import { RuntimeHookRegistry } from './core/hook-registry.js';
@@ -40,7 +50,8 @@ import { todoTools } from './tools/todo.js';
 import { worktreeTools, createProjectWorktree } from './tools/worktree.js';
 import { SkillStore } from '../../store/skill-store.js';
 import type { ResolvedSkill, SkillTemplateContext } from './skills/types.js';
-import { buildInvokeSkillTool } from './skills/skill-tool-builder.js';
+import { buildInvokeSkillTool, buildSkillDiscoveryTools } from './skills/skill-tool-builder.js';
+import { buildSkillsPromptSection } from './skills/prompt-injector.js';
 import { SessionStore } from './sessions/store.js';
 import { ProviderStore } from '../../store/provider-store.js';
 import type { CoderSession } from './sessions/types.js';
@@ -115,6 +126,8 @@ export interface RunCoderOptions {
   companyContext?: import('./company/types.js').CompanyContext;
   /** Extra system prompt block for company agents (master/subordinate). Appended to the base prompt. */
   companyPromptBlock?: string;
+  /** Role identity text (from template systemPromptOverride) re-injected after compaction. */
+  companyRoleOverride?: string;
   /**
    * Resolver for OAuth bearer tokens of external MCP servers. When provided,
    * external servers with `auth_type='oauth2'` automatically receive
@@ -227,6 +240,26 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     registry.registerAll(planTools);
     registry.registerAll(tasksTools);
     registry.registerAll(interactionTools);
+  }
+  // Sandbox-introspection tools (read_sandbox_logs): offered to both
+  // master and subordinates whenever the session has a builder
+  // sandbox attached. Without the binding the tool has nothing to
+  // inspect, so we gate registration on its presence.
+  if (opts.companyContext?.sandbox) {
+    registry.registerAll(sandboxTools);
+    // Docs tools are sandbox-only: they write into `<workdir>/docs/`
+    // which only exists when a container is attached. Registering them
+    // without a sandbox would expose agents to no-op tools that always
+    // error out — better to hide them.
+    registry.registerAll(docsTools);
+    // Env tools manage session-shared env vars used by every container.
+    // Gated on the same sandbox presence check so they only appear in
+    // builder-mode sessions.
+    registry.registerAll(envTools);
+    // Database tools let the agent query/introspect Postgres/MySQL
+    // instances the user registered in the Databases tab. Same gate as
+    // env/docs — no sandbox means no multi-service scenario to support.
+    registry.registerAll(databaseTools);
   }
   // expand_toolset registered AFTER external MCP servers (see below) so its
   // tier enum can include custom tiers dynamically.
@@ -363,8 +396,51 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   }
 
+  // Builder mode: when the company context carries a sandbox binding,
+  // we pin `cwd` to the container workdir and swap the default ports
+  // for sandbox-backed adapters. Every filesystem/shell tool from here
+  // on transparently talks to the container — no conditional in the
+  // tool code. The host `project.root_path` is ignored because there
+  // is no host-side project in builder mode (yet).
+  const sandboxBinding = opts.companyContext?.sandbox;
+  // Defense-in-depth: if this is a builder-mode session (project sits
+  // under `data/virtual-projects/`) but the companyContext has no
+  // sandbox binding, something dropped it between orchestrator and
+  // runCoder. The fallback below will use LocalFilesystemAdapter and
+  // writes will silently land on the host — exactly the resume-path
+  // bug we chased. Emit a loud warning so future regressions are
+  // caught on the first run instead of via user screenshots.
+  if (
+    opts.companyContext &&
+    !sandboxBinding &&
+    project.root_path.replace(/\\/g, '/').includes('/data/virtual-projects/')
+  ) {
+    console.warn(
+      `[coder] SUSPICIOUS: builder-mode session (project="${project.name}") but ` +
+        `companyContext.sandbox is undefined — writes will land on the host at ` +
+        `${project.root_path} instead of the sandbox container. This is almost ` +
+        `certainly a missing binding-propagation in the orchestrator.`,
+    );
+  }
+  const effectiveCwd = sandboxBinding
+    ? sandboxBinding.workdir
+    : resolvePath(project.root_path);
+  const fsPort = sandboxBinding
+    ? new SandboxFilesystemAdapter({
+        driver: sandboxBinding.driver,
+        containerId: sandboxBinding.containerId,
+      })
+    : defaultLocalFilesystemPort();
+  const shellPort = sandboxBinding
+    ? new SandboxShellAdapter({
+        driver: sandboxBinding.driver,
+        containerId: sandboxBinding.containerId,
+        defaultCwd: sandboxBinding.workdir,
+      })
+    : defaultLocalShellPort();
+
   const toolContext: ToolContext = {
-    cwd: resolvePath(project.root_path),
+    cwd: effectiveCwd,
     projectName: project.name,
     overlay,
     toolOutputStore,
@@ -415,6 +491,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     },
     companyContext: opts.companyContext,
+    // Ports: sandbox-backed when the session is in builder mode,
+    // otherwise local host filesystem/shell. Tools consume `ctx.ports`
+    // uniformly and never branch on mode.
+    ports: {
+      fs: fsPort,
+      shell: shellPort,
+    },
   };
 
   // Load existing history FIRST so we can detect fresh vs resumed sessions
@@ -454,21 +537,27 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     console.warn(`[coder] skill resolution failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  // Register invoke_skill tool if any tool-mode skills exist
-  const toolModeSkills = resolvedSkills.filter(
-    (s) => s.contextMode === 'tool' || s.contextMode === 'both',
-  );
-  if (toolModeSkills.length > 0) {
-    const skillTemplateCtx: SkillTemplateContext = {
-      PROJECT_NAME: project.name,
-      PROJECT_ROOT: project.root_path,
-      SESSION_ID: String(session.id),
-      OS: process.platform,
-      TIMESTAMP: new Date().toISOString(),
-    };
-    registry.register(
-      buildInvokeSkillTool(toolModeSkills, skillTemplateCtx, config.dbPath, session.id),
+  const skillTemplateCtx: SkillTemplateContext = {
+    PROJECT_NAME: project.name,
+    PROJECT_ROOT: project.root_path,
+    SESSION_ID: String(session.id),
+    OS: process.platform,
+    TIMESTAMP: new Date().toISOString(),
+  };
+
+  if (resolvedSkills.length > 0) {
+    // Discovery tools — always registered for all active skills
+    registry.registerAll(buildSkillDiscoveryTools(resolvedSkills, skillTemplateCtx));
+
+    // invoke_skill — only for tool-mode skills (logs usage)
+    const toolModeSkills = resolvedSkills.filter(
+      (s) => s.contextMode === 'tool' || s.contextMode === 'both',
     );
+    if (toolModeSkills.length > 0) {
+      registry.register(
+        buildInvokeSkillTool(toolModeSkills, skillTemplateCtx, config.dbPath, session.id),
+      );
+    }
   }
 
   // Detect indexing status — used for prompt conditioning and dashboard feedback.
@@ -483,7 +572,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     planMode: opts.planMode,
     providerFamily: session.provider as CoderProviderName,
     profile: preResolvedProfile,
-    skills: resolvedSkills.length > 0 ? resolvedSkills : undefined,
     sessionId: String(session.id),
     customTiers: customTierSummary.size > 0
       ? [...customTierSummary.entries()].map(([tier, info]) => ({
@@ -498,6 +586,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Append company prompt block (master orchestration or subordinate instructions)
   if (opts.companyPromptBlock) {
     systemPrompt += '\n' + opts.companyPromptBlock;
+  }
+
+  // Append skill awareness block — compact list + instructions to call get_skill_content
+  if (resolvedSkills.length > 0) {
+    systemPrompt += buildSkillsPromptSection(resolvedSkills, skillTemplateCtx);
   }
 
   // Reuse the history we loaded early for profile resolution.
@@ -519,6 +612,36 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       opts.companyContext.agentRunId,
       opts.companyContext.agentRole,
     );
+  }
+
+  // ─── Sandbox preview auto-reload (builder mode only) ──────────
+  // When an agent writes/edits a file inside the sandbox, publish a
+  // `sandbox.file_changed` event on the metaBus so the dashboard can
+  // refresh the iframe without the user clicking reload. Debounced so
+  // a burst of edits in a single turn collapses into one reload.
+  if (opts.companyContext?.sandbox) {
+    const orch = opts.companyContext.orchestrator;
+    const FILE_WRITE_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'multi_edit']);
+    const pending = new Set<string>();
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    hookRegistry.onToolCall('after', (ctx) => {
+      if (!FILE_WRITE_TOOLS.has(ctx.toolName)) return;
+      if (ctx.result?.isError) return;
+      const raw = ctx.toolArgs.path ?? ctx.toolArgs.file_path ?? '';
+      const path = typeof raw === 'string' ? raw : String(raw);
+      if (path) pending.add(path);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const paths = [...pending];
+        pending.clear();
+        debounceTimer = null;
+        try {
+          orch.sandboxService.publishFileChanged(paths);
+        } catch {
+          // best-effort — never crash the runner on a UI-notification hook
+        }
+      }, 300);
+    });
   }
 
   // ─── Fallback chain ───────────────────────────────────────────
@@ -575,6 +698,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     createProvider: createProviderForFallback,
     hookRegistry: hookRegistry.hasHandlers ? hookRegistry : undefined,
     context_window: sessionContextWindow,
+    isCompanySubordinate: opts.companyContext != null && !opts.companyContext.isMaster,
+    companyRoleOverride: opts.companyRoleOverride,
   });
 
   // Rehydrate the lightweight todo list from the DB so a session resume

@@ -1,17 +1,11 @@
 /**
- * Skill prompt injector — builds the system prompt section for inline skills.
+ * Skill prompt injector — builds the system prompt awareness block for active skills.
  *
- * Skills with context_mode 'inline' or 'both' get their prompt_body interpolated
- * and appended as a dedicated section in the system prompt. This section is inserted
- * AFTER the interaction section and BEFORE the project-specific hook output.
- *
- * A configurable budget guard (CODER_SKILL_PROMPT_BUDGET, default 4000 chars)
- * prevents skills from consuming too much of the context window. Skills are
- * included in sort_order; overflow skills are dropped with a notice.
+ * Instead of inlining full skill content (which bloats the prompt with many/large skills),
+ * we inject a compact list of available skill IDs + descriptions and instruct the model
+ * to call `get_skill_content` on demand before starting relevant tasks.
  */
 import type { ResolvedSkill, SkillTemplateContext } from './types.js';
-
-const DEFAULT_BUDGET = 4000;
 
 /**
  * Interpolate `${VAR}` placeholders in a skill prompt.
@@ -24,41 +18,21 @@ export function interpolateSkillVars(template: string, ctx: SkillTemplateContext
 }
 
 /**
- * Build the `# Active Skills` system prompt section from resolved inline skills.
- * Returns empty string if no inline skills are active.
+ * Build a compact `# Active Skills` awareness block for the system prompt.
+ * Lists available skills with ID + description and instructs the model to call
+ * `get_skill_content` before starting relevant tasks — keeping the system prompt
+ * small regardless of how many or how large the skills are.
  */
 export function buildSkillsPromptSection(
   skills: ResolvedSkill[],
-  templateCtx: SkillTemplateContext,
+  _templateCtx: SkillTemplateContext,
 ): string {
-  const inlineSkills = skills.filter(
-    (s) => s.contextMode === 'inline' || s.contextMode === 'both',
-  );
-  if (inlineSkills.length === 0) return '';
+  if (skills.length === 0) return '';
 
-  const budget = parseInt(process.env.CODER_SKILL_PROMPT_BUDGET ?? '', 10) || DEFAULT_BUDGET;
-  let usedChars = 0;
-  const sections: string[] = [];
-  const dropped: string[] = [];
+  const lines = skills.map((s) => {
+    const desc = s.description ? `: ${s.description}` : '';
+    return `- \`${s.id}\`${desc}`;
+  });
 
-  // Skills are already sorted by sortOrder from resolveActiveSkills
-  for (const skill of inlineSkills) {
-    const interpolated = interpolateSkillVars(skill.promptBody, templateCtx);
-    const header = `## Skill: ${skill.name}${skill.slashCommand ? ` (/${skill.slashCommand})` : ''}`;
-    const desc = skill.description ? `${skill.description}\n` : '';
-    const section = `${header}\n${desc}${interpolated}`;
-
-    if (usedChars + section.length > budget && sections.length > 0) {
-      dropped.push(skill.name);
-      continue;
-    }
-    sections.push(section);
-    usedChars += section.length;
-  }
-
-  let result = `\n\n# Active Skills\n\n${sections.join('\n\n')}`;
-  if (dropped.length > 0) {
-    result += `\n\n> ${dropped.length} skill(s) omitted due to prompt budget: ${dropped.join(', ')}`;
-  }
-  return result;
+  return `\n\n# Active Skills\n\nYou have ${skills.length} skill(s) configured for this session. Before starting a task that may be covered by a skill, load its instructions with \`get_skill_content\`.\n\n${lines.join('\n')}\n\nUse \`get_skills_list\` to see all skills or \`get_skill_content\` with a skill ID to load full instructions.`;
 }

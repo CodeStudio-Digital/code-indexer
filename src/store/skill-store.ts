@@ -13,6 +13,12 @@ type DB = InstanceType<typeof Database>;
 
 // ─── Public types ────────────────────────────────────────────────
 
+export interface SkillSourceRef {
+  repo: string;
+  commit: string;
+  path: string;
+}
+
 export interface SkillDefinition {
   id: string;
   name: string;
@@ -32,6 +38,7 @@ export interface SkillDefinition {
   author: string | null;
   version: string;
   source: SkillSource;
+  source_ref: SkillSourceRef | null;
   created_at: string;
   updated_at: string;
 }
@@ -55,6 +62,7 @@ export interface UpsertSkillInput {
   author?: string | null;
   version?: string;
   source?: SkillSource;
+  source_ref?: SkillSourceRef | null;
 }
 
 export interface SkillUsageInput {
@@ -98,6 +106,7 @@ interface SkillRaw {
   author: string | null;
   version: string;
   source: string;
+  source_ref: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -141,6 +150,7 @@ function hydrate(r: SkillRaw): SkillDefinition {
     author: r.author,
     version: r.version,
     source: r.source as SkillSource,
+    source_ref: parseJson<SkillSourceRef | null>(r.source_ref, null),
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -232,7 +242,7 @@ export class SkillStore {
              scope = ?, enabled = ?, allowed_tools = ?, model_override = ?,
              provider_override = ?, context_mode = ?, variables = ?,
              sort_order = ?, tags = ?, path_patterns = ?, author = ?,
-             version = ?, source = ?, updated_at = ?
+             version = ?, source = ?, source_ref = ?, updated_at = ?
            WHERE id = ?`,
         )
         .run(
@@ -253,6 +263,9 @@ export class SkillStore {
           input.author !== undefined ? input.author : existing.author,
           input.version ?? existing.version,
           input.source ?? existing.source,
+          input.source_ref !== undefined
+            ? (input.source_ref ? JSON.stringify(input.source_ref) : null)
+            : (existing.source_ref ? JSON.stringify(existing.source_ref) : null),
           now,
           input.id,
         );
@@ -263,8 +276,8 @@ export class SkillStore {
              (id, name, description, slash_command, prompt_body, scope, enabled,
               allowed_tools, model_override, provider_override, context_mode,
               variables, sort_order, tags, path_patterns, author, version, source,
-              created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              source_ref, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
@@ -285,6 +298,7 @@ export class SkillStore {
           input.author ?? null,
           input.version ?? '1.0.0',
           input.source ?? 'user',
+          input.source_ref ? JSON.stringify(input.source_ref) : null,
           now,
           now,
         );

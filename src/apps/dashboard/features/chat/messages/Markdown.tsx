@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cn } from '../../../lib/utils.js';
@@ -13,10 +14,10 @@ const baseClasses =
 const defaultClasses =
   'dark:prose-invert prose-pre:bg-card prose-pre:border prose-pre:text-foreground prose-code:bg-muted prose-code:text-foreground prose-a:text-primary prose-strong:text-foreground';
 
-export function Markdown({ text, className }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ text, className }: MarkdownProps) {
   return (
     <div className={cn(baseClasses, !className && defaultClasses, className)}>
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
     </div>
   );
-}
+});

@@ -5,6 +5,9 @@ import { mountCompanySessionRoutes } from './sessions.js';
 import { mountCompanyStreamRoutes } from './stream.js';
 import { mountCompanyBoardRoutes } from './board.js';
 import { mountCompanyKanbanRoutes } from './kanban.js';
+import { mountCompanyArchiveRoutes } from './archives.js';
+import { mountCompanyDatabaseRoutes } from './databases.js';
+import { mountCompanyLocalProjectRoutes } from './local-project.js';
 
 export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyTemplateRoutes(app, deps);
@@ -12,4 +15,7 @@ export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyStreamRoutes(app, deps);
   mountCompanyBoardRoutes(app, deps);
   mountCompanyKanbanRoutes(app, deps);
+  mountCompanyArchiveRoutes(app, deps);
+  mountCompanyDatabaseRoutes(app, deps);
+  mountCompanyLocalProjectRoutes(app, deps);
 }

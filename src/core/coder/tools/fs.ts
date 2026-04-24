@@ -1,9 +1,20 @@
-import { promises as fs } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
 import type { CoderTool, ToolContext, ToolResult } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
 import { CASCADING_REPLACERS, type ReplacerHit } from './edit-replacers.js';
-import { resolveSafe as resolveSafePath } from './paths.js';
+import { resolveSafe as resolveSafePath, pathFor } from './paths.js';
+import {
+  defaultLocalFilesystemPort,
+  type IFilesystemPort,
+} from '../ports/filesystem-port.js';
+
+/**
+ * Resolve the filesystem port for a tool invocation. Falls back to the
+ * process-wide local adapter when no port is wired (tests, legacy code
+ * paths). Behavior is byte-for-byte identical to calling node:fs directly.
+ */
+function fsPort(ctx: ToolContext): IFilesystemPort {
+  return ctx.ports?.fs ?? defaultLocalFilesystemPort();
+}
 import {
   WRITE_FILE_DESC,
   CREATE_FILE_DESC,
@@ -36,8 +47,9 @@ const writeFile: CoderTool = {
     const content = String(args.content ?? '');
     const abs = resolveSafe(path, ctx);
     if (!abs) return err(`Path '${path}' is outside project root`);
-    await fs.mkdir(dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content, 'utf-8');
+    const fs = fsPort(ctx);
+    await fs.mkdir(pathFor(ctx.cwd).dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content);
     ctx.overlay?.mark(path);
     const lines = content.split('\n').length;
     return ok(`Wrote ${path} (${lines} lines, ${content.length} bytes)`);
@@ -62,14 +74,15 @@ const createFile: CoderTool = {
     const content = String(args.content ?? '');
     const abs = resolveSafe(path, ctx);
     if (!abs) return err(`Path '${path}' is outside project root`);
+    const fs = fsPort(ctx);
     try {
       await fs.access(abs);
       return err(`File ${path} already exists. Use write_file or edit_file to modify it.`);
     } catch {
       // Doesn't exist — proceed
     }
-    await fs.mkdir(dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content, 'utf-8');
+    await fs.mkdir(pathFor(ctx.cwd).dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content);
     ctx.overlay?.mark(path);
     return ok(`Created ${path} (${content.length} bytes)`);
   },
@@ -276,10 +289,11 @@ const editFile: CoderTool = {
 
     const abs = resolveSafe(path, ctx);
     if (!abs) return err(`Path '${path}' is outside project root`);
+    const fs = fsPort(ctx);
 
     let content: string;
     try {
-      content = await fs.readFile(abs, 'utf-8');
+      content = await fs.readFile(abs);
     } catch {
       return err(`File ${path} not found`);
     }
@@ -298,7 +312,7 @@ const editFile: CoderTool = {
     for (const { label, transform } of strategies) {
       const r = applyEditWithTransform(content, oldStr, newStr, replaceAll, transform, label);
       if (r.applied && r.content !== undefined) {
-        await fs.writeFile(abs, r.content, 'utf-8');
+        await fs.writeFile(abs, r.content);
         ctx.overlay?.mark(path);
         const suffix = r.strategy === 'exact' ? '' : ` [matched via: ${r.strategy}]`;
         return ok(`Edited ${path} (${r.occurrences} replacement${r.occurrences === 1 ? '' : 's'})${suffix}`);
@@ -330,7 +344,7 @@ const editFile: CoderTool = {
         break;
       }
       const updated = applyHits(content, hits, newStr, replaceAll);
-      await fs.writeFile(abs, updated, 'utf-8');
+      await fs.writeFile(abs, updated);
       ctx.overlay?.mark(path);
       return ok(`Edited ${path} (${hits.length} replacement${hits.length === 1 ? '' : 's'}) [matched via: ${label}]`);
     }
@@ -389,7 +403,7 @@ const readFile: CoderTool = {
 
     let content: string;
     try {
-      content = await fs.readFile(abs, 'utf-8');
+      content = await fsPort(ctx).readFile(abs);
     } catch (e) {
       return err(`File ${path} not found: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -432,10 +446,12 @@ const listDirectory: CoderTool = {
     if (!abs) return err(`Path '${path}' is outside project root`);
 
     try {
+      const fs = fsPort(ctx);
       const recursive = Boolean(args.recursive);
+      const p = pathFor(ctx.cwd);
       const entries = recursive
-        ? await walkDir(abs, ctx.cwd)
-        : (await fs.readdir(abs, { withFileTypes: true })).map((e) => `${e.isDirectory() ? 'd' : 'f'} ${relative(ctx.cwd, resolve(abs, e.name)).replace(/\\/g, '/')}`);
+        ? await walkDir(fs, abs, ctx.cwd)
+        : (await fs.readdir(abs, { withFileTypes: true })).map((e) => `${e.isDirectory() ? 'd' : 'f'} ${p.relative(ctx.cwd, p.resolve(abs, e.name)).replace(/\\/g, '/')}`);
       const lines = entries.sort();
       return ok(`${path} (${lines.length} entries)\n${lines.join('\n')}`);
     } catch (e) {
@@ -444,17 +460,18 @@ const listDirectory: CoderTool = {
   },
 };
 
-async function walkDir(abs: string, projectRoot: string, depth = 0, max = 4): Promise<string[]> {
+async function walkDir(fs: IFilesystemPort, abs: string, projectRoot: string, depth = 0, max = 4): Promise<string[]> {
   if (depth > max) return [];
+  const p = pathFor(projectRoot);
   const out: string[] = [];
   const entries = await fs.readdir(abs, { withFileTypes: true });
   for (const e of entries) {
     if (e.name.startsWith('.') || e.name === 'node_modules' || e.name === 'dist') continue;
-    const full = resolve(abs, e.name);
-    const rel = relative(projectRoot, full).replace(/\\/g, '/');
+    const full = p.resolve(abs, e.name);
+    const rel = p.relative(projectRoot, full).replace(/\\/g, '/');
     if (e.isDirectory()) {
       out.push(`d ${rel}`);
-      out.push(...(await walkDir(full, projectRoot, depth + 1, max)));
+      out.push(...(await walkDir(fs, full, projectRoot, depth + 1, max)));
     } else {
       out.push(`f ${rel}`);
     }
@@ -563,10 +580,11 @@ const multiEdit: CoderTool = {
 
     const abs = resolveSafe(path, ctx);
     if (!abs) return err(`Path '${path}' is outside project root`);
+    const fs = fsPort(ctx);
 
     let content: string;
     try {
-      content = await fs.readFile(abs, 'utf-8');
+      content = await fs.readFile(abs);
     } catch {
       return err(`File ${path} not found`);
     }
@@ -594,7 +612,7 @@ const multiEdit: CoderTool = {
       applied.push({ index: i, strategy: r.strategy, occurrences: r.occurrences });
     }
 
-    await fs.writeFile(abs, current, 'utf-8');
+    await fs.writeFile(abs, current);
     ctx.overlay?.mark(path);
 
     const summary = applied

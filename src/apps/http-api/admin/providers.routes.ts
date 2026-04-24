@@ -77,6 +77,7 @@ export function providersRouter(store: ProviderStore): Hono {
       enabled?: boolean;
       use_for_agent?: boolean;
       use_for_coder?: boolean;
+      use_for_general?: boolean;
       is_default?: boolean;
       extra?: Record<string, unknown>;
     }>();
@@ -103,6 +104,7 @@ export function providersRouter(store: ProviderStore): Hono {
       enabled?: boolean;
       use_for_agent?: boolean;
       use_for_coder?: boolean;
+      use_for_general?: boolean;
       is_default?: boolean;
       extra?: Record<string, unknown>;
       fallback_provider_id?: string | null;
@@ -119,6 +121,7 @@ export function providersRouter(store: ProviderStore): Hono {
       enabled: body.enabled ?? existing.enabled,
       use_for_agent: body.use_for_agent ?? existing.use_for_agent,
       use_for_coder: body.use_for_coder ?? existing.use_for_coder,
+      use_for_general: body.use_for_general ?? existing.use_for_general,
       is_default: body.is_default ?? existing.is_default,
       extra: body.extra ?? existing.extra,
     });

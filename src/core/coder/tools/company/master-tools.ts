@@ -21,6 +21,8 @@ export function buildMasterTools(orchestrator: CompanyOrchestrator): CoderTool[]
     listCompanyProjects(orchestrator),
     forwardToAgent(orchestrator),
     finalizeSubordinates(orchestrator),
+    listContainers(orchestrator),
+    readContainerLogs(orchestrator),
   ];
 }
 
@@ -32,20 +34,32 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
     properties: {
       role: { type: 'string', description: 'Agent role name (e.g. "frontend", "backend", "qa", "po", "reviewer", "critic")' },
       task: { type: 'string', description: 'Task description for the subordinate agent' },
-      project_id: { type: 'number', description: 'ID of the project this agent should work on (from list_company_projects)' },
-      provider: { type: 'string', description: 'Optional LLM provider (e.g. "anthropic", "openai", "zai", "deepseek")' },
-      model: { type: 'string', description: 'Optional model name' },
-      tier: { type: 'string', enum: ['bootstrap', 'navigate', 'full'], description: 'Tool tier for the agent (default: navigate)' },
-      skills: { type: 'array', items: { type: 'string' }, description: 'Optional skill IDs to enable for this agent. Skills provide specialized capabilities (e.g. code review, testing patterns).' },
+      project_id: {
+        type: 'number',
+        description:
+          'Project id to delegate to. OMIT when the role is bound to exactly one project in "PROJECTS AND THEIR AGENTS" — it auto-resolves. Required when the role is bound to multiple projects or has no binding. If provided and not in the role\'s binding, the tool rejects with the allowed ids.',
+      },
+      provider: {
+        type: 'string',
+        description:
+          'LLM provider. IGNORED when the role is listed under YOUR TEAM in the system prompt — those roles are template-locked and always use their configured provider. For untemplated roles: must match an ALLOWED SUBORDINATE MODELS entry when a pool is configured; otherwise free-form.',
+      },
+      model: {
+        type: 'string',
+        description:
+          'Model name. IGNORED when the role is template-locked. For untemplated roles: must pair with `provider` as a tuple listed in ALLOWED SUBORDINATE MODELS (when configured).',
+      },
+      tier: { type: 'string', enum: ['bootstrap', 'navigate', 'full'], description: 'Tool tier for the agent. IGNORED for template-locked roles (template tier wins). Default for untemplated: navigate.' },
+      skills: { type: 'array', items: { type: 'string' }, description: 'Optional skill IDs. IGNORED for template-locked roles (template skills win).' },
       kanban_card_id: { type: 'number', description: 'Optional Kanban card ID. When provided, the card\'s full context (description, checklist, comments) is prepended to the task, the agent is auto-assigned to the card, and the card moves to in_progress.' },
       wait: { type: 'boolean', description: 'If true, block until the subordinate completes (default: false)' },
     },
-    required: ['role', 'task', 'project_id'],
+    required: ['role', 'task'],
   };
 
   return {
     name: 'spawn_subordinate_agent',
-    description: 'Delegate a task to a subordinate agent. The subordinate runs as a full coder session with write access, scoped to the specified project. The task MUST contain your synthesized research findings (specific file paths, functions, changes) — never copy-paste the user request. After calling this with wait=false, immediately call wait_for_subordinates.',
+    description: 'Delegate a task to a subordinate agent. The subordinate runs as a full coder session with write access, scoped to the project the role is bound to. The task MUST contain your synthesized research findings (specific file paths, functions, changes) — never copy-paste the user request. Think project-first: pick a role from the target project\'s "Agents working here" list; omit project_id when the role has a single binding. After calling this with wait=false, immediately call wait_for_subordinates.',
     parameters,
     source: 'native',
     handler: async (args) => {
@@ -62,17 +76,38 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           }
         }
 
-        // Apply template defaults if the LLM didn't specify provider/model/tier
+        // Template enforcement: when the role has an entry in the
+        // session template, the configured provider/model/tier/skills
+        // are LOCKED — the master's own arguments for those fields are
+        // discarded. The template is a commitment from the operator,
+        // not a suggestion. Roles with no template entry fall through
+        // to master-provided values or pool defaults.
         const defaults = orchestrator.getRoleDefaults(role);
+        const templateLocked = defaults !== null;
+        const argProvider = args.provider as string | undefined;
+        const argModel = args.model as string | undefined;
+        const argTier = args.tier as 'bootstrap' | 'navigate' | 'full' | undefined;
+        const argSkills = args.skills as string[] | undefined;
+
+        if (templateLocked && (argProvider || argModel || argTier || argSkills)) {
+          console.warn(
+            `[company] Template-locked role '${role}': ignoring master-provided ` +
+              `provider=${argProvider ?? '∅'} model=${argModel ?? '∅'} ` +
+              `tier=${argTier ?? '∅'} skills=${argSkills ? argSkills.join(',') : '∅'}`,
+          );
+        }
         const result = await orchestrator.spawnSubordinate({
           role,
           task,
-          projectId: args.project_id as number,
-          provider: (args.provider as string | undefined) ?? defaults?.provider,
-          model: (args.model as string | undefined) ?? defaults?.model,
-          tier: (args.tier as 'bootstrap' | 'navigate' | 'full' | undefined) ?? (defaults?.tier as 'bootstrap' | 'navigate' | 'full' | undefined),
-          skills: (args.skills as string[] | undefined) ?? defaults?.skills,
+          projectId: args.project_id as number | undefined,
+          provider: templateLocked ? defaults!.provider : argProvider,
+          model: templateLocked ? defaults!.model : argModel,
+          tier: templateLocked
+            ? (defaults!.tier as 'bootstrap' | 'navigate' | 'full' | undefined)
+            : argTier,
+          skills: templateLocked ? defaults!.skills : argSkills,
           wait: args.wait as boolean | undefined,
+          roleOverride: defaults?.systemPromptOverride,
         });
 
         // Auto-assign agent to Kanban card and move to in_progress
@@ -536,6 +571,119 @@ function resumeSubordinate(orchestrator: CompanyOrchestrator): CoderTool {
       } catch (e) {
         return err(`Failed to resume subordinate: ${e instanceof Error ? e.message : String(e)}`);
       }
+    },
+  };
+}
+
+// ─── list_containers ───────────────────────────────────────────
+
+function listContainers(orchestrator: CompanyOrchestrator): CoderTool {
+  return {
+    name: 'list_containers',
+    description:
+      'Enumerate every sandbox container in this session (primary + each microservice) with a health snapshot: ' +
+      'running state, last exit code, OOM flag, preview URL. Use this right after a subordinate reports completion ' +
+      'on build-touching work (scaffolder, dependency install, dev-server config) to confirm the service actually ' +
+      'came up. Pair with read_container_logs to diagnose anything that is stopped or crashed.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+    source: 'native',
+    handler: async () => {
+      const primary = orchestrator.getSandboxBinding();
+      const services = orchestrator.sandboxService.listServiceBindings();
+      const entries: Array<{ serviceId: string; binding: import('../../company/types.js').SandboxBinding }> = [];
+      if (primary) entries.push({ serviceId: primary.serviceId ?? 'main', binding: primary });
+      for (const s of services) entries.push({ serviceId: s.serviceId, binding: s.binding });
+
+      if (entries.length === 0) {
+        return ok('No sandbox is active for this session.');
+      }
+
+      const rows = await Promise.all(
+        entries.map(async ({ serviceId, binding }) => {
+          const [inspect, state] = await Promise.all([
+            binding.driver.inspectContainer(binding.containerId).catch(() => ({
+              exists: false,
+              running: false,
+              labels: {} as Record<string, string>,
+            })),
+            binding.driver.getContainerState(binding.containerId).catch(() => null),
+          ]);
+          const status = !inspect.exists
+            ? 'gone'
+            : inspect.running
+              ? 'running'
+              : 'stopped';
+          const parts: string[] = [];
+          parts.push(`${serviceId.padEnd(12)} ${status}`);
+          if (state) {
+            if (state.exitCode !== null) parts.push(`exitCode=${state.exitCode}`);
+            if (state.oomKilled) parts.push(`oomKilled=true`);
+            if (state.finishedAt && !inspect.running) parts.push(`finishedAt=${state.finishedAt}`);
+          }
+          parts.push(`previewUrl=${binding.previewUrl}`);
+          parts.push(`workdir=${binding.workdir}`);
+          const line = parts.join(' ');
+          const stateError = state?.error?.trim();
+          return stateError
+            ? `${line}\n  ↳ last state error: ${stateError}`
+            : line;
+        }),
+      );
+      const footer =
+        '\nUse read_container_logs(service_id=<id>, tail=<n>) to inspect a specific container.';
+      return ok(rows.join('\n') + footer);
+    },
+  };
+}
+
+// ─── read_container_logs ───────────────────────────────────────
+
+function readContainerLogs(orchestrator: CompanyOrchestrator): CoderTool {
+  return {
+    name: 'read_container_logs',
+    description:
+      'Tail stdout/stderr for one container in this session. Use after list_containers flags a service as ' +
+      'stopped, crashed, or with a non-zero exit code. Include the relevant excerpt verbatim in the fix task ' +
+      'you dispatch to a subordinate so it can reproduce and address the actual error.',
+    parameters: {
+      type: 'object',
+      properties: {
+        service_id: {
+          type: 'string',
+          description:
+            "Target container. 'main' (or omitted) = primary master container. Any other value must be a " +
+            'microservice id from list_containers.',
+        },
+        tail: {
+          type: 'integer',
+          description: 'Number of trailing log lines to return (default 200, max 2000).',
+        },
+      },
+      required: [],
+    },
+    source: 'native',
+    handler: async (args) => {
+      const serviceId = ((args.service_id as string | undefined) ?? 'main').trim();
+      const rawTail = args.tail as number | undefined;
+      const tail = Math.min(
+        2000,
+        Math.max(1, Number.isFinite(rawTail as number) ? (rawTail as number) : 200),
+      );
+      const binding =
+        serviceId === 'main' || serviceId === ''
+          ? orchestrator.getSandboxBinding()
+          : orchestrator.getSandboxServiceBinding(serviceId);
+      if (!binding) {
+        return err(
+          `No container for service_id '${serviceId}'. Use list_containers to see what's available.`,
+        );
+      }
+      const logs = await binding.driver.getContainerLogs(binding.containerId, tail);
+      return ok(logs || '(no log output)');
     },
   };
 }

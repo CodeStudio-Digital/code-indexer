@@ -81,6 +81,104 @@ export async function importSkill(
   }
 }
 
+// ─── Agent Skills (third-party install) ──────────────────────────
+
+export interface InstalledNamespace {
+  namespace: string;
+  repo: string | null;
+  commit: string | null;
+  skillCount: number;
+  commandCount: number;
+  mcpCount: number;
+}
+
+export interface InstalledMcpServer {
+  id: string;
+  name: string;
+  transport: string;
+}
+
+export interface InstallFromGithubResult {
+  namespace: string;
+  repo: string;
+  commitSha: string;
+  baseDir: string;
+  installed: Array<{
+    id: string;
+    name: string;
+    kind: 'skill' | 'command';
+    slash_command: string | null;
+  }>;
+  mcpServers?: InstalledMcpServer[];
+  warnings?: string[];
+}
+
+export async function installSkillFromGithub(opts: {
+  repo: string;
+  namespace?: string;
+  ref?: string;
+  overwrite?: boolean;
+}): Promise<InstallFromGithubResult> {
+  const r = await fetch('/api/admin/skills/install-github', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  });
+  const j = (await r.json()) as InstallFromGithubResult | { error: string };
+  if (!r.ok) throw new Error((j as { error: string }).error);
+  return j as InstallFromGithubResult;
+}
+
+export async function listSkillNamespaces(): Promise<InstalledNamespace[]> {
+  const r = await fetch('/api/admin/skills/namespaces');
+  const j = (await r.json()) as { namespaces: InstalledNamespace[] };
+  return j.namespaces;
+}
+
+export async function updateSkillNamespace(
+  namespace: string,
+  ref?: string,
+): Promise<InstallFromGithubResult> {
+  const r = await fetch(
+    `/api/admin/skills/namespace/${encodeURIComponent(namespace)}/update`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref }),
+    },
+  );
+  const j = (await r.json()) as InstallFromGithubResult | { error: string };
+  if (!r.ok) throw new Error((j as { error: string }).error);
+  return j as InstallFromGithubResult;
+}
+
+export async function uninstallSkillNamespace(
+  namespace: string,
+): Promise<{ namespace: string; removed: number }> {
+  const r = await fetch(
+    `/api/admin/skills/namespace/${encodeURIComponent(namespace)}`,
+    { method: 'DELETE' },
+  );
+  const j = (await r.json()) as { namespace: string; removed: number } | { error: string };
+  if (!r.ok) throw new Error((j as { error: string }).error);
+  return j as { namespace: string; removed: number };
+}
+
+export async function installSkillFromLocal(opts: {
+  folderPath: string;
+  namespace?: string;
+  overwrite?: boolean;
+}): Promise<InstallFromGithubResult> {
+  const r = await fetch('/api/admin/skills/install-local', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  });
+  const j = (await r.json()) as InstallFromGithubResult | { error: string };
+  if (!r.ok) throw new Error((j as { error: string }).error);
+  return j as InstallFromGithubResult;
+}
+
 export async function fetchSkillUsage(id: string): Promise<SkillUsageStats> {
   const r = await fetch(`/api/admin/skills/${id}/usage`);
   return (await r.json()) as SkillUsageStats;

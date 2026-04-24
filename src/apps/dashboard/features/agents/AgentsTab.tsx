@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Users, FileText, Trash2, Edit2, ChevronRight, ChevronLeft } from 'lucide-react';
+import { Plus, Users, FileText, Trash2, Edit2, ChevronRight, ChevronLeft, PanelLeft, PanelLeftClose } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
 import { useApi, apiDelete } from '../../hooks/useApi.js';
@@ -8,7 +8,11 @@ import { cn } from '../../lib/utils.js';
 import { TemplateBuilderModal } from './TemplateBuilderModal.js';
 import { TemplateListPanel } from './TemplateListPanel.js';
 import { NewCompanyDialog } from './NewCompanyDialog.js';
-import { CompanySessionView } from './CompanySessionView.js';
+// BuilderView is a smart wrapper: when the session was created with a
+// `builder.stack`, it renders the split chat+preview layout; otherwise
+// it delegates transparently to CompanySessionView. Routing through it
+// means AgentsTab doesn't need to branch on session mode.
+import { BuilderView } from '../builder/BuilderView.js';
 
 interface CompanySession {
   id: number;
@@ -27,7 +31,7 @@ export function AgentsTab() {
   const [showNewTemplate, setShowNewTemplate] = useState(false);
   const [showNewCompany, setShowNewCompany] = useState(false);
   const [sidebarView, setSidebarView] = useState<SidebarView>('sessions');
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(true);
+  const [agentsSidebarOpen, setAgentsSidebarOpen] = useState(true);
 
   const selectedSession = sessions?.find((s) => s.id === selectedSessionId);
 
@@ -43,7 +47,7 @@ export function AgentsTab() {
       {/* Sidebar — full-width on mobile when open, hidden otherwise */}
       <div className={cn(
         'border-r flex flex-col bg-card flex-shrink-0',
-        mobileSidebarOpen ? 'flex w-full md:w-64' : 'hidden md:flex md:w-64',
+        agentsSidebarOpen ? 'flex w-full md:w-64' : 'hidden',
       )}>
         {/* Top actions */}
         <div className="p-3 border-b space-y-2">
@@ -98,8 +102,8 @@ export function AgentsTab() {
                   key={s.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => { setSelectedSessionId(s.id); setMobileSidebarOpen(false); }}
-                  onKeyDown={(e) => e.key === 'Enter' && (setSelectedSessionId(s.id), setMobileSidebarOpen(false))}
+                  onClick={() => { setSelectedSessionId(s.id); setAgentsSidebarOpen(false); }}
+                  onKeyDown={(e) => e.key === 'Enter' && (setSelectedSessionId(s.id), setAgentsSidebarOpen(false))}
                   className={cn(
                     'w-full text-left px-3 py-2.5 border-b text-xs hover:bg-muted/50 transition-colors group cursor-pointer',
                     selectedSessionId === s.id && 'bg-muted',
@@ -138,20 +142,42 @@ export function AgentsTab() {
       {/* Main content — hidden on mobile when sidebar is open */}
       <div className={cn(
         'overflow-hidden flex flex-col',
-        mobileSidebarOpen ? 'hidden md:flex md:flex-1' : 'flex flex-1',
+        agentsSidebarOpen ? 'hidden md:flex md:flex-1' : 'flex flex-1',
       )}>
+        {/* Top bar with toggle button */}
+        <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
+          <button
+            onClick={() => setAgentsSidebarOpen((v) => !v)}
+            className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            title={agentsSidebarOpen ? 'Fechar painel' : 'Abrir painel'}
+          >
+            {agentsSidebarOpen
+              ? <PanelLeftClose className="h-4 w-4" />
+              : <PanelLeft className="h-4 w-4" />
+            }
+          </button>
+          {selectedSession && (
+            <span className="text-xs text-muted-foreground truncate">{selectedSession.name}</span>
+          )}
+          {!selectedSession && (
+            <span className="text-xs text-muted-foreground">{t('sessions')}</span>
+          )}
+        </div>
+
+        {/* Mobile back button */}
         {selectedSession && (
           <button
             className="md:hidden flex items-center gap-1 px-3 py-2 text-xs text-muted-foreground border-b hover:bg-muted transition-colors shrink-0"
-            onClick={() => setMobileSidebarOpen(true)}
+            onClick={() => setAgentsSidebarOpen(true)}
           >
             <ChevronLeft className="h-3.5 w-3.5" />
             {t('sessions')}
           </button>
         )}
+
         {selectedSession ? (
           <div className="flex-1 min-h-0 overflow-hidden">
-            <CompanySessionView
+            <BuilderView
               sessionId={selectedSession.id}
               sessionName={selectedSession.name}
               sessionStatus={selectedSession.status}

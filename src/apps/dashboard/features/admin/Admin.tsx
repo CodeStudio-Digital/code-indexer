@@ -15,6 +15,7 @@ import { StoragePanel } from './StoragePanel.js';
 import { HydePanel } from './HydePanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
 import { AuthPanel } from './AuthPanel.js';
+import { GeneralAiPanel } from './GeneralAiPanel.js';
 import { useAdminProviders } from './hooks/useAdminProviders.js';
 import type { AdminProvider } from './types.js';
 
@@ -69,6 +70,7 @@ export default function Admin() {
           <TabsTrigger value="tools">{t('admin:tabs.tools')}</TabsTrigger>
           <TabsTrigger value="mcp-servers">{t('admin:tabs.mcpServers')}</TabsTrigger>
           <TabsTrigger value="skills">{t('admin:tabs.skills')}</TabsTrigger>
+          <TabsTrigger value="ai-geral">IA Geral</TabsTrigger>
           <TabsTrigger value="auth">{t('admin:tabs.auth')}</TabsTrigger>
         </TabsList>
 
@@ -152,6 +154,10 @@ export default function Admin() {
 
         <TabsContent value="skills">
           <SkillsPanel />
+        </TabsContent>
+
+        <TabsContent value="ai-geral">
+          <GeneralAiPanel />
         </TabsContent>
 
         <TabsContent value="auth">

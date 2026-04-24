@@ -32,6 +32,9 @@ export function pumpBusToSSE(
   const since = Number.isFinite(opts.since ?? NaN) ? (opts.since as number) : -1;
   const heartbeat = opts.heartbeat ?? true;
   return streamSSE(c, async (stream) => {
+    const ac = new AbortController();
+    stream.onAbort(() => ac.abort());
+
     const stopHeartbeat = heartbeat ? attachHeartbeat(stream) : () => {};
     const unsubscribe = subscribe(
       bus,
@@ -45,7 +48,7 @@ export function pumpBusToSSE(
       since,
     );
     try {
-      await waitEnded(bus);
+      await waitEnded(bus, ac.signal);
     } finally {
       unsubscribe();
       stopHeartbeat();

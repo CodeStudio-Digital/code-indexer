@@ -77,6 +77,7 @@ export class ReconnectingSSEClient {
         if (this.opts.signal.aborted) return;
         if (this.terminalSeen) return;
         if (isAbortError(err)) return;
+        if ((err as { nonRetryable?: boolean }).nonRetryable) throw err;
 
         const delay = this.backoff.nextDelay(attempt);
         if (delay === null) throw err;
@@ -108,7 +109,9 @@ export class ReconnectingSSEClient {
       signal: this.opts.signal,
     });
     if (!res.ok || !res.body) {
-      throw new Error(`HTTP ${res.status}`);
+      throw Object.assign(new Error(`HTTP ${res.status}`), {
+        nonRetryable: res.status >= 400 && res.status < 500,
+      });
     }
 
     const reader = res.body.getReader();

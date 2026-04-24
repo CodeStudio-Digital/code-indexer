@@ -57,12 +57,12 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     let config: {
       master_provider?: string;
       master_model?: string;
-      role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }>;
+      role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }>;
     } = {};
     try { config = JSON.parse(session.config_json); } catch { /* use defaults */ }
 
     const roleConfigs = (config.role_assignments ?? []) as Array<{
-      role: string; provider: string; model: string; tier: string; skills?: string[];
+      role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string;
     }>;
 
     const orchestrator = new CompanyOrchestrator({
@@ -143,7 +143,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     if (!masterRun) return c.json({ error: 'No master run found — use /start instead' }, 400);
 
     // Parse role configs from session config
-    let config: { role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }> } = {};
+    let config: { role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }> } = {};
     try { config = JSON.parse(session.config_json); } catch { /* defaults */ }
     const roleConfigs = config.role_assignments ?? [];
 

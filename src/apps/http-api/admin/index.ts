@@ -23,6 +23,7 @@ import { googleOAuthRouter } from './oauth-google.routes.js';
 import { toolsRouter } from './tools.routes.js';
 import { mcpServersRouter } from './mcp-servers.routes.js';
 import { skillsRouter } from './skills.routes.js';
+import { generalAiRouter } from './general-ai.routes.js';
 
 export function createAdminRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -39,6 +40,7 @@ export function createAdminRouter(store: ProviderStore): Hono {
   app.route('/', toolsRouter(store));
   app.route('/', mcpServersRouter());
   app.route('/', skillsRouter());
+  app.route('/', generalAiRouter(store));
 
   return app;
 }

@@ -40,6 +40,12 @@ export interface ProviderConfig {
   enabled: boolean;
   use_for_agent: boolean;
   use_for_coder: boolean;
+  /**
+   * When true this provider is eligible as the backend for "general AI"
+   * utilities (commit message suggestions, etc). The actual (provider, model)
+   * selection lives in `app_settings['general_default_model']`.
+   */
+  use_for_general: boolean;
   is_default: boolean;
   /** Parsed JSON blob. Free-form per-kind (aws_region, zai_has_coding_mode, ...). */
   extra: Record<string, unknown>;
@@ -117,6 +123,7 @@ interface ProviderConfigRaw {
   enabled: number;
   use_for_agent: number;
   use_for_coder: number;
+  use_for_general: number;
   is_default: number;
   extra: string | null;
   fallback_provider_id: string | null;
@@ -188,6 +195,7 @@ function hydrateProvider(r: ProviderConfigRaw): ProviderConfig {
     enabled: !!r.enabled,
     use_for_agent: !!r.use_for_agent,
     use_for_coder: !!r.use_for_coder,
+    use_for_general: !!r.use_for_general,
     is_default: !!r.is_default,
     extra: parseJson<Record<string, unknown>>(r.extra, {}),
     fallback_provider_id: r.fallback_provider_id ?? null,
@@ -258,6 +266,7 @@ export interface UpsertProviderInput {
   enabled?: boolean;
   use_for_agent?: boolean;
   use_for_coder?: boolean;
+  use_for_general?: boolean;
   is_default?: boolean;
   extra?: Record<string, unknown>;
 }
@@ -296,11 +305,12 @@ export class ProviderStore {
 
   // ─── Providers ────────────────────────────────────────────────
 
-  listProviders(filter?: { use_for_coder?: boolean; use_for_agent?: boolean; enabled?: boolean }): ProviderConfig[] {
+  listProviders(filter?: { use_for_coder?: boolean; use_for_agent?: boolean; use_for_general?: boolean; enabled?: boolean }): ProviderConfig[] {
     const clauses: string[] = [];
     if (filter?.enabled !== undefined) clauses.push(`enabled = ${filter.enabled ? 1 : 0}`);
     if (filter?.use_for_coder !== undefined) clauses.push(`use_for_coder = ${filter.use_for_coder ? 1 : 0}`);
     if (filter?.use_for_agent !== undefined) clauses.push(`use_for_agent = ${filter.use_for_agent ? 1 : 0}`);
+    if (filter?.use_for_general !== undefined) clauses.push(`use_for_general = ${filter.use_for_general ? 1 : 0}`);
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = this.db
       .prepare(`SELECT * FROM provider_configs ${where} ORDER BY name`)
@@ -341,6 +351,65 @@ export class ProviderStore {
       .prepare('SELECT * FROM provider_configs WHERE id = ?')
       .get(id) as ProviderConfigRaw | undefined;
     return row ? hydrateProvider(row) : null;
+  }
+
+  // ─── General AI default (commit messages, prompt utilities, …) ─
+
+  /**
+   * Resolve the provider+model to use for "general AI" utilities.
+   *
+   * Priority:
+   *   1. Operator-pinned selection stored in `app_settings['general_default_model']`
+   *      (as JSON `{ providerId, modelId }`). Only returned if the provider is
+   *      still enabled, still flagged `use_for_general`, and the model is still
+   *      enabled.
+   *   2. First provider flagged `use_for_general` + its first enabled model.
+   *   3. `null` when no provider is eligible.
+   */
+  getGeneralDefault(): { providerId: string; modelId: string } | null {
+    const pinned = this.getAppSetting('general_default_model');
+    if (pinned) {
+      try {
+        const parsed = JSON.parse(pinned) as { providerId?: string; modelId?: string };
+        if (parsed.providerId && parsed.modelId) {
+          const prov = this.getProvider(parsed.providerId);
+          if (prov && prov.enabled && prov.use_for_general) {
+            const model = this.listModels(prov.id, true).find((m) => m.model_id === parsed.modelId);
+            if (model) return { providerId: prov.id, modelId: model.model_id };
+          }
+        }
+      } catch {
+        /* fall through to heuristic */
+      }
+    }
+    const candidates = this.listProviders({ enabled: true, use_for_general: true });
+    for (const p of candidates) {
+      const m = this.listModels(p.id, true)[0];
+      if (m) return { providerId: p.id, modelId: m.model_id };
+    }
+    return null;
+  }
+
+  setGeneralDefault(providerId: string, modelId: string): void {
+    this.setAppSetting('general_default_model', JSON.stringify({ providerId, modelId }));
+  }
+
+  // ─── app_settings KV ──────────────────────────────────────────
+
+  getAppSetting(key: string): string | null {
+    const row = this.db
+      .prepare('SELECT value FROM app_settings WHERE key = ?')
+      .get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  setAppSetting(key: string, value: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+      )
+      .run(key, value, new Date().toISOString());
   }
 
   /**
@@ -393,7 +462,7 @@ export class ProviderStore {
         .prepare(
           `UPDATE provider_configs SET
              name = ?, kind = ?, base_url = ?, api_key = ?, auth_mode = ?,
-             enabled = ?, use_for_agent = ?, use_for_coder = ?, is_default = ?,
+             enabled = ?, use_for_agent = ?, use_for_coder = ?, use_for_general = ?, is_default = ?,
              extra = ?, updated_at = ?
            WHERE id = ?`
         )
@@ -406,6 +475,7 @@ export class ProviderStore {
           (input.enabled ?? existing.enabled) ? 1 : 0,
           (input.use_for_agent ?? existing.use_for_agent) ? 1 : 0,
           (input.use_for_coder ?? existing.use_for_coder) ? 1 : 0,
+          (input.use_for_general ?? existing.use_for_general) ? 1 : 0,
           (input.is_default ?? existing.is_default) ? 1 : 0,
           JSON.stringify(input.extra ?? existing.extra),
           now,
@@ -416,8 +486,8 @@ export class ProviderStore {
         .prepare(
           `INSERT INTO provider_configs
              (id, name, kind, base_url, api_key, auth_mode, enabled,
-              use_for_agent, use_for_coder, is_default, extra, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              use_for_agent, use_for_coder, use_for_general, is_default, extra, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           input.id,
@@ -429,6 +499,7 @@ export class ProviderStore {
           (input.enabled ?? true) ? 1 : 0,
           (input.use_for_agent ?? true) ? 1 : 0,
           (input.use_for_coder ?? true) ? 1 : 0,
+          (input.use_for_general ?? false) ? 1 : 0,
           (input.is_default ?? false) ? 1 : 0,
           JSON.stringify(input.extra ?? {}),
           now,

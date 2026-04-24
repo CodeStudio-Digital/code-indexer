@@ -12,6 +12,11 @@ import type { EmbeddingService } from '../../../core/search/embeddings.js';
 import type { VectorStore } from '../../../store/vectors.js';
 import { SessionStore } from '../../../core/coder/index.js';
 import { CompanyStore } from '../../../store/company-store.js';
+import { CompanySandboxStore } from '../../../store/company-sandbox-store.js';
+import { CompanySandboxServicesStore } from '../../../store/company-sandbox-services-store.js';
+import { CompanySessionEnvStore } from '../../../store/company-session-env-store.js';
+import { CompanySessionDatabaseStore } from '../../../store/company-session-database-store.js';
+import { CompanyLocalProjectStore } from '../../../store/company-local-project-store.js';
 import type { ResolveMcpBearer } from '../../../core/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
 import {
   createAndSeedProviderStore,
@@ -70,6 +75,34 @@ export interface CoderDeps {
 
 export interface CompanyDeps {
   companyStore: CompanyStore;
+  /**
+   * Persisted per-session sandbox state. Enables the SandboxManager to
+   * survive API restarts by reconciling its in-memory map with rows in
+   * `company_sandboxes` instead of relying solely on podman labels.
+   */
+  companySandboxStore: CompanySandboxStore;
+  /**
+   * Per-service sandbox rows for the multi-microservice model
+   * (migration 035). The `SandboxManager.provisionAdditionalService`
+   * path reads/writes here; the single-primary-container path keeps
+   * using `companySandboxStore`.
+   */
+  companySandboxServicesStore: CompanySandboxServicesStore;
+  /** Shared env vars per session; injected into every container + written as /app/.env. */
+  companySessionEnvStore: CompanySessionEnvStore;
+  /**
+   * Typed databases registered per session (Databases tab). Stores metadata
+   * only — actual connection strings live in `companySessionEnvStore` so
+   * container injection works without code changes.
+   */
+  companySessionDatabaseStore: CompanySessionDatabaseStore;
+  /**
+   * Local (host-process) project registry — separate from sandbox tables
+   * because host processes have a different lifecycle (no container id,
+   * no image, no limits) and the sandbox CHECK constraints forbid a
+   * 'local-process' runtime. See migration 042.
+   */
+  companyLocalProjectStore: CompanyLocalProjectStore;
 }
 
 export type ServerDeps = CoreDeps
@@ -100,6 +133,13 @@ export function createDeps(): ServerDeps {
   const snapshotService = new SnapshotService(db, embeddingService, searchableVectorStore);
   const sessionStore = new SessionStore(config.dbPath);
   const companyStore = new CompanyStore(config.dbPath);
+  // Share the same underlying better-sqlite3 handle that CodeIndexDB
+  // opened — re-opening the file would create lock contention.
+  const companySandboxStore = new CompanySandboxStore(db.raw());
+  const companySandboxServicesStore = new CompanySandboxServicesStore(db.raw());
+  const companySessionEnvStore = new CompanySessionEnvStore(db.raw());
+  const companySessionDatabaseStore = new CompanySessionDatabaseStore(db.raw());
+  const companyLocalProjectStore = new CompanyLocalProjectStore(db.raw());
 
   const embeddingKind = deriveKindLabel(embeddingService, 'EmbeddingService');
   const vectorStoreKind = deriveKindLabel(vectorStore, 'VectorStore');
@@ -119,6 +159,11 @@ export function createDeps(): ServerDeps {
     hybridSearch,
     sessionStore,
     companyStore,
+    companySandboxStore,
+    companySandboxServicesStore,
+    companySessionEnvStore,
+    companySessionDatabaseStore,
+    companyLocalProjectStore,
     embeddingKind,
     vectorStoreKind,
     mcpBearerResolver: null,

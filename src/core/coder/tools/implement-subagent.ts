@@ -118,8 +118,10 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
 }
 
 /**
- * Read-only allowlist for the explore subagent (legacy `spawn_subagent`).
- * Pure MCP code-indexer tools — nothing that touches the filesystem or shell.
+ * Read-only allowlist for the explore subagent (legacy `spawn_subagent`)
+ * and for parallel agents spawned via `spawn_agents`. Includes MCP indexer
+ * tools plus native read-only filesystem, web, and diagnostics tools.
+ * Explicitly excludes mutating tools (write/edit/shell/git admin).
  */
 export const EXPLORE_ALLOWLIST = new Set<string>([
   'mcp__get_project_pulse',
@@ -148,6 +150,22 @@ export const EXPLORE_ALLOWLIST = new Set<string>([
   'mcp__query_snapshots',
   'mcp__get_context_for',
   'mcp__prepare_edit',
+  // Native read-only filesystem
+  'read_file',
+  'list_directory',
+  'glob',
+  // Web (read-only external fetch)
+  'web_fetch',
+  'web_search',
+  // Read-only diagnostics / LSP / git inspection
+  'get_diagnostics',
+  'lsp_definition',
+  'lsp_references',
+  'lsp_hover',
+  'lsp_diagnostics',
+  'git_status',
+  'git_diff',
+  'git_log',
 ]);
 
 /**

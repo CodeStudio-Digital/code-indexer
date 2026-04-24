@@ -166,3 +166,68 @@ body {
   50%  { transform: translateX(150%); }
   100% { transform: translateX(300%); }
 }
+
+/* ── Shiki code viewer ───────────────────────────────
+   Shiki emits `<pre class="shiki ..."><code><span class="line">…</span>…`.
+   We override the outer `<pre>` so it fills the scroll area and defer
+   text colors entirely to Shiki's inline styles. Line numbers use a
+   CSS counter so the gutter isn't part of the DOM text (copy-paste
+   produces clean code without numbers). */
+.shiki-viewer { padding: 0; }
+.shiki-viewer pre.shiki {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  background: transparent !important;
+  min-height: 100%;
+}
+.shiki-viewer pre.shiki code {
+  counter-reset: shiki-line;
+  font: inherit;
+  display: block;
+}
+/* Line numbers: push the code text right via padding on <code>, then the
+   ::before on each .line hangs into that padding with a negative margin.
+   The .line span itself stays inline so Shiki's trailing `\n` produces
+   the natural line break (no double-spacing). */
+.shiki-viewer.viewer-lineno pre.shiki code { padding-left: 3.25rem; }
+.shiki-viewer.viewer-lineno pre.shiki .line::before {
+  counter-increment: shiki-line;
+  content: counter(shiki-line);
+  display: inline-block;
+  width: 2.5rem;
+  margin-left: -3rem;
+  margin-right: 0.5rem;
+  text-align: right;
+  color: color-mix(in oklab, currentColor 40%, transparent);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.shiki-viewer.viewer-wrap pre.shiki { white-space: pre-wrap; word-break: break-word; }
+.shiki-viewer:not(.viewer-wrap) pre.shiki { white-space: pre; }
+
+/* ── react-diff-view theme overrides ─────────────────
+   The default palette uses light pastel pinks/greens that clash with
+   the dashboard theme. Remap via the component's CSS variables so the
+   diff reads correctly in both light and dark modes. */
+.diff-block {
+  --diff-background-color: transparent;
+  --diff-text-color: var(--foreground);
+  --diff-font-family: inherit;
+  --diff-gutter-insert-background-color: color-mix(in srgb, var(--success) 18%, transparent);
+  --diff-gutter-insert-text-color: var(--success);
+  --diff-gutter-delete-background-color: color-mix(in srgb, var(--destructive) 18%, transparent);
+  --diff-gutter-delete-text-color: var(--destructive);
+  --diff-code-insert-background-color: color-mix(in srgb, var(--success) 10%, transparent);
+  --diff-code-insert-text-color: var(--foreground);
+  --diff-code-delete-background-color: color-mix(in srgb, var(--destructive) 10%, transparent);
+  --diff-code-delete-text-color: var(--foreground);
+  --diff-code-insert-edit-background-color: color-mix(in srgb, var(--success) 30%, transparent);
+  --diff-code-delete-edit-background-color: color-mix(in srgb, var(--destructive) 30%, transparent);
+  --diff-selection-background-color: color-mix(in srgb, var(--primary) 25%, transparent);
+  --diff-omit-gutter-line-color: var(--muted-foreground);
+}
+.diff-block .diff { table-layout: auto; }
+.diff-block .diff-line { line-height: 1.45; }
+.diff-block .diff-code { padding: 0 0 0 0.5em; }
+.diff-block .diff-gutter { min-width: 3ch; }
+.diff-block .diff-gutter-col { width: 3.5ch; }

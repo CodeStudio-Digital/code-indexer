@@ -47,6 +47,7 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
       enabled: form.enabled,
       use_for_agent: form.use_for_agent,
       use_for_coder: form.use_for_coder,
+      use_for_general: form.use_for_general,
       is_default: form.is_default,
     };
     // Only send api_key when the user typed something — avoids clobbering an
@@ -125,6 +126,10 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
             <label className="flex items-center gap-2 text-sm">
               <Switch checked={!!form.use_for_coder} onCheckedChange={(v) => update('use_for_coder', v)} />
               {t('admin:editProvider.coder')}
+            </label>
+            <label className="flex items-center gap-2 text-sm" title="Disponibilizar este provider para uso como IA geral (commit messages, prompts, etc)">
+              <Switch checked={!!form.use_for_general} onCheckedChange={(v) => update('use_for_general', v)} />
+              IA geral
             </label>
             <label className="flex items-center gap-2 text-sm">
               <Switch checked={!!form.is_default} onCheckedChange={(v) => update('is_default', v)} />

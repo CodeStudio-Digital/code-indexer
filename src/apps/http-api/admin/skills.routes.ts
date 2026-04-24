@@ -6,6 +6,12 @@
 import { Hono } from 'hono';
 import { SkillStore, type UpsertSkillInput, type SkillDefinition } from '../../../store/skill-store.js';
 import { loadConfig } from '../../../utils/config.js';
+import {
+  installFromGithub,
+  uninstallNamespace,
+  listInstalledNamespaces,
+} from '../../../core/coder/skills/agent-skills-installer.js';
+import { installFromLocalFolder } from '../../../core/coder/skills/local-skills-installer.js';
 
 function getStore() {
   const config = loadConfig();
@@ -32,6 +38,100 @@ export function skillsRouter(): Hono {
       return c.json({ skills });
     } finally {
       store.close();
+    }
+  });
+
+  // ─── Install from GitHub (Agent Skills standard) ─────────────
+  // NOTE: these literal paths must be registered BEFORE /skills/:id
+  // to avoid being shadowed by the param route.
+  app.post('/skills/install-github', async (c) => {
+    const body = await c.req.json<{
+      repo: string;
+      namespace?: string;
+      ref?: string;
+      overwrite?: boolean;
+    }>();
+    if (!body.repo || !/^[\w.-]+\/[\w.-]+$/.test(body.repo)) {
+      return c.json({ error: 'repo must be in "owner/name" format' }, 400);
+    }
+    try {
+      const result = await installFromGithub({
+        repo: body.repo,
+        namespace: body.namespace,
+        ref: body.ref,
+        overwrite: body.overwrite ?? false,
+      });
+      return c.json(result, 201);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+
+  // ─── Install from local folder ───────────────────────────────
+  app.post('/skills/install-local', async (c) => {
+    const body = await c.req.json<{
+      folderPath: string;
+      namespace?: string;
+      overwrite?: boolean;
+    }>();
+    if (!body.folderPath || typeof body.folderPath !== 'string') {
+      return c.json({ error: 'folderPath is required' }, 400);
+    }
+    if (body.folderPath.includes('..')) {
+      return c.json({ error: 'folderPath must not contain ".." segments' }, 400);
+    }
+    try {
+      const result = await installFromLocalFolder({
+        folderPath: body.folderPath,
+        namespace: body.namespace,
+        overwrite: body.overwrite ?? false,
+      });
+      return c.json(result, 201);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+
+  app.get('/skills/namespaces', (c) =>
+    c.json({ namespaces: listInstalledNamespaces() }),
+  );
+
+  app.post('/skills/namespace/:namespace/update', async (c) => {
+    const namespace = c.req.param('namespace');
+    const store = getStore();
+    let repo: string | null = null;
+    let ref: string | undefined;
+    try {
+      const skills = store.listSkills({ tag: namespace });
+      const sample = skills.find((s) => s.source_ref);
+      if (!sample?.source_ref) {
+        return c.json({ error: 'no installed skills with source_ref' }, 404);
+      }
+      repo = sample.source_ref.repo;
+      const body = await c.req.json<{ ref?: string }>().catch(() => ({} as { ref?: string }));
+      ref = body.ref;
+    } finally {
+      store.close();
+    }
+    try {
+      const result = await installFromGithub({
+        repo: repo!,
+        namespace,
+        ref,
+        overwrite: true,
+      });
+      return c.json(result);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+
+  app.delete('/skills/namespace/:namespace', async (c) => {
+    try {
+      const result = await uninstallNamespace(c.req.param('namespace'));
+      return c.json(result);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
     }
   });
 

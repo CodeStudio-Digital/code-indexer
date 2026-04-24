@@ -27,7 +27,11 @@
       "Bash(npm ls:*)",
       "Bash(npx --prefix \"D:/MCP\" tsc --noEmit --skipLibCheck --project \"D:/MCP/tsconfig.json\")",
       "Bash(node node_modules/typescript/bin/tsc --noEmit)",
-      "Bash(ls D:/MCP/node_modules/.bin/tsc*)"
+      "Bash(ls D:/MCP/node_modules/.bin/tsc*)",
+      "Bash(grep -E \"\\\\.ts$|\\\\.test\\\\.ts$\")",
+      "Bash(echo \"---EXIT:$?---\")",
+      "Bash(pnpm tsc *)",
+      "Bash(pnpm test *)"
     ]
   }
 }
