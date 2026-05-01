@@ -126,6 +126,16 @@ export function mountCoderInteractionRoutes(
   });
 
   /**
+   * Hidden-prompt log for a session — system prompt at run-start, skill
+   * bodies fetched mid-conversation, runtime system-reminders, and
+   * sub-agent system prompts. Powers the Input tab in the details modal.
+   */
+  app.get('/api/coder/sessions/:id/inputs', (c) => {
+    const id = parseIdParam(c);
+    return c.json(sessionStore.listSessionInputs(id));
+  });
+
+  /**
    * Get the current task list state for a session. Used by the dashboard
    * to render the TaskListReview when (a) the SSE buffer was missed or
    * (b) the user reopens the session tab.

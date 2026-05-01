@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Boxes, ChevronLeft, ChevronRight, FolderGit2, Home, Menu, Moon, Settings, Sun, Users, X } from 'lucide-react';
+import { Boxes, ChevronLeft, ChevronRight, FolderGit2, Home, Menu, Moon, Palette, Settings, Sun, Users, X } from 'lucide-react';
 import { Button } from './components/ui/button.js';
 import { DialogProvider } from './components/ui/dialog-provider.js';
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from './components/ui/tooltip.js';
@@ -10,13 +10,15 @@ import ProjectDetail from './features/project/index.js';
 import { ProjectList } from './features/project/index.js';
 import { RecentSessionsList } from './features/recent/RecentSessionsList.js';
 import { AgentsTab } from './features/agents/AgentsTab.js';
+import { DesignSystemsTab } from './features/design-systems/DesignSystemsTab.js';
 import { cn } from './lib/utils.js';
 
 type View =
   | { page: 'home' }
   | { page: 'project'; id: number; name: string; sessionId?: number }
   | { page: 'admin' }
-  | { page: 'agents' };
+  | { page: 'agents' }
+  | { page: 'design-systems' };
 
 function NavButton({
   icon,
@@ -138,6 +140,13 @@ export default function App() {
               onClick={() => { setView({ page: 'agents' }); setMobileSidebarOpen(false); }}
             />
             <NavButton
+              icon={<Palette className="h-4 w-4 shrink-0" />}
+              label={t('nav.designSystems')}
+              active={view.page === 'design-systems'}
+              collapsed={sidebarCollapsed}
+              onClick={() => { setView({ page: 'design-systems' }); setMobileSidebarOpen(false); }}
+            />
+            <NavButton
               icon={<Settings className="h-4 w-4 shrink-0" />}
               label={t('nav.admin')}
               active={view.page === 'admin'}
@@ -216,6 +225,12 @@ export default function App() {
                 <span className="text-sm font-semibold">{t('nav.agents')}</span>
               </>
             )}
+            {view.page === 'design-systems' && (
+              <>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-semibold">{t('nav.designSystems')}</span>
+              </>
+            )}
             {view.page === 'admin' && (
               <>
                 <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -233,7 +248,7 @@ export default function App() {
           {/* Content */}
           <main className={cn(
             'flex-1 w-full mx-auto',
-            view.page !== 'agents' && 'px-3 py-4 sm:px-6 sm:py-6',
+            view.page !== 'agents' && view.page !== 'design-systems' && 'px-3 py-4 sm:px-6 sm:py-6',
           )}>
             {view.page === 'home' && (
               <ProjectList onSelectProject={(id, name) => setView({ page: 'project', id, name })} />
@@ -246,6 +261,7 @@ export default function App() {
               />
             )}
             {view.page === 'agents' && <AgentsTab />}
+            {view.page === 'design-systems' && <DesignSystemsTab />}
             {view.page === 'admin' && <Admin />}
           </main>
         </div>

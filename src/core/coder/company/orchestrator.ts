@@ -48,7 +48,19 @@ import { SubordinateLifecycle, type SpawnSubordinateSpec } from './services/Subo
 import { MasterLifecycle, type RoleConfig } from './services/MasterLifecycle.js';
 import { MasterAttention, type AttentionListener } from './services/MasterAttention.js';
 import { SandboxService } from './services/SandboxService.js';
-import type { SandboxBinding } from './types.js';
+import { PipelineService, type PipelineValidationResult } from './services/PipelineService.js';
+import { PipelineExecutor } from './services/PipelineExecutor.js';
+import { InboxQueue, type SendArgs as InboxSendArgs, type SendResult as InboxSendResult } from './services/InboxQueue.js';
+import type {
+  AgentInboxMessage,
+  InboxStatus,
+  Pipeline,
+  PipelineExecution,
+  PipelineExecutionStatus,
+  PipelineGraph,
+  PipelineNodeExecution,
+  SandboxBinding,
+} from './types.js';
 
 export type { SpawnSubordinateSpec };
 
@@ -81,6 +93,12 @@ export class CompanyOrchestrator {
   private readonly idle!: IdleController;
   private readonly subordinates!: SubordinateLifecycle;
   private readonly master!: MasterLifecycle;
+  // Pipelines depend on `subordinates` so they're constructed below.
+  private readonly pipelines!: PipelineService;
+  private readonly pipelineExecutor!: PipelineExecutor;
+  // Inbox queue is constructed alongside pipelines and back-wired
+  // into `subordinates` via `setOnSubordinateIdle`.
+  private readonly inbox!: InboxQueue;
 
   constructor(opts: CompanyOrchestratorOpts) {
     this.companySessionId = opts.companySessionId;
@@ -166,6 +184,36 @@ export class CompanyOrchestrator {
 
     masterDeps.idle = idle;
     subordinateDeps.idle = idle;
+
+    // Pipelines: thin CRUD + executor that drives subordinates through a
+    // stored graph. Constructed last because the executor needs the
+    // already-wired `subordinates` and `attention`.
+    const pipelines = new PipelineService(this.ctx);
+    (this as unknown as { pipelines: PipelineService }).pipelines = pipelines;
+    const pipelineExecutor = new PipelineExecutor({
+      ctx: this.ctx,
+      pipelines,
+      kanban: this.kanban,
+      subordinates,
+      attention: this.attention,
+      publisher: this.publisher,
+    });
+    (this as unknown as { pipelineExecutor: PipelineExecutor }).pipelineExecutor = pipelineExecutor;
+
+    // Inbox: persistent message queue between subordinates. The
+    // SubordinateLifecycle's idle hook is wired here (late-bound)
+    // because the queue needs `subordinates.reactivate` and the
+    // lifecycle was constructed before the queue.
+    const inbox = new InboxQueue({
+      ctx: this.ctx,
+      subordinates,
+      attention: this.attention,
+      publisher: this.publisher,
+    });
+    (this as unknown as { inbox: InboxQueue }).inbox = inbox;
+    subordinates.setOnSubordinateIdle((agentRunId, role) => {
+      void inbox.drainOnIdle(agentRunId, role);
+    });
   }
 
   // ─── BC: exposed runtime state ──────────────────────────────────
@@ -262,11 +310,14 @@ export class CompanyOrchestrator {
     });
   }
 
-  sendMessageToMaster(message: string): boolean {
-    return this.master.sendUserMessage(message);
+  sendMessageToMaster(
+    message: string,
+    options: { interject?: boolean } = {},
+  ): { ok: boolean; pending?: 'interactive_wait' } {
+    return this.master.sendUserMessage(message, options);
   }
 
-  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: string[]; systemPromptOverride?: string; projectIds?: number[] } | null {
+  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: import('./types.js').RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number } | null {
     return this.master.getRoleDefaults(role);
   }
 
@@ -589,5 +640,150 @@ export class CompanyOrchestrator {
 
   finalizeAllSubordinates(): { finalized: number; alreadyStopped: number } {
     return this.subordinates.finalizeAll();
+  }
+
+  // ─── Pipelines ─────────────────────────────────────────────────
+
+  pipelineList(opts?: {
+    /** Pass `'this'` to scope to the current session + globals; `'global'` for globals only; `'all'` for everything (default). */
+    scope?: 'this' | 'global' | 'all';
+    templateId?: number | null;
+  }): Pipeline[] {
+    if (opts?.scope === 'this') {
+      return this.pipelines.list({ companySessionId: this.companySessionId, templateId: opts.templateId ?? undefined });
+    }
+    if (opts?.scope === 'global') {
+      return this.pipelines.list({ companySessionId: null, templateId: opts.templateId ?? undefined });
+    }
+    return this.pipelines.list({ templateId: opts?.templateId ?? undefined });
+  }
+
+  pipelineGet(id: number): Pipeline | null {
+    return this.pipelines.get(id);
+  }
+
+  pipelineCreate(input: {
+    name: string;
+    description?: string;
+    graph: PipelineGraph;
+    /** Pass `'this'` to bind to the current session, `'global'` to keep reusable across sessions. Defaults to `'this'`. */
+    scope?: 'this' | 'global';
+    templateId?: number | null;
+  }): Pipeline {
+    return this.pipelines.create({
+      name: input.name,
+      description: input.description,
+      graph: input.graph,
+      companySessionId: input.scope === 'global' ? null : this.companySessionId,
+      templateId: input.templateId ?? null,
+    });
+  }
+
+  pipelineUpdate(
+    id: number,
+    patch: { name?: string; description?: string; graph?: PipelineGraph },
+    opts?: { expectedVersion?: number },
+  ): Pipeline | null {
+    return this.pipelines.update(id, patch, opts);
+  }
+
+  pipelineDelete(id: number): boolean {
+    return this.pipelines.delete(id);
+  }
+
+  /**
+   * Validate a graph against the session's role roster. Returns a
+   * structured result so dashboards can highlight offending nodes/edges.
+   */
+  pipelineValidate(graph: PipelineGraph): PipelineValidationResult {
+    const validRoles = new Set(this.master.roleConfigs.map((r) => r.role));
+    return this.pipelines.validate(graph, validRoles);
+  }
+
+  async pipelineStart(
+    pipelineId: number,
+    initialInput: string,
+    startedBy?: string,
+  ): Promise<PipelineExecution> {
+    return this.pipelineExecutor.start(pipelineId, initialInput, startedBy);
+  }
+
+  pipelineAbort(executionId: number, reason?: string): boolean {
+    return this.pipelineExecutor.abort(executionId, reason);
+  }
+
+  pipelinePause(executionId: number): boolean {
+    return this.pipelineExecutor.pause(executionId);
+  }
+
+  async pipelineResume(executionId: number): Promise<boolean> {
+    return this.pipelineExecutor.resume(executionId);
+  }
+
+  /**
+   * Boot-time recovery: any execution still marked `running` in the DB
+   * after a server restart has no in-memory listener, so we flip it to
+   * `paused` and emit `pipeline_paused` so the dashboard surfaces a
+   * Resume button. Idempotent.
+   */
+  async pipelineRecoverRunning(): Promise<{ paused: number }> {
+    return this.pipelineExecutor.recoverRunning();
+  }
+
+  pipelineStatus(executionId: number): {
+    execution: PipelineExecution;
+    nodes: PipelineNodeExecution[];
+  } | null {
+    return this.pipelineExecutor.status(executionId);
+  }
+
+  pipelineListExecutions(opts?: {
+    pipelineId?: number;
+    status?: PipelineExecutionStatus;
+    limit?: number;
+  }): PipelineExecution[] {
+    return this.pipelineExecutor.listExecutions(opts);
+  }
+
+  // ─── Agent inbox ────────────────────────────────────────────────
+
+  inboxSend(args: InboxSendArgs): InboxSendResult {
+    return this.inbox.send(args);
+  }
+
+  inboxRespond(messageId: number, answer: string): boolean {
+    return this.inbox.respond(messageId, answer);
+  }
+
+  inboxCancel(messageId: number, reason: string): boolean {
+    return this.inbox.cancel(messageId, reason);
+  }
+
+  inboxList(opts?: {
+    status?: InboxStatus | InboxStatus[];
+    toRole?: string;
+    toAgentRunId?: number;
+    fromAgentRunId?: number;
+    limit?: number;
+  }): AgentInboxMessage[] {
+    return this.inbox.list(opts ?? {});
+  }
+
+  /**
+   * Block until the inbox message identified by `waitToken` is
+   * answered. Throws on timeout. Used by the `send_to_agent` tool
+   * when called with `wait=true` so a synchronous-feeling Q&A
+   * round-trip is one tool call.
+   */
+  inboxWait(waitToken: string, timeoutMs?: number): Promise<string> {
+    return this.inbox.waitForAnswer(waitToken, timeoutMs);
+  }
+
+  inboxDetectCycle(args: {
+    fromAgentRunId: number;
+    toRole?: string;
+    toAgentRunId?: number;
+  }): boolean {
+    return this.inbox.detectCycle(args);
   }
 }

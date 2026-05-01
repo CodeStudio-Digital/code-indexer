@@ -1,4 +1,4 @@
-export type SkillContextMode = 'inline' | 'tool' | 'both';
+export type SkillContextMode = 'auto' | 'tool' | 'both';
 export type SkillSource = 'user' | 'builtin' | 'imported';
 
 export interface AdminSkill {
@@ -17,6 +17,8 @@ export interface AdminSkill {
   sort_order: number;
   tags: string[];
   path_patterns: string[] | null;
+  trigger_paths: string[] | null;
+  trigger_roles: string[] | null;
   author: string | null;
   version: string;
   source: SkillSource;
@@ -162,6 +164,21 @@ export async function uninstallSkillNamespace(
   const j = (await r.json()) as { namespace: string; removed: number } | { error: string };
   if (!r.ok) throw new Error((j as { error: string }).error);
   return j as { namespace: string; removed: number };
+}
+
+export async function installSkillFromUrl(opts: {
+  url: string;
+  namespace?: string;
+  overwrite?: boolean;
+}): Promise<InstallFromGithubResult> {
+  const r = await fetch('/api/admin/skills/install-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  });
+  const j = (await r.json()) as InstallFromGithubResult | { error: string };
+  if (!r.ok) throw new Error((j as { error: string }).error);
+  return j as InstallFromGithubResult;
 }
 
 export async function installSkillFromLocal(opts: {

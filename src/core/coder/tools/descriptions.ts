@@ -105,11 +105,12 @@ export const RUN_COMMAND_DESC =
   'Execute a shell command in the project root. Default timeout 120s. Returns stdout, stderr, exit code.\n' +
   "USE: running tests, builds, linters, formatters, type checks — the kinds of things that verify your work.\n" +
   "USE: shell one-liners for which there is no dedicated tool (tar, curl against localhost, etc.).\n" +
+  "USE: for multi-line code (Python, Node, etc.), pass command='python -' (or 'node -', 'bash') with the script in the `stdin` parameter. Avoid embedding code via -c \"...\" or here-strings — quoting rules differ across cmd / bash / PowerShell / sh-in-container, and shells like cmd.exe don't understand PowerShell '@'...'@' or bash '$'...''. Example: { command: \"python -\", stdin: \"import json\\nprint(json.dumps({'ok': True}))\" }.\n" +
   "DON'T: use cat/head/tail/less to read files — use read_file or mcp__read_file.\n" +
   "DON'T: use grep/rg/ack — use mcp__grep_code (indexer-aware, cheaper, filterable by layer/language).\n" +
   "DON'T: use find/ls for exploration — use mcp__list_directory or mcp__search.\n" +
   "DON'T: use sed/awk to edit files — use edit_file.\n" +
-  "DON'T: run interactive commands that expect stdin (nano, vim, prompts). They'll hang and time out.\n" +
+  "DON'T: run interactive commands that expect stdin from the user (nano, vim, prompts). They'll hang and time out. The `stdin` parameter is for batch payloads (script bodies), not interactive sessions.\n" +
   "DON'T: run long-running servers in foreground (npm run dev). They'll block for 120s then abort.";
 
 // ---------- interaction (src/core/coder/tools/interaction.ts) ----------

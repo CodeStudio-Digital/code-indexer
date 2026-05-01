@@ -344,6 +344,8 @@ export const executeTask: CoderTool = {
             provider: runner.provider,
             tools: runner.getToolListSnapshot(),
             ctx,
+            sessionId: runner.sessionId,
+            sessionStore: runner.sessionStore,
           },
           task
         );

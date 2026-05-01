@@ -48,6 +48,14 @@ export interface SubagentParent {
   /** Snapshot of the parent registry's tools — filtered by `spec.allowlist`. */
   tools: CoderTool[];
   ctx: ToolContext;
+  /** Persistent session id of the parent runner — propagated so subagent logs read `s=<parentId>/sub`. */
+  sessionId?: number;
+  /**
+   * Parent's SessionStore — when present, the implement-subagent's system
+   * prompt is mirrored into `coder_session_inputs` (kind `subagent_prompt`)
+   * for the Input tab in the session details modal.
+   */
+  sessionStore?: import('../sessions/store.js').SessionStore;
 }
 
 /**
@@ -88,6 +96,8 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     initialMessages: spec.initialMessages,
     maxTurns: spec.maxTurns,
     pushTimeCap: spec.pushTimeCap ?? SUBAGENT_TOOL_RESULT_CAP,
+    sessionId: parent.sessionId,
+    isSubagent: true,
   });
 
   if (parent.ctx.signal) {
@@ -269,6 +279,24 @@ Prefer get_file_skeleton + get_symbol_body over read_file of whole files. Use gr
  */
 export async function runImplementSubagent(parent: SubagentParent, task: CoderTask): Promise<TaskResult> {
   const systemPrompt = buildImplementSystemPrompt(task);
+  if (parent.sessionStore && parent.sessionId != null) {
+    try {
+      parent.sessionStore.recordSessionInput({
+        session_id: parent.sessionId,
+        kind: 'subagent_prompt',
+        source_label: `subagent:implement:${task.id}`,
+        content: systemPrompt,
+        meta: {
+          task_id: task.id,
+          task_title: task.title,
+          files: task.files,
+          complexity: task.estimated_complexity,
+        },
+      });
+    } catch {
+      // best-effort
+    }
+  }
   const initialMessages: AgentMessage[] = [
     {
       role: 'user',
@@ -458,6 +486,8 @@ export async function runParallelAgents(
       initialMessages: [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
       maxTurns: spec.maxTurns,
       pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
+      sessionId: parent.sessionId,
+      isSubagent: true,
     });
 
     // Track tool calls for progress reporting.

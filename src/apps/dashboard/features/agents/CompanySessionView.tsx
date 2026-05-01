@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, PanelLeft, PanelLeftClose, MessageSquare, KanbanSquare, Check, Plus, BookText, KeyRound, X, Archive, RotateCcw, Database } from 'lucide-react';
+import { StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, PanelLeft, PanelLeftClose, MessageSquare, KanbanSquare, Check, Plus, BookText, KeyRound, X, Archive, RotateCcw, Database, FlaskConical, Network, Inbox } from 'lucide-react';
+import { TestsTab } from './tests/TestsTab.js';
+import { QaRunBadge } from './tests/shared/QaRunBadge.js';
 import DocsTab from './DocsTab.js';
 import DatabasesTab from './DatabasesTab.js';
 import ServicesSidebar from './ServicesSidebar.js';
@@ -15,6 +17,8 @@ import { useProviders } from '../../hooks/useProviders.js';
 import { AgentPane } from './AgentPane.js';
 import { BoardPanel } from './BoardPanel.js';
 import { KanbanTab } from './KanbanTab.js';
+import { PipelinesTab } from './PipelinesTab.js';
+import { InboxPanel } from './InboxPanel.js';
 import { AgentSessionModal } from './AgentSessionModal.js';
 import { MasterComposer } from './MasterComposer.js';
 import { ResetSessionDialog } from './ResetSessionDialog.js';
@@ -125,6 +129,7 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
             {p.project_name}
           </Badge>
         ))}
+        <QaRunBadge sessionId={sessionId} />
         {stream.masterState && (
           <Badge variant="outline" className="text-[10px] ml-auto gap-1 capitalize">
             <Crown className="h-2.5 w-2.5 text-yellow-400" />
@@ -472,6 +477,15 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
               <TabsTrigger value="kanban" className="text-xs gap-1">
                 <KanbanSquare className="h-3 w-3" /> {t('agents:company.kanban')}
               </TabsTrigger>
+              <TabsTrigger value="pipelines" className="text-xs gap-1">
+                <Network className="h-3 w-3" /> {t('agents:company.pipelines')}
+              </TabsTrigger>
+              <TabsTrigger value="inbox" className="text-xs gap-1">
+                <Inbox className="h-3 w-3" /> {t('agents:company.inbox')}
+              </TabsTrigger>
+              <TabsTrigger value="tests" className="text-xs gap-1">
+                <FlaskConical className="h-3 w-3" /> Testes
+              </TabsTrigger>
               <TabsTrigger value="docs" className="text-xs gap-1">
                 <BookText className="h-3 w-3" /> {t('agents:company.docs')}
               </TabsTrigger>
@@ -491,10 +505,21 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
                 masterPrompts={Array.from(stream.masterPrompts.values())}
                 onAnswerQuestion={(promptId, answer) => stream.respondToMasterQuestion(promptId, answer)}
                 onRespondPlan={(promptId, approved, fb) => stream.respondToMasterPlan(promptId, approved, fb)}
+                sessionId={sessionId}
+                sessionName={sessionName}
               />
             </TabsContent>
             <TabsContent value="kanban" className="flex-1 overflow-hidden mt-0">
               <KanbanTab companySessionId={sessionId} streamCards={stream.kanbanCards} />
+            </TabsContent>
+            <TabsContent value="pipelines" className="flex-1 overflow-hidden mt-0">
+              <PipelinesTab companySessionId={sessionId} />
+            </TabsContent>
+            <TabsContent value="inbox" className="flex-1 overflow-hidden mt-0">
+              <InboxPanel companySessionId={sessionId} />
+            </TabsContent>
+            <TabsContent value="tests" className="flex-1 overflow-hidden mt-0">
+              <TestsTab sessionId={sessionId} />
             </TabsContent>
             <TabsContent value="docs" className="flex-1 overflow-hidden mt-0">
               <DocsTab companySessionId={sessionId} />

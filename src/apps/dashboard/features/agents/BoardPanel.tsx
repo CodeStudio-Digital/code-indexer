@@ -45,6 +45,9 @@ interface BoardPanelProps {
   masterPrompts?: MasterPrompt[];
   onAnswerQuestion?: (promptId: number, answer: string) => void;
   onRespondPlan?: (promptId: number, approved: boolean, feedback?: string) => void;
+  /** Identifies which company session this board belongs to — shown in the header so the user can never confuse boards across sessions. */
+  sessionId?: number;
+  sessionName?: string;
 }
 
 type FeedItem =
@@ -70,6 +73,8 @@ export const BoardPanel = memo(function BoardPanel({
   masterPrompts = [],
   onAnswerQuestion,
   onRespondPlan,
+  sessionId,
+  sessionName,
 }: BoardPanelProps) {
   const { t } = useTranslation('agents');
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -98,6 +103,11 @@ export const BoardPanel = memo(function BoardPanel({
         <MessageSquare className="h-4 w-4 text-muted-foreground" />
         <span className="text-sm font-medium">{t('board.title')}</span>
         <Badge variant="outline" className="text-[10px]">{items.length}</Badge>
+        {sessionName && (
+          <span className="ml-auto text-[10px] text-muted-foreground truncate max-w-[60%]" title={sessionName}>
+            {sessionName}{sessionId !== undefined && ` · #${sessionId}`}
+          </span>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {items.length === 0 && (

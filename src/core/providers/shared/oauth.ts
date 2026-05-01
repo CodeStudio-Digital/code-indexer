@@ -12,6 +12,15 @@ import {
 import {
   refreshIfExpired as refreshGoogleToken,
 } from '../../services/oauth/google.js';
+import {
+  refreshIfExpired as refreshClaudeCodeToken,
+  CLAUDE_CODE_BASE_URL,
+  CLAUDE_CODE_OAUTH_BETA,
+  claudeCodeFetch,
+  createClaudeCodeFetchWithRetry,
+  getClaudeCodeRequestMetadata,
+  getClaudeCodeRuntimeHeaders,
+} from '../../services/oauth/claude-code.js';
 import { extractAccountIdFromIdToken } from '../../coder/providers/chatgpt.js';
 import { getStore } from './store.js';
 
@@ -126,6 +135,94 @@ export async function resolveGoogleOAuthCreds(cfg: ProviderConfig): Promise<Reso
     extra: {
       refreshToken: tok?.refresh_token,
       projectId: extra.projectId,
+    },
+  };
+}
+
+/**
+ * Resolve Claude Code OAuth credentials. Claude.ai accounts with
+ * `user:inference` use Bearer auth plus the OAuth beta header; console-only
+ * authorizations fall back to the managed API key that Claude Code creates.
+ */
+export async function resolveClaudeCodeCreds(cfg: ProviderConfig): Promise<ResolvedCreds> {
+  const store = getStore();
+  if (!store) throw new Error('Claude Code requires the ProviderStore');
+  const runtimeHeaders = getClaudeCodeRuntimeHeaders(store, cfg.id);
+  const metadata = getClaudeCodeRequestMetadata(store, cfg.id);
+
+  const envToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (envToken) {
+    return {
+      authToken: envToken,
+      baseURL: (cfg.base_url ?? CLAUDE_CODE_BASE_URL).replace(/\/$/, ''),
+      extraHeaders: {
+        ...runtimeHeaders,
+        'anthropic-beta': CLAUDE_CODE_OAUTH_BETA,
+      },
+      fetch: claudeCodeFetch,
+      extra: {
+        authType: 'env_oauth',
+        subscriptionType: process.env.CLAUDE_CODE_SUBSCRIPTION_TYPE ?? null,
+        rateLimitTier: process.env.CLAUDE_CODE_RATE_LIMIT_TIER ?? null,
+        metadata,
+      },
+    };
+  }
+
+  const tok = store.getOAuth(cfg.id);
+  const scope = tok?.scope ?? '';
+  const authType = tok?.extra?.auth_type;
+  const usesClaudeAi =
+    authType === 'claude_ai' ||
+    scope.split(/\s+/).filter(Boolean).includes('user:inference');
+
+  const baseURL = (cfg.base_url ?? CLAUDE_CODE_BASE_URL).replace(/\/$/, '');
+  if (usesClaudeAi) {
+    let token = cfg.api_key ?? tok?.access_token ?? '';
+    try {
+      const fresh = await refreshClaudeCodeToken(store, cfg.id);
+      if (fresh && fresh !== cfg.api_key) {
+        token = fresh;
+        store.upsertProvider({ ...cfg, api_key: fresh });
+      } else if (fresh) {
+        token = fresh;
+      }
+    } catch (e) {
+      console.warn(`[claude-code] refresh failed: ${(e as Error).message}`);
+    }
+    if (!token) throw new Error('no Claude Code access token stored - re-connect');
+
+    return {
+      authToken: token,
+      baseURL,
+      extraHeaders: {
+        ...runtimeHeaders,
+        'anthropic-beta': CLAUDE_CODE_OAUTH_BETA,
+      },
+      fetch: createClaudeCodeFetchWithRetry(store, cfg.id),
+      extra: {
+        authType: 'claude_ai',
+        profile: tok?.extra?.profile,
+        profileInfo: tok?.extra?.profile_info,
+        roles: tok?.extra?.roles,
+        metadata,
+      },
+    };
+  }
+
+  const storedApiKey = tok?.extra?.api_key as string | undefined;
+  const apiKey = cfg.api_key ?? storedApiKey ?? '';
+  if (!apiKey) throw new Error('no Claude Code API key stored - re-connect');
+  return {
+    apiKey,
+    baseURL,
+    extraHeaders: runtimeHeaders,
+    fetch: claudeCodeFetch,
+    extra: {
+      authType: 'api_key',
+      profile: tok?.extra?.profile,
+      roles: tok?.extra?.roles,
+      metadata,
     },
   };
 }

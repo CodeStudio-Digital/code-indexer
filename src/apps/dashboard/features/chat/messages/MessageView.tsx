@@ -213,6 +213,15 @@ export function renderAssistantBlock(
       </div>
     );
   }
+  if (b.type === 'image') {
+    return (
+      <GeneratedImageBlock
+        key={`img-${i}`}
+        mediaType={b.mediaType ?? 'image/png'}
+        base64={b.base64 ?? ''}
+      />
+    );
+  }
   if (b.type !== 'tool_use') return null;
 
   const result = toolResultsById.get(b.id ?? '');
@@ -317,6 +326,44 @@ export function renderAssistantBlock(
     status: result ? (result.isError ? 'error' : 'done') : 'running',
   };
   return <ToolCallBlock key={`tu-${b.id}-${i}`} call={tc} />;
+}
+
+/**
+ * Inline image preview (300px wide) that opens a fullscreen modal on click.
+ * Used for assistant-emitted images (server-managed image_generation results).
+ */
+function GeneratedImageBlock({ mediaType, base64 }: { mediaType: string; base64: string }) {
+  const [open, setOpen] = useState(false);
+  if (!base64) return null;
+  const src = `data:${mediaType};base64,${base64}`;
+  return (
+    <>
+      <div className="my-2">
+        <img
+          src={src}
+          alt="Generated"
+          width={300}
+          onClick={() => setOpen(true)}
+          className="rounded border border-border cursor-zoom-in hover:opacity-90 transition-opacity"
+        />
+      </div>
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 cursor-zoom-out"
+          onClick={() => setOpen(false)}
+          role="button"
+          tabIndex={-1}
+        >
+          <img
+            src={src}
+            alt="Generated (full size)"
+            className="max-w-full max-h-full rounded shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
+    </>
+  );
 }
 
 /** Collapsible thinking block — shows model reasoning, like Gemini/Claude. */

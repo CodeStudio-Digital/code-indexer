@@ -142,6 +142,21 @@ export interface IndexStatus {
   mcpAvailable: boolean;
 }
 
+/**
+ * Set when the server returned 409 INTERACTION_PENDING because the live runner
+ * was blocked inside an interactive tool. Lets the UI render an explicit
+ * "interrupt and resend" choice instead of a generic error toast — matches
+ * the enqueue-and-attach contract of POST /messages with `interject:true`.
+ */
+export interface InteractionPending {
+  /** Server-supplied error code ('INTERACTION_PENDING'). */
+  code: string;
+  /** Human-readable message from the server. */
+  message: string;
+  /** The original message the user tried to send — re-submit when interrupting. */
+  pendingContent: string;
+}
+
 export interface SessionState {
   streaming: boolean;
   currentTurn: AssistantTurn | null;
@@ -160,6 +175,13 @@ export interface SessionState {
   contextStatus: ContextStatus | null;
   /** Whether the project is indexed and MCP tools are available. */
   indexStatus: IndexStatus | null;
+  /**
+   * 409 INTERACTION_PENDING handshake state. Null when the last send was
+   * accepted; populated when the server rejected because the runner was
+   * inside an interactive wait. Cleared on the next successful send or
+   * when the user dismisses.
+   */
+  interactionPending: InteractionPending | null;
 }
 
 export const ZERO_DELTA: RunDelta = {
@@ -181,6 +203,7 @@ export const EMPTY_STATE: SessionState = {
   todos: [],
   contextStatus: null,
   indexStatus: null,
+  interactionPending: null,
 };
 
 export type SessionPatch =

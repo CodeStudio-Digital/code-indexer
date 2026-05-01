@@ -13,6 +13,7 @@
 import type { IScaffolder, ScaffoldContext } from './scaffolder-port.js';
 import type { SandboxStack } from '../types.js';
 import { POLL_INTERVAL_MS, probeContainerReady, sleep, truncate } from './ready-probe.js';
+import { installPlaywrightTestClient } from './playwright-bootstrap.js';
 
 export interface ViteScaffolderOptions {
   stack: SandboxStack;
@@ -20,6 +21,17 @@ export interface ViteScaffolderOptions {
   viteTemplate: string;
   /** Total time budget from `npm create` to "dev server listening". */
   readyTimeoutMs?: number;
+  /**
+   * When true, after `npm install` completes the scaffolder will install
+   * `@playwright/cli`, `@playwright/test`, the chromium browser, and a
+   * default `playwright.config.ts`. Adds ~1–3 minutes to first boot but
+   * makes the QA agent immediately functional in this sandbox.
+   *
+   * Default `false` to keep boot time predictable for non-QA sessions.
+   * Toggle per session by subclassing or by passing the flag through
+   * the scaffolder factory (env var or builder config in phase 2).
+   */
+  includeE2e?: boolean;
 }
 
 const READY_TIMEOUT_DEFAULT_MS = 180_000;
@@ -28,11 +40,13 @@ export abstract class ViteScaffolderBase implements IScaffolder {
   readonly stack: SandboxStack;
   protected readonly viteTemplate: string;
   protected readonly readyTimeoutMs: number;
+  protected readonly includeE2e: boolean;
 
   protected constructor(options: ViteScaffolderOptions) {
     this.stack = options.stack;
     this.viteTemplate = options.viteTemplate;
     this.readyTimeoutMs = options.readyTimeoutMs ?? READY_TIMEOUT_DEFAULT_MS;
+    this.includeE2e = options.includeE2e ?? false;
   }
 
   async scaffold(ctx: ScaffoldContext): Promise<void> {
@@ -133,6 +147,27 @@ export abstract class ViteScaffolderBase implements IScaffolder {
       throw new Error(
         `npm install failed (exit ${installRes.exitCode}): ${truncate(installRes.stderr || installRes.stdout, 800)}`,
       );
+    }
+
+    // 3.5. Optional Playwright Agent CLI bootstrap. Non-fatal: if any
+    //      sub-step fails we log a warning and let the dev server boot
+    //      anyway — the QA agent can recover via run_command on first use.
+    //
+    //      `ctx.includeE2e` (set per-session by the manager from
+    //      `role_assignments`) overrides the construct-time
+    //      `this.includeE2e` (set globally via env var fallback). When
+    //      neither is set this branch is skipped.
+    const includeE2e = ctx.includeE2e ?? this.includeE2e;
+    if (includeE2e) {
+      await installPlaywrightTestClient({
+        driver,
+        containerId,
+        workdir,
+        sandboxId,
+        emit,
+        devServerPort: ctx.devServerPort,
+        signal,
+      });
     }
 
     // 4. Launch dev server in the background. We detach via `nohup ... &`

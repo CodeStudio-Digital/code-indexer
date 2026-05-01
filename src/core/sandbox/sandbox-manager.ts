@@ -16,7 +16,8 @@
 
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { join, resolve as resolvePath } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn as spawnChild } from 'node:child_process';
 import { PortAllocator, defaultPortAllocator } from './port-allocator.js';
 import type { ISandboxDriver } from './ports/sandbox-driver.js';
@@ -33,8 +34,15 @@ import { DEFAULT_SANDBOX_ISOLATION, DEFAULT_SANDBOX_LIMITS } from './types.js';
 
 const MAX_LOG_LINES = 200;
 import { getScaffolder } from './scaffolders/registry.js';
-import { resolveDriver } from './drivers/driver-factory.js';
+import { resolveDriver, getResolvedRuntime } from './drivers/driver-factory.js';
+import { CliOciDriver } from './drivers/cli-oci-driver.js';
 import { getNetworkController } from './network-controller.js';
+import { buildQaPreviewBaseUrl } from '../qa/url-resolver.js';
+import {
+  mintPreviewToken,
+  parseTokenExpiry,
+  QA_PREVIEW_TTL_MS,
+} from '../../apps/http-api/server/routes/preview-auth.js';
 import { archivePath, loadArchive, saveArchive } from './archive.js';
 import type {
   CompanySandboxStore,
@@ -56,6 +64,20 @@ let sandboxStore: CompanySandboxStore | null = null;
 let servicesStore: CompanySandboxServicesStore | null = null;
 let envStore: CompanySessionEnvStore | null = null;
 
+/**
+ * QA preview-routing configuration injected at boot. Holds just the
+ * port the http-api process is listening on so `syncManagedEnvs` can
+ * compose `PLAYWRIGHT_BASE_URL_*` URLs that point at the proxy from
+ * inside a sibling container. Optional `companyStore` lets the same
+ * function gate QA env injection behind `hasQaPlaywrightSkill` without
+ * importing the company store directly (preserves the dependency
+ * direction).
+ */
+let qaPreviewConfig: {
+  httpApiPort: number;
+  hasQaPlaywrightSkill: (sessionId: number) => boolean;
+} | null = null;
+
 export function setCompanySandboxStore(store: CompanySandboxStore | null): void {
   sandboxStore = store;
 }
@@ -70,6 +92,22 @@ export function setCompanySessionEnvStore(
   store: CompanySessionEnvStore | null,
 ): void {
   envStore = store;
+}
+
+/**
+ * Wire the QA preview-URL routing config. Called from `server.ts` at
+ * boot once `IndexerConfig` has been loaded and the company store is
+ * available. When this is null (tests, CLI, non-HTTP paths) the
+ * `PLAYWRIGHT_BASE_URL_*` family is silently skipped — sessions
+ * without the `qa-playwright` skill don't pay the cost either way.
+ */
+export function setQaPreviewConfig(
+  cfg: {
+    httpApiPort: number;
+    hasQaPlaywrightSkill: (sessionId: number) => boolean;
+  } | null,
+): void {
+  qaPreviewConfig = cfg;
 }
 
 function getStore(): CompanySandboxStore | null {
@@ -199,6 +237,33 @@ function resolvePublicBase(): string | null {
 }
 
 /**
+ * Pure: validate that a workspace-relative path is safe for HTTP
+ * callers to traverse. Rejects absolute paths, empty strings, and any
+ * `..` segment that could climb out of the workdir. Normalises slashes.
+ *
+ * Exported is unnecessary — only used by the manager; tests can drive
+ * it via `readWorkspaceFile` thrown errors.
+ */
+function ensureSafeRelPath(relPath: string): string {
+  if (typeof relPath !== 'string' || relPath.trim() === '') {
+    throw new Error('workspace path must be a non-empty string');
+  }
+  const normalised = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (normalised.startsWith('/')) {
+    throw new Error('absolute paths are not allowed');
+  }
+  const parts = normalised.split('/');
+  if (parts.some((p) => p === '..' || p === '.')) {
+    throw new Error('relative path must not contain `..` or `.` segments');
+  }
+  // NUL bytes — unusual but a known shell-escape vector.
+  if (normalised.includes('\0')) {
+    throw new Error('path contains illegal NUL byte');
+  }
+  return parts.join('/');
+}
+
+/**
  * Prepend `base` to `relative` when `relative` is origin-less. Absolute
  * URLs pass through unchanged. Returns the original string verbatim
  * when no base is configured so managed envs degrade gracefully (the
@@ -242,7 +307,7 @@ export interface SandboxManagerOptions {
   maxSandboxes?: number;
   /** Idle time before auto-destroy. Defaults to 30 min (env: MCP_SANDBOX_IDLE_MS). */
   idleTtlMs?: number;
-  /** Base image for Node-stack sandboxes. Defaults to `mcp-sandbox-node:20`. */
+  /** Base image for Node-stack sandboxes. Defaults to `localhost/mcp-sandbox-node:20-py`. */
   nodeImage?: string;
   /** Container port the dev server binds to. Defaults to 5173 (Vite). */
   devServerPort?: number;
@@ -261,7 +326,7 @@ export interface SandboxManagerOptions {
 
 const DEFAULT_MAX = 10;
 const DEFAULT_IDLE_TTL = 30 * 60 * 1000;
-const DEFAULT_NODE_IMAGE = 'mcp-sandbox-node:20';
+const DEFAULT_NODE_IMAGE = 'mcp-sandbox-node:20-py';
 const DEFAULT_DEV_PORT = 5173;
 const DEFAULT_WORKDIR = '/app';
 
@@ -369,6 +434,30 @@ export interface ProvisionRequest {
    * the linked project's `root_path` before calling provision.
    */
   hostWorkdirMount?: string;
+  /**
+   * When true the session has at least one role with the `qa-playwright`
+   * skill, so:
+   *   - the scaffolder writes a Playwright client config + reporter
+   *     into the project container (no browser install — the client
+   *     just connects);
+   *   - the caller (SandboxService) provisions a separate
+   *     `playwright-sidecar` container running
+   *     `mcr.microsoft.com/playwright:...` + `npx playwright run-server`,
+   *     attached to the same docker network, and injects
+   *     `PLAYWRIGHT_WS_ENDPOINT` into the project container's env.
+   *
+   * Architecturally: project container stays lean (~592 MB), browser
+   * lives in the sidecar (~2 GB pulled once + cached). The QA agent
+   * never installs anything browser-related — the env var tells it
+   * where to connect, and the skill v2.0.0 prompt forbids any local
+   * install attempts.
+   *
+   * `SandboxService.provisionIfNeeded` derives this from
+   * `config_json.role_assignments` (auto-detect via `qa-playwright`
+   * skill). The legacy env var `MCP_SANDBOX_INCLUDE_E2E=1` still works
+   * as a global override for tests.
+   */
+  includeE2e?: boolean;
 }
 
 /**
@@ -476,6 +565,248 @@ export class SandboxManager {
 
   list(): Sandbox[] {
     return [...this.sandboxes.values()];
+  }
+
+  // ────────────────────────────────────────────────── workspace I/O
+  // Thin wrappers around `driver.readFile` / `driver.writeFile` /
+  // `driver.exec` exposed at the manager surface so HTTP routes can
+  // serve files from the container without grabbing the private
+  // driver handle. Paths are resolved RELATIVE to the sandbox's
+  // workdir; absolute paths and `..` traversal are rejected here so
+  // callers don't need to repeat the validation.
+
+  /**
+   * Read a workspace-relative text file. Returns `null` when the file
+   * doesn't exist (driver-level "ENOENT" surfaces as a thrown error;
+   * we translate it). Throws on any other I/O failure or when the
+   * sandbox is missing.
+   */
+  async readWorkspaceFile(sessionId: string, relPath: string): Promise<string | null> {
+    const { driver, sb, abs } = this.resolveWorkspacePath(sessionId, relPath);
+    try {
+      return await driver.readFile(sb.containerId, abs);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/no such file|ENOENT|not found/i.test(msg)) return null;
+      throw e;
+    }
+  }
+
+  /** Write a workspace-relative text file (creates parents). */
+  async writeWorkspaceFile(sessionId: string, relPath: string, data: string): Promise<void> {
+    const { driver, sb, abs } = this.resolveWorkspacePath(sessionId, relPath);
+    await driver.writeFile(sb.containerId, abs, data, { recursive: true });
+  }
+
+  /**
+   * Stream a workspace-relative binary file out as a Buffer via base64
+   * transit. We pipe through `base64` because `driver.readFile` is
+   * utf-8-only — Playwright trace.zip files would be corrupted by a
+   * naive text read. The container ships `coreutils` so `base64`
+   * is universally available.
+   *
+   * @throws when the file is missing or larger than `maxBytes`.
+   */
+  async readWorkspaceFileBuffer(
+    sessionId: string,
+    relPath: string,
+    opts?: { maxBytes?: number },
+  ): Promise<Buffer> {
+    const maxBytes = opts?.maxBytes ?? 25 * 1024 * 1024; // 25 MiB default
+    const { driver, sb, abs } = this.resolveWorkspacePath(sessionId, relPath);
+    // Cheap size guard via `wc -c` before pulling bytes; avoids loading
+    // a runaway file into memory only to reject it.
+    const sizeProbe = await driver.exec(sb.containerId, `wc -c < "${abs}"`, {
+      cwd: undefined,
+      timeoutMs: 5_000,
+    });
+    if (sizeProbe.exitCode !== 0) {
+      throw new Error(`workspace file not readable: ${sizeProbe.stderr || sizeProbe.stdout}`);
+    }
+    const size = Number(sizeProbe.stdout.trim());
+    if (Number.isFinite(size) && size > maxBytes) {
+      throw new Error(`file ${relPath} is ${size} bytes, max ${maxBytes}`);
+    }
+    const b64 = await driver.exec(sb.containerId, `base64 -w0 < "${abs}"`, {
+      cwd: undefined,
+      timeoutMs: 30_000,
+      maxOutputBytes: Math.ceil(maxBytes * 1.4) + 1024, // base64 inflation
+    });
+    if (b64.exitCode !== 0) {
+      throw new Error(`base64 read failed: ${b64.stderr || b64.stdout}`);
+    }
+    return Buffer.from(b64.stdout.trim(), 'base64');
+  }
+
+  /**
+   * Multi-service variant: same shape as `readWorkspaceFileBuffer` but
+   * resolves the sandbox via `(sessionId, serviceId)`. When `serviceId`
+   * is `undefined` or `'main'` we fall through to the primary container,
+   * so callers don't have to branch.
+   *
+   * Used by the QA artifact route to serve screenshots/videos/HTML
+   * report from any microservice's workdir without exposing the
+   * primary-only `readWorkspaceFileBuffer` to that path.
+   */
+  async readWorkspaceFileBufferOnService(
+    sessionId: string,
+    serviceId: string | undefined,
+    relPath: string,
+    opts?: { maxBytes?: number },
+  ): Promise<Buffer> {
+    const isPrimary = !serviceId || serviceId === 'main';
+    if (isPrimary) return this.readWorkspaceFileBuffer(sessionId, relPath, opts);
+
+    const maxBytes = opts?.maxBytes ?? 25 * 1024 * 1024;
+    const { driver, sb, abs } = this.resolveServiceWorkspacePath(sessionId, serviceId, relPath);
+    const sizeProbe = await driver.exec(sb.containerId, `wc -c < "${abs}"`, {
+      cwd: undefined,
+      timeoutMs: 5_000,
+    });
+    if (sizeProbe.exitCode !== 0) {
+      throw new Error(`workspace file not readable: ${sizeProbe.stderr || sizeProbe.stdout}`);
+    }
+    const size = Number(sizeProbe.stdout.trim());
+    if (Number.isFinite(size) && size > maxBytes) {
+      throw new Error(`file ${relPath} is ${size} bytes, max ${maxBytes}`);
+    }
+    const b64 = await driver.exec(sb.containerId, `base64 -w0 < "${abs}"`, {
+      cwd: undefined,
+      timeoutMs: 30_000,
+      maxOutputBytes: Math.ceil(maxBytes * 1.4) + 1024,
+    });
+    if (b64.exitCode !== 0) {
+      throw new Error(`base64 read failed: ${b64.stderr || b64.stdout}`);
+    }
+    return Buffer.from(b64.stdout.trim(), 'base64');
+  }
+
+  /**
+   * v4.5 — list every regular file under a workspace-relative directory
+   * inside the sandbox, returning their paths relative to that root.
+   * Powers the QA report-persistence helper, which needs to mirror
+   * `playwright-report/` and `test-results/` to the host disk before
+   * the sandbox is destroyed.
+   *
+   * Implementation: a single `find -type f -printf '%P\n'` call. The
+   * container ships GNU coreutils so `-printf` is universally available;
+   * BusyBox `find` is NOT used in the project images. Returns an empty
+   * array when the directory does not exist (e.g. a run that never
+   * produced reports). Does NOT recurse into symlinks.
+   */
+  async listWorkspaceFilesOnService(
+    sessionId: string,
+    serviceId: string | undefined,
+    relDir: string,
+  ): Promise<string[]> {
+    const isPrimary = !serviceId || serviceId === 'main';
+    const { driver, sb, abs } = isPrimary
+      ? this.resolveWorkspacePath(sessionId, relDir)
+      : this.resolveServiceWorkspacePath(sessionId, serviceId, relDir);
+
+    // Probe existence first — `find` on a missing dir would emit to
+    // stderr with exit 1, which is indistinguishable from a real failure
+    // to read a known file. A test on the directory makes the
+    // not-yet-produced case explicit + cheap.
+    const probe = await driver.exec(sb.containerId, `[ -d "${abs}" ] && echo y || echo n`, {
+      cwd: undefined,
+      timeoutMs: 5_000,
+    });
+    if (probe.exitCode !== 0 || probe.stdout.trim() !== 'y') return [];
+
+    const list = await driver.exec(sb.containerId, `find "${abs}" -type f -printf '%P\\n'`, {
+      cwd: undefined,
+      timeoutMs: 30_000,
+      maxOutputBytes: 4 * 1024 * 1024, // 4 MiB of paths is enough for tens of thousands of files
+    });
+    if (list.exitCode !== 0) {
+      throw new Error(`listWorkspaceFilesOnService failed: ${list.stderr || list.stdout}`);
+    }
+    return list.stdout
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  }
+
+  /**
+   * v4.5 — recursively delete a workspace-relative directory. Used by
+   * `restoreQaWorkspace` to clear `tests/e2e/test-results/` and
+   * `tests/e2e/playwright-report/` between QA runs so the operator's
+   * disk doesn't grow unboundedly. Best-effort: missing dirs are NOT
+   * an error.
+   */
+  async removeWorkspaceDirOnService(
+    sessionId: string,
+    serviceId: string | undefined,
+    relDir: string,
+  ): Promise<void> {
+    const isPrimary = !serviceId || serviceId === 'main';
+    const { driver, sb, abs } = isPrimary
+      ? this.resolveWorkspacePath(sessionId, relDir)
+      : this.resolveServiceWorkspacePath(sessionId, serviceId, relDir);
+    // Refuse to wipe an empty / root-equivalent path. The
+    // ensureSafeRelPath validator already rejects '.', '..', and
+    // absolute paths, so the only way `abs` could equal the workdir
+    // root is if `relDir` was an empty string.
+    if (!relDir || relDir.trim() === '') return;
+    const r = await driver.exec(sb.containerId, `rm -rf "${abs}"`, {
+      cwd: undefined,
+      timeoutMs: 30_000,
+    });
+    if (r.exitCode !== 0 && !/no such file|not found/i.test(r.stderr || '')) {
+      throw new Error(`removeWorkspaceDirOnService failed: ${r.stderr || r.stdout}`);
+    }
+  }
+
+  /**
+   * Multi-service variant of `readWorkspaceFile` (text). Same fall-through
+   * to primary when `serviceId` is missing / 'main'.
+   */
+  async readWorkspaceFileOnService(
+    sessionId: string,
+    serviceId: string | undefined,
+    relPath: string,
+  ): Promise<string | null> {
+    const isPrimary = !serviceId || serviceId === 'main';
+    if (isPrimary) return this.readWorkspaceFile(sessionId, relPath);
+    const { driver, sb, abs } = this.resolveServiceWorkspacePath(sessionId, serviceId, relPath);
+    try {
+      return await driver.readFile(sb.containerId, abs);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/no such file|ENOENT|not found/i.test(msg)) return null;
+      throw e;
+    }
+  }
+
+  private resolveServiceWorkspacePath(
+    sessionId: string,
+    serviceId: string,
+    relPath: string,
+  ): { driver: ISandboxDriver; sb: Sandbox; abs: string } {
+    if (!this.driver) throw new Error('SandboxManager has no driver wired');
+    const sb = this.getService(sessionId, serviceId);
+    if (!sb) throw new Error(`No sandbox for session ${sessionId} service ${serviceId}`);
+    const safe = ensureSafeRelPath(relPath);
+    const base = sb.workdir.replace(/\/+$/, '');
+    return { driver: this.driver, sb, abs: `${base}/${safe}` };
+  }
+
+  /**
+   * Pure(ish) helper: validate a workspace-relative path and resolve
+   * it against the sandbox's container workdir. Rejects absolute paths
+   * and any `..` segment so HTTP callers can't escape the workspace.
+   */
+  private resolveWorkspacePath(
+    sessionId: string,
+    relPath: string,
+  ): { driver: ISandboxDriver; sb: Sandbox; abs: string } {
+    if (!this.driver) throw new Error('SandboxManager has no driver wired');
+    const sb = this.sandboxes.get(sessionId);
+    if (!sb) throw new Error(`No sandbox for session ${sessionId}`);
+    const safe = ensureSafeRelPath(relPath);
+    const base = sb.workdir.replace(/\/+$/, '');
+    return { driver: this.driver, sb, abs: `${base}/${safe}` };
   }
 
   // ───────────────────────────────────────────────────── services (multi)
@@ -834,7 +1165,17 @@ export class SandboxManager {
     if (!Number.isFinite(numericId)) return;
 
     const desired = new Map<string, string>();
+    const desiredSecret = new Set<string>();
     const publicBase = resolvePublicBase();
+
+    // QA preview routing (v4.3) — gated by both the per-process config
+    // (set at boot) AND the session's role assignments having the
+    // `qa-playwright` skill. When either is missing we silently skip
+    // the family so non-QA sessions don't pay the cost.
+    const qaEnabled =
+      qaPreviewConfig != null &&
+      qaPreviewConfig.hasQaPlaywrightSkill(numericId);
+    const qaRuntime = getResolvedRuntime();
 
     const addEntry = (idUpper: string, sb: Sandbox): void => {
       if (sb.previewUrl) {
@@ -845,6 +1186,22 @@ export class SandboxManager {
       // the host-mapped port — the shared network is inside dockerd).
       const hostname = idUpper === 'MAIN' ? 'main' : idUpper.toLowerCase();
       desired.set(`SERVICE_URL_${idUpper}`, `http://${hostname}:${this.devServerPort}`);
+
+      // QA preview URL through the http-api proxy, reachable from
+      // sibling containers on different networks (the Chrome Service).
+      // Each service gets its own entry; primary also gets the
+      // unsuffixed alias `PLAYWRIGHT_BASE_URL` for the default Playwright
+      // `baseURL` env-var convention.
+      if (qaEnabled && sb.previewUrl) {
+        const previewPath = previewPathPrefixOf(sb.previewUrl);
+        const url = buildQaPreviewBaseUrl({
+          httpApiPort: qaPreviewConfig!.httpApiPort,
+          runtime: qaRuntime,
+          previewPath,
+        });
+        desired.set(`PLAYWRIGHT_BASE_URL_${idUpper}`, url);
+        if (idUpper === 'MAIN') desired.set('PLAYWRIGHT_BASE_URL', url);
+      }
     };
 
     const primary = this.sandboxes.get(sessionId);
@@ -856,15 +1213,42 @@ export class SandboxManager {
       addEntry(safe, svc);
     }
 
+    // QA cookie: long-lived HMAC token persisted as `MCP_PREVIEW_COOKIE`.
+    // Re-mint when missing OR token has <7 days of headroom — verifying
+    // long before expiry so an in-flight Playwright run never hits 401.
+    if (qaEnabled) {
+      try {
+        const existing = envStore
+          .list(numericId)
+          .find((r) => r.key === 'MCP_PREVIEW_COOKIE');
+        const exp = parseTokenExpiry(existing?.value);
+        const REFRESH_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
+        const stale = !exp || exp - Date.now() < REFRESH_THRESHOLD_MS;
+        const value = stale
+          ? mintPreviewToken(String(numericId), QA_PREVIEW_TTL_MS).value
+          : existing!.value;
+        desired.set('MCP_PREVIEW_COOKIE', value);
+        desiredSecret.add('MCP_PREVIEW_COOKIE');
+      } catch (e) {
+        console.warn(
+          `[sandbox-manager] mint preview cookie ${sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+
     try {
       for (const [key, value] of desired) {
-        envStore.upsert(numericId, key, value, false, { source: 'auto' });
+        const isSecret = desiredSecret.has(key);
+        envStore.upsert(numericId, key, value, isSecret, { source: 'auto' });
       }
       for (const row of envStore.list(numericId)) {
-        if (
-          (row.key.startsWith('PREVIEW_URL_') || row.key.startsWith('SERVICE_URL_')) &&
-          !desired.has(row.key)
-        ) {
+        const isManaged =
+          row.key.startsWith('PREVIEW_URL_') ||
+          row.key.startsWith('SERVICE_URL_') ||
+          row.key.startsWith('PLAYWRIGHT_BASE_URL_') ||
+          row.key === 'PLAYWRIGHT_BASE_URL' ||
+          row.key === 'MCP_PREVIEW_COOKIE';
+        if (isManaged && !desired.has(row.key)) {
           envStore.delete(numericId, row.key);
         }
       }
@@ -985,6 +1369,29 @@ export class SandboxManager {
     const numericId = Number(sessionId);
     if (!Number.isFinite(numericId)) return;
     try {
+      // Defensive: free up any stale row sitting on this container_id
+      // (non-destroyed state) from a prior provisioning attempt that
+      // crashed before its success UPDATE landed. The partial unique
+      // index `idx_company_sandbox_services_container` (migration 035)
+      // would otherwise reject the upsert below with a
+      // `UNIQUE constraint failed: company_sandbox_services.container_id`.
+      const released = store.releaseStaleContainerId(sb.containerId, numericId, serviceId);
+      if (released > 0) {
+        console.warn(
+          `[sandbox-manager] persistService ${sessionId}:${serviceId} freed ${released} stale row(s) on container_id=${sb.containerId.slice(0, 12)}`,
+        );
+      }
+      // Same defensive release for `host_port` — the partial unique
+      // index `idx_company_sandbox_services_port` rejects the upsert
+      // when an old non-destroyed row still claims the same port.
+      // This is the typical aftermath of a provider crash where the
+      // old container was reaped but the row never got demoted.
+      const releasedPort = store.releaseStaleHostPort(sb.hostPort, numericId, serviceId);
+      if (releasedPort > 0) {
+        console.warn(
+          `[sandbox-manager] persistService ${sessionId}:${serviceId} freed ${releasedPort} stale row(s) on host_port=${sb.hostPort}`,
+        );
+      }
       store.upsert({
         session_id: numericId,
         service_id: serviceId,
@@ -1040,10 +1447,44 @@ export class SandboxManager {
         // Wake it up — filesystem is intact, just start the container
         // back up and relaunch Vite. Cheap (~5s) vs full reprovision.
         return await this.resumeSandbox(req.sessionId);
-      } else {
+      } else if (existing.status === 'pending' || existing.status === 'provisioning' || existing.status === 'destroying') {
+        // Don't touch in-flight states — another provision is already
+        // mutating this row. Returning the seed lets the caller wait
+        // for the in-flight provision to finish.
         existing.lastAccessAt = Date.now();
         this.persist(existing);
         return existing;
+      } else {
+        // 'ready' / 'error' fall here. Verify the container actually
+        // exists in the runtime before trusting the in-memory entry —
+        // the container can disappear out-of-band (TTL reaped by
+        // podman, Docker Desktop reset, OS reboot, manual `podman rm`)
+        // and the in-memory map keeps the stale binding pointing at a
+        // dead `containerId`. Without this check, every subsequent
+        // tool call from the agent fails with `container "" does not
+        // exist` and the master gets stuck in a recovery loop
+        // (session 73 incident). Heal transparently by falling through
+        // to a fresh provision when we detect the runtime disagrees.
+        let alive = true;
+        if (existing.containerId) {
+          try {
+            const inspect = await driver.inspectContainer(existing.containerId);
+            alive = inspect.exists && inspect.running;
+          } catch {
+            alive = false;
+          }
+        } else {
+          alive = false;
+        }
+        if (alive) {
+          existing.lastAccessAt = Date.now();
+          this.persist(existing);
+          return existing;
+        }
+        console.warn(
+          `[sandbox-manager] in-memory sandbox ${req.sessionId} points at a dead container ${(existing.containerId || '<empty>').slice(0, 12)} — auto-reprovisioning (host bind-mount preserves files)`,
+        );
+        await this.destroyInternal(req.sessionId, 'container-disappeared').catch(() => void 0);
       }
     }
     if (this.sandboxes.size >= this.maxSandboxes) {
@@ -1240,7 +1681,7 @@ export class SandboxManager {
         this.recordStep(seed, 'starting-dev-server', 'Starting dev server…');
         await this.relaunchDevServer(driver, containerId, this.workdir, req.signal, req.stack);
       } else {
-        const scaffolder = getScaffolder(req.stack);
+        const scaffolder = getScaffolder(req.stack, { includeE2e: req.includeE2e });
         await scaffolder.scaffold({
           sandboxId: req.sessionId,
           containerId,
@@ -1250,6 +1691,7 @@ export class SandboxManager {
           previewPathPrefix: previewPathPrefixOf(previewUrl),
           driver,
           signal: req.signal,
+          includeE2e: req.includeE2e,
           emit: (e) => {
             // Split scaffolder events: `step` updates drive the UI
             // label + record, `log` entries append to the ring buffer,
@@ -1574,6 +2016,18 @@ export class SandboxManager {
   private async resolveDriverOnce(): Promise<ISandboxDriver> {
     if (!this.driver) {
       this.driver = await resolveDriver();
+      // Ensure the sandbox base image is available locally. For CLI drivers
+      // (Docker/Podman) this is a no-op when the image already exists; on a
+      // fresh host it builds it automatically instead of failing at run-time
+      // with a confusing "registry not found" error.
+      if (this.driver instanceof CliOciDriver) {
+        const buildCtx = join(dirname(fileURLToPath(import.meta.url)), '../../../docker/sandbox-node');
+        await this.driver.ensureImage(this.nodeImage, buildCtx).catch((e) =>
+          console.warn(
+            `[sandbox-manager] image ensure failed (will retry on first sandbox): ${e instanceof Error ? e.message : String(e)}`,
+          ),
+        );
+      }
       // First driver resolution is where we do BOTH kinds of recovery:
       //   1. Reconcile DB rows with the runtime — living containers are
       //      reclaimed into the in-memory map; gone ones are marked
@@ -1592,9 +2046,17 @@ export class SandboxManager {
       // ANY container reclaimed into our in-memory map is NOT an orphan,
       // regardless of whether it's ready or paused. Without this guard
       // `reapOrphans` used to nuke paused sessions on every server boot.
+      // Include secondary service containers too — they are reconciled by
+      // `reconcileServicesFromDb` (called inside `reconcileFromDb`) into
+      // `this.services`, but the original code only iterated `this.sandboxes`
+      // (primary). Omitting them caused microservice containers to appear as
+      // orphans and be destroyed on every boot.
       const reclaimedIds = new Set<string>();
       for (const sb of this.sandboxes.values()) {
         if (sb.containerId) reclaimedIds.add(sb.containerId);
+      }
+      for (const svc of this.services.values()) {
+        if (svc.containerId) reclaimedIds.add(svc.containerId);
       }
       await this.reapOrphans(this.driver, reclaimedIds).catch((e) =>
         console.warn(
@@ -1990,9 +2452,26 @@ export class SandboxManager {
         if (row.container_id) dbContainerIds.add(row.container_id);
       }
     }
-    const orphans = allLabeled.filter(
-      (o) => !keepAlive.has(o.id) && !dbContainerIds.has(o.id),
-    );
+    // Also protect secondary service containers (company_sandbox_services).
+    // The original code only checked company_sandboxes (primary sandboxes),
+    // so microservice containers always fell through as orphans.
+    const svcStore = getServicesStore();
+    if (svcStore) {
+      for (const row of svcStore.listActive()) {
+        if (row.container_id) dbContainerIds.add(row.container_id);
+      }
+    }
+    const orphans = allLabeled.filter((o) => {
+      if (keepAlive.has(o.id) || dbContainerIds.has(o.id)) return false;
+      // Skip containers whose mcp.sessionId is not a numeric session ID.
+      // All company session IDs are SQLite integer primary keys ("42") or
+      // service composites ("42:api"). Chrome Service uses "chrome-service"
+      // and Verdaccio uses "verdaccio-registry" — both non-numeric — so
+      // they must be left alone even though they carry mcp.sandbox=1.
+      const sessionPart = o.sessionId.split(':')[0] ?? '';
+      if (!sessionPart || !/^\d+$/.test(sessionPart)) return false;
+      return true;
+    });
     const skipped = allLabeled.length - orphans.length;
     if (skipped > 0) {
       console.log(

@@ -6,7 +6,8 @@
 # keeps the LLM preview loop interactive.
 #
 # Build:
-#   docker build -t mcp-sandbox-node:20 docker/sandbox-node
+#   podman build -t mcp-sandbox-node:20-py docker/sandbox-node
+#   # or: docker build -t mcp-sandbox-node:20-py docker/sandbox-node
 #
 # When to rebuild:
 #   - New stack added that needs additional deps (update ANCHOR_DEPS).
@@ -31,6 +32,13 @@ FROM node:20-bookworm-slim
 # the `ss` command used to probe dev-server readiness in-container.
 # `ca-certificates` is required for `npm install` TLS against the
 # registry — Alpine shipped it in the base image, Debian-slim does not.
+# Python is included so agents can run ad-hoc scripts via `run_command`
+# (e.g. `python -` with the script body on stdin). `python3-venv` is a
+# separate Debian package that `python3 -m venv` requires; without it
+# venv creation fails with a confusing "ensurepip is not available".
+# `python-is-python3` creates the `/usr/bin/python` alias — the
+# command-synth allowlist and diagnostics tool both invoke `python` bare,
+# so Debian's "python3-only" default would silently break those paths.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git \
@@ -38,6 +46,10 @@ RUN apt-get update \
       tini \
       iproute2 \
       ca-certificates \
+      python3 \
+      python3-pip \
+      python3-venv \
+      python-is-python3 \
  && rm -rf /var/lib/apt/lists/*
 
 # Primer npm config — no audits in CI-style runs, reasonable timeouts.

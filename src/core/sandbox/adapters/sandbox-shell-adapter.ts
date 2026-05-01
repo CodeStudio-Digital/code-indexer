@@ -47,6 +47,7 @@ export class SandboxShellAdapter implements IShellPort {
       signal: options.signal,
       maxOutputBytes: options.maxOutputBytes,
       env: options.env as Record<string, string> | undefined,
+      stdin: options.stdin,
     });
     return r;
   }

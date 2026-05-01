@@ -6,6 +6,7 @@ import {
   CheckSquare,
   ChevronDown,
   ChevronRight,
+  Copy,
   FolderPlus,
   FolderX,
   MessageSquareCode,
@@ -53,6 +54,8 @@ interface SessionSidebarProps {
   onSelect: (id: number) => void;
   onNew: () => void;
   onDelete: (id: number) => void;
+  onRename: (id: number, currentTitle: string) => void;
+  onDuplicate: (id: number) => Promise<void> | void;
   onBatchDelete: (ids: number[]) => Promise<void> | void;
   onArchive: (id: number, archived: boolean) => Promise<void> | void;
   onFavorite: (id: number, favorite: boolean) => Promise<void> | void;
@@ -86,6 +89,8 @@ export function SessionSidebar({
   onSelect,
   onNew,
   onDelete,
+  onRename,
+  onDuplicate,
   onBatchDelete,
   onArchive,
   onFavorite,
@@ -446,6 +451,8 @@ export function SessionSidebar({
                       onToggle={() => toggleSelected(s.id)}
                       onSelect={() => onSelect(s.id)}
                       onDelete={() => onDelete(s.id)}
+                      onRename={() => onRename(s.id, s.title)}
+                      onDuplicate={() => onDuplicate(s.id)}
                       onArchive={() => onArchive(s.id, !isArchivedView)}
                       onFavorite={() => onFavorite(s.id, !s.is_favorite)}
                       isArchivedView={isArchivedView}
@@ -471,6 +478,8 @@ function SessionRow({
   onToggle,
   onSelect,
   onDelete,
+  onRename,
+  onDuplicate,
   onArchive,
   onFavorite,
   isArchivedView,
@@ -484,6 +493,8 @@ function SessionRow({
   onToggle: () => void;
   onSelect: () => void;
   onDelete: () => void;
+  onRename: () => void;
+  onDuplicate: () => void;
   onArchive: () => void;
   onFavorite: () => void;
   isArchivedView: boolean;
@@ -569,6 +580,9 @@ function SessionRow({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenuItem onClick={onRename}>
+                <Pencil className="h-3.5 w-3.5" /> {t('chat:sidebar.rename')}
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={onFavorite}>
                 <Star
                   className={cn('h-3.5 w-3.5', s.is_favorite && 'fill-current text-yellow-500')}
@@ -602,6 +616,9 @@ function SessionRow({
                   ))}
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+              <DropdownMenuItem onClick={onDuplicate}>
+                <Copy className="h-3.5 w-3.5" /> {t('chat:sidebar.duplicate')}
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={onDelete} className="text-destructive">
                 <Trash2 className="h-3.5 w-3.5" /> {t('common:actions.delete')}

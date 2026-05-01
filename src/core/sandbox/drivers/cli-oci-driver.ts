@@ -114,10 +114,16 @@ export class CliOciDriver implements ISandboxDriver {
       ...this.globalArgs,
       'run',
       '-d',
-      // Bind loopback only — the API proxy is what exposes sandboxes to
-      // the outside world, with auth and path rewriting. Binding on
-      // 0.0.0.0 would silently bypass the proxy.
-      '-p', `127.0.0.1:${spec.hostPort}:${spec.containerPort}`,
+      // Default: bind loopback only — the API proxy is what exposes
+      // sandboxes to the outside world, with auth and path rewriting.
+      // Binding on 0.0.0.0 would silently bypass the proxy.
+      //
+      // Override (`spec.hostBindAddr === '0.0.0.0'`) is for shared
+      // infra containers (e.g. the Chrome Service singleton). Other
+      // containers reach those via `host.containers.internal`, which
+      // resolves to the network gateway IP — that gateway can only
+      // route to ports bound on 0.0.0.0, NOT 127.0.0.1.
+      '-p', `${spec.hostBindAddr ?? '127.0.0.1'}:${spec.hostPort}:${spec.containerPort}`,
       // Traceable label — reaper uses this on boot to remove orphaned
       // containers left behind by a crashed API process.
       '--label', `mcp.sandbox=1`,
@@ -311,6 +317,10 @@ export class CliOciDriver implements ISandboxDriver {
     options: SandboxExecOptions,
   ): Promise<SandboxExecResult> {
     const argv = [...this.globalArgs, 'exec'];
+    // `-i` is required when we have a payload to pipe; without it the
+    // CLI closes the child's stdin immediately and the script never
+    // sees the bytes.
+    if (options.stdin !== undefined) argv.push('-i');
     if (options.cwd) argv.push('-w', options.cwd);
     if (options.user) argv.push('--user', options.user);
     if (options.env) {
@@ -329,6 +339,7 @@ export class CliOciDriver implements ISandboxDriver {
     options: SandboxExecOptions,
   ): Promise<SandboxExecResult> {
     const argv = [...this.globalArgs, 'exec'];
+    if (options.stdin !== undefined) argv.push('-i');
     if (options.cwd) argv.push('-w', options.cwd);
     if (options.user) argv.push('--user', options.user);
     if (options.env) {
@@ -629,6 +640,34 @@ export class CliOciDriver implements ISandboxDriver {
     }
   }
 
+  // ────────────────────────────────────────────────────────────── image mgmt
+
+  /**
+   * Ensure a local image exists, building it from `buildContextPath` if not.
+   * Called once at driver initialisation so `create()` never hits a remote
+   * registry for a locally-managed image.
+   */
+  async ensureImage(image: string, buildContextPath: string): Promise<void> {
+    const check = await this.shell.spawn(
+      this.binary,
+      [...this.globalArgs, 'images', '-q', image],
+      { cwd: this.cwd, env: process.env, timeoutMs: 15_000 },
+    );
+    if (check.stdout.trim()) return; // image already present
+
+    console.log(`[sandbox] image "${image}" not found locally — building from ${buildContextPath}`);
+    const build = await this.shell.spawn(
+      this.binary,
+      [...this.globalArgs, 'build', '-t', image, buildContextPath],
+      { cwd: this.cwd, env: process.env, timeoutMs: 10 * 60_000 },
+    );
+    if (build.exitCode !== 0) {
+      throw new Error(
+        `${this.binary} build failed (exit ${build.exitCode}): ${build.stderr.trim() || build.stdout.trim()}`,
+      );
+    }
+  }
+
   // ───────────────────────────────────────────────────────────── internals
 
   /**
@@ -645,6 +684,7 @@ export class CliOciDriver implements ISandboxDriver {
       timeoutMs: options.timeoutMs ?? this.defaultTimeoutMs,
       signal: options.signal,
       maxOutputBytes: options.maxOutputBytes,
+      stdin: options.stdin,
     });
   }
 

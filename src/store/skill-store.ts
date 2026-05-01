@@ -34,7 +34,10 @@ export interface SkillDefinition {
   variables: string[];
   sort_order: number;
   tags: string[];
+  /** @deprecated legacy column, prefer `trigger_paths`. */
   path_patterns: string[] | null;
+  trigger_paths: string[] | null;
+  trigger_roles: string[] | null;
   author: string | null;
   version: string;
   source: SkillSource;
@@ -58,12 +61,17 @@ export interface UpsertSkillInput {
   variables?: string[];
   sort_order?: number;
   tags?: string[];
+  /** @deprecated prefer `trigger_paths`. Both columns are written for back-compat. */
   path_patterns?: string[] | null;
+  trigger_paths?: string[] | null;
+  trigger_roles?: string[] | null;
   author?: string | null;
   version?: string;
   source?: SkillSource;
   source_ref?: SkillSourceRef | null;
 }
+
+export type SkillUsageOutcome = 'success' | 'failed' | 'aborted';
 
 export interface SkillUsageInput {
   session_id: number;
@@ -71,11 +79,23 @@ export interface SkillUsageInput {
   invoked_by: 'user' | 'model' | 'system';
   input_text?: string;
   duration_ms?: number;
+  /** Final disposition of the work the skill drove. NULL when unknown. */
+  outcome?: SkillUsageOutcome;
+  /** Free-form error tag (e.g. `props.foreign_vocabulary`, `vocab.leak`). */
+  error_code?: string;
+  /** Agent run that consumed the skill, if any. Lets the dashboard link
+   *  skill failures to specific runs. */
+  agent_run_id?: number;
 }
 
 export interface SkillUsageStats {
   total_invocations: number;
   last_used: string | null;
+  /** Fraction of invocations that ended in `outcome='success'`. NULL when
+   *  no row has a recorded outcome (legacy). */
+  success_rate: number | null;
+  /** Top non-null `error_code` values, descending. Capped at 5 entries. */
+  top_error_codes: Array<{ code: string; count: number }>;
 }
 
 export interface SkillListFilter {
@@ -103,6 +123,8 @@ interface SkillRaw {
   sort_order: number;
   tags: string;
   path_patterns: string | null;
+  trigger_paths: string | null;
+  trigger_roles: string | null;
   author: string | null;
   version: string;
   source: string;
@@ -131,6 +153,9 @@ function parseJson<T>(s: string | null, fallback: T): T {
 }
 
 function hydrate(r: SkillRaw): SkillDefinition {
+  // Normalize legacy 'inline' → 'auto' on read so old rows that survived
+  // migration 054 (e.g. shipped from imported skill packs) still typecheck.
+  const ctxMode: SkillContextMode = r.context_mode === 'inline' ? 'auto' : (r.context_mode as SkillContextMode);
   return {
     id: r.id,
     name: r.name,
@@ -142,11 +167,13 @@ function hydrate(r: SkillRaw): SkillDefinition {
     allowed_tools: parseJson<string[] | null>(r.allowed_tools, null),
     model_override: r.model_override,
     provider_override: r.provider_override,
-    context_mode: r.context_mode as SkillContextMode,
+    context_mode: ctxMode,
     variables: parseJson<string[]>(r.variables, []),
     sort_order: r.sort_order,
     tags: parseJson<string[]>(r.tags, []),
     path_patterns: parseJson<string[] | null>(r.path_patterns, null),
+    trigger_paths: parseJson<string[] | null>(r.trigger_paths, null),
+    trigger_roles: parseJson<string[] | null>(r.trigger_roles, null),
     author: r.author,
     version: r.version,
     source: r.source as SkillSource,
@@ -157,6 +184,12 @@ function hydrate(r: SkillRaw): SkillDefinition {
 }
 
 function toResolved(def: SkillDefinition): ResolvedSkill {
+  // Treat tags prefixed with `trigger:` as inline trigger tags (e.g.
+  // `trigger:design-system`). This keeps frontmatter terse while letting
+  // the matcher reuse a single field.
+  const triggerTags = def.tags
+    .filter((t) => t.startsWith('trigger:'))
+    .map((t) => t.slice('trigger:'.length));
   return {
     id: def.id,
     name: def.name,
@@ -168,6 +201,10 @@ function toResolved(def: SkillDefinition): ResolvedSkill {
     providerOverride: def.provider_override,
     contextMode: def.context_mode,
     pathPatterns: def.path_patterns,
+    triggerPaths: def.trigger_paths ?? def.path_patterns,
+    triggerRoles: def.trigger_roles,
+    triggerTags: triggerTags.length > 0 ? triggerTags : null,
+    tags: def.tags,
     source: def.source,
     sortOrder: def.sort_order,
   };
@@ -241,8 +278,9 @@ export class SkillStore {
              name = ?, description = ?, slash_command = ?, prompt_body = ?,
              scope = ?, enabled = ?, allowed_tools = ?, model_override = ?,
              provider_override = ?, context_mode = ?, variables = ?,
-             sort_order = ?, tags = ?, path_patterns = ?, author = ?,
-             version = ?, source = ?, source_ref = ?, updated_at = ?
+             sort_order = ?, tags = ?, path_patterns = ?, trigger_paths = ?,
+             trigger_roles = ?, author = ?, version = ?, source = ?,
+             source_ref = ?, updated_at = ?
            WHERE id = ?`,
         )
         .run(
@@ -260,6 +298,8 @@ export class SkillStore {
           input.sort_order ?? existing.sort_order,
           JSON.stringify(input.tags ?? existing.tags),
           input.path_patterns !== undefined ? JSON.stringify(input.path_patterns) : (existing.path_patterns ? JSON.stringify(existing.path_patterns) : null),
+          input.trigger_paths !== undefined ? JSON.stringify(input.trigger_paths) : (existing.trigger_paths ? JSON.stringify(existing.trigger_paths) : null),
+          input.trigger_roles !== undefined ? JSON.stringify(input.trigger_roles) : (existing.trigger_roles ? JSON.stringify(existing.trigger_roles) : null),
           input.author !== undefined ? input.author : existing.author,
           input.version ?? existing.version,
           input.source ?? existing.source,
@@ -275,9 +315,10 @@ export class SkillStore {
           `INSERT INTO skill_definitions
              (id, name, description, slash_command, prompt_body, scope, enabled,
               allowed_tools, model_override, provider_override, context_mode,
-              variables, sort_order, tags, path_patterns, author, version, source,
+              variables, sort_order, tags, path_patterns, trigger_paths,
+              trigger_roles, author, version, source,
               source_ref, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
@@ -290,11 +331,13 @@ export class SkillStore {
           input.allowed_tools ? JSON.stringify(input.allowed_tools) : null,
           input.model_override ?? null,
           input.provider_override ?? null,
-          input.context_mode ?? 'inline',
+          input.context_mode ?? 'auto',
           JSON.stringify(input.variables ?? []),
           input.sort_order ?? 0,
           JSON.stringify(input.tags ?? []),
           input.path_patterns ? JSON.stringify(input.path_patterns) : null,
+          input.trigger_paths ? JSON.stringify(input.trigger_paths) : null,
+          input.trigger_roles ? JSON.stringify(input.trigger_roles) : null,
           input.author ?? null,
           input.version ?? '1.0.0',
           input.source ?? 'user',
@@ -400,8 +443,8 @@ export class SkillStore {
   logSkillUsage(input: SkillUsageInput): void {
     this.db
       .prepare(
-        `INSERT INTO skill_usage_log (session_id, skill_id, invoked_by, input_text, duration_ms)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO skill_usage_log (session_id, skill_id, invoked_by, input_text, duration_ms, outcome, error_code, agent_run_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.session_id,
@@ -409,19 +452,44 @@ export class SkillStore {
         input.invoked_by,
         input.input_text ?? null,
         input.duration_ms ?? null,
+        input.outcome ?? null,
+        input.error_code ?? null,
+        input.agent_run_id ?? null,
       );
   }
 
   getSkillUsageStats(skillId: string): SkillUsageStats {
-    const row = this.db
+    const totalsRow = this.db
       .prepare(
-        `SELECT COUNT(*) as total, MAX(created_at) as last_used
+        `SELECT COUNT(*) as total, MAX(created_at) as last_used,
+                SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END) as successes,
+                SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END) as known_outcomes
          FROM skill_usage_log WHERE skill_id = ?`,
       )
-      .get(skillId) as { total: number; last_used: string | null };
+      .get(skillId) as {
+        total: number;
+        last_used: string | null;
+        successes: number | null;
+        known_outcomes: number | null;
+      };
+    const errorRows = this.db
+      .prepare(
+        `SELECT error_code, COUNT(*) as count
+         FROM skill_usage_log
+         WHERE skill_id = ? AND error_code IS NOT NULL
+         GROUP BY error_code
+         ORDER BY count DESC, error_code ASC
+         LIMIT 5`,
+      )
+      .all(skillId) as Array<{ error_code: string; count: number }>;
+
+    const known = totalsRow.known_outcomes ?? 0;
+    const successes = totalsRow.successes ?? 0;
     return {
-      total_invocations: row.total,
-      last_used: row.last_used,
+      total_invocations: totalsRow.total,
+      last_used: totalsRow.last_used,
+      success_rate: known > 0 ? successes / known : null,
+      top_error_codes: errorRows.map((r) => ({ code: r.error_code, count: r.count })),
     };
   }
 
@@ -462,6 +530,8 @@ export class SkillStore {
       sort_order: parsed.sort_order,
       tags: parsed.tags,
       path_patterns: parsed.path_patterns,
+      trigger_paths: parsed.trigger_paths,
+      trigger_roles: parsed.trigger_roles,
       author: parsed.author,
       version: parsed.version,
       source: 'imported',

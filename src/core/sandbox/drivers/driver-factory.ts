@@ -36,6 +36,16 @@ export function setDriverForTests(driver: ISandboxDriver | null): void {
   cached = driver;
 }
 
+/**
+ * Read-only accessor to the resolved runtime kind, or `null` when the
+ * factory hasn't been called yet. Lets unrelated subsystems
+ * (e.g. the QA endpoint that needs to address the host from inside a
+ * container) pick host aliases without re-implementing the probe.
+ */
+export function getResolvedRuntime(): 'docker' | 'podman' | 'e2b' | null {
+  return cached?.runtime ?? null;
+}
+
 export async function resolveDriver(
   options: ResolveDriverOptions = {},
 ): Promise<ISandboxDriver> {

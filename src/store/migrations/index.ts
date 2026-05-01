@@ -58,6 +58,24 @@ import { companySessionEnvSource039 } from './039_company_session_env_source.js'
 import { generalAi041 } from './041_general_ai.js';
 import { companySessionDatabases040 } from './040_company_session_databases.js';
 import { companyLocalProjects042 } from './042_company_local_projects.js';
+import { qaTestRuns043 } from './043_qa_test_runs.js';
+import { chromeService045 } from './045_chrome_service.js';
+import { qaArtifacts046 } from './046_qa_artifacts.js';
+import { qaKanbanAndPersistedPath047 } from './047_qa_kanban_and_persisted_path.js';
+import { designSystems048 } from './048_design_systems.js';
+import { verdaccioConfig049 } from './049_verdaccio_config.js';
+import { verdaccioBootstrapPassword050 } from './050_verdaccio_bootstrap_password.js';
+import { designSystemMcpInstall051 } from './051_design_system_mcp_install.js';
+import { providerModelMetadata052 } from './052_provider_model_metadata.js';
+import { coderSessionResponseId053 } from './053_coder_session_response_id.js';
+import { skillContextModeV2 } from './054_skill_context_mode_v2.js';
+import { skillTrigger } from './055_skill_trigger.js';
+import { skillUsageOutcome } from './056_skill_usage_outcome.js';
+import { sessionTemperature057 } from './057_session_temperature.js';
+import { pipelines058 } from './058_pipelines.js';
+import { agentInbox059 } from './059_agent_inbox.js';
+import { qaTestRunsLastErrorBackfill060 } from './060_qa_test_runs_last_error_backfill.js';
+import { coderSessionInputs061 } from './061_coder_session_inputs.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -110,6 +128,24 @@ export const MIGRATIONS: Migration[] = [
   companySessionDatabases040,
   generalAi041,
   companyLocalProjects042,
+  qaTestRuns043,
+  chromeService045,
+  qaArtifacts046,
+  qaKanbanAndPersistedPath047,
+  designSystems048,
+  verdaccioConfig049,
+  verdaccioBootstrapPassword050,
+  designSystemMcpInstall051,
+  providerModelMetadata052,
+  coderSessionResponseId053,
+  skillContextModeV2,
+  skillTrigger,
+  skillUsageOutcome,
+  sessionTemperature057,
+  pipelines058,
+  agentInbox059,
+  qaTestRunsLastErrorBackfill060,
+  coderSessionInputs061,
 ];
 
 /**

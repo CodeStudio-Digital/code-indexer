@@ -33,6 +33,15 @@ const writeFile: CoderTool = {
   name: 'write_file',
   description: maybeTerse(WRITE_FILE_DESC),
   source: 'native',
+  // Phase 2 hardening: explicit metadata co-located with the tool. The
+  // policy module (core/policy.ts) reads these to gate the invocation —
+  // here, plan-mode blocks until `submit_plan` is approved unless the
+  // current task scope unlocks paths. `parallelSafe: false` because two
+  // concurrent writes to the same file would race.
+  mutates: true,
+  parallelSafe: false,
+  riskLevel: 'write',
+  scopeAware: true,
   parameters: {
     type: 'object',
     properties: {

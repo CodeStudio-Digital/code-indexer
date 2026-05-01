@@ -1,0 +1,126 @@
+import { parentPort, workerData } from 'node:worker_threads';
+import { createRequire } from 'node:module';
+import type DatabaseConstructor from 'better-sqlite3';
+import type { DbWriteReq, DbWriteRes, DbWriterWorkerData, PersistAssistantTurnPayload } from './protocol.js';
+
+if (!parentPort) {
+  throw new Error('dbWriter worker: must run inside worker_threads');
+}
+
+const require = createRequire(import.meta.url);
+const Database = require('better-sqlite3') as typeof DatabaseConstructor;
+const { dbPath } = workerData as DbWriterWorkerData;
+
+const db = new Database(dbPath);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+const insertMsg = db.prepare(`
+  INSERT INTO coder_messages
+    (session_id, role, content_json, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+`);
+const touchSession = db.prepare(
+  "UPDATE coder_sessions SET updated_at = datetime('now') WHERE id = ?",
+);
+const insertTool = db.prepare(`
+  INSERT INTO coder_tool_calls
+    (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+`);
+const bumpStmt = db.prepare(`
+  UPDATE coder_sessions
+     SET total_input_tokens = total_input_tokens + ?,
+         total_output_tokens = total_output_tokens + ?,
+         total_cache_read_tokens = total_cache_read_tokens + ?,
+         total_cache_creation_tokens = total_cache_creation_tokens + ?,
+         last_turn_input_tokens = ?,
+         updated_at = datetime('now')
+   WHERE id = ?
+`);
+
+// Mirrors SessionStore.persistAssistantTurn — keep in sync if the schema changes.
+const persistAssistantTurnTx = db.transaction((p: PersistAssistantTurnPayload) => {
+  const r = insertMsg.run(
+    p.session_id,
+    p.message.role,
+    JSON.stringify(p.message.content),
+    p.usage?.input_tokens ?? 0,
+    p.usage?.output_tokens ?? 0,
+    p.usage?.cache_read_input_tokens ?? 0,
+    p.usage?.cache_creation_input_tokens ?? 0,
+  );
+  const messageId = Number(r.lastInsertRowid);
+  touchSession.run(p.session_id);
+  for (const tc of p.tool_calls) {
+    insertTool.run(
+      messageId,
+      tc.tool_use_id,
+      tc.tool_name,
+      JSON.stringify(tc.args),
+      tc.result_text,
+      tc.is_error ? 1 : 0,
+      tc.duration_ms,
+    );
+  }
+  if (p.usage) {
+    bumpStmt.run(
+      p.usage.input_tokens,
+      p.usage.output_tokens,
+      p.usage.cache_read_input_tokens ?? 0,
+      p.usage.cache_creation_input_tokens ?? 0,
+      p.usage.input_tokens,
+      p.session_id,
+    );
+  }
+  if (p.subagent_usage) {
+    bumpStmt.run(
+      p.subagent_usage.input_tokens,
+      p.subagent_usage.output_tokens,
+      p.subagent_usage.cache_read_input_tokens ?? 0,
+      p.subagent_usage.cache_creation_input_tokens ?? 0,
+      p.subagent_usage.input_tokens,
+      p.session_id,
+    );
+  }
+  return messageId;
+});
+
+interface InboundEnvelope {
+  reqId: number;
+  body: DbWriteReq;
+}
+
+parentPort.on('message', (msg: InboundEnvelope) => {
+  try {
+    const req = msg.body;
+    let result: DbWriteRes;
+    switch (req.kind) {
+      case 'persistAssistantTurn': {
+        const messageId = persistAssistantTurnTx(req.payload) as number;
+        result = { kind: 'persistAssistantTurn', messageId };
+        break;
+      }
+      default: {
+        const k = (req as { kind: string }).kind;
+        throw new Error(`unknown dbWriter req kind: ${k}`);
+      }
+    }
+    parentPort!.postMessage({ reqId: msg.reqId, ok: true, result });
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    parentPort!.postMessage({
+      reqId: msg.reqId,
+      ok: false,
+      error: { message: e.message, code: e.code },
+    });
+  }
+});
+
+parentPort.postMessage({ kind: 'ready' });
+
+const cleanup = (): void => {
+  try { db.close(); } catch { /* ignore */ }
+};
+process.on('beforeExit', cleanup);
+process.on('exit', cleanup);

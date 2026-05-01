@@ -35,6 +35,12 @@ export interface AgentDefinition {
   planMode: boolean;
   /** Optional max-turns override for this agent. */
   maxTurns?: number;
+  /**
+   * Default sampling temperature for this agent. Resolver clamps to [0, 1].
+   * Lower = more deterministic (good for code, admin); higher = more creative
+   * (planning brainstorm). Overridden by per-session or per-role values.
+   */
+  defaultTemperature?: number;
 }
 
 export const AGENTS: Record<AgentId, AgentDefinition> = {
@@ -45,6 +51,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     profile: 'bootstrap',
     planMode: false,
     maxTurns: 50,
+    defaultTemperature: 0.2,
   },
   plan: {
     id: 'plan',
@@ -52,6 +59,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
       'Read + planning. Navigate tier (~47 tools) with plan mode ON — the agent must submit_plan and get approval before any mutating tool.',
     profile: 'navigate',
     planMode: true,
+    defaultTemperature: 0.4,
   },
   build: {
     id: 'build',
@@ -59,6 +67,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
       'Read + edit + shell + git-read. Navigate tier (~47 tools), no plan gate. Use when you trust end-to-end execution (small features, bugfixes).',
     profile: 'navigate',
     planMode: false,
+    defaultTemperature: 0.2,
   },
   admin: {
     id: 'admin',
@@ -66,6 +75,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
       'Everything unlocked. Full tier (~60 tools) including git_commit, add_snapshot, index_project. Use only when the user explicitly asks for admin actions.',
     profile: 'full',
     planMode: false,
+    defaultTemperature: 0.1,
   },
 };
 

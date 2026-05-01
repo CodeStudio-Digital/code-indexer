@@ -4,6 +4,7 @@ import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
 import { Switch } from '../../components/ui/switch.js';
+import { ClaudeCodeUsagePanel } from './ClaudeCodeUsagePanel.js';
 import { GoogleQuotaPanel } from './GoogleQuotaPanel.js';
 import { FallbackChainPanel } from './FallbackChainPanel.js';
 import type { AdminModel, AdminProvider, TestResult } from './types.js';
@@ -90,6 +91,9 @@ export function ProviderCard({
         <CardContent className="pt-0 border-t bg-muted/20">
           {p.kind === 'google-oauth' && (
             <GoogleQuotaPanel providerId={p.id} />
+          )}
+          {p.kind === 'claude-code' && (
+            <ClaudeCodeUsagePanel providerId={p.id} />
           )}
           {models.length === 0 ? (
             <div className="py-3 text-sm text-muted-foreground">

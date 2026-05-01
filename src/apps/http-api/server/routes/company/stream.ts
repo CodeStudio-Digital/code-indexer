@@ -4,6 +4,7 @@ import { CompanyOrchestrator } from '../../../../../core/coder/company/orchestra
 import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import { withSessionLock } from '../coder/sessionLock.js';
 
 /**
  * Backwards-compatible accessor used by sibling routes (kanban.ts).
@@ -44,55 +45,82 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const id = parseIdParam(c);
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
-    if (session.status === 'running') {
-      return c.json({ error: 'Already running' }, 409);
-    }
 
     const body = await parseJsonBody<StartBody>(c);
     if (!body.user_message) {
       return c.json({ error: 'user_message required' }, 400);
     }
+    // Capture into a local const so TS narrowing survives the async closure below.
+    const userMessage = body.user_message;
+    const maxTurnsRequested = body.max_turns;
 
-    // Parse config from DB — this is the source of truth for roles
-    let config: {
-      master_provider?: string;
-      master_model?: string;
-      role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }>;
-    } = {};
-    try { config = JSON.parse(session.config_json); } catch { /* use defaults */ }
+    // Serialize the "is there already a master for this id?" decision so two
+    // concurrent POSTs cannot both pass the status check and each call
+    // orchestratorRegistry.set() — the second would silently overwrite the
+    // first orchestrator and a second runCoder loop would race the first.
+    const decision = await withSessionLock(id, async (): Promise<
+      | { kind: 'success'; orchestrator: CompanyOrchestrator }
+      | { kind: 'reject'; status: 404 | 409 | 500; body: { error: string } }
+    > => {
+      const cur = companyStore.getCompanySession(id);
+      if (!cur) return { kind: 'reject', status: 404, body: { error: 'Not found' } };
+      if (cur.status === 'running' || orchestratorRegistry.has(id)) {
+        return { kind: 'reject', status: 409, body: { error: 'Already running' } };
+      }
 
-    const roleConfigs = (config.role_assignments ?? []) as Array<{
-      role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string;
-    }>;
+      // Parse config from DB — this is the source of truth for roles
+      let config: {
+        master_provider?: string;
+        master_model?: string;
+        role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }>;
+      } = {};
+      try { config = JSON.parse(cur.config_json); } catch { /* use defaults */ }
 
-    const orchestrator = new CompanyOrchestrator({
-      companySessionId: id,
-      companyStore,
-      db,
-    });
-    orchestratorRegistry.set(id, orchestrator);
+      const roleConfigs = (config.role_assignments ?? []) as Array<{
+        role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string;
+      }>;
 
-    // Await startMaster — if it fails, return JSON error (not a broken SSE stream)
-    try {
-      await orchestrator.startMaster({
-        userMessage: body.user_message,
-        provider: config.master_provider ?? 'anthropic',
-        model: config.master_model ?? 'claude-sonnet-4-6',
-        maxTurns: body.max_turns ?? 100,
-        roleConfigs,
+      const orchestrator = new CompanyOrchestrator({
+        companySessionId: id,
+        companyStore,
+        db,
       });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[company] Master start failed:`, msg);
-      orchestratorRegistry.delete(id);
-      companyStore.updateCompanySessionStatus(id, 'error');
-      return c.json({ error: `Master start failed: ${msg}` }, 500);
+      orchestratorRegistry.set(id, orchestrator);
+
+      // Pause any pipeline executions that were 'running' before the
+      // server restart. The dashboard will surface a Resume button.
+      // Fire-and-forget: never block startMaster on this.
+      void orchestrator.pipelineRecoverRunning().catch((err) => {
+        console.warn(`[company s=${id}] pipeline recovery failed:`, err);
+      });
+
+      // Await startMaster — if it fails, return JSON error (not a broken SSE stream)
+      try {
+        await orchestrator.startMaster({
+          userMessage,
+          provider: config.master_provider ?? 'anthropic',
+          model: config.master_model ?? 'claude-sonnet-4-6',
+          maxTurns: maxTurnsRequested ?? 100,
+          roleConfigs,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[company s=${id}] Master start failed:`, msg);
+        orchestratorRegistry.delete(id);
+        companyStore.updateCompanySessionStatus(id, 'error');
+        return { kind: 'reject', status: 500, body: { error: `Master start failed: ${msg}` } };
+      }
+
+      // Persist the user message so it survives page reload
+      companyStore.setLastUserMessage(id, userMessage);
+      return { kind: 'success', orchestrator };
+    });
+
+    if (decision.kind === 'reject') {
+      return c.json(decision.body, decision.status);
     }
 
-    // Persist the user message so it survives page reload
-    companyStore.setLastUserMessage(id, body.user_message);
-
-    return pumpBusToSSE(c, orchestrator.metaBus, {
+    return pumpBusToSSE(c, decision.orchestrator.metaBus, {
       since: -1,
       onDone: () => orchestratorRegistry.scheduleEviction(id),
     });
@@ -119,51 +147,69 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/resume', async (c) => {
     const id = parseIdParam(c);
-
-    // If there's already an active orchestrator, use sendMessage instead
-    const existing = orchestratorRegistry.get(id);
-    if (existing) {
-      const body = await parseJsonBody<{ message: string }>(c);
-      if (body.message) existing.sendMessageToMaster(body.message);
-
-      return pumpBusToSSE(c, existing.metaBus, {
-        since: parseLastEventId(c),
-      });
-    }
-
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
-
     const body = await parseJsonBody<{ message: string }>(c);
-    if (!body.message) return c.json({ error: 'message required' }, 400);
 
-    // Check that there's a master run to resume
-    const agentRuns = companyStore.listAgentRuns(id);
-    const masterRun = agentRuns.filter((r) => r.role === 'master').pop();
-    if (!masterRun) return c.json({ error: 'No master run found — use /start instead' }, 400);
+    // Serialize the "is there an existing orchestrator?" decision so two
+    // concurrent /resume calls can't both observe registry-empty and each
+    // create a fresh CompanyOrchestrator + start its own runCoder loop.
+    const decision = await withSessionLock(id, async (): Promise<
+      | { kind: 'attach'; orchestrator: CompanyOrchestrator; since: number }
+      | { kind: 'fresh'; orchestrator: CompanyOrchestrator }
+      | { kind: 'reject'; status: 400 | 404 | 500; body: { error: string } }
+    > => {
+      const existing = orchestratorRegistry.get(id);
+      if (existing) {
+        if (body.message) existing.sendMessageToMaster(body.message);
+        return { kind: 'attach', orchestrator: existing, since: parseLastEventId(c) };
+      }
 
-    // Parse role configs from session config
-    let config: { role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }> } = {};
-    try { config = JSON.parse(session.config_json); } catch { /* defaults */ }
-    const roleConfigs = config.role_assignments ?? [];
+      const session = companyStore.getCompanySession(id);
+      if (!session) return { kind: 'reject', status: 404, body: { error: 'Not found' } };
+      if (!body.message) return { kind: 'reject', status: 400, body: { error: 'message required' } };
 
-    const orchestrator = new CompanyOrchestrator({ companySessionId: id, companyStore, db });
-    orchestratorRegistry.set(id, orchestrator);
+      // Check that there's a master run to resume
+      const agentRuns = companyStore.listAgentRuns(id);
+      const masterRun = agentRuns.filter((r) => r.role === 'master').pop();
+      if (!masterRun) return { kind: 'reject', status: 400, body: { error: 'No master run found — use /start instead' } };
 
-    try {
-      await orchestrator.resumeExistingMaster({
-        userMessage: body.message,
-        maxTurns: 100,
-        roleConfigs,
+      // Parse role configs from session config
+      let config: { role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }> } = {};
+      try { config = JSON.parse(session.config_json); } catch { /* defaults */ }
+      const roleConfigs = config.role_assignments ?? [];
+
+      const orchestrator = new CompanyOrchestrator({ companySessionId: id, companyStore, db });
+      orchestratorRegistry.set(id, orchestrator);
+
+      // Same recovery path as the start branch — see /start above.
+      void orchestrator.pipelineRecoverRunning().catch((err) => {
+        console.warn(`[company s=${id}] pipeline recovery failed:`, err);
       });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[company] Resume failed:`, msg);
-      orchestratorRegistry.delete(id);
-      return c.json({ error: `Resume failed: ${msg}` }, 500);
-    }
 
-    return pumpBusToSSE(c, orchestrator.metaBus, {
+      try {
+        await orchestrator.resumeExistingMaster({
+          userMessage: body.message,
+          maxTurns: 100,
+          roleConfigs,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[company s=${id}] Resume failed:`, msg);
+        orchestratorRegistry.delete(id);
+        return { kind: 'reject', status: 500, body: { error: `Resume failed: ${msg}` } };
+      }
+
+      return { kind: 'fresh', orchestrator };
+    });
+
+    if (decision.kind === 'reject') {
+      return c.json(decision.body, decision.status);
+    }
+    if (decision.kind === 'attach') {
+      return pumpBusToSSE(c, decision.orchestrator.metaBus, {
+        since: decision.since,
+      });
+    }
+    return pumpBusToSSE(c, decision.orchestrator.metaBus, {
       since: -1,
       onDone: () => orchestratorRegistry.scheduleEviction(id),
     });
@@ -265,6 +311,13 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * Send a follow-up message to the Master agent.
    * If master is alive → pushUserMessage. If dead → resumeMasterWithMessage.
    * Message is also posted to the board as "human" for visibility.
+   *
+   * When the master is blocked inside an interactive tool (waiting for a
+   * plan/question/tasks response or for subordinates), the default reply
+   * is 409 INTERACTION_PENDING so the human is steered to the canonical
+   * `/plan-response` / `/answer` route. Pass `{ "interject": true }` to
+   * break the wait and inject the message anyway — useful when the human
+   * wants to redirect the conversation mid-loop.
    */
   app.post('/api/company/sessions/:id/message', async (c) => {
     const id = parseIdParam(c);
@@ -275,12 +328,23 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ error: 'Session has ended. Please start a new session.' }, 410);
     }
 
-    const body = await parseJsonBody<{ message: string }>(c);
+    const body = await parseJsonBody<{ message: string; interject?: boolean }>(c);
     if (!body.message) {
       return c.json({ error: 'message required' }, 400);
     }
 
-    orchestrator.sendMessageToMaster(body.message);
+    const result = orchestrator.sendMessageToMaster(body.message, {
+      interject: body.interject,
+    });
+    if (!result.ok && result.pending === 'interactive_wait') {
+      return c.json(
+        {
+          error: 'master is waiting for an interactive answer — use /plan-response or /answer, or pass {"interject": true} to override',
+          code: 'INTERACTION_PENDING',
+        },
+        409,
+      );
+    }
     return c.json({ ok: true });
   });
 
@@ -314,9 +378,8 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.get('/api/company/sessions/:id/status', (c) => {
     const id = parseIdParam(c);
-    const orchestrator = orchestratorRegistry.get(id);
     return c.json({
-      active: !!orchestrator,
+      active: orchestratorRegistry.has(id),
       company_session_id: id,
     });
   });

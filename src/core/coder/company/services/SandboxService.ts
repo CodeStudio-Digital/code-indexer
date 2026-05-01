@@ -36,11 +36,108 @@ import { getSandboxManager, resolveDriver } from '../../../sandbox/index.js';
 // the DELETE /sessions handler — which doesn't go through the manager
 // for cleanup — can still resolve the file to delete.
 import { archivePath } from '../../../sandbox/archive.js';
+import { tryGetChromeService } from '../../../chrome-service/chrome-service.js';
+import type { SandboxManager } from '../../../sandbox/sandbox-manager.js';
 
 /** @deprecated prefer `archivePath` from `core/sandbox/archive`. Re-exported
  *  for back-compat with the DELETE /sessions handler. */
 export function sandboxArchivePath(sessionId: string | number): string {
   return archivePath(sessionId);
+}
+
+/**
+ * Pure: return `true` when at least one entry in the session config's
+ * `role_assignments` carries the `qa-playwright` skill. Used by
+ * `provisionIfNeeded` to flip `ProvisionRequest.includeE2e`, which in
+ * turn picks the Chromium-capable image and triggers the Playwright
+ * Agent CLI bootstrap inside the scaffolder.
+ *
+ * Tolerant of every malformed input shape. Exported for unit testing
+ * without a store / DB.
+ */
+export function hasQaPlaywrightSkill(configJson: string): boolean {
+  if (!configJson) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(configJson);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== 'object') return false;
+  const roles = (parsed as { role_assignments?: unknown }).role_assignments;
+  if (!Array.isArray(roles)) return false;
+  for (const role of roles) {
+    if (!role || typeof role !== 'object') continue;
+    const skills = (role as { skills?: unknown }).skills;
+    if (!Array.isArray(skills)) continue;
+    if (skills.some((s) => typeof s === 'string' && s === 'qa-playwright')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Wire a session to the SHARED Chrome Service singleton (v4.0).
+ *
+ * - When the service is enabled and running: persist
+ *   `PLAYWRIGHT_WS_ENDPOINT` (auto-source) into the session's env
+ *   store and trigger a `.env` sync on any live container so the
+ *   value is available to `npx playwright test` immediately.
+ * - When the service is absent / disabled / errored: log a warning
+ *   and continue. The QA agent will surface a clear diagnosis via
+ *   `qa_get_browser_endpoint`.
+ *
+ * Best-effort throughout: never throws to the provision path.
+ */
+async function wireSessionToChromeService(
+  companySessionId: number,
+  manager: SandboxManager,
+): Promise<void> {
+  const svc = tryGetChromeService();
+  if (!svc) {
+    console.warn(
+      `[sandbox-service] chrome service singleton not wired — session ${companySessionId} will not have PLAYWRIGHT_WS_ENDPOINT`,
+    );
+    return;
+  }
+  const state = await svc.getEndpoint();
+  if (state.status !== 'running') {
+    console.log(
+      `[sandbox-service] chrome service status=${state.status} — session ${companySessionId} provisions without PLAYWRIGHT_WS_ENDPOINT (operator must enable in Admin)`,
+    );
+    return;
+  }
+  // Write the endpoint directly so brand-new sessions (not yet seen by
+  // the backfill loop in `ChromeService.enable`) get it before the
+  // first .env sync. The auto source means env_set tools won't
+  // surface this row as user-editable.
+  const envStore = getCompanySessionEnvStore();
+  if (envStore) {
+    try {
+      envStore.upsert(companySessionId, 'PLAYWRIGHT_WS_ENDPOINT', state.wsEndpoint, false, {
+        source: 'auto',
+      });
+    } catch (e) {
+      console.warn(
+        `[sandbox-service] env upsert ${companySessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+  // Push to live containers so .env is up-to-date.
+  await manager.syncEnvsToAllContainers(String(companySessionId));
+}
+
+// Module-level binding for the env store, wired at boot from server.ts
+// (mirrors the pattern in env-tools.ts and sandbox-manager.ts).
+let companySessionEnvStoreRef: import('../../../../store/company-session-env-store.js').CompanySessionEnvStore | null = null;
+export function setSandboxServiceEnvStore(
+  store: import('../../../../store/company-session-env-store.js').CompanySessionEnvStore | null,
+): void {
+  companySessionEnvStoreRef = store;
+}
+function getCompanySessionEnvStore() {
+  return companySessionEnvStoreRef;
 }
 
 /**
@@ -153,6 +250,21 @@ export class SandboxService {
   }
 
   /**
+   * Decide whether the session needs the E2E-capable sandbox image
+   * (Chromium + GTK libs). True when at least one role assignment in
+   * the session config carries the `qa-playwright` skill.
+   *
+   * Defensive parsing: malformed JSON, missing fields and unexpected
+   * types all degrade silently to `false` — sessions without QA stay
+   * on the lean image.
+   */
+  private detectIncludeE2e(): boolean {
+    const row = this.ctx.companyStore.getCompanySession(this.ctx.companySessionId);
+    if (!row) return false;
+    return hasQaPlaywrightSkill(row.config_json ?? '');
+  }
+
+  /**
    * Provision (or reuse) the sandbox for this session. Idempotent: a
    * second call with an existing binding returns the same handle.
    *
@@ -199,6 +311,8 @@ export class SandboxService {
     // Archive restore is handled inside SandboxManager.provision now —
     // no need to load here. That guarantees every provision path
     // (eager POST, service, test) gets the same behavior.
+    const includeE2e = this.detectIncludeE2e();
+
     let sandbox: Sandbox;
     try {
       sandbox = await manager.provision({
@@ -207,11 +321,36 @@ export class SandboxService {
         signal: opts.signal,
         limits,
         hostWorkdirMount,
+        includeE2e,
       });
     } catch (e) {
+      // Non-fatal: the master can still operate in builder mode even when
+      // the primary container fails to start (Docker down, capacity, etc.).
+      // Return null so MasterLifecycle can start without a live binding.
+      console.warn(
+        `[sandbox-service] provision failed for session ${this.sessionKey} — master will start without a live sandbox binding: ${e instanceof Error ? e.message : String(e)}`,
+      );
       this.unsubscribe?.();
       this.unsubscribe = null;
-      throw e;
+      return null;
+    }
+
+    // QA wiring v4.0: when the session has a role with the
+    // `qa-playwright` skill (`includeE2e=true`), point it at the
+    // SHARED Chrome Service singleton. The Chrome Service container
+    // is provisioned independently by the operator via the Admin
+    // Panel — we just inject `PLAYWRIGHT_WS_ENDPOINT` into the
+    // session env. When the service is disabled, the agent will get
+    // a clear `alive:false` from `qa_get_browser_endpoint` instead
+    // of a confusing connection error mid-spec.
+    if (includeE2e) {
+      try {
+        await wireSessionToChromeService(this.ctx.companySessionId, manager);
+      } catch (e) {
+        console.warn(
+          `[sandbox-service] chrome service wiring failed for session ${this.sessionKey}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
     }
 
     // `resolveDriver` returns the same process-wide singleton the manager
@@ -392,6 +531,12 @@ export class SandboxService {
       driver,
       workdir: sandbox.workdir,
       previewUrl: sandbox.previewUrl,
+      // Forward the host bind-mount path so DS tools can translate
+      // container `/app/X` paths into the host equivalent for
+      // `npm pack`, `readFile`, etc. Sandbox without bind-mount
+      // (ephemeral fs) leaves this undefined — DS tools use the
+      // absence as a signal to fail with a useful error.
+      ...(sandbox.hostWorkdirMount ? { hostWorkdirMount: sandbox.hostWorkdirMount } : {}),
       get containerId(): string {
         const live = getSandboxManager().resolveContainerId(sessionKey, svcId);
         return live ?? initialContainerId;

@@ -16,7 +16,7 @@ import { parseIdParam, parseIntQuery, parseJsonBody, notFound } from '../_helper
  * exactly the same shape.
  */
 const TRIM_TOOL_RESULT = 4000;
-function trimMessageBlocks<M extends { content: unknown[] }>(messages: M[]): M[] {
+function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(messages: M[]): M[] {
   return messages.map((m) => ({
     ...m,
     content: m.content.map((block) => {
@@ -29,7 +29,16 @@ function trimMessageBlocks<M extends { content: unknown[] }>(messages: M[]): M[]
           _originalLength: (b.content as string).length,
         };
       }
-      if ((b.type === 'image' || b.type === 'document') && typeof b.base64 === 'string') {
+      // Preserve assistant-emitted images (e.g. server-managed image_generation
+      // results from Codex). Stripping their base64 would lose the image on
+      // session reload — there's no upload endpoint to re-fetch them from.
+      // User-side image/document uploads still get trimmed: they're stored
+      // verbatim and the dashboard fetches them on demand.
+      if (
+        (b.type === 'image' || b.type === 'document') &&
+        typeof b.base64 === 'string' &&
+        m.role !== 'assistant'
+      ) {
         const { base64: _omit, ...rest } = b;
         void _omit;
         return { ...rest, _hasBase64: true };
@@ -53,7 +62,7 @@ export function mountCoderSessionsRoutes(
   deps: ServerDeps,
   runtime: CoderRuntime,
 ): void {
-  const { sessionStore } = deps;
+  const { sessionStore, providerStore } = deps;
   const { activeRuns } = runtime;
 
   /**
@@ -159,6 +168,127 @@ export function mountCoderSessionsRoutes(
     return c.json(session);
   });
 
+  app.post('/api/coder/sessions/:id/generate-title', async (c) => {
+    const id = parseIdParam(c);
+    const src = sessionStore.loadSessionWithMessages(id);
+    if (!src) return notFound(c);
+
+    const firstUser = src.message_rows.find((r) => r.role === 'user');
+    if (!firstUser) return c.json({ error: 'no messages yet' }, 400);
+
+    // Extract plain text from the first user message's content blocks.
+    type Block = { type: string; text?: string };
+    const blocks = JSON.parse(firstUser.content_json) as Block[];
+    const text = blocks
+      .filter((b) => b.type === 'text' && b.text)
+      .map((b) => b.text!)
+      .join(' ')
+      .trim()
+      .slice(0, 500);
+    if (!text) return c.json({ error: 'no text content in first message' }, 400);
+
+    // Pick a provider usable by a one-shot SDK call. OAuth-only kinds
+    // (copilot/chatgpt/claude-code) and non-OpenAI-compatible kinds
+    // (bedrock/gemini) can't be driven by the Anthropic/OpenAI SDKs we
+    // import below — same constraint as HyDE. Fall through the list:
+    //   1. session's own provider, if usable
+    //   2. admin "general AI" pin, if usable
+    //   3. first enabled provider with an api_key in a usable kind
+    const isUsable = (p: { kind?: string; api_key?: string | null; enabled?: boolean } | null) => {
+      if (!p?.enabled || !p.api_key) return false;
+      const k = p.kind ?? '';
+      return k === 'anthropic' || k === 'openai' || k === 'zai' || k === 'deepseek';
+    };
+    let cfg = providerStore.getProvider(src.session.provider as string);
+    let modelId: string = src.session.model;
+    if (!isUsable(cfg) || !modelId) {
+      const def = providerStore.getGeneralDefault();
+      const generalCfg = def ? providerStore.getProvider(def.providerId) : null;
+      if (def && isUsable(generalCfg)) {
+        cfg = generalCfg;
+        modelId = def.modelId;
+      } else {
+        // Last-ditch: any enabled provider with an api_key in a usable kind.
+        const fallback = providerStore.listProviders({ enabled: true })
+          .find((p) => isUsable(p));
+        if (!fallback) {
+          return c.json({ error: 'no usable AI provider (need api_key + anthropic/openai-compatible kind)' }, 400);
+        }
+        cfg = fallback;
+        const firstModel = providerStore.listModels(fallback.id, true)[0];
+        modelId = firstModel?.model_id ?? '';
+        if (!modelId) return c.json({ error: 'fallback provider has no models configured' }, 400);
+      }
+    }
+    if (!cfg) return c.json({ error: 'provider config missing after selection' }, 500);
+
+    const prompt =
+      `Generate a concise title (3-7 words, no quotes, no trailing punctuation) for a chat session that starts with this user message:\n\n${text}\n\nRespond with only the title.`;
+
+    let title = '';
+    try {
+      if (cfg.kind === 'anthropic') {
+        const { default: Anthropic } = await import('@anthropic-ai/sdk');
+        const client = new Anthropic({
+          apiKey: cfg.api_key ?? '',
+          ...(cfg.base_url ? { baseURL: cfg.base_url } : {}),
+        });
+        const resp = await client.messages.create({
+          model: modelId,
+          max_tokens: 40,
+          messages: [{ role: 'user', content: prompt }],
+        });
+        title = resp.content
+          .filter((b) => b.type === 'text')
+          .map((b) => (b as { text: string }).text)
+          .join('');
+      } else {
+        const { default: OpenAI } = await import('openai');
+        const client = new OpenAI({
+          apiKey: cfg.api_key ?? '',
+          ...(cfg.base_url ? { baseURL: cfg.base_url } : {}),
+        });
+        const resp = await client.chat.completions.create({
+          model: modelId,
+          max_tokens: 40,
+          temperature: 0.3,
+          messages: [{ role: 'user', content: prompt }],
+        });
+        title = resp.choices[0]?.message?.content ?? '';
+      }
+    } catch (e) {
+      return c.json({ error: `AI call failed: ${e instanceof Error ? e.message : String(e)}` }, 500);
+    }
+
+    title = title.trim().replace(/^["']|["']$/g, '').trim().slice(0, 80);
+    if (!title) return c.json({ error: 'empty title generated' }, 400);
+
+    sessionStore.setSessionTitle(id, title);
+    return c.json({ title });
+  });
+
+  app.patch('/api/coder/sessions/:id/title', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ title?: string }>(c);
+    const title = (body.title ?? '').trim();
+    if (!title) return c.json({ error: 'title must be a non-empty string' }, 400);
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    sessionStore.setSessionTitle(id, title);
+    return c.json(sessionStore.getSession(id));
+  });
+
+  app.post('/api/coder/sessions/:id/duplicate', (c) => {
+    const id = parseIdParam(c);
+    try {
+      const session = sessionStore.duplicateSession(id);
+      return c.json({ session }, 201);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return c.json({ error: msg }, 400);
+    }
+  });
+
   app.post('/api/coder/sessions/:id/fork', async (c) => {
     const id = parseIdParam(c);
     const body = await parseJsonBody<{ before_message_id?: number }>(c);
@@ -173,6 +303,19 @@ export function mountCoderSessionsRoutes(
       const msg = e instanceof Error ? e.message : String(e);
       return c.json({ error: msg }, 400);
     }
+  });
+
+  app.patch('/api/coder/sessions/:id/temperature', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ temperature?: number | null }>(c);
+    const t = body.temperature;
+    if (t !== null && (typeof t !== 'number' || !Number.isFinite(t))) {
+      return c.json({ error: 'temperature:number|null required' }, 400);
+    }
+    sessionStore.setSessionTemperature(id, t ?? null);
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    return c.json(session);
   });
 
   app.patch('/api/coder/sessions/:id/group', async (c) => {

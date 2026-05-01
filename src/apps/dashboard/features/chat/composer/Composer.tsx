@@ -36,6 +36,9 @@ interface ComposerProps {
   currentProviderModels: EnrichedProviderModel[];
   maxTurns: number | null;
   setMaxTurns: (v: number | null) => void;
+  /** Per-session temperature override. `null` = inherit from role/agent/default. */
+  temperature: number | null;
+  setTemperature: (v: number | null) => void;
   sessionId?: number | null;
   onInvokeSkill?: (skillId: string, input: string) => void;
   /** Thinking mode toggle — only shown when provider supports it. */
@@ -290,6 +293,8 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             currentProviderModels={props.currentProviderModels}
             maxTurns={props.maxTurns}
             setMaxTurns={props.setMaxTurns}
+            temperature={props.temperature}
+            setTemperature={props.setTemperature}
             fallbackProvider={props.fallbackProvider ?? null}
             fallbackModel={props.fallbackModel ?? null}
             onFallbackChange={props.onFallbackChange ?? (() => {})}

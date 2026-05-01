@@ -5,6 +5,91 @@ import type { CoderSession } from '../sessions/types.js';
 
 // ─── Template ──────────────────────────────────────────────────
 
+/**
+ * Conditional / chain shape for `CompanyRoleConfig.skills`. Lets a role
+ * declare stack-specific skill picks (`{ when: "session.stack === 'react-ts'", skill: 'ds-components-react' }`)
+ * plus auxiliary skills that always come along (`chain`).
+ *
+ * Resolved at spawn-time via `resolveRoleSkills`. The result is a flat
+ * `string[]` of skill IDs that get session-level overrides applied.
+ */
+export interface RoleSkillsConfig {
+  /** Used when no `conditional` branch matches. */
+  primary?: string;
+  /** Skills always appended after the primary/conditional pick (e.g. shared QA). */
+  chain?: string[];
+  /**
+   * Branches evaluated in order; first matching branch contributes its
+   * `skill` as the primary. The `when` expression supports a tiny subset of
+   * syntax for safety: `session.<key> === '<literal>'` only.
+   */
+  conditional?: Array<{ when: string; skill: string }>;
+}
+
+export type RoleSkills = string[] | RoleSkillsConfig;
+
+export interface ResolveRoleSkillsContext {
+  /** Builder sandbox stack — set by `getSandboxStackForService` at spawn. */
+  stack?: string;
+}
+
+/**
+ * Flatten a `RoleSkills` value (either legacy `string[]` or the v2
+ * `RoleSkillsConfig` object) into the final list of skill IDs to enable
+ * for the spawning subordinate.
+ */
+export function resolveRoleSkills(
+  skills: RoleSkills | undefined,
+  ctx: ResolveRoleSkillsContext,
+): string[] {
+  if (!skills) return [];
+  if (Array.isArray(skills)) return skills;
+
+  const out: string[] = [];
+
+  if (skills.conditional && skills.conditional.length > 0) {
+    for (const branch of skills.conditional) {
+      if (evalSkillCondition(branch.when, ctx)) {
+        if (!out.includes(branch.skill)) out.push(branch.skill);
+        break;
+      }
+    }
+  }
+
+  if (out.length === 0 && skills.primary) {
+    out.push(skills.primary);
+  }
+
+  if (skills.chain && skills.chain.length > 0) {
+    for (const s of skills.chain) {
+      if (!out.includes(s)) out.push(s);
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Evaluate a `when` expression. Whitelisted forms only — anything else
+ * returns false. Keeping this tiny prevents arbitrary code execution from
+ * a stored template definition.
+ *
+ * Supported:
+ *   - `session.<key> === '<literal>'`
+ *   - `session.<key> == '<literal>'`
+ */
+function evalSkillCondition(expr: string, ctx: ResolveRoleSkillsContext): boolean {
+  const m = /^session\.([a-zA-Z_]\w*)\s*===?\s*['"]([^'"]+)['"]$/.exec(expr.trim());
+  if (!m) return false;
+  const [, key, value] = m;
+  switch (key) {
+    case 'stack':
+      return ctx.stack === value;
+    default:
+      return false;
+  }
+}
+
 export interface CompanyRoleConfig {
   role: string;
   provider: string;
@@ -13,9 +98,13 @@ export interface CompanyRoleConfig {
   systemPromptOverride?: string;
   /** Symbolic labels resolved to real project_ids at session creation. */
   projectHints?: string[];
-  /** Skill IDs to enable for this role. When set, configures session-level
-   *  skill overrides so only these skills are active during the agent's run. */
-  skills?: string[];
+  /**
+   * Skills to enable for this role. Either a flat list (legacy) or a
+   * conditional/chain config (v2) — see `RoleSkillsConfig`. Resolved via
+   * `resolveRoleSkills` at spawn-time, then enforced as session-level
+   * skill overrides in `skill_session_config`.
+   */
+  skills?: RoleSkills;
   /**
    * Concrete project ids this role is bound to in THIS session. When set,
    * `spawn_subordinate_agent` auto-resolves `project_id` (single binding) or
@@ -26,6 +115,13 @@ export interface CompanyRoleConfig {
    * because project ids don't exist until a session is created.
    */
   projectIds?: number[];
+  /**
+   * Sampling temperature override for this role. When set, takes precedence
+   * over the agent preset's `defaultTemperature` but is itself overridden by
+   * a per-session value. Range [0, 1]; resolver clamps. Persisted in
+   * `company_templates.roles_json` (no schema change — JSON field).
+   */
+  temperature?: number;
 }
 
 export interface CompanyTemplate {
@@ -178,6 +274,13 @@ export interface CompanyContext {
    * provision; absent for normal (non-builder) company sessions.
    */
   sandbox?: SandboxBinding;
+  /**
+   * Configured stack name for builder-mode sessions (e.g. `react-ts`).
+   * Set from the session config regardless of whether the primary container
+   * is currently live — allows the master to operate in builder mode even
+   * when `sandbox` is absent (container down, provisioning failure, etc.).
+   */
+  builderStack?: string;
 }
 
 /**
@@ -202,6 +305,17 @@ export interface SandboxBinding {
   containerId: string;
   /** Absolute container-side workdir (e.g. `/app`). Used as cwd for tools. */
   workdir: string;
+  /**
+   * Absolute HOST path the container's `workdir` is bind-mounted from
+   * (e.g. `D:\MCP\data\virtual-projects\<uuid>`). Present when the
+   * sandbox was provisioned with `hostWorkdirMount` set — every
+   * `'node-only'` Design System session has this. Tools that run in
+   * the host process and need to touch the package filesystem
+   * (`npm pack`, `readFile`, hash) translate container paths
+   * (`/app/pkg`) to host paths via this field. Without it, host-side
+   * `cwd: '/app/pkg'` becomes `\app\pkg` on Windows and ENOENTs.
+   */
+  hostWorkdirMount?: string;
   /** Public URL the dashboard iframes — kept here so tools/prompts can reference it. */
   previewUrl: string;
   /**
@@ -297,6 +411,145 @@ export interface KanbanCardFull extends KanbanCard {
   dependencies: KanbanCardDependency[];
   /** IDs of depends_on cards that are NOT in 'done' column */
   blocked_by: number[];
+}
+
+// ─── Pipelines ────────────────────────────────────────────────
+
+/**
+ * One stage in a pipeline graph. References a `role` from
+ * `CompanyRoleConfig`; the executor spawns a subordinate of that role and
+ * passes a rendered task derived from `taskTemplate`.
+ *
+ * V0 supports only `branchMode='linear'` — `pass-fail`, `by-tag` and
+ * `by-text-match` are landed in V1 along with the visual builder. The
+ * shape stays stable so V0 graphs are forward-compatible.
+ */
+export interface PipelineNode {
+  id: string;
+  label: string;
+  role: string;
+  /**
+   * Mustache-style placeholders supported: `{{initial_input}}`,
+   * `{{previous_output}}`, `{{vars.<nodeId>.output}}`. Anything else is
+   * left literal so node templates can include their own braces safely.
+   */
+  taskTemplate: string;
+  extraSkills?: string[];
+  kanbanTag?: KanbanTag | null;
+  kanbanColumnTarget?: KanbanColumn;
+  projectId?: number;
+  maxAttempts?: number;
+  branchMode?: 'linear' | 'pass-fail' | 'by-tag' | 'by-text-match';
+  position?: { x: number; y: number };
+}
+
+export type PipelineEdge =
+  | { kind: 'linear';        id: string; from: string; to: string }
+  | { kind: 'pass-fail';     id: string; from: string; on: 'pass' | 'fail'; to: string }
+  | { kind: 'by-tag';        id: string; from: string; tag: KanbanTag;     to: string }
+  | { kind: 'by-text-match'; id: string; from: string; pattern: string;    to: string };
+
+export interface PipelineGraph {
+  version: 1;
+  nodes: PipelineNode[];
+  edges: PipelineEdge[];
+  /** Optional explicit start. When omitted, the executor picks the unique node with no incoming edge. */
+  startNodeId?: string;
+}
+
+export interface Pipeline {
+  id: number;
+  name: string;
+  description: string;
+  company_session_id: number | null;
+  template_id: number | null;
+  graph: PipelineGraph;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type PipelineExecutionStatus =
+  | 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
+
+/**
+ * `context` carries the frozen graph snapshot taken at `start` plus the
+ * accumulated node outputs (`vars[<nodeId>].output`). The executor only
+ * reads from the snapshot, never from the live `pipelines.graph_json`,
+ * so editing a pipeline mid-flight cannot mutate a running execution.
+ */
+export interface PipelineExecution {
+  id: number;
+  pipeline_id: number;
+  company_session_id: number;
+  status: PipelineExecutionStatus;
+  current_node_id: string | null;
+  initial_input: string;
+  context: PipelineExecutionContext;
+  started_by: string;
+  started_at: string;
+  finished_at: string | null;
+  error_message: string | null;
+}
+
+export interface PipelineExecutionContext {
+  snapshot: PipelineGraph;
+  vars: Record<string, { output?: string; outcome?: string }>;
+}
+
+export type PipelineNodeStatus =
+  | 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'aborted';
+
+export interface PipelineNodeExecution {
+  id: number;
+  execution_id: number;
+  node_id: string;
+  node_label: string;
+  role: string;
+  status: PipelineNodeStatus;
+  agent_run_id: number | null;
+  kanban_card_id: number | null;
+  input_text: string;
+  output_text: string | null;
+  outcome_branch: string | null;
+  attempt: number;
+  started_at: string | null;
+  finished_at: string | null;
+  error_message: string | null;
+}
+
+// ─── Agent inbox ─────────────────────────────────────────────
+
+export type InboxKind = 'question' | 'notify';
+export type InboxStatus = 'pending' | 'delivered' | 'answered' | 'cancelled' | 'expired';
+
+/**
+ * One message between subordinates of the same company session.
+ *
+ * Either `to_role` or `to_agent_run_id` must be set:
+ *   - `to_role` is the loose form, the inbox picks the right run when
+ *     several agents are playing the same role
+ *   - `to_agent_run_id` pins the message to a specific run
+ *
+ * `wait_token` is set when the sender called `send_to_agent` with
+ * `wait=true` — the InboxQueue uses it to resolve the right pending
+ * promise once the answer arrives.
+ */
+export interface AgentInboxMessage {
+  id: number;
+  company_session_id: number;
+  from_agent_run_id: number;
+  from_role: string;
+  to_role: string | null;
+  to_agent_run_id: number | null;
+  kind: InboxKind;
+  body: string;
+  status: InboxStatus;
+  answer: string | null;
+  wait_token: string | null;
+  created_at: string;
+  delivered_at: string | null;
+  answered_at: string | null;
 }
 
 // ─── Runtime handles ───────────────────────────────────────────

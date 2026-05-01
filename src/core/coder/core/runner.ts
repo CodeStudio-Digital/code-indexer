@@ -1,14 +1,17 @@
 import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { resolve as pathResolve, relative as pathRelative, isAbsolute } from 'node:path';
 import type { ChatProvider } from '../providers/adapter.js';
 import type { ToolRegistry } from './registry.js';
 import type { AgentMessage, ChatDelta, ChatUsage, ContentBlock, ToolUseBlock, PlanBlock, QuestionBlock, ToolResultBlock } from './messages.js';
 import type { ToolContext } from './tool.js';
-import {compactMessages, PRUNE_PROTECT, computeCutoffIndex, totalChars, PRUNE_MINIMUM, snapCutoffToRoleBoundary} from "./compaction.js";
+import { compactMessages, PRUNE_PROTECT, computeCutoffIndex, totalChars, PRUNE_MINIMUM, snapCutoffToRoleBoundary, deriveCompactionLimits } from "./compaction.js";
+import { evaluateToolInvocation, findScopeViolations, type PolicyContext } from './policy.js';
 import { isSummarizerEnabled, summarizeSpan, renderSummary } from './summarizer.js';
 import { filterByTiers, profileToTiers, type ToolTier, type CoderProfile } from '../tools/tiers.js';
-import { getModelMaxTools, getModelCapabilityNote, getModelContextWindow } from '../providers/capabilities.js';
+import { getModelContextWindow, getModelMaxTools } from '../providers/capabilities.js';
 import { runToolFilterHook } from './hooks.js';
+import { resolveTemperature } from '../inference/temperature.js';
 
 export interface RunnerOptions {
   provider: ChatProvider;
@@ -17,6 +20,10 @@ export interface RunnerOptions {
   toolContext: ToolContext;
   initialMessages?: AgentMessage[];
   maxTurns?: number;
+  /** Persistent session id — used only for tagging logs so concurrent runs are distinguishable. */
+  sessionId?: number;
+  /** True for ephemeral subagents (spawn_subagent / spawn_agents). Tags logs as `s=<parentId>/sub`. */
+  isSubagent?: boolean;
   /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
   planMode?: boolean;
   /** Override the per-tool-result push-time cap. Subagents pass a tighter value. */
@@ -68,21 +75,55 @@ export interface RunnerOptions {
    * as a user message reminder alongside the deliverable reminder to survive compaction.
    */
   companyRoleOverride?: string;
+  /**
+   * Stateful Responses API: identifier of the previous response (for ChatGPT/Codex
+   * sessions running with `store: true`). When set, the provider sends only the
+   * message delta and lets the backend reconstruct the prefix from the stored
+   * response. Updated turn-by-turn via `onResponseId`.
+   */
+  previousResponseId?: string | null;
+  /** Companion to `previousResponseId` — number of messages already on the server. */
+  previousResponseMessageCount?: number | null;
+  /**
+   * Callback fired when the provider returns a new response.id (currently only
+   * ChatGPT/Codex with `store: true`). The caller persists the id in
+   * `coder_sessions.last_response_id` so subsequent turns can replay it.
+   */
+  onResponseId?: (responseId: string, messageCount: number) => void;
+  /**
+   * Phase 2 hardening: explicit escape hatch for admin-level operations
+   * outside plan mode. The policy module (core/policy.ts) consults this
+   * when `strict` is on. Today the runner constructs the policy context
+   * with `strict: false` so this flag is reserved — flipping `strict` to
+   * `true` (Phase 5) makes `adminOverride` the gate that lets execute /
+   * admin tools run without going through plan-mode approval.
+   */
+  adminOverride?: boolean;
+  /**
+   * Active agent preset — drives `defaultTemperature` lookup in
+   * `resolveTemperature()`. When unset, the resolver falls through to the
+   * global default (or to session/role overrides if present).
+   */
+  agentId?: import('../agents/index.js').AgentId | null;
+  /** Per-session temperature override (`coder_sessions.temperature_override`). */
+  sessionTemperature?: number | null;
+  /** Per-role temperature override (`CompanyRoleConfig.temperature`, company mode). */
+  roleTemperature?: number | null;
+  /**
+   * SessionStore — when present, lifecycle injections (system reminders,
+   * sub-agent prompts spawned via execute_task) get mirrored into
+   * `coder_session_inputs` for the Input tab. Optional so tests don't
+   * need to wire a real DB.
+   */
+  sessionStore?: import('../sessions/store.js').SessionStore;
 }
 
-// Tools blocked outright in plan mode until the user approves a submitted
-// plan. `run_command` is intentionally NOT here — it has its own granular
-// gate inside src/coder/tools/shell.ts that allows the read-only subset
-// (grep, ls, git status, ...) so the agent can explore during planning
-// without losing the ability to run mutating commands after approval.
-const MUTATING_TOOLS = new Set([
-  'write_file',
-  'edit_file',
-  'create_file',
-  'git_add',
-  'git_commit',
-  'git_branch',
-]);
+// Plan-mode mutating-tool block has moved to `core/policy.ts` (Phase 2).
+// Each tool now declares `mutates: true` on its definition; the policy
+// module also has a built-in classifier for tools that don't declare it
+// yet. `run_command` keeps its granular allowlist inside `tools/shell.ts`
+// (which permits the read-only subset during plan mode) — the policy
+// only blocks the write/git-mutating set, matching legacy behaviour.
 
 /**
  * Tunables (env-overridable for runtime tuning without rebuild).
@@ -262,19 +303,22 @@ export function normalizeMessageForCache(m: AgentMessage): AgentMessage {
  * same prefix produce byte-identical output. That keeps prompt-prefix caches
  * hot across turns even after compaction has fired.
  */
-export function compactHistoryForLLM(messages: AgentMessage[]): AgentMessage[] {
-  const result = compactMessages(messages);
+export function compactHistoryForLLM(
+  messages: AgentMessage[],
+  limits?: { minimum: number; protect: number },
+): AgentMessage[] {
+  const result = compactMessages(messages, limits);
   if (result.applied) {
     console.log(
-        `[coder] compaction pruned ${result.prunedBlocks} tool_result blocks ` +
-        `(~${result.prunedChars} chars) — protect budget ${PRUNE_PROTECT}`,
+      `[coder] compaction pruned ${result.prunedBlocks} tool_result blocks ` +
+      `(~${result.prunedChars} chars) — protect budget ${limits?.protect ?? PRUNE_PROTECT}`,
     );
   }
   const total = approxChars(result.messages);
   if (total > TURN_BUDGET_CHARS) {
     console.warn(
-        `[coder] turn payload ${total} chars exceeds budget ${TURN_BUDGET_CHARS}. ` +
-        `Lower CODER_PUSH_TIME_CAP or increase CODER_TURN_BUDGET_CHARS.`,
+      `[coder] turn payload ${total} chars exceeds budget ${TURN_BUDGET_CHARS}. ` +
+      `Lower CODER_PUSH_TIME_CAP or increase CODER_TURN_BUDGET_CHARS.`,
     );
   }
 
@@ -503,6 +547,80 @@ export interface RunnerEvents {
     total_chars_after: number;
     auto_continue: number;
   }) => void;
+  /**
+   * Emitted exactly once at the start of `run()`. Carries a fresh runId so
+   * downstream observers can correlate the rest of the lifecycle events
+   * even when several `runCoder()` calls share the same persistent session.
+   */
+  run_started: (payload: {
+    runId: string;
+    provider: string;
+    model: string;
+    profile: string | null;
+    planMode: boolean;
+    maxTurns: number;
+  }) => void;
+  /**
+   * Emitted right before each `provider.chat()` call. Useful for measuring
+   * cache-hit rate against retries: a turn that re-enters this event after
+   * a 400/401 retry has the same `turn` index as the previous emission.
+   */
+  provider_call: (payload: {
+    runId: string;
+    turn: number;
+    provider: string;
+    model: string;
+    toolCount: number;
+    historyChars: number;
+  }) => void;
+  /**
+   * Emitted alongside `provider_call` with the temperature the runner picked
+   * for this turn. `source` records WHICH layer of the precedence chain won
+   * (session/role/agent/default), or `'skipped'` when the model rejected
+   * sampling. Dashboard renders this as a per-turn "T" indicator.
+   */
+  temperature_resolved: (payload: {
+    runId: string;
+    turn: number;
+    provider: string;
+    model: string;
+    agent: import('../agents/index.js').AgentId | null;
+    temperature: number | undefined;
+    source: 'session' | 'role' | 'agent' | 'default' | 'skipped';
+    reason?: 'reasoning_model' | 'thinking_enabled';
+  }) => void;
+  /**
+   * Emitted once per turn, after the assistant message lands and before
+   * tool execution starts. Empty `names` means "no tool calls — turn ends
+   * with assistant text". Lets the dashboard preview the upcoming batch.
+   */
+  tool_batch: (payload: {
+    runId: string;
+    turn: number;
+    count: number;
+    names: string[];
+  }) => void;
+  /**
+   * Emitted whenever a tool invocation is refused for a safety reason
+   * (plan mode, task scope, shell allowlist, sandbox required, admin
+   * override required). Carries enough detail to surface a banner to
+   * the user without parsing the result text. The reason union mirrors
+   * `PolicyReason` from `core/policy.ts` plus the legacy `shell_allowlist`
+   * value (kept for shell.ts which gates internally rather than via
+   * the policy module).
+   */
+  blocked: (payload: {
+    runId: string;
+    turn: number;
+    tool: string;
+    reason:
+    | 'plan_mode'
+    | 'task_scope'
+    | 'shell_allowlist'
+    | 'sandbox_required'
+    | 'admin_required';
+    detail?: string;
+  }) => void;
 }
 
 /**
@@ -581,9 +699,57 @@ export class CoderRunner extends EventEmitter {
    */
   public activeTiers: Set<ToolTier> | null = null;
 
+  /**
+   * Last `response.id` returned by the Responses API (ChatGPT/Codex with
+   * `store: true`). Updated by `onResponseId` after every turn. Sent as
+   * `previous_response_id` on the next turn so the backend reconstructs the
+   * prefix from its stored copy (40-80% better cache hit than restating).
+   */
+  public previousResponseId: string | null = null;
+  /** Companion to `previousResponseId` — number of messages on server side. */
+  public previousResponseMessageCount: number | null = null;
+
+  /**
+   * Stable identifier for the current run() invocation. Generated fresh in
+   * the constructor (UUID v4) so each runCoder() call has a unique handle
+   * even when several share the same persistent session id. Carried in the
+   * payloads of run_started / provider_call / tool_batch / blocked so
+   * downstream observers can correlate lifecycle events.
+   */
+  public readonly runId: string = randomUUID();
+
+  /** Public mirrors of opts.sessionId / opts.isSubagent so subagent factories can inherit them. */
+  public readonly sessionId: number | undefined;
+  public readonly isSubagent: boolean;
+  /** Optional SessionStore for input-log mirroring; see RunnerOptions. */
+  public readonly sessionStore: import('../sessions/store.js').SessionStore | undefined;
+
+  /**
+   * Best-effort mirror of a runtime system-reminder injection into
+   * `coder_session_inputs` so the dashboard's Input tab shows what was
+   * pushed under the hood. No-op when sessionStore/sessionId are absent
+   * (subagents, tests). Dedup is handled by SessionStore.recordSessionInput.
+   */
+  private logSystemReminder(tag: string, content: string): void {
+    if (!this.sessionStore || this.sessionId == null) return;
+    try {
+      this.sessionStore.recordSessionInput({
+        session_id: this.sessionId,
+        kind: 'system_reminder',
+        source_label: `reminder:${tag}`,
+        content,
+      });
+    } catch {
+      // best-effort
+    }
+  }
+
   constructor(opts: RunnerOptions) {
     super();
     this.opts = opts;
+    this.sessionId = opts.sessionId;
+    this.isSubagent = opts.isSubagent ?? false;
+    this.sessionStore = opts.sessionStore;
     this.messages = (opts.initialMessages ?? []).map(normalizeMessageForCache);
     this.maxTurns = opts.maxTurns ?? 50;
     // back-reference so native interaction tools can pause the loop
@@ -598,6 +764,10 @@ export class CoderRunner extends EventEmitter {
     } else {
       this.activeTiers = null;
     }
+    // Seed from prior session state so the very first turn after resume can
+    // already replay the previous response.
+    this.previousResponseId = opts.previousResponseId ?? null;
+    this.previousResponseMessageCount = opts.previousResponseMessageCount ?? null;
   }
 
   /**
@@ -819,6 +989,14 @@ export class CoderRunner extends EventEmitter {
       cache_creation_input_tokens: 0,
       cache_read_input_tokens: 0,
     };
+    this.emit('run_started', {
+      runId: this.runId,
+      provider: this.opts.provider.name ?? 'unknown',
+      model: this.opts.provider.model ?? 'unknown',
+      profile: this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : null,
+      planMode: !!this.opts.planMode,
+      maxTurns: this.maxTurns,
+    });
     let autoContinueCount = 0;
     // Tools array is rebuilt each turn when tier filtering is active, so
     // `expand_toolset` calls take effect on the very next turn without any
@@ -858,500 +1036,670 @@ export class CoderRunner extends EventEmitter {
           console.log(`[coder] tool-filter hook removed ${before - filtered.length} tool(s)`);
         }
       }
-      // Capability cap: some providers (GLM, DeepSeek, gpt-4o-mini) start
-      // confusing tool names above their sweet-spot count. Trim the tail —
-      // tier filtering already put the most important tools first by
-      // registration order, so the drop is least-valuable-first.
-      const cap = getModelMaxTools(this.opts.provider.model);
-      const capped = filtered.length > cap ? filtered.slice(0, cap) : filtered;
-      if (capped.length < filtered.length) {
-        const note = getModelCapabilityNote(this.opts.provider.model);
-        console.warn(
-          `[coder] capability cap: ${this.opts.provider.model} limited to ${cap} tools (had ${filtered.length})` +
-            (note ? ` — ${note}` : ''),
-        );
+      const maxTools = getModelMaxTools(this.opts.provider.model ?? '');
+      if (filtered.length > maxTools) {
+        console.log(`[coder] tool cap: ${filtered.length} → ${maxTools} (model limit for ${this.opts.provider.model})`);
+        filtered = filtered.slice(0, maxTools);
       }
-      return capped.map((t) => ({
+      return filtered.map((t) => ({
         name: t.name,
         description: t.description,
         parameters: t.parameters,
       }));
     };
     let tools = buildTools();
+    if (this.opts.registry.has('post_to_board') || this.opts.registry.has('read_board')) {
+      console.log(
+        `[coder] company board tools visible: post_to_board=${tools.some((t) => t.name === 'post_to_board')} ` +
+        `read_board=${tools.some((t) => t.name === 'read_board')}`,
+      );
+    }
     let lastTiersKey = this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : '*';
 
     let turn = 0;
+    // In plan mode: allows ONE automatic nudge when the model writes intent text
+    // without calling tools mid-investigation. Prevents premature session end.
+    let planNudgeSent = false;
+    // Tracks the actual input_tokens count from the last API response so the
+    // compaction trigger can use real token counts instead of char estimates.
+    let lastKnownInputTokens: number | null = null;
+    // Derive compaction thresholds from the model's context window once per session.
+    const compactionLimits = deriveCompactionLimits(this.opts.context_window);
     // Outer loop: allows auto-continue after maxTurns by resetting `turn`.
     // eslint-disable-next-line no-constant-condition
     while (true) {
-    while (turn < this.maxTurns) {
-      this.flushPendingMessages();
+      while (turn < this.maxTurns) {
+        this.flushPendingMessages();
+        if (this.aborted) {
+          this.emit('done', 'aborted');
+          return { totalUsage, reason: 'aborted' };
+        }
+
+        turn++;
+        this.emit('turn_start', turn);
+
+        // Periodically remind subordinate agents to post a deliverable before stopping.
+        if (this.opts.isCompanySubordinate && turn > 1 && turn % SUBORDINATE_REMINDER_INTERVAL === 0) {
+          this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }] });
+          this.logSystemReminder('subordinate-deliverable', SUBORDINATE_REMINDER_MSG);
+          if (this.opts.companyRoleOverride) {
+            const text = `[System reminder — Role identity] ${this.opts.companyRoleOverride}`;
+            this.messages.push({ role: 'user', content: [{ type: 'text', text }] });
+            this.logSystemReminder('role-identity', text);
+          }
+        }
+
+        // LLM summarizer — opt-in via CODER_SUMMARIZER_ENABLE=1. Runs ONCE
+        // per session the first turn the history grows big enough to trigger
+        // compaction. Replaces the pre-cutoff span with a single synthetic
+        // assistant message containing a structured markdown summary. Any
+        // failure (LLM error, bad JSON, timeout) falls back to the
+        // deterministic compactMessages path below — the summarizer never
+        // breaks a turn.
+        if (isSummarizerEnabled() && !this.summarizedOnce) {
+          const total = totalChars(this.messages);
+          // Prefer real input_tokens from the last API response when the model's
+          // context_window is known — avoids premature compaction on large-context
+          // models (Claude 200K, DeepSeek 1M, Gemini 1M+) that were previously
+          // compacted at 60K chars (~7.5% of Claude's window).
+          const shouldCompact =
+            compactionLimits.triggerTokens !== null && lastKnownInputTokens !== null
+              ? lastKnownInputTokens >= compactionLimits.triggerTokens
+              : total > compactionLimits.minimum;
+          if (shouldCompact) {
+            const cutoff = snapCutoffToRoleBoundary(this.messages, computeCutoffIndex(this.messages, compactionLimits.protect));
+            if (cutoff > 1) {
+              const span = this.messages.slice(0, cutoff);
+              console.log(`[coder] running summarizer on ${cutoff} old messages (~${total} chars total)`);
+              const summary = await summarizeSpan(span, this.opts.provider);
+              if (summary) {
+                const rendered = renderSummary(summary);
+                const syntheticAssistant: AgentMessage = {
+                  role: 'assistant',
+                  content: [{ type: 'text', text: rendered }],
+                };
+                // Replace the pre-cutoff span with the synthetic summary. The
+                // persistent DB history is NOT touched — only the in-memory
+                // `this.messages` used to build provider requests. A session
+                // resume will rebuild from the untouched DB and re-apply the
+                // deterministic compaction path.
+                this.messages.splice(0, cutoff, syntheticAssistant);
+                this.summarizedOnce = true;
+                console.log(`[coder] summarizer collapsed ${cutoff} messages into 1 synthetic summary`);
+              } else {
+                // Mark as attempted so we don't retry every turn on a broken
+                // summarizer — deterministic compaction takes over.
+                this.summarizedOnce = true;
+                console.warn('[coder] summarizer returned null; using deterministic compaction');
+              }
+            }
+          }
+        }
+
+        // Rebuild tools iff tier set changed since last turn (cheap no-op
+        // otherwise). This keeps the prefix byte-stable across consecutive
+        // turns within the same tier, so server-side prefix cache hits.
+        const currentKey = this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : '*';
+        if (currentKey !== lastTiersKey) {
+          tools = buildTools();
+          lastTiersKey = currentKey;
+        }
+
+        const assistantContent: ContentBlock[] = [];
+        let pendingText = '';
+        const pendingToolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
+        const usageBox: { value: ChatUsage | null } = { value: null };
+        let retriedThisTurn = false;
+        let pendingThinking = '';
+        const pendingImages: Array<{ mediaType: string; base64: string }> = [];
+        void assistantContent;
+
+        this.emit('provider_call', {
+          runId: this.runId,
+          turn,
+          provider: this.opts.provider.name ?? 'unknown',
+          model: this.opts.provider.model ?? 'unknown',
+          toolCount: tools.length,
+          historyChars: totalChars(this.messages),
+        });
+
+        const tempResolution = resolveTemperature({
+          agent: this.opts.agentId ?? null,
+          providerName: this.opts.provider.name ?? '',
+          model: this.opts.provider.model ?? '',
+          thinking: this.opts.thinking,
+          sessionOverride: this.opts.sessionTemperature,
+          roleOverride: this.opts.roleTemperature,
+        });
+        this.emit('temperature_resolved', {
+          runId: this.runId,
+          turn,
+          provider: this.opts.provider.name ?? 'unknown',
+          model: this.opts.provider.model ?? 'unknown',
+          agent: this.opts.agentId ?? null,
+          temperature: tempResolution.temperature,
+          source: tempResolution.source,
+          reason: tempResolution.reason,
+        });
+
+        try {
+          const stream = this.opts.provider.chat({
+            system: this.opts.systemPrompt,
+            messages: compactHistoryForLLM(this.messages, compactionLimits),
+            tools,
+            thinking: this.opts.thinking,
+            ...(typeof tempResolution.temperature === 'number'
+              ? { inference: { temperature: tempResolution.temperature } }
+              : {}),
+            ...(this.previousResponseId
+              ? {
+                previousResponseId: this.previousResponseId,
+                previousResponseMessageCount: this.previousResponseMessageCount ?? 0,
+              }
+              : {}),
+          });
+          for await (const delta of stream) {
+            if (this.aborted) break;
+            this.handleDelta(delta, {
+              onText: (t) => {
+                pendingText += t;
+                this.emit('text_delta', t);
+              },
+              onThinking: (t) => {
+                pendingThinking += t;
+                this.emit('thinking_delta', t);
+              },
+              onToolCall: (id, name, input) => {
+                pendingToolCalls.set(id, { name, input });
+              },
+              onUsage: (u) => {
+                usageBox.value = u;
+              },
+              onResponseId: (id, messageCount) => {
+                this.previousResponseId = id;
+                this.previousResponseMessageCount = messageCount;
+                this.opts.onResponseId?.(id, messageCount);
+              },
+              onImageGenerated: (mediaType, base64) => {
+                pendingImages.push({ mediaType, base64 });
+              },
+            });
+          }
+        } catch (e) {
+          const error = e instanceof Error ? e : new Error(String(e));
+          // Retry once on recoverable provider 400 errors (message format issues).
+          // GLM/ZAI returns code 1214 for illegal message sequences that may be
+          // fixable by the compaction safety nets on a second pass.
+          const status = (e as { status?: number }).status;
+          const code = (e as { error?: { code?: string } }).error?.code;
+          const is400 = status === 400 || code === '1214';
+          if (is400 && !retriedThisTurn) {
+            retriedThisTurn = true;
+            console.warn(`[coder] provider returned 400 at turn ${turn}, retrying once`);
+            continue;
+          }
+
+          // 401: OAuth token expired mid-session (e.g. Copilot 25-min TTL).
+          // Re-create the provider to force a credential refresh, then retry.
+          const is401 = status === 401;
+          if (is401 && !retriedThisTurn && this.opts.createProvider) {
+            retriedThisTurn = true;
+            try {
+              const newProvider = await this.opts.createProvider(
+                this.opts.provider.name,
+                this.opts.provider.model,
+              );
+              this.swapProvider(newProvider);
+              console.warn(`[coder] 401 on turn ${turn} — refreshed OAuth credentials, retrying`);
+              continue;
+            } catch (refreshErr) {
+              console.error(
+                `[coder] credential refresh failed after 401: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
+              );
+            }
+          }
+
+          // Fallback: on persistent errors (400 after retry, 401 without refresh,
+          // 429, 5xx, timeout), try switching to the next provider in the fallback chain.
+          const is429 = status === 429;
+          const isTimeout = error.message?.includes('timeout') || status === 504 || status === 408;
+          const is5xx = status !== undefined && status >= 500 && status < 600;
+          const shouldFallback = (is400 && retriedThisTurn) || is401 || is429 || isTimeout || is5xx;
+
+          if (shouldFallback && this.opts.fallbackChain && this.opts.createProvider) {
+            const { nextFallback } = await import('./fallback.js');
+            const next = nextFallback(this.opts.fallbackChain);
+            if (next) {
+              const oldProvider = { provider: this.opts.provider.name ?? 'unknown', model: this.opts.provider.model ?? 'unknown' };
+              try {
+                const newProvider = await this.opts.createProvider(next.provider, next.model);
+                this.swapProvider(newProvider);
+                console.warn(`[coder] Fallback activated: ${oldProvider.provider}/${oldProvider.model} → ${next.provider}/${next.model} (error: ${error.message})`);
+                this.emit('fallback_activated', {
+                  from: oldProvider,
+                  to: next,
+                  error: error.message,
+                });
+                // Fire hook
+                await this.opts.hookRegistry?.fireFallback({
+                  sessionId: 0, projectName: '', provider: next.provider, model: next.model, turn,
+                  from: oldProvider,
+                  to: next,
+                  triggerError: error.message,
+                });
+                continue; // retry the turn with the new provider
+              } catch (fallbackErr) {
+                console.error(`[coder] Fallback provider creation failed: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+              }
+            }
+          }
+
+          // Fire error hook before giving up
+          await this.opts.hookRegistry?.fireError({
+            sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
+            model: this.opts.provider.model ?? 'unknown', turn,
+            error, errorType: 'provider', willRetry: false, willFallback: false,
+          });
+
+          this.emit('done', 'error', error);
+          return { totalUsage, reason: 'error' };
+        }
+
+        // Build assistant message in correct block order: thinking first, text,
+        // generated images, then tool_uses
+        if (pendingThinking) {
+          assistantContent.push({ type: 'thinking', text: pendingThinking });
+        }
+        if (pendingText) {
+          assistantContent.push({ type: 'text', text: pendingText });
+        }
+        for (const img of pendingImages) {
+          assistantContent.push({ type: 'image', mediaType: img.mediaType, base64: img.base64 });
+        }
+        const toolUseBlocks: ToolUseBlock[] = [];
+        for (const [id, { name, input }] of pendingToolCalls) {
+          const block: ToolUseBlock = { type: 'tool_use', id, name, input };
+          toolUseBlocks.push(block);
+          assistantContent.push(block);
+        }
+
+        const assistantMessage: AgentMessage = { role: 'assistant', content: assistantContent };
+        this.messages.push(assistantMessage);
+        const lastUsage = usageBox.value;
+        if (lastUsage) {
+          totalUsage.input_tokens += lastUsage.input_tokens;
+          totalUsage.output_tokens += lastUsage.output_tokens;
+          totalUsage.cache_creation_input_tokens =
+            (totalUsage.cache_creation_input_tokens ?? 0) + (lastUsage.cache_creation_input_tokens ?? 0);
+          totalUsage.cache_read_input_tokens =
+            (totalUsage.cache_read_input_tokens ?? 0) + (lastUsage.cache_read_input_tokens ?? 0);
+          const cached = lastUsage.cache_read_input_tokens ?? 0;
+          const ratio = lastUsage.input_tokens > 0 ? Math.round((cached / lastUsage.input_tokens) * 100) : 0;
+          const sLabel = this.opts.sessionId != null
+            ? (this.isSubagent ? `${this.opts.sessionId}/sub` : String(this.opts.sessionId))
+            : '?';
+          const tag = `[coder s=${sLabel} r=${this.runId.slice(0, 8)}]`;
+          console.log(
+            `${tag} turn=${turn} input=${lastUsage.input_tokens} output=${lastUsage.output_tokens} cache_hit=${cached} ratio=${ratio}%`,
+          );
+          if (turn >= 3 && ratio < 40 && lastUsage.input_tokens > 5_000) {
+            console.warn(
+              `${tag} low cache hit rate (${ratio}%) at turn ${turn}. ` +
+              `Check for prefix mutation: tools sort order, system prompt stability, push-time truncation.`,
+            );
+          }
+        }
+        this.emit('message_complete', assistantMessage, lastUsage);
+        // Persist real input_tokens across turns so the next iteration's compaction
+        // check can use actual token counts rather than character estimates.
+        if (lastUsage?.input_tokens) lastKnownInputTokens = lastUsage.input_tokens;
+
+        // Emit context metrics so the dashboard can show a progress indicator.
+        const historyChars = totalChars(this.messages);
+        this.emit('context_status', {
+          history_chars: historyChars,
+          turn,
+          max_turns: this.maxTurns,
+          auto_continue_count: autoContinueCount,
+          auto_continue_max: MAX_AUTO_CONTINUES,
+          last_turn_input_tokens: lastUsage?.input_tokens ?? 0,
+          context_window: this.opts.context_window ?? getModelContextWindow(this.opts.provider.model ?? ''),
+        });
+
+        // Always emit `tool_batch` once per turn so observability dashboards
+        // can count turns and see at a glance which turns ended with text-only
+        // responses (count === 0) versus which dispatched tools.
+        this.emit('tool_batch', {
+          runId: this.runId,
+          turn,
+          count: toolUseBlocks.length,
+          names: toolUseBlocks.map((b) => b.name),
+        });
+
+        // No tool calls → check if we should nudge or end.
+        if (toolUseBlocks.length === 0) {
+          // In plan mode: if the model wrote text mid-investigation without calling
+          // a tool or submit_plan, inject ONE nudge so it can follow through.
+          // Gated on turn > 1 so trivial greetings / one-shot answers don't get
+          // a nudge — only sessions that were already doing tool work get one.
+          const midInvestigation =
+            this.opts.planMode &&
+            !this.planApproved &&
+            !this.tasksApproved &&
+            turn > 1 &&
+            !planNudgeSent;
+          if (midInvestigation) {
+            planNudgeSent = true;
+            console.log(`[coder] plan mode: text-only turn ${turn} mid-investigation — injecting nudge`);
+            this.messages.push({
+              role: 'user',
+              content: [{ type: 'text', text: '[System] Continue your investigation and call submit_plan when you have a complete proposal ready, or submit_tasks to begin execution.' }],
+            });
+            continue;
+          }
+
+          this.recentTurnSignatures.length = 0;
+          this.recentTurnNamesSignatures.length = 0;
+          // Hook: completion
+          await this.opts.hookRegistry?.fireCompletion({
+            sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
+            model: this.opts.provider.model ?? 'unknown', turn,
+            reason: 'completed', totalUsage, turnCount: turn,
+          });
+          this.emit('done', 'completed');
+          return { totalUsage, reason: 'completed' };
+        }
+
+        // Doom-loop guard: if the model just asked for the exact same set of
+        // tool calls N turns in a row, something is stuck. Refuse to execute
+        // and bail with an error so the host can surface it to the user.
+        if (DOOM_LOOP_THRESHOLD >= 2) {
+          const sig = toolCallsSignature(
+            toolUseBlocks.map((b) => ({ name: b.name, input: b.input })),
+          );
+          this.recentTurnSignatures.push(sig);
+          if (this.recentTurnSignatures.length > DOOM_LOOP_THRESHOLD) {
+            this.recentTurnSignatures.shift();
+          }
+          if (
+            this.recentTurnSignatures.length === DOOM_LOOP_THRESHOLD &&
+            this.recentTurnSignatures.every((s) => s === sig && s !== '')
+          ) {
+            const err = new Error(
+              `Doom loop detected: the same tool call${toolUseBlocks.length > 1 ? 's were' : ' was'} emitted ${DOOM_LOOP_THRESHOLD} turns in a row without progress. ` +
+              `Last signature: ${sig.slice(0, 200)}${sig.length > 200 ? '…' : ''}. ` +
+              `Aborting to avoid cost runaway — fix the underlying issue (wrong args, missing file, bad permission) before retrying.`,
+            );
+            console.warn(`[coder] doom-loop aborted at turn ${turn}: ${sig.slice(0, 120)}`);
+            this.emit('done', 'error', err);
+            return { totalUsage, reason: 'error' };
+          }
+        }
+
+        // Fuzzy doom-loop guard: catches "same tool names, tweaked args"
+        // patterns the strict sig misses. Uses a higher threshold to keep
+        // false-positive risk low on legitimate iterative workflows.
+        if (DOOM_LOOP_FUZZY_THRESHOLD >= 2) {
+          const loose = toolNamesSignature(toolUseBlocks.map((b) => ({ name: b.name })));
+          this.recentTurnNamesSignatures.push(loose);
+          if (this.recentTurnNamesSignatures.length > DOOM_LOOP_FUZZY_THRESHOLD) {
+            this.recentTurnNamesSignatures.shift();
+          }
+          if (
+            this.recentTurnNamesSignatures.length === DOOM_LOOP_FUZZY_THRESHOLD &&
+            this.recentTurnNamesSignatures.every((s) => s === loose && s !== '')
+          ) {
+            const err = new Error(
+              `Doom loop detected (fuzzy): the same tool set (${loose}) ran ${DOOM_LOOP_FUZZY_THRESHOLD} turns in a row with tweaked arguments and no progress. ` +
+              `Aborting to avoid cost runaway — the model is likely retrying with minor variations instead of adjusting strategy.`,
+            );
+            console.warn(`[coder] fuzzy doom-loop aborted at turn ${turn}: ${loose.slice(0, 120)}`);
+            this.emit('done', 'error', err);
+            return { totalUsage, reason: 'error' };
+          }
+        }
+
+        // Execute each tool call sequentially and collect results.
+        // (tool_batch was emitted before the doom-loop guards — see above.)
+        const toolResultBlocks: ContentBlock[] = [];
+        for (const block of toolUseBlocks) {
+          if (this.aborted) break;
+          this.emit('tool_call_start', block.id, block.name, block.input);
+          // Hook: before tool call
+          await this.opts.hookRegistry?.fireToolCall({
+            sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
+            model: this.opts.provider.model ?? 'unknown', turn,
+            toolName: block.name, toolArgs: block.input, phase: 'before',
+          });
+          const start = Date.now();
+          let result;
+          // Look up the tool definition so the policy module can read its
+          // metadata. `registry.get` returns undefined for unknown names —
+          // the registry's own `invoke` falls back to an Unknown-tool error
+          // which we surface to the model as a normal tool result.
+          const toolDef = this.opts.registry.get(block.name);
+          if (!toolDef) {
+            result = await this.opts.registry.invoke(block.name, block.input, this.opts.toolContext);
+          } else {
+            const policyCtx: PolicyContext = {
+              planMode: !!this.opts.planMode,
+              planApproved: this.planApproved,
+              taskScope: this.currentTaskScope
+                ? { id: this.currentTaskScope.id, files: [...this.currentTaskScope.files] }
+                : null,
+              // Phase 5 reserved — runner stays in legacy mode for now.
+              strict: false,
+              adminOverride: this.opts.adminOverride ?? true,
+              sandboxBound:
+                !!this.opts.toolContext.ports?.fs || !!this.opts.toolContext.ports?.shell,
+            };
+            const decision = evaluateToolInvocation(toolDef, block.input, policyCtx);
+
+            if (decision.allowed) {
+              result = await this.opts.registry.invoke(block.name, block.input, this.opts.toolContext);
+            } else if (
+              decision.reason === 'plan_mode'
+              && decision.metadata.scopeAware
+              && policyCtx.taskScope
+            ) {
+              // Inline task-scope unlock: mutating tools may still run for
+              // paths declared in the active task's `files`. Anything outside
+              // is blocked — preserves the legacy contract.
+              const scopeFiles = policyCtx.taskScope.files;
+              const candidatePaths = extractPathsFromToolArgs(block.name, block.input);
+              const violators = findScopeViolations(candidatePaths, scopeFiles, isPathInsideScope);
+              const allInside = candidatePaths.length > 0 && violators.length === 0;
+              if (allInside) {
+                result = await this.opts.registry.invoke(block.name, block.input, this.opts.toolContext);
+              } else {
+                this.emit('blocked', {
+                  runId: this.runId,
+                  turn,
+                  tool: block.name,
+                  reason: 'task_scope',
+                  detail: `paths outside scope: ${violators.join(', ')}`,
+                });
+                result = {
+                  content: `Tool '${block.name}' refused: path(s) outside the current task scope. ` +
+                    `Task ${policyCtx.taskScope.id} declared files=[${scopeFiles.join(', ')}]; ` +
+                    `tried to touch [${violators.join(', ')}]. ` +
+                    `Either edit a file inside the declared scope, or call task_complete and submit a new task.`,
+                  isError: true,
+                };
+              }
+            } else {
+              this.emit('blocked', {
+                runId: this.runId,
+                turn,
+                tool: block.name,
+                reason: decision.reason,
+                detail: decision.detail,
+              });
+              result = { content: decision.detail, isError: true };
+            }
+          }
+          const durationMs = Date.now() - start;
+          // Accumulate subagent usage into the parent's total — costs of work
+          // delegated to a subagent must NEVER be hidden from the session.
+          if (result.subUsage) {
+            totalUsage.input_tokens += result.subUsage.input_tokens;
+            totalUsage.output_tokens += result.subUsage.output_tokens;
+            totalUsage.cache_creation_input_tokens =
+              (totalUsage.cache_creation_input_tokens ?? 0) + (result.subUsage.cache_creation_input_tokens ?? 0);
+            totalUsage.cache_read_input_tokens =
+              (totalUsage.cache_read_input_tokens ?? 0) + (result.subUsage.cache_read_input_tokens ?? 0);
+            const subCached = result.subUsage.cache_read_input_tokens ?? 0;
+            console.log(
+              `[coder] subagent tool=${block.name} input=${result.subUsage.input_tokens} output=${result.subUsage.output_tokens} cache_hit=${subCached}`,
+            );
+          }
+          this.emit('tool_call_result', block.id, block.name, result, durationMs);
+          // Hook: after tool call
+          await this.opts.hookRegistry?.fireToolCall({
+            sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
+            model: this.opts.provider.model ?? 'unknown', turn,
+            toolName: block.name, toolArgs: block.input, phase: 'after',
+            result, durationMs,
+          });
+          // Side-file truncation: if the content is too large AND the runner
+          // has a tool output store wired in, persist the full content and
+          // include the output_id in the truncation marker. This lets the
+          // agent retrieve the elided portion via `get_tool_output(id)` on
+          // demand — without making every large output permanently visible.
+          const cap = this.opts.pushTimeCap ?? PUSH_TIME_CAP;
+          let persistedId: string | null = null;
+          if (result.content.length > cap && this.opts.toolContext.toolOutputStore) {
+            persistedId = this.opts.toolContext.toolOutputStore.put(result.content);
+          }
+          toolResultBlocks.push(
+            buildToolResultBlock(block.id, result.content, result.isError, cap, persistedId ?? undefined),
+          );
+        }
+
+        this.messages.push({ role: 'tool', content: toolResultBlocks });
+      } // end inner while (turn < maxTurns)
+
+      // If aborted during the inner loop, don't auto-continue.
       if (this.aborted) {
         this.emit('done', 'aborted');
         return { totalUsage, reason: 'aborted' };
       }
 
-      turn++;
-      this.emit('turn_start', turn);
+      // Auto-continue: instead of dying at maxTurns, reset the turn counter and
+      // (only if context is full) compact history. Mirrors Claude Code's behaviour —
+      // the agent only stops when there's no more work, not due to an artificial ceiling.
+      if (MAX_AUTO_CONTINUES > 0 && autoContinueCount < MAX_AUTO_CONTINUES) {
+        autoContinueCount++;
+        this.emit('auto_continue', autoContinueCount, MAX_AUTO_CONTINUES);
 
-      // Periodically remind subordinate agents to post a deliverable before stopping.
-      if (this.opts.isCompanySubordinate && turn > 1 && turn % SUBORDINATE_REMINDER_INTERVAL === 0) {
-        this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }] });
-        if (this.opts.companyRoleOverride) {
-          this.messages.push({ role: 'user', content: [{ type: 'text', text: `[System reminder — Role identity] ${this.opts.companyRoleOverride}` }] });
-        }
-      }
+        // Skip compaction when context is well below the trigger. Auto-continue
+        // exists to extend beyond maxTurns; it is NOT a signal that we're out of
+        // tokens. When there's no real pressure, just reset state and continue —
+        // the dashboard then shows "Auto-continuing..." without a misleading
+        // "Context compacted" message.
+        const needsCompaction =
+          compactionLimits.triggerTokens !== null && lastKnownInputTokens !== null
+            ? lastKnownInputTokens >= compactionLimits.triggerTokens
+            : totalChars(this.messages) > compactionLimits.minimum;
 
-      // LLM summarizer — opt-in via CODER_SUMMARIZER_ENABLE=1. Runs ONCE
-      // per session the first turn the history grows big enough to trigger
-      // compaction. Replaces the pre-cutoff span with a single synthetic
-      // assistant message containing a structured markdown summary. Any
-      // failure (LLM error, bad JSON, timeout) falls back to the
-      // deterministic compactMessages path below — the summarizer never
-      // breaks a turn.
-      if (isSummarizerEnabled() && !this.summarizedOnce) {
-        const total = totalChars(this.messages);
-        if (total > PRUNE_MINIMUM) {
-          const cutoff = snapCutoffToRoleBoundary(this.messages, computeCutoffIndex(this.messages, PRUNE_PROTECT));
-          if (cutoff > 1) {
-            const span = this.messages.slice(0, cutoff);
-            console.log(`[coder] running summarizer on ${cutoff} old messages (~${total} chars total)`);
-            const summary = await summarizeSpan(span, this.opts.provider);
-            if (summary) {
-              const rendered = renderSummary(summary);
-              const syntheticAssistant: AgentMessage = {
-                role: 'assistant',
-                content: [{ type: 'text', text: rendered }],
-              };
-              // Replace the pre-cutoff span with the synthetic summary. The
-              // persistent DB history is NOT touched — only the in-memory
-              // `this.messages` used to build provider requests. A session
-              // resume will rebuild from the untouched DB and re-apply the
-              // deterministic compaction path.
-              this.messages.splice(0, cutoff, syntheticAssistant);
-              this.summarizedOnce = true;
-              console.log(`[coder] summarizer collapsed ${cutoff} messages into 1 synthetic summary`);
-            } else {
-              // Mark as attempted so we don't retry every turn on a broken
-              // summarizer — deterministic compaction takes over.
-              this.summarizedOnce = true;
-              console.warn('[coder] summarizer returned null; using deterministic compaction');
+        if (!needsCompaction) {
+          console.log(
+            `[coder] auto-continue ${autoContinueCount}/${MAX_AUTO_CONTINUES} — ` +
+            `context OK (${lastKnownInputTokens ?? '?'}/${compactionLimits.triggerTokens ?? '?'} tokens), skipping compaction`,
+          );
+          this.summarizedOnce = false;
+          lastKnownInputTokens = null;
+          turn = 0;
+          if (this.opts.isCompanySubordinate) {
+            this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }] });
+            this.logSystemReminder('subordinate-deliverable-autocontinue', SUBORDINATE_REMINDER_MSG);
+            if (this.opts.companyRoleOverride) {
+              const text = `[System reminder — Role identity] ${this.opts.companyRoleOverride}`;
+              this.messages.push({ role: 'user', content: [{ type: 'text', text }] });
+              this.logSystemReminder('role-identity-autocontinue', text);
             }
           }
-        }
-      }
-
-      // Rebuild tools iff tier set changed since last turn (cheap no-op
-      // otherwise). This keeps the prefix byte-stable across consecutive
-      // turns within the same tier, so server-side prefix cache hits.
-      const currentKey = this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : '*';
-      if (currentKey !== lastTiersKey) {
-        tools = buildTools();
-        lastTiersKey = currentKey;
-      }
-
-      const assistantContent: ContentBlock[] = [];
-      let pendingText = '';
-      const pendingToolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
-      const usageBox: { value: ChatUsage | null } = { value: null };
-      let retriedThisTurn = false;
-      let pendingThinking = '';
-      void assistantContent;
-
-      try {
-        const stream = this.opts.provider.chat({
-          system: this.opts.systemPrompt,
-          messages: compactHistoryForLLM(this.messages),
-          tools,
-          thinking: this.opts.thinking,
-        });
-        for await (const delta of stream) {
-          if (this.aborted) break;
-          this.handleDelta(delta, {
-            onText: (t) => {
-              pendingText += t;
-              this.emit('text_delta', t);
-            },
-            onThinking: (t) => {
-              pendingThinking += t;
-              this.emit('thinking_delta', t);
-            },
-            onToolCall: (id, name, input) => {
-              pendingToolCalls.set(id, { name, input });
-            },
-            onUsage: (u) => {
-              usageBox.value = u;
-            },
-          });
-        }
-      } catch (e) {
-        const error = e instanceof Error ? e : new Error(String(e));
-        // Retry once on recoverable provider 400 errors (message format issues).
-        // GLM/ZAI returns code 1214 for illegal message sequences that may be
-        // fixable by the compaction safety nets on a second pass.
-        const status = (e as { status?: number }).status;
-        const code = (e as { error?: { code?: string } }).error?.code;
-        const is400 = status === 400 || code === '1214';
-        if (is400 && !retriedThisTurn) {
-          retriedThisTurn = true;
-          console.warn(`[coder] provider returned 400 at turn ${turn}, retrying once`);
           continue;
         }
 
-        // 401: OAuth token expired mid-session (e.g. Copilot 25-min TTL).
-        // Re-create the provider to force a credential refresh, then retry.
-        const is401 = status === 401;
-        if (is401 && !retriedThisTurn && this.opts.createProvider) {
-          retriedThisTurn = true;
-          try {
-            const newProvider = await this.opts.createProvider(
-              this.opts.provider.name,
-              this.opts.provider.model,
-            );
-            this.swapProvider(newProvider);
-            console.warn(`[coder] 401 on turn ${turn} — refreshed OAuth credentials, retrying`);
-            continue;
-          } catch (refreshErr) {
-            console.error(
-              `[coder] credential refresh failed after 401: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
-            );
-          }
-        }
-
-        // Fallback: on persistent errors (400 after retry, 401 without refresh,
-        // 429, 5xx, timeout), try switching to the next provider in the fallback chain.
-        const is429 = status === 429;
-        const isTimeout = error.message?.includes('timeout') || status === 504 || status === 408;
-        const is5xx = status !== undefined && status >= 500 && status < 600;
-        const shouldFallback = (is400 && retriedThisTurn) || is401 || is429 || isTimeout || is5xx;
-
-        if (shouldFallback && this.opts.fallbackChain && this.opts.createProvider) {
-          const { nextFallback } = await import('./fallback.js');
-          const next = nextFallback(this.opts.fallbackChain);
-          if (next) {
-            const oldProvider = { provider: this.opts.provider.name ?? 'unknown', model: this.opts.provider.model ?? 'unknown' };
-            try {
-              const newProvider = await this.opts.createProvider(next.provider, next.model);
-              this.swapProvider(newProvider);
-              console.warn(`[coder] Fallback activated: ${oldProvider.provider}/${oldProvider.model} → ${next.provider}/${next.model} (error: ${error.message})`);
-              this.emit('fallback_activated', {
-                from: oldProvider,
-                to: next,
-                error: error.message,
-              });
-              // Fire hook
-              await this.opts.hookRegistry?.fireFallback({
-                sessionId: 0, projectName: '', provider: next.provider, model: next.model, turn,
-                from: oldProvider,
-                to: next,
-                triggerError: error.message,
-              });
-              continue; // retry the turn with the new provider
-            } catch (fallbackErr) {
-              console.error(`[coder] Fallback provider creation failed: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
-            }
-          }
-        }
-
-        // Fire error hook before giving up
-        await this.opts.hookRegistry?.fireError({
-          sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
-          model: this.opts.provider.model ?? 'unknown', turn,
-          error, errorType: 'provider', willRetry: false, willFallback: false,
-        });
-
-        this.emit('done', 'error', error);
-        return { totalUsage, reason: 'error' };
-      }
-
-      // Build assistant message in correct block order: thinking first, text, then tool_uses
-      if (pendingThinking) {
-        assistantContent.push({ type: 'thinking', text: pendingThinking });
-      }
-      if (pendingText) {
-        assistantContent.push({ type: 'text', text: pendingText });
-      }
-      const toolUseBlocks: ToolUseBlock[] = [];
-      for (const [id, { name, input }] of pendingToolCalls) {
-        const block: ToolUseBlock = { type: 'tool_use', id, name, input };
-        toolUseBlocks.push(block);
-        assistantContent.push(block);
-      }
-
-      const assistantMessage: AgentMessage = { role: 'assistant', content: assistantContent };
-      this.messages.push(assistantMessage);
-      const lastUsage = usageBox.value;
-      if (lastUsage) {
-        totalUsage.input_tokens += lastUsage.input_tokens;
-        totalUsage.output_tokens += lastUsage.output_tokens;
-        totalUsage.cache_creation_input_tokens =
-          (totalUsage.cache_creation_input_tokens ?? 0) + (lastUsage.cache_creation_input_tokens ?? 0);
-        totalUsage.cache_read_input_tokens =
-          (totalUsage.cache_read_input_tokens ?? 0) + (lastUsage.cache_read_input_tokens ?? 0);
-        const cached = lastUsage.cache_read_input_tokens ?? 0;
-        const ratio = lastUsage.input_tokens > 0 ? Math.round((cached / lastUsage.input_tokens) * 100) : 0;
         console.log(
-          `[coder] turn=${turn} input=${lastUsage.input_tokens} output=${lastUsage.output_tokens} cache_hit=${cached} ratio=${ratio}%`,
+          `[coder] auto-continue ${autoContinueCount}/${MAX_AUTO_CONTINUES} — compacting history before resuming`,
         );
-        if (turn >= 3 && ratio < 40 && lastUsage.input_tokens > 5_000) {
-          console.warn(
-            `[coder] low cache hit rate (${ratio}%) at turn ${turn}. ` +
-            `Check for prefix mutation: tools sort order, system prompt stability, push-time truncation.`,
-          );
-        }
-      }
-      this.emit('message_complete', assistantMessage, lastUsage);
 
-      // Emit context metrics so the dashboard can show a progress indicator.
-      const historyChars = totalChars(this.messages);
-      this.emit('context_status', {
-        history_chars: historyChars,
-        turn,
-        max_turns: this.maxTurns,
-        auto_continue_count: autoContinueCount,
-        auto_continue_max: MAX_AUTO_CONTINUES,
-        last_turn_input_tokens: lastUsage?.input_tokens ?? 0,
-        context_window: this.opts.context_window ?? getModelContextWindow(this.opts.provider.model ?? ''),
-      });
-
-      // No tool calls → conversation finished. In plan mode this is fine:
-      // the real safety net is at the tool-invocation level (mutating tools
-      // are blocked until submit_plan/submit_tasks is approved — see the
-      // per-tool check below). If the model answered the user with pure
-      // text without touching anything, there's nothing to gate. Forcing a
-      // plan for trivial greetings ("Oi") or short informational answers
-      // was user-hostile and added noise with zero safety benefit.
-      if (toolUseBlocks.length === 0) {
-        this.recentTurnSignatures.length = 0;
-        this.recentTurnNamesSignatures.length = 0;
-        // Hook: completion
-        await this.opts.hookRegistry?.fireCompletion({
-          sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
-          model: this.opts.provider.model ?? 'unknown', turn,
-          reason: 'completed', totalUsage, turnCount: turn,
-        });
-        this.emit('done', 'completed');
-        return { totalUsage, reason: 'completed' };
-      }
-
-      // Doom-loop guard: if the model just asked for the exact same set of
-      // tool calls N turns in a row, something is stuck. Refuse to execute
-      // and bail with an error so the host can surface it to the user.
-      if (DOOM_LOOP_THRESHOLD >= 2) {
-        const sig = toolCallsSignature(
-          toolUseBlocks.map((b) => ({ name: b.name, input: b.input })),
-        );
-        this.recentTurnSignatures.push(sig);
-        if (this.recentTurnSignatures.length > DOOM_LOOP_THRESHOLD) {
-          this.recentTurnSignatures.shift();
-        }
-        if (
-          this.recentTurnSignatures.length === DOOM_LOOP_THRESHOLD &&
-          this.recentTurnSignatures.every((s) => s === sig && s !== '')
-        ) {
-          const err = new Error(
-            `Doom loop detected: the same tool call${toolUseBlocks.length > 1 ? 's were' : ' was'} emitted ${DOOM_LOOP_THRESHOLD} turns in a row without progress. ` +
-              `Last signature: ${sig.slice(0, 200)}${sig.length > 200 ? '…' : ''}. ` +
-              `Aborting to avoid cost runaway — fix the underlying issue (wrong args, missing file, bad permission) before retrying.`,
-          );
-          console.warn(`[coder] doom-loop aborted at turn ${turn}: ${sig.slice(0, 120)}`);
-          this.emit('done', 'error', err);
-          return { totalUsage, reason: 'error' };
-        }
-      }
-
-      // Fuzzy doom-loop guard: catches "same tool names, tweaked args"
-      // patterns the strict sig misses. Uses a higher threshold to keep
-      // false-positive risk low on legitimate iterative workflows.
-      if (DOOM_LOOP_FUZZY_THRESHOLD >= 2) {
-        const loose = toolNamesSignature(toolUseBlocks.map((b) => ({ name: b.name })));
-        this.recentTurnNamesSignatures.push(loose);
-        if (this.recentTurnNamesSignatures.length > DOOM_LOOP_FUZZY_THRESHOLD) {
-          this.recentTurnNamesSignatures.shift();
-        }
-        if (
-          this.recentTurnNamesSignatures.length === DOOM_LOOP_FUZZY_THRESHOLD &&
-          this.recentTurnNamesSignatures.every((s) => s === loose && s !== '')
-        ) {
-          const err = new Error(
-            `Doom loop detected (fuzzy): the same tool set (${loose}) ran ${DOOM_LOOP_FUZZY_THRESHOLD} turns in a row with tweaked arguments and no progress. ` +
-              `Aborting to avoid cost runaway — the model is likely retrying with minor variations instead of adjusting strategy.`,
-          );
-          console.warn(`[coder] fuzzy doom-loop aborted at turn ${turn}: ${loose.slice(0, 120)}`);
-          this.emit('done', 'error', err);
-          return { totalUsage, reason: 'error' };
-        }
-      }
-
-      // Execute each tool call sequentially and collect results
-      const toolResultBlocks: ContentBlock[] = [];
-      for (const block of toolUseBlocks) {
-        if (this.aborted) break;
-        this.emit('tool_call_start', block.id, block.name, block.input);
-        // Hook: before tool call
-        await this.opts.hookRegistry?.fireToolCall({
-          sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
-          model: this.opts.provider.model ?? 'unknown', turn,
-          toolName: block.name, toolArgs: block.input, phase: 'before',
-        });
-        const start = Date.now();
-        let result;
-        if (this.opts.planMode && !this.planApproved && MUTATING_TOOLS.has(block.name)) {
-          // Inside an inline task scope, mutating tools are unlocked but only
-          // for paths declared in the task's `files`. Anything outside is
-          // still blocked even mid-task — keeps the path sandbox honest.
-          const scopeFiles = this.currentTaskScope?.files;
-          if (scopeFiles) {
-            const candidatePaths = extractPathsFromToolArgs(block.name, block.input);
-            const allInside = candidatePaths.length > 0
-              && candidatePaths.every((p) => isPathInsideScope(p, scopeFiles));
-            if (allInside) {
-              result = await this.opts.registry.invoke(block.name, block.input, this.opts.toolContext);
-            } else {
-              const violators = candidatePaths.filter((p) => !isPathInsideScope(p, scopeFiles));
-              result = {
-                content: `Tool '${block.name}' refused: path(s) outside the current task scope. ` +
-                  `Task ${this.currentTaskScope?.id} declared files=[${scopeFiles.join(', ')}]; ` +
-                  `tried to touch [${violators.join(', ')}]. ` +
-                  `Either edit a file inside the declared scope, or call task_complete and submit a new task.`,
-                isError: true,
+        // Summarize the old span for richer context preservation, falling
+        // back to deterministic compaction if the summarizer is unavailable.
+        const histTotal = totalChars(this.messages);
+        const cutoff = snapCutoffToRoleBoundary(this.messages, computeCutoffIndex(this.messages, compactionLimits.protect));
+        let strategy: 'summarizer' | 'deterministic' | 'none' = 'none';
+        let prunedMessages = 0;
+        let prunedChars = 0;
+        if (cutoff > 1) {
+          const span = this.messages.slice(0, cutoff);
+          let replaced = false;
+          try {
+            const summary = await summarizeSpan(span, this.opts.provider);
+            if (summary) {
+              const synthetic: AgentMessage = {
+                role: 'assistant',
+                content: [{ type: 'text', text: renderSummary(summary) }],
               };
+              this.messages.splice(0, cutoff, synthetic);
+              replaced = true;
+              strategy = 'summarizer';
+              prunedMessages = cutoff - 1; // cutoff original msgs replaced by 1 synthetic
+              prunedChars = histTotal - totalChars(this.messages);
+              console.log(
+                `[coder] summarizer collapsed ${cutoff} messages (~${histTotal} chars) into 1 synthetic summary`,
+              );
             }
-          } else {
-            result = {
-              content: `Tool '${block.name}' is blocked in plan mode. Call 'submit_plan' first and wait for user approval before mutating the workspace.`,
-              isError: true,
-            };
+          } catch (e) {
+            console.warn(`[coder] summarizer failed during auto-continue: ${e instanceof Error ? e.message : String(e)}`);
           }
-        } else {
-          result = await this.opts.registry.invoke(block.name, block.input, this.opts.toolContext);
+          if (!replaced) {
+            const compacted = compactMessages(this.messages, compactionLimits);
+            if (compacted.applied) {
+              // compactMessages returns a new array — swap in-place.
+              this.messages.length = 0;
+              this.messages.push(...compacted.messages);
+              strategy = 'deterministic';
+              prunedMessages = compacted.prunedBlocks;
+              prunedChars = compacted.prunedChars;
+              console.log(
+                `[coder] deterministic compaction pruned ${compacted.prunedBlocks} blocks (~${compacted.prunedChars} chars)`,
+              );
+            }
+          }
         }
-        const durationMs = Date.now() - start;
-        // Accumulate subagent usage into the parent's total — costs of work
-        // delegated to a subagent must NEVER be hidden from the session.
-        if (result.subUsage) {
-          totalUsage.input_tokens += result.subUsage.input_tokens;
-          totalUsage.output_tokens += result.subUsage.output_tokens;
-          totalUsage.cache_creation_input_tokens =
-            (totalUsage.cache_creation_input_tokens ?? 0) + (result.subUsage.cache_creation_input_tokens ?? 0);
-          totalUsage.cache_read_input_tokens =
-            (totalUsage.cache_read_input_tokens ?? 0) + (result.subUsage.cache_read_input_tokens ?? 0);
-          const subCached = result.subUsage.cache_read_input_tokens ?? 0;
-          console.log(
-            `[coder] subagent tool=${block.name} input=${result.subUsage.input_tokens} output=${result.subUsage.output_tokens} cache_hit=${subCached}`,
-          );
-        }
-        this.emit('tool_call_result', block.id, block.name, result, durationMs);
-        // Hook: after tool call
-        await this.opts.hookRegistry?.fireToolCall({
-          sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
-          model: this.opts.provider.model ?? 'unknown', turn,
-          toolName: block.name, toolArgs: block.input, phase: 'after',
-          result, durationMs,
+        this.emit('history_compacted', {
+          strategy,
+          pruned_messages: prunedMessages,
+          pruned_chars: prunedChars,
+          total_chars_before: histTotal,
+          total_chars_after: totalChars(this.messages),
+          auto_continue: autoContinueCount,
         });
-        // Side-file truncation: if the content is too large AND the runner
-        // has a tool output store wired in, persist the full content and
-        // include the output_id in the truncation marker. This lets the
-        // agent retrieve the elided portion via `get_tool_output(id)` on
-        // demand — without making every large output permanently visible.
-        const cap = this.opts.pushTimeCap ?? PUSH_TIME_CAP;
-        let persistedId: string | null = null;
-        if (result.content.length > cap && this.opts.toolContext.toolOutputStore) {
-          persistedId = this.opts.toolContext.toolOutputStore.put(result.content);
-        }
-        toolResultBlocks.push(
-          buildToolResultBlock(block.id, result.content, result.isError, cap, persistedId ?? undefined),
-        );
-      }
-
-      this.messages.push({ role: 'tool', content: toolResultBlocks });
-    } // end inner while (turn < maxTurns)
-
-    // If aborted during the inner loop, don't auto-continue.
-    if (this.aborted) {
-      this.emit('done', 'aborted');
-      return { totalUsage, reason: 'aborted' };
-    }
-
-    // Auto-continue: instead of dying at maxTurns, compact the history and
-    // reset the turn counter. Mirrors Claude Code's behaviour — the agent
-    // only stops when there's no more work, not due to an artificial ceiling.
-    if (MAX_AUTO_CONTINUES > 0 && autoContinueCount < MAX_AUTO_CONTINUES) {
-      autoContinueCount++;
-      console.log(
-        `[coder] auto-continue ${autoContinueCount}/${MAX_AUTO_CONTINUES} — compacting history before resuming`,
-      );
-      this.emit('auto_continue', autoContinueCount, MAX_AUTO_CONTINUES);
-
-      // Summarize the old span for richer context preservation, falling
-      // back to deterministic compaction if the summarizer is unavailable.
-      const histTotal = totalChars(this.messages);
-      const cutoff = snapCutoffToRoleBoundary(this.messages, computeCutoffIndex(this.messages, PRUNE_PROTECT));
-      let strategy: 'summarizer' | 'deterministic' | 'none' = 'none';
-      let prunedMessages = 0;
-      let prunedChars = 0;
-      if (cutoff > 1) {
-        const span = this.messages.slice(0, cutoff);
-        let replaced = false;
-        try {
-          const summary = await summarizeSpan(span, this.opts.provider);
-          if (summary) {
-            const synthetic: AgentMessage = {
-              role: 'assistant',
-              content: [{ type: 'text', text: renderSummary(summary) }],
-            };
-            this.messages.splice(0, cutoff, synthetic);
-            replaced = true;
-            strategy = 'summarizer';
-            prunedMessages = cutoff - 1; // cutoff original msgs replaced by 1 synthetic
-            prunedChars = histTotal - totalChars(this.messages);
-            console.log(
-              `[coder] summarizer collapsed ${cutoff} messages (~${histTotal} chars) into 1 synthetic summary`,
-            );
-          }
-        } catch (e) {
-          console.warn(`[coder] summarizer failed during auto-continue: ${e instanceof Error ? e.message : String(e)}`);
-        }
-        if (!replaced) {
-          const compacted = compactMessages(this.messages);
-          if (compacted.applied) {
-            // compactMessages returns a new array — swap in-place.
-            this.messages.length = 0;
-            this.messages.push(...compacted.messages);
-            strategy = 'deterministic';
-            prunedMessages = compacted.prunedBlocks;
-            prunedChars = compacted.prunedChars;
-            console.log(
-              `[coder] deterministic compaction pruned ${compacted.prunedBlocks} blocks (~${compacted.prunedChars} chars)`,
-            );
+        // Allow the summarizer to run again in the next continuation window.
+        this.summarizedOnce = false;
+        // Reset token baseline so the next window re-evaluates compaction from scratch.
+        lastKnownInputTokens = null;
+        // After compaction, re-inject the deliverable reminder for subordinates so
+        // the instruction survives context suppression regardless of what was pruned.
+        if (this.opts.isCompanySubordinate) {
+          this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }] });
+          this.logSystemReminder('subordinate-deliverable-postcompact', SUBORDINATE_REMINDER_MSG);
+          if (this.opts.companyRoleOverride) {
+            const text = `[System reminder — Role identity] ${this.opts.companyRoleOverride}`;
+            this.messages.push({ role: 'user', content: [{ type: 'text', text }] });
+            this.logSystemReminder('role-identity-postcompact', text);
           }
         }
+        // Reset turn counter so the inner while gets a full maxTurns budget.
+        turn = 0;
+        continue; // → back to outer while(true)
       }
-      this.emit('history_compacted', {
-        strategy,
-        pruned_messages: prunedMessages,
-        pruned_chars: prunedChars,
-        total_chars_before: histTotal,
-        total_chars_after: totalChars(this.messages),
-        auto_continue: autoContinueCount,
-      });
-      // Allow the summarizer to run again in the next continuation window.
-      this.summarizedOnce = false;
-      // After compaction, re-inject the deliverable reminder for subordinates so
-      // the instruction survives context suppression regardless of what was pruned.
-      if (this.opts.isCompanySubordinate) {
-        this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }] });
-        if (this.opts.companyRoleOverride) {
-          this.messages.push({ role: 'user', content: [{ type: 'text', text: `[System reminder — Role identity] ${this.opts.companyRoleOverride}` }] });
-        }
-      }
-      // Reset turn counter so the inner while gets a full maxTurns budget.
-      turn = 0;
-      continue; // → back to outer while(true)
-    }
 
-    // Exhausted all auto-continues — stop for real.
-    break;
+      // Exhausted all auto-continues — stop for real.
+      break;
     } // end outer while(true)
 
     this.emit('done', 'max_turns');
@@ -1365,6 +1713,8 @@ export class CoderRunner extends EventEmitter {
       onThinking: (t: string) => void;
       onToolCall: (id: string, name: string, input: Record<string, unknown>) => void;
       onUsage: (u: ChatUsage) => void;
+      onResponseId: (id: string, messageCount: number) => void;
+      onImageGenerated: (mediaType: string, base64: string) => void;
     }
   ): void {
     switch (delta.type) {
@@ -1379,6 +1729,12 @@ export class CoderRunner extends EventEmitter {
         break;
       case 'usage':
         handlers.onUsage(delta.usage);
+        break;
+      case 'response_id':
+        handlers.onResponseId(delta.id, delta.messageCount);
+        break;
+      case 'image_generated':
+        handlers.onImageGenerated(delta.mediaType, delta.base64);
         break;
       // tool_call_start, tool_call_args, done are informational only
       default:

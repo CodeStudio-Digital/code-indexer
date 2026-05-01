@@ -36,10 +36,22 @@ export function pumpBusToSSE(
     stream.onAbort(() => ac.abort());
 
     const stopHeartbeat = heartbeat ? attachHeartbeat(stream) : () => {};
+
+    // Sequential write queue — writes are awaited in order so backpressure
+    // is respected. A write failure means the client disconnected; abort
+    // immediately so waitEnded resolves and stream.close() doesn't hang.
+    let drainChain = Promise.resolve();
+    const enqueueWrite = (msg: { id: string; event: string; data: string }) => {
+      drainChain = drainChain.then(() => {
+        if (ac.signal.aborted) return;
+        return stream.writeSSE(msg).catch(() => { ac.abort(); });
+      });
+    };
+
     const unsubscribe = subscribe(
       bus,
       (ev) => {
-        void stream.writeSSE({
+        enqueueWrite({
           id: String(ev.seq),
           event: ev.event,
           data: JSON.stringify(ev.data),
@@ -52,6 +64,7 @@ export function pumpBusToSSE(
     } finally {
       unsubscribe();
       stopHeartbeat();
+      if (!ac.signal.aborted) await drainChain;
       await stream.close();
       opts.onDone?.();
     }

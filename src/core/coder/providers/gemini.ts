@@ -94,6 +94,8 @@ export class GeminiChatProvider implements ChatProvider {
         ]
       : undefined;
 
+    const temperature = req.inference?.temperature;
+
     let stream;
     try {
       stream = await this.client!.models.generateContentStream({
@@ -103,6 +105,7 @@ export class GeminiChatProvider implements ChatProvider {
           systemInstruction: req.system,
           tools,
           abortSignal: req.signal,
+          ...(typeof temperature === 'number' ? { temperature } : {}),
         },
       });
     } catch (e) {
@@ -183,10 +186,14 @@ export class GeminiChatProvider implements ChatProvider {
         }]
       : undefined;
 
+    const ccTemperature = req.inference?.temperature;
     const request = {
       contents,
       systemInstruction: req.system ? { parts: [{ text: req.system }] } : undefined,
       tools,
+      ...(typeof ccTemperature === 'number'
+        ? { generationConfig: { temperature: ccTemperature } }
+        : {}),
     };
 
     let lastUsage: { input: number; output: number; thinking: number } | null = null;

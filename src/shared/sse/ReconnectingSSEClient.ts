@@ -109,8 +109,19 @@ export class ReconnectingSSEClient {
       signal: this.opts.signal,
     });
     if (!res.ok || !res.body) {
+      // Surface the parsed JSON body alongside the status so callers can
+      // route specific 4xx flavours (e.g., 409 INTERACTION_PENDING) into
+      // their own UI state instead of a generic "error" toast.
+      let httpBody: unknown = null;
+      try {
+        httpBody = await res.json();
+      } catch {
+        /* response body wasn't JSON */
+      }
       throw Object.assign(new Error(`HTTP ${res.status}`), {
         nonRetryable: res.status >= 400 && res.status < 500,
+        status: res.status,
+        httpBody,
       });
     }
 

@@ -24,6 +24,10 @@ import {
 import {
   refreshIfExpired as refreshGoogleOAuthToken,
 } from '../../../core/services/oauth/google.js';
+import {
+  fetchClaudeCodeModels,
+} from '../../../core/services/oauth/claude-code.js';
+import { resolveClaudeCodeCreds } from '../../../core/providers/shared/oauth.js';
 import { publicProvider } from './shared/mask.js';
 import { resolveCopilotApiBase } from './shared/copilot-opts.js';
 import { refreshAllProviderModels } from '../../../core/indexer/providers/scheduled-refresh.js';
@@ -195,6 +199,15 @@ export function providersRouter(store: ProviderStore): Hono {
           headers: { Authorization: `Bearer ${cfg.api_key ?? ''}` },
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      } else if (cfg.kind === 'claude-code') {
+        const creds = await resolveClaudeCodeCreds(cfg);
+        await fetchClaudeCodeModels({
+          baseURL: creds.baseURL ?? cfg.base_url,
+          apiKey: creds.apiKey,
+          authToken: creds.authToken,
+          headers: creds.extraHeaders,
+          fetch: creds.fetch,
+        });
       } else if (cfg.kind === 'anthropic') {
         // Instantiate the adapter to validate key+baseURL; no network call is
         // cheaper than a minimal /v1/messages ping, so use that.

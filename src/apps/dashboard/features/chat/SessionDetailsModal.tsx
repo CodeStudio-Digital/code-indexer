@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { BarChart3, Check, ChevronDown, ChevronRight, Circle, ClipboardList, Copy, ListChecks, Loader2 } from 'lucide-react';
+import { BarChart3, Check, ChevronDown, ChevronRight, Circle, ClipboardList, Copy, ListChecks, Loader2, ScrollText } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
@@ -27,6 +27,26 @@ interface TodoHistoryEntry {
   args_json: string;
   created_at: string;
 }
+
+type SessionInputKind = 'system_prompt' | 'skill_content' | 'system_reminder' | 'subagent_prompt';
+
+interface SessionInputRow {
+  id: number;
+  session_id: number;
+  kind: SessionInputKind;
+  source_label: string;
+  content: string;
+  content_hash: string;
+  meta_json: string | null;
+  created_at: string;
+}
+
+const INPUT_KIND_STYLES: Record<SessionInputKind, string> = {
+  system_prompt: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+  skill_content: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+  system_reminder: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+  subagent_prompt: 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
+};
 
 interface TodoItem {
   content: string;
@@ -84,6 +104,8 @@ export function SessionDetailsModal({
   const { data: plans, loading } = useApi<CoderPlanRow[]>(plansUrl);
   const todoHistoryUrl = open && sessionId ? `/coder/sessions/${sessionId}/todo-history` : '';
   const { data: todoHistory, loading: todoHistoryLoading } = useApi<TodoHistoryEntry[]>(todoHistoryUrl);
+  const inputsUrl = open && sessionId ? `/coder/sessions/${sessionId}/inputs` : '';
+  const { data: inputs, loading: inputsLoading } = useApi<SessionInputRow[]>(inputsUrl);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -109,6 +131,14 @@ export function SessionDetailsModal({
               {todoHistory && todoHistory.length > 0 && (
                 <Badge variant="muted" className="h-4 text-[10px] ml-1">
                   {todoHistory.length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="inputs" className="gap-1.5">
+              <ScrollText className="h-3.5 w-3.5" /> {t('chat:details.inputs')}
+              {inputs && inputs.length > 0 && (
+                <Badge variant="muted" className="h-4 text-[10px] ml-1">
+                  {inputs.length}
                 </Badge>
               )}
             </TabsTrigger>
@@ -141,6 +171,18 @@ export function SessionDetailsModal({
             )}
             <div className="space-y-2">
               {todoHistory?.map((entry) => <TodoHistoryItem key={entry.id} entry={entry} />)}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="inputs" className="flex-1 overflow-y-auto mt-4">
+            {inputsLoading && <div className="text-xs text-muted-foreground">{t('common:actions.loading')}</div>}
+            {!inputsLoading && (!inputs || inputs.length === 0) && (
+              <div className="text-xs text-muted-foreground py-8 text-center">
+                {t('chat:details.noInputs')}
+              </div>
+            )}
+            <div className="space-y-2">
+              {inputs?.map((entry) => <InputItem key={entry.id} entry={entry} />)}
             </div>
           </TabsContent>
         </Tabs>
@@ -407,6 +449,162 @@ function TodoHistoryItem({ entry }: { entry: TodoHistoryEntry }) {
             ))}
           </ul>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Split a system-prompt-like body into collapsible markdown sections by H1
+ * (`# `) and H2 (`## `) headings. Returns sections in document order; the
+ * first section may be untitled (text before the first heading).
+ */
+function splitInputSections(content: string): Array<{ title: string | null; body: string }> {
+  const lines = content.split('\n');
+  const sections: Array<{ title: string | null; body: string[] }> = [{ title: null, body: [] }];
+  for (const line of lines) {
+    const m = /^(#{1,2})\s+(.+)$/.exec(line);
+    if (m) {
+      sections.push({ title: m[2].trim(), body: [] });
+    } else {
+      sections[sections.length - 1].body.push(line);
+    }
+  }
+  return sections
+    .map((s) => ({ title: s.title, body: s.body.join('\n').trim() }))
+    .filter((s) => s.title !== null || s.body.length > 0);
+}
+
+function InputSection({ title, body, defaultOpen }: { title: string | null; body: string; defaultOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  if (title === null) {
+    return body ? (
+      <pre className="text-[11px] whitespace-pre-wrap break-words font-mono bg-muted/30 rounded px-2 py-1.5 my-1">
+        {body}
+      </pre>
+    ) : null;
+  }
+  return (
+    <div className="border-t first:border-t-0 mt-1.5 pt-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-1.5 text-left text-[11px] font-semibold hover:text-foreground/80"
+      >
+        {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+        <span className="truncate">{title}</span>
+      </button>
+      {open && body && (
+        <pre className="text-[11px] whitespace-pre-wrap break-words font-mono bg-muted/30 rounded px-2 py-1.5 mt-1">
+          {body}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function InputItem({ entry }: { entry: SessionInputRow }) {
+  const { t } = useTranslation('chat');
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(entry.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const sections = splitInputSections(entry.content);
+  const previewSource = sections.find((s) => s.title)?.title ?? entry.content.split('\n').find((l) => l.trim()) ?? '';
+
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-start gap-2 px-3 py-2.5 text-left hover:bg-muted/50 transition-colors"
+      >
+        {open ? (
+          <ChevronDown className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+            <span
+              className={cn(
+                'text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded',
+                INPUT_KIND_STYLES[entry.kind],
+              )}
+            >
+              {t(`details.inputKind.${entry.kind}`)}
+            </span>
+            <span className="text-[11px] font-mono text-muted-foreground truncate">{entry.source_label}</span>
+            <span className="text-[11px] text-muted-foreground">{formatRelativeTime(entry.created_at)}</span>
+          </div>
+          {!open && previewSource && (
+            <div className="text-xs text-foreground/80 truncate">{previewSource}</div>
+          )}
+        </div>
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 border-t bg-muted/20">
+          <div className="flex justify-end pt-2">
+            <button
+              type="button"
+              onClick={onCopy}
+              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground rounded px-1.5 py-0.5 hover:bg-muted"
+              aria-label="Copy raw input"
+            >
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              {copied ? t('details.copiedInput') : t('details.copyInput')}
+            </button>
+          </div>
+          <div className="mt-1">
+            {sections.map((s, i) => (
+              <InputSection
+                key={`${entry.id}-${i}`}
+                title={s.title}
+                body={s.body}
+                defaultOpen={sections.length <= 3}
+              />
+            ))}
+          </div>
+          {entry.meta_json && <InputMeta json={entry.meta_json} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InputMeta({ json }: { json: string }) {
+  let pretty = json;
+  try {
+    pretty = JSON.stringify(JSON.parse(json), null, 2);
+  } catch {
+    /* keep raw */
+  }
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-t mt-1.5 pt-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-1.5 text-left text-[11px] font-semibold text-muted-foreground hover:text-foreground"
+      >
+        {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+        <span>meta</span>
+      </button>
+      {open && (
+        <pre className="text-[11px] whitespace-pre-wrap break-words font-mono bg-muted/30 rounded px-2 py-1.5 mt-1">
+          {pretty}
+        </pre>
       )}
     </div>
   );

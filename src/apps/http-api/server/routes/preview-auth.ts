@@ -30,6 +30,35 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 export const PREVIEW_COOKIE = 'mcp_preview';
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * Long-lived TTL for tokens that get injected into QA-enabled sandbox
+ * containers (v4.3). The dashboard's short cookie is fine because the
+ * dashboard re-mints on every poll; the QA agent has no equivalent
+ * refresh loop, so we need a TTL that comfortably outlives an idle
+ * session. `syncManagedEnvs` re-mints when the existing token has
+ * <7 days left, so 30d gives plenty of slack.
+ *
+ * Operator override: `MCP_QA_PREVIEW_TTL_MS` (milliseconds).
+ */
+export const QA_PREVIEW_TTL_MS =
+  Number(process.env.MCP_QA_PREVIEW_TTL_MS) || 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Pure: parse the `exp` epoch (ms) out of a minted cookie value.
+ * Returns `null` for malformed values. Used by `syncManagedEnvs` to
+ * decide whether the persisted token still has enough headroom or
+ * needs a re-mint — the verifier itself rejects expired tokens, but
+ * we want to refresh well before that point so an in-flight Playwright
+ * run never hits a 401.
+ */
+export function parseTokenExpiry(value: string | undefined): number | null {
+  if (!value) return null;
+  const parts = value.split('.');
+  if (parts.length !== 3) return null;
+  const exp = Number(parts[1]);
+  return Number.isFinite(exp) ? exp : null;
+}
+
 let cachedSecret: Buffer | null = null;
 function getSecret(): Buffer {
   if (cachedSecret) return cachedSecret;

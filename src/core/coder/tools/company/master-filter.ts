@@ -64,6 +64,10 @@ const COMPANY_TOOL_PREFIXES = [
   'read_board',
   'set_agent_status',
   'kanban_',
+  // Design System Creator tools — master needs `ds_publish_version` and
+  // `ds_set_version_status` to finish a round; without this prefix they
+  // were stripped here, so the master never published anything.
+  'ds_',
 ];
 
 function isCompanyTool(name: string): boolean {

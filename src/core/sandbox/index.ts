@@ -43,6 +43,7 @@ export type { NetworkInfo, NetworkControllerOptions } from './network-controller
 
 export { resolveDriver, setDriverForTests } from './drivers/driver-factory.js';
 export type { SandboxRuntimeChoice, ResolveDriverOptions } from './drivers/driver-factory.js';
+export { getResolvedRuntime } from './drivers/driver-factory.js';
 
 export { DockerDriver } from './drivers/docker-driver.js';
 export { PodmanDriver } from './drivers/podman-driver.js';

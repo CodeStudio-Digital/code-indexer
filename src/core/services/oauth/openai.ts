@@ -48,16 +48,14 @@ export const CHATGPT_CODEX_BASE_URL =
   process.env.CHATGPT_CODEX_BASE_URL ?? 'https://chatgpt.com/backend-api/codex';
 
 /**
- * Hardcoded seed list. The ChatGPT Codex backend doesn't expose a public
- * /models endpoint, so on connect we preload a known-good list. Users can
- * add more manually from the admin UI.
- */
-/**
- * Hardcoded allowlist matching opencode's Codex plugin
- * (packages/opencode/src/plugin/codex.ts). The ChatGPT Codex backend does
- * NOT expose /models to OAuth tokens — both opencode and the official
- * Codex CLI hardcode the list. Update this array as OpenAI ships new
- * Codex-capable models.
+ * Fallback seed list used by the discovery pipeline when the live
+ * `/models` call fails (network error, 5xx, timeout, missing creds).
+ *
+ * The Codex backend DOES expose `/models` to OAuth tokens (see
+ * `src/apps/http-api/admin/model-discovery/chatgpt.ts` and the upstream
+ * implementation in `codex-rs/model-provider/src/models_endpoint.rs`).
+ * This array exists only so a flaky upstream doesn't leave the user
+ * with an empty catalog after a refresh.
  */
 export const CHATGPT_SEED_MODELS: { model_id: string; name: string }[] = [
   { model_id: 'gpt-5.4', name: 'GPT-5.4' },
@@ -215,7 +213,7 @@ export async function startOAuthFlow(): Promise<StartFlowResult> {
       code_challenge_method: 'S256',
       id_token_add_organizations: 'true',
       codex_cli_simplified_flow: 'true',
-      originator: 'mcp-code-indexer',
+      originator: 'codex_cli_rs',
     }).toString();
 
   return { authorize_url, state };

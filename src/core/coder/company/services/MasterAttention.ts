@@ -24,7 +24,13 @@
  * `hasRunningSubordinates()` so the final "all done" branch still fires.
  */
 
-export type AttentionKind = 'question' | 'plan' | 'tasks' | 'finished';
+/**
+ * V2 adds `inbox_answered` so the InboxQueue can wake a sender that
+ * called `send_to_agent(wait=true)`. The signal carries the sender's
+ * own `agentRunId` (the run waiting on the answer) — listeners filter
+ * by that id to ignore other agents' inbox traffic.
+ */
+export type AttentionKind = 'question' | 'plan' | 'tasks' | 'finished' | 'inbox_answered';
 
 export interface AttentionEvent {
   kind: AttentionKind;

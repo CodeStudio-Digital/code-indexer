@@ -3,6 +3,7 @@ import type { CoderTool, ToolResult, JsonSchema } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
 import type { ChatProvider } from '../providers/adapter.js';
 import type { AgentMessage } from '../core/messages.js';
+import type { SessionStore } from '../sessions/store.js';
 import { runSubagent, EXPLORE_ALLOWLIST, extractLastAssistantText, runParallelAgents } from './implement-subagent.js';
 
 const EXPLORE_SYSTEM_PROMPT = `You are the EXPLORE subagent. A parent coder agent delegated a focused investigation to you.
@@ -45,6 +46,11 @@ export interface SubagentDeps {
    * will create its own ToolRegistry containing only the allowlisted subset.
    */
   parentTools: CoderTool[];
+  /**
+   * Optional — when present, every sub-agent system prompt is mirrored into
+   * `coder_session_inputs` on the parent session for the Input tab.
+   */
+  sessionStore?: SessionStore;
 }
 
 const subagentSchema: JsonSchema = {
@@ -98,8 +104,27 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
         { role: 'user', content: [{ type: 'text', text: task }] },
       ];
 
+      const parentSessionId = ctx.runner?.sessionId;
+      console.log(
+        `[coder s=${parentSessionId ?? '?'}] spawn_subagent: type=${type} max_turns=${maxTurns}`,
+      );
+
+      if (deps.sessionStore && parentSessionId != null) {
+        try {
+          deps.sessionStore.recordSessionInput({
+            session_id: parentSessionId,
+            kind: 'subagent_prompt',
+            source_label: 'subagent:explore',
+            content: EXPLORE_SYSTEM_PROMPT,
+            meta: { task, max_turns: maxTurns },
+          });
+        } catch {
+          // best-effort
+        }
+      }
+
       const result = await runSubagent(
-        { provider: deps.provider, tools: deps.parentTools, ctx },
+        { provider: deps.provider, tools: deps.parentTools, ctx, sessionId: parentSessionId },
         {
           systemPrompt: EXPLORE_SYSTEM_PROMPT,
           allowlist: EXPLORE_ALLOWLIST,
@@ -195,6 +220,10 @@ export function buildSpawnAgentsTool(deps: SubagentDeps): CoderTool {
       }
 
       const groupId = randomUUID().slice(0, 8);
+      const parentSessionId = ctx.runner?.sessionId;
+      console.log(
+        `[coder s=${parentSessionId ?? '?'}] spawn_agents: ${agentSpecs.length} parallel — labels=[${agentSpecs.map((a) => a.label).join(', ')}] group=${groupId}`,
+      );
 
       // Emit group start so the UI can create the parallel agents container.
       ctx.runner?.emit('agents_group_start', {
@@ -202,8 +231,26 @@ export function buildSpawnAgentsTool(deps: SubagentDeps): CoderTool {
         agents: agentSpecs.map((a, i) => ({ index: i, label: a.label })),
       });
 
+      if (deps.sessionStore && parentSessionId != null) {
+        try {
+          deps.sessionStore.recordSessionInput({
+            session_id: parentSessionId,
+            kind: 'subagent_prompt',
+            source_label: `subagent:explore-parallel:${groupId}`,
+            content: EXPLORE_SYSTEM_PROMPT,
+            meta: {
+              group_id: groupId,
+              agent_count: agentSpecs.length,
+              labels: agentSpecs.map((a) => a.label),
+            },
+          });
+        } catch {
+          // best-effort
+        }
+      }
+
       const { results, totalUsage } = await runParallelAgents(
-        { provider: deps.provider, tools: deps.parentTools, ctx },
+        { provider: deps.provider, tools: deps.parentTools, ctx, sessionId: parentSessionId },
         agentSpecs,
         EXPLORE_SYSTEM_PROMPT,
         EXPLORE_ALLOWLIST,

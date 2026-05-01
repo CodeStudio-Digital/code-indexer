@@ -94,6 +94,21 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
     runner.on('context_status', (payload) => {
       publish(bus, 'context_status', payload);
     });
+    // Lifecycle events (Phase 1 hardening): structured signals that fire once
+    // per run / turn / batch / safety-block. Wired here so the dashboard and
+    // future golden-test transcripts see the same payload the runner emits.
+    runner.on('run_started', (payload) => {
+      publish(bus, 'run_started', payload);
+    });
+    runner.on('provider_call', (payload) => {
+      publish(bus, 'provider_call', payload);
+    });
+    runner.on('tool_batch', (payload) => {
+      publish(bus, 'tool_batch', payload);
+    });
+    runner.on('blocked', (payload) => {
+      publish(bus, 'blocked', payload);
+    });
     runner.on('done', (reason, error) => {
       if (error) {
         // Surface provider/runner errors to the server log. The dashboard SSE

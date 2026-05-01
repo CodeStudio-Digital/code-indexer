@@ -16,7 +16,14 @@
  */
 import { loadPrompt, interpolate } from '../prompts/loader.js';
 import { runSystemPromptHook } from './hooks.js';
-export type ProviderFamily = 'anthropic' | 'openai' | 'zai' | 'gemini' | 'deepseek' | 'generic';
+export type ProviderFamily =
+  | 'anthropic'
+  | 'claude-code'
+  | 'openai'
+  | 'zai'
+  | 'gemini'
+  | 'deepseek'
+  | 'generic';
 
 export interface PromptContext {
   projectName: string;
@@ -49,6 +56,7 @@ export interface PromptContext {
 function providerPreamble(family: ProviderFamily): string {
   switch (family) {
     case 'anthropic':
+    case 'claude-code':
       // Claude already obeys XML tags and handles long contexts — keep it brief.
       return `<role>Coding agent (Claude family).</role>
 <formatting>
@@ -163,12 +171,18 @@ function tierHint(
   profile?: 'bootstrap' | 'navigate' | 'full',
   customTiers?: Array<{ tier: string; displayName: string; toolCount: number }>,
 ): string {
-  // Build the custom tiers block (shared across all profiles when custom tiers exist)
-  const customBlock = customTiers && customTiers.length > 0
+  // Build the custom tiers block (shared across all profiles when custom tiers exist).
+  // Sort lexicographically by tier name so the block is byte-identical across
+  // turns even if MCP server registration order varies — critical for prompt
+  // caching (the block is part of the cached prefix).
+  const sortedTiers = customTiers
+    ? [...customTiers].sort((a, b) => a.tier.localeCompare(b.tier))
+    : undefined;
+  const customBlock = sortedTiers && sortedTiers.length > 0
     ? '\n\n## External tool groups (hidden, on-demand)\n' +
       'The following external MCP server tool groups are available but HIDDEN. ' +
       'Call `expand_toolset({tier: "<name>"})` to unlock:\n' +
-      customTiers.map((t) => `- "${t.tier}" (${t.toolCount} tools) — ${t.displayName}`).join('\n') +
+      sortedTiers.map((t) => `- "${t.tier}" (${t.toolCount} tools) — ${t.displayName}`).join('\n') +
       '\nUnlock ONLY when your task requires them. They stay active for the rest of the session.\n'
     : '';
 

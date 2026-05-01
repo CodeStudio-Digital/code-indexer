@@ -91,12 +91,20 @@ export function openaiOAuthRouter(store: ProviderStore): Hono {
         extra: { id_token: result.id_token },
       });
 
-      // Try live discovery first — the Codex backend does expose /models
-      // on the v1 path for OAuth clients. Fall back to the hardcoded seed
-      // if the endpoint is unavailable (network hiccup, beta churn, etc.).
-      let models = await discoverModels(store, store.getProvider(providerId)!).catch(
-        () => [] as UpsertModelInput[]
-      );
+      // Try live discovery first. discoverChatgpt already falls back to
+      // CHATGPT_SEED_MODELS internally on network/HTTP failures, so a
+      // returned empty list here means the upstream said "no models".
+      let models: UpsertModelInput[] = [];
+      let etag: string | null = null;
+      try {
+        const result = await discoverModels(store, store.getProvider(providerId)!);
+        if (!result.notModified) {
+          models = result.models;
+          etag = result.etag;
+        }
+      } catch {
+        models = [];
+      }
       if (models.length === 0) {
         models = CHATGPT_SEED_MODELS.map((m) => ({
           model_id: m.model_id,
@@ -105,6 +113,7 @@ export function openaiOAuthRouter(store: ProviderStore): Hono {
         }));
       }
       store.replaceModelsFromSource(providerId, 'live', models);
+      store.setProviderCatalogEtag(providerId, etag);
 
       return c.json({
         status: 'authorized',

@@ -265,6 +265,168 @@ export const submitTasksToMaster: CoderTool = {
   },
 };
 
+// ─── send_to_agent ────────────────────────────────────────────────
+
+const SEND_TO_AGENT_DESC =
+  'Send a message to another subordinate via the persistent inbox queue.\n' +
+  'When the target is busy, the message sits as `pending` and is delivered automatically when they finish their current task. ' +
+  'Use kind="question" with wait=true to block until the target answers; kind="notify" with wait=false is fire-and-forget.\n' +
+  "USE: when you need a peer's domain knowledge and the master would just forward you anyway.\n" +
+  "DON'T: use for binary decisions — that's the master's job (ask_master).\n" +
+  "DON'T: use to coordinate tasks the master already orchestrated via the kanban — comment on the card instead.";
+
+export const sendToAgent: CoderTool = {
+  name: 'send_to_agent',
+  description: maybeTerse(SEND_TO_AGENT_DESC),
+  source: 'native',
+  parameters: {
+    type: 'object',
+    properties: {
+      target_role: {
+        type: 'string',
+        description: 'Recipient role (e.g. "backend"). The inbox picks the run with the smallest backlog.',
+      },
+      target_agent_run_id: {
+        type: 'number',
+        description: 'Optional: pin to a specific agent run id when several agents share a role.',
+      },
+      question: {
+        type: 'string',
+        description: 'Body of the message. For kind="question" frame it as a single, answerable question.',
+      },
+      kind: {
+        type: 'string',
+        enum: ['question', 'notify'],
+        description: '"question" expects an answer; "notify" is fire-and-forget. Default: "question".',
+      },
+      wait: {
+        type: 'boolean',
+        description: 'When true (default for question), your session BLOCKS until target answers via respond_to_inbox.',
+      },
+    },
+    required: ['question'],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const body = String(args.question ?? '').trim();
+    if (!body) return err('question cannot be empty');
+    const kind = (args.kind as 'question' | 'notify' | undefined) ?? 'question';
+    const wait = args.wait == null ? kind === 'question' : Boolean(args.wait);
+    const targetRole = args.target_role as string | undefined;
+    const targetAgentRunId = args.target_agent_run_id as number | undefined;
+
+    const company = ctx.companyContext;
+    if (!company) return err('send_to_agent requires a company orchestrator context');
+    if (company.agentRunId == null) return err('send_to_agent requires the caller to be a registered subordinate');
+    if (!targetRole && typeof targetAgentRunId !== 'number') {
+      return err('Provide either target_role or target_agent_run_id');
+    }
+
+    try {
+      const sent = company.orchestrator.inboxSend({
+        fromAgentRunId: company.agentRunId,
+        fromRole: company.agentRole,
+        toRole: targetRole,
+        toAgentRunId: targetAgentRunId,
+        kind,
+        body,
+        wait,
+      });
+
+      if (!wait || !sent.waitToken) {
+        const target = targetRole ?? `run=${targetAgentRunId}`;
+        return ok(
+          `Message ${sent.message.id} queued for @${target} ` +
+          `(${sent.deliveredImmediately ? 'delivered' : 'pending'}).`,
+        );
+      }
+
+      const answer = await company.orchestrator.inboxWait(sent.waitToken);
+      return ok(`@${targetRole ?? `run=${targetAgentRunId}`} answered: ${answer}`);
+    } catch (e) {
+      return err(`send_to_agent failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  },
+};
+
+// ─── respond_to_inbox ────────────────────────────────────────────
+
+export const respondToInbox: CoderTool = {
+  name: 'respond_to_inbox',
+  description:
+    'Answer an inbox message addressed to you (`message_id` is included in the prompt the inbox injected). ' +
+    'Use this when a peer asked you a question via send_to_agent. The sender unblocks immediately.',
+  source: 'native',
+  parameters: {
+    type: 'object',
+    properties: {
+      message_id: { type: 'number', description: 'Id of the inbox message to answer (printed in the [INBOX ...] header).' },
+      answer: { type: 'string', description: 'Your answer. Plain text — keep it focused.' },
+    },
+    required: ['message_id', 'answer'],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const messageId = Number(args.message_id);
+    const answer = String(args.answer ?? '').trim();
+    if (!Number.isFinite(messageId)) return err('message_id must be a number');
+    if (!answer) return err('answer cannot be empty');
+    const company = ctx.companyContext;
+    if (!company) return err('respond_to_inbox requires a company orchestrator context');
+    const ok2 = company.orchestrator.inboxRespond(messageId, answer);
+    if (!ok2) return err(`Message ${messageId} is not answerable (not found or already terminal).`);
+    return ok(`Answered inbox message ${messageId}.`);
+  },
+};
+
+// ─── read_my_inbox ──────────────────────────────────────────────
+
+export const readMyInbox: CoderTool = {
+  name: 'read_my_inbox',
+  description:
+    'List inbox messages addressed to you. Mostly a debug helper — incoming messages are normally injected as a prompt automatically.',
+  source: 'native',
+  parameters: {
+    type: 'object',
+    properties: {
+      status: {
+        type: 'string',
+        enum: ['pending', 'delivered', 'answered', 'cancelled', 'expired'],
+        description: 'Filter by status.',
+      },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const company = ctx.companyContext;
+    if (!company) return err('read_my_inbox requires a company orchestrator context');
+    if (company.agentRunId == null) return err('read_my_inbox requires the caller to be a registered subordinate');
+    const status = args.status as
+      | 'pending'
+      | 'delivered'
+      | 'answered'
+      | 'cancelled'
+      | 'expired'
+      | undefined;
+    const messages = company.orchestrator.inboxList({
+      toAgentRunId: company.agentRunId,
+      status,
+      limit: 50,
+    });
+    if (messages.length === 0) return ok('Inbox is empty.');
+    const compact = messages.map((m) => ({
+      id: m.id,
+      from: `@${m.from_role}`,
+      kind: m.kind,
+      status: m.status,
+      preview: m.body.slice(0, 160),
+      created_at: m.created_at,
+    }));
+    return ok(JSON.stringify(compact, null, 2));
+  },
+};
+
 // ─── Export ───────────────────────────────────────────────────────
 
 /**
@@ -272,5 +434,12 @@ export const submitTasksToMaster: CoderTool = {
  * These replace ask_user, submit_plan, submit_tasks for company subordinates.
  */
 export function buildSubordinateTools(): CoderTool[] {
-  return [askMaster, submitPlanToMaster, submitTasksToMaster];
+  return [
+    askMaster,
+    submitPlanToMaster,
+    submitTasksToMaster,
+    sendToAgent,
+    respondToInbox,
+    readMyInbox,
+  ];
 }

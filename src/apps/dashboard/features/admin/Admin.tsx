@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/button.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
 import { BedrockCredentialsDialog } from './BedrockCredentialsDialog.js';
 import { ChatgptConnectionDialog } from './ChatgptConnectionDialog.js';
+import { ClaudeCodeConnectionDialog } from './ClaudeCodeConnectionDialog.js';
 import { CopilotConnectionDialog } from './CopilotConnectionDialog.js';
 import { GoogleConnectionDialog } from './GoogleConnectionDialog.js';
 import { EditDialog } from './EditDialog.js';
@@ -16,6 +17,8 @@ import { HydePanel } from './HydePanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
 import { AuthPanel } from './AuthPanel.js';
 import { GeneralAiPanel } from './GeneralAiPanel.js';
+import { ChromeServicePanel } from './ChromeServicePanel.js';
+import { VerdaccioPanel } from './VerdaccioPanel.js';
 import { useAdminProviders } from './hooks/useAdminProviders.js';
 import type { AdminProvider } from './types.js';
 
@@ -42,6 +45,7 @@ export default function Admin() {
   const [editing, setEditing] = useState<Partial<AdminProvider> | null>(null);
   const [bedrockOpen, setBedrockOpen] = useState(false);
   const [copilotOpen, setCopilotOpen] = useState(false);
+  const [claudeCodeOpen, setClaudeCodeOpen] = useState(false);
   const [chatgptOpen, setChatgptOpen] = useState(false);
   const [googleOpen, setGoogleOpen] = useState(false);
 
@@ -71,6 +75,8 @@ export default function Admin() {
           <TabsTrigger value="mcp-servers">{t('admin:tabs.mcpServers')}</TabsTrigger>
           <TabsTrigger value="skills">{t('admin:tabs.skills')}</TabsTrigger>
           <TabsTrigger value="ai-geral">IA Geral</TabsTrigger>
+          <TabsTrigger value="chrome-service">Chrome Service</TabsTrigger>
+          <TabsTrigger value="verdaccio">Verdaccio</TabsTrigger>
           <TabsTrigger value="auth">{t('admin:tabs.auth')}</TabsTrigger>
         </TabsList>
 
@@ -78,6 +84,9 @@ export default function Admin() {
           <div className="flex items-center justify-end gap-2">
             <Button variant="outline" onClick={() => setCopilotOpen(true)}>
               {t('admin:connectCopilot')}
+            </Button>
+            <Button variant="outline" onClick={() => setClaudeCodeOpen(true)}>
+              {t('admin:connectClaudeCode')}
             </Button>
             <Button variant="outline" onClick={() => setGoogleOpen(true)}>
               {t('admin:connectGoogle')}
@@ -160,6 +169,14 @@ export default function Admin() {
           <GeneralAiPanel />
         </TabsContent>
 
+        <TabsContent value="chrome-service">
+          <ChromeServicePanel />
+        </TabsContent>
+
+        <TabsContent value="verdaccio">
+          <VerdaccioPanel />
+        </TabsContent>
+
         <TabsContent value="auth">
           <AuthPanel />
         </TabsContent>
@@ -184,6 +201,12 @@ export default function Admin() {
       {chatgptOpen && (
         <ChatgptConnectionDialog
           onClose={() => setChatgptOpen(false)}
+          onConnected={handleConnected}
+        />
+      )}
+      {claudeCodeOpen && (
+        <ClaudeCodeConnectionDialog
+          onClose={() => setClaudeCodeOpen(false)}
           onConnected={handleConnected}
         />
       )}

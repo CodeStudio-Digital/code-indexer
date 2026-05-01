@@ -32,12 +32,15 @@ class FakeDriver implements ISandboxDriver {
   async destroy(_: string) {
     this.calls.push('destroy');
   }
-  async exec(_: string, command: string, __: SandboxExecOptions): Promise<SandboxExecResult> {
+  lastStdin: string | undefined;
+  async exec(_: string, command: string, options: SandboxExecOptions): Promise<SandboxExecResult> {
     this.calls.push(`exec:${command}`);
+    this.lastStdin = options.stdin;
     return { stdout: `ran ${command}`, stderr: '', exitCode: 0, timedOut: false };
   }
-  async run(_: string, program: string, args: string[], __: SandboxExecOptions): Promise<SandboxExecResult> {
+  async run(_: string, program: string, args: string[], options: SandboxExecOptions): Promise<SandboxExecResult> {
     this.calls.push(`run:${program} ${args.join(' ')}`);
+    this.lastStdin = options.stdin;
     return { stdout: `ran ${program}`, stderr: '', exitCode: 0, timedOut: false };
   }
   async writeFile(_: string, absPath: string, data: string): Promise<void> {
@@ -176,6 +179,32 @@ describe('SandboxShellAdapter', () => {
     const r = await shell.run('git', ['status', '--short'], { cwd: '/app' });
     expect(r.exitCode).toBe(0);
     expect(driver.calls).toContain('run:git status --short');
+  });
+
+  it('forwards stdin through to the driver on exec', async () => {
+    const driver = new FakeDriver();
+    const shell = new SandboxShellAdapter({
+      driver,
+      containerId: 'fake-container',
+      defaultCwd: '/app',
+    });
+    await shell.exec('python -', {
+      cwd: '/app',
+      timeoutMs: 5_000,
+      stdin: "print('hi')",
+    });
+    expect(driver.lastStdin).toBe("print('hi')");
+  });
+
+  it('omits stdin when none is supplied', async () => {
+    const driver = new FakeDriver();
+    const shell = new SandboxShellAdapter({
+      driver,
+      containerId: 'fake-container',
+      defaultCwd: '/app',
+    });
+    await shell.exec('echo hi', { cwd: '/app', timeoutMs: 5_000 });
+    expect(driver.lastStdin).toBeUndefined();
   });
 });
 

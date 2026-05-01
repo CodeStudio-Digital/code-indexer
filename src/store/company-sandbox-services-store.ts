@@ -115,6 +115,70 @@ export class CompanySandboxServicesStore {
     return this.get(input.session_id, input.service_id)!;
   }
 
+  /**
+   * Defensive cleanup: a previous provisioning attempt may have left a
+   * row pointing at this `container_id` in a non-destroyed state when
+   * the spawn crashed between the INSERT and the success UPDATE. The
+   * partial unique index `idx_company_sandbox_services_container`
+   * (migration 035) only enforces uniqueness on non-destroyed rows, so
+   * marking the stragglers `destroyed` reopens the slot for the fresh
+   * upsert.
+   *
+   * The `excludeSessionId`/`excludeServiceId` pair is the row the
+   * caller is *about* to upsert — we never demote it because the
+   * upsert itself owns its lifecycle.
+   */
+  releaseStaleContainerId(
+    containerId: string,
+    excludeSessionId: number,
+    excludeServiceId: string,
+  ): number {
+    const r = this.db
+      .prepare(
+        `UPDATE company_sandbox_services
+            SET status = 'destroyed',
+                updated_at = datetime('now')
+          WHERE container_id = ?
+            AND status != 'destroyed'
+            AND NOT (session_id = ? AND service_id = ?)`,
+      )
+      .run(containerId, excludeSessionId, excludeServiceId);
+    return r.changes ?? 0;
+  }
+
+  /**
+   * Same idea as `releaseStaleContainerId` but for the
+   * `idx_company_sandbox_services_port` partial unique index. When the
+   * port allocator hands out a host port that an old, non-destroyed
+   * row still holds (typically because a previous container died
+   * without a clean teardown), the upsert below would fail with
+   * `UNIQUE constraint failed: company_sandbox_services.host_port`.
+   *
+   * Marking the straggler `destroyed` is safe — it's not the row the
+   * caller is about to upsert, and "destroyed" is the convention for
+   * "this row is no longer alive" everywhere else in the codebase.
+   * The exclude pair protects the caller's own (session, service)
+   * row, so re-provisioning the same service on the same port stays
+   * a vanilla upsert.
+   */
+  releaseStaleHostPort(
+    hostPort: number,
+    excludeSessionId: number,
+    excludeServiceId: string,
+  ): number {
+    const r = this.db
+      .prepare(
+        `UPDATE company_sandbox_services
+            SET status = 'destroyed',
+                updated_at = datetime('now')
+          WHERE host_port = ?
+            AND status != 'destroyed'
+            AND NOT (session_id = ? AND service_id = ?)`,
+      )
+      .run(hostPort, excludeSessionId, excludeServiceId);
+    return r.changes ?? 0;
+  }
+
   patch(
     sessionId: number,
     serviceId: string,

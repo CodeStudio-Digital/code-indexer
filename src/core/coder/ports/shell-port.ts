@@ -51,6 +51,17 @@ export interface ShellExecOptions {
   maxOutputBytes?: number;
   /** Optional env override. Defaults to `process.env` in the local adapter. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Optional payload written to the child's stdin before the stream is
+   * closed. Use this to feed multi-line code to interpreters (e.g.
+   * `python -`) instead of embedding it via shell quoting — quoting
+   * rules differ between cmd / bash / PowerShell / sh-in-container, and
+   * stdin works uniformly across all of them.
+   *
+   * EPIPE on commands that don't read stdin is swallowed: writing then
+   * `end()`ing into a closed stdin is a no-op, not a failure.
+   */
+  stdin?: string;
 }
 
 export interface ShellRunOptions {
@@ -105,6 +116,7 @@ export class LocalShellAdapter implements IShellPort {
       shell: isWin ? true : '/bin/bash',
       env: env ?? process.env,
     });
+    writeStdin(child, options.stdin);
     return this.collectStreaming(child, options);
   }
 
@@ -118,6 +130,7 @@ export class LocalShellAdapter implements IShellPort {
       cwd,
       env: env ?? process.env,
     });
+    writeStdin(child, options.stdin);
     return this.collectStreaming(child, options);
   }
 
@@ -188,6 +201,21 @@ export class LocalShellAdapter implements IShellPort {
       timedOut: false,
     };
   }
+}
+
+/**
+ * Feed `payload` into the child's stdin and close it. EPIPE on `write`
+ * happens when the child exits before reading (e.g. `echo hi` ignores
+ * stdin) — it's harmless, swallow it. The `end()` call signals EOF so
+ * interpreters running `python -` / `node -` know the script is done.
+ */
+function writeStdin(child: ReturnType<typeof spawn>, payload: string | undefined): void {
+  if (payload === undefined) return;
+  if (!child.stdin) return;
+  child.stdin.on('error', (e: NodeJS.ErrnoException) => {
+    if (e.code === 'EPIPE') return;
+  });
+  child.stdin.end(payload);
 }
 
 let defaultShell: IShellPort | null = null;

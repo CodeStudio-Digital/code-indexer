@@ -7,7 +7,12 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { cleanupSessionPersistence, getSandboxManager } from '../../../../../core/sandbox/index.js';
 import { getLocalProcessManager } from '../../../../../core/sandbox/local-process/LocalProcessManager.js';
-import { BUILDER_STACKS, type BuilderStack } from '../../../../../core/sandbox/types.js';
+import {
+  BUILDER_STACKS,
+  PROVISIONABLE_STACKS,
+  type BuilderStack,
+  type ProvisionableStack,
+} from '../../../../../core/sandbox/types.js';
 import { StackSnapshotSeeder } from '../../../../../core/coder/company/services/stack-snapshot-seeder.js';
 import { sandboxArchivePath } from '../../../../../core/coder/company/services/SandboxService.js';
 import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
@@ -107,6 +112,17 @@ function validateAllowedModels(
 const BUILDER_STACKS_SET: ReadonlySet<string> = new Set(BUILDER_STACKS);
 function isBuilderStack(s: unknown): s is BuilderStack {
   return typeof s === 'string' && BUILDER_STACKS_SET.has(s);
+}
+const PROVISIONABLE_STACKS_SET: ReadonlySet<string> = new Set(PROVISIONABLE_STACKS);
+/**
+ * Permissive variant of {@link isBuilderStack} used by the sandbox
+ * lifecycle routes (GET/POST /sandbox, restart-dev, logs). Accepts the
+ * internal stacks (`'node-only'`) that aren't user-pickable but still
+ * back real containers — without this, DS sessions can't have their
+ * sandbox inspected or re-provisioned via the dashboard / API.
+ */
+function isProvisionableStack(s: unknown): s is ProvisionableStack {
+  return typeof s === 'string' && PROVISIONABLE_STACKS_SET.has(s);
 }
 // Lightweight sanity validation. We don't parse the units — Podman/Docker
 // will reject `"pancakes"` at run time with a clear error. The point here
@@ -213,6 +229,14 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       ...full,
       projects: enrichedProjects,
     });
+  });
+
+  app.post('/api/company/sessions/:id/duplicate', (c) => {
+    const id = parseIdParam(c);
+    const source = companyStore.getCompanySession(id);
+    if (!source) return notFound(c);
+    const newSession = companyStore.duplicateCompanySession(id, `${source.name} (cópia)`);
+    return c.json({ session: newSession }, 201);
   });
 
   app.post('/api/company/sessions', async (c) => {
@@ -424,7 +448,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
 
-    let stack: BuilderStack | null = null;
+    let stack: ProvisionableStack | null = null;
     // Extract limits alongside stack in a single JSON parse. Without
     // this, the eager-provision endpoint creates the container with
     // process defaults (1g/1/256), and the later idempotent call from
@@ -440,7 +464,11 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         };
       };
       const requested = cfg.builder?.stack;
-      if (isBuilderStack(requested)) stack = requested;
+      // `isProvisionableStack` (vs `isBuilderStack`) — DS sessions use
+      // `'node-only'` which is registered as a scaffolder but kept out
+      // of the user-facing builder picker. The provision route must
+      // accept it so DS sessions can have their container restarted.
+      if (isProvisionableStack(requested)) stack = requested;
       if (cfg.builder?.limits) limits = cfg.builder.limits;
     } catch {
       /* treat as non-builder */
@@ -654,11 +682,11 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     const id = parseIdParam(c);
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
-    let stack: BuilderStack | null = null;
+    let stack: ProvisionableStack | null = null;
     try {
       const cfg = JSON.parse(session.config_json || '{}') as { builder?: { stack?: string } };
       const requested = cfg.builder?.stack;
-      if (isBuilderStack(requested)) stack = requested;
+      if (isProvisionableStack(requested)) stack = requested;
     } catch {
       // Legacy sessions have arbitrary config_json — treat as non-builder.
     }

@@ -1,5 +1,6 @@
 import type { ProviderDefinition } from './types.js';
 import { anthropic } from './definitions/anthropic.js';
+import { claudeCode } from './definitions/claude-code.js';
 import { openai } from './definitions/openai.js';
 import { deepseek } from './definitions/deepseek.js';
 import { gemini } from './definitions/gemini.js';
@@ -28,6 +29,7 @@ import { googleOAuth } from './definitions/google-oauth.js';
  */
 const ALL_DEFINITIONS: ProviderDefinition[] = [
   anthropic,
+  claudeCode,
   openai,
   deepseek,
   zai,

@@ -62,15 +62,26 @@ export function modelsRouter(store: ProviderStore): Hono {
   /**
    * POST /providers/:id/models/refresh — triggers live discovery and
    * replaces `source='live'` rows in provider_models. Manual rows survive.
+   *
+   * For providers that support catalog ETag (ChatGPT/Codex), passes the
+   * stored ETag via `If-None-Match`. A 304 response short-circuits the
+   * write — existing rows are left as-is and `notModified: true` is
+   * returned so the UI can render "no changes" state.
    */
   app.post('/providers/:id/models/refresh', async (c) => {
     const cfg = store.getProvider(c.req.param('id'));
     if (!cfg) return c.json({ error: 'not found' }, 404);
 
     try {
-      const live = await discoverModels(store, cfg);
-      store.replaceModelsFromSource(cfg.id, 'live', live);
-      return c.json({ ok: true, count: live.length });
+      const previousEtag = store.getProviderCatalogEtag(cfg.id);
+      const result = await discoverModels(store, cfg, previousEtag);
+      if (result.notModified) {
+        const current = store.listModels(cfg.id).filter((m) => m.source === 'live').length;
+        return c.json({ ok: true, count: current, notModified: true });
+      }
+      store.replaceModelsFromSource(cfg.id, 'live', result.models);
+      store.setProviderCatalogEtag(cfg.id, result.etag);
+      return c.json({ ok: true, count: result.models.length, notModified: false });
     } catch (e) {
       return c.json({ ok: false, error: (e as Error).message }, 500);
     }

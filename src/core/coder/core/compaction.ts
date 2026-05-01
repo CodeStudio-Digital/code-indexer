@@ -41,19 +41,51 @@
 import type { AgentMessage, ContentBlock } from './messages.js';
 
 /**
- * Below this char total, auto-compaction is a no-op. Default 20k matches
- * opencode's PRUNE_MINIMUM — small enough that normal sessions never trigger
- * compaction, large enough to avoid thrashing on short exploratory runs.
+ * Below this char total, auto-compaction is a no-op. Default 60k — fallback
+ * for models without a known context_window. Use deriveCompactionLimits() to
+ * get model-aware thresholds when context_window is available.
  */
 export const PRUNE_MINIMUM = Number(process.env.CODER_PRUNE_MINIMUM ?? 60_000);
 
 /**
  * How many chars of the most-recent history are guaranteed to survive
- * compaction verbatim. Older tool_result blocks are pruned until the
- * remaining protected region fits inside this budget. Default 80k — keeps
- * ~20 turns of full context visible to the model before pruning starts.
+ * compaction verbatim when using the fixed fallback. Use deriveCompactionLimits()
+ * for model-aware protection budgets.
  */
 export const PRUNE_PROTECT = Number(process.env.CODER_PRUNE_PROTECT ?? 80_000);
+
+/** Fraction of context window (in chars) at which compaction triggers. */
+const TRIGGER_RATIO = 0.90;
+/** Fraction of context window (in chars) kept verbatim after compaction. */
+const PROTECT_RATIO = 0.55;
+/** chars-per-token heuristic, matching token-budget.ts. */
+const CHARS_PER_TOKEN = 4;
+
+export interface CompactionLimits {
+    /** Char total above which compaction is triggered (char-based fallback). */
+    minimum: number;
+    /** How many recent chars to keep verbatim during compaction. */
+    protect: number;
+    /** Input-token count above which compaction is triggered (null = no known context_window). */
+    triggerTokens: number | null;
+}
+
+/**
+ * Derive context-aware compaction limits from the model's known context window.
+ * When contextWindowTokens is null/undefined, falls back to the hardcoded env
+ * defaults so behaviour is unchanged for models without registered capacity.
+ */
+export function deriveCompactionLimits(contextWindowTokens: number | null | undefined): CompactionLimits {
+    if (!contextWindowTokens) {
+        return { minimum: PRUNE_MINIMUM, protect: PRUNE_PROTECT, triggerTokens: null };
+    }
+    const contextChars = contextWindowTokens * CHARS_PER_TOKEN;
+    return {
+        minimum: Math.floor(contextChars * TRIGGER_RATIO),
+        protect: Math.floor(contextChars * PROTECT_RATIO),
+        triggerTokens: Math.floor(contextWindowTokens * TRIGGER_RATIO),
+    };
+}
 
 /**
  * Content marker written in place of a pruned tool_result. Deterministic:

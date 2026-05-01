@@ -20,6 +20,8 @@ export interface RoleConfig {
   fallback_provider?: string;
   /** Fallback model for auto-recovery. */
   fallback_model?: string;
+  /** Sampling temperature override for this role (range [0, 1]). */
+  temperature?: number;
 }
 
 export interface SkillDef {
@@ -175,6 +177,32 @@ export function RoleEditModal({
               <option value="navigate">{t('agents:role.tierNavigate')}</option>
               <option value="full">{t('agents:role.tierFull')}</option>
             </select>
+          </div>
+
+          {/* Temperature */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">
+              {t('agents:role.temperature', { defaultValue: 'Temperature' })}
+            </label>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={role.temperature ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === '') {
+                  onUpdate({ temperature: undefined });
+                  return;
+                }
+                const parsed = parseFloat(v);
+                if (!Number.isFinite(parsed)) return;
+                onUpdate({ temperature: Math.min(1, Math.max(0, parsed)) });
+              }}
+              placeholder={t('agents:role.temperaturePlaceholder', { defaultValue: 'auto (by agent preset)' })}
+              className="rounded-md border bg-background px-3 py-1.5 text-sm font-mono w-32"
+            />
           </div>
 
           {/* Skills — grouped by author/namespace */}

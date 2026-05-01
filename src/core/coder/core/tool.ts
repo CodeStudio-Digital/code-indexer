@@ -11,6 +11,17 @@ export interface JsonSchema {
   additionalProperties?: boolean;
 }
 
+/**
+ * Coarse risk classification used by the policy module to decide whether a
+ * tool may run in the current context, and (in a future phase) whether it
+ * is safe to dispatch in parallel with peers. Default resolution lives in
+ * `core/policy.ts`:
+ *   1. explicit field on the tool (most specific);
+ *   2. built-in classification by name for known native tools;
+ *   3. conservative fallback (for MCP-external + unknown tools).
+ */
+export type ToolRiskLevel = 'read' | 'write' | 'execute' | 'admin';
+
 export interface CoderTool {
   name: string;
   description: string;
@@ -18,6 +29,49 @@ export interface CoderTool {
   /** Tool source — used by the UI for rendering and by the registry for filtering. */
   source: 'native' | 'mcp' | 'mcp_external';
   handler: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
+  /**
+   * Whether the tool changes any state outside its own response: filesystem
+   * writes, shell commands, git mutations, MCP server-side mutations, etc.
+   * Mutating tools are gated by plan-mode (must `submit_plan` first) and
+   * are never paralelizable. Defaults to `true` for `mcp_external` tools
+   * with no explicit value (conservative posture); `false` for native read
+   * tools recognised by the built-in classifier.
+   */
+  mutates?: boolean;
+  /**
+   * Whether two invocations of this tool (or this tool against another
+   * `parallelSafe: true` tool) can be dispatched concurrently without
+   * data hazards. Pure reads are typically `true`. Anything that touches
+   * the filesystem, shell, or git index is `false`. Defaults to
+   * `!mutates` when omitted.
+   */
+  parallelSafe?: boolean;
+  /**
+   * Coarse risk bucket used by the dashboard for UI hints and (future) by
+   * the policy module for tier-orthogonal gating. `read` < `write` <
+   * `execute` < `admin`. Defaults are derived in `core/policy.ts`.
+   */
+  riskLevel?: ToolRiskLevel;
+  /**
+   * Tool requires a sandbox runtime to execute safely (e.g., scaffolders
+   * that materialize new projects, or shell tools that should never touch
+   * the host filesystem). The runner blocks invocation when no sandbox is
+   * bound to the session. Defaults to `false`.
+   */
+  requiresSandbox?: boolean;
+  /**
+   * Tool's path arguments must be inside the active inline task scope
+   * (when one is open). Today only the file-mutating tools opt in; setting
+   * this to `true` makes the path-confinement check kick in for any tool
+   * that takes file paths.
+   */
+  scopeAware?: boolean;
+  /**
+   * Tool pauses the runner waiting for human input (`submit_plan`,
+   * `ask_user`, `submit_tasks`, …). Interactive tools are never run in
+   * parallel, even if `parallelSafe` is otherwise `true`.
+   */
+  interactive?: boolean;
 }
 
 export interface ToolContext {

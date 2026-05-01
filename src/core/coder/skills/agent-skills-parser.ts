@@ -40,6 +40,17 @@ export interface ParsedSkillFile {
  *     - a
  *     - b
  *   key: "quoted string"
+ *   key:                       (object — one level of nesting)
+ *     subkey: scalar
+ *     subkey: [a, b]
+ *     subkey:
+ *       - a
+ *       - b
+ *
+ * Nested object support is shallow on purpose — the only consumer that
+ * needs it is the v2 `trigger:` field (`trigger.paths` / `trigger.roles` /
+ * `trigger.tags`). Adding a real YAML library for two more keys is not
+ * worth it.
  */
 export function parseFrontmatterYaml(src: string): SkillFrontmatter {
   const out: SkillFrontmatter = {};
@@ -61,9 +72,9 @@ export function parseFrontmatterYaml(src: string): SkillFrontmatter {
 
     if (rest === '') {
       // Block list?
-      const items: string[] = [];
       let j = i + 1;
-      while (j < lines.length) {
+      const items: string[] = [];
+      while (j < lines.length && /^\s+-\s/.test(lines[j])) {
         const bm = lines[j].match(/^\s*-\s*(.+?)\s*$/);
         if (!bm) break;
         items.push(unquote(bm[1]));
@@ -74,6 +85,40 @@ export function parseFrontmatterYaml(src: string): SkillFrontmatter {
         i = j;
         continue;
       }
+
+      // Nested object — one level of `<indent>subkey: ...` lines.
+      const nested: Record<string, unknown> = {};
+      while (j < lines.length) {
+        const childMatch = lines[j].match(/^\s+([A-Za-z_][\w-]*)\s*:\s*(.*)$/);
+        if (!childMatch) break;
+        const childKey = childMatch[1];
+        const childRest = childMatch[2];
+        if (childRest === '') {
+          const childItems: string[] = [];
+          let k = j + 1;
+          while (k < lines.length && /^\s+-\s/.test(lines[k])) {
+            const bm = lines[k].match(/^\s*-\s*(.+?)\s*$/);
+            if (!bm) break;
+            childItems.push(unquote(bm[1]));
+            k++;
+          }
+          nested[childKey] = childItems;
+          j = k;
+        } else if (childRest.startsWith('[') && childRest.endsWith(']')) {
+          const inner = childRest.slice(1, -1).trim();
+          nested[childKey] = inner ? inner.split(',').map((s) => unquote(s.trim())).filter(Boolean) : [];
+          j++;
+        } else {
+          nested[childKey] = unquote(childRest);
+          j++;
+        }
+      }
+      if (Object.keys(nested).length > 0) {
+        out[key] = nested;
+        i = j;
+        continue;
+      }
+
       out[key] = '';
       i++;
       continue;
@@ -167,7 +212,7 @@ export function toSkillDefinition(opts: {
     allowed_tools: allowedTools,
     model_override: null,
     provider_override: null,
-    context_mode: parsed.kind === 'command' ? 'tool' : 'inline',
+    context_mode: parsed.kind === 'command' ? 'tool' : 'auto',
     variables: parsed.kind === 'command' ? ['USER_INPUT'] : [],
     sort_order: 100,
     tags: [namespace, 'imported'],

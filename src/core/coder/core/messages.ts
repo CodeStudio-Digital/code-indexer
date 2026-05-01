@@ -112,4 +112,26 @@ export type ChatDelta =
   | { type: 'tool_call_args'; id: string; partial_json: string }
   | { type: 'tool_call_end'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'usage'; usage: ChatUsage }
+  /**
+   * Server-side response identifier returned by stateful APIs (currently only
+   * the OpenAI Responses API used by ChatGPT/Codex with `store: true`). The
+   * runner persists this in `coder_sessions.last_response_id` so the next
+   * turn can pass `previous_response_id` and skip restating the prior input.
+   * `messageCount` is the size of the AgentMessage[] sent in this turn —
+   * the next turn ships only `messages.slice(messageCount)`.
+   */
+  | { type: 'response_id'; id: string; messageCount: number }
+  /**
+   * Image emitted by a server-managed `image_generation` tool call. Currently
+   * only Codex/ChatGPT models with `image_generation` capability emit these.
+   * The runner converts them to `ImageBlock` entries on the assistant
+   * content so the UI renders them inline.
+   */
+  | {
+      type: 'image_generated';
+      id: string;
+      mediaType: string;
+      base64: string;
+      revisedPrompt?: string;
+    }
   | { type: 'done'; stop_reason?: string };

@@ -28,8 +28,12 @@ export async function refreshAllProviderModels(store: ProviderStore): Promise<vo
     const hasCredentials = !!(p.api_key || p.extra);
     if (!hasCredentials && p.kind !== 'bedrock') continue;
     try {
-      const models = await discoverModels(store, p);
-      store.replaceModelsFromSource(p.id, 'live', models);
+      const previousEtag = store.getProviderCatalogEtag(p.id);
+      const result = await discoverModels(store, p, previousEtag);
+      if (!result.notModified) {
+        store.replaceModelsFromSource(p.id, 'live', result.models);
+        store.setProviderCatalogEtag(p.id, result.etag);
+      }
       refreshed++;
     } catch (e) {
       console.warn(

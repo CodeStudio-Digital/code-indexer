@@ -12,8 +12,29 @@ export interface ChatRequest {
   messages: AgentMessage[];
   tools: ToolSpec[];
   signal?: AbortSignal;
-  /** Enable thinking/reasoning mode (Gemini thinkingConfig, Anthropic extended thinking). */
+  /** Enable thinking/reasoning mode (Gemini thinkingConfig, Anthropic extended thinking, Codex reasoning.effort). */
   thinking?: boolean;
+  /**
+   * For stateful providers (ChatGPT/Codex with `store: true`): identifier of
+   * the prior response. When present, the provider sends only the message
+   * delta and lets the backend reconstruct the prefix from the stored response.
+   */
+  previousResponseId?: string;
+  /**
+   * Companion to `previousResponseId`: how many messages were already on the
+   * server side. The provider ships `messages.slice(previousResponseMessageCount)`.
+   */
+  previousResponseMessageCount?: number;
+  /**
+   * Sampling parameters resolved by the runner via `resolveTemperature()`.
+   * Each provider reads `inference.temperature` and translates it to its
+   * vendor schema (or omits it when the model rejects sampling — e.g. OpenAI
+   * o-series, Anthropic with extended thinking). Range [0, 1] enforced by the
+   * resolver; providers do not re-clamp.
+   */
+  inference?: {
+    temperature?: number;
+  };
 }
 
 /**
@@ -30,4 +51,4 @@ export interface ChatProvider {
   chat(req: ChatRequest): AsyncIterable<ChatDelta>;
 }
 
-export type CoderProviderName = 'anthropic' | 'openai' | 'zai' | 'deepseek' | 'gemini';
+export type CoderProviderName = 'anthropic' | 'claude-code' | 'openai' | 'zai' | 'deepseek' | 'gemini';

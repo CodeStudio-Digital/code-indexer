@@ -29,6 +29,16 @@ import type {
   MasterPromptOption,
   MasterPromptStatus,
   CompanySessionArchive,
+  Pipeline,
+  PipelineGraph,
+  PipelineExecution,
+  PipelineExecutionContext,
+  PipelineExecutionStatus,
+  PipelineNodeExecution,
+  PipelineNodeStatus,
+  AgentInboxMessage,
+  InboxKind,
+  InboxStatus,
 } from '../core/coder/company/types.js';
 
 const require = createRequire(import.meta.url);
@@ -233,6 +243,44 @@ export class CompanyStore {
   deleteCompanySession(id: number): boolean {
     const r = this.db.prepare('DELETE FROM company_sessions WHERE id = ?').run(id);
     return r.changes > 0;
+  }
+
+  duplicateCompanySession(sourceId: number, newName: string): CompanySession {
+    let newId = 0;
+    const tx = this.db.transaction(() => {
+      const source = this.db
+        .prepare('SELECT * FROM company_sessions WHERE id = ?')
+        .get(sourceId) as { config_json: string } | undefined;
+      if (!source) throw new Error(`Session ${sourceId} not found`);
+
+      const r = this.db
+        .prepare(`INSERT INTO company_sessions (name, config_json, status) VALUES (?, ?, 'idle')`)
+        .run(newName, source.config_json);
+      newId = Number(r.lastInsertRowid);
+
+      this.db.prepare(`
+        INSERT INTO company_session_projects (company_session_id, project_id, label)
+        SELECT ?, project_id, label FROM company_session_projects WHERE company_session_id = ?
+      `).run(newId, sourceId);
+
+      this.db.prepare(`
+        INSERT INTO company_board (company_session_id, author_role, agent_run_id, kind, content, mentions_json, created_at)
+        SELECT ?, author_role, NULL, kind, content, mentions_json, created_at
+        FROM company_board WHERE company_session_id = ? AND archive_id IS NULL ORDER BY id
+      `).run(newId, sourceId);
+
+      this.db.prepare(`
+        INSERT INTO company_master_prompts
+          (company_session_id, agent_run_id, kind, runner_block_id, body, options_json, allow_freeform, status, answer, approved, feedback, created_at, resolved_at)
+        SELECT ?, NULL, kind, NULL, body, options_json, allow_freeform, status, answer, approved, feedback, created_at, resolved_at
+        FROM company_master_prompts
+        WHERE company_session_id = ? AND archive_id IS NULL AND status != 'pending'
+        ORDER BY id
+      `).run(newId, sourceId);
+    });
+
+    tx();
+    return this.getCompanySession(newId)!;
   }
 
   // ─── Projects ──────────────────────────────────────────────────
@@ -1033,6 +1081,545 @@ export class CompanyStore {
       }>;
     return rows.map(mapArchiveRow);
   }
+
+  // ─── QA verdict (read-only helper used by the pipeline executor) ──
+
+  /**
+   * Pass/fail verdict for the most recent COMPLETED QA run scoped to a
+   * given Kanban feature card. The pipeline executor consults this for
+   * `pass-fail` branches so it can rely on real test counts instead of
+   * parsing prose. Returns `null` when there is no completed run.
+   */
+  getLatestQaVerdictForCard(companySessionId: number, cardId: number): 'pass' | 'fail' | null {
+    const row = this.db
+      .prepare(
+        `SELECT passed, failed FROM qa_test_runs
+         WHERE company_session_id = ? AND kanban_feature_card_id = ? AND status = 'completed'
+         ORDER BY datetime(started_at) DESC, id DESC
+         LIMIT 1`,
+      )
+      .get(companySessionId, cardId) as { passed: number; failed: number } | undefined;
+    if (!row) return null;
+    if (row.failed > 0) return 'fail';
+    if (row.passed > 0) return 'pass';
+    return null;
+  }
+
+  // ─── Pipelines ─────────────────────────────────────────────────
+
+  createPipeline(input: {
+    name: string;
+    description?: string;
+    graph: PipelineGraph;
+    companySessionId?: number | null;
+    templateId?: number | null;
+  }): Pipeline {
+    const stmt = this.db.prepare(`
+      INSERT INTO pipelines (name, description, company_session_id, template_id, graph_json, version)
+      VALUES (?, ?, ?, ?, ?, 1)
+    `);
+    const r = stmt.run(
+      input.name,
+      input.description ?? '',
+      input.companySessionId ?? null,
+      input.templateId ?? null,
+      JSON.stringify(input.graph),
+    );
+    return this.getPipeline(Number(r.lastInsertRowid))!;
+  }
+
+  getPipeline(id: number): Pipeline | null {
+    const row = this.db
+      .prepare('SELECT * FROM pipelines WHERE id = ?')
+      .get(id) as PipelineRow | undefined;
+    return row ? mapPipelineRow(row) : null;
+  }
+
+  listPipelines(opts?: {
+    companySessionId?: number | null;
+    templateId?: number | null;
+  }): Pipeline[] {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (opts && 'companySessionId' in opts) {
+      if (opts.companySessionId === null) {
+        where.push('company_session_id IS NULL');
+      } else if (typeof opts.companySessionId === 'number') {
+        where.push('(company_session_id = ? OR company_session_id IS NULL)');
+        params.push(opts.companySessionId);
+      }
+    }
+    if (opts && typeof opts.templateId === 'number') {
+      where.push('template_id = ?');
+      params.push(opts.templateId);
+    }
+    const sql = `SELECT * FROM pipelines${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY updated_at DESC, id DESC`;
+    const rows = this.db.prepare(sql).all(...params) as PipelineRow[];
+    return rows.map(mapPipelineRow);
+  }
+
+  /**
+   * Updates a pipeline. When `expectedVersion` is provided and does not
+   * match the current row, throws `PipelineVersionMismatch` so the route
+   * layer can return 409 to the client. Successful writes bump `version`.
+   */
+  updatePipeline(
+    id: number,
+    patch: { name?: string; description?: string; graph?: PipelineGraph },
+    opts?: { expectedVersion?: number },
+  ): Pipeline | null {
+    const cur = this.getPipeline(id);
+    if (!cur) return null;
+    if (opts && typeof opts.expectedVersion === 'number' && cur.version !== opts.expectedVersion) {
+      const err = new Error(`Pipeline ${id} version mismatch: expected ${opts.expectedVersion}, got ${cur.version}`);
+      (err as { code?: string }).code = 'PIPELINE_VERSION_MISMATCH';
+      throw err;
+    }
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (patch.name !== undefined) { sets.push('name = ?'); params.push(patch.name); }
+    if (patch.description !== undefined) { sets.push('description = ?'); params.push(patch.description); }
+    if (patch.graph !== undefined) { sets.push('graph_json = ?'); params.push(JSON.stringify(patch.graph)); }
+    if (sets.length === 0) return cur;
+    sets.push("updated_at = datetime('now')");
+    sets.push('version = version + 1');
+    params.push(id);
+    this.db.prepare(`UPDATE pipelines SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+    return this.getPipeline(id);
+  }
+
+  deletePipeline(id: number): boolean {
+    const r = this.db.prepare('DELETE FROM pipelines WHERE id = ?').run(id);
+    return r.changes > 0;
+  }
+
+  // ─── Pipeline executions ──────────────────────────────────────
+
+  createPipelineExecution(input: {
+    pipelineId: number;
+    companySessionId: number;
+    initialInput: string;
+    context: PipelineExecutionContext;
+    startedBy?: string;
+    currentNodeId?: string | null;
+  }): PipelineExecution {
+    const stmt = this.db.prepare(`
+      INSERT INTO pipeline_executions
+        (pipeline_id, company_session_id, status, current_node_id, initial_input, context_json, started_by)
+      VALUES (?, ?, 'running', ?, ?, ?, ?)
+    `);
+    const r = stmt.run(
+      input.pipelineId,
+      input.companySessionId,
+      input.currentNodeId ?? null,
+      input.initialInput,
+      JSON.stringify(input.context),
+      input.startedBy ?? 'master',
+    );
+    return this.getPipelineExecution(Number(r.lastInsertRowid))!;
+  }
+
+  getPipelineExecution(id: number): PipelineExecution | null {
+    const row = this.db
+      .prepare('SELECT * FROM pipeline_executions WHERE id = ?')
+      .get(id) as PipelineExecutionRow | undefined;
+    return row ? mapPipelineExecutionRow(row) : null;
+  }
+
+  listPipelineExecutions(opts: {
+    companySessionId?: number;
+    pipelineId?: number;
+    status?: PipelineExecutionStatus;
+    limit?: number;
+  }): PipelineExecution[] {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (typeof opts.companySessionId === 'number') {
+      where.push('company_session_id = ?');
+      params.push(opts.companySessionId);
+    }
+    if (typeof opts.pipelineId === 'number') {
+      where.push('pipeline_id = ?');
+      params.push(opts.pipelineId);
+    }
+    if (opts.status) {
+      where.push('status = ?');
+      params.push(opts.status);
+    }
+    let sql = `SELECT * FROM pipeline_executions${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY started_at DESC, id DESC`;
+    if (typeof opts.limit === 'number') sql += ` LIMIT ${Math.max(1, Math.floor(opts.limit))}`;
+    const rows = this.db.prepare(sql).all(...params) as PipelineExecutionRow[];
+    return rows.map(mapPipelineExecutionRow);
+  }
+
+  updatePipelineExecution(
+    id: number,
+    patch: {
+      status?: PipelineExecutionStatus;
+      currentNodeId?: string | null;
+      context?: PipelineExecutionContext;
+      finishedAt?: string | null;
+      errorMessage?: string | null;
+    },
+  ): PipelineExecution | null {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (patch.status !== undefined) { sets.push('status = ?'); params.push(patch.status); }
+    if (patch.currentNodeId !== undefined) { sets.push('current_node_id = ?'); params.push(patch.currentNodeId); }
+    if (patch.context !== undefined) { sets.push('context_json = ?'); params.push(JSON.stringify(patch.context)); }
+    if (patch.finishedAt !== undefined) { sets.push('finished_at = ?'); params.push(patch.finishedAt); }
+    if (patch.errorMessage !== undefined) { sets.push('error_message = ?'); params.push(patch.errorMessage); }
+    if (sets.length === 0) return this.getPipelineExecution(id);
+    params.push(id);
+    this.db.prepare(`UPDATE pipeline_executions SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+    return this.getPipelineExecution(id);
+  }
+
+  // ─── Pipeline node executions ─────────────────────────────────
+
+  createPipelineNodeExecution(input: {
+    executionId: number;
+    nodeId: string;
+    nodeLabel: string;
+    role: string;
+    inputText: string;
+    attempt?: number;
+    agentRunId?: number | null;
+    kanbanCardId?: number | null;
+  }): PipelineNodeExecution {
+    const stmt = this.db.prepare(`
+      INSERT INTO pipeline_node_executions
+        (execution_id, node_id, node_label, role, status, agent_run_id, kanban_card_id, input_text, attempt, started_at)
+      VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, datetime('now'))
+    `);
+    const r = stmt.run(
+      input.executionId,
+      input.nodeId,
+      input.nodeLabel,
+      input.role,
+      input.agentRunId ?? null,
+      input.kanbanCardId ?? null,
+      input.inputText,
+      input.attempt ?? 1,
+    );
+    return this.getPipelineNodeExecution(Number(r.lastInsertRowid))!;
+  }
+
+  getPipelineNodeExecution(id: number): PipelineNodeExecution | null {
+    const row = this.db
+      .prepare('SELECT * FROM pipeline_node_executions WHERE id = ?')
+      .get(id) as PipelineNodeExecutionRow | undefined;
+    return row ? mapPipelineNodeExecutionRow(row) : null;
+  }
+
+  listPipelineNodeExecutions(executionId: number): PipelineNodeExecution[] {
+    const rows = this.db
+      .prepare('SELECT * FROM pipeline_node_executions WHERE execution_id = ? ORDER BY created_at ASC, id ASC')
+      .all(executionId) as PipelineNodeExecutionRow[];
+    return rows.map(mapPipelineNodeExecutionRow);
+  }
+
+  updatePipelineNodeExecution(
+    id: number,
+    patch: {
+      status?: PipelineNodeStatus;
+      agentRunId?: number | null;
+      kanbanCardId?: number | null;
+      outputText?: string | null;
+      outcomeBranch?: string | null;
+      finishedAt?: string | null;
+      errorMessage?: string | null;
+    },
+  ): PipelineNodeExecution | null {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (patch.status !== undefined) { sets.push('status = ?'); params.push(patch.status); }
+    if (patch.agentRunId !== undefined) { sets.push('agent_run_id = ?'); params.push(patch.agentRunId); }
+    if (patch.kanbanCardId !== undefined) { sets.push('kanban_card_id = ?'); params.push(patch.kanbanCardId); }
+    if (patch.outputText !== undefined) { sets.push('output_text = ?'); params.push(patch.outputText); }
+    if (patch.outcomeBranch !== undefined) { sets.push('outcome_branch = ?'); params.push(patch.outcomeBranch); }
+    if (patch.finishedAt !== undefined) { sets.push('finished_at = ?'); params.push(patch.finishedAt); }
+    if (patch.errorMessage !== undefined) { sets.push('error_message = ?'); params.push(patch.errorMessage); }
+    if (sets.length === 0) return this.getPipelineNodeExecution(id);
+    params.push(id);
+    this.db.prepare(`UPDATE pipeline_node_executions SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+    return this.getPipelineNodeExecution(id);
+  }
+
+  // ─── Agent inbox ───────────────────────────────────────────────
+
+  createInboxMessage(input: {
+    companySessionId: number;
+    fromAgentRunId: number;
+    fromRole: string;
+    toRole?: string | null;
+    toAgentRunId?: number | null;
+    kind: InboxKind;
+    body: string;
+    waitToken?: string | null;
+  }): AgentInboxMessage {
+    const stmt = this.db.prepare(`
+      INSERT INTO agent_inbox
+        (company_session_id, from_agent_run_id, from_role, to_role, to_agent_run_id, kind, body, wait_token)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const r = stmt.run(
+      input.companySessionId,
+      input.fromAgentRunId,
+      input.fromRole,
+      input.toRole ?? null,
+      input.toAgentRunId ?? null,
+      input.kind,
+      input.body,
+      input.waitToken ?? null,
+    );
+    return this.getInboxMessage(Number(r.lastInsertRowid))!;
+  }
+
+  getInboxMessage(id: number): AgentInboxMessage | null {
+    const row = this.db
+      .prepare('SELECT * FROM agent_inbox WHERE id = ?')
+      .get(id) as InboxRow | undefined;
+    return row ? mapInboxRow(row) : null;
+  }
+
+  /**
+   * List messages scoped to a session. Filters narrow the result so the
+   * dashboard inbox panel and the cycle detector can both reuse the
+   * same path. Ordered oldest-first so callers picking "the next one"
+   * get FIFO semantics.
+   */
+  listInboxMessages(opts: {
+    companySessionId: number;
+    status?: InboxStatus | InboxStatus[];
+    toRole?: string;
+    toAgentRunId?: number;
+    fromAgentRunId?: number;
+    limit?: number;
+  }): AgentInboxMessage[] {
+    const where: string[] = ['company_session_id = ?'];
+    const params: unknown[] = [opts.companySessionId];
+    if (opts.status) {
+      const arr = Array.isArray(opts.status) ? opts.status : [opts.status];
+      where.push(`status IN (${arr.map(() => '?').join(',')})`);
+      for (const s of arr) params.push(s);
+    }
+    if (opts.toRole) { where.push('to_role = ?'); params.push(opts.toRole); }
+    if (typeof opts.toAgentRunId === 'number') { where.push('to_agent_run_id = ?'); params.push(opts.toAgentRunId); }
+    if (typeof opts.fromAgentRunId === 'number') { where.push('from_agent_run_id = ?'); params.push(opts.fromAgentRunId); }
+    let sql = `SELECT * FROM agent_inbox WHERE ${where.join(' AND ')} ORDER BY datetime(created_at) ASC, id ASC`;
+    if (typeof opts.limit === 'number') sql += ` LIMIT ${Math.max(1, Math.floor(opts.limit))}`;
+    const rows = this.db.prepare(sql).all(...params) as InboxRow[];
+    return rows.map(mapInboxRow);
+  }
+
+  /**
+   * Atomically claim the next pending message for `(toAgentRunId OR
+   * toRole)` and flip it to `delivered`. Returns the claimed message
+   * or null if there's nothing waiting. The conditional UPDATE
+   * protects against two competing drains racing on the same row.
+   */
+  claimNextInboxForAgent(args: {
+    companySessionId: number;
+    agentRunId: number;
+    role: string;
+  }): AgentInboxMessage | null {
+    const tx = this.db.transaction(() => {
+      const row = this.db.prepare(
+        `SELECT * FROM agent_inbox
+         WHERE company_session_id = ?
+           AND status = 'pending'
+           AND (to_agent_run_id = ? OR (to_agent_run_id IS NULL AND to_role = ?))
+         ORDER BY datetime(created_at) ASC, id ASC
+         LIMIT 1`,
+      ).get(args.companySessionId, args.agentRunId, args.role) as InboxRow | undefined;
+      if (!row) return null;
+      const result = this.db.prepare(
+        `UPDATE agent_inbox
+         SET status = 'delivered', delivered_at = datetime('now'), to_agent_run_id = ?
+         WHERE id = ? AND status = 'pending'`,
+      ).run(args.agentRunId, row.id);
+      if (result.changes === 0) return null;
+      return this.getInboxMessage(row.id);
+    });
+    return tx();
+  }
+
+  answerInboxMessage(id: number, answer: string): AgentInboxMessage | null {
+    const r = this.db.prepare(
+      `UPDATE agent_inbox SET status = 'answered', answer = ?, answered_at = datetime('now')
+       WHERE id = ? AND status IN ('pending','delivered')`,
+    ).run(answer, id);
+    if (r.changes === 0) return null;
+    return this.getInboxMessage(id);
+  }
+
+  /**
+   * Generic status flip. Used for `cancelled` / `expired` paths so the
+   * routes/queue don't have to format their own SQL.
+   */
+  setInboxStatus(id: number, status: InboxStatus, opts?: { answer?: string }): AgentInboxMessage | null {
+    const sets: string[] = ['status = ?'];
+    const params: unknown[] = [status];
+    if (status === 'answered' || status === 'expired' || status === 'cancelled') {
+      sets.push("answered_at = COALESCE(answered_at, datetime('now'))");
+    }
+    if (opts?.answer != null) { sets.push('answer = ?'); params.push(opts.answer); }
+    params.push(id);
+    const r = this.db.prepare(
+      `UPDATE agent_inbox SET ${sets.join(', ')} WHERE id = ?`,
+    ).run(...params);
+    if (r.changes === 0) return null;
+    return this.getInboxMessage(id);
+  }
+}
+
+interface PipelineRow {
+  id: number;
+  name: string;
+  description: string;
+  company_session_id: number | null;
+  template_id: number | null;
+  graph_json: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapPipelineRow(row: PipelineRow): Pipeline {
+  let graph: PipelineGraph;
+  try {
+    graph = JSON.parse(row.graph_json) as PipelineGraph;
+  } catch {
+    graph = { version: 1, nodes: [], edges: [] };
+  }
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    company_session_id: row.company_session_id,
+    template_id: row.template_id,
+    graph,
+    version: row.version,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+interface PipelineExecutionRow {
+  id: number;
+  pipeline_id: number;
+  company_session_id: number;
+  status: string;
+  current_node_id: string | null;
+  initial_input: string;
+  context_json: string;
+  started_by: string;
+  started_at: string;
+  finished_at: string | null;
+  error_message: string | null;
+}
+
+function mapPipelineExecutionRow(row: PipelineExecutionRow): PipelineExecution {
+  let context: PipelineExecutionContext = {
+    snapshot: { version: 1, nodes: [], edges: [] },
+    vars: {},
+  };
+  try {
+    const parsed = JSON.parse(row.context_json) as Partial<PipelineExecutionContext>;
+    if (parsed.snapshot) context.snapshot = parsed.snapshot;
+    if (parsed.vars) context.vars = parsed.vars;
+  } catch {
+    // fall back to empty
+  }
+  return {
+    id: row.id,
+    pipeline_id: row.pipeline_id,
+    company_session_id: row.company_session_id,
+    status: row.status as PipelineExecutionStatus,
+    current_node_id: row.current_node_id,
+    initial_input: row.initial_input,
+    context,
+    started_by: row.started_by,
+    started_at: row.started_at,
+    finished_at: row.finished_at,
+    error_message: row.error_message,
+  };
+}
+
+interface PipelineNodeExecutionRow {
+  id: number;
+  execution_id: number;
+  node_id: string;
+  node_label: string;
+  role: string;
+  status: string;
+  agent_run_id: number | null;
+  kanban_card_id: number | null;
+  input_text: string;
+  output_text: string | null;
+  outcome_branch: string | null;
+  attempt: number;
+  started_at: string | null;
+  finished_at: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+function mapPipelineNodeExecutionRow(row: PipelineNodeExecutionRow): PipelineNodeExecution {
+  return {
+    id: row.id,
+    execution_id: row.execution_id,
+    node_id: row.node_id,
+    node_label: row.node_label,
+    role: row.role,
+    status: row.status as PipelineNodeStatus,
+    agent_run_id: row.agent_run_id,
+    kanban_card_id: row.kanban_card_id,
+    input_text: row.input_text,
+    output_text: row.output_text,
+    outcome_branch: row.outcome_branch,
+    attempt: row.attempt,
+    started_at: row.started_at,
+    finished_at: row.finished_at,
+    error_message: row.error_message,
+  };
+}
+
+interface InboxRow {
+  id: number;
+  company_session_id: number;
+  from_agent_run_id: number;
+  from_role: string;
+  to_role: string | null;
+  to_agent_run_id: number | null;
+  kind: string;
+  body: string;
+  status: string;
+  answer: string | null;
+  wait_token: string | null;
+  created_at: string;
+  delivered_at: string | null;
+  answered_at: string | null;
+}
+
+function mapInboxRow(row: InboxRow): AgentInboxMessage {
+  return {
+    id: row.id,
+    company_session_id: row.company_session_id,
+    from_agent_run_id: row.from_agent_run_id,
+    from_role: row.from_role,
+    to_role: row.to_role,
+    to_agent_run_id: row.to_agent_run_id,
+    kind: row.kind as InboxKind,
+    body: row.body,
+    status: row.status as InboxStatus,
+    answer: row.answer,
+    wait_token: row.wait_token,
+    created_at: row.created_at,
+    delivered_at: row.delivered_at,
+    answered_at: row.answered_at,
+  };
 }
 
 function mapArchiveRow(row: {

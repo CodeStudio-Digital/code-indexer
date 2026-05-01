@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import type { AgentMessage } from '../core/messages.js';
 import type {
   CoderSession, CoderSessionGroup, CoderMessageRow, SessionWithMessages, CoderSessionStats, CoderPlanRow, CoderPlanStatus,
   CoderTask, TasksState, CoderTasksRow, TaskExecutionMode, RecentCoderSession,
+  SessionInputKind, SessionInputRow,
 } from './types.js';
 
 type SessionRow = Omit<CoderSession, 'is_archived' | 'is_favorite'> & {
@@ -71,6 +73,33 @@ export class SessionStore {
     this.db
       .prepare("UPDATE coder_sessions SET agent = ?, updated_at = datetime('now') WHERE id = ?")
       .run(agent, id);
+  }
+
+  /**
+   * Persist the per-session temperature override. Pass `null` to clear (the
+   * resolver will fall back to the role/agent/default chain). The resolver
+   * clamps at runtime, so out-of-range writes are tolerated here.
+   */
+  setSessionTemperature(id: number, temperature: number | null): void {
+    this.db
+      .prepare(
+        "UPDATE coder_sessions SET temperature_override = ?, updated_at = datetime('now') WHERE id = ?",
+      )
+      .run(temperature, id);
+  }
+
+  /**
+   * Persist the Responses API state needed to enable `previous_response_id`
+   * on the next turn for ChatGPT/Codex sessions. `messageCount` is the size
+   * of the AgentMessage[] array we just sent — the backend now owns that
+   * prefix, so the next turn can ship only `messages.slice(messageCount)`.
+   */
+  setLastResponseState(id: number, responseId: string | null, messageCount: number | null): void {
+    this.db
+      .prepare(
+        "UPDATE coder_sessions SET last_response_id = ?, last_response_message_count = ?, updated_at = datetime('now') WHERE id = ?",
+      )
+      .run(responseId, messageCount, id);
   }
 
   getSession(id: number): CoderSession | null {
@@ -168,6 +197,12 @@ export class SessionStore {
          WHERE id = ?
       `)
       .run(favorite ? 1 : 0, favorite ? 1 : 0, id);
+  }
+
+  setSessionTitle(id: number, title: string): void {
+    this.db
+      .prepare("UPDATE coder_sessions SET title = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(title, id);
   }
 
   setSessionGroup(id: number, groupId: number | null): void {
@@ -573,6 +608,47 @@ export class SessionStore {
     return { session, seed_text: seedText };
   }
 
+  /**
+   * Duplicate a session: create a new session with the same provider/model/group
+   * and ALL messages copied. Useful for branching experiments without losing
+   * the original conversation.
+   */
+  duplicateSession(sourceId: number): CoderSession {
+    const src = this.loadSessionWithMessages(sourceId);
+    if (!src) throw new Error(`source session ${sourceId} not found`);
+
+    const tx = this.db.transaction(() => {
+      const created = this.createSession({
+        project_id: src.session.project_id,
+        title: `${src.session.title} (cópia)`,
+        provider: src.session.provider,
+        model: src.session.model,
+      });
+      if (src.session.group_id != null) {
+        this.setSessionGroup(created.id, src.session.group_id);
+      }
+      const copyStmt = this.db.prepare(`
+        INSERT INTO coder_messages
+          (session_id, role, content_json, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const r of src.message_rows) {
+        copyStmt.run(
+          created.id,
+          r.role,
+          r.content_json,
+          r.input_tokens ?? 0,
+          r.output_tokens ?? 0,
+          r.cache_read_tokens ?? 0,
+          r.cache_creation_tokens ?? 0,
+        );
+      }
+      return this.getSession(created.id)!;
+    });
+
+    return tx();
+  }
+
   loadSessionWithMessages(id: number): SessionWithMessages | null {
     const session = this.getSession(id);
     if (!session) return null;
@@ -777,6 +853,58 @@ export class SessionStore {
          ORDER BY tc.created_at ASC, tc.id ASC
       `)
       .all(sessionId) as { id: number; args_json: string; created_at: string }[];
+  }
+
+  // ─── Session inputs / hidden-prompt log (migration 061) ───────
+
+  /**
+   * Record a hidden prompt injected into the session (system prompt, skill
+   * body fetched mid-conversation, system-reminder, or sub-agent prompt).
+   *
+   * Dedup: if the latest row for the same `(session_id, kind)` has the same
+   * content hash, we skip — turn-over-turn the system prompt is usually
+   * byte-identical (cache prefix), so we only persist when something
+   * actually changed (skill loaded, tier expanded, etc.).
+   */
+  recordSessionInput(input: {
+    session_id: number;
+    kind: SessionInputKind;
+    source_label: string;
+    content: string;
+    meta?: Record<string, unknown> | null;
+  }): SessionInputRow | null {
+    const hash = createHash('sha1').update(input.content).digest('hex');
+    const last = this.db
+      .prepare(
+        `SELECT content_hash FROM coder_session_inputs
+          WHERE session_id = ? AND kind = ?
+          ORDER BY id DESC LIMIT 1`,
+      )
+      .get(input.session_id, input.kind) as { content_hash: string } | undefined;
+    if (last && last.content_hash === hash) return null;
+
+    const meta = input.meta ? JSON.stringify(input.meta) : null;
+    const r = this.db
+      .prepare(
+        `INSERT INTO coder_session_inputs
+           (session_id, kind, source_label, content, content_hash, meta_json)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(input.session_id, input.kind, input.source_label, input.content, hash, meta);
+    return this.db
+      .prepare('SELECT * FROM coder_session_inputs WHERE id = ?')
+      .get(Number(r.lastInsertRowid)) as SessionInputRow;
+  }
+
+  /** Newest-first list for the Input tab in the session details modal. */
+  listSessionInputs(sessionId: number): SessionInputRow[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM coder_session_inputs
+          WHERE session_id = ?
+          ORDER BY created_at DESC, id DESC`,
+      )
+      .all(sessionId) as SessionInputRow[];
   }
 
   // ─── Tasks (migration 008) ────────────────────────────────────

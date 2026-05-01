@@ -17,6 +17,12 @@ import { CompanySandboxServicesStore } from '../../../store/company-sandbox-serv
 import { CompanySessionEnvStore } from '../../../store/company-session-env-store.js';
 import { CompanySessionDatabaseStore } from '../../../store/company-session-database-store.js';
 import { CompanyLocalProjectStore } from '../../../store/company-local-project-store.js';
+import { SkillStore } from '../../../store/skill-store.js';
+import { QaTestRunStore } from '../../../core/qa/store/qa-test-run-store.js';
+import { QaTestResultStore } from '../../../core/qa/store/qa-test-result-store.js';
+import { ChromeServiceStore } from '../../../store/chrome-service-store.js';
+import { DesignSystemStore } from '../../../store/design-system-store.js';
+import { VerdaccioStore } from '../../../store/verdaccio-store.js';
 import type { ResolveMcpBearer } from '../../../core/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
 import {
   createAndSeedProviderStore,
@@ -71,6 +77,49 @@ export interface CoderDeps {
    * routes forward it into runCoder via `opts.mcpBearerResolver`.
    */
   mcpBearerResolver: ResolveMcpBearer | null;
+  /**
+   * Skills registry (builtin + user + imported). Shared across the boot
+   * seeder (`ensureBuiltinSkills`) and the admin/coder routes that
+   * currently instantiate ad-hoc per request — sharing the same DB
+   * handle avoids SQLite WAL contention on heavy boots.
+   */
+  skillStore: SkillStore;
+}
+
+export interface QaDeps {
+  /**
+   * Per-run QA test rows. Read by the TestsTab routes (history, detail);
+   * written by the test-event endpoint that the Playwright reporter posts to.
+   */
+  qaTestRunStore: QaTestRunStore;
+  /**
+   * Per-test outcome rows streamed in by the Playwright reporter.
+   * Cascade-deletes with the parent run (FK in migration 043).
+   */
+  qaTestResultStore: QaTestResultStore;
+}
+
+export interface ChromeServiceDeps {
+  /**
+   * Singleton-row config for the SHARED Playwright/Chromium container
+   * (admin-managed). The runtime `ChromeService` class operates on
+   * this store; the admin routes read it directly.
+   */
+  chromeServiceStore: ChromeServiceStore;
+}
+
+export interface DesignSystemDeps {
+  /**
+   * CRUD store for Design System Creator sessions, versions and
+   * components (migration 048). Read by the design-system routes and
+   * by the DS tools registered on subordinate runners.
+   */
+  designSystemStore: DesignSystemStore;
+  /**
+   * Singleton config for the embedded Verdaccio registry (migration 049).
+   * The runtime `VerdaccioService` operates on this store.
+   */
+  verdaccioStore: VerdaccioStore;
 }
 
 export interface CompanyDeps {
@@ -111,7 +160,10 @@ export type ServerDeps = CoreDeps
   & CostingDeps
   & ProjectServiceDeps
   & CoderDeps
-  & CompanyDeps;
+  & CompanyDeps
+  & QaDeps
+  & ChromeServiceDeps
+  & DesignSystemDeps;
 
 export function createDeps(): ServerDeps {
   const config = loadConfig();
@@ -140,6 +192,12 @@ export function createDeps(): ServerDeps {
   const companySessionEnvStore = new CompanySessionEnvStore(db.raw());
   const companySessionDatabaseStore = new CompanySessionDatabaseStore(db.raw());
   const companyLocalProjectStore = new CompanyLocalProjectStore(db.raw());
+  const skillStore = new SkillStore(db.raw());
+  const qaTestRunStore = new QaTestRunStore(db.raw());
+  const qaTestResultStore = new QaTestResultStore(db.raw());
+  const chromeServiceStore = new ChromeServiceStore(db.raw());
+  const designSystemStore = new DesignSystemStore(db.raw());
+  const verdaccioStore = new VerdaccioStore(db.raw());
 
   const embeddingKind = deriveKindLabel(embeddingService, 'EmbeddingService');
   const vectorStoreKind = deriveKindLabel(vectorStore, 'VectorStore');
@@ -164,6 +222,12 @@ export function createDeps(): ServerDeps {
     companySessionEnvStore,
     companySessionDatabaseStore,
     companyLocalProjectStore,
+    skillStore,
+    qaTestRunStore,
+    qaTestResultStore,
+    chromeServiceStore,
+    designSystemStore,
+    verdaccioStore,
     embeddingKind,
     vectorStoreKind,
     mcpBearerResolver: null,

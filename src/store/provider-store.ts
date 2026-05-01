@@ -23,7 +23,7 @@ type DB = InstanceType<typeof Database>;
  * shapes. The union listed below is kept as a docstring for the known
  * built-ins so IDE autocompletion still shows something useful.
  *
- * Known built-ins: 'anthropic' | 'openai' | 'gemini' | 'bedrock' | 'copilot' | 'chatgpt' | 'deepseek' | 'zai'
+ * Known built-ins: 'anthropic' | 'claude-code' | 'openai' | 'gemini' | 'bedrock' | 'copilot' | 'chatgpt' | 'deepseek' | 'zai'
  */
 export type ProviderKind = string;
 
@@ -69,6 +69,18 @@ export interface ProviderModel {
   /** 'manual' | 'live' (from provider API) | 'hardcoded' (legacy fallback). */
   source: string;
   updated_at: string;
+  // Rich metadata (added in migration 052) — populated by providers that
+  // expose it (currently ChatGPT/Codex). Null for everything else.
+  display_name: string | null;
+  description: string | null;
+  default_reasoning_level: string | null;
+  supported_reasoning_levels: string[] | null;
+  apply_patch_tool_type: string | null;
+  available_in_plans: string[] | null;
+  minimal_client_version: string | null;
+  visibility: string | null;
+  supported_in_api: boolean | null;
+  input_modalities: string[] | null;
 }
 
 export interface OAuthTokenRow {
@@ -143,6 +155,16 @@ interface ProviderModelRaw {
   enabled: number;
   source: string;
   updated_at: string;
+  display_name: string | null;
+  description: string | null;
+  default_reasoning_level: string | null;
+  supported_reasoning_levels: string | null;
+  apply_patch_tool_type: string | null;
+  available_in_plans: string | null;
+  minimal_client_version: string | null;
+  visibility: string | null;
+  supported_in_api: number | null;
+  input_modalities: string | null;
 }
 
 interface OAuthTokenRaw {
@@ -217,6 +239,16 @@ function hydrateModel(r: ProviderModelRaw): ProviderModel {
     enabled: !!r.enabled,
     source: r.source,
     updated_at: r.updated_at,
+    display_name: r.display_name,
+    description: r.description,
+    default_reasoning_level: r.default_reasoning_level,
+    supported_reasoning_levels: parseJson<string[] | null>(r.supported_reasoning_levels, null),
+    apply_patch_tool_type: r.apply_patch_tool_type,
+    available_in_plans: parseJson<string[] | null>(r.available_in_plans, null),
+    minimal_client_version: r.minimal_client_version,
+    visibility: r.visibility,
+    supported_in_api: r.supported_in_api === null ? null : !!r.supported_in_api,
+    input_modalities: parseJson<string[] | null>(r.input_modalities, null),
   };
 }
 
@@ -279,8 +311,32 @@ export interface UpsertModelInput {
   default_max_tokens?: number | null;
   can_reason?: boolean;
   supports_attachments?: boolean;
+  /**
+   * Force the `enabled` flag. When undefined, `replaceModelsFromSource`
+   * preserves the existing DB value for known rows (admin toggles survive)
+   * and uses `default_enabled` (or `true`) for newly seen rows.
+   */
   enabled?: boolean;
+  /**
+   * Default `enabled` value for rows that don't yet exist in the DB. Only
+   * read when `enabled` is undefined and there's no prior row. Use this
+   * from live discovery to disable hidden / non-API models on first sight
+   * without overriding subsequent admin toggles.
+   */
+  default_enabled?: boolean;
   source?: string;
+  // Rich metadata fields (migration 052). All optional — pass null to
+  // explicitly clear, omit to leave at NULL.
+  display_name?: string | null;
+  description?: string | null;
+  default_reasoning_level?: string | null;
+  supported_reasoning_levels?: string[] | null;
+  apply_patch_tool_type?: string | null;
+  available_in_plans?: string[] | null;
+  minimal_client_version?: string | null;
+  visibility?: string | null;
+  supported_in_api?: boolean | null;
+  input_modalities?: string[] | null;
 }
 
 export class ProviderStore {
@@ -540,41 +596,89 @@ export class ProviderStore {
   }
 
   /**
-   * Bulk replace models for a provider. Used by live discovery: existing
-   * manual entries are preserved (we filter by source), live rows are wiped
-   * and rewritten. Call within a single transaction for atomicity.
+   * Bulk replace models for a provider, scoped to a `source` (e.g. 'live'
+   * or 'manual'). Existing rows from other sources are untouched.
+   *
+   * Admin toggles (`enabled`) are preserved across refreshes: when an input
+   * row omits `enabled`, we look up the current value in the DB by
+   * (provider_id, model_id, mode) and reuse it. Newly seen models default
+   * to `true`. Pass `enabled: true|false` explicitly to override.
    */
   replaceModelsFromSource(providerId: string, source: string, models: UpsertModelInput[]): void {
     const now = new Date().toISOString();
     const tx = this.db.transaction(() => {
-      this.db.prepare('DELETE FROM provider_models WHERE provider_id = ? AND source = ?').run(providerId, source);
+      const existingRows = this.db
+        .prepare(
+          'SELECT model_id, mode, enabled FROM provider_models WHERE provider_id = ? AND source = ?'
+        )
+        .all(providerId, source) as { model_id: string; mode: string; enabled: number }[];
+      const existingEnabled = new Map<string, boolean>();
+      for (const row of existingRows) {
+        existingEnabled.set(`${row.model_id}|${row.mode}`, !!row.enabled);
+      }
+
+      this.db
+        .prepare('DELETE FROM provider_models WHERE provider_id = ? AND source = ?')
+        .run(providerId, source);
+
       const insert = this.db.prepare(
         `INSERT INTO provider_models
            (provider_id, model_id, mode, name, context_window, default_max_tokens,
-            can_reason, supports_attachments, enabled, source, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            can_reason, supports_attachments, enabled, source, updated_at,
+            display_name, description, default_reasoning_level,
+            supported_reasoning_levels, apply_patch_tool_type, available_in_plans,
+            minimal_client_version, visibility, supported_in_api, input_modalities)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(provider_id, model_id, mode) DO UPDATE SET
            name = excluded.name,
            context_window = excluded.context_window,
            default_max_tokens = excluded.default_max_tokens,
            can_reason = excluded.can_reason,
            supports_attachments = excluded.supports_attachments,
+           enabled = excluded.enabled,
            source = excluded.source,
-           updated_at = excluded.updated_at`
+           updated_at = excluded.updated_at,
+           display_name = excluded.display_name,
+           description = excluded.description,
+           default_reasoning_level = excluded.default_reasoning_level,
+           supported_reasoning_levels = excluded.supported_reasoning_levels,
+           apply_patch_tool_type = excluded.apply_patch_tool_type,
+           available_in_plans = excluded.available_in_plans,
+           minimal_client_version = excluded.minimal_client_version,
+           visibility = excluded.visibility,
+           supported_in_api = excluded.supported_in_api,
+           input_modalities = excluded.input_modalities`
       );
       for (const m of models) {
+        const mode = m.mode ?? '';
+        const prev = existingEnabled.get(`${m.model_id}|${mode}`);
+        const finalEnabled = m.enabled ?? prev ?? m.default_enabled ?? true;
         insert.run(
           providerId,
           m.model_id,
-          m.mode ?? '',
+          mode,
           m.name,
           m.context_window ?? null,
           m.default_max_tokens ?? null,
           m.can_reason ? 1 : 0,
           m.supports_attachments ? 1 : 0,
-          (m.enabled ?? true) ? 1 : 0,
+          finalEnabled ? 1 : 0,
           m.source ?? source,
-          now
+          now,
+          m.display_name ?? null,
+          m.description ?? null,
+          m.default_reasoning_level ?? null,
+          m.supported_reasoning_levels ? JSON.stringify(m.supported_reasoning_levels) : null,
+          m.apply_patch_tool_type ?? null,
+          m.available_in_plans ? JSON.stringify(m.available_in_plans) : null,
+          m.minimal_client_version ?? null,
+          m.visibility ?? null,
+          m.supported_in_api === null || m.supported_in_api === undefined
+            ? null
+            : m.supported_in_api
+              ? 1
+              : 0,
+          m.input_modalities ? JSON.stringify(m.input_modalities) : null
         );
       }
     });
@@ -603,6 +707,32 @@ export class ProviderStore {
     this.db
       .prepare(`UPDATE provider_models SET ${sets.join(', ')} WHERE provider_id = ? AND model_id = ? AND mode = ?`)
       .run(...args);
+  }
+
+  // ─── Catalog ETag ─────────────────────────────────────────────
+
+  /**
+   * ETag from the last live model-catalog refresh, stored under
+   * `provider_configs.extra.catalog_etag`. The Codex `/models` endpoint
+   * returns an ETag that we can replay via `If-None-Match` to short-circuit
+   * with a 304 when nothing changed.
+   */
+  getProviderCatalogEtag(providerId: string): string | null {
+    const cfg = this.getProvider(providerId);
+    if (!cfg) return null;
+    const value = cfg.extra?.catalog_etag;
+    return typeof value === 'string' && value.length > 0 ? value : null;
+  }
+
+  setProviderCatalogEtag(providerId: string, etag: string | null): void {
+    const cfg = this.getProvider(providerId);
+    if (!cfg) return;
+    const nextExtra = { ...cfg.extra };
+    if (etag === null || etag === '') delete nextExtra.catalog_etag;
+    else nextExtra.catalog_etag = etag;
+    this.db
+      .prepare('UPDATE provider_configs SET extra = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(nextExtra), new Date().toISOString(), providerId);
   }
 
   // ─── OAuth ────────────────────────────────────────────────────

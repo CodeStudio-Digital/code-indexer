@@ -27,6 +27,9 @@ export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
   'claude-sonnet-4-6':          { maxTools: 200, contextWindow: 200_000 },
   'claude-haiku-4-5-20251001':  { maxTools: 120, contextWindow: 200_000, note: 'Haiku prefers tighter catalogs' },
   // ── OpenAI ───────────────────────────────────────────────────────────────
+  'gpt-5':                      { maxTools: 128, contextWindow: 272_000 },
+  'gpt-5.5':                    { maxTools: 128, contextWindow: 272_000 },
+  'gpt-5-mini':                 { maxTools: 128, contextWindow: 272_000 },
   'gpt-4o':                     { maxTools: 128, contextWindow: 128_000 },
   'gpt-4o-mini':                { maxTools: 64,  contextWindow: 128_000, note: 'Smaller context = tighter tool catalog' },
   'gpt-4-turbo':                { maxTools: 128, contextWindow: 128_000 },
@@ -34,13 +37,18 @@ export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
   'o1-mini':                    { maxTools: 64,  contextWindow: 128_000 },
   'o3-mini':                    { maxTools: 64,  contextWindow: 200_000 },
   // ── ZAI / GLM ─────────────────────────────────────────────────────────────
-  'glm-5.1':                    { maxTools: 50,  contextWindow: 200_000, note: 'GLM-5.1: 200K context / 128K max output; tool-name confusion rises past ~50 tools' },
-  'glm-4.6':                    { maxTools: 40,  contextWindow: 128_000 },
-  'glm-4.7-flash':              { maxTools: 40,  contextWindow: 128_000 },
+  'glm-5.1':                    { maxTools: 200, contextWindow: 200_000 },
+  'glm-4.6':                    { maxTools: 200, contextWindow: 128_000 },
+  'glm-4.7-flash':              { maxTools: 200, contextWindow: 128_000 },
   // ── DeepSeek ─────────────────────────────────────────────────────────────
-  'deepseek-chat':              { maxTools: 40,  contextWindow: 64_000 },
-  'deepseek-coder':             { maxTools: 40,  contextWindow: 64_000 },
-  'deepseek-reasoner':          { maxTools: 32,  contextWindow: 64_000 },
+  // V4 models (April 2026): 1M context, 384K max output, native thinking mode
+  // API hard limit: 128 tools max (https://api-docs.deepseek.com/api/create-chat-completion)
+  'deepseek-v4-flash':          { maxTools: 128, contextWindow: 1_000_000 },
+  'deepseek-v4-pro':            { maxTools: 128, contextWindow: 1_000_000 },
+  // Deprecated aliases (routed → v4-flash/v4-pro; retire Jul 24 2026)
+  'deepseek-chat':              { maxTools: 128, contextWindow: 1_000_000, note: 'deprecated → deepseek-v4-flash' },
+  'deepseek-coder':             { maxTools: 128, contextWindow: 1_000_000, note: 'deprecated → deepseek-v4-flash' },
+  'deepseek-reasoner':          { maxTools: 128, contextWindow: 1_000_000, note: 'deprecated → deepseek-v4-pro' },
   // ── Gemini ───────────────────────────────────────────────────────────────
   'gemini-2.5-flash':           { maxTools: 64,  contextWindow: 1_048_576 },
   'gemini-2.5-flash-preview-04-17': { maxTools: 64, contextWindow: 1_048_576 },

@@ -129,7 +129,26 @@ export async function openStream(
     await client.run();
   } catch (e) {
     if ((e as Error).name !== 'AbortError') {
-      updateSession(sid, { error: e instanceof Error ? e.message : String(e) });
+      // Special case: server returned 409 INTERACTION_PENDING because the
+      // runner was blocked inside an interactive tool. Surface as a
+      // structured handshake state instead of a raw error so the UI can
+      // render an explicit "interrupt and resend" choice.
+      const err = e as { status?: number; httpBody?: { code?: string; error?: string } };
+      if (err.status === 409 && err.httpBody?.code === 'INTERACTION_PENDING') {
+        const pendingContent =
+          (opts.body && typeof (opts.body as { content?: unknown }).content === 'string')
+            ? ((opts.body as { content: string }).content)
+            : '';
+        updateSession(sid, {
+          interactionPending: {
+            code: err.httpBody.code,
+            message: err.httpBody.error ?? 'Runner is waiting for an interactive answer.',
+            pendingContent,
+          },
+        });
+      } else {
+        updateSession(sid, { error: e instanceof Error ? e.message : String(e) });
+      }
     }
   } finally {
     if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Users, FileText, Trash2, Edit2, ChevronRight, ChevronLeft, PanelLeft, PanelLeftClose } from 'lucide-react';
+import { Plus, Users, FileText, Trash2, Edit2, ChevronRight, ChevronLeft, PanelLeft, PanelLeftClose, Copy } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
 import { useApi, apiDelete } from '../../hooks/useApi.js';
@@ -40,6 +40,16 @@ export function AgentsTab() {
     await apiDelete(`/company/sessions/${id}`);
     if (selectedSessionId === id) setSelectedSessionId(null);
     refetchSessions();
+  }
+
+  async function handleDuplicate(e: React.MouseEvent, id: number) {
+    e.stopPropagation();
+    const res = await fetch(`/api/company/sessions/${id}/duplicate`, { method: 'POST' });
+    if (!res.ok) return;
+    const data = await res.json() as { session: CompanySession };
+    refetchSessions();
+    setSelectedSessionId(data.session.id);
+    setAgentsSidebarOpen(false);
   }
 
   return (
@@ -112,15 +122,27 @@ export function AgentsTab() {
                   <div className="flex items-center gap-2">
                     <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                     <span className="font-medium truncate flex-1">{s.name}</span>
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => handleDelete(e as unknown as React.MouseEvent, s.id)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleDelete(e as unknown as React.MouseEvent, s.id); } }}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive cursor-pointer"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </span>
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => handleDuplicate(e as unknown as React.MouseEvent, s.id)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleDuplicate(e as unknown as React.MouseEvent, s.id); } }}
+                        className="text-muted-foreground hover:text-primary cursor-pointer"
+                        title={t('duplicateSession')}
+                      >
+                        <Copy className="h-3 w-3" />
+                      </span>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => handleDelete(e as unknown as React.MouseEvent, s.id)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleDelete(e as unknown as React.MouseEvent, s.id); } }}
+                        className="text-muted-foreground hover:text-destructive cursor-pointer"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-1.5 mt-1">
                     <StatusBadge status={s.status} />
@@ -178,6 +200,7 @@ export function AgentsTab() {
         {selectedSession ? (
           <div className="flex-1 min-h-0 overflow-hidden">
             <BuilderView
+              key={selectedSession.id}
               sessionId={selectedSession.id}
               sessionName={selectedSession.name}
               sessionStatus={selectedSession.status}

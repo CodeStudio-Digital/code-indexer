@@ -124,9 +124,12 @@ export function copilotOAuthRouter(store: ProviderStore): Hono {
       let model_count = 0;
       try {
         const fresh = store.getProvider(providerId)!;
-        const live = await discoverModels(store, fresh);
-        store.replaceModelsFromSource(providerId, 'live', live);
-        model_count = live.length;
+        const result = await discoverModels(store, fresh);
+        if (!result.notModified) {
+          store.replaceModelsFromSource(providerId, 'live', result.models);
+          store.setProviderCatalogEtag(providerId, result.etag);
+        }
+        model_count = result.models.length;
       } catch (e) {
         console.warn(`[copilot] initial model discovery failed: ${(e as Error).message}`);
       }

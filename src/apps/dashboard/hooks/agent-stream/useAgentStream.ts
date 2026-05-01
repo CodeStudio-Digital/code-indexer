@@ -60,10 +60,22 @@ export function useAgentStream(sessionId: number | null) {
         maxTurns?: number | null;
         /** Enable thinking/reasoning mode. */
         thinking?: boolean;
+        /**
+         * When true and a live run is currently blocked inside an interactive
+         * tool, ask the server to break the wait (`interruptWait`) and inject
+         * this message. Default false — the canonical answer flow is /answer
+         * or /plan-response. Set this to true to deliberately redirect a
+         * mid-loop master.
+         */
+        interject?: boolean;
       },
     ) => {
       if (!sessionId) return;
       const sid = sessionId;
+      // Clear any prior 409 handshake — a successful send or a fresh attempt
+      // both reset the slot. The catch path in openStream re-populates it
+      // when the server responds with INTERACTION_PENDING again.
+      updateSession(sid, { interactionPending: null });
       await runStream(
         sid,
         {
@@ -76,13 +88,35 @@ export function useAgentStream(sessionId: number | null) {
             profile: extras?.profile,
             max_turns: extras?.maxTurns ?? undefined,
             thinking: extras?.thinking || undefined,
+            interject: extras?.interject || undefined,
           },
         },
         onMessageComplete,
       );
     },
-    [sessionId, runStream],
+    [sessionId, runStream, updateSession],
   );
+
+  /**
+   * Resend the most recent message that was rejected with
+   * 409 INTERACTION_PENDING, this time asking the server to interrupt
+   * the runner's interactive wait. No-op if there is no pending handshake.
+   */
+  const sendWithInterject = useCallback(
+    async (onMessageComplete?: () => void) => {
+      if (sessionId === null) return;
+      const pending = stateMap[sessionId]?.interactionPending;
+      if (!pending) return;
+      await sendMessage(pending.pendingContent, onMessageComplete, { interject: true });
+    },
+    [sessionId, stateMap, sendMessage],
+  );
+
+  /** Discard the 409 handshake without resending. */
+  const dismissInteractionPending = useCallback(() => {
+    if (sessionId === null) return;
+    updateSession(sessionId, { interactionPending: null });
+  }, [sessionId, updateSession]);
 
   /**
    * Reattach to an in-flight run after the tab was closed/reopened.
@@ -224,7 +258,10 @@ export function useAgentStream(sessionId: number | null) {
     todos: active.todos,
     contextStatus: active.contextStatus,
     indexStatus: active.indexStatus,
+    interactionPending: active.interactionPending,
     sendMessage,
+    sendWithInterject,
+    dismissInteractionPending,
     reattach,
     abort,
     reset,

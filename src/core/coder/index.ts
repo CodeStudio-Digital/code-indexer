@@ -1,6 +1,7 @@
 import { resolve as resolvePath } from 'node:path';
 import { existsSync } from 'node:fs';
 import { CodeIndexDB } from '../../store/db.js';
+import { getDbWriter, isDbWriterEnabled, type DbWriter } from '../workers/dbWriter/client.js';
 import { loadConfig } from '../../utils/config.js';
 import { createCoderProvider } from '../providers/factory.js';
 import type { CoderProviderName } from './providers/adapter.js';
@@ -8,6 +9,7 @@ import { ToolRegistry } from './core/registry.js';
 import { CoderRunner } from './core/runner.js';
 import { buildSystemPrompt } from './core/system-prompt.js';
 import { fsTools } from './tools/fs.js';
+import { applyPatchTool } from './tools/apply-patch.js';
 import { shellTools } from './tools/shell.js';
 import { gitTools } from './tools/git.js';
 import {
@@ -27,6 +29,8 @@ import { buildSubagentTool, buildSpawnAgentsTool } from './tools/subagent.js';
 import { buildMasterTools } from './tools/company/master-tools.js';
 import { buildKanbanTools } from './tools/company/kanban-tools.js';
 import { buildBoardTools } from './tools/company/board-tools.js';
+import { buildQaTools } from './tools/company/qa/index.js';
+import { buildDesignSystemTools } from './tools/company/design-system/index.js';
 import { buildSubordinateTools } from './tools/company/subordinate-tools.js';
 import { sandboxTools } from './tools/company/sandbox-tools.js';
 import { docsTools } from './tools/company/docs-tools.js';
@@ -51,7 +55,8 @@ import { worktreeTools, createProjectWorktree } from './tools/worktree.js';
 import { SkillStore } from '../../store/skill-store.js';
 import type { ResolvedSkill, SkillTemplateContext } from './skills/types.js';
 import { buildInvokeSkillTool, buildSkillDiscoveryTools } from './skills/skill-tool-builder.js';
-import { buildSkillsPromptSection } from './skills/prompt-injector.js';
+import { buildMatchedSkillsPromptSection, buildSkillsPromptSection } from './skills/prompt-injector.js';
+import { matchSkills, type SkillMatchContext } from './skills/skill-matcher.js';
 import { SessionStore } from './sessions/store.js';
 import { ProviderStore } from '../../store/provider-store.js';
 import type { CoderSession } from './sessions/types.js';
@@ -129,6 +134,13 @@ export interface RunCoderOptions {
   /** Role identity text (from template systemPromptOverride) re-injected after compaction. */
   companyRoleOverride?: string;
   /**
+   * Per-role sampling temperature override (`CompanyRoleConfig.temperature`).
+   * Forwarded to `CoderRunner` and consumed by `resolveTemperature`. Lower
+   * precedence than the per-session value but higher than the agent preset
+   * default. Only meaningful for company subordinates.
+   */
+  roleTemperature?: number;
+  /**
    * Resolver for OAuth bearer tokens of external MCP servers. When provided,
    * external servers with `auth_type='oauth2'` automatically receive
    * `Authorization: Bearer <access>` (with auto-refresh). When null/omitted,
@@ -136,6 +148,14 @@ export interface RunCoderOptions {
    * user to complete the OAuth flow.
    */
   mcpBearerResolver?: import('../mcp-client/auth/use-cases/resolve-mcp-bearer.js').ResolveMcpBearer | null;
+  /**
+   * Phase 2 hardening: explicit escape hatch the policy module consults
+   * when running in strict mode (Phase 5). Today this flag is reserved —
+   * the runner builds its policy context with `strict: false` so the
+   * adminOverride value has no observable effect on behaviour. Wired in
+   * advance so the API surface is stable when strict mode is enabled.
+   */
+  adminOverride?: boolean;
 }
 
 export interface IndexStatus {
@@ -162,6 +182,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const config = loadConfig();
   const db = new CodeIndexDB(config.dbPath);
   const store = new SessionStore(config.dbPath);
+  const dbWriter: DbWriter | null = isDbWriterEnabled() ? getDbWriter(config.dbPath) : null;
 
   // Resolve or create the session. `agent` is persisted on the session row so
   // resume paths (/continue, reattach) honour the user's preset even when the
@@ -228,6 +249,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(fsTools);
   registry.registerAll(shellTools);
   registry.registerAll(gitTools);
+  // apply_patch is gated to ChatGPT/Codex sessions because it doubles up
+  // with multi_edit/edit_file for other providers (no benefit, more tokens).
+  // The Codex backend signals its preference via apply_patch_tool_type and
+  // the chatgpt provider switches the wire shape to `type: 'custom'`.
+  if (provider.name === 'chatgpt') {
+    registry.register(applyPatchTool);
+  }
 
   // Company subordinates get master-directed communication tools instead of
   // the human-facing ask_user / submit_plan / submit_tasks. The replacement
@@ -241,24 +269,23 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     registry.registerAll(tasksTools);
     registry.registerAll(interactionTools);
   }
-  // Sandbox-introspection tools (read_sandbox_logs): offered to both
-  // master and subordinates whenever the session has a builder
-  // sandbox attached. Without the binding the tool has nothing to
-  // inspect, so we gate registration on its presence.
-  if (opts.companyContext?.sandbox) {
+  // Builder-mode tools: offered to both master and subordinates in builder
+  // sessions. The gate is on session configuration (`builderStack`) rather
+  // than a live sandbox binding so the master can access env/database tools
+  // even when the primary container is temporarily unavailable.
+  // Tools that actually need a live container (sandboxTools, docsTools) are
+  // still registered — they will return clear errors if called without one.
+  if (opts.companyContext?.sandbox || opts.companyContext?.builderStack) {
     registry.registerAll(sandboxTools);
-    // Docs tools are sandbox-only: they write into `<workdir>/docs/`
-    // which only exists when a container is attached. Registering them
-    // without a sandbox would expose agents to no-op tools that always
-    // error out — better to hide them.
+    // Docs tools write into `<workdir>/docs/` inside the container.
+    // Registered for all builder sessions; fail gracefully when the
+    // container is down so the agent gets a useful error message.
     registry.registerAll(docsTools);
-    // Env tools manage session-shared env vars used by every container.
-    // Gated on the same sandbox presence check so they only appear in
-    // builder-mode sessions.
+    // Env tools manage session-shared env vars stored in the DB —
+    // they work independently of any container being alive.
     registry.registerAll(envTools);
-    // Database tools let the agent query/introspect Postgres/MySQL
-    // instances the user registered in the Databases tab. Same gate as
-    // env/docs — no sandbox means no multi-service scenario to support.
+    // Database tools query Postgres/MySQL instances registered in the
+    // Databases tab — DB-backed, do not require the sandbox container.
     registry.registerAll(databaseTools);
   }
   // expand_toolset registered AFTER external MCP servers (see below) so its
@@ -374,7 +401,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     const parentTools = allDisabled.size > 0
       ? registry.list().filter((t) => !allDisabled.has(t.name))
       : registry.list();
-    const subagentDeps = { provider, parentTools };
+    const subagentDeps = { provider, parentTools, sessionStore: store };
     registry.register(buildSubagentTool(subagentDeps));
     registry.register(buildSpawnAgentsTool(subagentDeps));
   }
@@ -386,13 +413,31 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Subordinate kanban tools: self-service card updates (comment, checklist, move-to-review)
     if (!isMaster && agentRunId != null) {
       registry.registerAll(buildSubordinateKanbanTools(orchestrator, agentRole, agentRunId));
+      // QA tools: gated by skill (qa-playwright) via the skill's allowed-tools.
+      // The tool is harmless when not used, so we register unconditionally for
+      // subordinates and let the prompt-injector instructions discipline usage.
+      registry.registerAll(buildQaTools(orchestrator, agentRole, agentRunId));
+      // Design System Creator tools: same pattern — gated by per-skill
+      // allowed-tools (ds-extractor, ds-components-*, ds-mcp-server, ds-docs).
+      registry.registerAll(buildDesignSystemTools(orchestrator, agentRole, agentRunId));
     }
     if (isMaster) {
       registry.registerAll(buildMasterTools(orchestrator));
       registry.registerAll(buildKanbanTools(orchestrator));
+      // Master also gets the DS publish/status tools (it owns the publish step).
+      registry.registerAll(buildDesignSystemTools(orchestrator, agentRole, agentRunId));
       // Strip code-level tools from Master — it should only orchestrate, not read code
       registry.filterInPlace(isMasterAllowed);
       console.log(`[coder] Master: filtered to ${registry.list().length} tools (orchestration-only)`);
+    }
+    // Diagnostic log of DS tool count post-registration. Lets the operator
+    // distinguish "tool missing from registry" (this log shows 0) from
+    // "model didn't call tool" (log shows 4) when a round goes wrong.
+    const dsCount = registry.list().filter((t) => t.name.startsWith('ds_')).length;
+    if (dsCount > 0) {
+      console.log(
+        `[coder] DS tools registered for ${isMaster ? 'master' : `subordinate (${agentRole})`}: ${dsCount}`,
+      );
     }
   }
 
@@ -547,7 +592,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   if (resolvedSkills.length > 0) {
     // Discovery tools — always registered for all active skills
-    registry.registerAll(buildSkillDiscoveryTools(resolvedSkills, skillTemplateCtx));
+    registry.registerAll(
+      buildSkillDiscoveryTools(resolvedSkills, skillTemplateCtx, store, session.id),
+    );
 
     // invoke_skill — only for tool-mode skills (logs usage)
     const toolModeSkills = resolvedSkills.filter(
@@ -555,7 +602,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     );
     if (toolModeSkills.length > 0) {
       registry.register(
-        buildInvokeSkillTool(toolModeSkills, skillTemplateCtx, config.dbPath, session.id),
+        buildInvokeSkillTool(toolModeSkills, skillTemplateCtx, config.dbPath, session.id, store),
       );
     }
   }
@@ -588,10 +635,46 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     systemPrompt += '\n' + opts.companyPromptBlock;
   }
 
-  // Append skill awareness block — compact list + instructions to call get_skill_content
+  // Append skill awareness block. Strategy:
+  //   1. If we have a company context (master/subordinate), use the matcher
+  //      to filter skills by role/tags/paths and inject the matched ones
+  //      with full body (high confidence) or as suggestions (lower).
+  //   2. Otherwise (legacy / non-company sessions), fall back to the
+  //      compact awareness block listing all enabled skills.
   if (resolvedSkills.length > 0) {
-    systemPrompt += buildSkillsPromptSection(resolvedSkills, skillTemplateCtx);
+    const matchCtx: SkillMatchContext = {
+      role: opts.companyContext?.agentRole,
+      mode: opts.companyContext?.isMaster ? 'master' : opts.companyContext ? 'subordinate' : undefined,
+      cwd: project.root_path,
+      recentFiles: [],
+      sessionTags: [],
+    };
+    const matched = matchSkills(resolvedSkills, matchCtx);
+    if (matched.length > 0) {
+      systemPrompt += buildMatchedSkillsPromptSection(matched, skillTemplateCtx);
+    } else {
+      systemPrompt += buildSkillsPromptSection(resolvedSkills, skillTemplateCtx);
+    }
   }
+
+  // Persist the fully assembled system prompt for the Input tab in the
+  // session details modal. Dedup by hash inside SessionStore — typical
+  // restarts are byte-identical (cache prefix is intentionally stable).
+  store.recordSessionInput({
+    session_id: session.id,
+    kind: 'system_prompt',
+    source_label: 'turn-start',
+    content: systemPrompt,
+    meta: {
+      provider: session.provider,
+      profile: preResolvedProfile,
+      planMode: !!opts.planMode,
+      mcp_available: mcpBridgeOk,
+      skill_ids: resolvedSkills.map((s) => s.id),
+      company_role: opts.companyContext?.agentRole ?? null,
+      is_master: !!opts.companyContext?.isMaster,
+    },
+  });
 
   // Reuse the history we loaded early for profile resolution.
   const initialMessages: AgentMessage[] = initialMessagesEarly;
@@ -687,6 +770,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     systemPrompt,
     toolContext,
     initialMessages,
+    sessionId: session.id,
+    sessionStore: store,
     maxTurns: opts.maxTurns ?? 50,
     planMode: opts.planMode,
     thinking: opts.thinking,
@@ -700,6 +785,24 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     context_window: sessionContextWindow,
     isCompanySubordinate: opts.companyContext != null && !opts.companyContext.isMaster,
     companyRoleOverride: opts.companyRoleOverride,
+    adminOverride: opts.adminOverride,
+    agentId: effectiveAgentId,
+    sessionTemperature: session.temperature_override,
+    roleTemperature: opts.roleTemperature,
+    // Stateful Responses API resume — populated only for ChatGPT/Codex sessions
+    // that completed at least one turn with `store: true`. Other providers
+    // ignore these fields.
+    previousResponseId: session.last_response_id,
+    previousResponseMessageCount: session.last_response_message_count,
+    onResponseId: (responseId, messageCount) => {
+      try {
+        store.setLastResponseState(session.id, responseId, messageCount);
+      } catch (e) {
+        console.warn(
+          `[coder] setLastResponseState failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    },
   });
 
   // Rehydrate the lightweight todo list from the DB so a session resume
@@ -843,18 +946,30 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
   let pendingTurn: PendingTurn | null = null;
 
-  const flushPendingTurn = () => {
+  const flushPendingTurn = async (): Promise<void> => {
     if (!pendingTurn) return;
-    const hasSubUsage = pendingTurn.subagentUsage.input_tokens > 0
-      || pendingTurn.subagentUsage.output_tokens > 0;
-    store.persistAssistantTurn({
-      session_id: session.id,
-      message: pendingTurn.message,
-      usage: pendingTurn.usage,
-      tool_calls: pendingTurn.toolCalls,
-      subagent_usage: hasSubUsage ? pendingTurn.subagentUsage : undefined,
-    });
+    const turn = pendingTurn;
     pendingTurn = null;
+    const hasSubUsage = turn.subagentUsage.input_tokens > 0
+      || turn.subagentUsage.output_tokens > 0;
+    const payload = {
+      session_id: session.id,
+      message: turn.message,
+      usage: turn.usage,
+      tool_calls: turn.toolCalls,
+      subagent_usage: hasSubUsage ? turn.subagentUsage : undefined,
+    };
+    try {
+      if (dbWriter) {
+        await dbWriter.persistAssistantTurn(payload);
+      } else {
+        store.persistAssistantTurn(payload);
+      }
+    } catch (err) {
+      // Non-fatal: the agent loop continues. The bus log is the authoritative
+      // transcript and can be reconstructed if persistence fails for one turn.
+      console.error(`[coder] persistAssistantTurn failed for session ${session.id}:`, err);
+    }
   };
 
   runner.on('tool_call_start', (id, name, input) => {
@@ -925,7 +1040,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Order matters: flush the assistant turn (message + tool rows) BEFORE the
   // 'tool' role message, so the FK chain stays consistent on resume.
   runner.on('turn_start', () => {
-    flushPendingTurn();
+    void flushPendingTurn();
     flushToolMessages();
   });
 
@@ -937,20 +1052,24 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   const donePromise = runner
     .run()
-    .then((res) => {
-      flushPendingTurn();
+    .then(async (res) => {
+      await flushPendingTurn();
       flushToolMessages();
       store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
       return { reason: res.reason, usage: res.totalUsage, error: lastRunnerError?.message };
     })
-    .catch((e) => {
-      flushPendingTurn();
+    .catch(async (e) => {
+      await flushPendingTurn();
       flushToolMessages();
       store.updateSessionStatus(session.id, 'error');
       throw e;
     })
     .finally(async () => {
       void lastToolMessageId; // silence unused
+      // Drain any pending async writes for THIS session before closing the
+      // local DB handles. The writer is a process-wide singleton with its
+      // own connection — it is not closed here, only on process shutdown.
+      if (dbWriter) await dbWriter.drainSession(session.id);
       await mcpServerManager.closeAll();
       await bridge.close();
       for (const b of extraBridges) await b.close();
@@ -964,6 +1083,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 function defaultModelFor(provider: CoderProviderName): string {
   switch (provider) {
     case 'anthropic':
+    case 'claude-code':
       return 'claude-sonnet-4-6';
     case 'openai':
       return 'gpt-4o-mini';

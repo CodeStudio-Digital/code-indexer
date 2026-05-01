@@ -39,6 +39,23 @@ import { composeMcpClientAuth } from '../../core/mcp-client/auth/composition.js'
 import { createMcpServersOauthRouter } from './admin/mcp-servers-oauth.routes.js';
 import { mergeDBCapabilities } from '../../core/coder/providers/capabilities.js';
 import { startProviderRefreshScheduler } from '../../core/indexer/providers/scheduled-refresh.js';
+import { ensureBuiltinSkills } from '../../core/bootstrap/ensure-builtin-skills.js';
+import {
+  setQaTestRunStore,
+  setQaEndpointEnvStore,
+} from '../../core/coder/tools/company/qa/index.js';
+import { startQaWatchdog } from '../../core/qa/watchdog.js';
+import { setDesignSystemStore, setDesignSystemSkillStore } from '../../core/coder/tools/company/design-system/index.js';
+import { ChromeService, setChromeService } from '../../core/chrome-service/chrome-service.js';
+import { VerdaccioService, setVerdaccioService } from '../../core/verdaccio/verdaccio-service.js';
+import {
+  setSandboxServiceEnvStore,
+  hasQaPlaywrightSkill,
+} from '../../core/coder/company/services/SandboxService.js';
+import { setQaPreviewConfig } from '../../core/sandbox/sandbox-manager.js';
+import { mountDesignSystemRoutes } from './server/routes/design-system/index.js';
+import { closeDbWriter } from '../../core/workers/dbWriter/client.js';
+import { closeIndexJobPool } from '../../core/workers/indexJob/client.js';
 
 export function createApp() {
   const deps = createDeps();
@@ -53,6 +70,46 @@ export function createApp() {
   setCompanyLocalProjectStore(deps.companyLocalProjectStore);
   setEnvToolStore(deps.companySessionEnvStore);
   setDatabaseToolStores(deps.companySessionDatabaseStore, deps.companySessionEnvStore);
+  setQaTestRunStore(deps.qaTestRunStore);
+  setQaEndpointEnvStore(deps.companySessionEnvStore);
+  setDesignSystemStore(deps.designSystemStore);
+  setDesignSystemSkillStore(deps.skillStore);
+  setSandboxServiceEnvStore(deps.companySessionEnvStore);
+
+  // Wire QA preview-routing config (v4.3). Lets `syncManagedEnvs` mint
+  // long-lived `PLAYWRIGHT_BASE_URL_*` URLs pointing at this http-api
+  // process from sibling containers (the Chrome Service). Gated by
+  // `hasQaPlaywrightSkill` so non-QA sessions don't get the env vars.
+  setQaPreviewConfig({
+    httpApiPort: deps.config.dashboard.port,
+    hasQaPlaywrightSkill: (sessionId: number) => {
+      try {
+        const session = deps.companyStore.getCompanySession(sessionId);
+        return session ? hasQaPlaywrightSkill(session.config_json ?? '') : false;
+      } catch {
+        return false;
+      }
+    },
+  });
+
+  // Wire the Chrome Service singleton so the admin routes + the QA
+  // tools can observe lifecycle. Boot recovery (auto-start when
+  // `enabled=true` in the DB) runs below after migrations finish.
+  const chromeService = new ChromeService({
+    store: deps.chromeServiceStore,
+    companyStore: deps.companyStore,
+    envStore: deps.companySessionEnvStore,
+    httpApiPort: deps.config.dashboard.port,
+  });
+  setChromeService(chromeService);
+
+  // Verdaccio singleton — embedded npm registry for the Design System
+  // Creator pipeline. Boot recovery is handled together with chrome's,
+  // both best-effort.
+  const verdaccioService = new VerdaccioService({
+    store: deps.verdaccioStore,
+  });
+  setVerdaccioService(verdaccioService);
 
   // Boot reconciliation for host-process runs. Anything left in a live
   // state by the previous server instance is impossible to re-attach
@@ -107,6 +164,49 @@ export function createApp() {
     }
   } catch (e) {
     console.warn(`[company] Startup recovery failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // QA test runs: any row in `status='running'` after restart cannot be
+  // a live Playwright invocation (the host process is gone). Mark them
+  // aborted so the dashboard's TestsTab stops showing the spinner
+  // forever. See sessão 68 incident (run id=1 stuck running).
+  try {
+    const { recovered } = deps.qaTestRunStore.recoverStaleRuns();
+    if (recovered > 0) {
+      console.log(`[qa-recovery] Boot: ${recovered} stale qa_test_runs aborted`);
+    }
+  } catch (e) {
+    console.warn(`[qa-recovery] Boot failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // QA orphan-run watchdog (v4.4): every minute, sweep `running` rows
+  // that have received zero `qa_test_results` for >10 min and mark them
+  // `errored`. Closes the door on session-68-style ghost runs where the
+  // streaming reporter was wired wrong but the agent moved on.
+  startQaWatchdog(deps.qaTestRunStore);
+
+  // Verdaccio auto-start: same idempotent pattern as chrome-service.
+  void verdaccioService.recoverOnBoot().catch((e) => {
+    console.warn(
+      `[verdaccio] Boot recovery failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  });
+
+  // Seed builtin skills (e.g. `qa-playwright`) into the DB. Idempotent —
+  // re-runs on every boot, but only inserts/updates when the file's
+  // `version` is newer than the existing row. User clones (different id
+  // with `source='user'`) are never touched. Failures are non-fatal.
+  try {
+    const seeded = ensureBuiltinSkills(deps.skillStore);
+    if (seeded.inserted.length > 0 || seeded.updated.length > 0) {
+      console.log(
+        `[builtin-skills] Boot: ${seeded.inserted.length} inserted, ${seeded.updated.length} updated, ${seeded.skippedSameVersion.length} unchanged`,
+      );
+    }
+  } catch (e) {
+    console.warn(
+      `[builtin-skills] Boot seed failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 
   const app = new Hono();
@@ -174,22 +274,34 @@ export function createApp() {
   mountStatsRoutes(app, deps);
   app.route('/api/admin', createAdminRouter(deps.providerStore));
   mountCoderRoutes(app, deps);
+  // Design System Creator routes (sessions / versions / storybook proxy).
+  // Mounted after coder routes so the company sessions referenced by
+  // DS sessions are already wired.
+  mountDesignSystemRoutes(app, deps);
   // Builder-mode sandbox preview proxy. Dormant for non-builder sessions
   // (the route 404s when no sandbox is registered for the sessionId).
   mountPreviewRoutes(app, deps);
   mountWorkspaceRoutes(app, deps);
 
-  return { app, db: deps.db };
+  return { app, db: deps.db, chromeService };
 }
 
 export async function startServer(port: number, host: string) {
-  const { app } = createApp();
+  const { app, chromeService } = createApp();
   console.log(`MCP Code Indexer API running at http://${host}:${port}`);
   // `serve()` returns the underlying Node http.Server. We need that
   // reference to attach the WebSocket upgrade handler for the preview
   // proxy (Vite HMR uses WS). Hono itself has no notion of upgrades.
   const server = serve({ fetch: app.fetch, port, hostname: host });
   attachPreviewUpgrade(server as unknown as import('node:http').Server);
+
+  // Chrome Service auto-start deferred until after serve() so the
+  // /api/health reachability probe inside recoverOnBoot finds the port open.
+  void chromeService.recoverOnBoot().catch((e) => {
+    console.warn(
+      `[chrome-service] Boot recovery failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  });
 }
 
 // ── Periodic heap monitor ──────────────────────────────
@@ -203,6 +315,26 @@ if (HEAP_LOG_INTERVAL_MS > 0) {
     );
   }, HEAP_LOG_INTERVAL_MS).unref();
 }
+
+// Drain the dbWriter worker on graceful shutdown so the latest assistant
+// turn(s) land before the process exits. Without this, SIGINT/SIGTERM during
+// an active session can drop pending writes.
+let shuttingDown = false;
+const gracefulShutdown = (signal: NodeJS.Signals): void => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  void (async () => {
+    try {
+      await Promise.allSettled([closeDbWriter(), closeIndexJobPool()]);
+    } catch (err) {
+      console.error('[shutdown] worker pool close failed:', err);
+    } finally {
+      process.exit(signal === 'SIGTERM' ? 0 : 130);
+    }
+  })();
+};
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
 
 // Auto-start when executed directly
 const isDirectRun = process.argv[1]?.replace(/\\/g, '/').includes('api/server');

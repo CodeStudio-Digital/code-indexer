@@ -1,0 +1,237 @@
+/**
+ * Drill-down for a single QA run — lists every test outcome with its
+ * status, duration, error, and inline icons for screenshot / video /
+ * trace artifacts. Header includes a button to open the full
+ * Playwright HTML report. Modal closes via Escape or backdrop.
+ *
+ * v4.2: results are `QaTestResultWithUrls` (server-enriched) so the
+ * frontend doesn't reimplement URL encoding. Lightbox preview for
+ * images and videos via `ArtifactPreview`.
+ */
+import React, { useEffect, useState } from 'react';
+import { ExternalLink, Camera, Film, FileText, Bug } from 'lucide-react';
+import { fetchRunDetail } from '../api/qa-api.js';
+import {
+  formatDurationMs,
+  summariseRun,
+} from '../../../../../../core/qa/parsers/run-status-format.js';
+import { QaStatusBadge } from '../shared/QaStatusBadge.js';
+import { TraceLinkButton } from '../shared/TraceLinkButton.js';
+import { ArtifactPreview } from '../shared/ArtifactPreview.js';
+import type { QaRun, QaTestResultWithUrls } from '../shared/types.js';
+
+interface Props {
+  sessionId: number;
+  runId: number;
+  onClose: () => void;
+}
+
+interface RunDetail {
+  run: QaRun;
+  results: QaTestResultWithUrls[];
+  report_url: string;
+}
+
+export function RunDetailModal({ sessionId, runId, onClose }: Props) {
+  const [data, setData] = useState<RunDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchRunDetail({ sessionId, runId })
+      .then((d) => !cancelled && setData(d))
+      .catch((e: Error) => !cancelled && setError(e.message));
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, runId]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 bg-background/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-card border rounded-lg shadow-lg max-w-3xl w-full max-h-[80vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex items-center justify-between px-4 py-3 border-b gap-3">
+          <h2 className="text-sm font-semibold">QA run detail</h2>
+          <div className="flex items-center gap-3 text-xs">
+            {data?.report_url && (
+              <a
+                href={data.report_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-primary hover:underline"
+                title="Open the full Playwright HTML report"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Open full HTML report
+              </a>
+            )}
+            <button
+              onClick={onClose}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Close"
+            >
+              Close (Esc)
+            </button>
+          </div>
+        </header>
+        <div className="flex-1 overflow-auto p-4 space-y-4">
+          {error && <p className="text-sm text-red-600">Failed: {error}</p>}
+          {!data && !error && (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          )}
+          {data && <RunDetailBody run={data.run} results={data.results} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RunDetailBody({ run, results }: { run: QaRun; results: QaTestResultWithUrls[] }) {
+  return (
+    <>
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="text-base font-semibold truncate">{run.suite}</span>
+          <QaStatusBadge kind="run" status={run.status} />
+          {run.service_id && run.service_id !== 'main' && (
+            <span className="text-[10px] uppercase tracking-wider bg-muted px-1.5 py-0.5 rounded">
+              {run.service_id}
+            </span>
+          )}
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {summariseRun(run.passed, run.failed, run.skipped)} ·{' '}
+          {formatDurationMs(run.duration_ms)} · {run.trigger}
+        </div>
+      </div>
+
+      {results.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No individual test rows captured for this run.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {results.map((r) => (
+            <ResultRow key={r.id} sessionId={run.company_session_id} result={r} />
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+function ResultRow({
+  sessionId,
+  result,
+}: {
+  sessionId: number;
+  result: QaTestResultWithUrls;
+}) {
+  const [preview, setPreview] = useState<
+    | { kind: 'screenshot'; url: string; path: string }
+    | { kind: 'video'; url: string; path: string }
+    | null
+  >(null);
+
+  return (
+    <li className="border rounded p-2 text-sm">
+      <div className="flex items-center gap-2">
+        <QaStatusBadge kind="test" status={result.status} />
+        <span className="truncate">{result.test_name}</span>
+        <span className="ml-auto text-xs text-muted-foreground">
+          {formatDurationMs(result.duration_ms)}
+        </span>
+      </div>
+      <div className="text-xs text-muted-foreground mt-0.5 truncate">
+        {result.spec_file}
+      </div>
+      {result.error && (
+        <pre className="mt-2 text-xs whitespace-pre-wrap text-red-700 bg-red-50 p-2 rounded">
+          {result.error}
+        </pre>
+      )}
+      {(result.screenshot_url ||
+        result.video_url ||
+        result.trace_url ||
+        result.summary_md_url ||
+        result.kanban_card_id) && (
+        <div className="mt-2 flex items-center gap-3 text-xs flex-wrap">
+          {result.screenshot_url && result.screenshot_path && (
+            <button
+              onClick={() =>
+                setPreview({
+                  kind: 'screenshot',
+                  url: result.screenshot_url!,
+                  path: result.screenshot_path!,
+                })
+              }
+              className="inline-flex items-center gap-1 text-primary hover:underline"
+              title={`Preview ${result.screenshot_path}`}
+            >
+              <Camera className="h-3 w-3" /> screenshot
+            </button>
+          )}
+          {result.video_url && result.video_path && (
+            <button
+              onClick={() =>
+                setPreview({
+                  kind: 'video',
+                  url: result.video_url!,
+                  path: result.video_path!,
+                })
+              }
+              className="inline-flex items-center gap-1 text-primary hover:underline"
+              title={`Preview ${result.video_path}`}
+            >
+              <Film className="h-3 w-3" /> video
+            </button>
+          )}
+          {result.trace_path && (
+            <TraceLinkButton sessionId={sessionId} tracePath={result.trace_path} />
+          )}
+          {result.summary_md_url && (
+            <a
+              href={result.summary_md_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-primary hover:underline"
+              title={`Open ${result.summary_md_path ?? 'summary.md'}`}
+            >
+              <FileText className="h-3 w-3" /> summary.md
+            </a>
+          )}
+          {result.kanban_card_id && (
+            <a
+              href={`#/kanban?card=${result.kanban_card_id}`}
+              className="inline-flex items-center gap-1 text-red-600 hover:underline"
+              title="Open the auto-created bug card"
+            >
+              <Bug className="h-3 w-3" /> bug card #{result.kanban_card_id}
+            </a>
+          )}
+        </div>
+      )}
+      {preview && (
+        <ArtifactPreview
+          kind={preview.kind}
+          url={preview.url}
+          path={preview.path}
+          onClose={() => setPreview(null)}
+        />
+      )}
+    </li>
+  );
+}

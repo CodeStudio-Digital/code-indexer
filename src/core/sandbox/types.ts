@@ -50,7 +50,18 @@ export type SandboxStack =
   | 'angular'
   | 'vite-api'
   | 'cf-worker'
-  | 'local-process';
+  | 'local-process'
+  /**
+   * Bare Node.js sandbox — no scaffolding, no dev server, no preview.
+   * Used by Design System Creator sessions: the agent receives a
+   * container with Node + npm + git, the virtual project root is
+   * bind-mounted at `/app`, and the uploaded theme sits ready at
+   * `/app/design_system/`. The pipeline does NOT need a Vite app
+   * scaffold — that pollutes the workdir with `package.json`, `src/`,
+   * `node_modules/` etc. and confuses the extractor about what's
+   * "the theme" vs. "the scaffold".
+   */
+  | 'node-only';
 
 /**
  * Subset of `SandboxStack` actually exposed as selectable options in the
@@ -61,6 +72,20 @@ export type SandboxStack =
  */
 export const BUILDER_STACKS = ['react-ts', 'vue-ts', 'angular', 'vite-api', 'cf-worker'] as const;
 export type BuilderStack = (typeof BUILDER_STACKS)[number];
+
+/**
+ * Stacks the sandbox lifecycle routes (GET/POST /sandbox, restart-dev,
+ * logs) accept. Superset of `BUILDER_STACKS`: includes internal-only
+ * stacks like `'node-only'` (used by Design System Creator) that aren't
+ * exposed in user-facing pickers but still need to be provisionable,
+ * inspectable, and restartable from the dashboard / API.
+ *
+ * Keep `BUILDER_STACKS` for user-input validation (NewCompanyDialog
+ * options, snapshot seeding) and `PROVISIONABLE_STACKS` for routes that
+ * touch any session backed by a real container.
+ */
+export const PROVISIONABLE_STACKS = [...BUILDER_STACKS, 'node-only'] as const;
+export type ProvisionableStack = (typeof PROVISIONABLE_STACKS)[number];
 
 export interface SandboxLimits {
   /** Memory limit passed to the OCI runtime (e.g. "1g", "512m"). */

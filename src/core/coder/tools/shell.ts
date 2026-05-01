@@ -6,6 +6,7 @@ import { pathFor } from './paths.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_BYTES = 100_000;
+const MAX_STDIN_BYTES = 100_000;
 
 /**
  * Resolve the shell port for a tool invocation. Falls back to the
@@ -115,12 +116,32 @@ const runCommandTool: CoderTool = {
   name: 'run_command',
   description: maybeTerse(RUN_COMMAND_DESC),
   source: 'native',
+  // `mutates: false` is INTENTIONAL even though run_command can mutate
+  // the workspace. The shell tool gates internally via `isReadOnlyCommand`
+  // below — letting through `grep`, `ls`, `cat`, etc. during plan mode.
+  // If we set `mutates: true` here the policy module would block ALL
+  // commands during plan mode, including the read-only set the agent
+  // needs to explore before submitting a plan. The internal allowlist
+  // is the actual safety net here; `parallelSafe: false` because shell
+  // side effects make concurrent dispatch unsafe regardless.
+  mutates: false,
+  parallelSafe: false,
+  riskLevel: 'execute',
   parameters: {
     type: 'object',
     properties: {
       command: { type: 'string', description: 'Shell command to execute' },
       cwd: { type: 'string', description: 'Optional subdirectory relative to project root' },
       timeout_ms: { type: 'number', description: 'Timeout in ms (default 120000)' },
+      stdin: {
+        type: 'string',
+        description:
+          'Optional payload written to the process stdin (then EOF). Use this to feed ' +
+          'multi-line code to interpreters: command="python -" with the script body in ' +
+          'stdin, or command="node -" / command="bash". Avoids cross-shell quoting bugs ' +
+          '(here-strings, backslashes, $VAR expansion differ between cmd / bash / ' +
+          'PowerShell / sh-in-container). Max 100000 bytes.',
+      },
     },
     required: ['command'],
     additionalProperties: false,
@@ -155,12 +176,22 @@ const runCommandTool: CoderTool = {
       cwd = abs;
     }
 
+    let stdin: string | undefined;
+    if (args.stdin !== undefined && args.stdin !== null) {
+      if (typeof args.stdin !== 'string') return err('stdin must be a string');
+      if (Buffer.byteLength(args.stdin, 'utf-8') > MAX_STDIN_BYTES) {
+        return err(`stdin exceeds ${MAX_STDIN_BYTES} bytes; stage to a file and read it instead`);
+      }
+      stdin = args.stdin;
+    }
+
     const timeout = typeof args.timeout_ms === 'number' ? args.timeout_ms : DEFAULT_TIMEOUT_MS;
     const result = await shellPort(ctx).exec(command, {
       cwd,
       timeoutMs: timeout,
       signal: ctx.signal,
       maxOutputBytes: MAX_OUTPUT_BYTES,
+      stdin,
     });
 
     const lines: string[] = [];

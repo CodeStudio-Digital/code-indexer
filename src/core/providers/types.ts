@@ -17,8 +17,12 @@ export type CredKind = 'api-key' | 'oauth' | 'aws';
 
 export interface ResolvedCreds {
   apiKey?: string;
+  /** Bearer token auth used by OAuth-backed Anthropic/Claude Code flows. */
+  authToken?: string;
   baseURL?: string;
   extraHeaders?: Record<string, string>;
+  /** Optional provider-specific fetch implementation (proxy/retry/auth parity). */
+  fetch?: typeof fetch;
   aws?: {
     accessKeyId?: string;
     secretAccessKey?: string;
@@ -59,6 +63,13 @@ export interface CreateCoderOpts {
    * Unused by every other shape.
    */
   cloudCodeSessionId?: string;
+  /**
+   * Database id of the provider_configs row this instance corresponds to.
+   * Some shapes (currently ChatGPT) use it to look up persisted per-model
+   * metadata (reasoning levels, apply_patch_tool_type, etc.) from
+   * `provider_models`. Optional — definitions that don't need it ignore.
+   */
+  providerId?: string;
 }
 
 export interface ProviderDefinition {

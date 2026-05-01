@@ -11,12 +11,20 @@
  * the preview proxy relies on its exact shape).
  */
 export interface BuilderPromptContext {
-  /** Container-side workdir (typically `/app`). */
-  workdir: string;
+  /**
+   * Container-side workdir (typically `/app`). Optional — omitted when
+   * the session is in builder mode but the primary container is not yet
+   * running (e.g. provision failure). Master prompts still get the
+   * builder block; subordinate prompts should always have this set.
+   */
+  workdir?: string;
   /** Stack name (`react-ts`, `vue-ts`, etc.). */
   stack: string;
-  /** Public URL of the live preview iframe. */
-  previewUrl: string;
+  /**
+   * Public URL of the live preview iframe. Optional for the same reason
+   * as `workdir` — may be absent when the container is down.
+   */
+  previewUrl?: string;
   /**
    * Siblings on the same session — every container reachable on the
    * shared docker network. Rendered as a dedicated block so subordinates
@@ -106,6 +114,23 @@ export interface SubordinatePromptContext {
  * breaking the preview iframe (ECONNREFUSED at the proxy) and HMR.
  */
 function buildBuilderInstructions(b: BuilderPromptContext): string {
+  // When workdir/previewUrl are absent the primary container is not running.
+  // Return a lightweight awareness block so the agent knows the session is
+  // in builder mode but avoids container-specific instructions that would
+  // be misleading without a live sandbox.
+  if (!b.workdir || !b.previewUrl) {
+    return `
+
+## BUILDER MODE — ${b.stack} session (primary container unavailable)
+
+This is a **${b.stack}** builder session. The primary container is not
+currently running. Subordinate agents will be spawned into their own
+containers when you delegate tasks. You can still manage environment
+variables (\`env_list\`, \`env_set\`, \`env_unset\`) and databases
+(\`db_query\`, \`db_list\`) for this session.
+`;
+  }
+
   const isAngular = b.stack === 'angular';
   const reservedFiles = isAngular
     ? `- **\`${b.workdir}/angular.json\` → \`projects.*.architect.serve.options\`** —
@@ -239,6 +264,44 @@ included verbatim in the task description. Don't trust a subordinate's
 
 function projectSlug(name: string): string {
   return name.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+}
+
+/**
+ * Pure: returns the master-side QA awareness block when at least one role
+ * in the roster has the `qa-playwright` skill enabled. Empty string
+ * otherwise — concatenating it is a no-op for non-QA sessions.
+ *
+ * Kept tiny and side-effect-free so the system-prompt assembly remains
+ * a pure function of `MasterPromptContext`.
+ */
+export function buildQaTeamBlock(roster: MasterPromptContext['roster']): string {
+  const qaRoles = roster.filter((r) => r.skills?.includes('qa-playwright'));
+  if (qaRoles.length === 0) return '';
+  const roleList = qaRoles.map((r) => `\`${r.role}\``).join(', ');
+  return `
+
+## QA TEAM IS AVAILABLE
+
+Your team includes ${qaRoles.length === 1 ? 'a QA agent' : 'QA agents'} (${roleList}) backed by the Playwright Agent CLI inside the sandbox container. Use them like any other subordinate: \`spawn_subordinate_agent(role='${qaRoles[0].role}', task=..., kanban_card_id=X)\`.
+
+### Required workflow with the QA team (DO NOT skip)
+
+1. **Delegate WITHOUT inlining specs.** Pass the goal ("validate the login flow", "smoke-test the dashboard"), NOT a list of \`.spec.ts\` files to write. The QA's job is to figure out the test plan from the code — your job is to set the goal.
+2. **Wait for \`submit_plan_to_master\`** (Phase B). The QA WILL submit a \`tests/e2e/TEST_PLAN.md\` for your review. \`wait_for_subordinates\` returns when this fires; \`MasterAttention.signal({kind:'plan'})\` wakes you.
+3. **Approve, iterate, or escalate.** Use \`approve_subordinate_plan\` to greenlight, send feedback to iterate, or relay to the human via \`ask_user\` when the plan touches sensitive flows (auth, payment).
+4. **Only after approval** the QA writes specs (Phase D). On every run: \`qa_start_run\` FIRST (the watchdog kills runs after 10 min of reporter silence — skip this and the dashboard shows a permanent spinner), then the canonical \`npx playwright test\` command — never \`--reporter=\` on the CLI; that REPLACES the reporters wired in \`playwright.config.ts\` (streaming + HTML + JSON + list) and breaks Tab Testes Live + the HTML report.
+
+Skipping Phase B defeats the purpose of having a QA — it stops being aligned with you and you waste turns reviewing specs that don't match the goal.
+
+### What the QA does (v4.5: server now automates most Kanban work)
+
+- **Bug cards are auto-created.** When a Playwright run reports any failed/timed-out/interrupted test, the server's \`qa_kanban_bridge\` creates a card with \`tag='bug'\`, links it to the feature card via \`kanban_add_dependency\`, and stamps the result row with \`kanban_card_id\` so the dashboard deep-links from the failure to the bug card. Idempotent across reruns: the same \`(suite, test)\` reuses the existing card and appends a "failure recurred" comment.
+- **The QA agent must NOT call \`kanban_create_card\` for test failures.** Use \`kanban_my_comment\` on the auto-created card to add reproduction notes. Manual \`kanban_create_card\` is reserved for non-test issues (flaky infra, missing fixture data, env gap).
+- **Feature card status auto-syncs.** When the QA agent calls \`qa_start_run({ kanban_feature_card_id: <id> })\` (you should pass the card id from the briefing), the server moves the card on completion: \`done\` if all green, \`in_progress\` if any red, with a comment linking the run.
+- Emits \`qa_run_completed\` after every run; the server then persists \`playwright-report/\` + \`test-results/\` to \`data/qa-reports/<sessionId>/<runId>/\` so evidence survives sandbox teardown.
+- Calls \`ask_master\` only when a regression blocks the rest of the team.
+
+**Default delegation pattern**: when a feature is delivered to Review, create a Kanban card titled \`QA: <feature>\`, attach acceptance criteria as the description, and spawn the QA role with \`kanban_card_id\`. The card context flows automatically into the QA's briefing — and the QA must echo that id back as \`kanban_feature_card_id\` in \`qa_start_run\` so the bridge can sync the card status when the run completes.`;
 }
 
 export function buildMasterCompanyBlock(ctx: MasterPromptContext): string {
@@ -555,7 +618,7 @@ The system also auto-updates cards:
 - Always check dependencies before moving cards
 
 BEGIN by exploring the projects to understand the request. Create Kanban cards for your plan, then post your findings to the board and ask the user for approval via \`ask_user\` before delegating any implementation work.
-${ctx.builder ? buildBuilderInstructions(ctx.builder) : ''}${ctx.builder ? buildMasterContainerOversight() : ''}`;
+${buildQaTeamBlock(ctx.roster)}${ctx.builder ? buildBuilderInstructions(ctx.builder) : ''}${ctx.builder ? buildMasterContainerOversight() : ''}`;
 
 }
 

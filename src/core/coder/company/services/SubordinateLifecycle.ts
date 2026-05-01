@@ -27,10 +27,12 @@ import { loadConfig } from '../../../../utils/config.js';
 import { buildSubordinateCompanyBlock } from '../system-prompts.js';
 import { RetryPolicy } from '../RetryPolicy.js';
 import { ConcurrencyPolicy } from '../ConcurrencyPolicy.js';
-import type {
-  CompanyContext,
-  SubordinateHandle,
-  AgentRunStatus,
+import {
+  resolveRoleSkills,
+  type CompanyContext,
+  type SubordinateHandle,
+  type AgentRunStatus,
+  type RoleSkills,
 } from '../types.js';
 import type { SessionContext } from './SessionContext.js';
 import type { HumanInTheLoop } from './HumanInTheLoop.js';
@@ -59,8 +61,20 @@ export interface SpawnSubordinateSpec {
   model?: string;
   tier?: 'bootstrap' | 'navigate' | 'full';
   wait?: boolean;
-  skills?: string[];
+  /**
+   * Either a flat list of skill IDs (legacy, master-supplied) or the v2
+   * `RoleSkillsConfig` (template-supplied). Resolved via
+   * `resolveRoleSkills` after the subordinate stack is known so
+   * conditional branches can pick stack-specific skills.
+   */
+  skills?: RoleSkills;
   roleOverride?: string;
+  /**
+   * Sampling temperature for this role, taken from `CompanyRoleConfig.temperature`.
+   * Forwarded to the runner as `roleTemperature`. The resolver clamps to [0, 1]
+   * and lets a per-session override (if set) win.
+   */
+  temperature?: number;
 }
 
 /**
@@ -124,6 +138,14 @@ export interface SubordinateLifecycleDeps {
   /** Facade passed into CompanyContext so tools can reach the orchestrator. */
   orchestratorRef: unknown;
   attention: MasterAttention;
+  /**
+   * Optional callback fired whenever a subordinate transitions to
+   * `waiting` (its current task done). The orchestrator wires the
+   * `InboxQueue.drainOnIdle` here so a queued message gets injected
+   * as the next prompt. Set late (after the queue is constructed)
+   * via `setOnSubordinateIdle`.
+   */
+  onSubordinateIdle?: (agentRunId: number, role: string) => void;
 }
 
 export class SubordinateLifecycle implements ISubordinateQuery {
@@ -133,6 +155,15 @@ export class SubordinateLifecycle implements ISubordinateQuery {
   readonly concurrencyPolicy = new ConcurrencyPolicy();
 
   constructor(private readonly deps: SubordinateLifecycleDeps) {}
+
+  /**
+   * Late-bind the idle callback. Used by the orchestrator to wire
+   * `InboxQueue.drainOnIdle` after both services have been constructed
+   * (the queue depends on `SubordinateLifecycle.reactivate`).
+   */
+  setOnSubordinateIdle(cb: (agentRunId: number, role: string) => void): void {
+    this.deps.onSubordinateIdle = cb;
+  }
 
   // ─── ISubordinateQuery ──────────────────────────────────────────
 
@@ -347,12 +378,25 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       }
     }
 
-    if (spec.skills && spec.skills.length > 0) {
+    const subordinateBinding = this.resolveBindingForProject(spec.projectId);
+    const subordinateLabel =
+      this.deps.ctx.projects.find((p) => p.project_id === spec.projectId)?.label ?? null;
+    const subordinateStack = (
+      this.deps.orchestratorRef as unknown as {
+        getSandboxStackForService?: (serviceId?: string | null) => string | null;
+      }
+    ).getSandboxStackForService?.(subordinateLabel) ?? 'react-ts';
+
+    // Resolve skills now that the subordinate stack is known. Conditional
+    // template branches like `{ when: "session.stack === 'react-ts'", skill: 'ds-components-react' }`
+    // pick the right primary; chain entries are appended verbatim.
+    const resolvedSkills = resolveRoleSkills(spec.skills, { stack: subordinateStack });
+    if (resolvedSkills.length > 0) {
       try {
         const skillStore = new SkillStore(config.dbPath);
         const allSkills = skillStore.resolveActiveSkills(subSession.id, spec.projectId);
         for (const skill of allSkills) {
-          skillStore.setSessionSkillEnabled(subSession.id, skill.id, spec.skills.includes(skill.id));
+          skillStore.setSessionSkillEnabled(subSession.id, skill.id, resolvedSkills.includes(skill.id));
         }
         skillStore.close();
       } catch (e) {
@@ -368,15 +412,6 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       provider,
       model,
     });
-
-    const subordinateBinding = this.resolveBindingForProject(spec.projectId);
-    const subordinateLabel =
-      this.deps.ctx.projects.find((p) => p.project_id === spec.projectId)?.label ?? null;
-    const subordinateStack = (
-      this.deps.orchestratorRef as unknown as {
-        getSandboxStackForService?: (serviceId?: string | null) => string | null;
-      }
-    ).getSandboxStackForService?.(subordinateLabel) ?? 'react-ts';
     const companyContext: CompanyContext = {
       orchestrator: this.deps.orchestratorRef as never,
       companySessionId: ctx.companySessionId,
@@ -423,6 +458,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       companyContext,
       companyPromptBlock: subordinateBlock,
       companyRoleOverride: spec.roleOverride,
+      roleTemperature: spec.temperature,
     } as RunCoderOptions & { companyPromptBlock: string });
 
     this.wireInterceptions(handle, agentRun.id, spec.role);
@@ -744,6 +780,63 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     }
   }
 
+  /**
+   * Telemetry: when a subordinate finishes (success or failure), log one
+   * `skill_usage_log` row per skill that was active during its run. Lets
+   * the dashboard's `/api/admin/skills/:id/health` endpoint compute
+   * success_rate and surface error_codes per skill.
+   *
+   * Best-effort: failures here never crash the completion handler — the
+   * outcome reporting is observability, not load-bearing wiring.
+   */
+  private logSkillOutcome(
+    sessionId: number,
+    agentRunId: number,
+    outcome: 'success' | 'failed' | 'aborted',
+    errorMessage?: string,
+  ): void {
+    try {
+      const config = loadConfig();
+      const skillStore = new SkillStore(config.dbPath);
+      try {
+        const overrides = skillStore.getSessionSkillConfig(sessionId);
+        const enabledIds = Array.from(overrides.entries())
+          .filter(([, enabled]) => enabled)
+          .map(([id]) => id);
+        if (enabledIds.length === 0) return;
+
+        // Cheap heuristic: extract a short code from the error message
+        // (the validation tools surface codes like `vocab.leak` or
+        // `props.foreign_vocabulary` in their output). Anything that
+        // doesn't look like a code becomes null.
+        let errorCode: string | undefined;
+        if (errorMessage) {
+          const match = /\b(vocab\.\w+|props\.\w+|css\.\w+|schema\.\w+|stories\.\w+|audit\.\w+|semantic\.\w+)\b/.exec(
+            errorMessage,
+          );
+          if (match) errorCode = match[1];
+        }
+
+        for (const skillId of enabledIds) {
+          skillStore.logSkillUsage({
+            session_id: sessionId,
+            skill_id: skillId,
+            invoked_by: 'system',
+            outcome,
+            error_code: errorCode,
+            agent_run_id: agentRunId,
+          });
+        }
+      } finally {
+        skillStore.close();
+      }
+    } catch (e) {
+      console.warn(
+        `[company] Failed to log skill outcome for run ${agentRunId}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
   private wireInterceptions(handle: RunCoderHandle, agentRunId: number, role: string): void {
     this.deps.humanInLoop.wireSubordinatePlan(handle, agentRunId, role);
     this.deps.humanInLoop.wireSubordinateQuestion(handle, agentRunId, role);
@@ -787,9 +880,20 @@ export class SubordinateLifecycle implements ISubordinateQuery {
                 `[AUTO] Agent completed successfully${resumedTag}. Status: waiting for next instructions.`);
             }
           } catch { /* best-effort */ }
+          this.logSkillOutcome(handle.session.id, agentRunId, 'success');
+          // Inbox drain: any pending inter-agent message targeted at
+          // this run (or its role) is injected as the next prompt.
+          // Best-effort — failures here must not break the completion
+          // path. Fire-and-forget so the master gets its 'finished'
+          // signal without waiting on the reactivate round-trip.
+          if (this.deps.onSubordinateIdle) {
+            try { this.deps.onSubordinateIdle(agentRunId, role); }
+            catch (e) { console.warn('[company] inbox drain hook threw:', e); }
+          }
         } else {
           const detail = error ? ` — ${error}` : '';
           this.handleFailure(agentRunId, role, `${reason}${detail}`, error ?? null);
+          this.logSkillOutcome(handle.session.id, agentRunId, 'failed', error ?? undefined);
         }
       })
       .catch((err) => {

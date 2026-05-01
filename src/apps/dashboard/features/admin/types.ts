@@ -1,4 +1,12 @@
-export type ProviderKind = 'anthropic' | 'openai' | 'gemini' | 'bedrock' | 'copilot' | 'chatgpt' | 'google-oauth';
+export type ProviderKind =
+  | 'anthropic'
+  | 'claude-code'
+  | 'openai'
+  | 'gemini'
+  | 'bedrock'
+  | 'copilot'
+  | 'chatgpt'
+  | 'google-oauth';
 
 export interface AdminProvider {
   id: string;
@@ -32,7 +40,16 @@ export interface TestResult {
   error?: string;
 }
 
-export const KINDS: ProviderKind[] = ['anthropic', 'openai', 'gemini', 'bedrock', 'copilot', 'chatgpt', 'google-oauth'];
+export const KINDS: ProviderKind[] = [
+  'anthropic',
+  'claude-code',
+  'openai',
+  'gemini',
+  'bedrock',
+  'copilot',
+  'chatgpt',
+  'google-oauth',
+];
 
 export interface CopilotOpts {
   edition: 'individual' | 'enterprise';
@@ -52,6 +69,12 @@ export type ChatgptFlowState =
   | { state: 'idle' }
   | { state: 'waiting'; authorizeUrl: string; flowState: string }
   | { state: 'success'; providerId?: string; modelCount?: number }
+  | { state: 'error'; message: string };
+
+export type ClaudeCodeFlowState =
+  | { state: 'idle' }
+  | { state: 'waiting'; authorizeUrl: string; manualAuthorizeUrl?: string; flowState: string }
+  | { state: 'success'; providerId?: string; modelCount?: number; authType?: string }
   | { state: 'error'; message: string };
 
 export type GoogleFlowState =

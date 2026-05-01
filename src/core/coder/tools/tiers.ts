@@ -47,8 +47,14 @@ export const CORE_TIER_NAMES: ReadonlySet<string> = new Set<CoreTier>([
  */
 export type CoderProfile = 'bootstrap' | 'navigate' | 'full';
 
-/** Tier 0 — bootstrap. Always visible. ~13 tools. */
-const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
+/**
+ * Tier 0 — bootstrap. Always visible. ~13 tools.
+ *
+ * Exported for test access — the membership of company-specific tools
+ * (kanban subordinate, design-system) is treated as a contract that
+ * regression tests should be able to inspect directly.
+ */
+export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // Native — minimal read/interaction set
   'read_file',
   'list_directory',
@@ -59,10 +65,27 @@ const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'ask_master',
   'submit_plan_to_master',
   'submit_tasks_to_master',
+  // Company board tools — mandatory communication channel for master +
+  // subordinates. Keep explicit so they cannot disappear from tool config.
+  'post_to_board',
+  'read_board',
+  'set_agent_status',
+  'kanban_read_my_card',
   // Subordinate kanban tools (company mode — self-service card updates)
   'kanban_my_comment',
   'kanban_my_checklist',
   'kanban_move_to_review',
+  // Design System Creator tools (company mode — DS sessions). All four
+  // were previously visible only via the `'bootstrap'` fallback in
+  // `getToolTier`; registering them here makes the contract grep-able
+  // and matches the pattern used for the kanban subordinate tools.
+  'ds_get_session_info',
+  'ds_record_component',
+  'ds_validate_manifest',
+  'ds_validate_stories',
+  'ds_audit_package',
+  'ds_set_version_status',
+  'ds_publish_version',
   'expand_toolset',
   'get_tool_output',
   'glob',
@@ -88,6 +111,8 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'edit_file',
   'multi_edit',
   'create_file',
+  // Codex-only freeform editor (gated to the chatgpt provider in index.ts).
+  'apply_patch',
   'web_fetch',
   'web_search',
   'run_command',
@@ -238,6 +263,10 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   todo_write: 'Update the lightweight todo list sidebar',
   invoke_skill: 'Invoke a reusable skill by ID',
   // ─── Subordinate kanban ──────────────────────────────────────
+  post_to_board: 'Post to the shared company board',
+  read_board: 'Read shared company board messages',
+  set_agent_status: 'Update company agent status',
+  kanban_read_my_card: 'Read assigned Kanban card details',
   kanban_my_comment: 'Add a comment to your assigned Kanban card',
   kanban_my_checklist: 'Check off or add objectives on your card',
   kanban_move_to_review: 'Move your card to Review (done working)',

@@ -17,7 +17,8 @@ import type {
   AnalysisResult,
 } from '../../types.js';
 import { FileScanner } from './scanner.js';
-import { TreeSitterExtractor } from './tree-sitter/index.js';
+import { TreeSitterExtractor, type TreeSitterResult } from './tree-sitter/index.js';
+import { getIndexJobPool, isIndexWorkersEnabled } from '../workers/indexJob/client.js';
 
 /**
  * Enriches LLM-extracted symbol references with line numbers and snippets.
@@ -182,7 +183,20 @@ export class IndexAgent {
     // 6. Process files concurrently
     const concurrency = options?.concurrency ?? this.config.concurrency;
     const indexedFiles: Array<{ path: string; fileId: number; analysis: import('../../types.js').LLMFileAnalysis; content: string }> = [];
-    const treeSitter = new TreeSitterExtractor();
+    // Tree-sitter parsing is CPU-bound and was the largest source of main-thread
+    // blocking during indexing. When MCP_INDEX_WORKERS=1, dispatch to a worker
+    // pool sized to ~min(8, available cores). Result objects are plain JS and
+    // structured-clone safe. Worker lifecycle is managed at the process level
+    // (via closeIndexJobPool on shutdown), so dispose is a no-op for the pool path.
+    const treeSitter: {
+      extract(filePath: string, content: string): Promise<TreeSitterResult>;
+      dispose(): void;
+    } = isIndexWorkersEnabled()
+      ? {
+          extract: (filePath, content) => getIndexJobPool().extract(filePath, content),
+          dispose: () => { /* pool persists across runs */ },
+        }
+      : new TreeSitterExtractor();
     let treeSitterHits = 0;
     let llmSkipped = 0;
 

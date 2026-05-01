@@ -18,12 +18,16 @@ import { vectorStoresRouter } from './vector-stores.routes.js';
 import { oauthRouter } from './oauth.routes.js';
 import { copilotOAuthRouter } from './oauth-copilot.routes.js';
 import { openaiOAuthRouter } from './oauth-openai.routes.js';
+import { claudeCodeOAuthRouter } from './oauth-claude-code.routes.js';
 import { bedrockOAuthRouter } from './oauth-bedrock.routes.js';
 import { googleOAuthRouter } from './oauth-google.routes.js';
 import { toolsRouter } from './tools.routes.js';
 import { mcpServersRouter } from './mcp-servers.routes.js';
 import { skillsRouter } from './skills.routes.js';
 import { generalAiRouter } from './general-ai.routes.js';
+import { chromeServiceRouter } from './chrome-service.routes.js';
+import { verdaccioRouter } from './verdaccio.routes.js';
+import { bedrockModelAccessRouter } from './bedrock-model-access.routes.js';
 
 export function createAdminRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -35,12 +39,16 @@ export function createAdminRouter(store: ProviderStore): Hono {
   app.route('/', oauthRouter(store));
   app.route('/', copilotOAuthRouter(store));
   app.route('/', openaiOAuthRouter(store));
+  app.route('/', claudeCodeOAuthRouter(store));
   app.route('/', bedrockOAuthRouter(store));
+  app.route('/', bedrockModelAccessRouter(store));
   app.route('/', googleOAuthRouter(store));
   app.route('/', toolsRouter(store));
   app.route('/', mcpServersRouter());
   app.route('/', skillsRouter());
   app.route('/', generalAiRouter(store));
+  app.route('/', chromeServiceRouter());
+  app.route('/', verdaccioRouter());
 
   return app;
 }

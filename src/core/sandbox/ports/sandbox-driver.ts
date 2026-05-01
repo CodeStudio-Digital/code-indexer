@@ -28,6 +28,16 @@ export interface SandboxCreateSpec {
   hostPort: number;
   /** Container port the dev server listens on (e.g. 5173 for Vite). */
   containerPort: number;
+  /**
+   * Host interface to bind the published port on. Defaults to
+   * `127.0.0.1` (loopback only) so sandbox containers don't accidentally
+   * expose dev servers on the LAN. Set to `0.0.0.0` for shared
+   * infrastructure containers (e.g. the Chrome Service singleton)
+   * that other containers must reach via `host.containers.internal` /
+   * `host.docker.internal`, since those aliases resolve to the
+   * container-network gateway, not host loopback.
+   */
+  hostBindAddr?: string;
   limits: SandboxLimits;
   /** Isolation / hardening flags. Drivers MUST honor every field. */
   isolation: SandboxIsolation;
@@ -78,6 +88,13 @@ export interface SandboxExecOptions {
    * `null` → use the container's default user (whatever was set on run).
    */
   user?: string | null;
+  /**
+   * Optional payload written to the child process stdin. CLI-based
+   * drivers (Docker/Podman) emit `exec -i` and pipe this through the
+   * host shell. Used by `run_command` to deliver multi-line code to
+   * interpreters (e.g. `python -`) without shell-quoting headaches.
+   */
+  stdin?: string;
 }
 
 export interface SandboxReaddirEntry {

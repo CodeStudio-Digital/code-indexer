@@ -142,11 +142,15 @@ export class BedrockChatProvider implements ChatProvider {
       console.log('Tem System Prompt?', !!system);
       console.log('-----------------------------\n');
 
+      const temperature = req.inference?.temperature;
       const cmd = new sdk.ConverseStreamCommand({
         modelId: this.model,
         messages,
         system,
         toolConfig,
+        ...(typeof temperature === 'number'
+          ? { inferenceConfig: { temperature } }
+          : {}),
       });
       const resp = await client.send(cmd);
       stream = resp.stream;

@@ -9,8 +9,21 @@
 
 import { ViteScaffolderBase } from './vite-scaffolder-base.js';
 
+export interface ReactTsScaffolderOptions {
+  /**
+   * When true, the scaffolder additionally installs `@playwright/cli`,
+   * `@playwright/test`, and the chromium browser inside the sandbox so
+   * QA agents can drive the preview out-of-the-box. Off by default.
+   */
+  includeE2e?: boolean;
+}
+
 export class ReactTsScaffolder extends ViteScaffolderBase {
-  constructor() {
-    super({ stack: 'react-ts', viteTemplate: 'react-ts' });
+  constructor(options: ReactTsScaffolderOptions = {}) {
+    super({
+      stack: 'react-ts',
+      viteTemplate: 'react-ts',
+      includeE2e: options.includeE2e ?? false,
+    });
   }
 }

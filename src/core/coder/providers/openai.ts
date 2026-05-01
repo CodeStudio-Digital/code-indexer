@@ -38,7 +38,7 @@ export class OpenAIChatProvider implements ChatProvider {
   }
 
   async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
-    const messages = toOpenAIMessages(req.system, req.messages);
+    const messages = toOpenAIMessages(req.system, req.messages, this.vendor);
     const tools = req.tools.map((t) => ({
       type: 'function' as const,
       function: {
@@ -63,6 +63,23 @@ export class OpenAIChatProvider implements ChatProvider {
       zaiExtras.max_tokens = Number.isFinite(parsed) && parsed > 0 ? parsed : 32_000;
     }
 
+    // DeepSeek-V4: only explicitly enable thinking when the runner requests it.
+    // Thinking is ON by default for V4 models — we never disable it via param
+    // because: (a) the default is fine, (b) disabling would suppress reasoning_content
+    // which we now pass back in multi-turn contexts (see toOpenAIMessages).
+    const deepseekExtras: Record<string, unknown> = {};
+    if (this.vendor === 'deepseek' && req.thinking === true) {
+      deepseekExtras.thinking = { type: 'enabled' };
+    }
+
+    // OpenAI o-series and gpt-5 reasoning variants reject `temperature !== 1`.
+    // The runner's resolver already filters these models, but guard here too
+    // since this adapter is shared across vendors. Copilot has been observed
+    // to reject `top_p` paired with `temperature` — we only send temperature
+    // in this MVP, so that conflict can't occur.
+    const isReasoningModel = /^(o[134]([\-.].*)?$|gpt-5.*reason)/i.test(this.model);
+    const temperature = isReasoningModel ? undefined : req.inference?.temperature;
+
     let stream;
     try {
       // Pass stream:true as a typed literal so the overload resolves to the
@@ -74,7 +91,9 @@ export class OpenAIChatProvider implements ChatProvider {
         tools: tools.length > 0 ? tools : undefined,
         stream: true as const,
         stream_options: { include_usage: true },
+        ...(typeof temperature === 'number' ? { temperature } : {}),
         ...zaiExtras,
+        ...deepseekExtras,
       };
       stream = await this.client.chat.completions.create(
         params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming
@@ -160,7 +179,7 @@ export class OpenAIChatProvider implements ChatProvider {
 
 type OAIMsg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
-function toOpenAIMessages(system: string, messages: AgentMessage[]): OAIMsg[] {
+function toOpenAIMessages(system: string, messages: AgentMessage[], vendor?: OpenAICompatVendor): OAIMsg[] {
   const out: OAIMsg[] = [{ role: 'system', content: system }];
 
   for (const m of messages) {
@@ -213,17 +232,26 @@ function toOpenAIMessages(system: string, messages: AgentMessage[]): OAIMsg[] {
     }
 
     if (m.role === 'assistant') {
+      const reasoning = m.content
+        .filter((b): b is Extract<ContentBlock, { type: 'thinking' }> => b.type === 'thinking')
+        .map((b) => b.text)
+        .join('');
       const text = m.content
         .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
         .map((b) => b.text)
         .join('');
       const toolUses = m.content.filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use');
-      const msg: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam = {
+      // DeepSeek V4 requires reasoning_content to be passed back in multi-turn
+      // conversations that include tool calls — without it the API rejects the
+      // request. Other vendors ignore unknown fields, so it's safe to include
+      // for deepseek only to avoid polluting other providers' payloads.
+      const msg: Record<string, unknown> = {
         role: 'assistant',
         content: text || "",
+        ...(vendor === 'deepseek' && reasoning ? { reasoning_content: reasoning } : {}),
       };
       if (toolUses.length > 0) {
-        msg.tool_calls = toolUses.map((tu) => ({
+        msg['tool_calls'] = toolUses.map((tu) => ({
           id: tu.id,
           type: 'function' as const,
           function: {
@@ -232,7 +260,7 @@ function toOpenAIMessages(system: string, messages: AgentMessage[]): OAIMsg[] {
           },
         }));
       }
-      out.push(msg);
+      out.push(msg as unknown as OAIMsg);
     }
   }
 

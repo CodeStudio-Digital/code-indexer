@@ -114,7 +114,7 @@ export async function createCoderProvider(
     throw new Error(`Shape '${def.kind}' does not support the coder`);
   }
   const creds = await resolveCreds(def, cfg);
-  return def.createCoder(creds, model, opts);
+  return def.createCoder(creds, model, { ...opts, providerId: opts?.providerId ?? cfg?.id });
 }
 
 // ─── Back-compat re-exports ──────────────────────────────────────

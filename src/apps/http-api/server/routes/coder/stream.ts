@@ -1,15 +1,18 @@
 import type { Hono } from 'hono';
 import { runCoder } from '../../../../../core/coder/index.js';
 import type { CoderAttachment } from '../../../../../core/coder/index.js';
+import type { AgentMessage } from '../../../../../core/coder/core/messages.js';
 import {
   createBus,
   publish,
   markEnded,
+  setBusRunner,
 } from '../../../coder-bus.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { parseIdParam, notFound } from '../_helpers.js';
+import { withSessionLock } from './sessionLock.js';
 
 interface SendMessageBody {
   content: string;
@@ -27,7 +30,22 @@ interface SendMessageBody {
   worktree?: { name?: string; branch?: string };
   /** Enable thinking/reasoning mode for providers that support it. */
   thinking?: boolean;
+  /**
+   * Opt-in: when there is already a live run for this session AND it is
+   * blocked inside an interactive tool (ask_user / submit_plan / submit_tasks),
+   * interrupt that wait and inject this message instead of returning 409.
+   * Default false — the canonical answer path is /answer or /plan-response.
+   */
+  interject?: boolean;
 }
+
+/**
+ * Window during which we'll wait for `bus.runner` to become available when
+ * a second POST /messages arrives during a fresh run's setup phase. Five
+ * seconds is comfortably more than `runCoder` ever takes locally; if it
+ * exceeds this we'd rather fail fast than block the request handler.
+ */
+const RUNNER_READY_TIMEOUT_MS = 5_000;
 
 interface ContinueBody {
   plan_mode?: boolean;
@@ -62,13 +80,117 @@ export function mountCoderStreamRoutes(
     const body = await c.req.json<SendMessageBody>();
     if (!body.content?.trim()) return c.json({ error: 'content required' }, 400);
 
-    const ctrl = new AbortController();
-    const bus = createBus(ctrl);
-    activeRuns.set(id, bus);
+    // Serialize the "do we have an active run?" decision per session so two
+    // concurrent POSTs cannot both observe `activeRuns.get(id) === undefined`
+    // and each spin up a fresh `runCoder`. Inside the lock we either:
+    //   (a) attach to the live run by enqueueing the message + tailing the
+    //       existing bus, or
+    //   (b) create a brand new bus + runCoder and tail that.
+    // The lock is released as soon as the synchronous setup completes — the
+    // SSE stream itself is not held under the lock.
+    const decision = await withSessionLock(id, async (): Promise<
+      | { kind: 'attach'; bus: ReturnType<typeof createBus>; tailFrom: number }
+      | { kind: 'fresh'; bus: ReturnType<typeof createBus> }
+      | { kind: 'reject'; status: 409; body: { error: string; code: string } }
+    > => {
+      const existing = activeRuns.get(id);
+      if (existing && !existing.ended) {
+        // Attachments are intentionally not supported on enqueue-and-attach:
+        // the runner's pendingUserMessages buffer is text-only and the live
+        // turn already committed to whatever attachments were sent at start.
+        // Reject explicitly so the caller knows to either start a new session
+        // or wait for the current run to finish.
+        if (body.attachments && body.attachments.length > 0) {
+          return {
+            kind: 'reject',
+            status: 409,
+            body: {
+              error: 'attachments are only supported on the first message of a session — drop them or wait for the current run to finish',
+              code: 'ATTACHMENTS_MIDRUN_UNSUPPORTED',
+            },
+          };
+        }
 
-    // Fire-and-forget the run in the background. The HTTP response below
-    // only subscribes to the bus — if the client disconnects, the run keeps
+        let runner;
+        try {
+          runner = await Promise.race([
+            existing.runnerReady,
+            new Promise<never>((_, rej) =>
+              setTimeout(() => rej(new Error('runner not ready')), RUNNER_READY_TIMEOUT_MS),
+            ),
+          ]);
+        } catch {
+          // The first run failed before wiring its runner, or setup is
+          // taking abnormally long. Fall through to creating a fresh run —
+          // the failed bus will linger-evict on its own timer.
+          return { kind: 'fresh', bus: startFreshRun() };
+        }
+
+        // Live run waiting on an interactive tool? `interject:true` means
+        // "abandon the wait and process my message instead" (mirrors how
+        // company subordinates wake the master from `wait_for_subordinates`).
+        // Without `interject` we steer callers to the canonical /answer route.
+        if (runner.isWaitingForInput()) {
+          if (!body.interject) {
+            return {
+              kind: 'reject',
+              status: 409,
+              body: {
+                error: 'runner is waiting for an interactive answer — use /answer or /plan-response, or pass {"interject": true} to override',
+                code: 'INTERACTION_PENDING',
+              },
+            };
+          }
+          runner.interruptWait();
+        }
+
+        // Persist the user message BEFORE pushing it onto the runner's
+        // pendingUserMessages buffer. If the runner crashes/aborts before
+        // flushing, the message is still in the DB so a future resume can
+        // pick it up. The runner only consumes its in-memory history during
+        // a run, so there is no DB-to-runner race here.
+        const userMsg: AgentMessage = {
+          role: 'user',
+          content: [{ type: 'text', text: body.content }],
+        };
+        sessionStore.appendMessage(id, userMsg);
+        runner.pushUserMessage(body.content);
+
+        // Tail mode: subscribe to events from now on, no replay. The runner
+        // will emit a fresh `turn_start` (and downstream tool calls) when
+        // it picks up the enqueued message at the next turn boundary.
+        return { kind: 'attach', bus: existing, tailFrom: existing.nextSeq - 1 };
+      }
+
+      // No live run, or the previous bus is in its 30s linger window with
+      // `ended === true`. Either way, create a new run.
+      return { kind: 'fresh', bus: startFreshRun() };
+
+      // Synchronous setup of a fresh run + register in activeRuns. The
+      // actual `runCoder()` call is fired into the background below so the
+      // lock returns quickly.
+      function startFreshRun() {
+        const ctrl = new AbortController();
+        const newBus = createBus(ctrl);
+        activeRuns.set(id, newBus);
+        return newBus;
+      }
+    });
+
+    if (decision.kind === 'reject') {
+      return c.json(decision.body, decision.status);
+    }
+    if (decision.kind === 'attach') {
+      return pumpBusToSSE(c, decision.bus, {
+        since: decision.tailFrom,
+        heartbeat: false,
+      });
+    }
+
+    // Fresh run: fire runCoder fire-and-forget. The HTTP response only
+    // subscribes to the bus — if the client disconnects, the run keeps
     // producing events into the buffer until it finishes.
+    const bus = decision.bus;
     void (async () => {
       try {
         const handle = await runCoder({
@@ -81,10 +203,10 @@ export function mountCoderStreamRoutes(
           profile: body.profile,
           worktree: body.worktree,
           thinking: body.thinking,
-          signal: ctrl.signal,
+          signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
         });
-        bus.runner = handle.runner;
+        setBusRunner(bus, handle.runner);
         publish(bus, 'session', handle.session);
         publish(bus, 'index_status', handle.indexStatus);
         wireRunnerToBus(handle.runner, bus);
@@ -128,9 +250,15 @@ export function mountCoderStreamRoutes(
       return c.json({ error: 'session not in resumable state' }, 409);
     }
 
-    const ctrl = new AbortController();
-    const bus = createBus(ctrl);
-    activeRuns.set(id, bus);
+    // Take the lock so a /continue racing with a /messages can't both spin
+    // up runCoder for the same session. We hold it only across the
+    // synchronous setup; the SSE pump runs outside the lock.
+    const bus = await withSessionLock(id, async () => {
+      const ctrl = new AbortController();
+      const newBus = createBus(ctrl);
+      activeRuns.set(id, newBus);
+      return newBus;
+    });
 
     void (async () => {
       try {
@@ -142,10 +270,10 @@ export function mountCoderStreamRoutes(
           agent: body.agent,
           profile: body.profile,
           resume: true,
-          signal: ctrl.signal,
+          signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
         });
-        bus.runner = handle.runner;
+        setBusRunner(bus, handle.runner);
         publish(bus, 'session', handle.session);
         publish(bus, 'index_status', handle.indexStatus);
         wireRunnerToBus(handle.runner, bus);

@@ -172,11 +172,16 @@ export class E2BDriver implements ISandboxDriver {
     options: SandboxExecOptions,
   ): Promise<SandboxExecResult> {
     const sbx = this.requireHandle(containerId);
-    const result = await sbx.commands.run(command, {
+    // E2B's commands.run forwards `stdin` to the spawned process when
+    // present. Mirror the same semantics as the CLI driver: feed the
+    // payload, EOF on close.
+    const runOptions: Record<string, unknown> = {
       cwd: options.cwd,
       envs: options.env,
       timeoutMs: options.timeoutMs,
-    });
+    };
+    if (options.stdin !== undefined) runOptions.stdin = options.stdin;
+    const result = await sbx.commands.run(command, runOptions);
     return {
       stdout: result.stdout ?? '',
       stderr: result.stderr ?? '',

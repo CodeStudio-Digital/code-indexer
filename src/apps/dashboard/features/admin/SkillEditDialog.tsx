@@ -27,14 +27,14 @@ interface SkillEditDialogProps {
   onSave: (s: Partial<AdminSkill>) => void;
 }
 
-const CONTEXT_MODE_VALUES: SkillContextMode[] = ['inline', 'tool', 'both'];
+const CONTEXT_MODE_VALUES: SkillContextMode[] = ['auto', 'tool', 'both'];
 const CONTEXT_MODE_LABEL_KEYS: Record<SkillContextMode, string> = {
-  inline: 'skillEdit.contextInline',
+  auto: 'skillEdit.contextAuto',
   tool: 'skillEdit.contextTool',
   both: 'skillEdit.contextBoth',
 };
 const CONTEXT_MODE_DESC_KEYS: Record<SkillContextMode, string> = {
-  inline: 'skillEdit.contextInlineDesc',
+  auto: 'skillEdit.contextAutoDesc',
   tool: 'skillEdit.contextToolDesc',
   both: 'skillEdit.contextBothDesc',
 };
@@ -51,7 +51,7 @@ export function SkillEditDialog({ initial, isExisting, onClose, onSave }: SkillE
   const { t } = useTranslation(['admin', 'common']);
   const isNew = !isExisting;
   const [form, setForm] = useState<Partial<AdminSkill>>({
-    context_mode: 'inline',
+    context_mode: 'auto',
     scope: 'global',
     enabled: true,
     sort_order: 0,
@@ -86,7 +86,7 @@ export function SkillEditDialog({ initial, isExisting, onClose, onSave }: SkillE
       allowed_tools: form.allowed_tools,
       model_override: form.model_override || null,
       provider_override: form.provider_override || null,
-      context_mode: form.context_mode || 'inline',
+      context_mode: form.context_mode || 'auto',
       sort_order: form.sort_order ?? 0,
       tags: form.tags ?? [],
       path_patterns: form.path_patterns,

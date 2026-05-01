@@ -52,13 +52,17 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [maxTurns, setMaxTurns] = useState<number | null>(null);
   const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
+  const [sessionTemperature, setSessionTemperature] = useState<number | null>(null);
   const composerRef = useRef<ComposerHandle>(null);
+  const pendingAutoTitle = useRef<Set<number>>(new Set());
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState('');
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [renameGroupTarget, setRenameGroupTarget] = useState<CoderSessionGroup | null>(null);
   const [renameGroupName, setRenameGroupName] = useState('');
+  const [renameSessionTarget, setRenameSessionTarget] = useState<{ id: number; title: string } | null>(null);
+  const [renameSessionTitle, setRenameSessionTitle] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [toolConfigOpen, setToolConfigOpen] = useState(false);
   const [skillConfigOpen, setSkillConfigOpen] = useState(false);
@@ -154,29 +158,51 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     }
   }, [persistedMessageCount, streaming, currentTurn, clearCurrentTurn, liveTurnDuplicatedInHistory]);
 
-  const handleNewSession = () => {
-    setNewSessionTitle('');
-    setNewSessionOpen(true);
-  };
-
-  const confirmNewSession = async () => {
-    const title = newSessionTitle.trim() || 'New session';
-    setNewSessionOpen(false);
+  const createSession = async (title?: string) => {
     const created = await apiPost<CoderSession>('/coder/sessions', {
       project_id: projectId,
-      title: title.slice(0, 80),
+      title: (title ?? 'Nova sessão').slice(0, 80),
       provider,
       model: model || PROVIDERS.find((p) => p.id === provider)?.defaultModel,
     });
+    if (!title) pendingAutoTitle.current.add(created.id);
     refetchSessions();
     setSelectedId(created.id);
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+    return created;
+  };
+
+  const handleNewSession = () => {
+    void createSession();
+  };
+
+  const confirmNewSession = async () => {
+    const title = newSessionTitle.trim();
+    setNewSessionOpen(false);
+    await createSession(title || undefined);
   };
 
   const handleSend = useCallback(async (text: string, atts: AgentAttachment[]) => {
     if (!text.trim() || !selectedId) return;
-    await sendMessage(text, () => refetchSession(), { attachments: atts, agent, maxTurns, thinking });
-  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking]);
+    const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
+    if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
+    await sendMessage(text, async () => {
+      refetchSession();
+      if (shouldAutoTitle) {
+        apiPost<{ title: string }>(`/coder/sessions/${selectedId}/generate-title`, {})
+          .then(() => {
+            refetchSessions();
+            window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+          })
+          .catch((err) => {
+            // Visible diagnostic instead of silent swallow — auto-title
+            // failures used to be invisible (no provider configured, OAuth
+            // provider, etc.) and the user had no way to tell what went wrong.
+            console.warn('[auto-title] generate-title failed:', err);
+          });
+      }
+    }, { attachments: atts, agent, maxTurns, thinking });
+  }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking]);
 
 
   /**
@@ -223,6 +249,28 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
       })
       .catch(() => {});
   }, [selectedId]);
+
+  // Temperature override: load from the selected session row. The full session
+  // payload already includes `temperature_override` since the column flows
+  // through `SELECT *` mapping; no extra endpoint needed for read.
+  useEffect(() => {
+    if (!sessionData?.session) {
+      setSessionTemperature(null);
+      return;
+    }
+    const t = (sessionData.session as { temperature_override?: number | null }).temperature_override;
+    setSessionTemperature(typeof t === 'number' ? t : null);
+  }, [sessionData?.session]);
+
+  const handleTemperatureChange = async (next: number | null) => {
+    setSessionTemperature(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/temperature`, { temperature: next });
+    } catch {
+      /* ignore — UI optimistic, server is the source of truth on next refetch */
+    }
+  };
 
   const handleFallbackChange = async (fbProvider: string | null, fbModel: string | null) => {
     setFallbackProvider(fbProvider);
@@ -274,6 +322,31 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const handleFavorite = async (id: number, favorite: boolean) => {
     await apiPatch(`/coder/sessions/${id}/favorite`, { favorite });
     refetchSessions();
+    window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+  };
+
+  const handleRenameSession = (id: number, currentTitle: string) => {
+    setRenameSessionTarget({ id, title: currentTitle });
+    setRenameSessionTitle(currentTitle);
+  };
+
+  const confirmRenameSession = async () => {
+    if (!renameSessionTarget) return;
+    const title = renameSessionTitle.trim();
+    if (!title || title === renameSessionTarget.title) {
+      setRenameSessionTarget(null);
+      return;
+    }
+    await apiPatch(`/coder/sessions/${renameSessionTarget.id}/title`, { title });
+    setRenameSessionTarget(null);
+    refetchSessions();
+    window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+  };
+
+  const handleDuplicate = async (id: number) => {
+    const res = await apiPost<{ session: CoderSession }>(`/coder/sessions/${id}/duplicate`, {});
+    await refetchSessions();
+    setSelectedId(res.session.id);
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
   };
 
@@ -450,6 +523,34 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <Dialog
+        open={!!renameSessionTarget}
+        onOpenChange={(open) => { if (!open) setRenameSessionTarget(null); }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('chat:renameSession')}</DialogTitle>
+          </DialogHeader>
+          <Input
+            autoFocus
+            placeholder={t('chat:sessionNamePlaceholder')}
+            value={renameSessionTitle}
+            onChange={(e) => setRenameSessionTitle(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') confirmRenameSession(); }}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameSessionTarget(null)}>
+              {t('common:actions.cancel')}
+            </Button>
+            <Button
+              onClick={confirmRenameSession}
+              disabled={!renameSessionTitle.trim() || renameSessionTitle.trim() === renameSessionTarget?.title}
+            >
+              {t('common:actions.save')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <SessionDetailsModal
         open={detailsOpen}
         onOpenChange={setDetailsOpen}
@@ -485,6 +586,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
           onMobileClose={() => setMobileSidebarOpen(false)}
           onNew={handleNewSession}
           onDelete={handleDelete}
+          onRename={handleRenameSession}
+          onDuplicate={handleDuplicate}
           onBatchDelete={handleBatchDelete}
           onArchive={handleArchive}
           onFavorite={handleFavorite}
@@ -573,6 +676,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 fallbackProvider={fallbackProvider}
                 fallbackModel={fallbackModel}
                 onFallbackChange={handleFallbackChange}
+                temperature={sessionTemperature}
+                setTemperature={handleTemperatureChange}
                 getModelsForProvider={getModelsForProvider}
                 onInvokeSkill={async (skillId, input) => {
                   if (!selectedId) return;

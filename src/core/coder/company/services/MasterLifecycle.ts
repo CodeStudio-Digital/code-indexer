@@ -30,13 +30,18 @@ import type {
   IMetaBusWirer,
 } from './ports.js';
 
+import { resolveRoleSkills, type RoleSkills } from '../types.js';
+
 export type RoleConfig = {
   role: string;
   provider: string;
   model: string;
   tier: string;
   projectHints?: string[];
-  skills?: string[];
+  /** Either a flat list of skill IDs or a `RoleSkillsConfig` object with
+   *  `primary`/`chain`/`conditional`. Resolved via `resolveRoleSkills`
+   *  before use. */
+  skills?: RoleSkills;
   systemPromptOverride?: string;
   /**
    * Concrete project ids this role is bound to in THIS session.
@@ -45,6 +50,9 @@ export type RoleConfig = {
    * project ids outside this list).
    */
   projectIds?: number[];
+  /** Per-role sampling temperature (forwarded to the runner via
+   *  `SubordinateLifecycle.spawn`). See `CompanyRoleConfig.temperature`. */
+  temperature?: number;
 };
 
 export interface MasterLifecycleDeps {
@@ -110,9 +118,9 @@ export class MasterLifecycle implements IMasterNotifier {
     this._roleConfigs = configs;
   }
 
-  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: string[]; systemPromptOverride?: string; projectIds?: number[] } | null {
+  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number } | null {
     const cfg = this._roleConfigs.find((r) => r.role === role);
-    return cfg ? { provider: cfg.provider, model: cfg.model, tier: cfg.tier, skills: cfg.skills, systemPromptOverride: cfg.systemPromptOverride, projectIds: cfg.projectIds } : null;
+    return cfg ? { provider: cfg.provider, model: cfg.model, tier: cfg.tier, skills: cfg.skills, systemPromptOverride: cfg.systemPromptOverride, projectIds: cfg.projectIds, temperature: cfg.temperature } : null;
   }
 
   /** Current allowed-models pool. Empty array = no restriction. */
@@ -265,12 +273,13 @@ export class MasterLifecycle implements IMasterNotifier {
     ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'running');
 
     const masterRoleConfig = opts.roleConfigs?.find((r) => r.role === 'master');
-    if (masterRoleConfig?.skills && masterRoleConfig.skills.length > 0) {
+    const masterResolvedSkills = resolveRoleSkills(masterRoleConfig?.skills, {});
+    if (masterResolvedSkills.length > 0) {
       try {
         const skillStore = new SkillStore(config.dbPath);
         const allSkills = skillStore.resolveActiveSkills(masterSession.id, primaryProjectId);
         for (const skill of allSkills) {
-          skillStore.setSessionSkillEnabled(masterSession.id, skill.id, masterRoleConfig.skills.includes(skill.id));
+          skillStore.setSessionSkillEnabled(masterSession.id, skill.id, masterResolvedSkills.includes(skill.id));
         }
         skillStore.close();
       } catch (e) {
@@ -282,6 +291,8 @@ export class MasterLifecycle implements IMasterNotifier {
     // can be woven into the master's CompanyContext. For non-builder
     // sessions this call is a no-op that returns null (the SandboxService
     // inspects `config_json.builder` and bails out cleanly).
+    // SandboxService.provisionIfNeeded never throws — it returns null when
+    // the container can't be started, so the master always starts.
     const orchestrator = this.deps.orchestratorRef as unknown as {
       provisionSandboxIfNeeded?: (signal?: AbortSignal) => Promise<import('../types.js').SandboxBinding | null>;
       getSandboxStackForService?: (serviceId?: string | null) => string | null;
@@ -289,6 +300,11 @@ export class MasterLifecycle implements IMasterNotifier {
     const sandboxBinding = orchestrator.provisionSandboxIfNeeded
       ? await orchestrator.provisionSandboxIfNeeded(opts.signal)
       : null;
+
+    // Read the configured stack from the session config (DB-backed, works
+    // even when the primary container is not running). Non-null means the
+    // session is in builder mode regardless of container status.
+    const configuredStack = orchestrator.getSandboxStackForService?.() ?? null;
 
     const companyContext: CompanyContext = {
       orchestrator: this.deps.orchestratorRef as never,
@@ -298,6 +314,7 @@ export class MasterLifecycle implements IMasterNotifier {
       allowedProjectIds: ctx.projects.map((p) => p.project_id),
       isMaster: true,
       sandbox: sandboxBinding ?? undefined,
+      builderStack: configuredStack ?? undefined,
     };
 
     const projectInfos = ctx.projects.map((p) => {
@@ -313,14 +330,16 @@ export class MasterLifecycle implements IMasterNotifier {
     const promptBlock = buildMasterCompanyBlock({
       roster: opts.roleConfigs ?? [],
       projects: projectInfos,
-      // Builder-mode awareness: tell the master it's running inside a
-      // sandbox AND which files are MCP-managed (vite.config.ts) so it
-      // doesn't overwrite them during delegation planning.
-      builder: sandboxBinding
+      // Builder-mode awareness: tell the master it's in a builder session
+      // and which files are MCP-managed. When the primary container is
+      // down (sandboxBinding null) we still pass the stack so the master
+      // knows it's a builder session — workdir/previewUrl are omitted and
+      // buildBuilderInstructions renders a degraded but useful block.
+      builder: configuredStack
         ? {
-            workdir: sandboxBinding.workdir,
-            stack: orchestrator.getSandboxStackForService?.() ?? 'react-ts',
-            previewUrl: sandboxBinding.previewUrl,
+            workdir: sandboxBinding?.workdir,
+            stack: orchestrator.getSandboxStackForService?.() ?? configuredStack,
+            previewUrl: sandboxBinding?.previewUrl,
           }
         : undefined,
       // Curated pool — when non-empty, the master prompt gains a strict
@@ -401,6 +420,8 @@ export class MasterLifecycle implements IMasterNotifier {
     // (the manager's in-memory state is lost on API restart, so the
     // container is rebuilt fresh; persisting workdir contents across
     // restarts is a Phase 5 item).
+    // SandboxService.provisionIfNeeded never throws — returns null when
+    // the container can't start, so the master always resumes.
     const orchestratorResume = this.deps.orchestratorRef as unknown as {
       provisionSandboxIfNeeded?: () => Promise<import('../types.js').SandboxBinding | null>;
       getSandboxStackForService?: (serviceId?: string | null) => string | null;
@@ -408,6 +429,10 @@ export class MasterLifecycle implements IMasterNotifier {
     const sandboxBindingResume = orchestratorResume.provisionSandboxIfNeeded
       ? await orchestratorResume.provisionSandboxIfNeeded()
       : null;
+
+    // DB-backed stack config — non-null means builder mode regardless of
+    // whether the container is currently running.
+    const configuredStackResume = orchestratorResume.getSandboxStackForService?.() ?? null;
 
     const companyContext: CompanyContext = {
       orchestrator: this.deps.orchestratorRef as never,
@@ -417,6 +442,7 @@ export class MasterLifecycle implements IMasterNotifier {
       allowedProjectIds: ctx.projects.map((p) => p.project_id),
       isMaster: true,
       sandbox: sandboxBindingResume ?? undefined,
+      builderStack: configuredStackResume ?? undefined,
     };
 
     const projectInfos = ctx.projects.map((p) => {
@@ -432,11 +458,11 @@ export class MasterLifecycle implements IMasterNotifier {
     const promptBlock = buildMasterCompanyBlock({
       roster: opts.roleConfigs ?? [],
       projects: projectInfos,
-      builder: sandboxBindingResume
+      builder: configuredStackResume
         ? {
-            workdir: sandboxBindingResume.workdir,
-            stack: orchestratorResume.getSandboxStackForService?.() ?? 'react-ts',
-            previewUrl: sandboxBindingResume.previewUrl,
+            workdir: sandboxBindingResume?.workdir,
+            stack: orchestratorResume.getSandboxStackForService?.() ?? configuredStackResume,
+            previewUrl: sandboxBindingResume?.previewUrl,
           }
         : undefined,
       allowedModels: this._allowedModels.length > 0 ? this._allowedModels : undefined,
@@ -528,14 +554,34 @@ export class MasterLifecycle implements IMasterNotifier {
   /**
    * Forward a human message to the master. If the master is alive,
    * pushUserMessage; otherwise resurrect the session with the message.
+   *
+   * When the master is alive but currently blocked inside an interactive
+   * tool (`wait_for_subordinates` / `ask_user` / `submit_plan`), the
+   * pushed message would otherwise sit in the runner's pendingUserMessages
+   * buffer until something else wakes the wait. With `interject: true`
+   * we break the wait first (the blocked tool receives `{ interrupted: true }`
+   * and reports an error so the master can react), then push the message.
+   *
+   * Returns a structured result so the HTTP layer can distinguish "queued"
+   * from "interaction pending — caller must opt-in to override".
    */
-  sendUserMessage(message: string): boolean {
+  sendUserMessage(
+    message: string,
+    options: { interject?: boolean } = {},
+  ): { ok: boolean; pending?: 'interactive_wait' } {
     this.deps.board.post('human', null, 'message', message);
     this.deps.idle.onUserMessageReceived();
 
     if (!this._ended && this._handle?.runner) {
-      this._handle.runner.pushUserMessage(message);
-      return true;
+      const runner = this._handle.runner;
+      if (runner.isWaitingForInput()) {
+        if (!options.interject) {
+          return { ok: false, pending: 'interactive_wait' };
+        }
+        runner.interruptWait();
+      }
+      runner.pushUserMessage(message);
+      return { ok: true };
     }
     try {
       this.deps.ctx.companyStore.updateCompanySessionStatus(
@@ -544,7 +590,7 @@ export class MasterLifecycle implements IMasterNotifier {
       );
     } catch { /* ignore */ }
     void this.resurrect(message);
-    return true;
+    return { ok: true };
   }
 
   abort(): void {

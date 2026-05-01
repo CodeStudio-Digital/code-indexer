@@ -11,11 +11,13 @@ import {
 describe('tool tiers', () => {
   it('bootstrap tier contains exactly the expected tools', () => {
     // Locked-down count so accidental additions show up in CI.
-    expect(TIER_COUNTS.bootstrap).toBe(19);
+    // Bumped to 37 when `ds_validate_stories` was added as the Phase 2
+    // story-fidelity gate (master + subordinate both call it).
+    expect(TIER_COUNTS.bootstrap).toBe(37);
   });
 
   it('navigate tier contains the expected tools', () => {
-    expect(TIER_COUNTS.navigate).toBe(39);
+    expect(TIER_COUNTS.navigate).toBe(41);
   });
 
   it('admin tier contains the expected tools', () => {

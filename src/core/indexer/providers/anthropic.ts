@@ -1,28 +1,88 @@
-import Anthropic from '@anthropic-ai/sdk';
+import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk';
 import type { LLMProvider } from './base.js';
 import { SYSTEM_PROMPT, SUMMARY_ONLY_SYSTEM_PROMPT, buildUserPrompt, buildSummaryUserPrompt, parseAnalysisResponse } from './base.js';
 import type { AnalysisResult } from '../../../types.js';
 
+type AnthropicTextResponse = {
+  content: Array<{ type: string; text?: string }>;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+  };
+};
+
 export class AnthropicProvider implements LLMProvider {
-  readonly name = 'anthropic';
+  readonly name: string;
   readonly model: string;
   private client: Anthropic;
+  private defaultMetadata?: Anthropic.Metadata;
+  private defaultBetas?: string[];
+  private defaultTemperature?: number;
+  private defaultSystemPrefixBlocks?: Anthropic.TextBlockParam[];
+  private useBetaMessages: boolean;
 
-  constructor(apiKey?: string, model?: string, baseURL?: string) {
+  constructor(
+    apiKey?: string,
+    model?: string,
+    baseURL?: string,
+    opts?: {
+      authToken?: string;
+      defaultHeaders?: Record<string, string>;
+      defaultMetadata?: Anthropic.Metadata;
+      defaultBetas?: string[];
+      defaultTemperature?: number;
+      systemPrefixBlocks?: Anthropic.TextBlockParam[];
+      maxRetries?: number;
+      dangerouslyAllowBrowser?: boolean;
+      fetch?: typeof fetch;
+      useBetaMessages?: boolean;
+      name?: string;
+    },
+  ) {
+    this.name = opts?.name ?? 'anthropic';
     this.model = model ?? 'claude-haiku-4-5-20251001';
+    this.defaultMetadata = opts?.defaultMetadata;
+    this.defaultBetas = opts?.defaultBetas;
+    this.defaultTemperature = opts?.defaultTemperature;
+    this.defaultSystemPrefixBlocks = opts?.systemPrefixBlocks;
+    this.useBetaMessages = opts?.useBetaMessages ?? false;
     this.client = new Anthropic({
-      apiKey: apiKey ?? process.env.ANTHROPIC_API_KEY,
+      apiKey: opts?.authToken ? null : (apiKey ?? process.env.ANTHROPIC_API_KEY),
+      ...(opts?.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
+      ...(opts?.authToken ? { authToken: opts.authToken } : {}),
       ...(baseURL ? { baseURL } : {}),
+      ...(opts?.defaultHeaders ? { defaultHeaders: opts.defaultHeaders } : {}),
+      ...(opts?.dangerouslyAllowBrowser !== undefined
+        ? { dangerouslyAllowBrowser: opts.dangerouslyAllowBrowser }
+        : {}),
+      ...(opts?.fetch ? { fetch: opts.fetch as unknown as ClientOptions['fetch'] } : {}),
     });
   }
 
+  private buildSystem(text: string): string | Anthropic.TextBlockParam[] {
+    if (!this.defaultSystemPrefixBlocks?.length) return text;
+    return [...this.defaultSystemPrefixBlocks, { type: 'text', text }];
+  }
+
   async analyzeFile(filePath: string, content: string): Promise<AnalysisResult> {
-    const response = await this.client.messages.create({
+    const params = {
       model: this.model,
       max_tokens: 4096,
-      system: SYSTEM_PROMPT,
+      system: this.buildSystem(SYSTEM_PROMPT),
       messages: [{ role: 'user', content: buildUserPrompt(filePath, content) }],
-    });
+      metadata: this.defaultMetadata,
+      ...(typeof this.defaultTemperature === 'number'
+        ? { temperature: this.defaultTemperature }
+        : {}),
+      ...(this.useBetaMessages && this.defaultBetas?.length
+        ? { betas: this.defaultBetas }
+        : {}),
+    };
+    const response = (this.useBetaMessages
+      ? await this.client.beta.messages.create(
+        params as Parameters<typeof this.client.beta.messages.create>[0],
+      )
+      : await this.client.messages.create(params as Anthropic.MessageCreateParamsNonStreaming)) as AnthropicTextResponse;
 
     const text = response.content
       .filter(block => block.type === 'text')
@@ -41,12 +101,24 @@ export class AnthropicProvider implements LLMProvider {
     content: string,
     symbols: Array<{ name: string; kind: string; signature: string; line?: number | null; end_line?: number }>
   ): Promise<AnalysisResult> {
-    const response = await this.client.messages.create({
+    const params = {
       model: this.model,
       max_tokens: 1024,
-      system: SUMMARY_ONLY_SYSTEM_PROMPT,
+      system: this.buildSystem(SUMMARY_ONLY_SYSTEM_PROMPT),
       messages: [{ role: 'user', content: buildSummaryUserPrompt(filePath, content, symbols) }],
-    });
+      metadata: this.defaultMetadata,
+      ...(typeof this.defaultTemperature === 'number'
+        ? { temperature: this.defaultTemperature }
+        : {}),
+      ...(this.useBetaMessages && this.defaultBetas?.length
+        ? { betas: this.defaultBetas }
+        : {}),
+    };
+    const response = (this.useBetaMessages
+      ? await this.client.beta.messages.create(
+        params as Parameters<typeof this.client.beta.messages.create>[0],
+      )
+      : await this.client.messages.create(params as Anthropic.MessageCreateParamsNonStreaming)) as AnthropicTextResponse;
 
     const text = response.content
       .filter(block => block.type === 'text')

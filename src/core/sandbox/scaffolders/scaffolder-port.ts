@@ -36,6 +36,13 @@ export interface ScaffoldContext {
   previewPathPrefix: string;
   driver: ISandboxDriver;
   signal?: AbortSignal;
+  /**
+   * Per-session opt-in for the Playwright Agent CLI bootstrap. When set,
+   * scaffolders should prefer this over their construct-time `includeE2e`
+   * — the runtime context (driven by `role_assignments` of the session)
+   * is the source of truth, not the registry's compile-time default.
+   */
+  includeE2e?: boolean;
   /** Emit progress / log events up to the manager (and through to SSE). */
   emit: (event: SandboxEvent) => void;
 }

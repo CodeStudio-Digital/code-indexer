@@ -5,6 +5,7 @@ import {
   Copy,
   Download,
   FolderOpen,
+  Link as LinkIcon,
   Pencil,
   Plus,
   RefreshCw,
@@ -19,6 +20,7 @@ import { Switch } from '../../components/ui/switch.js';
 import { SkillEditDialog } from './SkillEditDialog.js';
 import { SkillsInstallDialog } from './SkillsInstallDialog.js';
 import { SkillsInstallLocalDialog } from './SkillsInstallLocalDialog.js';
+import { SkillsInstallUrlDialog } from './SkillsInstallUrlDialog.js';
 import { useAdminSkills } from './hooks/useAdminSkills.js';
 import {
   listSkillNamespaces,
@@ -48,6 +50,7 @@ export function SkillsPanel() {
   const [filter, setFilter] = useState('');
   const [installOpen, setInstallOpen] = useState(false);
   const [localInstallOpen, setLocalInstallOpen] = useState(false);
+  const [urlInstallOpen, setUrlInstallOpen] = useState(false);
   const [namespaces, setNamespaces] = useState<InstalledNamespace[]>([]);
   const [nsBusy, setNsBusy] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -132,6 +135,9 @@ export function SkillsPanel() {
           </Button>
           <Button variant="outline" onClick={() => setInstallOpen(true)}>
             <Cloud className="h-4 w-4 mr-2" /> Install from GitHub
+          </Button>
+          <Button variant="outline" onClick={() => setUrlInstallOpen(true)}>
+            <LinkIcon className="h-4 w-4 mr-2" /> Install from URL
           </Button>
           <Button variant="outline" onClick={() => setLocalInstallOpen(true)}>
             <FolderOpen className="h-4 w-4 mr-2" /> Install from Local Folder
@@ -285,6 +291,15 @@ export function SkillsPanel() {
       <SkillsInstallLocalDialog
         open={localInstallOpen}
         onOpenChange={setLocalInstallOpen}
+        onInstalled={() => {
+          void loadNamespaces();
+          void reload();
+        }}
+      />
+
+      <SkillsInstallUrlDialog
+        open={urlInstallOpen}
+        onOpenChange={setUrlInstallOpen}
         onInstalled={() => {
           void loadNamespaces();
           void reload();

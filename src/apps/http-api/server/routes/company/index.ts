@@ -8,6 +8,9 @@ import { mountCompanyKanbanRoutes } from './kanban.js';
 import { mountCompanyArchiveRoutes } from './archives.js';
 import { mountCompanyDatabaseRoutes } from './databases.js';
 import { mountCompanyLocalProjectRoutes } from './local-project.js';
+import { mountCompanyPipelineRoutes } from './pipelines.js';
+import { mountCompanyInboxRoutes } from './inbox.js';
+import { mountQaRoutes } from './qa/index.js';
 
 export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyTemplateRoutes(app, deps);
@@ -18,4 +21,7 @@ export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyArchiveRoutes(app, deps);
   mountCompanyDatabaseRoutes(app, deps);
   mountCompanyLocalProjectRoutes(app, deps);
+  mountCompanyPipelineRoutes(app, deps);
+  mountCompanyInboxRoutes(app, deps);
+  mountQaRoutes(app, deps);
 }

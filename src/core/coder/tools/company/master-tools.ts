@@ -7,6 +7,7 @@
 import type { CoderTool, ToolResult, JsonSchema } from '../../core/tool.js';
 import { ok, err } from '../../core/tool.js';
 import type { CompanyOrchestrator } from '../../company/orchestrator.js';
+import { buildPipelineMasterTools } from './pipeline-tools.js';
 
 export function buildMasterTools(orchestrator: CompanyOrchestrator): CoderTool[] {
   return [
@@ -23,6 +24,7 @@ export function buildMasterTools(orchestrator: CompanyOrchestrator): CoderTool[]
     finalizeSubordinates(orchestrator),
     listContainers(orchestrator),
     readContainerLogs(orchestrator),
+    ...buildPipelineMasterTools(orchestrator),
   ];
 }
 
@@ -108,6 +110,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           skills: templateLocked ? defaults!.skills : argSkills,
           wait: args.wait as boolean | undefined,
           roleOverride: defaults?.systemPromptOverride,
+          temperature: defaults?.temperature,
         });
 
         // Auto-assign agent to Kanban card and move to in_progress
@@ -179,10 +182,13 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
           let done = false;
           const off = orchestrator.onSubordinateAttention((ev) => {
             if (done) return;
+            // Inbox answers are subordinate↔subordinate signals; the
+            // master doesn't need to wake for those.
+            if (ev.kind === 'inbox_answered') return;
             done = true;
             clearTimeout(timer);
             off();
-            resolve(ev);
+            resolve({ kind: ev.kind, agentRunId: ev.agentRunId, role: ev.role });
           });
           const timer = setTimeout(() => {
             if (done) return;

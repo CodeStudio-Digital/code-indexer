@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Paperclip, Repeat, Send, Settings2, Shield, Square } from 'lucide-react';
+import { Paperclip, Repeat, Send, Settings2, Shield, Square, Thermometer } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -29,6 +29,13 @@ interface ComposerToolbarProps {
   currentProviderModels: EnrichedProviderModel[];
   maxTurns: number | null;
   setMaxTurns: (v: number | null) => void;
+  /**
+   * Per-session temperature override. `null` = inherit (resolver falls through
+   * to role/agent/default). UI clears the value back to null when the user
+   * empties the input; the runtime resolver clamps to [0, 1].
+   */
+  temperature: number | null;
+  setTemperature: (v: number | null) => void;
   fallbackProvider: string | null;
   fallbackModel: string | null;
   onFallbackChange: (provider: string | null, model: string | null) => void;
@@ -52,6 +59,8 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   currentProviderModels,
   maxTurns,
   setMaxTurns,
+  temperature,
+  setTemperature,
   fallbackProvider,
   fallbackModel,
   onFallbackChange,
@@ -130,6 +139,32 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
             setMaxTurns(v === '' ? null : Math.max(1, parseInt(v, 10) || 1));
           }}
           placeholder="50"
+          className="h-7 w-16 text-xs font-mono px-1.5"
+        />
+      </div>
+
+      <div
+        className="hidden sm:flex items-center gap-1 text-muted-foreground"
+        title={t('chat:toolbar.temperature', { defaultValue: 'Temperature override (empty = auto by agent)' })}
+      >
+        <Thermometer className="h-3.5 w-3.5" />
+        <Input
+          type="number"
+          min={0}
+          max={1}
+          step={0.05}
+          value={temperature ?? ''}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === '') {
+              setTemperature(null);
+              return;
+            }
+            const parsed = parseFloat(v);
+            if (!Number.isFinite(parsed)) return;
+            setTemperature(Math.min(1, Math.max(0, parsed)));
+          }}
+          placeholder="auto"
           className="h-7 w-16 text-xs font-mono px-1.5"
         />
       </div>
@@ -232,6 +267,33 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
                     setMaxTurns(v === '' ? null : Math.max(1, parseInt(v, 10) || 1));
                   }}
                   placeholder="50"
+                  className="h-7 text-xs font-mono px-1.5"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">
+                {t('chat:toolbar.temperature', { defaultValue: 'Temperature' })}
+              </label>
+              <div className="flex items-center gap-2">
+                <Thermometer className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <Input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={temperature ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === '') {
+                      setTemperature(null);
+                      return;
+                    }
+                    const parsed = parseFloat(v);
+                    if (!Number.isFinite(parsed)) return;
+                    setTemperature(Math.min(1, Math.max(0, parsed)));
+                  }}
+                  placeholder="auto"
                   className="h-7 text-xs font-mono px-1.5"
                 />
               </div>

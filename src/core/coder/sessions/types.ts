@@ -35,6 +35,26 @@ export interface CoderSession {
   last_turn_input_tokens: number;
   /** Selected agent preset (explore | plan | build | admin). Sticky across turns so resume paths honour the user's choice. */
   agent: string | null;
+  /**
+   * Last `response.id` returned by the Responses API for this session, used as
+   * `previous_response_id` on the next turn. Only populated for ChatGPT/Codex
+   * sessions running with `store: true`. Null for other providers.
+   */
+  last_response_id: string | null;
+  /**
+   * Count of messages that were on the server side when `last_response_id` was
+   * returned. The provider sends only `messages.slice(last_response_message_count)`
+   * on the next turn — the backend reconstructs the prefix from the stored
+   * response. Null for non-Codex sessions.
+   */
+  last_response_message_count: number | null;
+  /**
+   * Per-session sampling temperature override. When non-null, takes precedence
+   * over the role-level and agent-level defaults in `resolveTemperature`. Range
+   * [0, 1] enforced by the resolver — out-of-range values are clamped, not
+   * rejected at write-time, so the UI can be permissive.
+   */
+  temperature_override: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -123,6 +143,31 @@ export interface CoderPlanRow {
   feedback: string | null;
   created_at: string;
   resolved_at: string | null;
+}
+
+// ─── Session inputs / hidden-prompt log (migration 061) ───────
+
+export type SessionInputKind =
+  | 'system_prompt'
+  | 'skill_content'
+  | 'system_reminder'
+  | 'subagent_prompt';
+
+/**
+ * One row per hidden prompt the agent sees: the run-start system prompt,
+ * skill bodies fetched mid-conversation, runtime system-reminders, and
+ * system prompts handed to spawned sub-agents. Surfaced in the "Input" tab
+ * of the session details modal as a debugging trail.
+ */
+export interface SessionInputRow {
+  id: number;
+  session_id: number;
+  kind: SessionInputKind;
+  source_label: string;
+  content: string;
+  content_hash: string;
+  meta_json: string | null;
+  created_at: string;
 }
 
 // ─── Tasks (migration 008) ─────────────────────────────────────
