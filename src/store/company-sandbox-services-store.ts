@@ -36,11 +36,22 @@ export interface PersistedSandboxServiceRow {
   limits_json: string;
   status: PersistedSandboxStatus;
   error: string | null;
+  mount_kind: 'owned' | 'external';
+  image_source: 'default' | 'project_dockerfile';
+  built_image_tag: string | null;
+  dockerfile_path: string | null;
+  dockerfile_exposed_port: number | null;
   is_primary: 0 | 1;
   last_access_at_ms: number;
   paused_at_ms: number | null;
   created_at: string;
   updated_at: string;
+  /** 1 = service references an externally-managed container we never start/stop. */
+  is_attached: 0 | 1;
+  /** User-supplied container id or name (only meaningful when is_attached=1). */
+  external_container_ref: string | null;
+  /** DNS hostname peer containers use to reach this service. */
+  attached_hostname: string | null;
 }
 
 export interface UpsertSandboxServiceInput {
@@ -56,9 +67,17 @@ export interface UpsertSandboxServiceInput {
   limits: Record<string, unknown>;
   status: PersistedSandboxStatus;
   error?: string | null;
+  mount_kind?: 'owned' | 'external';
+  image_source?: 'default' | 'project_dockerfile';
+  built_image_tag?: string | null;
+  dockerfile_path?: string | null;
+  dockerfile_exposed_port?: number | null;
   is_primary?: boolean;
   last_access_at_ms?: number;
   paused_at_ms?: number | null;
+  is_attached?: boolean;
+  external_container_ref?: string | null;
+  attached_hostname?: string | null;
 }
 
 export class CompanySandboxServicesStore {
@@ -72,11 +91,15 @@ export class CompanySandboxServicesStore {
         INSERT INTO company_sandbox_services (
           session_id, service_id, name, container_id, runtime, stack,
           workdir, host_workdir_mount, host_port, limits_json, status,
-          error, is_primary, last_access_at_ms, paused_at_ms, updated_at
+          error, mount_kind, image_source, built_image_tag, dockerfile_path,
+          dockerfile_exposed_port, is_primary, last_access_at_ms, paused_at_ms,
+          is_attached, external_container_ref, attached_hostname, updated_at
         ) VALUES (
           @session_id, @service_id, @name, @container_id, @runtime, @stack,
           @workdir, @host_workdir_mount, @host_port, @limits_json, @status,
-          @error, @is_primary, @last_access_at_ms, @paused_at_ms, datetime('now')
+          @error, @mount_kind, @image_source, @built_image_tag, @dockerfile_path,
+          @dockerfile_exposed_port, @is_primary, @last_access_at_ms, @paused_at_ms,
+          @is_attached, @external_container_ref, @attached_hostname, datetime('now')
         )
         ON CONFLICT(session_id, service_id) DO UPDATE SET
           name = excluded.name,
@@ -89,9 +112,17 @@ export class CompanySandboxServicesStore {
           limits_json = excluded.limits_json,
           status = excluded.status,
           error = excluded.error,
+          mount_kind = excluded.mount_kind,
+          image_source = excluded.image_source,
+          built_image_tag = excluded.built_image_tag,
+          dockerfile_path = excluded.dockerfile_path,
+          dockerfile_exposed_port = excluded.dockerfile_exposed_port,
           is_primary = excluded.is_primary,
           last_access_at_ms = excluded.last_access_at_ms,
           paused_at_ms = excluded.paused_at_ms,
+          is_attached = excluded.is_attached,
+          external_container_ref = excluded.external_container_ref,
+          attached_hostname = excluded.attached_hostname,
           updated_at = datetime('now')
         `,
       )
@@ -108,9 +139,17 @@ export class CompanySandboxServicesStore {
         limits_json: JSON.stringify(input.limits ?? {}),
         status: input.status,
         error: input.error ?? null,
+        mount_kind: input.mount_kind ?? 'owned',
+        image_source: input.image_source ?? 'default',
+        built_image_tag: input.built_image_tag ?? null,
+        dockerfile_path: input.dockerfile_path ?? null,
+        dockerfile_exposed_port: input.dockerfile_exposed_port ?? null,
         is_primary: input.is_primary ? 1 : 0,
         last_access_at_ms: now,
         paused_at_ms: input.paused_at_ms ?? null,
+        is_attached: input.is_attached ? 1 : 0,
+        external_container_ref: input.external_container_ref ?? null,
+        attached_hostname: input.attached_hostname ?? null,
       });
     return this.get(input.session_id, input.service_id)!;
   }
@@ -194,6 +233,14 @@ export class CompanySandboxServicesStore {
     if (patch.limits !== undefined) { fields.push('limits_json = @limits_json'); values.limits_json = JSON.stringify(patch.limits); }
     if (patch.name !== undefined) { fields.push('name = @name'); values.name = patch.name; }
     if (patch.is_primary !== undefined) { fields.push('is_primary = @is_primary'); values.is_primary = patch.is_primary ? 1 : 0; }
+    if (patch.mount_kind !== undefined) { fields.push('mount_kind = @mount_kind'); values.mount_kind = patch.mount_kind; }
+    if (patch.image_source !== undefined) { fields.push('image_source = @image_source'); values.image_source = patch.image_source; }
+    if (patch.built_image_tag !== undefined) { fields.push('built_image_tag = @built_image_tag'); values.built_image_tag = patch.built_image_tag; }
+    if (patch.dockerfile_path !== undefined) { fields.push('dockerfile_path = @dockerfile_path'); values.dockerfile_path = patch.dockerfile_path; }
+    if (patch.dockerfile_exposed_port !== undefined) { fields.push('dockerfile_exposed_port = @dockerfile_exposed_port'); values.dockerfile_exposed_port = patch.dockerfile_exposed_port; }
+    if (patch.is_attached !== undefined) { fields.push('is_attached = @is_attached'); values.is_attached = patch.is_attached ? 1 : 0; }
+    if (patch.external_container_ref !== undefined) { fields.push('external_container_ref = @external_container_ref'); values.external_container_ref = patch.external_container_ref; }
+    if (patch.attached_hostname !== undefined) { fields.push('attached_hostname = @attached_hostname'); values.attached_hostname = patch.attached_hostname; }
     if (fields.length === 0) return;
     fields.push("updated_at = datetime('now')");
     this.db

@@ -19,7 +19,8 @@
  *   - IIdleController → fire on subordinate count changes
  */
 
-import { runCoder, type RunCoderOptions, type RunCoderHandle } from '../../index.js';
+import { runCoder, type CoderAttachment, type RunCoderOptions, type RunCoderHandle } from '../../index.js';
+import { attachmentsToBlocks } from '../../core/messages.js';
 import { createBus } from '../../../../apps/http-api/coder-bus.js';
 import { SessionStore } from '../../sessions/store.js';
 import { SkillStore } from '../../../../store/skill-store.js';
@@ -75,6 +76,13 @@ export interface SpawnSubordinateSpec {
    * and lets a per-session override (if set) win.
    */
   temperature?: number;
+  /**
+   * Optional attachments (typically images) the master forwards to the
+   * subordinate alongside the task — e.g. design inspiration for the
+   * frontend role. Threaded through `runCoder` as the first user turn,
+   * so the subordinate sees them natively.
+   */
+  attachments?: CoderAttachment[];
 }
 
 /**
@@ -86,6 +94,18 @@ export interface SpawnSubordinateSpec {
  * because the tool wraps those errors into the master's `spawn_subordinate_agent`
  * reply so it can autocorrect on retry.
  */
+/**
+ * Normalize a host filesystem path for case-insensitive equality on
+ * Windows and trailing-separator tolerance everywhere. Used to decide
+ * whether a project's `root_path` matches a sandbox binding's
+ * `hostWorkdirMount` — i.e. whether the project is the one bind-mounted
+ * into that container. Not a general-purpose path util; lives here
+ * because that comparison is the only caller.
+ */
+function normalizeHostPath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
 export function resolveSpawnProjectBinding(args: {
   role: string;
   specProjectId: number | undefined;
@@ -222,8 +242,16 @@ export class SubordinateLifecycle implements ISubordinateQuery {
    * Resolution:
    *   project has label + that label has a live service binding
    *     → use the service binding
-   *   otherwise (primary project, or service container not yet up)
-   *     → fall back to the master binding
+   *   project's root_path equals the primary container's hostWorkdirMount
+   *     (i.e. THIS project is the one bind-mounted into the primary)
+   *     → use the primary master binding
+   *   otherwise (host-only project linked to a builder session, or
+   *     service container not yet up)
+   *     → return null so the subordinate runs on the host filesystem
+   *       at its own root_path. Falling back to the primary binding
+   *       here would ship the agent into the WRONG project's container
+   *       workdir — that's the "backend agent edits files in the React
+   *       container" bug.
    */
   private resolveBindingForProject(
     projectId: number,
@@ -240,7 +268,14 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       const svc = orchestrator.getSandboxServiceBinding(label);
       if (svc) return svc;
     }
-    return orchestrator.getSandboxBinding ? orchestrator.getSandboxBinding() : null;
+    const primary = orchestrator.getSandboxBinding ? orchestrator.getSandboxBinding() : null;
+    if (!primary) return null;
+    const projectRoot = this.deps.ctx.db.getProject(projectId)?.root_path ?? null;
+    if (projectRoot && primary.hostWorkdirMount &&
+        normalizeHostPath(projectRoot) === normalizeHostPath(primary.hostWorkdirMount)) {
+      return primary;
+    }
+    return null;
   }
 
   // ─── Spawn ──────────────────────────────────────────────────────
@@ -453,6 +488,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     const handle = await runCoder({
       session: { id: subSession.id },
       userMessage: spec.task,
+      attachments: spec.attachments,
       maxTurns: 50,
       profile: spec.tier ?? 'navigate',
       companyContext,
@@ -493,7 +529,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
 
   // ─── Resume ─────────────────────────────────────────────────────
 
-  async resume(agentRunId: number, message?: string, roleOverride?: string): Promise<{
+  async resume(agentRunId: number, message?: string, roleOverride?: string, attachments?: CoderAttachment[]): Promise<{
     agentRunId: number;
     coderSessionId: number;
     status: AgentRunStatus;
@@ -581,6 +617,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       handle = await runCoder({
         session: { id: agentRun.coder_session_id },
         userMessage: resumeMessage,
+        attachments,
         maxTurns: 50,
         companyContext,
         companyPromptBlock: subordinateBlock,
@@ -628,7 +665,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
    * Reactivate a waiting/completed/errored/aborted subordinate. Returns
    * false if the agent run doesn't exist or isn't in a resumable state.
    */
-  async reactivate(agentRunId: number, message: string): Promise<boolean> {
+  async reactivate(agentRunId: number, message: string, attachments?: CoderAttachment[]): Promise<boolean> {
     const agentRun = this.deps.ctx.companyStore.getAgentRun(agentRunId);
     if (!agentRun) return false;
     const resumableStatuses = ['error', 'aborted', 'waiting', 'completed', 'interrupted'];
@@ -637,7 +674,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       return false;
     }
     try {
-      await this.resume(agentRunId, message);
+      await this.resume(agentRunId, message, undefined, attachments);
       return true;
     } catch (e) {
       console.warn(`[company] Failed to reactivate ${agentRun.role}: ${e instanceof Error ? e.message : String(e)}`);
@@ -658,11 +695,15 @@ export class SubordinateLifecycle implements ISubordinateQuery {
   }
 
   abortAll(): void {
+    // This lifecycle only ever owns subs of its own front, so the
+    // in-memory map is naturally scoped — no extra filtering needed.
     for (const sub of this.subordinates.values()) {
-      sub.runner.abort();
-      this.deps.status.setStatus(sub.agentRunId, 'aborted');
+      try { sub.runner.abort(); } catch { /* best-effort */ }
+      try { this.deps.status.setStatus(sub.agentRunId, 'aborted'); } catch { /* best-effort */ }
       this.deps.attention.signal({ kind: 'finished', agentRunId: sub.agentRunId, role: sub.role });
     }
+    this.subordinates.clear();
+    this.runningIds.clear();
   }
 
   /** Gracefully terminate all subordinates (master-driven finalization). */
@@ -675,13 +716,13 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     for (const run of subs) {
       const handle = this.subordinates.get(run.id);
       if (this.runningIds.has(run.id) && handle) {
-        handle.runner.abort();
+        try { handle.runner.abort(); } catch { /* best-effort */ }
         this.runningIds.delete(run.id);
         finalized++;
       } else {
         alreadyStopped++;
       }
-      this.deps.status.setStatus(run.id, 'completed', 'Finalized by master');
+      try { this.deps.status.setStatus(run.id, 'completed', 'Finalized by master'); } catch { /* best-effort */ }
       this.deps.attention.signal({ kind: 'finished', agentRunId: run.id, role: run.role });
     }
 
@@ -696,8 +737,68 @@ export class SubordinateLifecycle implements ISubordinateQuery {
   // ─── Internal: failure classifier ───────────────────────────────
 
   /**
+   * On provider failures, move the same agent run to another curated model
+   * before retrying. Prefer the session default; if the agent is already on
+   * it, use the first other allowed model. `resume()` recreates the runner
+   * from `coder_sessions`, so the session row must be updated first.
+   */
+  private applyModelFallback(
+    agentRunId: number,
+    role: string,
+  ): { from: { provider: string; model: string }; to: { provider: string; model: string } } | null {
+    const orchestratorForPool = this.deps.orchestratorRef as unknown as {
+      getAllowedModels?: () => readonly import('../types.js').AllowedModel[];
+      getPoolDefault?: () => import('../types.js').AllowedModel | null;
+    };
+
+    const agentRun = this.deps.ctx.companyStore.getAgentRun(agentRunId);
+    if (!agentRun) return null;
+
+    const allowedModels = orchestratorForPool.getAllowedModels?.() ?? [];
+    const poolDefault = orchestratorForPool.getPoolDefault?.() ?? null;
+    const candidates = [
+      ...(poolDefault ? [poolDefault] : []),
+      ...allowedModels,
+    ];
+    const fallback = candidates.find(
+      (candidate) => candidate.provider !== agentRun.provider || candidate.model !== agentRun.model,
+    );
+    if (!fallback) return null;
+
+    const from = { provider: agentRun.provider, model: agentRun.model };
+    const to = { provider: fallback.provider, model: fallback.model };
+
+    try {
+      const config = loadConfig();
+      const store = new SessionStore(config.dbPath);
+      try {
+        store.updateSessionProvider(agentRun.coder_session_id, to.provider, to.model);
+        // A stored response id belongs to the previous provider/model turn
+        // graph. Clear it so the resumed run starts with plain message history.
+        store.setLastResponseState(agentRun.coder_session_id, null, null);
+      } finally {
+        store.close();
+      }
+      this.deps.ctx.companyStore.updateAgentRunProvider(agentRunId, to.provider, to.model);
+      this.deps.board.post(
+        'system',
+        agentRunId,
+        'message',
+        `[AUTO-FALLBACK] @${role} ${from.provider}/${from.model} -> ${to.provider}/${to.model}`,
+      );
+      return { from, to };
+    } catch (e) {
+      console.warn(
+        `[company] auto-fallback failed for ${role}#${agentRunId}: ` +
+        `${e instanceof Error ? e.message : String(e)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
    * Unified failure handler. Classifies the error:
-   *   - Transient (429/5xx/timeout/network) → auto-retry via RetryPolicy
+   *   - Transient/provider (400/429/5xx/timeout/network) → auto-retry via RetryPolicy
    *   - Permanent → notify master immediately with recovery hint.
    */
   private handleFailure(
@@ -714,13 +815,17 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     if (this.retryPolicy.shouldRetry(agentRunId, errorDetail)) {
       const attempt = this.retryPolicy.usedCount(agentRunId);
       const max = this.retryPolicy.maxAttempts;
+      const fallback = this.applyModelFallback(agentRunId, role);
       this.deps.board.post('system', agentRunId, 'message',
         `[AUTO-RETRY] @${role} — transient error, retrying (${attempt}/${max})`);
       try {
         const cardId = this.deps.kanban.findCardForAgent(agentRunId);
         if (cardId) {
+          const fallbackNote = fallback
+            ? `; model fallback ${fallback.from.provider}/${fallback.from.model} -> ${fallback.to.provider}/${fallback.to.model}`
+            : '';
           this.deps.kanban.addComment(cardId, role, agentRunId,
-            `[AUTO-RETRY] Transient error; attempt ${attempt}/${max}: ${errorDetail ?? 'unknown'}`);
+            `[AUTO-RETRY] Transient error${fallbackNote}; attempt ${attempt}/${max}: ${errorDetail ?? 'unknown'}`);
         }
       } catch { /* best-effort */ }
 

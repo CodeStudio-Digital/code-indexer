@@ -607,7 +607,7 @@ function upsertDesignSystemSkill(
       prompt_body: promptBody,
       scope: 'global',
       enabled: true,
-      context_mode: 'inline',
+      context_mode: 'auto',
       source: 'builtin',
       tags: ['design-system'],
     });

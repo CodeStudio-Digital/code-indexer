@@ -17,6 +17,7 @@ export { DEFAULT_SANDBOX_LIMITS } from './types.js';
 
 export type {
   ISandboxDriver,
+  SandboxBuildSpec,
   SandboxCreateSpec,
   SandboxExecOptions,
   SandboxExecResult,

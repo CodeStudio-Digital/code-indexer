@@ -19,22 +19,12 @@
  */
 
 import type { Hono } from 'hono';
-import { isAbsolute, resolve as resolvePath, sep as pathSep } from 'node:path';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
-import { detectManifest } from '../../../../../core/sandbox/manifest-detector/detect.js';
-import { synthesizeStartCommand } from '../../../../../core/sandbox/command-synth/synthesize.js';
-import { validateArgv } from '../../../../../core/sandbox/command-synth/allowlist.js';
-import { defaultPortAllocator } from '../../../../../core/sandbox/port-allocator.js';
+import { parseIdParam, notFound } from '../_helpers.js';
 import { getLocalProcessManager } from '../../../../../core/sandbox/local-process/LocalProcessManager.js';
 
-interface StartBody {
-  path?: string;
-  useAi?: boolean;
-}
-
 export function mountCompanyLocalProjectRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore, db, companyLocalProjectStore } = deps;
+  const { companyStore, companyLocalProjectStore } = deps;
 
   // GET status — used by the UI to render the "host" row in the sidebar.
   app.get('/api/company/sessions/:id/local-project', (c) => {
@@ -82,107 +72,14 @@ export function mountCompanyLocalProjectRoutes(app: Hono, deps: ServerDeps): voi
 
   // POST — start (or restart after stop) a local-process run.
   app.post('/api/company/sessions/:id/local-project', async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
-
-    const body = await parseJsonBody<StartBody>(c);
-    const rawPath = typeof body.path === 'string' ? body.path.trim() : '';
-    if (!rawPath) return c.json({ error: 'path is required' }, 400);
-    if (!isAbsolute(rawPath)) {
-      return c.json({ error: 'path must be absolute' }, 400);
-    }
-    const absPath = resolvePath(rawPath);
-
-    // Gate 1 — path must live under a known project root. This is the
-    // primary defense against running arbitrary host directories.
-    const roots = db.listProjects().map((p) => resolvePath(p.root_path));
-    const underKnownRoot = roots.some((root) => isPathUnder(absPath, root));
-    if (!underKnownRoot) {
-      return c.json(
-        {
-          error:
-            'path must be equal to or under a registered project root. ' +
-            'Open the Projects page first and add this folder.',
-        },
-        400,
-      );
-    }
-
-    // Gate 2 — manifest must be detected.
-    const manifest = detectManifest(absPath);
-    if (!manifest) {
-      return c.json(
-        {
-          error:
-            'no supported manifest in this folder (package.json, pyproject.toml, ' +
-            'go.mod, Cargo.toml, Gemfile)',
-        },
-        400,
-      );
-    }
-
-    // If a live process is already running, return 409 — user must stop first.
-    const mgr = getLocalProcessManager();
-    if (mgr.get(String(id))) {
-      return c.json({ error: 'a local project is already running; stop it first' }, 409);
-    }
-
-    const allocator = defaultPortAllocator();
-    const port = await allocator.acquire();
-
-    let synthesis;
-    try {
-      synthesis = await synthesizeStartCommand(manifest, port, {
-        useAi: body.useAi === true,
-      });
-    } catch (err) {
-      allocator.release(port);
-      throw err;
-    }
-
-    // Gate 3 — the synthesized argv passes the same allowlist used by
-    // the manager. Fallback rules already pass by construction; AI
-    // output is checked inside `synthesizeStartCommand` but we re-validate
-    // here too so a future bug in the synth layer can't sneak through.
-    const argvCheck = validateArgv(synthesis.command.program, synthesis.command.args);
-    if (!argvCheck.ok) {
-      allocator.release(port);
-      return c.json({ error: `rejected: ${argvCheck.reason}` }, 422);
-    }
-
-    // Release the allocator's pre-acquired port so the manager's own
-    // `acquire()` can take it (the manager owns the allocation lifecycle).
-    allocator.release(port);
-
-    try {
-      const result = await mgr.start({
-        sessionId: String(id),
-        cwd: absPath,
-        manifestKind: manifest.kind,
-        program: synthesis.command.program,
-        args: synthesis.command.args,
-        env: synthesis.command.env,
-        rationale: synthesis.command.rationale,
-        synthSource: synthesis.source,
-        readyProbePath: synthesis.command.readyProbe.path,
-      });
-      return c.json({
-        preview_url: result.previewUrl,
-        port: result.hostPort,
-        pid: result.pid,
-        program: result.program,
-        args: result.args,
-        rationale: synthesis.command.rationale,
-        synth_source: synthesis.source,
-        ai_failure_reason: synthesis.aiFailureReason ?? null,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const code = (err as { code?: string } | null)?.code;
-      const status = code === 'READINESS_FAILED' ? 424 : 500;
-      return c.json({ error: message, code: code ?? null }, status);
-    }
+    parseIdParam(c);
+    return c.json(
+      {
+        error:
+          'Run local project (host process) has been retired. Use External project so the project runs in a container with the Node dev image or its Dockerfile.',
+      },
+      410,
+    );
   });
 
   // DELETE — stop a running local project AND drop the persisted row.
@@ -202,18 +99,4 @@ export function mountCompanyLocalProjectRoutes(app: Hono, deps: ServerDeps): voi
     companyLocalProjectStore.delete(id);
     return c.json({ ok: true });
   });
-}
-
-/**
- * True when `candidate` is equal to `root` or lives inside it. Uses
- * path-separator-aware prefix check after resolution to defeat
- * `/foo/../etc` shenanigans.
- */
-function isPathUnder(candidate: string, root: string): boolean {
-  const normCandidate = candidate.endsWith(pathSep) ? candidate : candidate + pathSep;
-  const normRoot = root.endsWith(pathSep) ? root : root + pathSep;
-  return (
-    candidate === root ||
-    normCandidate.toLowerCase().startsWith(normRoot.toLowerCase())
-  );
 }

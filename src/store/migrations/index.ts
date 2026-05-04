@@ -76,6 +76,12 @@ import { pipelines058 } from './058_pipelines.js';
 import { agentInbox059 } from './059_agent_inbox.js';
 import { qaTestRunsLastErrorBackfill060 } from './060_qa_test_runs_last_error_backfill.js';
 import { coderSessionInputs061 } from './061_coder_session_inputs.js';
+import { companySandboxesHostWorkdir062 } from './062_company_sandboxes_host_workdir.js';
+import { externalMount063 } from './063_external_mount.js';
+import { attachedServices064 } from './064_attached_services.js';
+import { companyFronts065 } from './065_company_fronts.js';
+import { companySubsessions067 } from './067_company_subsessions.js';
+import { companyDriveFiles066 } from './066_company_drive_files.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -146,6 +152,12 @@ export const MIGRATIONS: Migration[] = [
   agentInbox059,
   qaTestRunsLastErrorBackfill060,
   coderSessionInputs061,
+  companySandboxesHostWorkdir062,
+  externalMount063,
+  attachedServices064,
+  companyFronts065,
+  companyDriveFiles066,
+  companySubsessions067,
 ];
 
 /**

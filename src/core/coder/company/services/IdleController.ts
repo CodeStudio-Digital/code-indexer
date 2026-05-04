@@ -87,7 +87,9 @@ export class IdleController implements IIdleController {
       return;
     }
 
-    // Transition to "paused" — bus stays alive for follow-up messages.
+    // Transition this session to "paused" — bus stays alive for follow-up
+    // messages. With migration 067, sub-sessions are full CompanySession
+    // rows so this single status field is naturally per-tab.
     try {
       this.deps.ctx.companyStore.updateCompanySessionStatus(
         this.deps.ctx.companySessionId,

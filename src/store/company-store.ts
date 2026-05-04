@@ -189,17 +189,56 @@ export class CompanyStore {
     template_id?: number | null;
     name: string;
     config_json?: string;
+    parent_session_id?: number | null;
   }): CompanySession {
     const stmt = this.db.prepare(`
-      INSERT INTO company_sessions (template_id, name, config_json)
-      VALUES (?, ?, ?)
+      INSERT INTO company_sessions (template_id, name, config_json, parent_session_id)
+      VALUES (?, ?, ?, ?)
     `);
     const r = stmt.run(
       input.template_id ?? null,
       input.name,
       input.config_json ?? '{}',
+      input.parent_session_id ?? null,
     );
     return this.getCompanySession(Number(r.lastInsertRowid))!;
+  }
+
+  /**
+   * Create a sub-session ("front") of a parent. Snapshots the parent's
+   * `template_id` and `config_json` so role/provider/model defaults
+   * carry over; the new row's runtime state (board, agent_runs,
+   * master_prompts, inbox) starts empty and isolated by FK.
+   */
+  createChildSession(input: {
+    parent_session_id: number;
+    name: string;
+  }): CompanySession {
+    const parent = this.getCompanySession(input.parent_session_id);
+    if (!parent) throw new Error(`Parent session ${input.parent_session_id} not found`);
+    if (parent.parent_session_id != null) {
+      throw new Error('Cannot nest sub-sessions: parent must itself be a root session');
+    }
+    return this.createCompanySession({
+      template_id: parent.template_id,
+      name: input.name,
+      config_json: parent.config_json,
+      parent_session_id: parent.id,
+    });
+  }
+
+  /**
+   * List active (non-archived) sub-sessions of a parent, ordered by id
+   * so the dashboard renders tabs in creation order.
+   */
+  listChildSessions(parentSessionId: number): CompanySession[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM company_sessions
+         WHERE parent_session_id = ?
+         ORDER BY id ASC`,
+      )
+      .all(parentSessionId) as CompanySession[];
   }
 
   getCompanySession(id: number): CompanySession | null {
@@ -208,10 +247,24 @@ export class CompanyStore {
       .get(id) as CompanySession | undefined ?? null;
   }
 
-  listCompanySessions(opts?: { status?: CompanySessionStatus }): CompanySession[] {
+  /**
+   * List sessions for the dashboard sidebar. By default this returns
+   * only ROOT sessions (`parent_session_id IS NULL`) so the sidebar
+   * doesn't flood with sub-sessions ("front tabs") — they're rendered
+   * inline as tabs inside their parent's view (migration 067). Pass
+   * `includeChildren: true` for admin/diagnostic flows that want the
+   * raw list.
+   */
+  listCompanySessions(opts?: {
+    status?: CompanySessionStatus;
+    includeChildren?: boolean;
+  }): CompanySession[] {
     const clauses: string[] = [];
     const params: unknown[] = [];
     if (opts?.status) { clauses.push('status = ?'); params.push(opts.status); }
+    if (!opts?.includeChildren) {
+      clauses.push('parent_session_id IS NULL');
+    }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     return this.db
       .prepare(`SELECT * FROM company_sessions ${where} ORDER BY updated_at DESC`)
@@ -222,6 +275,12 @@ export class CompanyStore {
     this.db.prepare(`
       UPDATE company_sessions SET status = ?, updated_at = datetime('now') WHERE id = ?
     `).run(status, id);
+  }
+
+  renameCompanySession(id: number, name: string): void {
+    this.db.prepare(`
+      UPDATE company_sessions SET name = ?, updated_at = datetime('now') WHERE id = ?
+    `).run(name, id);
   }
 
   setMasterSessionId(id: number, masterSessionId: number): void {
@@ -610,13 +669,11 @@ export class CompanyStore {
   cancelPendingMasterPrompts(companySessionId: number): MasterPrompt[] {
     const pending = this.listMasterPrompts(companySessionId, { status: 'pending' });
     if (pending.length === 0) return [];
-    const stmt = this.db.prepare(`
+    this.db.prepare(`
       UPDATE company_master_prompts
          SET status = 'cancelled', resolved_at = datetime('now')
        WHERE company_session_id = ? AND status = 'pending'
-    `);
-    stmt.run(companySessionId);
-    // Re-read to get fresh resolved_at.
+    `).run(companySessionId);
     return pending
       .map((p) => this.getMasterPrompt(p.id))
       .filter((p): p is MasterPrompt => p !== null);

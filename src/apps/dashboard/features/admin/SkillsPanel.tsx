@@ -31,13 +31,13 @@ import {
 } from './skills-api.js';
 
 const MODE_LABEL: Record<string, string> = {
-  inline: 'Inline',
+  auto: 'Auto',
   tool: 'Tool',
   both: 'Both',
 };
 
 const MODE_COLOR: Record<string, string> = {
-  inline: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
+  auto: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
   tool: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
   both: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
 };
@@ -145,7 +145,7 @@ export function SkillsPanel() {
           <Button
             onClick={() =>
               setEditing({
-                context_mode: 'inline',
+                context_mode: 'auto',
                 scope: 'global',
                 enabled: true,
                 sort_order: 0,

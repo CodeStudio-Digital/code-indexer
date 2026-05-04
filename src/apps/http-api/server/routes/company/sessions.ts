@@ -6,10 +6,13 @@ import { randomUUID } from 'node:crypto';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { cleanupSessionPersistence, getSandboxManager } from '../../../../../core/sandbox/index.js';
-import { getLocalProcessManager } from '../../../../../core/sandbox/local-process/LocalProcessManager.js';
+import { detectDockerfile } from '../../../../../core/sandbox/dockerfile-detector.js';
+import { detectManifest } from '../../../../../core/sandbox/manifest-detector/detect.js';
+import type { NodeManifest } from '../../../../../core/sandbox/manifest-detector/types.js';
 import {
   BUILDER_STACKS,
   PROVISIONABLE_STACKS,
+  type Sandbox,
   type BuilderStack,
   type ProvisionableStack,
 } from '../../../../../core/sandbox/types.js';
@@ -47,6 +50,10 @@ interface CreateSessionBody {
       cpus?: string;
       pids?: number;
     };
+    /** Existing linked project to run via bind-mount + project Dockerfile. */
+    main_project_id?: number;
+    /** Runtime for existing main project: production Dockerfile or dev package.json. */
+    main_project_runtime?: ExternalProjectRuntime;
   };
   /**
    * Curated pool of `(provider, model)` tuples the master is allowed
@@ -109,6 +116,16 @@ function validateAllowedModels(
   return null;
 }
 
+/**
+ * Parse a YAML OpenAPI document into a plain JS object. Loaded lazily so
+ * the `yaml` package isn't on the http-api boot path — the API Reference
+ * tab is the only consumer.
+ */
+async function parseOpenApiYaml(raw: string): Promise<unknown> {
+  const mod = (await import('yaml')) as { parse: (s: string) => unknown };
+  return mod.parse(raw);
+}
+
 const BUILDER_STACKS_SET: ReadonlySet<string> = new Set(BUILDER_STACKS);
 function isBuilderStack(s: unknown): s is BuilderStack {
   return typeof s === 'string' && BUILDER_STACKS_SET.has(s);
@@ -123,6 +140,84 @@ const PROVISIONABLE_STACKS_SET: ReadonlySet<string> = new Set(PROVISIONABLE_STAC
  */
 function isProvisionableStack(s: unknown): s is ProvisionableStack {
   return typeof s === 'string' && PROVISIONABLE_STACKS_SET.has(s);
+}
+
+type ExternalProjectRuntime = 'dockerfile' | 'node';
+
+function isExternalProjectRuntime(value: unknown): value is ExternalProjectRuntime {
+  return value === 'dockerfile' || value === 'node';
+}
+
+function inferPortFromNodeScript(script: string): number | null {
+  const match =
+    script.match(/(?:^|\s)--port(?:=|\s+)(\d{2,5})(?=\s|$)/) ??
+    script.match(/(?:^|\s)-p\s+(\d{2,5})(?=\s|$)/);
+  if (!match) return null;
+  const port = Number(match[1]);
+  return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : null;
+}
+
+function inferNodeDevPort(stack: BuilderStack | ProvisionableStack, manifest: NodeManifest): number {
+  const scriptName = manifest.devScriptName;
+  const script = scriptName ? manifest.scripts[scriptName]?.toLowerCase() ?? '' : '';
+  const scriptedPort = inferPortFromNodeScript(script);
+  if (scriptedPort) return scriptedPort;
+  if (stack === 'angular' || /\bng\s+serve\b/.test(script)) return 4200;
+  if (/\bnext\s+(dev|start)\b/.test(script)) return 3000;
+  return 5173;
+}
+
+function resolveExternalProjectSpec(
+  rootPath: string,
+  stack: BuilderStack | ProvisionableStack,
+  requestedRuntime?: ExternalProjectRuntime,
+):
+  | {
+      mountKind: 'external';
+      imageSource: 'project_dockerfile';
+      dockerfilePath: string;
+      containerPortOverride: number;
+      skipDefaultCommand: true;
+    }
+  | {
+      mountKind: 'external';
+      imageSource: 'default';
+      containerPortOverride: number;
+      skipDefaultCommand: false;
+    } {
+  const manifest = detectManifest(rootPath);
+  const dockerfile = detectDockerfile(rootPath);
+  const runtime =
+    requestedRuntime ??
+    (manifest?.kind === 'node' && manifest.devScriptName ? 'node' : 'dockerfile');
+
+  if (runtime === 'node') {
+    if (!manifest || manifest.kind !== 'node' || !manifest.devScriptName) {
+      throw new Error(
+        'Node dev image requires package.json with a dev, start, or serve script.',
+      );
+    }
+    return {
+      mountKind: 'external',
+      imageSource: 'default',
+      containerPortOverride: inferNodeDevPort(stack, manifest),
+      skipDefaultCommand: false,
+    };
+  }
+
+  const firstPort = dockerfile?.exposedPorts[0];
+  if (!dockerfile || !firstPort) {
+    throw new Error(
+      "Dockerfile mode requires Dockerfile or Containerfile with EXPOSE <port>. Choose Node dev image for package.json projects.",
+    );
+  }
+  return {
+    mountKind: 'external',
+    imageSource: 'project_dockerfile',
+    dockerfilePath: dockerfile.path,
+    containerPortOverride: firstPort,
+    skipDefaultCommand: true,
+  };
 }
 // Lightweight sanity validation. We don't parse the units — Podman/Docker
 // will reject `"pancakes"` at run time with a clear error. The point here
@@ -160,6 +255,23 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       .listCompanySessionProjects(id)
       .find((p) => p.label === serviceId);
     const linkedProject = linked ? db.getProject(linked.project_id) : null;
+    const serviceRow = deps.companySandboxServicesStore.get(id, serviceId);
+    const isExternalProject =
+      serviceRow?.mount_kind === 'external' ||
+      (!!linkedProject && !linkedProject.name.startsWith('_builder_'));
+    const isAttached = serviceRow?.is_attached === 1;
+
+    if (isAttached) {
+      // Attached services never had a podman container we own and never
+      // had a `_builder_*` project row. Just drop the in-memory entry
+      // (so list_containers/list_services stop reporting it) and the
+      // persisted row. The user's container keeps running outside.
+      await getSandboxManager()
+        .destroyService(String(id), serviceId, 'user-removed')
+        .catch(() => void 0);
+      deps.companySandboxServicesStore.delete(id, serviceId);
+      return;
+    }
 
     const orch = orchestratorRegistry.get(id);
     if (orch) {
@@ -175,6 +287,9 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       try {
         companyStore.removeProjectFromCompanySession(id, linkedProject.id);
       } catch { /* best effort */ }
+      if (isExternalProject) {
+        return;
+      }
       if (linkedProject.name.startsWith('_builder_') && linkedProject.root_path) {
         try {
           await rm(linkedProject.root_path, { recursive: true, force: true });
@@ -192,6 +307,175 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         companyStore.removeProjectFromCompanySession(id, linked.project_id);
       } catch { /* best effort */ }
     }
+  }
+
+  async function startPrimarySandboxForSession(
+    id: number,
+    retry = false,
+  ): Promise<
+    | { ok: true; sandbox: Sandbox }
+    | { ok: false; status: 400 | 404 | 409 | 500; error: string }
+  > {
+    const session = companyStore.getCompanySession(id);
+    if (!session) return { ok: false, status: 404, error: 'session not found' };
+
+    let stack: ProvisionableStack | null = null;
+    let limits: { memory?: string; cpus?: string; pids?: number } | undefined;
+    let cfg: {
+      builder?: {
+        stack?: string;
+        limits?: { memory?: string; cpus?: string; pids?: number };
+        main_project_id?: number;
+        main_project_runtime?: ExternalProjectRuntime;
+      };
+    } = {};
+    try {
+      cfg = JSON.parse(session.config_json || '{}') as typeof cfg;
+      if (isProvisionableStack(cfg.builder?.stack)) stack = cfg.builder.stack;
+      if (cfg.builder?.limits) limits = cfg.builder.limits;
+    } catch {
+      /* treat as non-builder */
+    }
+    if (!stack) {
+      return { ok: false, status: 409, error: 'session was not created with builder mode' };
+    }
+
+    const mainProjectId = cfg.builder?.main_project_id;
+    const linkedProjects = companyStore.listCompanySessionProjects(id);
+    const primaryLink =
+      mainProjectId != null
+        ? linkedProjects.find((p) => p.project_id === mainProjectId)
+        : linkedProjects.find((p) => !p.label) ?? linkedProjects[0];
+    const primaryProject = primaryLink ? db.getProject(primaryLink.project_id) : null;
+    const hostWorkdirMount = primaryProject?.root_path ?? undefined;
+    let externalSpec:
+      | ReturnType<typeof resolveExternalProjectSpec>
+      | {};
+    if (mainProjectId != null) {
+      if (!primaryProject) {
+        return { ok: false, status: 404, error: `Project ${mainProjectId} not found` };
+      }
+      try {
+        externalSpec = resolveExternalProjectSpec(
+          primaryProject.root_path,
+          stack as BuilderStack,
+          cfg.builder?.main_project_runtime,
+        );
+      } catch (e) {
+        return {
+          ok: false,
+          status: 400,
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+    } else {
+      externalSpec = {};
+    }
+
+    try {
+      const sandbox = await getSandboxManager().provision({
+        sessionId: String(id),
+        stack,
+        retry,
+        limits,
+        hostWorkdirMount,
+        ...externalSpec,
+      });
+      return { ok: true, sandbox };
+    } catch (e) {
+      return {
+        ok: false,
+        status: 500,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
+  /**
+   * Reject lifecycle calls (start/pause/unpause/restart/retry) on
+   * services that reference an externally-managed container. The
+   * platform never starts/stops these — only `inspect` is allowed.
+   * Returns `null` when the call is permitted.
+   */
+  function rejectIfAttached(
+    id: number,
+    serviceId: string,
+  ): { status: 409; error: string } | null {
+    const row = deps.companySandboxServicesStore.get(id, serviceId);
+    if (row?.is_attached === 1) {
+      return {
+        status: 409,
+        error:
+          "This service is an externally-managed container — manage its lifecycle from your host (podman start/stop). Use Refresh to update its status.",
+      };
+    }
+    return null;
+  }
+
+  function serviceStartPayload(
+    serviceId: string,
+    sb: Sandbox,
+  ) {
+    return {
+      ok: true,
+      service_id: serviceId,
+      status: sb.runtimePaused ? 'paused' : sb.status,
+      runtime_paused: !!sb.runtimePaused,
+      preview_url: sb.previewUrl,
+      container_id: sb.containerId,
+    };
+  }
+
+  function nodeModulesVolumeName(sessionId: number | string, serviceId?: string): string {
+    const safeSession = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 48);
+    const base = `mcp-sbx-nm-${safeSession}`;
+    return serviceId ? `${base}-${serviceId}` : base;
+  }
+
+  function buildSessionDeletePlan(id: number) {
+    const full = companyStore.getCompanySessionFull(id);
+    const projectPaths: Array<{
+      project_id: number;
+      name: string;
+      label: string | null;
+      root_path: string;
+      kind: 'owned' | 'external';
+      removable: boolean;
+    }> = [];
+    if (full) {
+      for (const link of full.projects) {
+        const project = db.getProject(link.project_id);
+        if (!project?.root_path) continue;
+        const owned = project.name.startsWith('_builder_');
+        projectPaths.push({
+          project_id: project.id,
+          name: project.name,
+          label: link.label ?? null,
+          root_path: project.root_path,
+          kind: owned ? 'owned' : 'external',
+          removable: owned,
+        });
+      }
+    }
+
+    const volumes: Array<{ name: string; label: string; removable: boolean }> = [];
+    const primary = deps.companySandboxStore.get(id);
+    if (primary && primary.mount_kind !== 'external') {
+      volumes.push({ name: nodeModulesVolumeName(id), label: 'main node_modules', removable: true });
+    }
+    for (const row of deps.companySandboxServicesStore.listBySessionAll(id)) {
+      if (row.mount_kind === 'external') continue;
+      volumes.push({
+        name: nodeModulesVolumeName(id, row.service_id),
+        label: `${row.service_id} node_modules`,
+        removable: true,
+      });
+    }
+
+    return {
+      project_paths: projectPaths,
+      node_modules_volumes: volumes,
+    };
   }
 
   app.get('/api/company/sessions', (c) => {
@@ -259,6 +543,34 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       if (!proj) return c.json({ error: `Project ${pid} not found` }, 404);
     }
 
+    if (body.builder && (body.project_ids?.length ?? 0) > 0) {
+      const mainProjectId = body.builder.main_project_id;
+      if (!Number.isInteger(mainProjectId)) {
+        return c.json(
+          {
+            error:
+              'builder.main_project_id is required when creating a builder session from existing projects',
+          },
+          400,
+        );
+      }
+      if (!(body.project_ids ?? []).includes(mainProjectId!)) {
+        return c.json(
+          { error: 'builder.main_project_id must be included in project_ids' },
+          400,
+        );
+      }
+      if (
+        body.builder.main_project_runtime !== undefined &&
+        !isExternalProjectRuntime(body.builder.main_project_runtime)
+      ) {
+        return c.json(
+          { error: "builder.main_project_runtime must be 'dockerfile' or 'node'" },
+          400,
+        );
+      }
+    }
+
     // Builder + no explicit projects → spin up a virtual project so the
     // rest of the orchestrator (which assumes one project per session
     // minimum) keeps working. The project is a pure bookkeeping row:
@@ -323,6 +635,12 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
               builder: {
                 stack: body.builder.stack,
                 ...(body.builder.limits ? { limits: body.builder.limits } : {}),
+                ...(body.builder.main_project_id
+                  ? { main_project_id: body.builder.main_project_id }
+                  : {}),
+                ...(body.builder.main_project_runtime
+                  ? { main_project_runtime: body.builder.main_project_runtime }
+                  : {}),
               },
             }
           : {}),
@@ -458,10 +776,12 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     let limits: { memory?: string; cpus?: string; pids?: number } | undefined;
     try {
       const cfg = JSON.parse(session.config_json || '{}') as {
-        builder?: {
-          stack?: string;
-          limits?: { memory?: string; cpus?: string; pids?: number };
-        };
+      builder?: {
+        stack?: string;
+        limits?: { memory?: string; cpus?: string; pids?: number };
+        main_project_id?: number;
+        main_project_runtime?: ExternalProjectRuntime;
+      };
       };
       const requested = cfg.builder?.stack;
       // `isProvisionableStack` (vs `isBuilderStack`) — DS sessions use
@@ -492,10 +812,39 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     // service label; the primary is the first linked project without
     // a service_id label (falls back to the first link if all are
     // labeled, which only happens for user-supplied builder projects).
+    const cfg = JSON.parse(session.config_json || '{}') as {
+      builder?: { main_project_id?: number; main_project_runtime?: ExternalProjectRuntime };
+    };
+    const mainProjectId = cfg.builder?.main_project_id;
     const linkedProjects = companyStore.listCompanySessionProjects(id);
-    const primaryLink = linkedProjects.find((p) => !p.label) ?? linkedProjects[0];
+    const primaryLink =
+      mainProjectId != null
+        ? linkedProjects.find((p) => p.project_id === mainProjectId)
+        : linkedProjects.find((p) => !p.label) ?? linkedProjects[0];
     const primaryProject = primaryLink ? db.getProject(primaryLink.project_id) : null;
     const hostWorkdirMount = primaryProject?.root_path ?? undefined;
+    let externalSpec:
+      | ReturnType<typeof resolveExternalProjectSpec>
+      | {};
+    if (mainProjectId != null) {
+      if (!primaryProject) return c.json({ error: `Project ${mainProjectId} not found` }, 404);
+      try {
+        externalSpec = resolveExternalProjectSpec(
+          primaryProject.root_path,
+          stack as BuilderStack,
+          cfg.builder?.main_project_runtime,
+        );
+      } catch (e) {
+        return c.json(
+          {
+            error: e instanceof Error ? e.message : String(e),
+          },
+          400,
+        );
+      }
+    } else {
+      externalSpec = {};
+    }
     try {
       // Fire-and-await: the provision returns once the dev server
       // binds its port. We keep the HTTP roundtrip open because the
@@ -507,6 +856,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         retry,
         limits,
         hostWorkdirMount,
+        ...externalSpec,
       });
       return c.json({
         status: sandbox.status,
@@ -551,6 +901,64 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  app.post('/api/company/sessions/:id/services/:serviceId/pause', async (c) => {
+    const id = parseIdParam(c);
+    const serviceId = c.req.param('serviceId');
+    if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
+    const session = companyStore.getCompanySession(id);
+    if (!session) return notFound(c);
+    const blocked = rejectIfAttached(id, serviceId);
+    if (blocked) return c.json({ error: blocked.error }, blocked.status);
+    try {
+      const sb = await getSandboxManager().pauseRuntimeContainer(String(id), serviceId);
+      return c.json({
+        ok: true,
+        service_id: serviceId,
+        status: sb.runtimePaused ? 'paused' : sb.status,
+        runtime_paused: !!sb.runtimePaused,
+        preview_url: sb.previewUrl,
+        container_id: sb.containerId,
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      const status: 404 | 409 | 500 = /No sandbox|No service|no longer exists/i.test(message)
+        ? 404
+        : /Cannot|not running/i.test(message)
+          ? 409
+          : 500;
+      return c.json({ error: message }, status);
+    }
+  });
+
+  app.post('/api/company/sessions/:id/services/:serviceId/unpause', async (c) => {
+    const id = parseIdParam(c);
+    const serviceId = c.req.param('serviceId');
+    if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
+    const session = companyStore.getCompanySession(id);
+    if (!session) return notFound(c);
+    const blocked = rejectIfAttached(id, serviceId);
+    if (blocked) return c.json({ error: blocked.error }, blocked.status);
+    try {
+      const sb = await getSandboxManager().unpauseRuntimeContainer(String(id), serviceId);
+      return c.json({
+        ok: true,
+        service_id: serviceId,
+        status: sb.runtimePaused ? 'paused' : sb.status,
+        runtime_paused: !!sb.runtimePaused,
+        preview_url: sb.previewUrl,
+        container_id: sb.containerId,
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      const status: 404 | 409 | 500 = /No sandbox|No service|no longer exists/i.test(message)
+        ? 404
+        : /Cannot|not running/i.test(message)
+          ? 409
+          : 500;
+      return c.json({ error: message }, status);
+    }
+  });
+
   /**
    * Tail the dev-server log inside a running sandbox container.
    * Convenience endpoint for debugging "why isn't my preview
@@ -569,10 +977,23 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     if (!svc || !svc.containerId) {
       return c.json({ error: `service '${serviceId}' not running` }, 404);
     }
+    if (svc.runtimePaused) {
+      return c.json({ error: `service '${serviceId}' is runtime-paused` }, 409);
+    }
     const requested = Number(c.req.query('lines') ?? '200');
     const lines = Number.isFinite(requested) ? Math.min(Math.max(requested, 10), 2_000) : 200;
     const { resolveDriver } = await import('../../../../../core/sandbox/index.js');
     const driver = await resolveDriver();
+    if (svc.imageSource === 'project_dockerfile') {
+      const logs = await driver.getContainerLogs(svc.containerId, lines).catch(() => '');
+      return c.json({
+        devServer: logs,
+        containerId: svc.containerId,
+        hostPort: svc.hostPort,
+        portStatus: (await driver.isPortListening(svc.hostPort)) ? 'listening' : 'not-listening',
+        scaffolder: svc.recentLogs,
+      });
+    }
     const res = await driver.exec(
       svc.containerId,
       `tail -n ${lines} /tmp/dev-server.log 2>/dev/null || true`,
@@ -582,7 +1003,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     // server is actually up (useful when fetch failed).
     const portProbe = await driver.exec(
       svc.containerId,
-      `ss -ltn 2>/dev/null | awk '{print $4}' | grep -E ':${svc.hostPort === 0 ? 5173 : 5173}$' >/dev/null && echo listening || echo not-listening`,
+      `ss -ltn 2>/dev/null | awk '{print $4}' | grep -E ':${svc.containerPort}$' >/dev/null && echo listening || echo not-listening`,
       { cwd: undefined, timeoutMs: 2_000 },
     );
     return c.json({
@@ -601,9 +1022,32 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     const id = parseIdParam(c);
     const serviceId = c.req.param('serviceId');
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
+    const blocked = rejectIfAttached(id, serviceId);
+    if (blocked) return c.json({ error: blocked.error }, blocked.status);
     const svc = getSandboxManager().getService(String(id), serviceId);
     if (!svc || !svc.containerId) {
       return c.json({ error: `service '${serviceId}' not running` }, 404);
+    }
+    if (svc.runtimePaused) {
+      return c.json({ error: `service '${serviceId}' is runtime-paused` }, 409);
+    }
+    if (svc.mountKind === 'external') {
+      return c.json(
+        {
+          error:
+            'External project containers should be recreated with Retry so package.json/Dockerfile metadata is re-read.',
+        },
+        409,
+      );
+    }
+    if (svc.imageSource === 'project_dockerfile') {
+      return c.json(
+        {
+          error:
+            'Project Dockerfile containers use their image CMD/ENTRYPOINT; use Retry to rebuild/recreate.',
+        },
+        409,
+      );
     }
     const { resolveDriver } = await import('../../../../../core/sandbox/index.js');
     const driver = await resolveDriver();
@@ -637,6 +1081,154 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       );
     }
     return c.json({ ok: true });
+  });
+
+  app.post('/api/company/sessions/:id/services/:serviceId/start', async (c) => {
+    const id = parseIdParam(c);
+    const serviceId = c.req.param('serviceId');
+    if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
+    const session = companyStore.getCompanySession(id);
+    if (!session) return notFound(c);
+    const blocked = rejectIfAttached(id, serviceId);
+    if (blocked) return c.json({ error: blocked.error }, blocked.status);
+
+    if (serviceId === 'main') {
+      const result = await startPrimarySandboxForSession(id, false);
+      if (!result.ok) return c.json({ error: result.error }, result.status);
+      return c.json(serviceStartPayload('main', result.sandbox));
+    }
+
+    const manager = getSandboxManager();
+    await manager.reconcileServiceFromDb(String(id), serviceId).catch(() => void 0);
+    const live = manager.getService(String(id), serviceId);
+    if (live && live.status !== 'error') {
+      try {
+        const sb = live.runtimePaused
+          ? await manager.unpauseRuntimeContainer(String(id), serviceId)
+          : live.status === 'paused'
+            ? await manager.startServiceContainer(String(id), serviceId)
+            : live;
+        return c.json(serviceStartPayload(serviceId, sb));
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        if (!/no longer exists/i.test(message)) {
+          return c.json({ error: message }, 409);
+        }
+        // Fall through to recreate from the saved row/project below.
+      }
+    }
+
+    interface StartBody {
+      stack?: string;
+      name?: string;
+      limits?: { memory?: string; cpus?: string; pids?: number };
+    }
+    const body = await parseJsonBody<StartBody>(c).catch(() => null);
+    const row = deps.companySandboxServicesStore.get(id, serviceId);
+
+    let resolvedStack: string;
+    let resolvedName: string;
+    let limits: { memory?: string; cpus?: string; pids?: number } = {};
+    let hostWorkdirMount: string | undefined;
+    let provisionSpec:
+      | ReturnType<typeof resolveExternalProjectSpec>
+      | {};
+    let forceRecreate = live?.status === 'error';
+
+    if (row) {
+      resolvedStack = row.stack;
+      resolvedName = row.name || row.service_id;
+      try {
+        limits = JSON.parse(row.limits_json) as typeof limits;
+      } catch { /* ignore malformed limits */ }
+      hostWorkdirMount = row.host_workdir_mount || undefined;
+      try {
+        const link = companyStore
+          .listCompanySessionProjects(id)
+          .find((p) => p.label === row.service_id);
+        if (link) {
+          const proj = db.getProject(link.project_id);
+          if (proj?.root_path) hostWorkdirMount = proj.root_path;
+        }
+      } catch { /* fall back to row.host_workdir_mount */ }
+      if (row.mount_kind === 'external') {
+        try {
+          if (row.image_source === 'project_dockerfile') {
+            if (!row.dockerfile_path || !row.dockerfile_exposed_port) {
+              throw new Error(
+                'External Dockerfile service is missing Dockerfile metadata. Re-add it from the External project tab.',
+              );
+            }
+            provisionSpec = {
+              mountKind: 'external',
+              imageSource: 'project_dockerfile',
+              dockerfilePath: row.dockerfile_path,
+              containerPortOverride: row.dockerfile_exposed_port,
+              skipDefaultCommand: true,
+            };
+          } else if (hostWorkdirMount) {
+            provisionSpec = resolveExternalProjectSpec(
+              hostWorkdirMount,
+              row.stack as BuilderStack,
+              'node',
+            );
+          } else {
+            throw new Error('External Node service is missing its project root.');
+          }
+        } catch (e) {
+          return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+        }
+      } else {
+        provisionSpec = {};
+      }
+    } else {
+      const link = companyStore
+        .listCompanySessionProjects(id)
+        .find((p) => p.label === serviceId);
+      if (!link) {
+        return c.json({ error: `Service '${serviceId}' not found` }, 404);
+      }
+      const stack = body?.stack?.trim();
+      if (!stack) {
+        return c.json(
+          {
+            error:
+              `Service '${serviceId}' has no saved stack. Pass { "stack": "<react-ts|vue-ts|vite-api|cf-worker|...>" } to start it.`,
+          },
+          400,
+        );
+      }
+      const proj = db.getProject(link.project_id);
+      resolvedStack = stack;
+      resolvedName = body?.name ?? proj?.name ?? serviceId;
+      if (body?.limits) limits = body.limits;
+      hostWorkdirMount = proj?.root_path ?? undefined;
+      if (proj && !proj.name.startsWith('_builder_')) {
+        try {
+          provisionSpec = resolveExternalProjectSpec(proj.root_path, stack as BuilderStack);
+        } catch (e) {
+          return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+        }
+      } else {
+        provisionSpec = {};
+      }
+    }
+
+    try {
+      const sandbox = await manager.provisionAdditionalService({
+        sessionId: String(id),
+        serviceId,
+        stack: resolvedStack as BuilderStack,
+        name: resolvedName,
+        limits,
+        hostWorkdirMount,
+        forceRecreate,
+        ...provisionSpec,
+      });
+      return c.json(serviceStartPayload(serviceId, sandbox));
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+    }
   });
 
   app.get('/api/company/sessions/:id/sandbox/logs', async (c) => {
@@ -708,6 +1300,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       sandbox: sandbox
         ? {
             status: sandbox.status,
+            runtimePaused: !!sandbox.runtimePaused,
             step: sandbox.step,
             previewUrl: sandbox.previewUrl,
             stack: sandbox.stack,
@@ -1023,23 +1616,31 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     );
     const services = persisted.map((row) => {
       const liveSb = live.get(row.service_id);
-      const liveStatus = liveSb?.status ?? row.status;
+      const runtimePaused = !!liveSb?.runtimePaused;
+      const liveStatus = runtimePaused ? 'paused' : liveSb?.status ?? row.status;
       // Rows in the DB with `status='destroyed'` and no live Map
       // entry are orphans (soft-deleted by a transient teardown).
       // Report as `'orphaned'` so the UI can show a Retry/Remove
       // affordance instead of a running badge.
       const isOrphaned = !liveSb && row.status === 'destroyed';
+      const isAttached = row.is_attached === 1;
       return {
         service_id: row.service_id,
         name: row.name || row.service_id,
         stack: row.stack,
-        status: isOrphaned ? 'orphaned' : liveStatus,
+        status: isOrphaned ? 'paused' : liveStatus,
+        runtime_paused: runtimePaused,
         step: liveSb?.step ?? 'queued',
         host_port: row.host_port,
         preview_url: liveSb?.previewUrl ?? null,
         is_primary: !!row.is_primary,
-        error: liveSb?.error ?? row.error ?? null,
+        error: liveSb?.error ?? row.error ?? (isOrphaned && !isAttached ? 'Container is not present. Press Play to recreate it.' : null),
         created_at: row.created_at,
+        mount_kind: row.mount_kind ?? 'owned',
+        image_source: row.image_source ?? 'default',
+        is_attached: isAttached,
+        external_container_ref: row.external_container_ref ?? null,
+        attached_hostname: row.attached_hostname ?? null,
       };
     });
 
@@ -1054,18 +1655,32 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     if (!alreadyHasPrimary) {
       const sandboxRow = deps.companySandboxStore.get(id);
       const liveMain = manager.get(String(id));
-      if (sandboxRow || liveMain) {
+      let builderStack = '';
+      try {
+        const cfg = JSON.parse(session.config_json || '{}') as { builder?: { stack?: string } };
+        if (isProvisionableStack(cfg.builder?.stack)) builderStack = cfg.builder.stack;
+      } catch {
+        /* non-builder */
+      }
+      if (sandboxRow || liveMain || builderStack) {
+        const runtimePaused = !!liveMain?.runtimePaused;
         services.unshift({
           service_id: 'main',
           name: 'main',
-          stack: liveMain?.stack ?? sandboxRow?.stack ?? '',
-          status: liveMain?.status ?? sandboxRow?.status ?? 'pending',
+          stack: liveMain?.stack ?? sandboxRow?.stack ?? builderStack,
+          status: runtimePaused ? 'paused' : liveMain?.status ?? sandboxRow?.status ?? 'paused',
+          runtime_paused: runtimePaused,
           step: liveMain?.step ?? 'queued',
           host_port: liveMain?.hostPort ?? sandboxRow?.host_port ?? 0,
           preview_url: liveMain?.previewUrl ?? null,
           is_primary: true,
           error: liveMain?.error ?? sandboxRow?.error ?? null,
           created_at: sandboxRow?.created_at ?? new Date().toISOString(),
+          mount_kind: liveMain?.mountKind ?? sandboxRow?.mount_kind ?? 'owned',
+          image_source: liveMain?.imageSource ?? sandboxRow?.image_source ?? 'default',
+          is_attached: false,
+          external_container_ref: null,
+          attached_hostname: null,
         });
       }
     }
@@ -1091,7 +1706,8 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         service_id: link.label,
         name: project?.name ?? link.label,
         stack: '',
-        status: 'orphaned',
+        status: 'paused',
+        runtime_paused: false,
         step: 'queued',
         host_port: 0,
         preview_url: null,
@@ -1101,46 +1717,84 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         created_at: new Date().toISOString(),
         project_id: link.project_id,
         root_path: project?.root_path ?? '',
+        mount_kind: project?.name?.startsWith('_builder_') ? 'owned' : 'external',
+        image_source: 'default',
+        is_attached: false,
+        external_container_ref: null,
+        attached_hostname: null,
       });
       seen.add(link.label);
     }
 
-    // Host-process (local) project — surfaced as another service row so
-    // the sidebar uses the same Retry/Remove/Logs plumbing. `stack` is
-    // the marker `'local-process'` and the UI renders a `host` badge.
-    const liveLocal = getLocalProcessManager().get(String(id));
-    const persistedLocal = deps.companyLocalProjectStore.get(id);
-    if (liveLocal) {
-      augmented.push({
-        service_id: 'local-project',
-        name: 'local project',
-        stack: 'local-process',
-        status: liveLocal.status === 'running' ? 'ready' : liveLocal.status,
-        step: liveLocal.status === 'running' ? 'ready' : 'starting-dev-server',
-        host_port: liveLocal.hostPort,
-        preview_url: liveLocal.previewUrl,
-        is_primary: false,
-        error: liveLocal.error ?? null,
-        created_at: new Date(liveLocal.createdAt).toISOString(),
-      });
-    } else if (persistedLocal) {
-      // No live process but a row survived (server-restart or prior error) —
-      // show it as orphaned so the UI offers Retry with the same path.
-      augmented.push({
-        service_id: 'local-project',
-        name: 'local project',
-        stack: 'local-process',
-        status: 'orphaned',
-        step: 'queued',
-        host_port: persistedLocal.host_port,
-        preview_url: null,
-        is_primary: false,
-        error: persistedLocal.error ?? null,
-        created_at: persistedLocal.created_at,
-      });
+    return c.json({ services: augmented });
+  });
+
+  // ─── OpenAPI document for the API Reference tab ─────────────────
+  //
+  // Probes a fixed set of conventional paths inside the service's
+  // workdir and returns the first one that parses. Read goes through
+  // the sandbox driver so it works for both OCI (local bind-mount) and
+  // E2B (remote workdir). Returning JSON from a YAML source means the
+  // dashboard's renderer (Scalar) doesn't need a YAML parser.
+
+  const OPENAPI_CANDIDATES: ReadonlyArray<string> = [
+    'openapi.yaml',
+    'openapi.yml',
+    'openapi.json',
+    'docs/openapi.yaml',
+    'docs/openapi.yml',
+    'docs/openapi.json',
+    'api/openapi.yaml',
+    'api/openapi.yml',
+    'api/openapi.json',
+  ];
+
+  app.get('/api/company/sessions/:id/services/:serviceId/openapi', async (c) => {
+    const id = parseIdParam(c);
+    const serviceId = c.req.param('serviceId');
+    const session = companyStore.getCompanySession(id);
+    if (!session) return notFound(c);
+
+    const manager = getSandboxManager();
+    const sb =
+      serviceId === 'main'
+        ? manager.get(String(id))
+        : manager.getService(String(id), serviceId);
+    if (!sb) {
+      return c.json(
+        { error: 'service_not_running', searchedPaths: [] },
+        404,
+      );
     }
 
-    return c.json({ services: augmented });
+    const { resolveDriver } = await import('../../../../../core/sandbox/drivers/driver-factory.js');
+    const driver = await resolveDriver();
+
+    const tried: string[] = [];
+    for (const rel of OPENAPI_CANDIDATES) {
+      const abs = `${sb.workdir.replace(/\/+$/, '')}/${rel}`;
+      tried.push(rel);
+      let raw: string;
+      try {
+        raw = await driver.readFile(sb.containerId, abs);
+      } catch {
+        continue;
+      }
+      try {
+        const spec = rel.endsWith('.json') ? JSON.parse(raw) : (await parseOpenApiYaml(raw));
+        return c.json({ spec, sourcePath: rel });
+      } catch (e) {
+        return c.json(
+          {
+            error: 'spec_parse_error',
+            sourcePath: rel,
+            message: e instanceof Error ? e.message : String(e),
+          },
+          422,
+        );
+      }
+    }
+    return c.json({ error: 'openapi_not_found', searchedPaths: tried }, 404);
   });
 
   app.post('/api/company/sessions/:id/services', async (c) => {
@@ -1153,6 +1807,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       stack: string;
       name?: string;
       limits?: { memory?: string; cpus?: string; pids?: number };
+      source?: { project_id?: number; runtime?: ExternalProjectRuntime };
     }
     const body = await parseJsonBody<AddServiceBody>(c);
     if (!body || typeof body.service_id !== 'string' || typeof body.stack !== 'string') {
@@ -1179,32 +1834,59 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       }
     }
 
-    // Every microservice gets its OWN real projects row — same shape
-    // the primary builder container already uses (`_builder_<uuid>`).
-    // This is what makes the service show up in the dashboard's
-    // Projects list and become indexable. The project's `root_path`
-    // doubles as the sandbox bind-mount, so files agents write in the
-    // container land on the host at a path indexers can actually read.
-    //
-    // Link lives in `company_session_projects` with `label = serviceId`,
-    // giving us a cheap lookup during DELETE without a new schema column.
+    const externalProjectId = body.source?.project_id;
+    const externalProject =
+      Number.isInteger(externalProjectId) && externalProjectId! > 0
+        ? db.getProject(externalProjectId!)
+        : null;
+    if (body.source) {
+      if (!externalProject) {
+        return c.json({ error: `Project ${externalProjectId} not found` }, 404);
+      }
+      if (body.source.runtime !== undefined && !isExternalProjectRuntime(body.source.runtime)) {
+        return c.json({ error: "source.runtime must be 'dockerfile' or 'node'" }, 400);
+      }
+    }
+
+    let provisionSpec:
+      | ReturnType<typeof resolveExternalProjectSpec>
+      | {};
+    try {
+      provisionSpec = externalProject
+        ? resolveExternalProjectSpec(
+            externalProject.root_path,
+            body.stack as BuilderStack,
+            body.source?.runtime,
+          )
+        : {};
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+    }
+
     let projectId: number;
     let rootPath: string;
+    let createdOwnedProject = false;
     try {
-      const uuid = randomUUID();
-      rootPath = join(process.cwd(), 'data', 'virtual-projects', uuid);
-      mkdirSync(rootPath, { recursive: true });
-      const created = db.createProject(
-        `_builder_${uuid}`,
-        rootPath,
-        `Microservice '${body.name || body.service_id}' (${body.stack}) of session #${id}`,
-      );
-      projectId = created.id;
+      if (externalProject) {
+        projectId = externalProject.id;
+        rootPath = externalProject.root_path;
+      } else {
+        const uuid = randomUUID();
+        rootPath = join(process.cwd(), 'data', 'virtual-projects', uuid);
+        mkdirSync(rootPath, { recursive: true });
+        const created = db.createProject(
+          `_builder_${uuid}`,
+          rootPath,
+          `Microservice '${body.name || body.service_id}' (${body.stack}) of session #${id}`,
+        );
+        projectId = created.id;
+        createdOwnedProject = true;
+      }
       companyStore.addProjectToCompanySession(id, projectId, body.service_id);
     } catch (e) {
       return c.json(
         {
-          error: `Failed to prepare virtual project for service: ${e instanceof Error ? e.message : String(e)}`,
+          error: `Failed to prepare project for service: ${e instanceof Error ? e.message : String(e)}`,
         },
         500,
       );
@@ -1219,6 +1901,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
           name: body.name,
           limits: effectiveLimits,
           hostWorkdirMount: rootPath,
+          ...provisionSpec,
         });
         return c.json(
           {
@@ -1236,8 +1919,9 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         serviceId: body.service_id,
         stack: body.stack as BuilderStack,
         name: body.name,
-        limits: body.limits,
+        limits: effectiveLimits,
         hostWorkdirMount: rootPath,
+        ...provisionSpec,
       });
       return c.json(
         {
@@ -1255,10 +1939,89 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       // renders as `project-<id>` in the sidebar forever), then drop
       // the project row and wipe the empty workdir we just mkdirSync'd.
       try { companyStore.removeProjectFromCompanySession(id, projectId); } catch { /* best effort */ }
-      try { db.deleteProject(projectId); } catch { /* best effort */ }
-      try { await rm(rootPath, { recursive: true, force: true }); } catch { /* best effort */ }
+      if (createdOwnedProject) {
+        try { db.deleteProject(projectId); } catch { /* best effort */ }
+        try { await rm(rootPath, { recursive: true, force: true }); } catch { /* best effort */ }
+      }
       const message = e instanceof Error ? e.message : String(e);
       return c.json({ error: message }, 400);
+    }
+  });
+
+  app.post('/api/company/sessions/:id/services/attach', async (c) => {
+    const id = parseIdParam(c);
+    const session = companyStore.getCompanySession(id);
+    if (!session) return notFound(c);
+
+    interface AttachBody {
+      service_id?: string;
+      container_ref?: string;
+      name?: string;
+      hostname?: string;
+    }
+    const body = await parseJsonBody<AttachBody>(c);
+    const serviceId = (body.service_id ?? '').trim();
+    const containerRef = (body.container_ref ?? '').trim();
+    if (!serviceId || !containerRef) {
+      return c.json({ error: 'service_id and container_ref are required' }, 400);
+    }
+    const existing = deps.companySandboxServicesStore.get(id, serviceId);
+    if (existing && existing.status !== 'destroyed') {
+      return c.json({ error: `service '${serviceId}' already exists in this session` }, 409);
+    }
+    try {
+      const sandbox = await getSandboxManager().attachExternalService({
+        sessionId: String(id),
+        serviceId,
+        containerRef,
+        name: body.name,
+        hostname: body.hostname,
+      });
+      return c.json(
+        {
+          service_id: serviceId,
+          container_id: sandbox.containerId,
+          hostname: sandbox.attachedHostname ?? serviceId,
+          status: sandbox.runtimePaused ? 'paused' : sandbox.status,
+          runtime_paused: !!sandbox.runtimePaused,
+          error: sandbox.error ?? null,
+        },
+        201,
+      );
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      const status = /not found/i.test(message) ? 404 : 400;
+      return c.json({ error: message }, status);
+    }
+  });
+
+  app.post('/api/company/sessions/:id/services/:serviceId/refresh', async (c) => {
+    const id = parseIdParam(c);
+    const serviceId = c.req.param('serviceId');
+    if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
+    const session = companyStore.getCompanySession(id);
+    if (!session) return notFound(c);
+    const row = deps.companySandboxServicesStore.get(id, serviceId);
+    if (!row || row.is_attached !== 1) {
+      return c.json(
+        { error: 'Refresh is only available for attached external containers.' },
+        409,
+      );
+    }
+    try {
+      const sandbox = await getSandboxManager().refreshAttachedService(String(id), serviceId);
+      return c.json({
+        service_id: serviceId,
+        container_id: sandbox.containerId,
+        hostname: sandbox.attachedHostname ?? serviceId,
+        status: sandbox.runtimePaused ? 'paused' : sandbox.status,
+        runtime_paused: !!sandbox.runtimePaused,
+        error: sandbox.error ?? null,
+        last_checked_at: sandbox.lastAccessAt,
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return c.json({ error: message }, 500);
     }
   });
 
@@ -1268,6 +2031,8 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
+    const blocked = rejectIfAttached(id, serviceId);
+    if (blocked) return c.json({ error: blocked.error }, blocked.status);
 
     // Retry re-provisions the service using the saved row — same
     // stack / limits / host workdir mount. Two recoverable states:
@@ -1287,25 +2052,14 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     }
     const body = await parseJsonBody<RetryBody>(c).catch(() => null);
 
-    // Primary must be live for secondary services to attach to the
-    // shared network. If it isn't, the user needs to start the
-    // master first — surfacing the requirement here rather than
-    // failing deep inside the manager.
-    if (!getSandboxManager().get(String(id))) {
-      return c.json(
-        {
-          error:
-            'Primary sandbox is not running for this session. Start the master (send a message or use the sidebar) and try again.',
-        },
-        409,
-      );
-    }
-
     let resolvedStack: string;
     let resolvedName: string;
     let limits: { memory?: string; cpus?: string; pids?: number } = {};
     let hostWorkdirMount: string | undefined;
     let forceRecreate: boolean;
+    let provisionSpec:
+      | ReturnType<typeof resolveExternalProjectSpec>
+      | {};
 
     if (row) {
       resolvedStack = row.stack;
@@ -1335,6 +2089,38 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       // a destroyed one from the same process); forceRecreate lets
       // the path tear it down and rebuild cleanly.
       forceRecreate = true;
+      if (row.mount_kind === 'external') {
+        try {
+          if (row.image_source === 'project_dockerfile') {
+            const dockerfilePath = row.dockerfile_path;
+            const port = row.dockerfile_exposed_port;
+            if (!dockerfilePath || !port) {
+              throw new Error(
+                'External Dockerfile service is missing Dockerfile metadata. Re-add it from the External project tab.',
+              );
+            }
+            provisionSpec = {
+              mountKind: 'external',
+              imageSource: 'project_dockerfile',
+              dockerfilePath,
+              containerPortOverride: port,
+              skipDefaultCommand: true,
+            };
+          } else if (hostWorkdirMount) {
+            provisionSpec = resolveExternalProjectSpec(
+              hostWorkdirMount,
+              row.stack as BuilderStack,
+              'node',
+            );
+          } else {
+            throw new Error('External Node service is missing its project root.');
+          }
+        } catch (e) {
+          return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+        }
+      } else {
+        provisionSpec = {};
+      }
     } else {
       // Historical orphan: no row, but a project link may exist.
       const link = companyStore
@@ -1360,6 +2146,15 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       if (body?.limits) limits = body.limits;
       hostWorkdirMount = proj?.root_path ?? undefined;
       forceRecreate = false;
+      if (proj && !proj.name.startsWith('_builder_')) {
+        try {
+          provisionSpec = resolveExternalProjectSpec(proj.root_path, stack as BuilderStack);
+        } catch (e) {
+          return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+        }
+      } else {
+        provisionSpec = {};
+      }
     }
 
     try {
@@ -1371,6 +2166,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         limits,
         hostWorkdirMount,
         forceRecreate,
+        ...provisionSpec,
       });
       return c.json({
         service_id: serviceId,
@@ -1392,19 +2188,61 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     return c.json({ ok: true });
   });
 
+  app.get('/api/company/sessions/:id/delete-plan', (c) => {
+    const id = parseIdParam(c);
+    const session = companyStore.getCompanySession(id);
+    if (!session) return notFound(c);
+    return c.json(buildSessionDeletePlan(id));
+  });
+
   app.delete('/api/company/sessions/:id', async (c) => {
     const id = parseIdParam(c);
+    const deleteBody = (await c.req.json().catch(() => ({}))) as {
+      remove_project_paths?: string[];
+      remove_node_modules_volumes?: string[];
+    };
+    const selectedProjectPaths = new Set(
+      Array.isArray(deleteBody.remove_project_paths)
+        ? deleteBody.remove_project_paths.filter((p): p is string => typeof p === 'string')
+        : [],
+    );
+    const deletePlan = buildSessionDeletePlan(id);
+    const removableProjectPaths = new Set(
+      deletePlan.project_paths.filter((p) => p.removable).map((p) => p.root_path),
+    );
+    const selectedVolumes = new Set(
+      Array.isArray(deleteBody.remove_node_modules_volumes)
+        ? deleteBody.remove_node_modules_volumes.filter((v): v is string => typeof v === 'string')
+        : [],
+    );
+    const removableVolumes = new Set(
+      deletePlan.node_modules_volumes.filter((v) => v.removable).map((v) => v.name),
+    );
+    const nodeModulesVolumeNames = [...selectedVolumes].filter((name) =>
+      removableVolumes.has(name),
+    );
 
     // ── Collect disposable artefacts BEFORE deleting the DB rows ──
     //
     // Once `deleteCompanySession` runs, the join rows between session
     // and project are gone (ON DELETE CASCADE), and we can no longer
     // identify which projects were the synthetic `_builder_*` ones.
-    // Same goes for root_paths — we need them to wipe the disk dirs.
+    // Same goes for root_paths — we need them now so selected disk
+    // dirs can be removed after the session row cascades away.
     //
     // We capture BOTH the ids AND the root_paths up-front.
     let virtualProjects: Array<{ id: number; rootPath: string }> = [];
+    let cleanupMountKind: 'owned' | 'external' = 'owned';
+    let builtImageTags: string[] = [];
     try {
+      const primarySandboxRow = deps.companySandboxStore.get(id);
+      if (primarySandboxRow?.mount_kind === 'external') cleanupMountKind = 'external';
+      builtImageTags = [
+        primarySandboxRow?.built_image_tag,
+        ...deps.companySandboxServicesStore
+          .listBySessionAll(id)
+          .map((row) => row.built_image_tag),
+      ].filter((tag): tag is string => !!tag);
       const full = companyStore.getCompanySessionFull(id);
       if (full) {
         virtualProjects = full.projects
@@ -1452,7 +2290,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     const deleted = companyStore.deleteCompanySession(id);
     if (!deleted) return notFound(c);
 
-    // ── Remove virtual projects rows + their empty host dirs ──
+    // ── Remove virtual project rows; remove host dirs only when selected ──
     //
     // User-linked (non-virtual) projects are NEVER auto-removed, even
     // if this was their only session. Only our synthetic `_builder_`
@@ -1465,7 +2303,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
           `[company] delete virtual project row ${vp.id} failed: ${e instanceof Error ? e.message : String(e)}`,
         );
       }
-      if (vp.rootPath) {
+      if (vp.rootPath && selectedProjectPaths.has(vp.rootPath) && removableProjectPaths.has(vp.rootPath)) {
         try {
           await rm(vp.rootPath, { recursive: true, force: true });
         } catch (e) {
@@ -1489,13 +2327,19 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       );
     }
 
-    // ── Remove bind-mounted host workdir + node_modules volume ──
+    // ── Remove selected dependency volumes only ──
     //
     // When the sandbox ran under the persistent bind-mount layout
     // (`data/virtual-projects/<sessionId>` + `mcp-sbx-nm-<id>` volume),
-    // the container destroy above leaves both behind. Wipe them — the
-    // user explicitly deleted the session.
-    await cleanupSessionPersistence(String(id));
+    // the container destroy above leaves dependency volumes behind.
+    // Remove only the names selected in the delete dialog.
+    await cleanupSessionPersistence(String(id), {
+      mountKind: cleanupMountKind,
+      builtImageTags,
+      removeHostWorkdir: false,
+      removeNodeModulesVolume: false,
+      nodeModulesVolumeNames,
+    });
 
     return c.json({ ok: true });
   });

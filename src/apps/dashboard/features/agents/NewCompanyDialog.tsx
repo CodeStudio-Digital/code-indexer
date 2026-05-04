@@ -18,6 +18,16 @@ interface Project {
   root_path: string;
 }
 
+interface ProjectManifestResponse {
+  manifest: {
+    kind: string;
+    packageManager?: string;
+    devScriptName?: string | null;
+    scripts?: Record<string, string>;
+  } | null;
+  dockerfile: { path: string; exposedPorts: number[] } | null;
+}
+
 interface NewCompanyDialogProps {
   onClose: () => void;
   onCreated: (sessionId: number) => void;
@@ -68,6 +78,10 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   // sandbox and enables the live-preview pane. 'off' preserves the
   // traditional company-session flow (no sandbox, no preview).
   const [builderStack, setBuilderStack] = useState<'off' | 'react-ts' | 'vue-ts' | 'angular' | 'vite-api' | 'cf-worker'>('off');
+  const [mainProjectId, setMainProjectId] = useState<number | null>(null);
+  const [mainProjectRuntime, setMainProjectRuntime] = useState<'node' | 'dockerfile'>('node');
+  const [mainProjectManifest, setMainProjectManifest] = useState<ProjectManifestResponse | null>(null);
+  const [mainProjectManifestLoading, setMainProjectManifestLoading] = useState(false);
   // Per-session CPU/memory preset. `default` uses server env defaults
   // (1g/1cpu unless MCP_SANDBOX_* is set). `custom` reveals three
   // inputs for operators who need something specific.
@@ -136,10 +150,60 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   // existing codebase while scaffolding a new one). Traditional mode
   // still requires at least one linked project.
   const projectsRequired = !builderEnabled;
+  const needsExternalMainProject = builderEnabled && selectedProjectIds.length > 0;
+  const mainProjectNodeOk =
+    !needsExternalMainProject ||
+    (mainProjectManifest?.manifest?.kind === 'node' &&
+      !!mainProjectManifest.manifest.devScriptName);
+  const mainProjectDockerfileOk =
+    !needsExternalMainProject || !!mainProjectManifest?.dockerfile?.exposedPorts?.[0];
+  const mainProjectRuntimeOk =
+    mainProjectRuntime === 'node' ? mainProjectNodeOk : mainProjectDockerfileOk;
+
+  useEffect(() => {
+    if (!needsExternalMainProject) {
+      setMainProjectId(null);
+      return;
+    }
+    if (!mainProjectId || !selectedProjectIds.includes(mainProjectId)) {
+      setMainProjectId(selectedProjectIds[0] ?? null);
+    }
+  }, [needsExternalMainProject, selectedProjectIds, mainProjectId]);
+
+  useEffect(() => {
+    if (!needsExternalMainProject || !mainProjectId) {
+      setMainProjectManifest(null);
+      return;
+    }
+    let cancelled = false;
+    setMainProjectManifestLoading(true);
+    fetch(`/api/projects/${mainProjectId}/manifest`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body: ProjectManifestResponse | null) => {
+        if (!cancelled) {
+          setMainProjectManifest(body);
+          if (body?.manifest?.kind === 'node' && body.manifest.devScriptName) {
+            setMainProjectRuntime('node');
+          } else if (body?.dockerfile?.exposedPorts?.[0]) {
+            setMainProjectRuntime('dockerfile');
+          }
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setMainProjectManifest(null);
+      })
+      .finally(() => {
+        if (!cancelled) setMainProjectManifestLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsExternalMainProject, mainProjectId]);
 
   async function handleCreate() {
     if (!name.trim()) return;
     if (projectsRequired && selectedProjectIds.length === 0) return;
+    if (needsExternalMainProject && (!mainProjectId || !mainProjectRuntimeOk)) return;
 
     setCreating(true);
     try {
@@ -164,6 +228,8 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
           ? {
               builder: {
                 stack: builderStack,
+                ...(mainProjectId ? { main_project_id: mainProjectId } : {}),
+                ...(mainProjectId ? { main_project_runtime: mainProjectRuntime } : {}),
                 ...(resolveLimitsFromForm(limitsPreset, customMemory, customCpus, customPids)
                   ? {
                       limits: resolveLimitsFromForm(
@@ -205,6 +271,94 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
               placeholder={t('agents:newCompanyDialog.sessionPlaceholder')}
             />
           </div>
+
+          {needsExternalMainProject && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+              <label className="text-xs font-medium text-muted-foreground">
+                {t('agents:mainProject.label')}
+              </label>
+              <select
+                value={mainProjectId ?? ''}
+                onChange={(e) => setMainProjectId(e.target.value ? Number(e.target.value) : null)}
+                className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm"
+              >
+                {selectedProjectIds.map((id) => {
+                  const project = projects?.find((p) => p.id === id);
+                  return (
+                    <option key={id} value={id}>
+                      {project?.name ?? `project-${id}`} — {project?.root_path ?? ''}
+                    </option>
+                  );
+                })}
+              </select>
+              <div className="mt-2 grid grid-cols-2 gap-1">
+                <button
+                  type="button"
+                  className={
+                    'rounded border px-2 py-1 text-[10px] ' +
+                    (mainProjectRuntime === 'node'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-background hover:bg-accent')
+                  }
+                  onClick={() => setMainProjectRuntime('node')}
+                >
+                  {t('agents:mainProject.nodeRuntime')}
+                </button>
+                <button
+                  type="button"
+                  className={
+                    'rounded border px-2 py-1 text-[10px] ' +
+                    (mainProjectRuntime === 'dockerfile'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-background hover:bg-accent')
+                  }
+                  onClick={() => setMainProjectRuntime('dockerfile')}
+                >
+                  {t('agents:mainProject.dockerfileRuntime')}
+                </button>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1 text-[10px]">
+                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">
+                  {t('agents:mainProject.preserved')}
+                </span>
+                {mainProjectManifestLoading && (
+                  <span className="rounded bg-muted px-1.5 py-0.5">
+                    {t('agents:mainProject.checking')}
+                  </span>
+                )}
+                {mainProjectManifest?.manifest && (
+                  <span className="rounded bg-muted px-1.5 py-0.5">
+                    {mainProjectManifest.manifest.kind}
+                    {mainProjectManifest.manifest.packageManager
+                      ? ` (${mainProjectManifest.manifest.packageManager})`
+                      : ''}
+                    {mainProjectManifest.manifest.devScriptName
+                      ? ` · ${mainProjectManifest.manifest.devScriptName}`
+                      : ''}
+                  </span>
+                )}
+                {mainProjectRuntime === 'node' && !mainProjectNodeOk && !mainProjectManifestLoading && (
+                  <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-600">
+                    {t('agents:mainProject.nodeRuntimeRequired')}
+                  </span>
+                )}
+                {mainProjectManifest?.dockerfile?.exposedPorts?.[0] ? (
+                  <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-emerald-600">
+                    {t('agents:mainProject.dockerfileDetected', {
+                      port: mainProjectManifest.dockerfile.exposedPorts[0],
+                    })}
+                  </span>
+                ) : mainProjectRuntime === 'dockerfile' && !mainProjectManifestLoading ? (
+                  <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-600">
+                    {t('agents:mainProject.dockerfileRequired')}
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-2 text-[10px] text-muted-foreground">
+                {t('agents:mainProject.helper')}
+              </p>
+            </div>
+          )}
 
           {/* Template */}
           <div>
@@ -612,7 +766,8 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
             disabled={
               creating ||
               !name.trim() ||
-              (projectsRequired && selectedProjectIds.length === 0)
+              (projectsRequired && selectedProjectIds.length === 0) ||
+              (needsExternalMainProject && (!mainProjectId || !mainProjectRuntimeOk))
             }
             size="sm"
           >

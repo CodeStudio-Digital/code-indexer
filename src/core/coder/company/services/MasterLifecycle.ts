@@ -13,12 +13,13 @@
  * since the watermark so the master doesn't need to call read_board.
  */
 
-import { runCoder, type RunCoderOptions, type RunCoderHandle } from '../../index.js';
+import { runCoder, type CoderAttachment, type RunCoderOptions, type RunCoderHandle } from '../../index.js';
+import { attachmentsToBlocks } from '../../core/messages.js';
 import { createCoderProvider } from '../../../providers/factory.js';
 import { SessionStore } from '../../sessions/store.js';
 import { SkillStore } from '../../../../store/skill-store.js';
 import { loadConfig } from '../../../../utils/config.js';
-import { buildMasterCompanyBlock } from '../system-prompts.js';
+import { buildMasterCompanyBlock, type MasterPromptContext } from '../system-prompts.js';
 import type { AllowedModel, CompanyContext } from '../types.js';
 import type { SessionContext } from './SessionContext.js';
 import type { HumanInTheLoop } from './HumanInTheLoop.js';
@@ -55,6 +56,22 @@ export type RoleConfig = {
   temperature?: number;
 };
 
+function buildPromptRoster(
+  configs: readonly RoleConfig[],
+  stack: string | null | undefined,
+): MasterPromptContext['roster'] {
+  return configs.map((cfg) => ({
+    role: cfg.role,
+    provider: cfg.provider,
+    model: cfg.model,
+    tier: cfg.tier,
+    projectHints: cfg.projectHints,
+    projectIds: cfg.projectIds,
+    skills: resolveRoleSkills(cfg.skills, { stack: stack ?? undefined }),
+    systemPromptOverride: cfg.systemPromptOverride,
+  }));
+}
+
 export interface MasterLifecycleDeps {
   ctx: SessionContext;
   board: IBoardPoster;
@@ -86,9 +103,19 @@ export class MasterLifecycle implements IMasterNotifier {
   /** Flag consumed by IdleController to trigger auto-continue. */
   private _shouldContinue = false;
 
+  /**
+   * Buffer of attachments from the user's most recent message. Set by
+   * `start`, `resumeExisting`, and `sendUserMessage`; overwritten on each
+   * new user turn (including with []). Master tools (`spawn_subordinate_agent`,
+   * `forward_to_agent`) read this when the master sets `forward_user_attachments=true`,
+   * so images can be propagated to subordinates without the master spending
+   * tokens base64-encoding them into JSON tool arguments.
+   */
+  private _lastUserAttachments: CoderAttachment[] = [];
+
   // Resurrection concurrency
   private resumingPromise: Promise<void> | null = null;
-  private resumeQueue: string[] = [];
+  private resumeQueue: Array<{ message: string; attachments?: CoderAttachment[] }> = [];
 
   constructor(private readonly deps: MasterLifecycleDeps) {}
 
@@ -113,6 +140,13 @@ export class MasterLifecycle implements IMasterNotifier {
 
   /** Role templates — used by spawn_subordinate_agent as defaults. */
   get roleConfigs(): readonly RoleConfig[] { return this._roleConfigs; }
+
+  /**
+   * Attachments from the user's most recent turn. Read-only — does not
+   * clear on read so the master can forward the same images to multiple
+   * subordinates in the same turn.
+   */
+  getLastUserAttachments(): readonly CoderAttachment[] { return this._lastUserAttachments; }
 
   updateRoleConfigs(configs: RoleConfig[]): void {
     this._roleConfigs = configs;
@@ -200,7 +234,7 @@ export class MasterLifecycle implements IMasterNotifier {
       return;
     }
     if (this.resumingPromise) {
-      this.resumeQueue.push(enriched);
+      this.resumeQueue.push({ message: enriched });
       return;
     }
     this.deps.idle.onMasterResurrected();
@@ -237,6 +271,7 @@ export class MasterLifecycle implements IMasterNotifier {
     maxTurns?: number;
     signal?: AbortSignal;
     roleConfigs?: RoleConfig[];
+    attachments?: CoderAttachment[];
   }): Promise<RunCoderHandle> {
     if (this._handle) throw new Error('Master already started');
 
@@ -269,11 +304,19 @@ export class MasterLifecycle implements IMasterNotifier {
     // here (start + resume) alongside role configs.
     this.loadConfigFromDb();
 
+    const orchestrator = this.deps.orchestratorRef as unknown as {
+      provisionSandboxIfNeeded?: (signal?: AbortSignal) => Promise<import('../types.js').SandboxBinding | null>;
+      getSandboxStackForService?: (serviceId?: string | null) => string | null;
+    };
+    const configuredStack = orchestrator.getSandboxStackForService?.() ?? null;
+
     ctx.companyStore.setMasterSessionId(ctx.companySessionId, masterSession.id);
     ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'running');
 
-    const masterRoleConfig = opts.roleConfigs?.find((r) => r.role === 'master');
-    const masterResolvedSkills = resolveRoleSkills(masterRoleConfig?.skills, {});
+    const masterRoleConfig = this._roleConfigs.find((r) => r.role === 'master');
+    const masterResolvedSkills = resolveRoleSkills(masterRoleConfig?.skills, {
+      stack: configuredStack ?? undefined,
+    });
     if (masterResolvedSkills.length > 0) {
       try {
         const skillStore = new SkillStore(config.dbPath);
@@ -293,10 +336,6 @@ export class MasterLifecycle implements IMasterNotifier {
     // inspects `config_json.builder` and bails out cleanly).
     // SandboxService.provisionIfNeeded never throws — it returns null when
     // the container can't be started, so the master always starts.
-    const orchestrator = this.deps.orchestratorRef as unknown as {
-      provisionSandboxIfNeeded?: (signal?: AbortSignal) => Promise<import('../types.js').SandboxBinding | null>;
-      getSandboxStackForService?: (serviceId?: string | null) => string | null;
-    };
     const sandboxBinding = orchestrator.provisionSandboxIfNeeded
       ? await orchestrator.provisionSandboxIfNeeded(opts.signal)
       : null;
@@ -304,7 +343,6 @@ export class MasterLifecycle implements IMasterNotifier {
     // Read the configured stack from the session config (DB-backed, works
     // even when the primary container is not running). Non-null means the
     // session is in builder mode regardless of container status.
-    const configuredStack = orchestrator.getSandboxStackForService?.() ?? null;
 
     const companyContext: CompanyContext = {
       orchestrator: this.deps.orchestratorRef as never,
@@ -328,7 +366,7 @@ export class MasterLifecycle implements IMasterNotifier {
     });
 
     const promptBlock = buildMasterCompanyBlock({
-      roster: opts.roleConfigs ?? [],
+      roster: buildPromptRoster(this._roleConfigs, configuredStack),
       projects: projectInfos,
       // Builder-mode awareness: tell the master it's in a builder session
       // and which files are MCP-managed. When the primary container is
@@ -350,13 +388,18 @@ export class MasterLifecycle implements IMasterNotifier {
     this._companyContext = companyContext;
     this._promptBlock = promptBlock;
 
-    this.deps.board.post('human', null, 'message', opts.userMessage);
+    this._lastUserAttachments = opts.attachments ?? [];
+    const startBoardMsg = opts.attachments && opts.attachments.length > 0
+      ? `${opts.userMessage}\n\n_[${opts.attachments.length} ${opts.attachments.length === 1 ? 'attachment' : 'attachments'}]_`
+      : opts.userMessage;
+    this.deps.board.post('human', null, 'message', startBoardMsg);
     this.deps.board.post('system', null, 'message',
       `Master agent started (${opts.provider}/${opts.model}). Analyzing task...`);
 
     const handle = await runCoder({
       session: { id: masterSession.id },
       userMessage: opts.userMessage,
+      attachments: opts.attachments,
       maxTurns: opts.maxTurns ?? 100,
       signal: opts.signal,
       planMode: false,
@@ -379,6 +422,7 @@ export class MasterLifecycle implements IMasterNotifier {
     userMessage: string;
     maxTurns?: number;
     roleConfigs?: RoleConfig[];
+    attachments?: CoderAttachment[];
   }): Promise<RunCoderHandle> {
     if (this._handle) throw new Error('Master already started');
 
@@ -394,11 +438,20 @@ export class MasterLifecycle implements IMasterNotifier {
     // here (start + resume) alongside role configs.
     this.loadConfigFromDb();
 
+    const orchestratorResume = this.deps.orchestratorRef as unknown as {
+      provisionSandboxIfNeeded?: () => Promise<import('../types.js').SandboxBinding | null>;
+      getSandboxStackForService?: (serviceId?: string | null) => string | null;
+    };
+    const configuredStackResume = orchestratorResume.getSandboxStackForService?.() ?? null;
+
     ctx.companyStore.updateAgentRunStatus(masterRun.id, 'running');
     ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'running');
 
-    const masterRoleConfigResume = opts.roleConfigs?.find((r) => r.role === 'master');
-    if (masterRoleConfigResume?.skills && masterRoleConfigResume.skills.length > 0) {
+    const masterRoleConfigResume = this._roleConfigs.find((r) => r.role === 'master');
+    const masterResolvedSkillsResume = resolveRoleSkills(masterRoleConfigResume?.skills, {
+      stack: configuredStackResume ?? undefined,
+    });
+    if (masterResolvedSkillsResume.length > 0) {
       const resumeConfig = loadConfig();
       const primaryProjectIdResume = ctx.projects[0]?.project_id;
       if (primaryProjectIdResume) {
@@ -406,7 +459,7 @@ export class MasterLifecycle implements IMasterNotifier {
           const skillStore = new SkillStore(resumeConfig.dbPath);
           const allSkills = skillStore.resolveActiveSkills(masterRun.coder_session_id, primaryProjectIdResume);
           for (const skill of allSkills) {
-            skillStore.setSessionSkillEnabled(masterRun.coder_session_id, skill.id, masterRoleConfigResume.skills.includes(skill.id));
+            skillStore.setSessionSkillEnabled(masterRun.coder_session_id, skill.id, masterResolvedSkillsResume.includes(skill.id));
           }
           skillStore.close();
         } catch (e) {
@@ -422,17 +475,12 @@ export class MasterLifecycle implements IMasterNotifier {
     // restarts is a Phase 5 item).
     // SandboxService.provisionIfNeeded never throws — returns null when
     // the container can't start, so the master always resumes.
-    const orchestratorResume = this.deps.orchestratorRef as unknown as {
-      provisionSandboxIfNeeded?: () => Promise<import('../types.js').SandboxBinding | null>;
-      getSandboxStackForService?: (serviceId?: string | null) => string | null;
-    };
     const sandboxBindingResume = orchestratorResume.provisionSandboxIfNeeded
       ? await orchestratorResume.provisionSandboxIfNeeded()
       : null;
 
     // DB-backed stack config — non-null means builder mode regardless of
     // whether the container is currently running.
-    const configuredStackResume = orchestratorResume.getSandboxStackForService?.() ?? null;
 
     const companyContext: CompanyContext = {
       orchestrator: this.deps.orchestratorRef as never,
@@ -456,7 +504,7 @@ export class MasterLifecycle implements IMasterNotifier {
     });
 
     const promptBlock = buildMasterCompanyBlock({
-      roster: opts.roleConfigs ?? [],
+      roster: buildPromptRoster(this._roleConfigs, configuredStackResume),
       projects: projectInfos,
       builder: configuredStackResume
         ? {
@@ -471,12 +519,14 @@ export class MasterLifecycle implements IMasterNotifier {
     this._companyContext = companyContext;
     this._promptBlock = promptBlock;
 
+    this._lastUserAttachments = opts.attachments ?? [];
     this.deps.board.post('system', null, 'message',
       `Master resumed from existing session (${masterRun.provider}/${masterRun.model}).`);
 
     const handle = await runCoder({
       session: { id: masterRun.coder_session_id },
       userMessage: opts.userMessage,
+      attachments: opts.attachments,
       maxTurns: opts.maxTurns ?? 100,
       planMode: false,
       profile: 'full',
@@ -493,12 +543,12 @@ export class MasterLifecycle implements IMasterNotifier {
 
   // ─── Resurrection (subordinate finished after master exited) ───
 
-  private async resurrect(message: string): Promise<void> {
+  private async resurrect(message: string, attachments?: CoderAttachment[]): Promise<void> {
     if (!this._handle || !this._companyContext || !this._agentRunId) return;
     if (this.deps.ctx.isAborted || this.deps.ctx.isBusEnded) return;
 
     if (this.resumingPromise) {
-      this.resumeQueue.push(message);
+      this.resumeQueue.push({ message, attachments });
       return this.resumingPromise;
     }
 
@@ -517,6 +567,7 @@ export class MasterLifecycle implements IMasterNotifier {
       const handle = await runCoder({
         session: { id: masterSessionId },
         userMessage: message,
+        attachments,
         maxTurns: 40,
         planMode: false,
         profile: 'full',
@@ -531,7 +582,13 @@ export class MasterLifecycle implements IMasterNotifier {
 
       // Flush queued messages that arrived during spin-up.
       const queued = this.resumeQueue.splice(0, this.resumeQueue.length);
-      for (const msg of queued) handle.runner.pushUserMessage(msg);
+      for (const item of queued) {
+        if (item.attachments?.length) {
+          handle.runner.pushUserContent(attachmentsToBlocks(item.message, item.attachments));
+        } else {
+          handle.runner.pushUserMessage(item.message);
+        }
+      }
 
       this.attachCompletionHandler(handle, this._agentRunId!);
     };
@@ -567,9 +624,14 @@ export class MasterLifecycle implements IMasterNotifier {
    */
   sendUserMessage(
     message: string,
-    options: { interject?: boolean } = {},
+    options: { interject?: boolean; attachments?: CoderAttachment[] } = {},
   ): { ok: boolean; pending?: 'interactive_wait' } {
-    this.deps.board.post('human', null, 'message', message);
+    const attachments = options.attachments;
+    this._lastUserAttachments = attachments ?? [];
+    const boardMessage = attachments && attachments.length > 0
+      ? `${message}\n\n_[${attachments.length} ${attachments.length === 1 ? 'attachment' : 'attachments'}]_`
+      : message;
+    this.deps.board.post('human', null, 'message', boardMessage);
     this.deps.idle.onUserMessageReceived();
 
     if (!this._ended && this._handle?.runner) {
@@ -580,7 +642,11 @@ export class MasterLifecycle implements IMasterNotifier {
         }
         runner.interruptWait();
       }
-      runner.pushUserMessage(message);
+      if (attachments && attachments.length > 0) {
+        runner.pushUserContent(attachmentsToBlocks(message, attachments));
+      } else {
+        runner.pushUserMessage(message);
+      }
       return { ok: true };
     }
     try {
@@ -589,17 +655,21 @@ export class MasterLifecycle implements IMasterNotifier {
         'running',
       );
     } catch { /* ignore */ }
-    void this.resurrect(message);
+    void this.resurrect(message, attachments);
     return { ok: true };
   }
 
   abort(): void {
     if (this._handle) {
-      this._handle.runner.abort();
+      try { this._handle.runner.abort(); } catch { /* best-effort */ }
       if (this._agentRunId) {
-        this.deps.status.setStatus(this._agentRunId, 'aborted');
+        try { this.deps.status.setStatus(this._agentRunId, 'aborted'); } catch { /* best-effort */ }
       }
     }
+    // Hard-end so a stray `sendUserMessage` after abort doesn't resurrect
+    // the master via the lazy-start path.
+    this._ended = true;
+    this._endedWithError = this._endedWithError ?? 'aborted';
   }
 
   // ─── Internal ───────────────────────────────────────────────────

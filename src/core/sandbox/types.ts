@@ -31,6 +31,9 @@ export type SandboxStatus =
   /** Container removed and reaped. Terminal. */
   | 'destroyed';
 
+export type SandboxMountKind = 'owned' | 'external';
+export type SandboxImageSource = 'default' | 'project_dockerfile';
+
 /**
  * The stacks this repository knows about.
  *
@@ -38,11 +41,10 @@ export type SandboxStatus =
  * `cf-worker`) all have an `IScaffolder` registered in `scaffolders/registry.ts`
  * and are provisioned by `SandboxManager` inside a Podman/Docker container.
  *
- * `local-process` is a marker — it identifies host-process projects owned
+ * `local-process` is a deprecated marker — it identifies host-process projects owned
  * by the `LocalProcessManager`. It never flows through the scaffolder
  * registry (calling `getScaffolder('local-process')` throws); it only
- * exists here so `SandboxEvent` envelopes can carry the stack label
- * uniformly across both runtimes.
+ * remains here so legacy cleanup/status code keeps compiling.
  */
 export type SandboxStack =
   | 'react-ts'
@@ -225,11 +227,20 @@ export interface Sandbox {
   hostPort: number;
   /** Container-internal path the scaffolder populated (typically `/app`). */
   workdir: string;
+  /** Container-side port published by the runtime. Defaults to 5173 for scaffolded stacks. */
+  containerPort: number;
   /** Absolute URL the dashboard can iframe. Always goes through the API proxy. */
   previewUrl: string;
   /** Final (resolved) CPU/memory/pids limits the container was created with. */
   limits: SandboxLimits;
   status: SandboxStatus;
+  /**
+   * True when the OCI runtime has frozen the container via `podman
+   * pause` / `docker pause`. This is deliberately separate from
+   * `status='paused'`, which means the manager's soft-TTL stopped the
+   * container and can auto-resume it.
+   */
+  runtimePaused?: boolean;
   /** Granular sub-step within `status`. Drives the provisioning UI label. */
   step: SandboxStep;
   /** Last error string when `status === 'error'`. */
@@ -252,6 +263,26 @@ export interface Sandbox {
   hostWorkdirMount?: string;
   /** Named volume backing `<workdir>/node_modules` (only when hostWorkdirMount is set). */
   nodeModulesVolumeName?: string;
+  /** Whether this bind mount is disposable builder-owned storage or a user's existing project. */
+  mountKind: SandboxMountKind;
+  /** Whether the container image is the MCP default image or was built from the project root. */
+  imageSource: SandboxImageSource;
+  /** Deterministic tag for images built from project Dockerfiles. */
+  builtImageTag?: string;
+  /** Absolute path to the project Dockerfile/Containerfile used for the image build. */
+  dockerfilePath?: string;
+  /** First EXPOSE port selected from the project Dockerfile. */
+  dockerfileExposedPort?: number;
+  /**
+   * True when this sandbox references a container that lives outside
+   * the platform's lifecycle. The manager only inspects it; start,
+   * stop, pause, restart and destroy are no-ops for these entries.
+   */
+  attached?: boolean;
+  /** User-supplied id/name of the externally-managed container. */
+  externalContainerRef?: string;
+  /** DNS hostname peer containers use to reach the attached service. */
+  attachedHostname?: string;
 }
 
 export interface SandboxLogLine {

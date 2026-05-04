@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, PanelLeft, PanelLeftClose, MessageSquare, KanbanSquare, Check, Plus, BookText, KeyRound, X, Archive, RotateCcw, Database, FlaskConical, Network, Inbox } from 'lucide-react';
+import { StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, PanelLeft, PanelLeftClose, MessageSquare, KanbanSquare, Check, Plus, BookText, BookOpen, KeyRound, X, Archive, RotateCcw, Database, FlaskConical, Network, Inbox, FolderOpen } from 'lucide-react';
 import { TestsTab } from './tests/TestsTab.js';
 import { QaRunBadge } from './tests/shared/QaRunBadge.js';
 import DocsTab from './DocsTab.js';
@@ -13,16 +13,21 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/ta
 import { cn } from '../../lib/utils.js';
 import { useApi, apiPost } from '../../hooks/useApi.js';
 import { useCompanyStream } from '../../hooks/useCompanyStream.js';
+import type { AgentAttachment } from '../../hooks/agent-stream/types.js';
 import { useProviders } from '../../hooks/useProviders.js';
 import { AgentPane } from './AgentPane.js';
 import { BoardPanel } from './BoardPanel.js';
 import { KanbanTab } from './KanbanTab.js';
 import { PipelinesTab } from './PipelinesTab.js';
 import { InboxPanel } from './InboxPanel.js';
+import { DrivePanel } from './DrivePanel.js';
 import { AgentSessionModal } from './AgentSessionModal.js';
 import { MasterComposer } from './MasterComposer.js';
+import { FrontTabsBar } from './FrontTabsBar.js';
+import { useCompanySiblings } from '../../hooks/useCompanySiblings.js';
 import { ResetSessionDialog } from './ResetSessionDialog.js';
 import { ArchivedTab } from './ArchivedTab.js';
+import { CompanyApiReferenceTab } from './CompanyApiReferenceTab.js';
 import { RoleEditModal, type RoleConfig, type SkillDef } from './RoleEditModal.js';
 
 interface Project {
@@ -46,8 +51,15 @@ interface SessionFullData {
 
 export function CompanySessionView({ sessionId, sessionName, sessionStatus }: CompanySessionViewProps) {
   const { t } = useTranslation(['agents', 'common']);
-  const stream = useCompanyStream(sessionId);
-  const { data: sessionData, refetch } = useApi<SessionFullData>(`/company/sessions/${sessionId}`);
+  // Multi-front (migration 067): the URL identifies the ROOT session
+  // (parent of the tab tree). The active tab can be the parent itself
+  // ("Main") or any non-archived child. `useCompanyStream` is mounted
+  // on the active id, so switching tabs gives us a clean stream of
+  // that sub-session's board / agents / prompts.
+  const siblings = useCompanySiblings(sessionId);
+  const activeSessionId = siblings.activeSessionId ?? sessionId;
+  const stream = useCompanyStream(activeSessionId);
+  const { data: sessionData, refetch } = useApi<SessionFullData>(`/company/sessions/${activeSessionId}`);
   const [agentPanelOpen, setAgentPanelOpen] = useState(true);
   const [modalSession, setModalSession] = useState<{ coderSessionId: number; role: string; status: string } | null>(null);
   const [editingRoleIdx, setEditingRoleIdx] = useState<number | null>(null);
@@ -60,8 +72,10 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
   const { data: skillsList } = useApi<{ skills: SkillDef[] }>('/admin/skills');
   const { providerOptions, getModelsForProvider, getDefaultModel } = useProviders();
 
-  // Reset stream state when switching sessions
-  useEffect(() => { stream.reset(); }, [sessionId]);
+  // Reset stream state when the active sub-session changes (tab switch
+  // or explicit session change). Each sub-session has its own metaBus
+  // and own state — re-mounting the hook on a fresh id does the rest.
+  useEffect(() => { stream.reset(); }, [activeSessionId]);
 
   // On mount, attempt ONE reattach if the session is already running.
   // The cleanup fn resets the flag so navigating away and back retries once more.
@@ -77,23 +91,26 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
     return () => { reattachAttemptedRef.current = false; }; // reset on unmount
   }, [sessionId, sessionStatus]);
 
+  // Sub-session isolation is now enforced at the FK level: agent_runs /
+  // board / prompts all key on `company_session_id`, so each tab's
+  // stream only ever carries its own data. No client-side filtering.
   const subordinates = Array.from(stream.subordinateStates.values());
   const config = sessionData ? parseConfig(sessionData.session.config_json) : null;
 
   // Session already has a run if status is not idle/draft — use sendMessage, not start
   const sessionAlreadyRan = sessionStatus === 'running' || sessionStatus === 'completed' || sessionStatus === 'paused' || sessionStatus === 'error';
 
-  async function handleSend(text: string) {
+  async function handleSend(text: string, attachments: AgentAttachment[]) {
     if (!stream.connected && (sessionAlreadyRan || stream.started)) {
       // Session ran before but is now disconnected — resume the master
       // from its existing coder session to keep full conversation history.
-      await stream.resume(text);
+      await stream.resume(text, attachments);
       refetch();
     } else if (!stream.started && !sessionAlreadyRan) {
-      await stream.start(text);
+      await stream.start(text, attachments);
       refetch();
     } else {
-      await stream.sendMessage(text);
+      await stream.sendMessage(text, attachments);
     }
   }
 
@@ -121,8 +138,16 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
         <Users className="h-4 w-4 text-muted-foreground" />
         <h2 className="text-sm font-semibold">{sessionName}</h2>
         <Badge variant={stream.connected ? 'default' : 'outline'} className="text-[10px]">
-          {stream.connected ? t('agents:company.live') : sessionStatus}
+          {stream.connected ? t('agents:company.live') : (sessionData?.session.status ?? sessionStatus)}
         </Badge>
+        {(() => {
+          const running = siblings.children.filter((c) => c.status === 'running').length
+            + (siblings.parent?.status === 'running' ? 1 : 0);
+          const total = siblings.children.length + (siblings.parent ? 1 : 0);
+          return total > 1 && running > 0 ? (
+            <span className="text-[10px] text-muted-foreground">{running}/{total} fronts</span>
+          ) : null;
+        })()}
         {sessionData?.projects.map((p) => (
           <Badge key={p.project_id} variant="outline" className="text-[10px] gap-1">
             <FolderGit2 className="h-2.5 w-2.5" />
@@ -483,11 +508,17 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
               <TabsTrigger value="inbox" className="text-xs gap-1">
                 <Inbox className="h-3 w-3" /> {t('agents:company.inbox')}
               </TabsTrigger>
+              <TabsTrigger value="drive" className="text-xs gap-1">
+                <FolderOpen className="h-3 w-3" /> Drive
+              </TabsTrigger>
               <TabsTrigger value="tests" className="text-xs gap-1">
                 <FlaskConical className="h-3 w-3" /> Testes
               </TabsTrigger>
               <TabsTrigger value="docs" className="text-xs gap-1">
                 <BookText className="h-3 w-3" /> {t('agents:company.docs')}
+              </TabsTrigger>
+              <TabsTrigger value="api" className="text-xs gap-1">
+                <BookOpen className="h-3 w-3" /> {t('agents:company.apiReference')}
               </TabsTrigger>
               <TabsTrigger value="env" className="text-xs gap-1">
                 <KeyRound className="h-3 w-3" /> {t('agents:company.env')}
@@ -499,15 +530,28 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
                 <Archive className="h-3 w-3" /> {t('agents:company.archived')}
               </TabsTrigger>
             </TabsList>
-            <TabsContent value="board" className="flex-1 overflow-hidden mt-0">
-              <BoardPanel
-                messages={boardMessages}
-                masterPrompts={Array.from(stream.masterPrompts.values())}
-                onAnswerQuestion={(promptId, answer) => stream.respondToMasterQuestion(promptId, answer)}
-                onRespondPlan={(promptId, approved, fb) => stream.respondToMasterPlan(promptId, approved, fb)}
-                sessionId={sessionId}
-                sessionName={sessionName}
-              />
+            <TabsContent value="board" className="flex-1 overflow-hidden mt-0 flex flex-col">
+              {siblings.parent && (
+                <FrontTabsBar
+                  parent={siblings.parent}
+                  children={siblings.children}
+                  activeSessionId={siblings.activeSessionId}
+                  onSelect={siblings.setActiveSessionId}
+                  onCreate={siblings.createChild}
+                  onArchive={siblings.archiveChild}
+                  onRename={siblings.renameChild}
+                />
+              )}
+              <div className="flex-1 overflow-hidden">
+                <BoardPanel
+                  messages={boardMessages}
+                  masterPrompts={Array.from(stream.masterPrompts.values())}
+                  onAnswerQuestion={(promptId, answer) => stream.respondToMasterQuestion(promptId, answer)}
+                  onRespondPlan={(promptId, approved, fb) => stream.respondToMasterPlan(promptId, approved, fb)}
+                  sessionId={sessionId}
+                  sessionName={sessionName}
+                />
+              </div>
             </TabsContent>
             <TabsContent value="kanban" className="flex-1 overflow-hidden mt-0">
               <KanbanTab companySessionId={sessionId} streamCards={stream.kanbanCards} />
@@ -518,11 +562,17 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
             <TabsContent value="inbox" className="flex-1 overflow-hidden mt-0">
               <InboxPanel companySessionId={sessionId} />
             </TabsContent>
+            <TabsContent value="drive" className="flex-1 overflow-hidden mt-0">
+              <DrivePanel companySessionId={sessionId} />
+            </TabsContent>
             <TabsContent value="tests" className="flex-1 overflow-hidden mt-0">
               <TestsTab sessionId={sessionId} />
             </TabsContent>
             <TabsContent value="docs" className="flex-1 overflow-hidden mt-0">
               <DocsTab companySessionId={sessionId} />
+            </TabsContent>
+            <TabsContent value="api" className="flex-1 overflow-hidden mt-0">
+              <CompanyApiReferenceTab sessionId={sessionId} />
             </TabsContent>
             <TabsContent value="env" className="flex-1 overflow-hidden mt-0">
               <EnvTab companySessionId={sessionId} />

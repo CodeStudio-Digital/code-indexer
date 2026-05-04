@@ -91,6 +91,41 @@ export interface AgentMessage {
   content: ContentBlock[];
 }
 
+/**
+ * Build a user-message content array from a text + optional attachments.
+ * Images go through as ImageBlock; everything else as DocumentBlock — same
+ * routing the providers expect.
+ *
+ * Used everywhere a human message can carry attachments: the initial
+ * runCoder fresh-start, MasterLifecycle.sendUserMessage, and the master
+ * tools that forward content to subordinates.
+ */
+export function attachmentsToBlocks(
+  text: string,
+  attachments?: ReadonlyArray<{
+    name?: string;
+    mediaType: string;
+    base64?: string;
+    text?: string;
+  }>,
+): ContentBlock[] {
+  const blocks: ContentBlock[] = [{ type: 'text', text }];
+  for (const att of attachments ?? []) {
+    if (att.mediaType.startsWith('image/') && att.base64) {
+      blocks.push({ type: 'image', mediaType: att.mediaType, base64: att.base64 });
+    } else {
+      blocks.push({
+        type: 'document',
+        name: att.name ?? 'attachment',
+        mediaType: att.mediaType,
+        text: att.text,
+        base64: att.base64,
+      });
+    }
+  }
+  return blocks;
+}
+
 export interface ChatUsage {
   input_tokens: number;
   output_tokens: number;

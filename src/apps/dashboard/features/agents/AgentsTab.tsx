@@ -3,8 +3,16 @@ import { useTranslation } from 'react-i18next';
 import { Plus, Users, FileText, Trash2, Edit2, ChevronRight, ChevronLeft, PanelLeft, PanelLeftClose, Copy } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
-import { useApi, apiDelete } from '../../hooks/useApi.js';
+import { useApi } from '../../hooks/useApi.js';
 import { cn } from '../../lib/utils.js';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../../components/ui/dialog.js';
 import { TemplateBuilderModal } from './TemplateBuilderModal.js';
 import { TemplateListPanel } from './TemplateListPanel.js';
 import { NewCompanyDialog } from './NewCompanyDialog.js';
@@ -32,14 +40,14 @@ export function AgentsTab() {
   const [showNewCompany, setShowNewCompany] = useState(false);
   const [sidebarView, setSidebarView] = useState<SidebarView>('sessions');
   const [agentsSidebarOpen, setAgentsSidebarOpen] = useState(true);
+  const [deleteTarget, setDeleteTarget] = useState<CompanySession | null>(null);
 
   const selectedSession = sessions?.find((s) => s.id === selectedSessionId);
 
   async function handleDelete(e: React.MouseEvent, id: number) {
     e.stopPropagation();
-    await apiDelete(`/company/sessions/${id}`);
-    if (selectedSessionId === id) setSelectedSessionId(null);
-    refetchSessions();
+    const target = sessions?.find((s) => s.id === id) ?? null;
+    if (target) setDeleteTarget(target);
   }
 
   async function handleDuplicate(e: React.MouseEvent, id: number) {
@@ -242,6 +250,17 @@ export function AgentsTab() {
           }}
         />
       )}
+      {deleteTarget && (
+        <DeleteCompanyDialog
+          session={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={() => {
+            if (selectedSessionId === deleteTarget.id) setSelectedSessionId(null);
+            setDeleteTarget(null);
+            refetchSessions();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -266,5 +285,204 @@ function StatusBadge({ status }: { status: string }) {
     <Badge variant="outline" className={cn('text-[9px] px-1', colors[status])}>
       {t(STATUS_KEYS[status] ?? status)}
     </Badge>
+  );
+}
+
+interface DeletePlan {
+  project_paths: Array<{
+    project_id: number;
+    name: string;
+    label: string | null;
+    root_path: string;
+    kind: 'owned' | 'external';
+    removable: boolean;
+  }>;
+  node_modules_volumes: Array<{
+    name: string;
+    label: string;
+    removable: boolean;
+  }>;
+}
+
+function DeleteCompanyDialog({
+  session,
+  onClose,
+  onDeleted,
+}: {
+  session: CompanySession;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [plan, setPlan] = useState<DeletePlan | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [selectedVolumes, setSelectedVolumes] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetch(`/api/company/sessions/${session.id}/delete-plan`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((body: DeletePlan) => {
+        if (!cancelled) {
+          setPlan(body);
+          setSelectedPaths(new Set());
+          setSelectedVolumes(new Set());
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id]);
+
+  function togglePath(path: string) {
+    setSelectedPaths((cur) => {
+      const next = new Set(cur);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
+  function toggleVolume(name: string) {
+    setSelectedVolumes((cur) => {
+      const next = new Set(cur);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
+
+  async function submit() {
+    setDeleting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/company/sessions/${session.id}`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          remove_project_paths: [...selectedPaths],
+          remove_node_modules_volumes: [...selectedVolumes],
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      onDeleted();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  const removablePaths = plan?.project_paths.filter((p) => p.removable) ?? [];
+  const preservedPaths = plan?.project_paths.filter((p) => !p.removable) ?? [];
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Delete company</DialogTitle>
+          <DialogDescription>
+            Containers are removed. Project folders are preserved unless selected below.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 text-xs">
+          <div className="rounded border border-destructive/30 bg-destructive/5 p-2">
+            <div className="font-medium text-destructive">{session.name}</div>
+            <div className="text-muted-foreground mt-0.5">
+              This removes the company session and its Podman/Docker containers.
+            </div>
+          </div>
+
+          {loading && <div className="text-muted-foreground">Loading folders...</div>}
+
+          {removablePaths.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Optional folders to remove
+              </div>
+              {removablePaths.map((item) => (
+                <label key={item.root_path} className="flex items-start gap-2 rounded border p-2">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={selectedPaths.has(item.root_path)}
+                    onChange={() => togglePath(item.root_path)}
+                  />
+                  <span className="min-w-0">
+                    <span className="block font-medium truncate">{item.label ?? item.name}</span>
+                    <span className="block font-mono text-[10px] text-muted-foreground break-all">
+                      {item.root_path}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {(plan?.node_modules_volumes.length ?? 0) > 0 && (
+            <div className="space-y-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Optional dependency volumes
+              </div>
+              {plan!.node_modules_volumes.map((item) => (
+                <label key={item.name} className="flex items-center gap-2 rounded border p-2">
+                  <input
+                    type="checkbox"
+                    checked={selectedVolumes.has(item.name)}
+                    onChange={() => toggleVolume(item.name)}
+                  />
+                  <span>
+                    <span className="block font-medium">{item.label}</span>
+                    <span className="block font-mono text-[10px] text-muted-foreground">
+                      {item.name}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {preservedPaths.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Preserved external projects
+              </div>
+              {preservedPaths.map((item) => (
+                <div key={item.root_path} className="rounded border bg-muted/30 p-2">
+                  <div className="font-medium truncate">{item.label ?? item.name}</div>
+                  <div className="font-mono text-[10px] text-muted-foreground break-all">
+                    {item.root_path}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {error && <div className="text-destructive">{error}</div>}
+        </div>
+
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={deleting}>
+            Cancel
+          </Button>
+          <Button type="button" variant="destructive" onClick={submit} disabled={deleting}>
+            {deleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

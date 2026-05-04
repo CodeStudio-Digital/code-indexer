@@ -200,7 +200,9 @@ export class HumanInTheLoop {
    * so dashboards can transition cards from "pending" to "cancelled".
    */
   cancelPendingMasterPrompts(): MasterPrompt[] {
-    const cancelled = this.ctx.companyStore.cancelPendingMasterPrompts(this.ctx.companySessionId);
+    const cancelled = this.ctx.companyStore.cancelPendingMasterPrompts(
+      this.ctx.companySessionId,
+    );
     for (const p of cancelled) {
       this.bus.publish('master_prompt_cancelled', { prompt: p });
     }

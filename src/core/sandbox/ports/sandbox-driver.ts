@@ -16,6 +16,20 @@
 
 import type { SandboxIsolation, SandboxLimits, SandboxStack } from '../types.js';
 
+export interface SandboxBuildSpec {
+  /** Absolute host directory used as the build context. */
+  contextDir: string;
+  /** Absolute host path to Dockerfile/Containerfile. */
+  dockerfilePath: string;
+  /** Deterministic image tag to create. */
+  imageTag: string;
+  signal?: AbortSignal;
+  /** Optional streaming hook for build logs. */
+  emit?: (event: { stream: 'stdout' | 'stderr'; chunk: string }) => void;
+  /** Disable build cache, used by retry flows. */
+  noCache?: boolean;
+}
+
 export interface SandboxCreateSpec {
   /** Stable id (reuses companySessionId). Drivers label containers with this. */
   sandboxId: string;
@@ -43,6 +57,8 @@ export interface SandboxCreateSpec {
   isolation: SandboxIsolation;
   /** Environment variables to set inside the container. */
   env?: Record<string, string>;
+  /** When true, run the image's own CMD/ENTRYPOINT instead of MCP's idle command. */
+  skipDefaultCommand?: boolean;
   /**
    * Absolute HOST path to bind-mount onto `workdir` inside the container.
    * When set, the workspace lives on the host filesystem and survives
@@ -106,6 +122,12 @@ export interface ISandboxDriver {
   /** Informational — used by the manager for logs and for `Sandbox.runtime`. */
   readonly runtime: 'docker' | 'podman' | 'e2b';
 
+  /** Build a project-provided Dockerfile/Containerfile image. */
+  build(spec: SandboxBuildSpec): Promise<void>;
+
+  /** Remove an image tag. Idempotent and best-effort. */
+  removeImage(tag: string): Promise<void>;
+
   /**
    * Create and start the container. Returns the runtime-assigned
    * containerId. The container must be running on return; scaffolding
@@ -138,6 +160,19 @@ export interface ISandboxDriver {
    * resumes instantly. Idempotent.
    */
   stopContainer(containerId: string, graceSeconds?: number): Promise<void>;
+
+  /**
+   * Freeze a running container at the OCI runtime level (`podman pause`
+   * / `docker pause`). Unlike stop/start, the process tree and port
+   * bindings remain in place; `unpauseContainer` resumes execution.
+   */
+  pauseContainer(containerId: string): Promise<void>;
+
+  /**
+   * Resume a runtime-paused container (`podman unpause` / `docker
+   * unpause`). Idempotent when the container is already unpaused.
+   */
+  unpauseContainer(containerId: string): Promise<void>;
 
   /**
    * Run a shell-parsed command inside the container. Equivalent to
@@ -258,6 +293,8 @@ export interface SandboxInspectResult {
   exists: boolean;
   /** `true` only when the container's main process is currently running. */
   running: boolean;
+  /** `true` when the runtime has frozen the container via pause/unpause. */
+  paused: boolean;
   /** Container-reported labels; subset of what we set on `create()`. */
   labels: Record<string, string>;
 }

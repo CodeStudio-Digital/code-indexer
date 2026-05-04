@@ -26,6 +26,8 @@ import type {
   SandboxEvent,
   SandboxLogLine,
   SandboxObserver,
+  SandboxImageSource,
+  SandboxMountKind,
   SandboxStack,
   SandboxStatus,
   SandboxStep,
@@ -49,8 +51,13 @@ import type {
   PersistedSandboxRow,
   PersistedSandboxStatus,
 } from '../../store/company-sandbox-store.js';
-import type { CompanySandboxServicesStore } from '../../store/company-sandbox-services-store.js';
+import type {
+  CompanySandboxServicesStore,
+  PersistedSandboxServiceRow,
+} from '../../store/company-sandbox-services-store.js';
 import type { CompanySessionEnvStore } from '../../store/company-session-env-store.js';
+import { detectManifest } from './manifest-detector/detect.js';
+import type { NodeManifest, NodePackageManager } from './manifest-detector/types.js';
 
 /**
  * Module-level binding of the persistence store. The SandboxManager
@@ -337,10 +344,19 @@ const DEFAULT_WORKDIR = '/app';
  * — failures are logged, not thrown (session deletion should not be
  * blocked by stale persistence artifacts).
  */
-export async function cleanupSessionPersistence(sessionId: string): Promise<void> {
+export async function cleanupSessionPersistence(
+  sessionId: string,
+  opts: {
+    mountKind?: SandboxMountKind;
+    builtImageTags?: readonly string[];
+    removeHostWorkdir?: boolean;
+    removeNodeModulesVolume?: boolean;
+    nodeModulesVolumeNames?: readonly string[];
+  } = {},
+): Promise<void> {
   // 1. Host workdir dir.
   const hostDir = resolveHostWorkdirMount(sessionId);
-  if (hostDir && existsSync(hostDir)) {
+  if (opts.removeHostWorkdir !== false && opts.mountKind !== 'external' && hostDir && existsSync(hostDir)) {
     try {
       rmSync(hostDir, { recursive: true, force: true });
     } catch (e) {
@@ -353,16 +369,32 @@ export async function cleanupSessionPersistence(sessionId: string): Promise<void
   // 2. Named node_modules volume. Route through the active CLI driver
   //    when available — falls back to `docker`/`podman` discovery via
   //    env. Silently no-ops when the volume doesn't exist.
-  const volName = nodeModulesVolumeFor(sessionId);
-  const binary =
-    process.env.MCP_SANDBOX_RUNTIME === 'podman' ? 'podman' : 'docker';
-  await new Promise<void>((resolve) => {
-    const child = spawnChild(binary, ['volume', 'rm', '-f', volName], {
-      stdio: 'ignore',
-    });
-    child.once('error', () => resolve());
-    child.once('close', () => resolve());
-  });
+  const volumeNames = opts.nodeModulesVolumeNames
+    ? [...new Set(opts.nodeModulesVolumeNames)]
+    : opts.removeNodeModulesVolume !== false
+      ? [nodeModulesVolumeFor(sessionId)]
+      : [];
+  if (volumeNames.length > 0) {
+    const binary =
+      process.env.MCP_SANDBOX_RUNTIME === 'podman' ? 'podman' : 'docker';
+    await Promise.all(
+      volumeNames.map((volName) => new Promise<void>((resolve) => {
+        const child = spawnChild(binary, ['volume', 'rm', '-f', volName], {
+          stdio: 'ignore',
+        });
+        child.once('error', () => resolve());
+        child.once('close', () => resolve());
+      })),
+    );
+  }
+
+  const tags = [...new Set((opts.builtImageTags ?? []).filter(Boolean))];
+  if (tags.length > 0) {
+    const driver = await resolveDriver().catch(() => null);
+    await Promise.allSettled(
+      tags.map((tag) => driver?.removeImage(tag).catch(() => void 0)),
+    );
+  }
 }
 
 /**
@@ -388,6 +420,21 @@ function resolveHostWorkdirMount(sessionId: string): string | null {
 function nodeModulesVolumeFor(sessionId: string): string {
   const safe = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 48);
   return `mcp-sbx-nm-${safe}`;
+}
+
+function projectImageTag(sessionId: string, serviceId = 'main'): string {
+  const safeSession = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 48);
+  const safeService = String(serviceId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 32);
+  return `mcp-session-${safeSession}-${safeService}:latest`;
+}
+
+interface ExternalNodeDevSpec {
+  manifest: NodeManifest;
+  packageManager: NodePackageManager;
+  scriptName: string;
+  scriptBody: string;
+  containerPort: number;
+  framework: 'angular' | 'next' | 'vite' | 'generic';
 }
 
 /** True when `dir` exists and contains at least a `package.json`. */
@@ -434,6 +481,11 @@ export interface ProvisionRequest {
    * the linked project's `root_path` before calling provision.
    */
   hostWorkdirMount?: string;
+  mountKind?: SandboxMountKind;
+  imageSource?: SandboxImageSource;
+  dockerfilePath?: string;
+  containerPortOverride?: number;
+  skipDefaultCommand?: boolean;
   /**
    * When true the session has at least one role with the `qa-playwright`
    * skill, so:
@@ -461,10 +513,9 @@ export interface ProvisionRequest {
 }
 
 /**
- * Request to stand up a SECONDARY container alongside the primary
- * sandbox of a session. Used for multi-microservice sessions
- * (frontend + worker + php). The primary sandbox must already exist
- * — `SandboxManager.provisionAdditionalService` refuses otherwise.
+ * Request to stand up a SECONDARY container for a session. Used for
+ * multi-microservice sessions (frontend + worker + php). Secondary
+ * services can be started independently of the primary sandbox.
  */
 export interface ProvisionServiceRequest {
   sessionId: string;
@@ -486,6 +537,11 @@ export interface ProvisionServiceRequest {
    * primary workspace.
    */
   hostWorkdirMount?: string;
+  mountKind?: SandboxMountKind;
+  imageSource?: SandboxImageSource;
+  dockerfilePath?: string;
+  containerPortOverride?: number;
+  skipDefaultCommand?: boolean;
   /**
    * When `true`, destroy any pre-existing service with the same id
    * (including ones currently `ready`) before provisioning. Used by
@@ -846,6 +902,20 @@ export class SandboxManager {
     return out;
   }
 
+  private runtimePauseTarget(
+    sessionId: string,
+    serviceId?: string | null,
+  ): { sb: Sandbox; serviceId: string | null } {
+    if (!serviceId || serviceId === 'main') {
+      const sb = this.sandboxes.get(sessionId);
+      if (!sb) throw new Error(`No sandbox for session ${sessionId}`);
+      return { sb, serviceId: null };
+    }
+    const sb = this.services.get(this.serviceKey(sessionId, serviceId));
+    if (!sb) throw new Error(`No service '${serviceId}' for session ${sessionId}`);
+    return { sb, serviceId };
+  }
+
   /**
    * Like `listServices` but pairs each sandbox with its `serviceId`
    * (recovered from the map key). Consumers that bind services by id
@@ -864,11 +934,10 @@ export class SandboxManager {
   }
 
   /**
-   * Stand up a secondary container for a session that already has a
-   * primary sandbox. Three side-effects beyond the normal provision
-   * path:
+   * Stand up a secondary container for a session. Three side-effects
+   * beyond the normal provision path:
    *   1. Ensures the session's shared docker network exists, attaching
-   *      the PRIMARY container to it on first call (idempotent).
+   *      the primary container only when it is currently live.
    *   2. Creates the new container with `isolation.network` pointing at
    *      that network and an alias equal to `serviceId`, so other
    *      services can `fetch('http://<serviceId>/…')`.
@@ -888,12 +957,19 @@ export class SandboxManager {
       );
     }
 
+    const driver = await this.resolveDriverOnce();
+    await this.reconcilePrimaryForSession(driver, req.sessionId).catch((e) =>
+      console.warn(
+        `[sandbox-manager] targeted primary reconcile ${req.sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
+      ),
+    );
+    await this.reconcileServiceForSession(driver, req.sessionId, req.serviceId).catch((e) =>
+      console.warn(
+        `[sandbox-manager] targeted service reconcile ${req.sessionId}:${req.serviceId} failed: ${e instanceof Error ? e.message : String(e)}`,
+      ),
+    );
+
     const primary = this.sandboxes.get(req.sessionId);
-    if (!primary) {
-      throw new Error(
-        `Cannot add service '${req.serviceId}' — session ${req.sessionId} has no primary sandbox`,
-      );
-    }
 
     const existing = this.getService(req.sessionId, req.serviceId);
     if (existing) {
@@ -917,13 +993,11 @@ export class SandboxManager {
       );
     }
 
-    const driver = await this.resolveDriverOnce();
-
     // Ensure shared network; best-effort. If it fails we still proceed
     // on the default bridge — services are reachable via published
     // ports even without the alias.
     const networkName = await ensureSessionNetwork(req.sessionId);
-    if (networkName && primary.containerId) {
+    if (networkName && primary?.containerId) {
       await attachContainerToSessionNetwork(req.sessionId, primary.containerId, 'main');
     }
 
@@ -936,6 +1010,13 @@ export class SandboxManager {
     const previewUrl = `/preview/${encodeURIComponent(req.sessionId)}/_svc/${encodeURIComponent(req.serviceId)}/`;
     const seedLimits = { ...DEFAULT_SANDBOX_LIMITS, ...(req.limits ?? {}) };
     const serviceSandboxId = `${req.sessionId}:${req.serviceId}`;
+    const mountKind = req.mountKind ?? 'owned';
+    const imageSource = req.imageSource ?? 'default';
+    let containerPort = req.containerPortOverride ?? this.devServerPort;
+    const builtImageTag =
+      imageSource === 'project_dockerfile'
+        ? projectImageTag(req.sessionId, req.serviceId)
+        : undefined;
 
     const seed: Sandbox = {
       id: serviceSandboxId,
@@ -944,9 +1025,11 @@ export class SandboxManager {
       stack: req.stack,
       hostPort,
       workdir: this.workdir,
+      containerPort,
       previewUrl,
       limits: seedLimits,
       status: 'pending',
+      runtimePaused: false,
       step: 'queued',
       recentLogs: [],
       createdAt: Date.now(),
@@ -957,6 +1040,11 @@ export class SandboxManager {
       // recover the original UUID path from the DB — it would fall
       // back to the legacy serviceId-based layout.
       hostWorkdirMount: req.hostWorkdirMount,
+      mountKind,
+      imageSource,
+      builtImageTag,
+      dockerfilePath: req.dockerfilePath,
+      dockerfileExposedPort: imageSource === 'project_dockerfile' ? containerPort : undefined,
     };
     this.services.set(this.serviceKey(req.sessionId, req.serviceId), seed);
     this.persistService(req.sessionId, req.serviceId, req.name ?? req.serviceId, seed, 'provisioning');
@@ -980,12 +1068,38 @@ export class SandboxManager {
       const hostWorkdirMount =
         req.hostWorkdirMount ??
         (perServiceHostRoot ? join(perServiceHostRoot, req.serviceId) : null);
-      const nodeModulesVolumeName = hostWorkdirMount
+      let externalNodeSpec: ExternalNodeDevSpec | null = null;
+      if (mountKind === 'external') {
+        if (!hostWorkdirMount) {
+          throw new Error('External projects require a registered project root to bind-mount.');
+        }
+        if (imageSource === 'project_dockerfile') {
+          if (!req.dockerfilePath || !req.containerPortOverride) {
+            throw new Error("Dockerfile doesn't EXPOSE a port — add `EXPOSE <n>` or choose Node dev image.");
+          }
+        } else {
+          externalNodeSpec = this.resolveExternalNodeDevSpec(
+            hostWorkdirMount,
+            req.stack,
+            req.containerPortOverride,
+          );
+          containerPort = externalNodeSpec.containerPort;
+          seed.containerPort = containerPort;
+          seed.dockerfileExposedPort = containerPort;
+        }
+      }
+      const nodeModulesVolumeName = hostWorkdirMount && mountKind !== 'external'
         ? `${nodeModulesVolumeFor(req.sessionId)}-${req.serviceId}`
         : undefined;
       if (hostWorkdirMount) {
         try {
-          mkdirSync(hostWorkdirMount, { recursive: true });
+          if (mountKind === 'external') {
+            if (!existsSync(hostWorkdirMount)) {
+              throw new Error(`Project root does not exist: ${hostWorkdirMount}`);
+            }
+          } else {
+            mkdirSync(hostWorkdirMount, { recursive: true });
+          }
         } catch (e) {
           throw new Error(
             `Failed to prepare host workdir ${hostWorkdirMount}: ${e instanceof Error ? e.message : String(e)}`,
@@ -996,29 +1110,54 @@ export class SandboxManager {
         // Import it into the shared session envs so siblings see the
         // values too — every container already receives the merged
         // shared envs on start.
-        importDotEnvIntoStore(hostWorkdirMount, req.sessionId);
+        if (mountKind !== 'external') {
+          importDotEnvIntoStore(hostWorkdirMount, req.sessionId);
+        }
       }
 
       const sharedEnvs = resolveSessionEnvs(req.sessionId);
+      const image = imageSource === 'project_dockerfile' ? builtImageTag! : this.nodeImage;
+      if (imageSource === 'project_dockerfile') {
+        this.recordStep(seed, 'creating-container', 'Building image from Dockerfile…');
+        await driver.build({
+          contextDir: hostWorkdirMount!,
+          dockerfilePath: req.dockerfilePath!,
+          imageTag: image,
+          signal: req.signal,
+          noCache: req.forceRecreate === true,
+          emit: (event) => {
+            this.appendLog(seed, event.stream === 'stderr' ? 'error' : 'info', event.chunk);
+            this.emit({
+              kind: 'log',
+              sandboxId: serviceSandboxId,
+              stream: event.stream,
+              chunk: event.chunk,
+            });
+          },
+        });
+      }
       const { containerId } = await driver.create({
         sandboxId: serviceSandboxId,
-        image: this.nodeImage,
+        image,
         stack: req.stack,
         workdir: this.workdir,
         hostPort,
-        containerPort: this.devServerPort,
+        containerPort,
         limits,
         isolation,
         env: Object.keys(sharedEnvs).length > 0 ? sharedEnvs : undefined,
         hostWorkdirMount: hostWorkdirMount ?? undefined,
         nodeModulesVolumeName,
+        skipDefaultCommand: req.skipDefaultCommand ?? imageSource === 'project_dockerfile',
       });
       seed.containerId = containerId;
       seed.hostWorkdirMount = hostWorkdirMount ?? undefined;
       seed.nodeModulesVolumeName = nodeModulesVolumeName;
 
-      await this.prepareWorkdir(driver, containerId, this.workdir, isolation.user);
-      if (Object.keys(sharedEnvs).length > 0) {
+      if (mountKind !== 'external') {
+        await this.prepareWorkdir(driver, containerId, this.workdir, isolation.user);
+      }
+      if (mountKind !== 'external' && Object.keys(sharedEnvs).length > 0) {
         try {
           await driver.writeFile(
             containerId,
@@ -1038,7 +1177,12 @@ export class SandboxManager {
       const hostWorkdirPopulated =
         !!hostWorkdirMount && hasInitializedWorkdir(hostWorkdirMount);
 
-      if (hostWorkdirPopulated) {
+      if (imageSource === 'project_dockerfile') {
+        this.recordStep(seed, 'starting-dev-server', 'Waiting for project container…');
+        await this.waitForPublishedHttp(driver, seed, '/', req.signal);
+      } else if (mountKind === 'external' && externalNodeSpec) {
+        await this.startExternalNodeDevServer(driver, seed, externalNodeSpec, req.signal);
+      } else if (hostWorkdirPopulated) {
         this.recordStep(seed, 'starting-dev-server', 'Resuming persisted workdir…');
         await this.relaunchDevServer(driver, containerId, this.workdir, req.signal, req.stack);
       } else {
@@ -1061,6 +1205,7 @@ export class SandboxManager {
       }
 
       seed.status = 'ready';
+      seed.runtimePaused = false;
       seed.step = 'ready';
       seed.lastAccessAt = Date.now();
       this.persistService(req.sessionId, req.serviceId, req.name ?? req.serviceId, seed, 'running');
@@ -1185,7 +1330,7 @@ export class SandboxManager {
       // service_id hostname on the CONTAINER's dev-server port (not
       // the host-mapped port — the shared network is inside dockerd).
       const hostname = idUpper === 'MAIN' ? 'main' : idUpper.toLowerCase();
-      desired.set(`SERVICE_URL_${idUpper}`, `http://${hostname}:${this.devServerPort}`);
+      desired.set(`SERVICE_URL_${idUpper}`, `http://${hostname}:${sb.containerPort}`);
 
       // QA preview URL through the http-api proxy, reachable from
       // sibling containers on different networks (the Chrome Service).
@@ -1272,11 +1417,13 @@ export class SandboxManager {
     const body = renderDotEnv(envs);
     const targets: Array<{ containerId: string; workdir: string }> = [];
     const primary = this.sandboxes.get(sessionId);
-    if (primary?.containerId) {
+    if (primary?.containerId && !primary.runtimePaused && primary.mountKind !== 'external') {
       targets.push({ containerId: primary.containerId, workdir: primary.workdir });
     }
     for (const svc of this.listServices(sessionId)) {
-      if (svc.containerId) targets.push({ containerId: svc.containerId, workdir: svc.workdir });
+      if (svc.containerId && !svc.runtimePaused && svc.mountKind !== 'external') {
+        targets.push({ containerId: svc.containerId, workdir: svc.workdir });
+      }
     }
     if (targets.length === 0 || !this.driver) return;
     const driver = this.driver;
@@ -1299,7 +1446,11 @@ export class SandboxManager {
     sb.status = 'destroying';
     this.emit({ kind: 'destroying', sandboxId: sb.id, reason });
     try {
-      if (sb.containerId && this.driver) {
+      // Attached services reference a container the platform does not
+      // own — never invoke `driver.destroy` for them. The user manages
+      // that container's lifecycle outside the platform; we only ever
+      // drop the row binding it to the session.
+      if (sb.containerId && this.driver && !sb.attached) {
         await this.driver.destroy(sb.containerId);
       }
     } catch (e) {
@@ -1350,6 +1501,252 @@ export class SandboxManager {
         await destroySessionNetwork(sessionId);
       }
     }
+  }
+
+  // ────────────────────────────────────────────────── attached services
+  //
+  // "Attached" services reference a Podman/Docker container that lives
+  // outside the platform's lifecycle. The user runs `podman run` for it
+  // by hand; we only inspect to surface its real status and let the
+  // session's agents `exec` into it via the same driver. Start, stop,
+  // pause, restart, rebuild and destroy are all bypassed — clicking
+  // delete just drops the row and leaves the container alone.
+
+  /**
+   * Resolve the live Podman/Docker state of an externally-managed
+   * container and return a status snapshot suitable for the in-memory
+   * Sandbox entry and the persisted row.
+   */
+  private async resolveAttachedState(
+    driver: ISandboxDriver,
+    containerRef: string,
+  ): Promise<{
+    exists: boolean;
+    running: boolean;
+    paused: boolean;
+    status: SandboxStatus;
+    error: string | null;
+    runtimePaused: boolean;
+  }> {
+    const inspect = await driver.inspectContainer(containerRef);
+    if (!inspect.exists) {
+      return {
+        exists: false,
+        running: false,
+        paused: false,
+        status: 'error',
+        error: `Container '${containerRef}' not found.`,
+        runtimePaused: false,
+      };
+    }
+    if (inspect.paused) {
+      return {
+        exists: true,
+        running: false,
+        paused: true,
+        status: 'ready',
+        error: null,
+        runtimePaused: true,
+      };
+    }
+    if (inspect.running) {
+      return {
+        exists: true,
+        running: true,
+        paused: false,
+        status: 'ready',
+        error: null,
+        runtimePaused: false,
+      };
+    }
+    return {
+      exists: true,
+      running: false,
+      paused: false,
+      status: 'paused',
+      error: 'Container is not running. Start it from your host (`podman start`) and click Refresh.',
+      runtimePaused: false,
+    };
+  }
+
+  /**
+   * Bind an existing user-managed container to a session as a service.
+   * The platform never starts/stops/destroys the container — only the
+   * row is owned by the session. Idempotent on `serviceId`: a second
+   * call rebinds to a (possibly new) container ref.
+   */
+  async attachExternalService(req: {
+    sessionId: string;
+    serviceId: string;
+    containerRef: string;
+    name?: string;
+    hostname?: string;
+  }): Promise<Sandbox> {
+    if (req.serviceId === 'main') {
+      throw new Error(`service_id 'main' is reserved for the primary sandbox`);
+    }
+    if (!/^[a-z][a-z0-9-]{0,31}$/.test(req.serviceId)) {
+      throw new Error(
+        `Invalid service_id '${req.serviceId}' — use lowercase letters, digits, hyphen; ≤32 chars`,
+      );
+    }
+    const ref = req.containerRef.trim();
+    if (!ref) throw new Error('container_ref is required');
+
+    const driver = await this.resolveDriverOnce();
+    const state = await this.resolveAttachedState(driver, ref);
+    if (!state.exists) {
+      throw new Error(state.error ?? `Container '${ref}' not found.`);
+    }
+
+    const hostname = (req.hostname ?? req.serviceId).trim() || req.serviceId;
+    const serviceSandboxId = `${req.sessionId}:${req.serviceId}`;
+    const sb: Sandbox = {
+      id: serviceSandboxId,
+      containerId: ref,
+      runtime: driver.runtime,
+      stack: 'node-only',
+      hostPort: 0,
+      workdir: '/',
+      containerPort: 0,
+      previewUrl: '',
+      limits: { ...DEFAULT_SANDBOX_LIMITS },
+      status: state.status,
+      runtimePaused: state.runtimePaused,
+      step: state.status === 'ready' ? 'ready' : 'queued',
+      recentLogs: [
+        { at: Date.now(), level: 'info', text: `Attached external container ${ref}` },
+      ],
+      createdAt: Date.now(),
+      lastAccessAt: Date.now(),
+      mountKind: 'external',
+      imageSource: 'default',
+      error: state.error ?? undefined,
+      attached: true,
+      externalContainerRef: ref,
+      attachedHostname: hostname,
+    };
+    this.services.set(this.serviceKey(req.sessionId, req.serviceId), sb);
+
+    const store = getServicesStore();
+    const numericId = Number(req.sessionId);
+    if (store && Number.isFinite(numericId)) {
+      try {
+        store.upsert({
+          session_id: numericId,
+          service_id: req.serviceId,
+          name: req.name ?? req.serviceId,
+          container_id: ref,
+          runtime: driver.runtime,
+          stack: 'attached',
+          workdir: '/',
+          host_workdir_mount: null,
+          host_port: 0,
+          limits: {},
+          status: this.toPersistedStatus(sb.status),
+          error: sb.error ?? null,
+          mount_kind: 'external',
+          image_source: 'default',
+          is_primary: false,
+          last_access_at_ms: sb.lastAccessAt,
+          paused_at_ms: null,
+          is_attached: true,
+          external_container_ref: ref,
+          attached_hostname: hostname,
+        });
+      } catch (e) {
+        console.warn(
+          `[sandbox-manager] persist attached service ${req.sessionId}:${req.serviceId} failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+    this.emit({ kind: 'ready', sandboxId: serviceSandboxId, previewUrl: '' });
+    return sb;
+  }
+
+  /**
+   * Re-inspect an attached container and update its in-memory + DB
+   * status. Returns the refreshed Sandbox. Throws when the row is not
+   * an attached service (callers should branch on `is_attached` first).
+   */
+  async refreshAttachedService(sessionId: string, serviceId: string): Promise<Sandbox> {
+    const key = this.serviceKey(sessionId, serviceId);
+    const sb = this.services.get(key);
+    const store = getServicesStore();
+    const numericId = Number(sessionId);
+    let ref = sb?.externalContainerRef ?? sb?.containerId ?? '';
+    let hostname = sb?.attachedHostname ?? serviceId;
+    let name = sb ? '' : serviceId;
+    if (!ref && store && Number.isFinite(numericId)) {
+      const row = store.get(numericId, serviceId);
+      if (row?.is_attached === 1 && row.external_container_ref) {
+        ref = row.external_container_ref;
+        hostname = row.attached_hostname || row.service_id;
+        name = row.name || row.service_id;
+      }
+    }
+    if (!ref) {
+      throw new Error(`Service '${serviceId}' is not an attached external container.`);
+    }
+
+    const driver = await this.resolveDriverOnce();
+    const state = await this.resolveAttachedState(driver, ref);
+
+    let target = sb;
+    if (!target) {
+      target = {
+        id: `${sessionId}:${serviceId}`,
+        containerId: ref,
+        runtime: driver.runtime,
+        stack: 'node-only',
+        hostPort: 0,
+        workdir: '/',
+        containerPort: 0,
+        previewUrl: '',
+        limits: { ...DEFAULT_SANDBOX_LIMITS },
+        status: state.status,
+        runtimePaused: state.runtimePaused,
+        step: state.status === 'ready' ? 'ready' : 'queued',
+        recentLogs: [],
+        createdAt: Date.now(),
+        lastAccessAt: Date.now(),
+        mountKind: 'external',
+        imageSource: 'default',
+        attached: true,
+        externalContainerRef: ref,
+        attachedHostname: hostname,
+        error: state.error ?? undefined,
+      };
+      this.services.set(key, target);
+    } else {
+      target.status = state.status;
+      target.runtimePaused = state.runtimePaused;
+      target.error = state.error ?? undefined;
+      target.lastAccessAt = Date.now();
+      target.recentLogs.push({
+        at: Date.now(),
+        level: state.error ? 'error' : 'info',
+        text: state.error ?? `Refreshed: ${state.runtimePaused ? 'paused' : state.running ? 'running' : 'stopped'}`,
+      });
+      while (target.recentLogs.length > 200) target.recentLogs.shift();
+    }
+
+    if (store && Number.isFinite(numericId)) {
+      try {
+        store.patch(numericId, serviceId, {
+          status: this.toPersistedStatus(target.status),
+          error: target.error ?? null,
+          last_access_at_ms: target.lastAccessAt,
+          paused_at_ms: target.status === 'paused' ? Date.now() : null,
+        });
+      } catch (e) {
+        console.warn(
+          `[sandbox-manager] refresh attached ${sessionId}:${serviceId} patch failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+    void name; // avoid unused-var when the row already exists
+    return target;
   }
 
   /**
@@ -1405,6 +1802,11 @@ export class SandboxManager {
         limits: sb.limits as unknown as Record<string, unknown>,
         status: statusOverride ?? this.toPersistedStatus(sb.status),
         error: sb.error ?? null,
+        mount_kind: sb.mountKind,
+        image_source: sb.imageSource,
+        built_image_tag: sb.builtImageTag ?? null,
+        dockerfile_path: sb.dockerfilePath ?? null,
+        dockerfile_exposed_port: sb.dockerfileExposedPort ?? null,
         is_primary: false,
         last_access_at_ms: sb.lastAccessAt,
         paused_at_ms: sb.status === 'paused' ? Date.now() : null,
@@ -1425,9 +1827,21 @@ export class SandboxManager {
    * racing a second container into existence.
    */
   async provision(req: ProvisionRequest): Promise<Sandbox> {
-    // Drive reclaim/reconcile BEFORE the early-return — reconcile may
-    // have just restored an in-memory entry for this session.
+    // Drive targeted reclaim/reconcile BEFORE the early-return —
+    // reconcile may have just restored an in-memory entry for this
+    // session. Keep this scoped to the requested session so a single
+    // Play click does not inspect every persisted project container.
     const driver = await this.resolveDriverOnce();
+    await this.reconcilePrimaryForSession(driver, req.sessionId).catch((e) =>
+      console.warn(
+        `[sandbox-manager] targeted primary reconcile ${req.sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
+      ),
+    );
+    await this.reconcileServicesForSession(driver, req.sessionId).catch((e) =>
+      console.warn(
+        `[sandbox-manager] targeted services reconcile ${req.sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
+      ),
+    );
 
     const existing = this.sandboxes.get(req.sessionId);
     if (existing) {
@@ -1469,7 +1883,8 @@ export class SandboxManager {
         if (existing.containerId) {
           try {
             const inspect = await driver.inspectContainer(existing.containerId);
-            alive = inspect.exists && inspect.running;
+            alive = inspect.exists && (inspect.running || inspect.paused);
+            existing.runtimePaused = inspect.paused;
           } catch {
             alive = false;
           }
@@ -1496,6 +1911,11 @@ export class SandboxManager {
 
     const hostPort = await this.allocator.acquire();
     const previewUrl = this.buildPreviewUrl(req.sessionId, hostPort);
+    const mountKind = req.mountKind ?? 'owned';
+    const imageSource = req.imageSource ?? 'default';
+    let containerPort = req.containerPortOverride ?? this.devServerPort;
+    const builtImageTag =
+      imageSource === 'project_dockerfile' ? projectImageTag(req.sessionId, 'main') : undefined;
 
     // Seed a pending record synchronously so concurrent `provision` calls
     // short-circuit via the `existing` branch above instead of racing.
@@ -1509,13 +1929,21 @@ export class SandboxManager {
       stack: req.stack,
       hostPort,
       workdir: this.workdir,
+      containerPort,
       previewUrl,
       limits: seedLimits,
       status: 'pending',
+      runtimePaused: false,
       step: 'queued',
       recentLogs: [],
       createdAt: Date.now(),
       lastAccessAt: Date.now(),
+      hostWorkdirMount: req.hostWorkdirMount,
+      mountKind,
+      imageSource,
+      builtImageTag,
+      dockerfilePath: req.dockerfilePath,
+      dockerfileExposedPort: imageSource === 'project_dockerfile' ? containerPort : undefined,
     };
     this.sandboxes.set(req.sessionId, seed);
     // Persist the provisioning intent EARLY so even a crash during
@@ -1559,7 +1987,27 @@ export class SandboxManager {
       //   3. `null` when disabled (`MCP_SANDBOX_BIND_MOUNT=0`) — legacy
       //      ephemeral-fs + tar-archive lifecycle.
       const hostWorkdirMount = req.hostWorkdirMount ?? resolveHostWorkdirMount(req.sessionId);
-      const nodeModulesVolumeName = hostWorkdirMount
+      let externalNodeSpec: ExternalNodeDevSpec | null = null;
+      if (mountKind === 'external') {
+        if (!hostWorkdirMount) {
+          throw new Error('External projects require a registered project root to bind-mount.');
+        }
+        if (imageSource === 'project_dockerfile') {
+          if (!req.dockerfilePath || !req.containerPortOverride) {
+            throw new Error("Dockerfile doesn't EXPOSE a port — add `EXPOSE <n>` or choose Node dev image.");
+          }
+        } else {
+          externalNodeSpec = this.resolveExternalNodeDevSpec(
+            hostWorkdirMount,
+            req.stack,
+            req.containerPortOverride,
+          );
+          containerPort = externalNodeSpec.containerPort;
+          seed.containerPort = containerPort;
+          seed.dockerfileExposedPort = containerPort;
+        }
+      }
+      const nodeModulesVolumeName = hostWorkdirMount && mountKind !== 'external'
         ? nodeModulesVolumeFor(req.sessionId)
         : undefined;
       if (hostWorkdirMount) {
@@ -1567,7 +2015,13 @@ export class SandboxManager {
         // docker/podman creates missing bind-mount sources as root-owned
         // directories, which we then can't chown away from inside.
         try {
-          mkdirSync(hostWorkdirMount, { recursive: true });
+          if (mountKind === 'external') {
+            if (!existsSync(hostWorkdirMount)) {
+              throw new Error(`Project root does not exist: ${hostWorkdirMount}`);
+            }
+          } else {
+            mkdirSync(hostWorkdirMount, { recursive: true });
+          }
         } catch (e) {
           throw new Error(
             `Failed to prepare host workdir ${hostWorkdirMount}: ${e instanceof Error ? e.message : String(e)}`,
@@ -1578,26 +2032,60 @@ export class SandboxManager {
         // already wrote to disk become part of the session envs
         // BEFORE we materialize /app/.env. Only fills missing keys —
         // user edits via the Env tab always take precedence.
-        importDotEnvIntoStore(hostWorkdirMount, req.sessionId);
+        if (mountKind !== 'external') {
+          importDotEnvIntoStore(hostWorkdirMount, req.sessionId);
+        }
       }
 
       const sharedEnvs = resolveSessionEnvs(req.sessionId);
+      const image = imageSource === 'project_dockerfile' ? builtImageTag! : this.nodeImage;
+      if (imageSource === 'project_dockerfile') {
+        this.recordStep(seed, 'creating-container', 'Building image from Dockerfile…');
+        await driver.build({
+          contextDir: hostWorkdirMount!,
+          dockerfilePath: req.dockerfilePath!,
+          imageTag: image,
+          signal: req.signal,
+          noCache: req.retry === true,
+          emit: (event) => {
+            this.appendLog(seed, event.stream === 'stderr' ? 'error' : 'info', event.chunk);
+            this.emit({
+              kind: 'log',
+              sandboxId: req.sessionId,
+              stream: event.stream,
+              chunk: event.chunk,
+            });
+          },
+        });
+      }
       const { containerId } = await driver.create({
         sandboxId: req.sessionId,
-        image: this.nodeImage,
+        image,
         stack: req.stack,
         workdir: this.workdir,
         hostPort,
-        containerPort: this.devServerPort,
+        containerPort,
         limits,
         isolation,
         env: Object.keys(sharedEnvs).length > 0 ? sharedEnvs : undefined,
         hostWorkdirMount: hostWorkdirMount ?? undefined,
         nodeModulesVolumeName,
+        skipDefaultCommand: req.skipDefaultCommand ?? imageSource === 'project_dockerfile',
       });
       seed.containerId = containerId;
       seed.hostWorkdirMount = hostWorkdirMount ?? undefined;
       seed.nodeModulesVolumeName = nodeModulesVolumeName;
+
+      // If secondary services were started before main, connect the
+      // primary container to their shared network now. When main starts
+      // first, provisionAdditionalService handles this on the first
+      // service start, so avoid creating an unused network here.
+      if (this.listServices(req.sessionId).length > 0) {
+        const networkName = await ensureSessionNetwork(req.sessionId);
+        if (networkName) {
+          await attachContainerToSessionNetwork(req.sessionId, containerId, 'main');
+        }
+      }
 
       // Ensure the workdir exists and is writable by the non-root user
       // the container will run code as. Executed as root via the
@@ -1605,12 +2093,14 @@ export class SandboxManager {
       // does this at build time, but we repeat it here so third-party
       // images (and older builds of our own image) still work. This
       // also papers over the Podman "workdir does not exist" failure.
-      await this.prepareWorkdir(driver, containerId, this.workdir, isolation.user);
+      if (mountKind !== 'external') {
+        await this.prepareWorkdir(driver, containerId, this.workdir, isolation.user);
+      }
 
       // Materialize /app/.env as soon as the workdir is writable so
       // scaffolders (vite-api, cf-worker) that reference env vars
       // during `npm install` / `wrangler dev` startup see them.
-      if (Object.keys(sharedEnvs).length > 0) {
+      if (mountKind !== 'external' && Object.keys(sharedEnvs).length > 0) {
         try {
           await driver.writeFile(
             containerId,
@@ -1658,7 +2148,12 @@ export class SandboxManager {
         }
       }
 
-      if (hostWorkdirPopulated) {
+      if (imageSource === 'project_dockerfile') {
+        this.recordStep(seed, 'starting-dev-server', 'Waiting for project container…');
+        await this.waitForPublishedHttp(driver, seed, '/', req.signal);
+      } else if (mountKind === 'external' && externalNodeSpec) {
+        await this.startExternalNodeDevServer(driver, seed, externalNodeSpec, req.signal);
+      } else if (hostWorkdirPopulated) {
         // The bind-mounted host dir already holds the user's code. Trust
         // it verbatim: no scaffolder, no tar restore. Just start Vite.
         this.recordStep(seed, 'starting-dev-server', 'Resuming persisted workdir…');
@@ -1707,6 +2202,7 @@ export class SandboxManager {
       }
 
       seed.status = 'ready';
+      seed.runtimePaused = false;
       seed.step = 'ready';
       seed.lastAccessAt = Date.now();
       this.appendLog(seed, 'info', 'Dev server is ready.');
@@ -1772,12 +2268,66 @@ export class SandboxManager {
     if (!sb || !sb.containerId || !this.driver) {
       throw new Error(`No running sandbox for session ${sessionId}`);
     }
+    if (sb.runtimePaused) {
+      throw new Error(`Cannot restart dev-server while session ${sessionId} is runtime-paused`);
+    }
+    if (sb.mountKind === 'external') {
+      throw new Error('External project containers should be recreated with Retry so package.json/Dockerfile metadata is re-read.');
+    }
+    if (sb.imageSource === 'project_dockerfile') {
+      throw new Error('Project Dockerfile containers use their image CMD/ENTRYPOINT; use Retry to rebuild/recreate.');
+    }
     this.appendLog(sb, 'info', 'Restart requested — killing dev-server and relaunching…');
     await this.recoverDevServer(sb);
     sb.step = 'ready';
     sb.lastAccessAt = Date.now();
     this.appendLog(sb, 'info', 'Dev server restarted.');
     this.emit({ kind: 'ready', sandboxId: sb.id, previewUrl: sb.previewUrl });
+  }
+
+  async pauseRuntimeContainer(sessionId: string, serviceId?: string | null): Promise<Sandbox> {
+    const { sb, serviceId: resolvedServiceId } = this.runtimePauseTarget(sessionId, serviceId);
+    if (sb.runtimePaused) return sb;
+    if (sb.status !== 'ready') {
+      throw new Error(`Cannot runtime-pause ${sb.id} from status '${sb.status}'`);
+    }
+    const driver = await this.resolveDriverOnce();
+    if (!sb.containerId) throw new Error(`No container id for ${sb.id}`);
+
+    const inspect = await driver.inspectContainer(sb.containerId);
+    if (!inspect.exists) throw new Error(`Container for ${sb.id} no longer exists`);
+    if (inspect.paused) {
+      sb.runtimePaused = true;
+    } else {
+      if (!inspect.running) throw new Error(`Container for ${sb.id} is not running`);
+      this.appendLog(sb, 'info', 'Runtime pause requested.');
+      await driver.pauseContainer(sb.containerId);
+      sb.runtimePaused = true;
+    }
+    sb.lastAccessAt = Date.now();
+    this.persistRuntimePauseState(sessionId, resolvedServiceId, sb);
+    return sb;
+  }
+
+  async unpauseRuntimeContainer(sessionId: string, serviceId?: string | null): Promise<Sandbox> {
+    const { sb, serviceId: resolvedServiceId } = this.runtimePauseTarget(sessionId, serviceId);
+    const driver = await this.resolveDriverOnce();
+    if (!sb.containerId) throw new Error(`No container id for ${sb.id}`);
+
+    const inspect = await driver.inspectContainer(sb.containerId);
+    if (!inspect.exists) throw new Error(`Container for ${sb.id} no longer exists`);
+    if (inspect.paused || sb.runtimePaused) {
+      this.appendLog(sb, 'info', 'Runtime unpause requested.');
+      await driver.unpauseContainer(sb.containerId);
+    } else if (!inspect.running) {
+      throw new Error(`Container for ${sb.id} is not running`);
+    }
+    sb.runtimePaused = false;
+    if (sb.status === 'ready') sb.step = 'ready';
+    sb.lastAccessAt = Date.now();
+    this.persistRuntimePauseState(sessionId, resolvedServiceId, sb);
+    this.emit({ kind: 'ready', sandboxId: sb.id, previewUrl: sb.previewUrl });
+    return sb;
   }
 
   /**
@@ -1792,6 +2342,12 @@ export class SandboxManager {
       throw new Error(`No running sandbox for session ${sb.id}`);
     }
     const driver = this.driver;
+    if (sb.mountKind === 'external') {
+      throw new Error('External project containers cannot use MCP dev-server recovery.');
+    }
+    if (sb.imageSource === 'project_dockerfile') {
+      throw new Error('Project Dockerfile containers cannot use MCP dev-server recovery.');
+    }
 
     // Kill every `node`/`vite` PID. `pkill` exits non-zero when nothing
     // matches; we tolerate that case.
@@ -1867,6 +2423,7 @@ export class SandboxManager {
     const sb = this.sandboxes.get(sessionId);
     if (!sb) return;
     if (sb.status === 'paused') return;
+    if (sb.runtimePaused) return;
     if (sb.status !== 'ready') {
       // Can't pause provisioning/error sandboxes. Let them resolve first.
       return;
@@ -1905,6 +2462,7 @@ export class SandboxManager {
       return;
     }
     sb.status = 'paused';
+    sb.runtimePaused = false;
     sb.step = 'queued';
     this.allocator.release(sb.hostPort); // port is no longer bound
     this.persist(sb, 'paused');
@@ -1933,6 +2491,7 @@ export class SandboxManager {
     this.recordStep(sb, 'starting-dev-server', 'Starting container…');
 
     await driver.startContainer(sb.containerId);
+    sb.runtimePaused = false;
     // Re-reserve the port: `podman start` re-binds the mapping we set
     // at create time (`-p 127.0.0.1:<hostPort>:5173`), so the same
     // port comes back. Mirror that in the allocator.
@@ -1941,20 +2500,34 @@ export class SandboxManager {
     // Dev server died when the container was stopped. Relaunch it —
     // vite.config.ts + node_modules are already in place.
     this.recordStep(sb, 'starting-dev-server', 'Relaunching dev server…');
-    try {
-      await this.relaunchDevServer(driver, sb.containerId, sb.workdir, undefined, sb.stack);
-    } catch (e) {
-      // Fallback: if Vite didn't come up cleanly (e.g. the agent
-      // corrupted vite.config.ts before the pause, or a stale process
-      // pinned the port), run the workdir-preserving recovery path.
-      // Only `vite.config.ts` is rewritten — every other file in the
-      // sandbox's workdir survives.
-      this.appendLog(
-        sb,
-        'info',
-        `Resume relaunch failed (${e instanceof Error ? e.message : String(e)}). Falling back to full dev-server recovery…`,
+    if (sb.imageSource === 'project_dockerfile') {
+      await this.waitForPublishedHttp(driver, sb, '/');
+    } else if (sb.mountKind === 'external') {
+      if (!sb.hostWorkdirMount) {
+        throw new Error('External Node project is missing its host project root.');
+      }
+      const spec = this.resolveExternalNodeDevSpec(
+        sb.hostWorkdirMount,
+        sb.stack,
+        sb.containerPort,
       );
-      await this.recoverDevServer(sb);
+      await this.startExternalNodeDevServer(driver, sb, spec);
+    } else {
+      try {
+        await this.relaunchDevServer(driver, sb.containerId, sb.workdir, undefined, sb.stack);
+      } catch (e) {
+        // Fallback: if Vite didn't come up cleanly (e.g. the agent
+        // corrupted vite.config.ts before the pause, or a stale process
+        // pinned the port), run the workdir-preserving recovery path.
+        // Only `vite.config.ts` is rewritten — every other file in the
+        // sandbox's workdir survives.
+        this.appendLog(
+          sb,
+          'info',
+          `Resume relaunch failed (${e instanceof Error ? e.message : String(e)}). Falling back to full dev-server recovery…`,
+        );
+        await this.recoverDevServer(sb);
+      }
     }
 
     sb.status = 'ready';
@@ -1964,6 +2537,57 @@ export class SandboxManager {
     this.persist(sb, 'running');
     this.emit({ kind: 'resumed', sandboxId: sb.id, previewUrl: sb.previewUrl });
     this.syncManagedEnvs(sessionId);
+    return sb;
+  }
+
+  async startServiceContainer(sessionId: string, serviceId: string): Promise<Sandbox> {
+    const sb = this.getService(sessionId, serviceId);
+    if (!sb) throw new Error(`No service '${serviceId}' for session ${sessionId}`);
+    if (sb.status === 'ready' && !sb.runtimePaused) return sb;
+    if (sb.runtimePaused) return await this.unpauseRuntimeContainer(sessionId, serviceId);
+    if (sb.status !== 'paused') {
+      throw new Error(`Cannot start service '${serviceId}' from status '${sb.status}'`);
+    }
+    const driver = await this.resolveDriverOnce();
+    if (!sb.containerId) throw new Error(`No container id for ${sb.id}`);
+
+    const inspect = await driver.inspectContainer(sb.containerId);
+    if (!inspect.exists) throw new Error(`Container for ${sb.id} no longer exists`);
+    if (inspect.paused) {
+      await driver.unpauseContainer(sb.containerId);
+    } else if (!inspect.running) {
+      this.recordStep(sb, 'starting-dev-server', 'Starting container...');
+      await driver.startContainer(sb.containerId);
+      await this.reservePort(sb.hostPort);
+    }
+
+    this.recordStep(sb, 'starting-dev-server', 'Starting dev server...');
+    if (sb.imageSource === 'project_dockerfile') {
+      await this.waitForPublishedHttp(driver, sb, '/');
+    } else if (sb.mountKind === 'external') {
+      if (!sb.hostWorkdirMount) {
+        throw new Error('External Node service is missing its host project root.');
+      }
+      const spec = this.resolveExternalNodeDevSpec(
+        sb.hostWorkdirMount,
+        sb.stack,
+        sb.containerPort,
+      );
+      await this.startExternalNodeDevServer(driver, sb, spec);
+    } else {
+      await this.relaunchDevServer(driver, sb.containerId, sb.workdir, undefined, sb.stack);
+    }
+
+    sb.status = 'ready';
+    sb.runtimePaused = false;
+    sb.step = 'ready';
+    sb.error = undefined;
+    sb.lastAccessAt = Date.now();
+    this.appendLog(sb, 'info', 'Service started.');
+    this.persistService(sessionId, serviceId, serviceId, sb, 'running');
+    this.emit({ kind: 'ready', sandboxId: sb.id, previewUrl: sb.previewUrl });
+    this.syncManagedEnvs(sessionId);
+    void this.syncEnvsToAllContainers(sessionId).catch(() => void 0);
     return sb;
   }
 
@@ -2028,43 +2652,249 @@ export class SandboxManager {
           ),
         );
       }
-      // First driver resolution is where we do BOTH kinds of recovery:
-      //   1. Reconcile DB rows with the runtime — living containers are
-      //      reclaimed into the in-memory map; gone ones are marked
-      //      destroyed; paused ones stay paused but port-reserved.
-      //   2. Scan for legacy orphans (containers that carry our labels
-      //      but have no DB row — a crashed process that never wrote
-      //      to DB before dying). These get archived + removed.
-      // Both are best-effort and don't throw — a recovery failure must
-      // not prevent fresh sessions from starting.
-      await this.reconcileFromDb(this.driver).catch((e) =>
-        console.warn(
-          `[sandbox-manager] DB reconcile failed: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-      );
-      // Build the "keep-alive" set from what reconcile just populated:
-      // ANY container reclaimed into our in-memory map is NOT an orphan,
-      // regardless of whether it's ready or paused. Without this guard
-      // `reapOrphans` used to nuke paused sessions on every server boot.
-      // Include secondary service containers too — they are reconciled by
-      // `reconcileServicesFromDb` (called inside `reconcileFromDb`) into
-      // `this.services`, but the original code only iterated `this.sandboxes`
-      // (primary). Omitting them caused microservice containers to appear as
-      // orphans and be destroyed on every boot.
-      const reclaimedIds = new Set<string>();
-      for (const sb of this.sandboxes.values()) {
-        if (sb.containerId) reclaimedIds.add(sb.containerId);
-      }
-      for (const svc of this.services.values()) {
-        if (svc.containerId) reclaimedIds.add(svc.containerId);
-      }
-      await this.reapOrphans(this.driver, reclaimedIds).catch((e) =>
-        console.warn(
-          `[sandbox-manager] orphan reaper failed: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-      );
+      // Keep driver resolution side-effect-light. Project container
+      // recovery is intentionally targeted by session/service when the
+      // user takes an action; otherwise starting the server would scan
+      // every persisted project container.
     }
     return this.driver;
+  }
+
+  async reconcileSessionFromDb(sessionId: string): Promise<Sandbox | undefined> {
+    const driver = await this.resolveDriverOnce();
+    await this.reconcilePrimaryForSession(driver, sessionId);
+    await this.reconcileServicesForSession(driver, sessionId);
+    return this.sandboxes.get(sessionId);
+  }
+
+  async reconcileServiceFromDb(sessionId: string, serviceId: string): Promise<Sandbox | undefined> {
+    const driver = await this.resolveDriverOnce();
+    const result = await this.reconcileServiceForSession(driver, sessionId, serviceId);
+    return result?.sandbox ?? undefined;
+  }
+
+  private async reconcilePrimaryForSession(
+    driver: ISandboxDriver,
+    sessionId: string,
+  ): Promise<{ sandbox: Sandbox | null; missing: boolean } | null> {
+    const numericId = Number(sessionId);
+    if (!Number.isFinite(numericId)) return null;
+    const store = getStore();
+    if (!store) return null;
+    const row = store.get(numericId);
+    if (!row || row.status === 'destroyed') return null;
+    return this.reconcilePrimaryRowFromDb(driver, row);
+  }
+
+  private async reconcileServicesForSession(
+    driver: ISandboxDriver,
+    sessionId: string,
+  ): Promise<Array<{ sandbox: Sandbox | null; missing: boolean; stopped: boolean }>> {
+    const numericId = Number(sessionId);
+    if (!Number.isFinite(numericId)) return [];
+    const svcStore = getServicesStore();
+    if (!svcStore) return [];
+    const results: Array<{ sandbox: Sandbox | null; missing: boolean; stopped: boolean }> = [];
+    for (const row of svcStore.listBySession(numericId)) {
+      if (row.status === 'destroyed') continue;
+      results.push(await this.reconcileServiceRowFromDb(driver, row));
+    }
+    return results;
+  }
+
+  private async reconcileServiceForSession(
+    driver: ISandboxDriver,
+    sessionId: string,
+    serviceId: string,
+  ): Promise<{ sandbox: Sandbox | null; missing: boolean; stopped: boolean } | null> {
+    const numericId = Number(sessionId);
+    if (!Number.isFinite(numericId)) return null;
+    const svcStore = getServicesStore();
+    if (!svcStore) return null;
+    const row = svcStore.get(numericId, serviceId);
+    if (!row || row.status === 'destroyed') return null;
+    return this.reconcileServiceRowFromDb(driver, row);
+  }
+
+  private async reconcilePrimaryRowFromDb(
+    driver: ISandboxDriver,
+    row: PersistedSandboxRow,
+  ): Promise<{ sandbox: Sandbox | null; missing: boolean }> {
+    const store = getStore();
+    const inspect = await driver.inspectContainer(row.container_id);
+    if (!inspect.exists) {
+      // Container is gone (pruned, VM reset). Clear the DB row so
+      // the next provision falls through to archive-restore.
+      store?.delete(row.session_id);
+      this.allocator.release(row.host_port);
+      return { sandbox: null, missing: true };
+    }
+
+    await this.reservePort(row.host_port);
+
+    const effectiveStatus: SandboxStatus = inspect.running
+      ? 'ready'
+      : inspect.paused
+        ? 'ready'
+        : row.status === 'paused'
+          ? 'paused'
+          : 'paused'; // running-in-DB but stopped-in-runtime -> now paused
+
+    const limits = this.parseLimits(row.limits_json);
+    const previewUrl = this.buildPreviewUrl(String(row.session_id), row.host_port);
+    const sb: Sandbox = {
+      id: String(row.session_id),
+      containerId: row.container_id,
+      runtime: row.runtime,
+      stack: row.stack as SandboxStack,
+      hostPort: row.host_port,
+      workdir: row.workdir,
+      containerPort: row.dockerfile_exposed_port ?? this.devServerPort,
+      previewUrl,
+      limits,
+      status: effectiveStatus,
+      runtimePaused: inspect.paused,
+      step: effectiveStatus === 'ready' ? 'ready' : 'queued',
+      recentLogs: [
+        { at: Date.now(), level: 'info', text: `Reclaimed from DB (status=${effectiveStatus})` },
+      ],
+      createdAt: new Date(row.created_at).getTime() || Date.now(),
+      lastAccessAt: row.last_access_at_ms,
+      error: row.error ?? undefined,
+      hostWorkdirMount: row.host_workdir_mount ?? undefined,
+      mountKind: row.mount_kind ?? 'owned',
+      imageSource: row.image_source ?? 'default',
+      builtImageTag: row.built_image_tag ?? undefined,
+      dockerfilePath: row.dockerfile_path ?? undefined,
+      dockerfileExposedPort: row.dockerfile_exposed_port ?? undefined,
+    };
+    this.sandboxes.set(sb.id, sb);
+
+    if (effectiveStatus === 'paused' && row.status !== 'paused') {
+      store?.patch(row.session_id, { status: 'paused', paused_at_ms: Date.now() });
+    } else if (effectiveStatus === 'ready' && row.status === 'paused') {
+      store?.patch(row.session_id, { status: 'running', paused_at_ms: null });
+    }
+    return { sandbox: sb, missing: false };
+  }
+
+  private async reconcileServiceRowFromDb(
+    driver: ISandboxDriver,
+    row: PersistedSandboxServiceRow,
+  ): Promise<{ sandbox: Sandbox | null; missing: boolean; stopped: boolean }> {
+    const svcStore = getServicesStore();
+    if (row.is_attached === 1 && row.external_container_ref) {
+      // Attached rows: pure inspect, no port reservation, never offer
+      // "Press Play to recreate" — the user owns the container.
+      const state = await this.resolveAttachedState(driver, row.external_container_ref);
+      const serviceSandboxId = `${row.session_id}:${row.service_id}`;
+      const sb: Sandbox = {
+        id: serviceSandboxId,
+        containerId: row.external_container_ref,
+        runtime: row.runtime,
+        stack: 'node-only',
+        hostPort: 0,
+        workdir: '/',
+        containerPort: 0,
+        previewUrl: '',
+        limits: this.parseLimits(row.limits_json),
+        status: state.status,
+        runtimePaused: state.runtimePaused,
+        step: state.status === 'ready' ? 'ready' : 'queued',
+        recentLogs: [
+          {
+            at: Date.now(),
+            level: state.error ? 'error' : 'info',
+            text: state.error ?? `Reclaimed attached service (status=${state.status})`,
+          },
+        ],
+        createdAt: new Date(row.created_at).getTime() || Date.now(),
+        lastAccessAt: row.last_access_at_ms,
+        error: state.error ?? undefined,
+        mountKind: 'external',
+        imageSource: 'default',
+        attached: true,
+        externalContainerRef: row.external_container_ref,
+        attachedHostname: row.attached_hostname || row.service_id,
+      };
+      this.services.set(this.serviceKey(String(row.session_id), row.service_id), sb);
+      svcStore?.patch(row.session_id, row.service_id, {
+        status: this.toPersistedStatus(sb.status),
+        error: sb.error ?? null,
+        last_access_at_ms: sb.lastAccessAt,
+        paused_at_ms: sb.status === 'paused' ? Date.now() : null,
+      });
+      return { sandbox: sb, missing: !state.exists, stopped: state.status !== 'ready' };
+    }
+    const inspect = await driver.inspectContainer(row.container_id);
+    if (!inspect.exists) {
+      // Container is gone (image rebuilt, docker prune, host reset).
+      // Keep the durable service row, but do NOT re-provision it on
+      // boot/open. Manual-first lifecycle: the UI surfaces this as
+      // paused/recoverable and the user decides when to press Play.
+      this.allocator.release(row.host_port);
+      svcStore?.patch(row.session_id, row.service_id, {
+        status: 'paused',
+        error: 'Container is not present. Press Play to recreate it from the saved project files.',
+        paused_at_ms: Date.now(),
+      });
+      return { sandbox: null, missing: true, stopped: false };
+    }
+    await this.reservePort(row.host_port);
+
+    const effectiveStatus: SandboxStatus =
+      inspect.running || inspect.paused ? 'ready' : 'paused';
+    const limits = this.parseLimits(row.limits_json);
+    // Service previewUrl scheme matches the one `provisionAdditionalService`
+    // emits — the `_svc` sentinel route in preview.ts relies on it.
+    const previewUrl = `/preview/${encodeURIComponent(String(row.session_id))}/_svc/${encodeURIComponent(row.service_id)}/`;
+    const serviceSandboxId = `${row.session_id}:${row.service_id}`;
+    const sb: Sandbox = {
+      id: serviceSandboxId,
+      containerId: row.container_id,
+      runtime: row.runtime,
+      stack: row.stack as SandboxStack,
+      hostPort: row.host_port,
+      workdir: row.workdir,
+      containerPort: row.dockerfile_exposed_port ?? this.devServerPort,
+      previewUrl,
+      limits,
+      status: effectiveStatus,
+      runtimePaused: inspect.paused,
+      step: effectiveStatus === 'ready' ? 'ready' : 'queued',
+      recentLogs: [
+        {
+          at: Date.now(),
+          level: 'info',
+          text: `Reclaimed service from DB (status=${inspect.paused ? 'runtime-paused' : effectiveStatus})`,
+        },
+      ],
+      createdAt: new Date(row.created_at).getTime() || Date.now(),
+      lastAccessAt: row.last_access_at_ms,
+      error: row.error ?? undefined,
+      hostWorkdirMount: row.host_workdir_mount ?? undefined,
+      mountKind: row.mount_kind ?? 'owned',
+      imageSource: row.image_source ?? 'default',
+      builtImageTag: row.built_image_tag ?? undefined,
+      dockerfilePath: row.dockerfile_path ?? undefined,
+      dockerfileExposedPort: row.dockerfile_exposed_port ?? undefined,
+    };
+    this.services.set(this.serviceKey(String(row.session_id), row.service_id), sb);
+
+    if (effectiveStatus === 'paused') {
+      svcStore?.patch(row.session_id, row.service_id, {
+        status: 'paused',
+        paused_at_ms: Date.now(),
+        error: null,
+      });
+    } else if (row.status !== 'running') {
+      svcStore?.patch(row.session_id, row.service_id, {
+        status: 'running',
+        paused_at_ms: null,
+        error: null,
+      });
+    }
+    return { sandbox: sb, missing: false, stopped: effectiveStatus === 'paused' };
   }
 
   /**
@@ -2085,64 +2915,15 @@ export class SandboxManager {
    */
   private async reconcileFromDb(driver: ISandboxDriver): Promise<void> {
     const store = getStore();
-    if (!store) return;
-    const rows = store.listActive();
-    if (rows.length === 0) return;
+    const rows = store?.listActive() ?? [];
 
     let reclaimed = 0;
     let lost = 0;
     for (const row of rows) {
       try {
-        const inspect = await driver.inspectContainer(row.container_id);
-        if (!inspect.exists) {
-          // Container is gone (pruned, VM reset). Clear the DB row so
-          // the next provision falls through to archive-restore.
-          store.delete(row.session_id);
-          this.allocator.release(row.host_port);
-          lost++;
-          continue;
-        }
-
-        // Container exists. Reserve its port in the in-memory allocator
-        // (the allocator starts fresh on each process) so a fresh
-        // provision in a DIFFERENT session doesn't grab the same port.
-        await this.reservePort(row.host_port);
-
-        const effectiveStatus: SandboxStatus = inspect.running
-          ? 'ready'
-          : row.status === 'paused'
-            ? 'paused'
-            : 'paused'; // running-in-DB but stopped-in-runtime → now paused
-
-        const limits = this.parseLimits(row.limits_json);
-        const previewUrl = this.buildPreviewUrl(String(row.session_id), row.host_port);
-        const sb: Sandbox = {
-          id: String(row.session_id),
-          containerId: row.container_id,
-          runtime: row.runtime,
-          stack: row.stack as SandboxStack,
-          hostPort: row.host_port,
-          workdir: row.workdir,
-          previewUrl,
-          limits,
-          status: effectiveStatus,
-          step: effectiveStatus === 'ready' ? 'ready' : 'queued',
-          recentLogs: [
-            { at: Date.now(), level: 'info', text: `Reclaimed from DB (status=${effectiveStatus})` },
-          ],
-          createdAt: new Date(row.created_at).getTime() || Date.now(),
-          lastAccessAt: row.last_access_at_ms,
-          error: row.error ?? undefined,
-        };
-        this.sandboxes.set(sb.id, sb);
-
-        // If DB and runtime disagree, rewrite DB to the truthful state.
-        if (effectiveStatus === 'paused' && row.status !== 'paused') {
-          store.patch(row.session_id, { status: 'paused', paused_at_ms: Date.now() });
-        } else if (effectiveStatus === 'ready' && row.status === 'paused') {
-          store.patch(row.session_id, { status: 'running', paused_at_ms: null });
-        }
-        reclaimed++;
+        const result = await this.reconcilePrimaryRowFromDb(driver, row);
+        if (result.missing) lost++;
+        else if (result.sandbox) reclaimed++;
       } catch (e) {
         console.warn(
           `[sandbox-manager] reconcile session=${row.session_id} failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -2171,146 +2952,26 @@ export class SandboxManager {
     if (rows.length === 0) return;
 
     let reclaimed = 0;
-    let reprovisioned = 0;
+    let stopped = 0;
     let orphan = 0;
     for (const row of rows) {
       try {
-        const inspect = await driver.inspectContainer(row.container_id);
-        if (!inspect.exists) {
-          // Container is gone (image rebuilt, docker prune, host reset)
-          // — but the service row is a durable "this session has this
-          // microservice" record the user set up intentionally, AND the
-          // workdir persists on the host at `row.workdir_mount`. Instead
-          // of deleting the row (which erased microservices from the UI
-          // on every image rebuild) we re-provision the container with
-          // the same spec. The scaffolder detects the populated workdir
-          // and skips fresh scaffolding, just relaunching the dev server.
-          //
-          // Pre-requisite: the primary sandbox must already be in the
-          // services map (reconcileFromDb ran first). If it isn't (the
-          // primary was also lost and not yet reclaimed), we leave the
-          // stale row in place and bump paused_at so the UI surfaces
-          // the state for the user to retry manually.
-          this.allocator.release(row.host_port);
-          const primarySessionId = String(row.session_id);
-          const primary = this.sandboxes.get(primarySessionId);
-          if (!primary) {
-            svcStore.patch(row.session_id, row.service_id, {
-              status: 'error',
-              error: 'primary sandbox unavailable at reconcile; retry from the UI',
-              paused_at_ms: Date.now(),
-            });
-            orphan++;
-            continue;
-          }
-          try {
-            await this.provisionAdditionalService({
-              sessionId: primarySessionId,
-              serviceId: row.service_id,
-              stack: row.stack as SandboxStack,
-              name: row.name || row.service_id,
-              limits: this.parseLimits(row.limits_json),
-              // Re-bind-mount the SAME host dir the original service
-              // used — this is what makes the workdir survive.
-              hostWorkdirMount: row.host_workdir_mount || undefined,
-            });
-            reprovisioned++;
-          } catch (e) {
-            console.warn(
-              `[sandbox-manager] service re-provision ${row.session_id}:${row.service_id} failed: ${e instanceof Error ? e.message : String(e)}`,
-            );
-            svcStore.patch(row.session_id, row.service_id, {
-              status: 'error',
-              error: e instanceof Error ? e.message : String(e),
-            });
-            orphan++;
-          }
+        const result = await this.reconcileServiceRowFromDb(driver, row);
+        if (result.missing) {
+          orphan++;
           continue;
         }
-        await this.reservePort(row.host_port);
-
-        // If the service container exists but isn't running (server
-        // was restarted, docker host rebooted), kick it back up
-        // immediately so the preview route sees `ready` on reclaim.
-        // Unlike primary sandboxes we don't implement a pause/resume
-        // state machine for services — they either run or they don't.
-        let startError: string | null = null;
-        if (!inspect.running) {
-          try {
-            await driver.startContainer(row.container_id);
-          } catch (e) {
-            const base = e instanceof Error ? e.message : String(e);
-            // Grab post-mortem before moving on so the UI's error
-            // field shows exit code / OOM / last logs, not just
-            // "start failed".
-            const diagnostic = await this.captureContainerDiagnostic(
-              driver,
-              row.container_id,
-            );
-            startError = diagnostic ? `${base}\n\n${diagnostic}` : base;
-            console.warn(
-              `[sandbox-manager] service reclaim: failed to start ${row.session_id}:${row.service_id}: ${startError}`,
-            );
-          }
-        }
-        const effectiveStatus: SandboxStatus = startError ? 'error' : 'ready';
-        const limits = this.parseLimits(row.limits_json);
-        // Service previewUrl scheme matches the one `provisionAdditionalService`
-        // emits — the `_svc` sentinel route in preview.ts relies on it.
-        const previewUrl = `/preview/${encodeURIComponent(String(row.session_id))}/_svc/${encodeURIComponent(row.service_id)}/`;
-        const serviceSandboxId = `${row.session_id}:${row.service_id}`;
-        const sb: Sandbox = {
-          id: serviceSandboxId,
-          containerId: row.container_id,
-          runtime: row.runtime,
-          stack: row.stack as SandboxStack,
-          hostPort: row.host_port,
-          workdir: row.workdir,
-          previewUrl,
-          limits,
-          status: effectiveStatus,
-          step: effectiveStatus === 'ready' ? 'ready' : 'queued',
-          recentLogs: [
-            {
-              at: Date.now(),
-              level: startError ? 'error' : 'info',
-              text: startError
-                ? `Reclaimed service from DB but start failed: ${startError}`
-                : `Reclaimed service from DB (status=${effectiveStatus})`,
-            },
-          ],
-          createdAt: new Date(row.created_at).getTime() || Date.now(),
-          lastAccessAt: row.last_access_at_ms,
-          error: startError ?? row.error ?? undefined,
-        };
-        this.services.set(this.serviceKey(String(row.session_id), row.service_id), sb);
-
-        // Persisted state must reflect reality. If the start failed,
-        // leave the row paused so the next boot (or a manual retry) can
-        // re-attempt the start path rather than assuming the container
-        // is live.
-        if (startError) {
-          svcStore.patch(row.session_id, row.service_id, {
-            status: 'paused',
-            paused_at_ms: Date.now(),
-            error: startError,
-          });
-        } else if (row.status !== 'running') {
-          svcStore.patch(row.session_id, row.service_id, {
-            status: 'running',
-            paused_at_ms: null,
-          });
-        }
-        reclaimed++;
+        if (result.stopped) stopped++;
+        if (result.sandbox) reclaimed++;
       } catch (e) {
         console.warn(
           `[sandbox-manager] reconcile service=${row.session_id}:${row.service_id} failed: ${e instanceof Error ? e.message : String(e)}`,
         );
       }
     }
-    if (reclaimed > 0 || reprovisioned > 0 || orphan > 0) {
+    if (reclaimed > 0 || stopped > 0 || orphan > 0) {
       console.log(
-        `[sandbox-manager] reconciled services from DB: ${reclaimed} reclaimed, ${reprovisioned} re-provisioned, ${orphan} orphan (needs retry)`,
+        `[sandbox-manager] reconciled services from DB: ${reclaimed} reclaimed, ${stopped} stopped, ${orphan} missing (manual start required)`,
       );
     }
   }
@@ -2366,10 +3027,16 @@ export class SandboxManager {
         runtime: sb.runtime,
         stack: sb.stack,
         workdir: sb.workdir,
+        host_workdir_mount: sb.hostWorkdirMount ?? null,
         host_port: sb.hostPort,
         limits: sb.limits as unknown as Record<string, unknown>,
         status: statusOverride ?? this.toPersistedStatus(sb.status),
         error: sb.error ?? null,
+        mount_kind: sb.mountKind,
+        image_source: sb.imageSource,
+        built_image_tag: sb.builtImageTag ?? null,
+        dockerfile_path: sb.dockerfilePath ?? null,
+        dockerfile_exposed_port: sb.dockerfileExposedPort ?? null,
         last_access_at_ms: sb.lastAccessAt,
         paused_at_ms: sb.status === 'paused' ? Date.now() : null,
       });
@@ -2378,6 +3045,31 @@ export class SandboxManager {
         `[sandbox-manager] persist ${sb.id} failed: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
+  }
+
+  private persistRuntimePauseState(
+    sessionId: string,
+    serviceId: string | null,
+    sb: Sandbox,
+  ): void {
+    if (serviceId) {
+      const store = getServicesStore();
+      const numericId = Number(sessionId);
+      if (!store || !Number.isFinite(numericId)) return;
+      try {
+        store.patch(numericId, serviceId, {
+          status: 'running',
+          last_access_at_ms: sb.lastAccessAt,
+          paused_at_ms: null,
+        });
+      } catch (e) {
+        console.warn(
+          `[sandbox-manager] persist runtime pause ${sessionId}:${serviceId} failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+      return;
+    }
+    this.persist(sb, 'running');
   }
 
   /**
@@ -2725,6 +3417,210 @@ export class SandboxManager {
    * package.json's `dev` script forwards to vite/ng which both
    * accept `--host`.
    */
+  private resolveExternalNodeDevSpec(
+    hostWorkdirMount: string,
+    stack: SandboxStack,
+    portOverride?: number,
+  ): ExternalNodeDevSpec {
+    const manifest = detectManifest(hostWorkdirMount);
+    if (!manifest || manifest.kind !== 'node') {
+      throw new Error(
+        'External Node image mode requires a package.json with a dev/start/serve script.',
+      );
+    }
+    const scriptName = manifest.devScriptName;
+    if (!scriptName) {
+      throw new Error(
+        'External Node image mode requires package.json script "dev", "start", or "serve".',
+      );
+    }
+    const scriptBody = manifest.scripts[scriptName] ?? '';
+    const framework = this.inferExternalNodeFramework(stack, scriptBody);
+    const scriptedPort = this.inferExternalNodeScriptPort(scriptBody);
+    return {
+      manifest,
+      packageManager: manifest.packageManager,
+      scriptName,
+      scriptBody,
+      containerPort: portOverride ?? scriptedPort ?? this.inferExternalNodePort(framework),
+      framework,
+    };
+  }
+
+  private inferExternalNodeScriptPort(scriptBody: string): number | null {
+    const match =
+      scriptBody.match(/(?:^|\s)--port(?:=|\s+)(\d{2,5})(?=\s|$)/) ??
+      scriptBody.match(/(?:^|\s)-p\s+(\d{2,5})(?=\s|$)/);
+    if (!match) return null;
+    const port = Number(match[1]);
+    return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : null;
+  }
+
+  private inferExternalNodeFramework(
+    stack: SandboxStack,
+    scriptBody: string,
+  ): ExternalNodeDevSpec['framework'] {
+    const script = scriptBody.toLowerCase();
+    if (stack === 'angular' || /\bng\s+serve\b/.test(script)) return 'angular';
+    if (/\bnext\s+(dev|start)\b/.test(script)) return 'next';
+    if (/\bvite\b/.test(script)) return 'vite';
+    return 'generic';
+  }
+
+  private inferExternalNodePort(framework: ExternalNodeDevSpec['framework']): number {
+    switch (framework) {
+      case 'angular':
+        return 4200;
+      case 'next':
+        return 3000;
+      case 'vite':
+      case 'generic':
+        return this.devServerPort;
+    }
+  }
+
+  private externalNodeInstallCommand(pm: NodePackageManager): string {
+    if (pm === 'pnpm') {
+      return 'corepack enable >/tmp/external-node-install.log 2>&1 || true; pnpm install --frozen-lockfile=false';
+    }
+    if (pm === 'yarn') {
+      return 'corepack enable >/tmp/external-node-install.log 2>&1 || true; yarn install';
+    }
+    return 'npm install --no-audit --no-fund --loglevel=error';
+  }
+
+  private externalNodeRunArgs(spec: ExternalNodeDevSpec, previewPathPrefix: string): string {
+    const script = spec.scriptBody.toLowerCase();
+    const hasHost = /(?:^|\s)--(?:host|hostname)(?:[=\s]|$)/.test(script);
+    const hasPort = /(?:^|\s)(?:--port|-p)(?:[=\s]|$)/.test(script);
+    const args: string[] = [];
+
+    if (spec.framework === 'next') {
+      if (!hasHost) args.push('--hostname 0.0.0.0');
+      if (!hasPort) args.push(`--port ${spec.containerPort}`);
+      return args.join(' ');
+    }
+
+    if (!hasHost) args.push('--host 0.0.0.0');
+    if (!hasPort) args.push(`--port ${spec.containerPort}`);
+    if (spec.framework === 'angular') {
+      if (!/(?:^|\s)--disable-host-check(?:[=\s]|$)/.test(script)) {
+        args.push('--disable-host-check');
+      }
+      if (!/(?:^|\s)--poll(?:[=\s]|$)/.test(script)) {
+        args.push('--poll=300');
+      }
+      if (!/(?:^|\s)--serve-path(?:[=\s]|$)/.test(script)) {
+        args.push(`--serve-path=${shQuote(previewPathPrefix)}`);
+      }
+    } else if (spec.framework === 'vite') {
+      if (!/(?:^|\s)--base(?:[=\s]|$)/.test(script)) {
+        args.push(`--base=${shQuote(previewPathPrefix)}`);
+      }
+    }
+    return args.join(' ');
+  }
+
+  private externalNodeRunCommand(spec: ExternalNodeDevSpec, previewPathPrefix: string): string {
+    const args = this.externalNodeRunArgs(spec, previewPathPrefix);
+    const suffix = args ? ` ${args}` : '';
+    const corepack =
+      spec.packageManager === 'pnpm' || spec.packageManager === 'yarn'
+        ? 'corepack enable >/tmp/external-node-corepack.log 2>&1 || true; '
+        : '';
+    if (spec.packageManager === 'yarn') {
+      return `${corepack}yarn ${shQuote(spec.scriptName)}${suffix}`;
+    }
+    return `${corepack}${spec.packageManager} run ${shQuote(spec.scriptName)}${args ? ` -- ${args}` : ''}`;
+  }
+
+  private externalNodeDependencyProbeCommand(): string {
+    return `test -d node_modules && test -d node_modules/.bin && node -e "for (const mod of ['rollup','esbuild']) { try { require.resolve(mod); } catch { continue; } require(mod); }"`;
+  }
+
+  private async ensureExternalNodeDependencies(
+    driver: ISandboxDriver,
+    sb: Sandbox,
+    spec: ExternalNodeDevSpec,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const probeCommand = this.externalNodeDependencyProbeCommand();
+    const installProbe = await driver.exec(
+      sb.containerId,
+      probeCommand,
+      { cwd: sb.workdir, timeoutMs: 10_000, signal },
+    );
+    if (installProbe.exitCode === 0) {
+      this.appendLog(sb, 'info', 'Using existing node_modules from the external project.');
+      return;
+    }
+
+    this.recordStep(
+      sb,
+      'installing-deps',
+      `Installing dependencies (${spec.packageManager} install)…`,
+    );
+    const installRes = await driver.exec(
+      sb.containerId,
+      this.externalNodeInstallCommand(spec.packageManager),
+      { cwd: sb.workdir, timeoutMs: 420_000, signal, env: { CI: '1' } },
+    );
+    if (installRes.exitCode !== 0) {
+      throw new Error(
+        `${spec.packageManager} install failed (exit ${installRes.exitCode}): ${truncateForLog(installRes.stderr || installRes.stdout, 1_200)}`,
+      );
+    }
+
+    const postInstallProbe = await driver.exec(
+      sb.containerId,
+      probeCommand,
+      { cwd: sb.workdir, timeoutMs: 10_000, signal },
+    );
+    if (postInstallProbe.exitCode !== 0) {
+      throw new Error(
+        `dependency probe failed after ${spec.packageManager} install: ${truncateForLog(postInstallProbe.stderr || postInstallProbe.stdout, 1_200)}`,
+      );
+    }
+  }
+
+  private async startExternalNodeDevServer(
+    driver: ISandboxDriver,
+    sb: Sandbox,
+    spec: ExternalNodeDevSpec,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.ensureExternalNodeDependencies(driver, sb, spec, signal);
+
+    this.recordStep(
+      sb,
+      'starting-dev-server',
+      `Starting ${spec.packageManager} run ${spec.scriptName} on port ${spec.containerPort}…`,
+    );
+    const previewPath = previewPathPrefixOf(sb.previewUrl);
+    const command = `nohup ${this.externalNodeRunCommand(spec, previewPath)} > /tmp/dev-server.log 2>&1 &`;
+    const spawnRes = await driver.exec(sb.containerId, command, {
+      cwd: sb.workdir,
+      timeoutMs: 10_000,
+      signal,
+      env: {
+        HOST: '0.0.0.0',
+        PORT: String(spec.containerPort),
+      },
+    });
+    if (spawnRes.exitCode !== 0) {
+      throw new Error(`failed to launch external Node dev server: ${spawnRes.stderr || spawnRes.stdout}`);
+    }
+
+    await this.waitForPublishedHttp(
+      driver,
+      sb,
+      '/',
+      signal,
+      'External Node dev server',
+      180_000,
+    );
+  }
+
   private buildDevServerCommand(stack: SandboxStack): string {
     const port = this.devServerPort;
     if (stack === 'cf-worker') {
@@ -2769,6 +3665,73 @@ export class SandboxManager {
     throw new Error('relaunched dev server failed to bind port');
   }
 
+  private async waitForPublishedHttp(
+    driver: ISandboxDriver,
+    sb: Sandbox,
+    path: string,
+    signal?: AbortSignal,
+    label = 'Project container',
+    timeoutMs = 120_000,
+  ): Promise<void> {
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    const deadline = Date.now() + timeoutMs;
+    let lastError = '';
+    while (Date.now() < deadline) {
+      if (signal?.aborted) throw new Error(`${label} start aborted`);
+      if (await driver.isPortListening(sb.hostPort)) {
+        try {
+          const remainingMs = Math.max(1_000, deadline - Date.now());
+          const requestTimeoutMs = Math.min(15_000, remainingMs);
+          const res = await fetch(`http://127.0.0.1:${sb.hostPort}${normalizedPath}`, {
+            redirect: 'manual',
+            signal: AbortSignal.timeout(requestTimeoutMs),
+          });
+          if (res.status < 500) return;
+          lastError = `HTTP ${res.status}`;
+        } catch (e) {
+          lastError = e instanceof Error ? e.message : String(e);
+        }
+        const readyLog = await this.readDevServerLog(driver, sb, 60);
+        if (this.devServerLogLooksReady(readyLog)) return;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    const [diagnostic, devLog] = sb.containerId
+      ? await Promise.all([
+          this.captureContainerDiagnostic(driver, sb.containerId),
+          this.readDevServerLog(driver, sb, 80),
+        ])
+      : ['', ''];
+    throw new Error(
+      `${label} did not return HTTP on host port ${sb.hostPort} -> container port ${sb.containerPort}${normalizedPath} within ${timeoutMs}ms.` +
+        (lastError ? ` Last error: ${lastError}.` : '') +
+        (devLog ? `\n\n--- dev-server log ---\n${devLog}` : '') +
+        (diagnostic ? `\n\n${diagnostic}` : ''),
+    );
+  }
+
+  private async readDevServerLog(
+    driver: ISandboxDriver,
+    sb: Sandbox,
+    lines: number,
+  ): Promise<string> {
+    if (!sb.containerId) return '';
+    try {
+      const res = await driver.exec(
+        sb.containerId,
+        `tail -n ${lines} /tmp/dev-server.log || true`,
+        { cwd: sb.workdir, timeoutMs: 5_000 },
+      );
+      return res.stdout;
+    } catch {
+      return '';
+    }
+  }
+
+  private devServerLogLooksReady(log: string): boolean {
+    return /(?:Local:\s+http|Network:\s+http|Watch mode enabled|Application bundle generation complete|ready in \d)/i.test(log);
+  }
+
   private startStatsSampler(): void {
     if (this.statsIntervalMs <= 0 || this.statsTimer) return;
     this.statsTimer = setInterval(() => {
@@ -2782,7 +3745,7 @@ export class SandboxManager {
     const driver = this.driver;
     if (!driver) return;
     for (const sb of this.sandboxes.values()) {
-      if (sb.status !== 'ready') continue;
+      if (sb.status !== 'ready' || sb.runtimePaused) continue;
       try {
         const sample = await driver.stats(sb.containerId);
         if (!sample) continue;
@@ -2804,51 +3767,48 @@ export class SandboxManager {
     // Check every 60s — TTL granularity doesn't need sub-minute accuracy.
     this.reaperTimer = setInterval(async () => {
       if (this.shuttingDown) return;
-      // Make sure DB reconcile has happened before we make destroy
-      // decisions — otherwise we'd skip paused sandboxes that exist
-      // in DB but haven't been pulled into memory yet.
-      try {
-        await this.resolveDriverOnce();
-      } catch {
-        return; // can't reap without a driver; try next tick
-      }
       const now = Date.now();
 
-      // ─── Soft tier: running → paused ───
-      // After `pauseTtlMs` of no touches, stop the container but keep
-      // it around. Users coming back within `destroyAfterPauseMs` get
-      // a ~5s resume instead of a fresh scaffold.
-      for (const sb of this.sandboxes.values()) {
-        if (sb.status !== 'ready') continue;
-        const idleMs = now - sb.lastAccessAt;
-        if (idleMs >= this.pauseTtlMs) {
-          console.log(
-            `[sandbox-manager] pausing session=${sb.id} (idle for ${Math.round(idleMs / 1000)}s ≥ ${Math.round(this.pauseTtlMs / 1000)}s soft TTL)`,
-          );
-          void this.pauseSandbox(sb.id, 'idle-soft-ttl');
+      // Manual-first lifecycle: opening/polling a session must not
+      // trigger hidden stop/start churn. The legacy idle reaper is kept
+      // behind an opt-in flag for operators that still want automatic
+      // resource cleanup.
+      if (process.env.MCP_SANDBOX_AUTO_IDLE_REAPER === '1') {
+        try {
+          await this.resolveDriverOnce();
+        } catch {
+          return; // can't reap without a driver; try next tick
         }
-      }
 
-      // ─── Hard tier: paused → destroyed ───
-      // Check BOTH in-memory paused sandboxes and persisted ones.
-      // Covers the case where the API server has been running long
-      // enough that a paused sandbox crossed the hard threshold.
-      const store = getStore();
-      if (store) {
-        const stale = store.listPausedOlderThan(this.destroyAfterPauseMs);
-        for (const row of stale) {
-          console.log(
-            `[sandbox-manager] destroying paused session=${row.session_id} (paused for > ${Math.round(this.destroyAfterPauseMs / 1000)}s hard TTL)`,
-          );
-          void this.destroyInternal(String(row.session_id), 'idle-hard-ttl');
-        }
-      } else {
-        // No DB — fall back to in-memory check.
+        // ─── Soft tier: running → paused ───
         for (const sb of this.sandboxes.values()) {
-          if (sb.status !== 'paused') continue;
-          const pausedFor = now - sb.lastAccessAt;
-          if (pausedFor >= this.destroyAfterPauseMs) {
-            void this.destroyInternal(sb.id, 'idle-hard-ttl');
+          if (sb.status !== 'ready' || sb.runtimePaused) continue;
+          const idleMs = now - sb.lastAccessAt;
+          if (idleMs >= this.pauseTtlMs) {
+            console.log(
+              `[sandbox-manager] pausing session=${sb.id} (idle for ${Math.round(idleMs / 1000)}s >= ${Math.round(this.pauseTtlMs / 1000)}s soft TTL)`,
+            );
+            void this.pauseSandbox(sb.id, 'idle-soft-ttl');
+          }
+        }
+
+        // ─── Hard tier: paused → destroyed ───
+        const store = getStore();
+        if (store) {
+          const stale = store.listPausedOlderThan(this.destroyAfterPauseMs);
+          for (const row of stale) {
+            console.log(
+              `[sandbox-manager] destroying paused session=${row.session_id} (paused for > ${Math.round(this.destroyAfterPauseMs / 1000)}s hard TTL)`,
+            );
+            void this.destroyInternal(String(row.session_id), 'idle-hard-ttl');
+          }
+        } else {
+          for (const sb of this.sandboxes.values()) {
+            if (sb.status !== 'paused') continue;
+            const pausedFor = now - sb.lastAccessAt;
+            if (pausedFor >= this.destroyAfterPauseMs) {
+              void this.destroyInternal(sb.id, 'idle-hard-ttl');
+            }
           }
         }
       }
@@ -2941,6 +3901,10 @@ function defaultPreviewUrl(sessionId: string, _hostPort: number): string {
 function shQuote(s: string): string {
   if (/^[a-zA-Z0-9_.\-/:@=]+$/.test(s)) return s;
   return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+function truncateForLog(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)} …[+${s.length - max} bytes]` : s;
 }
 
 function previewPathPrefixOf(previewUrl: string): string {

@@ -20,6 +20,7 @@
 
 import type { RunCoderHandle } from '../index.js';
 import { createBus, type CoderRunBus } from '../../../apps/http-api/coder-bus.js';
+import { orchestratorRegistry } from '../../../apps/http-api/sse/OrchestratorRegistry.js';
 import type { CompanyStore } from '../../../store/company-store.js';
 import type { CodeIndexDB } from '../../../store/db.js';
 import type {
@@ -51,6 +52,7 @@ import { SandboxService } from './services/SandboxService.js';
 import { PipelineService, type PipelineValidationResult } from './services/PipelineService.js';
 import { PipelineExecutor } from './services/PipelineExecutor.js';
 import { InboxQueue, type SendArgs as InboxSendArgs, type SendResult as InboxSendResult } from './services/InboxQueue.js';
+import { CompanyDriveStore } from './services/CompanyDriveStore.js';
 import type {
   AgentInboxMessage,
   InboxStatus,
@@ -74,6 +76,14 @@ export class CompanyOrchestrator {
   // ─── Public properties (kept for BC with tools / HTTP routes) ───
 
   readonly companySessionId: number;
+  /**
+   * When non-null, this orchestrator is a sub-session ("front tab") of
+   * the parent. Sandbox / projects / kanban / pipelines / services / env
+   * are read from the parent so all sub-sessions share the same project
+   * context. Board / agent_runs / master_prompts / inbox stay isolated
+   * by `company_session_id` FK — that's the multi-front guarantee.
+   */
+  readonly parentSessionId: number | null;
   readonly metaBus: CoderRunBus;
 
   // ─── Services (composed) ────────────────────────────────────────
@@ -99,16 +109,24 @@ export class CompanyOrchestrator {
   // Inbox queue is constructed alongside pipelines and back-wired
   // into `subordinates` via `setOnSubordinateIdle`.
   private readonly inbox!: InboxQueue;
+  /** Company-scoped shared file drive (see `CompanyDriveStore`). */
+  readonly driveStore: CompanyDriveStore;
 
   constructor(opts: CompanyOrchestratorOpts) {
     this.companySessionId = opts.companySessionId;
     this.metaBus = createBus(new AbortController());
+    // Resolve parent linkage (migration 067). Sub-sessions defer
+    // sandbox/projects/kanban lookups to the parent's row when their own
+    // are empty — see `getSandboxBinding` and `listProjects` below.
+    const sessionRow = opts.companyStore.getCompanySession(opts.companySessionId);
+    this.parentSessionId = sessionRow?.parent_session_id ?? null;
 
     this.ctx = new SessionContext({
       companySessionId: opts.companySessionId,
       companyStore: opts.companyStore,
       db: opts.db,
       metaBus: this.metaBus,
+      parentSessionId: this.parentSessionId,
     });
 
     this.publisher = new MetaBusPublisher(this.metaBus);
@@ -121,6 +139,7 @@ export class CompanyOrchestrator {
     this.board = new BoardBridge(this.ctx, this.publisher, this.kanban);
     this.status = new AgentStatusUpdater(this.ctx, this.publisher);
     this.attention = new MasterAttention();
+    this.driveStore = CompanyDriveStore.fromSessionContext(this.ctx);
 
     // Construction has small cycles (Master ↔ HumanInTheLoop wire each
     // other; Subordinates ↔ IdleController query each other). We resolve
@@ -236,6 +255,7 @@ export class CompanyOrchestrator {
     maxTurns?: number;
     signal?: AbortSignal;
     roleConfigs?: RoleConfig[];
+    attachments?: import('../index.js').CoderAttachment[];
   }): Promise<RunCoderHandle> {
     return this.master.start(opts);
   }
@@ -244,6 +264,7 @@ export class CompanyOrchestrator {
     userMessage: string;
     maxTurns?: number;
     roleConfigs?: RoleConfig[];
+    attachments?: import('../index.js').CoderAttachment[];
   }): Promise<RunCoderHandle> {
     return this.master.resumeExisting(opts);
   }
@@ -312,9 +333,46 @@ export class CompanyOrchestrator {
 
   sendMessageToMaster(
     message: string,
-    options: { interject?: boolean } = {},
+    options: { interject?: boolean; attachments?: import('../index.js').CoderAttachment[] } = {},
   ): { ok: boolean; pending?: 'interactive_wait' } {
+    // Lazy-start: a sub-session's master is dormant until the user sends
+    // the first message. When `MasterLifecycle.start` has never been
+    // called, kick it off with defaults pulled from `config_json` (the
+    // sub-session inherits the parent's snapshot at creation time).
+    if (!this.master.isAlive && this.master.agentRunId == null) {
+      const session = this.ctx.companyStore.getCompanySession(this.companySessionId);
+      let cfg: {
+        master_provider?: string;
+        master_model?: string;
+        role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }>;
+      } = {};
+      try { cfg = session ? JSON.parse(session.config_json || '{}') : {}; } catch { /* defaults */ }
+      const provider = cfg.master_provider ?? 'anthropic';
+      const model = cfg.master_model ?? 'claude-sonnet-4-6';
+      const roleConfigs = (cfg.role_assignments ?? []) as RoleConfig[];
+      void this.master.start({
+        userMessage: message,
+        provider,
+        model,
+        maxTurns: 100,
+        roleConfigs,
+        attachments: options.attachments,
+      }).catch((e) => {
+        console.error(`[company s=${this.companySessionId}] lazy master start failed:`, e);
+      });
+      return { ok: true };
+    }
     return this.master.sendUserMessage(message, options);
+  }
+
+  /**
+   * Read-only view of the user's most recent attachments. Master tools
+   * (`spawn_subordinate_agent`, `forward_to_agent`) consume this when
+   * `forward_user_attachments=true` so images can be propagated to
+   * subordinates without spending tokens.
+   */
+  getMasterLastUserAttachments(): readonly import('../index.js').CoderAttachment[] {
+    return this.master.getLastUserAttachments();
   }
 
   getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: import('./types.js').RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number } | null {
@@ -382,8 +440,12 @@ export class CompanyOrchestrator {
     return this.subordinates.resume(agentRunId, message, roleOverride);
   }
 
-  async reactivateSubordinate(agentRunId: number, message: string): Promise<boolean> {
-    return this.subordinates.reactivate(agentRunId, message);
+  async reactivateSubordinate(
+    agentRunId: number,
+    message: string,
+    attachments?: import('../index.js').CoderAttachment[],
+  ): Promise<boolean> {
+    return this.subordinates.reactivate(agentRunId, message, attachments);
   }
 
   abortSubordinate(agentRunId: number): boolean {
@@ -442,6 +504,44 @@ export class CompanyOrchestrator {
   hasPendingPlan(agentRunId: number): boolean { return this.humanInLoop.hasPendingPlan(agentRunId); }
   hasPendingQuestion(agentRunId: number): boolean { return this.humanInLoop.hasPendingQuestion(agentRunId); }
   hasPendingTasks(agentRunId: number): boolean { return this.humanInLoop.hasPendingTasks(agentRunId); }
+
+  // ─── Sub-sessions (multi-front via parent_session_id) ─────────────
+  //
+  // A sub-session is a full `CompanySession` linked to this orchestrator
+  // via `parent_session_id`. Creating one snapshots the parent's config
+  // (template / role_assignments / allowed_models / builder); the new
+  // child runs with its own orchestrator and its own board/agent_runs/
+  // master_prompts/inbox by virtue of the `company_session_id` FK.
+
+  listChildSessions(): import('./types.js').CompanySession[] {
+    return this.ctx.companyStore.listChildSessions(this.companySessionId);
+  }
+
+  createChildSession(name: string): import('./types.js').CompanySession {
+    const trimmed = (name ?? '').trim();
+    if (!trimmed) throw new Error('Sub-session name cannot be empty');
+    if (this.parentSessionId != null) {
+      throw new Error('Cannot create sub-sessions of a sub-session — use the parent session');
+    }
+    const child = this.ctx.companyStore.createChildSession({
+      parent_session_id: this.companySessionId,
+      name: trimmed,
+    });
+    this.publisher.publish('subsession_created', { session: child });
+    return child;
+  }
+
+  renameChildSession(childId: number, name: string): void {
+    const trimmed = (name ?? '').trim();
+    if (!trimmed) throw new Error('Sub-session name cannot be empty');
+    const child = this.ctx.companyStore.getCompanySession(childId);
+    if (!child || child.parent_session_id !== this.companySessionId) {
+      throw new Error(`Sub-session ${childId} not found in this session`);
+    }
+    this.ctx.companyStore.renameCompanySession(childId, trimmed);
+    const updated = this.ctx.companyStore.getCompanySession(childId);
+    if (updated) this.publisher.publish('subsession_renamed', { session: updated });
+  }
 
   // ─── Board ──────────────────────────────────────────────────────
 
@@ -527,7 +627,16 @@ export class CompanyOrchestrator {
    * lifecycles read this to enrich their `CompanyContext`.
    */
   getSandboxBinding(): SandboxBinding | null {
-    return this.sandboxService.getBinding();
+    const own = this.sandboxService.getBinding();
+    if (own) return own;
+    // Sub-session fallback: share parent's binding so all sibling tabs
+    // edit the same container/workdir. Requires the parent's
+    // orchestrator to be alive (the dashboard keeps it warm while at
+    // least one tab is open).
+    if (this.parentSessionId != null) {
+      return orchestratorRegistry.get(this.parentSessionId)?.getSandboxBinding() ?? null;
+    }
+    return null;
   }
 
   /**
@@ -539,7 +648,12 @@ export class CompanyOrchestrator {
    * own bind-mounted host dir.
    */
   getSandboxServiceBinding(serviceId: string): SandboxBinding | null {
-    return this.sandboxService.getServiceBinding(serviceId);
+    const own = this.sandboxService.getServiceBinding(serviceId);
+    if (own) return own;
+    if (this.parentSessionId != null) {
+      return orchestratorRegistry.get(this.parentSessionId)?.getSandboxServiceBinding(serviceId) ?? null;
+    }
+    return null;
   }
 
   /**
@@ -574,6 +688,14 @@ export class CompanyOrchestrator {
     previewUrl: string;
     isSelf: boolean;
   }> {
+    // Sub-sessions don't run their own sandbox — defer the peer list to
+    // the parent's orchestrator so the master / subordinates of a child
+    // tab see the same containers + previewUrls as Main does.
+    if (this.parentSessionId != null) {
+      const parent = orchestratorRegistry.get(this.parentSessionId);
+      if (parent) return parent.listSandboxPeers(selfServiceId);
+      return [];
+    }
     const devPort = Number(process.env.MCP_SANDBOX_DEV_PORT ?? 5173);
     const peers: Array<{
       serviceId: string;
@@ -612,6 +734,16 @@ export class CompanyOrchestrator {
    * master's (and subsequently subordinates') `CompanyContext`.
    */
   async provisionSandboxIfNeeded(signal?: AbortSignal): Promise<SandboxBinding | null> {
+    // Sub-sessions ("front tabs") never spin their own container — they
+    // share the parent's. We delegate to the parent's live orchestrator
+    // (provisioning it if the parent isn't yet warmed up). Without this,
+    // every new tab would start a duplicate container against the same
+    // bind-mount, which both wastes resources and races on file writes.
+    if (this.parentSessionId != null) {
+      const parent = orchestratorRegistry.get(this.parentSessionId);
+      if (!parent) return null; // parent dormant — child just won't have sandbox tools this turn
+      return await parent.provisionSandboxIfNeeded(signal);
+    }
     return await this.sandboxService.provisionIfNeeded({ signal });
   }
 
@@ -628,7 +760,10 @@ export class CompanyOrchestrator {
     try {
       this.ctx.companyStore.updateCompanySessionStatus(this.companySessionId, finalStatus);
     } catch { /* ignore */ }
-    if (teardownSandbox) {
+    // Sub-sessions don't own a sandbox — teardown would target the
+    // parent's container, which siblings (and the parent itself) still
+    // depend on. Skip the teardown call entirely for children.
+    if (teardownSandbox && this.parentSessionId == null) {
       // Best-effort sandbox teardown. Fire-and-forget: abortAll is often
       // called from signal handlers where we can't block on a container
       // removal round-trip. The manager's reaper + process shutdown hook

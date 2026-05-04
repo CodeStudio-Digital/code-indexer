@@ -29,8 +29,8 @@
  */
 
 import type { SessionContext } from './SessionContext.js';
-import type { SubordinateLifecycle } from './SubordinateLifecycle.js';
 import type { MasterAttention } from './MasterAttention.js';
+import type { SubordinateLifecycle } from './SubordinateLifecycle.js';
 import type { IMetaBusPublisher } from './ports.js';
 import type { AgentInboxMessage, InboxKind, InboxStatus } from '../types.js';
 

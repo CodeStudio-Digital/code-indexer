@@ -31,6 +31,9 @@ import type {
   SandboxStack,
 } from '../../../sandbox/index.js';
 import { getSandboxManager, resolveDriver } from '../../../sandbox/index.js';
+import { detectDockerfile } from '../../../sandbox/dockerfile-detector.js';
+import { detectManifest } from '../../../sandbox/manifest-detector/detect.js';
+import type { NodeManifest } from '../../../sandbox/manifest-detector/types.js';
 // Archive persistence is now owned by SandboxManager itself (auto-save
 // on destroy, auto-load on provision). We re-export the path helper so
 // the DELETE /sessions handler — which doesn't go through the manager
@@ -75,6 +78,14 @@ export function hasQaPlaywrightSkill(configJson: string): boolean {
     }
   }
   return false;
+}
+
+function inferExternalNodePort(stack: SandboxStack, manifest: NodeManifest): number {
+  const scriptName = manifest.devScriptName;
+  const script = scriptName ? manifest.scripts[scriptName]?.toLowerCase() ?? '' : '';
+  if (stack === 'angular' || /\bng\s+serve\b/.test(script)) return 4200;
+  if (/\bnext\s+(dev|start)\b/.test(script)) return 3000;
+  return 5173;
 }
 
 /**
@@ -161,6 +172,8 @@ export interface BuilderSessionConfig {
       cpus?: string;
       pids?: number;
     };
+    main_project_id?: number;
+    main_project_runtime?: 'dockerfile' | 'node';
     /** Multi-microservice form; when present, overrides `stack`/`limits` above. */
     services?: BuilderServiceConfig[];
   };
@@ -304,9 +317,75 @@ export class SandboxService {
     // row (`_builder_<uuid>`) points at — NOT the fallback sessionId
     // path. Without this the project dir on disk stays empty while
     // the sandbox writes to a sibling dir nothing indexes.
-    const primaryLink = this.ctx.projects.find((p) => !p.label) ?? this.ctx.projects[0];
+    const primaryLink =
+      builderCfg.main_project_id != null
+        ? this.ctx.projects.find((p) => p.project_id === builderCfg.main_project_id)
+        : this.ctx.projects.find((p) => !p.label) ?? this.ctx.projects[0];
     const primaryProject = primaryLink ? this.ctx.db.getProject(primaryLink.project_id) : null;
     const hostWorkdirMount = primaryProject?.root_path ?? undefined;
+    let externalSpec:
+      | {
+          mountKind: 'external';
+          imageSource: 'project_dockerfile';
+          dockerfilePath: string;
+          containerPortOverride: number;
+          skipDefaultCommand: true;
+        }
+      | {
+          mountKind: 'external';
+          imageSource: 'default';
+          containerPortOverride: number;
+          skipDefaultCommand: false;
+        }
+      | {} = {};
+    if (builderCfg.main_project_id != null) {
+      if (!primaryProject) {
+        console.warn(
+          `[sandbox-service] external main project ${builderCfg.main_project_id} not found for session ${this.sessionKey}`,
+        );
+        this.unsubscribe?.();
+        this.unsubscribe = null;
+        return null;
+      }
+      const manifest = detectManifest(primaryProject.root_path);
+      const runtime =
+        builderCfg.main_project_runtime ??
+        (manifest?.kind === 'node' && manifest.devScriptName ? 'node' : 'dockerfile');
+      if (runtime === 'node') {
+        if (!manifest || manifest.kind !== 'node' || !manifest.devScriptName) {
+          console.warn(
+            `[sandbox-service] external main project for session ${this.sessionKey} has no package.json dev/start/serve script`,
+          );
+          this.unsubscribe?.();
+          this.unsubscribe = null;
+          return null;
+        }
+        externalSpec = {
+          mountKind: 'external',
+          imageSource: 'default',
+          containerPortOverride: inferExternalNodePort(stack, manifest),
+          skipDefaultCommand: false,
+        };
+      } else {
+        const dockerfile = detectDockerfile(primaryProject.root_path);
+        const firstPort = dockerfile?.exposedPorts[0];
+        if (!dockerfile || !firstPort) {
+          console.warn(
+            `[sandbox-service] external main project for session ${this.sessionKey} has no Dockerfile EXPOSE port`,
+          );
+          this.unsubscribe?.();
+          this.unsubscribe = null;
+          return null;
+        }
+        externalSpec = {
+          mountKind: 'external',
+          imageSource: 'project_dockerfile',
+          dockerfilePath: dockerfile.path,
+          containerPortOverride: firstPort,
+          skipDefaultCommand: true,
+        };
+      }
+    }
 
     // Archive restore is handled inside SandboxManager.provision now —
     // no need to load here. That guarantees every provision path
@@ -322,6 +401,7 @@ export class SandboxService {
         limits,
         hostWorkdirMount,
         includeE2e,
+        ...externalSpec,
       });
     } catch (e) {
       // Non-fatal: the master can still operate in builder mode even when
@@ -399,7 +479,8 @@ export class SandboxService {
   /**
    * Stand up a secondary microservice container for this session.
    * Returns the binding consumers can use to target tool calls at the
-   * new service. Requires the primary sandbox to already be provisioned.
+   * new service. Secondary containers can be started independently of
+   * the primary sandbox.
    */
   async addService(opts: {
     serviceId: string;
@@ -414,12 +495,12 @@ export class SandboxService {
      * peer project on disk, listable/indexable from the Projects UI.
      */
     hostWorkdirMount?: string;
+    mountKind?: 'owned' | 'external';
+    imageSource?: 'default' | 'project_dockerfile';
+    dockerfilePath?: string;
+    containerPortOverride?: number;
+    skipDefaultCommand?: boolean;
   }): Promise<SandboxBinding> {
-    if (!this.binding) {
-      throw new Error(
-        `Cannot add service '${opts.serviceId}' — primary sandbox not provisioned yet`,
-      );
-    }
     const manager = getSandboxManager();
     const sandbox = await manager.provisionAdditionalService({
       sessionId: this.sessionKey,
@@ -429,6 +510,11 @@ export class SandboxService {
       limits: opts.limits,
       signal: opts.signal,
       hostWorkdirMount: opts.hostWorkdirMount,
+      mountKind: opts.mountKind,
+      imageSource: opts.imageSource,
+      dockerfilePath: opts.dockerfilePath,
+      containerPortOverride: opts.containerPortOverride,
+      skipDefaultCommand: opts.skipDefaultCommand,
     });
     const driver = await resolveDriver();
     const binding: SandboxBinding = this.buildBinding(driver, sandbox, opts.serviceId);

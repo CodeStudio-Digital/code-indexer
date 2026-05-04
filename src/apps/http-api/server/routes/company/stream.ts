@@ -17,9 +17,53 @@ export const activeOrchestrators = {
   set: (id: number, o: CompanyOrchestrator) => orchestratorRegistry.set(id, o),
 };
 
+interface AttachmentBody {
+  name: string;
+  mediaType: string;
+  base64?: string;
+  text?: string;
+}
+
 interface StartBody {
   user_message: string;
   max_turns?: number;
+  attachments?: AttachmentBody[];
+}
+
+const MAX_ATTACHMENTS = 4;
+// 14 MB base64 ≈ 10 MB raw — generous for UI screenshots, hard cap for safety.
+const MAX_ATTACHMENT_BASE64_BYTES = 14 * 1024 * 1024;
+
+function validateAttachments(input: unknown): { ok: true; value: AttachmentBody[] | undefined } | { ok: false; error: string } {
+  if (input === undefined || input === null) return { ok: true, value: undefined };
+  if (!Array.isArray(input)) return { ok: false, error: 'attachments must be an array' };
+  if (input.length === 0) return { ok: true, value: undefined };
+  if (input.length > MAX_ATTACHMENTS) {
+    return { ok: false, error: `attachments: at most ${MAX_ATTACHMENTS} items` };
+  }
+  const out: AttachmentBody[] = [];
+  for (let i = 0; i < input.length; i++) {
+    const att = input[i];
+    if (!att || typeof att !== 'object') {
+      return { ok: false, error: `attachments[${i}] must be an object` };
+    }
+    const a = att as Record<string, unknown>;
+    if (typeof a.mediaType !== 'string' || !a.mediaType.startsWith('image/')) {
+      return { ok: false, error: `attachments[${i}].mediaType must be "image/*"` };
+    }
+    if (typeof a.base64 !== 'string' || a.base64.length === 0) {
+      return { ok: false, error: `attachments[${i}].base64 is required` };
+    }
+    if (a.base64.length > MAX_ATTACHMENT_BASE64_BYTES) {
+      return { ok: false, error: `attachments[${i}] is too large (max ~10 MB)` };
+    }
+    out.push({
+      name: typeof a.name === 'string' && a.name ? a.name : `attachment-${i + 1}`,
+      mediaType: a.mediaType,
+      base64: a.base64,
+    });
+  }
+  return { ok: true, value: out };
 }
 
 interface PlanResponseBody {
@@ -50,9 +94,14 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     if (!body.user_message) {
       return c.json({ error: 'user_message required' }, 400);
     }
+    const attachmentsCheck = validateAttachments(body.attachments);
+    if (!attachmentsCheck.ok) {
+      return c.json({ error: attachmentsCheck.error }, 400);
+    }
     // Capture into a local const so TS narrowing survives the async closure below.
     const userMessage = body.user_message;
     const maxTurnsRequested = body.max_turns;
+    const attachments = attachmentsCheck.value;
 
     // Serialize the "is there already a master for this id?" decision so two
     // concurrent POSTs cannot both pass the status check and each call
@@ -102,6 +151,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           model: config.master_model ?? 'claude-sonnet-4-6',
           maxTurns: maxTurnsRequested ?? 100,
           roleConfigs,
+          attachments,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -147,7 +197,12 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/resume', async (c) => {
     const id = parseIdParam(c);
-    const body = await parseJsonBody<{ message: string }>(c);
+    const body = await parseJsonBody<{ message: string; attachments?: AttachmentBody[] }>(c);
+    const attachmentsCheck = validateAttachments(body.attachments);
+    if (!attachmentsCheck.ok) {
+      return c.json({ error: attachmentsCheck.error }, 400);
+    }
+    const attachments = attachmentsCheck.value;
 
     // Serialize the "is there an existing orchestrator?" decision so two
     // concurrent /resume calls can't both observe registry-empty and each
@@ -159,7 +214,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     > => {
       const existing = orchestratorRegistry.get(id);
       if (existing) {
-        if (body.message) existing.sendMessageToMaster(body.message);
+        if (body.message) existing.sendMessageToMaster(body.message, { attachments });
         return { kind: 'attach', orchestrator: existing, since: parseLastEventId(c) };
       }
 
@@ -167,13 +222,17 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       if (!session) return { kind: 'reject', status: 404, body: { error: 'Not found' } };
       if (!body.message) return { kind: 'reject', status: 400, body: { error: 'message required' } };
 
-      // Check that there's a master run to resume
+      // Sub-sessions (migration 067): a brand-new tab has no master_run
+      // yet, so we cold-start instead of trying to resume.
       const agentRuns = companyStore.listAgentRuns(id);
       const masterRun = agentRuns.filter((r) => r.role === 'master').pop();
-      if (!masterRun) return { kind: 'reject', status: 400, body: { error: 'No master run found — use /start instead' } };
 
       // Parse role configs from session config
-      let config: { role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }> } = {};
+      let config: {
+        master_provider?: string;
+        master_model?: string;
+        role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }>;
+      } = {};
       try { config = JSON.parse(session.config_json); } catch { /* defaults */ }
       const roleConfigs = config.role_assignments ?? [];
 
@@ -186,11 +245,25 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       });
 
       try {
-        await orchestrator.resumeExistingMaster({
-          userMessage: body.message,
-          maxTurns: 100,
-          roleConfigs,
-        });
+        if (masterRun) {
+          await orchestrator.resumeExistingMaster({
+            userMessage: body.message,
+            maxTurns: 100,
+            roleConfigs,
+            attachments,
+          });
+        } else {
+          // Cold-start path for a brand-new sub-session in a resumable
+          // root. Same `startMaster` flow `/start` uses.
+          await orchestrator.startMaster({
+            userMessage: body.message,
+            provider: config.master_provider ?? 'anthropic',
+            model: config.master_model ?? 'claude-sonnet-4-6',
+            maxTurns: 100,
+            roleConfigs,
+            attachments,
+          });
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[company s=${id}] Resume failed:`, msg);
@@ -328,13 +401,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ error: 'Session has ended. Please start a new session.' }, 410);
     }
 
-    const body = await parseJsonBody<{ message: string; interject?: boolean }>(c);
+    const body = await parseJsonBody<{ message: string; interject?: boolean; attachments?: AttachmentBody[] }>(c);
     if (!body.message) {
       return c.json({ error: 'message required' }, 400);
+    }
+    const attachmentsCheck = validateAttachments(body.attachments);
+    if (!attachmentsCheck.ok) {
+      return c.json({ error: attachmentsCheck.error }, 400);
     }
 
     const result = orchestrator.sendMessageToMaster(body.message, {
       interject: body.interject,
+      attachments: attachmentsCheck.value,
     });
     if (!result.ok && result.pending === 'interactive_wait') {
       return c.json(

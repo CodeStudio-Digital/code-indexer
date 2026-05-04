@@ -46,7 +46,7 @@ export function BuilderView({ sessionId, sessionName, sessionStatus }: BuilderVi
   // SSE event wiring. 4s cadence balances freshness vs load — the
   // add/remove flows complete in tens of seconds anyway.
   const [extraServices, setExtraServices] = React.useState<
-    Array<{ id: string; label: string; previewUrl: string; status: string }>
+    Array<{ id: string; label: string; previewUrl: string; status: string; runtimePaused?: boolean }>
   >([]);
   React.useEffect(() => {
     let cancelled = false;
@@ -59,6 +59,7 @@ export function BuilderView({ sessionId, sessionName, sessionStatus }: BuilderVi
             service_id: string;
             name: string;
             status: string;
+            runtime_paused?: boolean;
             preview_url: string | null;
           }>;
         };
@@ -71,6 +72,7 @@ export function BuilderView({ sessionId, sessionName, sessionStatus }: BuilderVi
               label: s.name || s.service_id,
               previewUrl: s.preview_url!,
               status: s.status,
+              runtimePaused: !!s.runtime_paused,
             })),
         );
       } catch {

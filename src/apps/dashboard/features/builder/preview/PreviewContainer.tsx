@@ -4,8 +4,9 @@ import type { SandboxSnapshot } from '../useSandboxStatus.js';
 import { PreviewIframe } from './preview-iframe/PreviewIframe.js';
 import { FilesTab } from './files/FilesTab.js';
 import { GitTab } from './git/GitTab.js';
+import { ApiReferenceTab } from './api-reference/ApiReferenceTab.js';
 import { useSessionProjects } from './useSessionProjects.js';
-import { PREVIEW_TABS } from './tabs.js';
+import { PREVIEW_TABS, type TabValue } from './tabs.js';
 
 export interface PreviewContainerProps {
   snapshot: SandboxSnapshot | null;
@@ -14,24 +15,31 @@ export interface PreviewContainerProps {
   onRestartDev: () => Promise<void>;
   sessionId: number;
   fileChangeTick?: number;
-  extraServices?: Array<{ id: string; label: string; previewUrl: string; status: string }>;
+  extraServices?: Array<{
+    id: string;
+    label: string;
+    previewUrl: string;
+    status: string;
+    runtimePaused?: boolean;
+  }>;
 }
 
 /**
  * Right-hand panel of BuilderView. Tabs: Preview (iframe + toolbar),
- * Files (read-only filesystem tree), Git (status/diff/log + init).
+ * Files (read-only filesystem tree), Git (status/diff/log + init),
+ * API Reference (Scalar render of openapi.{yaml,json}).
  * All tabs share the same session's linked projects via
  * `useSessionProjects`.
  */
 export function PreviewContainer(props: PreviewContainerProps) {
-  const [tab, setTab] = useState<'preview' | 'files' | 'git'>('preview');
+  const [tab, setTab] = useState<TabValue>('preview');
   const { projects } = useSessionProjects(props.sessionId);
 
   return (
     <div className="flex flex-col h-full bg-card border-l">
       <Tabs
         value={tab}
-        onValueChange={(v) => setTab(v as 'preview' | 'files' | 'git')}
+        onValueChange={(v) => setTab(v as TabValue)}
         className="flex flex-col h-full min-h-0"
       >
         <div className="px-2 pt-2 border-b">
@@ -52,6 +60,14 @@ export function PreviewContainer(props: PreviewContainerProps) {
         </TabsContent>
         <TabsContent value="git" className="flex-1 min-h-0 mt-0 outline-none">
           <GitTab sessionId={props.sessionId} projects={projects} />
+        </TabsContent>
+        <TabsContent value="api-reference" className="flex-1 min-h-0 mt-0 outline-none">
+          <ApiReferenceTab
+            sessionId={props.sessionId}
+            snapshot={props.snapshot}
+            extraServices={props.extraServices ?? []}
+            fileChangeTick={props.fileChangeTick}
+          />
         </TabsContent>
       </Tabs>
     </div>

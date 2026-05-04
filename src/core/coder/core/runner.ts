@@ -1182,127 +1182,130 @@ export class CoderRunner extends EventEmitter {
           reason: tempResolution.reason,
         });
 
-        try {
-          const stream = this.opts.provider.chat({
-            system: this.opts.systemPrompt,
-            messages: compactHistoryForLLM(this.messages, compactionLimits),
-            tools,
-            thinking: this.opts.thinking,
-            ...(typeof tempResolution.temperature === 'number'
-              ? { inference: { temperature: tempResolution.temperature } }
-              : {}),
-            ...(this.previousResponseId
-              ? {
-                previousResponseId: this.previousResponseId,
-                previousResponseMessageCount: this.previousResponseMessageCount ?? 0,
-              }
-              : {}),
-          });
-          for await (const delta of stream) {
-            if (this.aborted) break;
-            this.handleDelta(delta, {
-              onText: (t) => {
-                pendingText += t;
-                this.emit('text_delta', t);
-              },
-              onThinking: (t) => {
-                pendingThinking += t;
-                this.emit('thinking_delta', t);
-              },
-              onToolCall: (id, name, input) => {
-                pendingToolCalls.set(id, { name, input });
-              },
-              onUsage: (u) => {
-                usageBox.value = u;
-              },
-              onResponseId: (id, messageCount) => {
-                this.previousResponseId = id;
-                this.previousResponseMessageCount = messageCount;
-                this.opts.onResponseId?.(id, messageCount);
-              },
-              onImageGenerated: (mediaType, base64) => {
-                pendingImages.push({ mediaType, base64 });
-              },
+        providerAttempt: while (true) {
+          try {
+            const stream = this.opts.provider.chat({
+              system: this.opts.systemPrompt,
+              messages: compactHistoryForLLM(this.messages, compactionLimits),
+              tools,
+              thinking: this.opts.thinking,
+              ...(typeof tempResolution.temperature === 'number'
+                ? { inference: { temperature: tempResolution.temperature } }
+                : {}),
+              ...(this.previousResponseId
+                ? {
+                  previousResponseId: this.previousResponseId,
+                  previousResponseMessageCount: this.previousResponseMessageCount ?? 0,
+                }
+                : {}),
             });
-          }
-        } catch (e) {
-          const error = e instanceof Error ? e : new Error(String(e));
-          // Retry once on recoverable provider 400 errors (message format issues).
-          // GLM/ZAI returns code 1214 for illegal message sequences that may be
-          // fixable by the compaction safety nets on a second pass.
-          const status = (e as { status?: number }).status;
-          const code = (e as { error?: { code?: string } }).error?.code;
-          const is400 = status === 400 || code === '1214';
-          if (is400 && !retriedThisTurn) {
-            retriedThisTurn = true;
-            console.warn(`[coder] provider returned 400 at turn ${turn}, retrying once`);
-            continue;
-          }
-
-          // 401: OAuth token expired mid-session (e.g. Copilot 25-min TTL).
-          // Re-create the provider to force a credential refresh, then retry.
-          const is401 = status === 401;
-          if (is401 && !retriedThisTurn && this.opts.createProvider) {
-            retriedThisTurn = true;
-            try {
-              const newProvider = await this.opts.createProvider(
-                this.opts.provider.name,
-                this.opts.provider.model,
-              );
-              this.swapProvider(newProvider);
-              console.warn(`[coder] 401 on turn ${turn} — refreshed OAuth credentials, retrying`);
-              continue;
-            } catch (refreshErr) {
-              console.error(
-                `[coder] credential refresh failed after 401: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
-              );
+            for await (const delta of stream) {
+              if (this.aborted) break;
+              this.handleDelta(delta, {
+                onText: (t) => {
+                  pendingText += t;
+                  this.emit('text_delta', t);
+                },
+                onThinking: (t) => {
+                  pendingThinking += t;
+                  this.emit('thinking_delta', t);
+                },
+                onToolCall: (id, name, input) => {
+                  pendingToolCalls.set(id, { name, input });
+                },
+                onUsage: (u) => {
+                  usageBox.value = u;
+                },
+                onResponseId: (id, messageCount) => {
+                  this.previousResponseId = id;
+                  this.previousResponseMessageCount = messageCount;
+                  this.opts.onResponseId?.(id, messageCount);
+                },
+                onImageGenerated: (mediaType, base64) => {
+                  pendingImages.push({ mediaType, base64 });
+                },
+              });
             }
-          }
+            break;
+          } catch (e) {
+            const error = e instanceof Error ? e : new Error(String(e));
+            // Retry once on recoverable provider 400 errors (message format issues).
+            // GLM/ZAI returns code 1214 for illegal message sequences that may be
+            // fixable by the compaction safety nets on a second pass.
+            const status = (e as { status?: number }).status;
+            const code = (e as { error?: { code?: string } }).error?.code;
+            const is400 = status === 400 || code === '1214';
+            if (is400 && !retriedThisTurn) {
+              retriedThisTurn = true;
+              console.warn(`[coder] provider returned 400 at turn ${turn}, retrying once`);
+              continue providerAttempt;
+            }
 
-          // Fallback: on persistent errors (400 after retry, 401 without refresh,
-          // 429, 5xx, timeout), try switching to the next provider in the fallback chain.
-          const is429 = status === 429;
-          const isTimeout = error.message?.includes('timeout') || status === 504 || status === 408;
-          const is5xx = status !== undefined && status >= 500 && status < 600;
-          const shouldFallback = (is400 && retriedThisTurn) || is401 || is429 || isTimeout || is5xx;
-
-          if (shouldFallback && this.opts.fallbackChain && this.opts.createProvider) {
-            const { nextFallback } = await import('./fallback.js');
-            const next = nextFallback(this.opts.fallbackChain);
-            if (next) {
-              const oldProvider = { provider: this.opts.provider.name ?? 'unknown', model: this.opts.provider.model ?? 'unknown' };
+            // 401: OAuth token expired mid-session (e.g. Copilot 25-min TTL).
+            // Re-create the provider to force a credential refresh, then retry.
+            const is401 = status === 401;
+            if (is401 && !retriedThisTurn && this.opts.createProvider) {
+              retriedThisTurn = true;
               try {
-                const newProvider = await this.opts.createProvider(next.provider, next.model);
+                const newProvider = await this.opts.createProvider(
+                  this.opts.provider.name,
+                  this.opts.provider.model,
+                );
                 this.swapProvider(newProvider);
-                console.warn(`[coder] Fallback activated: ${oldProvider.provider}/${oldProvider.model} → ${next.provider}/${next.model} (error: ${error.message})`);
-                this.emit('fallback_activated', {
-                  from: oldProvider,
-                  to: next,
-                  error: error.message,
-                });
-                // Fire hook
-                await this.opts.hookRegistry?.fireFallback({
-                  sessionId: 0, projectName: '', provider: next.provider, model: next.model, turn,
-                  from: oldProvider,
-                  to: next,
-                  triggerError: error.message,
-                });
-                continue; // retry the turn with the new provider
-              } catch (fallbackErr) {
-                console.error(`[coder] Fallback provider creation failed: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+                console.warn(`[coder] 401 on turn ${turn} — refreshed OAuth credentials, retrying`);
+                continue providerAttempt;
+              } catch (refreshErr) {
+                console.error(
+                  `[coder] credential refresh failed after 401: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
+                );
               }
             }
+
+            // Fallback: on persistent errors (400 after retry, 401 without refresh,
+            // 429, 5xx, timeout), try switching to the next provider in the fallback chain.
+            const is429 = status === 429;
+            const isTimeout = error.message?.includes('timeout') || status === 504 || status === 408;
+            const is5xx = status !== undefined && status >= 500 && status < 600;
+            const shouldFallback = (is400 && retriedThisTurn) || is401 || is429 || isTimeout || is5xx;
+
+            if (shouldFallback && this.opts.fallbackChain && this.opts.createProvider) {
+              const { nextFallback } = await import('./fallback.js');
+              const next = nextFallback(this.opts.fallbackChain);
+              if (next) {
+                const oldProvider = { provider: this.opts.provider.name ?? 'unknown', model: this.opts.provider.model ?? 'unknown' };
+                try {
+                  const newProvider = await this.opts.createProvider(next.provider, next.model);
+                  this.swapProvider(newProvider);
+                  console.warn(`[coder] Fallback activated: ${oldProvider.provider}/${oldProvider.model} → ${next.provider}/${next.model} (error: ${error.message})`);
+                  this.emit('fallback_activated', {
+                    from: oldProvider,
+                    to: next,
+                    error: error.message,
+                  });
+                  // Fire hook
+                  await this.opts.hookRegistry?.fireFallback({
+                    sessionId: 0, projectName: '', provider: next.provider, model: next.model, turn,
+                    from: oldProvider,
+                    to: next,
+                    triggerError: error.message,
+                  });
+                  continue providerAttempt; // retry the turn with the new provider
+                } catch (fallbackErr) {
+                  console.error(`[coder] Fallback provider creation failed: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+                }
+              }
+            }
+
+            // Fire error hook before giving up
+            await this.opts.hookRegistry?.fireError({
+              sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
+              model: this.opts.provider.model ?? 'unknown', turn,
+              error, errorType: 'provider', willRetry: false, willFallback: false,
+            });
+
+            this.emit('done', 'error', error);
+            return { totalUsage, reason: 'error' };
           }
-
-          // Fire error hook before giving up
-          await this.opts.hookRegistry?.fireError({
-            sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
-            model: this.opts.provider.model ?? 'unknown', turn,
-            error, errorType: 'provider', willRetry: false, willFallback: false,
-          });
-
-          this.emit('done', 'error', error);
-          return { totalUsage, reason: 'error' };
         }
 
         // Build assistant message in correct block order: thinking first, text,

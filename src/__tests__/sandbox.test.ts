@@ -1,11 +1,14 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PortAllocator } from '../core/sandbox/port-allocator.js';
 import { SandboxFilesystemAdapter } from '../core/sandbox/adapters/sandbox-filesystem-adapter.js';
 import { SandboxShellAdapter } from '../core/sandbox/adapters/sandbox-shell-adapter.js';
 import {
   SandboxManager,
   sessionNetworkName,
+  setCompanySandboxServicesStore,
+  setCompanySandboxStore,
 } from '../core/sandbox/sandbox-manager.js';
+import { setDriverForTests } from '../core/sandbox/drivers/driver-factory.js';
 import type {
   ISandboxDriver,
   SandboxCreateSpec,
@@ -15,6 +18,7 @@ import type {
   SandboxReaddirEntry,
   SandboxStatsSample,
 } from '../core/sandbox/ports/sandbox-driver.js';
+import type { Sandbox } from '../core/sandbox/types.js';
 
 /**
  * A minimal in-memory driver mock — zero dependency on Docker/Podman.
@@ -25,7 +29,16 @@ class FakeDriver implements ISandboxDriver {
   readonly files = new Map<string, string>();
   readonly dirs = new Set<string>(['/app']);
   readonly calls: string[] = [];
+  exists = true;
+  running = true;
+  paused = false;
 
+  async build() {
+    this.calls.push('build');
+  }
+  async removeImage(tag: string) {
+    this.calls.push(`removeImage:${tag}`);
+  }
   async create(_: SandboxCreateSpec) {
     return { containerId: 'fake-container' };
   }
@@ -82,13 +95,22 @@ class FakeDriver implements ISandboxDriver {
     this.calls.push('importWorkdir');
   }
   async inspectContainer(): Promise<SandboxInspectResult> {
-    return { exists: true, running: true, labels: {} };
+    this.calls.push('inspectContainer');
+    return { exists: this.exists, running: this.running, paused: this.paused, labels: {} };
   }
   async startContainer(): Promise<void> {
     this.calls.push('startContainer');
   }
   async stopContainer(): Promise<void> {
     this.calls.push('stopContainer');
+  }
+  async pauseContainer(): Promise<void> {
+    this.calls.push('pauseContainer');
+    this.paused = true;
+  }
+  async unpauseContainer(): Promise<void> {
+    this.calls.push('unpauseContainer');
+    this.paused = false;
   }
   async getContainerLogs(): Promise<string> {
     return '';
@@ -97,6 +119,104 @@ class FakeDriver implements ISandboxDriver {
     return null;
   }
 }
+
+function makeSandbox(id: string): Sandbox {
+  return {
+    id,
+    containerId: `${id}-container`,
+    runtime: 'docker',
+    stack: 'react-ts',
+    hostPort: 45_020,
+    workdir: '/app',
+    containerPort: 5173,
+    previewUrl: `/preview/${id}/`,
+    limits: { memory: '1g', cpus: '1', pids: 256 },
+    status: 'ready',
+    runtimePaused: false,
+    step: 'ready',
+    recentLogs: [],
+    createdAt: Date.now(),
+    lastAccessAt: Date.now(),
+    mountKind: 'owned',
+    imageSource: 'default',
+  };
+}
+
+describe('SandboxManager targeted reconciliation', () => {
+  beforeEach(() => {
+    setCompanySandboxStore(null);
+    setCompanySandboxServicesStore(null);
+    setDriverForTests(null);
+    delete process.env.MCP_SANDBOX_AUTO_IDLE_REAPER;
+  });
+
+  afterEach(() => {
+    setCompanySandboxStore(null);
+    setCompanySandboxServicesStore(null);
+    setDriverForTests(null);
+    delete process.env.MCP_SANDBOX_AUTO_IDLE_REAPER;
+  });
+
+  it('hydrates only the requested service row without global DB scans or starts', async () => {
+    const driver = new FakeDriver();
+    setDriverForTests(driver);
+
+    const row = {
+      session_id: 1,
+      service_id: 'api',
+      name: 'api',
+      container_id: 'api-container',
+      runtime: 'docker' as const,
+      stack: 'react-ts',
+      workdir: '/app',
+      host_workdir_mount: null,
+      host_port: 45_021,
+      limits_json: '{}',
+      status: 'running' as const,
+      error: null,
+      mount_kind: 'external' as const,
+      image_source: 'default' as const,
+      built_image_tag: null,
+      dockerfile_path: null,
+      dockerfile_exposed_port: null,
+      is_primary: 0 as const,
+      last_access_at_ms: 123,
+      paused_at_ms: null,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    };
+    const serviceStore = {
+      get: vi.fn(() => row),
+      listBySession: vi.fn(() => {
+        throw new Error('listBySession should not be called for a single service');
+      }),
+      listActive: vi.fn(() => {
+        throw new Error('listActive should not be called for a single service');
+      }),
+      patch: vi.fn(),
+    };
+    const primaryStore = {
+      get: vi.fn(() => null),
+      listActive: vi.fn(() => {
+        throw new Error('primary listActive should not be called');
+      }),
+      patch: vi.fn(),
+      delete: vi.fn(),
+    };
+    setCompanySandboxServicesStore(serviceStore as never);
+    setCompanySandboxStore(primaryStore as never);
+
+    const mgr = new SandboxManager({ statsIntervalMs: 0 });
+    const sb = await mgr.reconcileServiceFromDb('1', 'api');
+
+    expect(sb?.id).toBe('1:api');
+    expect(serviceStore.get).toHaveBeenCalledWith(1, 'api');
+    expect(serviceStore.listBySession).not.toHaveBeenCalled();
+    expect(serviceStore.listActive).not.toHaveBeenCalled();
+    expect(primaryStore.listActive).not.toHaveBeenCalled();
+    expect(driver.calls).toEqual(['inspectContainer']);
+  });
+});
 
 describe('PortAllocator', () => {
   it('hands out unique ports within the pool', async () => {
@@ -219,8 +339,6 @@ describe('multi-service sandbox (migration 035)', () => {
   it('rejects invalid or reserved service_ids', async () => {
     const driver = new FakeDriver();
     const mgr = new SandboxManager({ driver });
-    // Without a primary sandbox provisioned first, the manager must
-    // refuse — we can't add a sidecar to nothing.
     await expect(
       mgr.provisionAdditionalService({
         sessionId: '999',
@@ -235,14 +353,6 @@ describe('multi-service sandbox (migration 035)', () => {
         stack: 'react-ts',
       }),
     ).rejects.toThrow(/Invalid service_id/);
-    // Valid id but no primary in the map yet.
-    await expect(
-      mgr.provisionAdditionalService({
-        sessionId: '999',
-        serviceId: 'worker',
-        stack: 'react-ts',
-      }),
-    ).rejects.toThrow(/primary sandbox/);
   });
 
   it('listServices filters by session prefix', () => {
@@ -250,5 +360,61 @@ describe('multi-service sandbox (migration 035)', () => {
     // listServices() is safe to call on an empty manager — returns [].
     expect(mgr.listServices('1')).toEqual([]);
     expect(mgr.getService('1', 'api')).toBeUndefined();
+  });
+
+  it('runtime-pauses and unpauses the primary container without stopping it', async () => {
+    const driver = new FakeDriver();
+    const mgr = new SandboxManager({ driver, statsIntervalMs: 0 });
+    const sb = makeSandbox('1');
+    (mgr as unknown as { sandboxes: Map<string, Sandbox> }).sandboxes.set('1', sb);
+
+    await mgr.pauseRuntimeContainer('1', 'main');
+    expect(driver.calls).toContain('pauseContainer');
+    expect(sb.runtimePaused).toBe(true);
+    expect(sb.status).toBe('ready');
+
+    await mgr.unpauseRuntimeContainer('1', 'main');
+    expect(driver.calls).toContain('unpauseContainer');
+    expect(sb.runtimePaused).toBe(false);
+    expect(sb.status).toBe('ready');
+  });
+
+  it('runtime-pauses and unpauses a secondary service container', async () => {
+    const driver = new FakeDriver();
+    const mgr = new SandboxManager({ driver, statsIntervalMs: 0 });
+    const sb = makeSandbox('1:api');
+    (mgr as unknown as { services: Map<string, Sandbox> }).services.set('1:api', sb);
+
+    await mgr.pauseRuntimeContainer('1', 'api');
+    expect(driver.calls).toContain('pauseContainer');
+    expect(sb.runtimePaused).toBe(true);
+
+    await mgr.unpauseRuntimeContainer('1', 'api');
+    expect(driver.calls).toContain('unpauseContainer');
+    expect(sb.runtimePaused).toBe(false);
+  });
+
+  it('treats an already runtime-paused container as an idempotent pause', async () => {
+    const driver = new FakeDriver();
+    driver.paused = true;
+    const mgr = new SandboxManager({ driver, statsIntervalMs: 0 });
+    const sb = makeSandbox('1');
+    (mgr as unknown as { sandboxes: Map<string, Sandbox> }).sandboxes.set('1', sb);
+
+    await mgr.pauseRuntimeContainer('1', 'main');
+    expect(driver.calls).not.toContain('pauseContainer');
+    expect(sb.runtimePaused).toBe(true);
+    expect(sb.status).toBe('ready');
+  });
+
+  it('rejects runtime pause when the container no longer exists', async () => {
+    const driver = new FakeDriver();
+    driver.exists = false;
+    const mgr = new SandboxManager({ driver, statsIntervalMs: 0 });
+    const sb = makeSandbox('1');
+    (mgr as unknown as { sandboxes: Map<string, Sandbox> }).sandboxes.set('1', sb);
+
+    await expect(mgr.pauseRuntimeContainer('1', 'main')).rejects.toThrow(/no longer exists/);
+    expect(sb.runtimePaused).toBe(false);
   });
 });

@@ -32,6 +32,7 @@ import { buildBoardTools } from './tools/company/board-tools.js';
 import { buildQaTools } from './tools/company/qa/index.js';
 import { buildDesignSystemTools } from './tools/company/design-system/index.js';
 import { buildSubordinateTools } from './tools/company/subordinate-tools.js';
+import { buildSharedDriveTools } from './tools/company/shared-drive-tools.js';
 import { sandboxTools } from './tools/company/sandbox-tools.js';
 import { docsTools } from './tools/company/docs-tools.js';
 import { envTools } from './tools/company/env-tools.js';
@@ -60,7 +61,7 @@ import { matchSkills, type SkillMatchContext } from './skills/skill-matcher.js';
 import { SessionStore } from './sessions/store.js';
 import { ProviderStore } from '../../store/provider-store.js';
 import type { CoderSession } from './sessions/types.js';
-import type { AgentMessage, ChatUsage, ContentBlock } from './core/messages.js';
+import { attachmentsToBlocks, type AgentMessage, type ChatUsage } from './core/messages.js';
 import type { ToolContext } from './core/tool.js';
 
 export interface CoderAttachment {
@@ -346,6 +347,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // registry, meaning they are trimmed first when the model tool cap kicks in.
   const mcpServerManager = new McpServerManager(opts.mcpBearerResolver ?? null);
   let externalToolTiers: ReadonlyMap<string, import('./tools/tiers.js').ToolTier> | undefined;
+  // Subordinate-only override: turns each connected MCP server into its own
+  // expandable custom tier (named by server id) so the agent sees the pack
+  // in the system prompt and unlocks it on demand via expand_toolset, instead
+  // of the admin's `default_tier` deciding visibility per-server.
+  let subordinateTierSummary: Map<string, { displayName: string; toolCount: number }> | undefined;
+  const isSubordinate = !!opts.companyContext && !opts.companyContext.isMaster;
   try {
     const mcpServerStore = new McpServerStore(config.dbPath);
     const enabledServers = mcpServerStore.listServers({ enabled: true });
@@ -366,6 +373,25 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         console.log(
           `[coder] ${extTools.length} external tool(s) from ${mcpServerManager.connectedCount} MCP server(s)`,
         );
+
+        if (isSubordinate) {
+          const subTierMap = new Map<string, import('./tools/tiers.js').ToolTier>();
+          subordinateTierSummary = new Map();
+          for (const srv of enabledServers) {
+            const prefix = `ext_${srv.id}__`;
+            const srvToolNames = extTools.filter((t) => t.name.startsWith(prefix)).map((t) => t.name);
+            if (srvToolNames.length === 0) continue;
+            for (const n of srvToolNames) subTierMap.set(n, srv.id);
+            subordinateTierSummary.set(srv.id, { displayName: srv.name, toolCount: srvToolNames.length });
+          }
+          externalToolTiers = subTierMap;
+          if (subordinateTierSummary.size > 0) {
+            console.log(
+              `[coder] subordinate ${opts.companyContext!.agentRole}: external MCPs as opt-in tiers ` +
+                `[${[...subordinateTierSummary.keys()].join(', ')}] — call expand_toolset to unlock`,
+            );
+          }
+        }
       }
     }
     mcpServerStore.close();
@@ -375,7 +401,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // expand_toolset — registered AFTER external servers so the tier enum
   // includes any custom tiers (e.g., "cloudflare", "github") from connected servers.
-  const customTierSummary = mcpServerManager.getCustomTierSummary();
+  // For subordinates, every enabled MCP server is exposed as its own opt-in tier
+  // (regardless of admin's `default_tier`) so the master/session-free behavior
+  // (which respects the configured tier) is preserved.
+  const customTierSummary = subordinateTierSummary ?? mcpServerManager.getCustomTierSummary();
   registry.registerAll(buildExpandTools(customTierSummary.size > 0 ? customTierSummary : undefined));
 
   // Load disabled tools early so the subagent parentTools snapshot is already
@@ -410,6 +439,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (opts.companyContext) {
     const { orchestrator, agentRole, isMaster, agentRunId } = opts.companyContext;
     registry.registerAll(buildBoardTools(orchestrator, agentRole, agentRunId));
+    // Shared drive: persistent file pool scoped to the company template,
+    // visible to master and every subordinate. Lets agents exchange large
+    // documents without inflating board posts or inbox messages.
+    registry.registerAll(buildSharedDriveTools());
     // Subordinate kanban tools: self-service card updates (comment, checklist, move-to-review)
     if (!isMaster && agentRunId != null) {
       registry.registerAll(buildSubordinateKanbanTools(orchestrator, agentRole, agentRunId));
@@ -883,21 +916,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   });
 
   if (!opts.resume) {
-    // Build user content blocks: text first, then attachments
-    const userBlocks: ContentBlock[] = [{ type: 'text', text: opts.userMessage }];
-    for (const att of opts.attachments ?? []) {
-      if (att.mediaType.startsWith('image/') && att.base64) {
-        userBlocks.push({ type: 'image', mediaType: att.mediaType, base64: att.base64 });
-      } else {
-        userBlocks.push({
-          type: 'document',
-          name: att.name,
-          mediaType: att.mediaType,
-          text: att.text,
-          base64: att.base64,
-        });
-      }
-    }
+    const userBlocks = attachmentsToBlocks(opts.userMessage, opts.attachments);
     runner.pushUserContent(userBlocks);
     store.appendMessage(session.id, { role: 'user', content: userBlocks });
   } else {

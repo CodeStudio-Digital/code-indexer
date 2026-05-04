@@ -16,6 +16,14 @@ export interface SessionContextOpts {
   companyStore: CompanyStore;
   db: CodeIndexDB;
   metaBus: CoderRunBus;
+  /**
+   * Migration 067: when this session is a sub-session, project links
+   * fall back to the parent's `company_session_projects` so all tabs of
+   * the same root see the same project list. Read once at construction
+   * (also re-read by `refreshProjects`) — no live link to parent's DB
+   * mutations beyond the explicit refresh.
+   */
+  parentSessionId?: number | null;
 }
 
 export class SessionContext {
@@ -23,6 +31,7 @@ export class SessionContext {
   readonly companyStore: CompanyStore;
   readonly db: CodeIndexDB;
   readonly metaBus: CoderRunBus;
+  readonly parentSessionId: number | null;
 
   private _aborted = false;
   private _projects: CompanySessionProject[];
@@ -32,7 +41,15 @@ export class SessionContext {
     this.companyStore = opts.companyStore;
     this.db = opts.db;
     this.metaBus = opts.metaBus;
-    this._projects = opts.companyStore.listCompanySessionProjects(opts.companySessionId);
+    this.parentSessionId = opts.parentSessionId ?? null;
+    this._projects = this.loadProjects();
+  }
+
+  /** Own projects first; if empty AND child, fall back to parent's. */
+  private loadProjects(): CompanySessionProject[] {
+    const own = this.companyStore.listCompanySessionProjects(this.companySessionId);
+    if (own.length > 0 || this.parentSessionId == null) return own;
+    return this.companyStore.listCompanySessionProjects(this.parentSessionId);
   }
 
   get projects(): ReadonlyArray<CompanySessionProject> {
@@ -53,6 +70,6 @@ export class SessionContext {
 
   /** Re-read projects from the DB (e.g., after an admin modified links). */
   refreshProjects(): void {
-    this._projects = this.companyStore.listCompanySessionProjects(this.companySessionId);
+    this._projects = this.loadProjects();
   }
 }

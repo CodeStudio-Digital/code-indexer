@@ -2,6 +2,7 @@ import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { mountCompanyTemplateRoutes } from './templates.js';
 import { mountCompanySessionRoutes } from './sessions.js';
+import { mountCompanyChildRoutes } from './children.js';
 import { mountCompanyStreamRoutes } from './stream.js';
 import { mountCompanyBoardRoutes } from './board.js';
 import { mountCompanyKanbanRoutes } from './kanban.js';
@@ -10,11 +11,13 @@ import { mountCompanyDatabaseRoutes } from './databases.js';
 import { mountCompanyLocalProjectRoutes } from './local-project.js';
 import { mountCompanyPipelineRoutes } from './pipelines.js';
 import { mountCompanyInboxRoutes } from './inbox.js';
+import { mountCompanyDriveRoutes } from './drive.js';
 import { mountQaRoutes } from './qa/index.js';
 
 export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyTemplateRoutes(app, deps);
   mountCompanySessionRoutes(app, deps);
+  mountCompanyChildRoutes(app, deps);
   mountCompanyStreamRoutes(app, deps);
   mountCompanyBoardRoutes(app, deps);
   mountCompanyKanbanRoutes(app, deps);
@@ -23,5 +26,6 @@ export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyLocalProjectRoutes(app, deps);
   mountCompanyPipelineRoutes(app, deps);
   mountCompanyInboxRoutes(app, deps);
+  mountCompanyDriveRoutes(app, deps);
   mountQaRoutes(app, deps);
 }

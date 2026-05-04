@@ -110,6 +110,16 @@ export class E2BDriver implements ISandboxDriver {
   /** Public URL per-port, cached to avoid re-resolving on every probe. */
   private readonly hostUrls = new Map<string, string>();
 
+  async build(): Promise<void> {
+    throw new Error(
+      'Project Dockerfile builds are not supported by the E2B driver. Use Docker or Podman for external projects.',
+    );
+  }
+
+  async removeImage(_tag: string): Promise<void> {
+    // E2B has no local OCI image cache to remove.
+  }
+
   async create(spec: SandboxCreateSpec): Promise<{ containerId: string }> {
     const { Sandbox } = await loadSdk();
     const template = process.env.E2B_TEMPLATE ?? 'base';
@@ -151,7 +161,7 @@ export class E2BDriver implements ISandboxDriver {
     // `running: exists` — the caller treats paused state as non-existent
     // on E2B since we don't support pause/resume there.
     const exists = this.handles.has(containerId);
-    return { exists, running: exists, labels: {} };
+    return { exists, running: exists, paused: false, labels: {} };
   }
 
   async startContainer(_containerId: string): Promise<void> {
@@ -164,6 +174,14 @@ export class E2BDriver implements ISandboxDriver {
 
   async stopContainer(_containerId: string): Promise<void> {
     throw new Error('E2B driver does not support stop; destroy instead.');
+  }
+
+  async pauseContainer(_containerId: string): Promise<void> {
+    throw new Error('E2B driver does not support runtime pause.');
+  }
+
+  async unpauseContainer(_containerId: string): Promise<void> {
+    throw new Error('E2B driver does not support runtime unpause.');
   }
 
   async exec(

@@ -62,6 +62,13 @@ const COMPANY_TOOL_PREFIXES = [
   'finalize_subordinates',
   'post_to_board',
   'read_board',
+  // Shared drive (company-scoped file pool). Master must be able to read
+  // artifacts dropped by subordinates and write briefs of its own.
+  'write_shared_file',
+  'read_shared_file',
+  'list_shared_files',
+  'delete_shared_file',
+  'append_shared_file',
   'set_agent_status',
   'kanban_',
   // Design System Creator tools — master needs `ds_publish_version` and

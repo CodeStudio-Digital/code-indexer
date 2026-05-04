@@ -161,6 +161,13 @@ export interface CompanySession {
   status: CompanySessionStatus;
   master_session_id: number | null;
   config_json: string;
+  /**
+   * Multi-front via sub-sessions (migration 067): when set, this row is
+   * a child "tab" of `parent_session_id` and shares
+   * sandbox/projects/kanban/pipelines with the parent. NULL = root
+   * session (a parent or a standalone single-tab session).
+   */
+  parent_session_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -339,6 +346,13 @@ export interface BuilderServiceConfig {
   name?: string;
   /** Free-form stack key validated by the scaffolder registry at runtime. */
   stack: string;
+  /** Whether files are builder-owned or an existing user project. */
+  mountKind?: 'owned' | 'external';
+  /** Whether the image is the MCP default image or built from a project Dockerfile. */
+  imageSource?: 'default' | 'project_dockerfile';
+  dockerfilePath?: string;
+  containerPortOverride?: number;
+  skipDefaultCommand?: boolean;
   /** Optional per-service CPU/memory/pids override. */
   limits?: {
     memory?: string;

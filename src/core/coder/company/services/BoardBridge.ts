@@ -7,6 +7,11 @@
  *
  * The auto-hook is the one place where BoardBridge knows about Kanban; we
  * inject `IKanbanNotifier` so the dependency is narrow and testable.
+ *
+ * Multi-front (migration 067) is achieved by having the orchestrator
+ * scope itself to a single CompanySession — sub-sessions are siblings
+ * via `parent_session_id`, and the board is naturally isolated by the
+ * `company_session_id` FK. No per-front bookkeeping needed here.
  */
 
 import type { SessionContext } from './SessionContext.js';

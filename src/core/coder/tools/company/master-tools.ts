@@ -7,6 +7,7 @@
 import type { CoderTool, ToolResult, JsonSchema } from '../../core/tool.js';
 import { ok, err } from '../../core/tool.js';
 import type { CompanyOrchestrator } from '../../company/orchestrator.js';
+import { attachmentsToBlocks } from '../../core/messages.js';
 import { buildPipelineMasterTools } from './pipeline-tools.js';
 
 export function buildMasterTools(orchestrator: CompanyOrchestrator): CoderTool[] {
@@ -55,6 +56,10 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
       skills: { type: 'array', items: { type: 'string' }, description: 'Optional skill IDs. IGNORED for template-locked roles (template skills win).' },
       kanban_card_id: { type: 'number', description: 'Optional Kanban card ID. When provided, the card\'s full context (description, checklist, comments) is prepended to the task, the agent is auto-assigned to the card, and the card moves to in_progress.' },
       wait: { type: 'boolean', description: 'If true, block until the subordinate completes (default: false)' },
+      forward_user_attachments: {
+        type: 'boolean',
+        description: 'When true, includes the images the user attached to their most recent message (e.g. design inspiration, screenshots) so the subordinate sees them natively. Set this whenever the user shared a visual that informs the task.',
+      },
     },
     required: ['role', 'task'],
   };
@@ -98,6 +103,11 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
               `tier=${argTier ?? '∅'} skills=${argSkills ? argSkills.join(',') : '∅'}`,
           );
         }
+        const forwardAtts = args.forward_user_attachments as boolean | undefined;
+        const attachments = forwardAtts
+          ? [...orchestrator.getMasterLastUserAttachments()]
+          : undefined;
+
         const result = await orchestrator.spawnSubordinate({
           role,
           task,
@@ -111,6 +121,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           wait: args.wait as boolean | undefined,
           roleOverride: defaults?.systemPromptOverride,
           temperature: defaults?.temperature,
+          attachments: attachments && attachments.length > 0 ? attachments : undefined,
         });
 
         // Auto-assign agent to Kanban card and move to in_progress
@@ -437,6 +448,10 @@ function forwardToAgent(orchestrator: CompanyOrchestrator): CoderTool {
     properties: {
       agent_run_id: { type: 'number', description: 'ID of the target subordinate agent' },
       message: { type: 'string', description: 'Message to forward to the agent' },
+      forward_user_attachments: {
+        type: 'boolean',
+        description: 'When true, includes the images the user attached to their most recent message so the subordinate sees them natively. Set this whenever the visual context matters for what you are forwarding.',
+      },
     },
     required: ['agent_run_id', 'message'],
   };
@@ -449,26 +464,42 @@ function forwardToAgent(orchestrator: CompanyOrchestrator): CoderTool {
     handler: async (args) => {
       const agentRunId = args.agent_run_id as number;
       const message = args.message as string;
+      const forwardAtts = args.forward_user_attachments as boolean | undefined;
+      const attachments = forwardAtts
+        ? [...orchestrator.getMasterLastUserAttachments()]
+        : [];
 
       const sub = orchestrator.getSubordinate(agentRunId);
       const dbStatus = orchestrator.getSubordinateStatus(agentRunId);
 
       // Post to board first
       const roleName = sub?.role ?? `agent-${agentRunId}`;
+      const boardSuffix = attachments.length > 0
+        ? `\n\n_[${attachments.length} ${attachments.length === 1 ? 'attachment' : 'attachments'} forwarded]_`
+        : '';
       orchestrator.postToBoard('master', null, 'handoff',
-        `[@${roleName}] ${message}`, [roleName]);
+        `[@${roleName}] ${message}${boardSuffix}`, [roleName]);
 
       const isRunning = orchestrator.isSubordinateRunning(agentRunId);
+      const prefixed = `[From Master]: ${message}`;
 
       // If the agent is actually running its event loop, push directly.
       if (isRunning && sub) {
-        sub.runner.pushUserMessage(`[From Master]: ${message}`);
+        if (attachments.length > 0) {
+          sub.runner.pushUserContent(attachmentsToBlocks(prefixed, attachments));
+        } else {
+          sub.runner.pushUserMessage(prefixed);
+        }
         return ok(`Message forwarded to ${roleName} (agent_run_id=${agentRunId})`);
       }
 
       // Otherwise, the agent is dead (waiting, completed, errored, aborted),
       // we must reactivate it via a new runCoder call.
-      const reactivated = await orchestrator.reactivateSubordinate(agentRunId, `[From Master]: ${message}`);
+      const reactivated = await orchestrator.reactivateSubordinate(
+        agentRunId,
+        prefixed,
+        attachments.length > 0 ? attachments : undefined,
+      );
       if (reactivated) {
         return ok(`Reactivated ${roleName} (agent_run_id=${agentRunId}) with new task. Agent is running again with full context preserved.`);
       }
@@ -614,13 +645,16 @@ function listContainers(orchestrator: CompanyOrchestrator): CoderTool {
             binding.driver.inspectContainer(binding.containerId).catch(() => ({
               exists: false,
               running: false,
+              paused: false,
               labels: {} as Record<string, string>,
             })),
             binding.driver.getContainerState(binding.containerId).catch(() => null),
           ]);
           const status = !inspect.exists
             ? 'gone'
-            : inspect.running
+            : inspect.paused
+              ? 'paused'
+              : inspect.running
               ? 'running'
               : 'stopped';
           const parts: string[] = [];

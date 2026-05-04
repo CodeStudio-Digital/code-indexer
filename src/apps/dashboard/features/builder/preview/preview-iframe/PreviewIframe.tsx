@@ -12,7 +12,7 @@ export interface PreviewIframeProps {
   onRestartDev: () => Promise<void>;
   sessionId: number;
   fileChangeTick?: number;
-  extraServices?: Array<{ id: string; label: string; previewUrl: string; status: string }>;
+  extraServices?: Array<{ id: string; label: string; previewUrl: string; status: string; runtimePaused?: boolean }>;
 }
 
 const STEP_LABELS: Record<SandboxStepLabel, string> = {
@@ -42,7 +42,7 @@ export function PreviewIframe({
   const [selectedService, setSelectedService] = useState<string>('main');
 
   const sandbox = snapshot?.sandbox;
-  const status = sandbox?.status ?? (snapshot?.builder ? 'pending' : null);
+  const status = sandbox?.status ?? (snapshot?.builder ? 'paused' : null);
   const activeExtra =
     selectedService !== 'main'
       ? extraServices.find((s) => s.id === selectedService) ?? null
@@ -53,6 +53,8 @@ export function PreviewIframe({
       ? 'ready'
       : activeExtra.status
     : status;
+  const runtimePaused = activeExtra ? !!activeExtra.runtimePaused : !!sandbox?.runtimePaused;
+  const toolbarStatus = runtimePaused ? 'paused' : effectiveStatus;
 
   useEffect(() => {
     if (fileChangeTick > 0 && status === 'ready') {
@@ -91,7 +93,7 @@ export function PreviewIframe({
     >
       <option value="main">Primary</option>
       {extraServices.map((s) => (
-        <option key={s.id} value={s.id}>{s.label} ({s.status})</option>
+        <option key={s.id} value={s.id}>{s.label} ({s.runtimePaused ? 'paused' : s.status})</option>
       ))}
     </select>
   ) : null;
@@ -99,17 +101,17 @@ export function PreviewIframe({
   return (
     <div className="flex flex-col h-full bg-card">
       <PreviewToolbar
-        status={effectiveStatus}
+        status={toolbarStatus}
         previewUrl={previewUrl}
         restartingDev={restartingDev}
-        canOpenLogs={!!sandbox}
+        canOpenLogs={!!sandbox && !runtimePaused}
         onRestartDev={handleRestartDev}
         onOpenLogs={() => setLogOverlayOpen(true)}
         onReload={() => { setReloadKey((k) => k + 1); onRefresh(); }}
         serviceSwitcher={serviceSwitcher}
       />
       <div className="flex-1 relative overflow-hidden flex flex-col">
-        {effectiveStatus === 'ready' && previewUrl ? (
+        {effectiveStatus === 'ready' && previewUrl && !runtimePaused ? (
           <iframe
             key={reloadKey}
             ref={iframeRef}
@@ -118,7 +120,7 @@ export function PreviewIframe({
             sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
             title="Sandbox preview"
           />
-        ) : status === 'error' ? (
+        ) : effectiveStatus === 'error' ? (
           <div className="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
             <div className="flex items-start gap-3">
               <AlertTriangle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
@@ -138,18 +140,29 @@ export function PreviewIframe({
             </div>
             <LogTail lines={logs} />
           </div>
-        ) : status === 'paused' ? (
+        ) : runtimePaused ? (
           <div className="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
             <div className="flex items-center gap-3">
               <Pause className="h-5 w-5 text-muted-foreground flex-shrink-0" />
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium">Sandbox paused — resuming…</div>
+                <div className="text-sm font-medium">Container paused</div>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                  Container was auto-paused after inactivity to save resources. Restarting Vite; your
-                  files and dependencies are preserved.
+                  The process tree is frozen; files, ports, and dependencies are preserved.
                 </p>
               </div>
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" />
+            </div>
+            <LogTail lines={logs} />
+          </div>
+        ) : effectiveStatus === 'paused' ? (
+          <div className="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
+            <div className="flex items-center gap-3">
+              <Pause className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium">Container paused</div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Press Play in the Microservices list to start it. Files and dependencies stay on disk.
+                </p>
+              </div>
             </div>
             <LogTail lines={logs} />
           </div>

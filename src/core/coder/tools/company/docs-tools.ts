@@ -207,7 +207,14 @@ const docsIndexUpdate: CoderTool = {
           properties: {
             title: { type: 'string' },
             path: { type: 'string' },
-            children: { type: 'array' },
+            children: {
+              type: 'array',
+              description: 'Nested TOC entries.',
+              items: {
+                type: 'object',
+                additionalProperties: true,
+              },
+            },
           },
           required: ['title'],
           additionalProperties: true,

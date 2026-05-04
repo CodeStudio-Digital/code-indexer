@@ -80,23 +80,7 @@ export function registerCompanyHooks(
         );
       }
     } catch {
-      // Kanban update is best-effort
-    }
-  });
-
-  // ─── Error → kanban auto-comment ───────────────────────────
-  // (board post already happens in the onError hook above;
-  //  this adds a parallel kanban comment for card history)
-  hookRegistry.onError(async (ctx) => {
-    try {
-      const cardId = orchestrator.findCardForAgent(agentRunId);
-      if (cardId) {
-        orchestrator.kanbanAddComment(cardId, role, agentRunId,
-          `[AUTO] Error: ${ctx.error.message} (type: ${ctx.errorType}, retry: ${ctx.willRetry}, fallback: ${ctx.willFallback})`,
-        );
-      }
-    } catch {
-      // Kanban update is best-effort
+      // Best-effort
     }
   });
 }

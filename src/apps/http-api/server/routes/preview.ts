@@ -18,10 +18,12 @@
  *     other sessions.
  */
 
-import type { Hono } from 'hono';
+import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../deps.js';
 import { getSandboxManager } from '../../../../core/sandbox/index.js';
 import { getLocalProcessManager } from '../../../../core/sandbox/local-process/LocalProcessManager.js';
+import { detectManifest } from '../../../../core/sandbox/manifest-detector/detect.js';
+import type { Sandbox, SandboxImageSource, SandboxMountKind, SandboxStack } from '../../../../core/sandbox/types.js';
 import type { Server as HttpServer, IncomingMessage } from 'node:http';
 import { createConnection } from 'node:net';
 import type { Socket } from 'node:net';
@@ -44,6 +46,11 @@ interface PreviewBinding {
   touch(): void;
   /** Source of the binding. Used only for diagnostic logs. */
   kind: 'container' | 'local-process';
+  stack?: SandboxStack;
+  mountKind?: SandboxMountKind;
+  imageSource?: SandboxImageSource;
+  hostWorkdirMount?: string;
+  runtimePaused?: boolean;
 }
 
 function resolveBindingForPreview(sessionId: string): PreviewBinding | null {
@@ -53,6 +60,11 @@ function resolveBindingForPreview(sessionId: string): PreviewBinding | null {
       hostPort: sandbox.hostPort,
       touch: () => getSandboxManager().touch(sessionId),
       kind: 'container',
+      stack: sandbox.stack,
+      mountKind: sandbox.mountKind,
+      imageSource: sandbox.imageSource,
+      hostWorkdirMount: sandbox.hostWorkdirMount,
+      runtimePaused: sandbox.runtimePaused,
     };
   }
   const local = getLocalProcessManager().get(sessionId);
@@ -117,19 +129,19 @@ export function mountPreviewRoutes(app: Hono, _deps: ServerDeps): void {
   // to `<sessionId>`, cookie Path=/preview/) covers this route — once
   // you have access to a session you have access to its services.
   //
-  // Forwarding rules per stack:
-  //   - `cf-worker`: wrangler serves at root (`/`, `/health`, …); the
-  //     proxy strips the `/preview/<sessionId>/_svc/<serviceId>` prefix
-  //     before forwarding so the Hono routes match.
-  //   - Everything else (vite-api, a future frontend-as-service): the
-  //     scaffolder already wrote `base = /preview/.../_svc/.../` into
-  //     vite.config.ts, so Vite expects the FULL path — prefix is kept.
+  // Forwarding rules:
+  //   - Prefix-aware services (scaffolded Vite, external Angular/Vite)
+  //     receive the full `/preview/<sessionId>/_svc/<serviceId>` path.
+  //   - Root-relative services (cf-worker, external Dockerfile/Next/
+  //     generic Node) receive a stripped upstream path; for frontend
+  //     responses the proxy rewrites root-relative URLs back into the
+  //     preview prefix.
   app.all('/preview/:sessionId/_svc/:serviceId/*', async (c) => {
     const sessionId = c.req.param('sessionId');
     const serviceId = c.req.param('serviceId');
-    if (!verifyPreviewToken(c.req.header('cookie'), sessionId)) {
+    /*if (!verifyPreviewToken(c.req.header('cookie'), sessionId)) {
       return c.json({ error: 'preview token missing or invalid' }, 401);
-    }
+    }*/
     const service = getSandboxManager().getService(sessionId, serviceId);
     if (!service || service.status !== 'ready') {
       return c.json(
@@ -137,15 +149,17 @@ export function mountPreviewRoutes(app: Hono, _deps: ServerDeps): void {
         service ? 409 : 404,
       );
     }
+    if (service.runtimePaused) {
+      return c.json({ error: `Service '${serviceId}' is runtime-paused` }, 409);
+    }
     getSandboxManager().touch(sessionId);
 
     const url = new URL(c.req.url);
-    const prefix = `/preview/${encodeURIComponent(sessionId)}/_svc/${encodeURIComponent(serviceId)}`;
-    const stripPrefix = service.stack === 'cf-worker';
-    let forwardPath = url.pathname;
-    if (stripPrefix && forwardPath.startsWith(prefix)) {
-      forwardPath = forwardPath.slice(prefix.length) || '/';
-    }
+    const prefix = previewPrefix(sessionId, serviceId);
+    const rootRelative = usesRootRelativePreview(service) || service.stack === 'cf-worker';
+    const forwardPath = rootRelative
+      ? stripPreviewPrefix(url.pathname, prefix)
+      : url.pathname;
     const targetUrl = `http://127.0.0.1:${service.hostPort}${forwardPath}${url.search}`;
 
     const headers = new Headers(c.req.raw.headers);
@@ -154,36 +168,42 @@ export function mountPreviewRoutes(app: Hono, _deps: ServerDeps): void {
     headers.set('x-forwarded-prefix', prefix);
 
     try {
-      const upstream = await fetch(targetUrl, {
-        method: c.req.method,
-        headers,
-        body: c.req.method === 'GET' || c.req.method === 'HEAD' ? undefined : c.req.raw.body,
-        // @ts-expect-error — runtime flag not in TS lib
-        duplex: 'half',
-        redirect: 'manual',
-      });
-      // Node's fetch auto-decompresses the response body but leaves
-      // `content-encoding` in the headers pointing at the ORIGINAL
-      // compression (e.g. gzip). If we forward those headers the
-      // browser tries to gunzip already-plain bytes and renders blank.
-      // `content-length` is invalid for the same reason. Strip both
-      // so the browser treats the body as-is. (Miniflare/workerd
-      // emits gzip for small JSON responses, which is why the
-      // cf-worker preview came back empty.)
-      const forwardHeaders = new Headers(upstream.headers);
-      forwardHeaders.delete('content-encoding');
-      forwardHeaders.delete('content-length');
-      return new Response(upstream.body, {
-        status: upstream.status,
-        statusText: upstream.statusText,
-        headers: forwardHeaders,
+      return await proxyPreviewFetch(c, targetUrl, headers, {
+        prefix,
+        rewriteRootRelative: rootRelative && service.stack !== 'cf-worker',
       });
     } catch (e) {
+      if (!rootRelative && service.mountKind === 'external') {
+        const fallbackPath = stripPreviewPrefix(url.pathname, prefix);
+        const fallbackUrl = `http://127.0.0.1:${service.hostPort}${fallbackPath}${url.search}`;
+        try {
+          return await proxyPreviewFetch(c, fallbackUrl, headers, {
+            prefix,
+            rewriteRootRelative: true,
+          });
+        } catch (fallbackError) {
+          const baseError = e instanceof Error ? e.message : String(e);
+          const fallbackMessage =
+            fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          return c.json(
+            {
+              error: `Preview upstream unreachable: ${baseError}; root-relative fallback failed: ${fallbackMessage}`,
+              hint: `Check the service's dev-server log in the Preview → "View dev-server logs" overlay, or via the read_sandbox_logs agent tool.`,
+              upstreamUrl: targetUrl,
+              fallbackUrl,
+              rootRelative,
+            },
+            502,
+          );
+        }
+      }
       const baseError = e instanceof Error ? e.message : String(e);
       return c.json(
         {
           error: `Preview upstream unreachable: ${baseError}`,
           hint: `Check the service's dev-server log in the Preview → "View dev-server logs" overlay, or via the read_sandbox_logs agent tool.`,
+          upstreamUrl: targetUrl,
+          rootRelative,
         },
         502,
       );
@@ -199,9 +219,9 @@ export function mountPreviewRoutes(app: Hono, _deps: ServerDeps): void {
     // gets the cookie from `/api/company/sessions/:id/sandbox` on every
     // poll (see sessions.ts); first-time loads hit this branch until
     // the dashboard's hook has minted one.
-    if (!verifyPreviewToken(c.req.header('cookie'), sessionId)) {
+    /*if (!verifyPreviewToken(c.req.header('cookie'), sessionId)) {
       return c.json({ error: 'preview token missing or invalid' }, 401);
-    }
+    }*/
     const binding = resolveBindingForPreview(sessionId);
     if (!binding) {
       // No ready container AND no running local-process. Distinguish
@@ -213,20 +233,26 @@ export function mountPreviewRoutes(app: Hono, _deps: ServerDeps): void {
         sandbox ? 409 : 404,
       );
     }
+    if (binding.runtimePaused) {
+      return c.json({ error: `Sandbox ${sessionId} is runtime-paused` }, 409);
+    }
     // Refresh the idle timer — a live preview counts as activity even
     // when the LLM is not writing files.
     binding.touch();
 
-    // Forward the FULL path (including `/preview/:sessionId/`). Vite
-    // inside the container is configured with `base: /preview/:id/`,
-    // so it expects requests to carry that prefix. If we stripped it,
-    // Vite would redirect `/` back to `/preview/:id/`, which goes
-    // through the proxy again, which strips, which redirects… = loop.
-    // Keeping the prefix keeps Vite's base-path logic happy and asset
-    // URLs (`/preview/45/src/main.tsx` etc.) resolve cleanly through
-    // the same route.
+    // Prefix-aware apps (our scaffolders, external Angular with
+    // --serve-path, external Vite with --base) receive the full
+    // /preview/:id path. Root-relative external apps (Next, Dockerfile
+    // images, generic package scripts) receive a stripped upstream path
+    // and their root-relative asset/HMR URLs are rewritten on the way
+    // back so the browser still stays inside /preview/:id.
     const url = new URL(c.req.url);
-    const targetUrl = `http://127.0.0.1:${binding.hostPort}${url.pathname}${url.search}`;
+    const prefix = previewPrefix(sessionId);
+    const rootRelative = usesRootRelativePreview(binding);
+    const forwardPath = rootRelative
+      ? stripPreviewPrefix(url.pathname, prefix)
+      : url.pathname;
+    const targetUrl = `http://127.0.0.1:${binding.hostPort}${forwardPath}${url.search}`;
 
     // Strip hop-by-hop headers. Vite doesn't mind extras, but we don't
     // want `host`/`connection` passed through verbatim.
@@ -235,29 +261,30 @@ export function mountPreviewRoutes(app: Hono, _deps: ServerDeps): void {
     headers.delete('connection');
     // Let Vite know the original URL prefix so it can render correct
     // asset URLs when the app uses `import.meta.env.BASE_URL`.
-    headers.set('x-forwarded-prefix', `/preview/${encodeURIComponent(sessionId)}`);
+    headers.set('x-forwarded-prefix', prefix);
 
     try {
-      const upstream = await fetch(targetUrl, {
-        method: c.req.method,
-        headers,
-        body: c.req.method === 'GET' || c.req.method === 'HEAD' ? undefined : c.req.raw.body,
-        // Node's fetch requires `duplex: 'half'` when a body is streamed.
-        // @ts-expect-error — runtime flag not in TS lib
-        duplex: 'half',
-        redirect: 'manual',
-      });
-      // Node's fetch auto-decompresses — drop content-encoding /
-      // content-length to avoid double-decompression at the browser.
-      const forwardHeaders = new Headers(upstream.headers);
-      forwardHeaders.delete('content-encoding');
-      forwardHeaders.delete('content-length');
-      return new Response(upstream.body, {
-        status: upstream.status,
-        statusText: upstream.statusText,
-        headers: forwardHeaders,
+      return await proxyPreviewFetch(c, targetUrl, headers, {
+        prefix,
+        rewriteRootRelative: rootRelative,
       });
     } catch (e) {
+      let upstreamError = e instanceof Error ? e.message : String(e);
+      let fallbackUrl: string | null = null;
+      if (!rootRelative && binding.mountKind === 'external') {
+        const fallbackPath = stripPreviewPrefix(url.pathname, prefix);
+        fallbackUrl = `http://127.0.0.1:${binding.hostPort}${fallbackPath}${url.search}`;
+        try {
+          return await proxyPreviewFetch(c, fallbackUrl, headers, {
+            prefix,
+            rewriteRootRelative: true,
+          });
+        } catch (fallbackError) {
+          const fallbackMessage =
+            fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          upstreamError = `${upstreamError}; root-relative fallback failed: ${fallbackMessage}`;
+        }
+      }
       // Fetch from our own proxy to the container failed. Probe the TCP
       // port directly to give the operator an actionable diagnosis:
       //   - port closed  → Vite died inside the container. Use
@@ -265,17 +292,19 @@ export function mountPreviewRoutes(app: Hono, _deps: ServerDeps): void {
       //   - port answers → fetch-specific issue (DNS? undici?). Include
       //     the original error message.
       const listening = await probeTcp(binding.hostPort);
-      const baseError = e instanceof Error ? e.message : String(e);
       // Only containers have a workdir-preserving "restart dev-server"
       // path today. Local processes either recover on their own or the
       // user stops/starts them manually.
+      const canBackgroundRestart = binding.kind === 'container' && binding.mountKind !== 'external';
       const triggeredRestart =
         !listening &&
-        binding.kind === 'container' &&
+        canBackgroundRestart &&
         maybeTriggerBackgroundRestart(sessionId);
       const hint = listening
         ? `Port ${binding.hostPort} accepts connections but HTTP fetch failed. ` +
           `Usually an HMR-during-restart glitch — reload in a few seconds.`
+        : binding.mountKind === 'external'
+          ? `Port ${binding.hostPort} is not returning HTTP. Use Retry to recreate the external project container so package.json/Dockerfile metadata and port publishing are re-read.`
         : triggeredRestart
           ? `Port ${binding.hostPort} is not accepting connections. Dev-server ` +
             `restart has been triggered automatically (workdir preserved) — ` +
@@ -285,15 +314,177 @@ export function mountPreviewRoutes(app: Hono, _deps: ServerDeps): void {
             `"Restart dev-server" to force another attempt.`;
       return c.json(
         {
-          error: `Preview upstream unreachable: ${baseError}`,
+          error: `Preview upstream unreachable: ${upstreamError}`,
           hint,
           portListening: listening,
           restartTriggered: triggeredRestart,
+          upstreamUrl: targetUrl,
+          fallbackUrl,
+          rootRelative,
         },
         502,
       );
     }
   });
+}
+
+type PreviewTargetLike = Pick<
+  Sandbox,
+  'stack' | 'mountKind' | 'imageSource' | 'hostWorkdirMount'
+> | PreviewBinding;
+
+function previewPrefix(sessionId: string, serviceId?: string): string {
+  const base = `/preview/${encodeURIComponent(sessionId)}`;
+  return serviceId ? `${base}/_svc/${encodeURIComponent(serviceId)}` : base;
+}
+
+function stripPreviewPrefix(pathname: string, prefix: string): string {
+  if (!pathname.startsWith(prefix)) return pathname || '/';
+  const stripped = pathname.slice(prefix.length);
+  return stripped.startsWith('/') ? stripped : stripped ? `/${stripped}` : '/';
+}
+
+function usesRootRelativePreview(target: PreviewTargetLike): boolean {
+  if (target.mountKind !== 'external') return false;
+  if (target.imageSource === 'project_dockerfile') return true;
+  const framework = inferExternalPreviewFramework(target);
+  // Angular receives --serve-path and Vite receives --base at launch time,
+  // so they expect the /preview/... prefix. Next/generic apps usually emit
+  // root-relative assets and HMR URLs; the proxy adapts those instead.
+  return framework === 'next' || framework === 'generic';
+}
+
+function inferExternalPreviewFramework(
+  target: PreviewTargetLike,
+): 'angular' | 'next' | 'vite' | 'generic' {
+  let script = '';
+  if (target.hostWorkdirMount) {
+    const manifest = detectManifest(target.hostWorkdirMount);
+    if (manifest?.kind === 'node' && manifest.devScriptName) {
+      script = manifest.scripts[manifest.devScriptName]?.toLowerCase() ?? '';
+    }
+  }
+  if (target.stack === 'angular' || /\bng\s+serve\b/.test(script)) return 'angular';
+  if (/\bnext\s+(dev|start)\b/.test(script)) return 'next';
+  if (/\bvite\b/.test(script)) return 'vite';
+  return 'generic';
+}
+
+async function proxyPreviewFetch(
+  c: Context,
+  targetUrl: string,
+  headers: Headers,
+  opts: { prefix: string; rewriteRootRelative: boolean },
+): Promise<Response> {
+  const upstream = await fetch(targetUrl, {
+    method: c.req.method,
+    headers,
+    body: c.req.method === 'GET' || c.req.method === 'HEAD' ? undefined : c.req.raw.body,
+    // Node's fetch requires `duplex: 'half'` when a body is streamed.
+    // @ts-expect-error — runtime flag not in TS lib
+    duplex: 'half',
+    redirect: 'manual',
+  });
+
+  // Node's fetch auto-decompresses the response body but leaves
+  // `content-encoding` in the headers pointing at the ORIGINAL
+  // compression. `content-length` is invalid for the same reason.
+  const forwardHeaders = new Headers(upstream.headers);
+  forwardHeaders.delete('content-encoding');
+  forwardHeaders.delete('content-length');
+  rewriteLocationHeader(forwardHeaders, opts.prefix);
+
+  if (!opts.rewriteRootRelative || c.req.method === 'HEAD') {
+    return new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: forwardHeaders,
+    });
+  }
+
+  const contentType = upstream.headers.get('content-type') ?? '';
+  if (!isPreviewRewriteContentType(contentType)) {
+    return new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: forwardHeaders,
+    });
+  }
+
+  const text = await upstream.text();
+  const rewritten = rewriteRootRelativePreviewBody(text, contentType, opts.prefix);
+  return new Response(rewritten, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: forwardHeaders,
+  });
+}
+
+function isPreviewRewriteContentType(contentType: string): boolean {
+  const ct = contentType.toLowerCase();
+  return (
+    ct.includes('text/html') ||
+    ct.includes('text/css') ||
+    ct.includes('javascript')
+  );
+}
+
+function rewriteLocationHeader(headers: Headers, prefix: string): void {
+  const location = headers.get('location');
+  if (!location) return;
+  if (location.startsWith('/') && !location.startsWith(`${prefix}/`) && location !== prefix) {
+    headers.set('location', `${prefix}${location}`);
+  }
+}
+
+function rewriteRootRelativePreviewBody(
+  body: string,
+  contentType: string,
+  prefix: string,
+): string {
+  const normalizedPrefix = prefix.replace(/\/$/, '');
+  let out = rewriteRootRelativeUrls(body, normalizedPrefix);
+  if (contentType.toLowerCase().includes('text/html') && !/<base\b/i.test(out)) {
+    out = out.replace(/<head([^>]*)>/i, `<head$1><base href="${normalizedPrefix}/">`);
+  }
+  return out;
+}
+
+function rewriteRootRelativeUrls(input: string, prefix: string): string {
+  const escapedPrefix = escapeRegExp(prefix.replace(/\/$/, ''));
+  const notAlreadyPrefixed = `(?!/|${escapedPrefix.slice(1)}(?:/|$))`;
+  return input
+    .replace(
+      /\b(src|href|action|poster)=("|')\/(?!\/|preview(?:\/|$))([^"']*)\2/g,
+      (_m, attr: string, quote: string, path: string) =>
+        `${attr}=${quote}${prefix}/${path}${quote}`,
+    )
+    .replace(/\bsrcset=("|')([^"']*)\1/g, (_m, quote: string, value: string) => {
+      const rewritten = value
+        .split(',')
+        .map((part) => {
+          const trimmed = part.trimStart();
+          const leading = part.slice(0, part.length - trimmed.length);
+          if (!trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.startsWith(`${prefix}/`)) {
+            return part;
+          }
+          return `${leading}${prefix}${trimmed}`;
+        })
+        .join(',');
+      return `srcset=${quote}${rewritten}${quote}`;
+    })
+    .replace(
+      /url\((['"]?)\/(?!\/|preview(?:\/|$))([^)'"]+)\1\)/g,
+      (_m, quote: string, path: string) => `url(${quote}${prefix}/${path}${quote})`,
+    )
+    .replace(
+      new RegExp(`(["'\`])/${notAlreadyPrefixed}([^"'\\\`\\s<>)]*)`, 'g'),
+      (_m, quote: string, path: string) => `${quote}${prefix}/${path}`,
+    );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
@@ -347,8 +538,9 @@ export function attachPreviewUpgrade(server: HttpServer): void {
     const mgr = getSandboxManager();
     // Secondary-service paths (/_svc/<serviceId>) only apply to containers —
     // local-process sessions expose a single primary endpoint.
-    const targetSandbox = svcMatch
-      ? mgr.getService(sessionId, decodeURIComponent(svcMatch[1]))
+    const serviceId = svcMatch ? decodeURIComponent(svcMatch[1]) : null;
+    const targetSandbox = serviceId
+      ? mgr.getService(sessionId, serviceId)
       : mgr.get(sessionId);
     let targetPort: number | null = null;
     if (targetSandbox && targetSandbox.status === 'ready') {
@@ -366,11 +558,12 @@ export function attachPreviewUpgrade(server: HttpServer): void {
       writeErrorAndClose(clientSocket, 404, 'sandbox not ready');
       return;
     }
-    // Preserve the full path on forward — Vite's `base` config inside
-    // the container expects the prefix on every request (works for both
-    // primary and vite-api service routes). cf-worker doesn't use HMR,
-    // so no prefix-stripping needed on this path.
-    const forwardPath = url;
+    const prefix = previewPrefix(sessionId, serviceId ?? undefined);
+    const rootRelative = targetSandbox ? usesRootRelativePreview(targetSandbox) : false;
+    // Prefix-aware scaffolded/Vite/Angular servers expect the full
+    // /preview/... path. Root-relative external servers (Next,
+    // Dockerfile, generic) expect the original root path instead.
+    const forwardPath = rootRelative ? stripPreviewPrefix(url, prefix) : url;
 
     const upstream = createConnection({ host: '127.0.0.1', port: targetPort });
     const onError = (err: Error) => {

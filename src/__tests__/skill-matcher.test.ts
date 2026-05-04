@@ -3,9 +3,10 @@ import { matchSkills, scoreSkill } from '../core/coder/skills/skill-matcher.js';
 import type { ResolvedSkill } from '../core/coder/skills/types.js';
 
 function skill(partial: Partial<ResolvedSkill> & { id: string }): ResolvedSkill {
+  const { id, ...rest } = partial;
   return {
-    id: partial.id,
-    name: partial.id,
+    id,
+    name: id,
     description: '',
     slashCommand: null,
     promptBody: 'body',
@@ -20,7 +21,7 @@ function skill(partial: Partial<ResolvedSkill> & { id: string }): ResolvedSkill 
     tags: [],
     source: 'builtin',
     sortOrder: 50,
-    ...partial,
+    ...rest,
   };
 }
 

@@ -28,11 +28,13 @@
  */
 
 import { mkdtemp, rm, writeFile as hostWriteFile, readFile as hostReadFile } from 'node:fs/promises';
+import { spawn as spawnChild } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 import type { IShellPort, ShellExecResult } from '../../coder/ports/shell-port.js';
 import type {
   ISandboxDriver,
+  SandboxBuildSpec,
   SandboxCreateSpec,
   SandboxExecOptions,
   SandboxExecResult,
@@ -87,6 +89,58 @@ export class CliOciDriver implements ISandboxDriver {
   }
 
   // ───────────────────────────────────────────────────────────── lifecycle
+
+  async build(spec: SandboxBuildSpec): Promise<void> {
+    const args = [
+      ...this.globalArgs,
+      'build',
+      '-t',
+      spec.imageTag,
+      '-f',
+      spec.dockerfilePath,
+      ...(spec.noCache ? ['--no-cache'] : []),
+      spec.contextDir,
+    ];
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawnChild(this.binary, args, {
+        cwd: this.cwd,
+        env: process.env,
+        windowsHide: true,
+      });
+      const onAbort = () => {
+        child.kill('SIGKILL');
+      };
+      spec.signal?.addEventListener('abort', onAbort, { once: true });
+      child.stdout?.setEncoding('utf8');
+      child.stderr?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => spec.emit?.({ stream: 'stdout', chunk }));
+      child.stderr?.on('data', (chunk: string) => spec.emit?.({ stream: 'stderr', chunk }));
+      child.once('error', (err) => {
+        spec.signal?.removeEventListener('abort', onAbort);
+        reject(err);
+      });
+      child.once('close', (code) => {
+        spec.signal?.removeEventListener('abort', onAbort);
+        if (spec.signal?.aborted) {
+          reject(new Error(`${this.binary} build aborted`));
+          return;
+        }
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(new Error(`${this.binary} build failed with exit code ${code ?? 'null'}`));
+      });
+    });
+  }
+
+  async removeImage(tag: string): Promise<void> {
+    if (!tag.trim()) return;
+    await this.cli([...this.globalArgs, 'rmi', '-f', tag], {
+      timeoutMs: this.defaultTimeoutMs,
+    }).catch(() => void 0);
+  }
 
   async create(spec: SandboxCreateSpec): Promise<{ containerId: string }> {
     // Pre-flight cleanup: remove any lingering container with the name
@@ -214,10 +268,14 @@ export class CliOciDriver implements ISandboxDriver {
     for (const [k, v] of Object.entries(mergedEnv)) {
       args.push('-e', `${k}=${v}`);
     }
-    // Give the container SOMETHING to do so `-d` doesn't immediately exit.
-    // `sleep infinity` is supported by GNU coreutils (our alpine image ships
-    // busybox, so we use `tail -f /dev/null` which is universal).
-    args.push(spec.image, 'tail', '-f', '/dev/null');
+    if (spec.skipDefaultCommand) {
+      args.push(spec.image);
+    } else {
+      // Give the container SOMETHING to do so `-d` doesn't immediately exit.
+      // `sleep infinity` is supported by GNU coreutils (our alpine image ships
+      // busybox, so we use `tail -f /dev/null` which is universal).
+      args.push(spec.image, 'tail', '-f', '/dev/null');
+    }
 
     const res = await this.cli(args, { timeoutMs: this.defaultTimeoutMs });
     if (res.exitCode !== 0) {
@@ -240,8 +298,8 @@ export class CliOciDriver implements ISandboxDriver {
   }
 
   async inspectContainer(containerId: string): Promise<SandboxInspectResult> {
-    // `inspect --format` returns JSON we can parse for exactly the two
-    // booleans the manager cares about (exists, running) plus labels
+    // `inspect --format` returns JSON we can parse for exactly the
+    // booleans the manager cares about (exists, running, paused) plus labels
     // so the reconcile path can read `mcp.workdir` / `mcp.sessionId`
     // without a second call. Exit code non-zero = container gone.
     const res = await this.cli(
@@ -249,20 +307,26 @@ export class CliOciDriver implements ISandboxDriver {
         ...this.globalArgs,
         'inspect',
         '--format',
-        '{{json .State.Running}}|{{json .Config.Labels}}',
+        '{{json .State.Running}}|{{json .State.Paused}}|{{json .Config.Labels}}',
         containerId,
       ],
       { timeoutMs: this.defaultTimeoutMs },
     );
     this.throwIfTimedOut(res, 'inspect');
     if (res.exitCode !== 0) {
-      return { exists: false, running: false, labels: {} };
+      return { exists: false, running: false, paused: false, labels: {} };
     }
-    const [runningRaw, labelsRaw] = res.stdout.trim().split('|');
+    const [runningRaw, pausedRaw, labelsRaw] = res.stdout.trim().split('|');
     let running = false;
+    let paused = false;
     let labels: Record<string, string> = {};
     try {
       running = JSON.parse(runningRaw ?? 'false') === true;
+    } catch {
+      /* leave false */
+    }
+    try {
+      paused = JSON.parse(pausedRaw ?? 'false') === true;
     } catch {
       /* leave false */
     }
@@ -274,7 +338,7 @@ export class CliOciDriver implements ISandboxDriver {
     } catch {
       /* leave {} */
     }
-    return { exists: true, running, labels };
+    return { exists: true, running, paused, labels };
   }
 
   async startContainer(containerId: string): Promise<void> {
@@ -306,6 +370,31 @@ export class CliOciDriver implements ISandboxDriver {
       // from the caller's perspective.
       if (stderr.includes('no such') || stderr.includes('not running')) return;
       throw new Error(`${this.binary} stop failed: ${res.stderr.trim() || res.stdout.trim()}`);
+    }
+  }
+
+  async pauseContainer(containerId: string): Promise<void> {
+    const res = await this.cli([...this.globalArgs, 'pause', containerId], {
+      timeoutMs: this.defaultTimeoutMs,
+    });
+    this.throwIfTimedOut(res, 'pause');
+    if (res.exitCode !== 0) {
+      const text = `${res.stderr}\n${res.stdout}`.toLowerCase();
+      if (text.includes('already') && text.includes('paused')) return;
+      if (text.includes('is paused')) return;
+      throw new Error(`${this.binary} pause failed: ${res.stderr.trim() || res.stdout.trim()}`);
+    }
+  }
+
+  async unpauseContainer(containerId: string): Promise<void> {
+    const res = await this.cli([...this.globalArgs, 'unpause', containerId], {
+      timeoutMs: this.defaultTimeoutMs,
+    });
+    this.throwIfTimedOut(res, 'unpause');
+    if (res.exitCode !== 0) {
+      const text = `${res.stderr}\n${res.stdout}`.toLowerCase();
+      if (text.includes('not paused') || text.includes('is not paused')) return;
+      throw new Error(`${this.binary} unpause failed: ${res.stderr.trim() || res.stdout.trim()}`);
     }
   }
 

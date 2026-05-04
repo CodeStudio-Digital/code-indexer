@@ -57,13 +57,13 @@ describe('CodeIndexDB', () => {
 
   describe('migrations', () => {
     it('applies all migrations on a fresh DB', () => {
-      expect(db.getSchemaVersion()).toBe(61);
+      expect(db.getSchemaVersion()).toBe(67);
     });
 
     it('re-opening an existing DB does not re-apply migrations', () => {
       db.close();
       const db2 = new CodeIndexDB(dbPath);
-      expect(db2.getSchemaVersion()).toBe(61);
+      expect(db2.getSchemaVersion()).toBe(67);
       db2.close();
     });
 
@@ -79,6 +79,24 @@ describe('CodeIndexDB', () => {
       // @ts-expect-error - accessing internal for test
       const info = db.db.prepare("PRAGMA table_info(snapshot_files)").all();
       expect((info as unknown[]).length).toBeGreaterThan(0);
+    });
+
+    it('migration 067 drops `front_id` columns and `company_fronts` table', () => {
+      // @ts-expect-error - accessing internal for test
+      const inner = db.db as InstanceType<typeof import('better-sqlite3')>;
+      const tables = inner
+        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+        .all() as Array<{ name: string }>;
+      const tableNames = new Set(tables.map((t) => t.name));
+      expect(tableNames.has('company_fronts')).toBe(false);
+
+      for (const table of ['company_agent_runs', 'company_board', 'company_master_prompts', 'agent_inbox']) {
+        const cols = inner.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+        expect(cols.some((c) => c.name === 'front_id')).toBe(false);
+      }
+
+      const sessionCols = inner.prepare(`PRAGMA table_info(company_sessions)`).all() as Array<{ name: string }>;
+      expect(sessionCols.some((c) => c.name === 'parent_session_id')).toBe(true);
     });
   });
 

@@ -1,12 +1,13 @@
 import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Crown, Sparkles } from 'lucide-react';
+import { Crown, Server, Sparkles } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { Badge } from '../../components/ui/badge.js';
 import { FallbackPicker } from '../../components/FallbackPicker.js';
 import { MarkdownToolbar } from '../chat/composer/MarkdownToolbar.js';
 import { useMarkdownShortcuts } from '../chat/composer/useMarkdownShortcuts.js';
+import { useAdminMcpServers } from '../admin/hooks/useAdminMcpServers.js';
 
 export interface RoleConfig {
   role: string;
@@ -63,6 +64,9 @@ export function RoleEditModal({
 }: RoleEditModalProps) {
   const { t } = useTranslation(['agents', 'common']);
   const models = getModelsForProvider(role.provider);
+  const { servers: mcpServers } = useAdminMcpServers();
+  const enabledMcpServers = mcpServers.filter((s) => s.enabled);
+  const isMasterRole = role.role === 'master';
   const [systemPrompt, setSystemPrompt] = useState(role.systemPromptOverride ?? '');
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const { handleKeyDown: mdKeyDown, applyAction } = useMarkdownShortcuts(promptRef, systemPrompt, (v) => {
@@ -259,6 +263,27 @@ export function RoleEditModal({
               </div>
             );
           })()}
+
+          {/* Available MCP packs — read-only. Subordinates auto-receive every
+              enabled server as an opt-in custom tier (named by server id) and
+              unlock it on demand via expand_toolset. Master path is unchanged. */}
+          {!isMasterRole && enabledMcpServers.length > 0 && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                <Server className="h-3 w-3" /> {t('agents:role.availableMcps')}
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {enabledMcpServers.map((s) => (
+                  <Badge key={s.id} variant="outline" className="text-[10px] h-5 font-mono" title={s.name}>
+                    {s.id}
+                  </Badge>
+                ))}
+              </div>
+              <p className="text-[10px] text-muted-foreground opacity-80">
+                {t('agents:role.availableMcpsHint')}
+              </p>
+            </div>
+          )}
 
           {/* System prompt override — full markdown editor */}
           <div className="space-y-1.5">

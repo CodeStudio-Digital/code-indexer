@@ -501,6 +501,25 @@ ${allowedModelsBlock}
 \`read_board\` — Read board messages. Use \`since_id\` for incremental reads.
 \`ask_user\` — **SESSION-KEEPING GATE.** Blocks your session waiting for user response. Use SHORT questions — the detailed content should already be on the board.
 
+## SHARED DRIVE — LARGE DOCUMENTS BETWEEN AGENTS
+
+A persistent file pool shared by every agent of this company (visible across all sessions of the same template). Use it to exchange documents that would bloat the board if pasted inline (specs, dumps, transcripts, multi-page reports, briefings to subordinates).
+
+\`write_shared_file({ path, content })\` — Create or overwrite a file. \`path\` is logical (e.g. "briefs/auth-rewrite.md"); content is UTF-8 text up to 4MB.
+\`append_shared_file({ path, content })\` — Append to an existing file (or create it). Useful for shared logs / running notes.
+\`read_shared_file({ path, offset?, max_bytes? })\` — Read a file. Default 256KB; pass \`max_bytes\` (cap 4MB) or \`offset\` to page.
+\`list_shared_files({ prefix?, owner_role? })\` — Browse the drive. Default lists everything in scope.
+\`delete_shared_file({ path })\` — Remove a file when it's no longer needed.
+
+WHEN TO USE:
+- Briefing a subordinate: write the brief to \`briefs/<role>-<topic>.md\` then in \`spawn_subordinate_agent\` say "read briefs/<role>-<topic>.md from the shared drive".
+- Receiving deliverables: subordinates can write large outputs (audits, scraped data, design specs) to \`reports/...\` and post a short pointer to the board.
+- Cross-session memory: anything you write here is visible to every future session of the same company — treat it as the company's persistent notebook.
+
+DON'T:
+- Don't paste a 5KB+ artifact into a board post or \`ask_user\` — write it to the drive and link by path.
+- Don't use it for ephemeral scratch (it persists across sessions).
+
 ## WORKFLOW — MULTI-PHASE ORCHESTRATION
 
 You operate in phases. EVERY phase ends with \`ask_user\`. Never let your session end without user dismissal.
@@ -682,6 +701,23 @@ DO NOT finish without posting this deliverable. The Master agent relies ENTIRELY
 
 \`post_to_board\` — Post updates. Use \`@master\` to get attention. Use \`@role\` to mention others.
 \`read_board\` — Read messages. Use \`since_id\` for incremental reads.
+
+## Shared drive — for large documents
+
+A persistent file pool every agent of this company can read and write. Use it whenever you'd otherwise paste a multi-KB blob into a board post or inbox message.
+
+\`write_shared_file({ path, content })\` — Save a document (UTF-8, up to 4MB). Pick a clear logical path: \`reports/<topic>.md\`, \`data/<topic>.json\`, \`audits/<file>.md\`.
+\`append_shared_file({ path, content })\` — Append (creates the file if missing). Good for shared logs.
+\`read_shared_file({ path, offset?, max_bytes? })\` — Read a file. Default 256KB; cap 4MB.
+\`list_shared_files({ prefix?, owner_role? })\` — Discover what's already on the drive — the master may have left a brief for you.
+\`delete_shared_file({ path })\` — Remove a stale file.
+
+WHEN TO USE:
+- Big deliverables: write the full report to \`reports/<role>-<topic>.md\` and post a SHORT board deliverable that says "see reports/<role>-<topic>.md".
+- Receiving a brief: if the master mentioned a path on the drive, \`read_shared_file\` it before asking questions.
+- Handing data to a peer: \`write_shared_file\` first, then \`send_to_agent\` with just the path — keeps the inbox legible.
+
+DON'T paste >1KB content into board posts or inbox messages — write to the drive and link.
 
 ## Interaction flow
 

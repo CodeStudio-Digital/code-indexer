@@ -47,6 +47,7 @@ export interface SandboxSnapshot {
   sandbox:
     | {
         status: SandboxPollStatus;
+        runtimePaused?: boolean;
         step: SandboxStepLabel;
         previewUrl: string;
         stack: 'react-ts' | 'vue-ts';
@@ -69,7 +70,7 @@ const FAST_MS = 1_500;
 const SLOW_MS = 10_000;
 // `error` deliberately polls slow: the record is stable, the UI shows
 // the message, and the user must click Retry to change anything.
-const TERMINAL: SandboxPollStatus[] = ['ready', 'error', 'destroyed'];
+const TERMINAL: SandboxPollStatus[] = ['ready', 'paused', 'error', 'destroyed'];
 
 export function useSandboxStatus(sessionId: number | null): {
   data: SandboxSnapshot | null;
@@ -136,16 +137,9 @@ export function useSandboxStatus(sessionId: number | null): {
 
     let timer: ReturnType<typeof setTimeout> | null = null;
     let bumpSeen = bump.current;
-    // Last time we fired the eager-provision POST. We throttle rather
-    // than use a one-shot flag so a sandbox that disappears mid-session
-    // (TTL reaper, server restart reaping orphans, crash) gets
-    // re-provisioned automatically — the user doesn't have to refresh
-    // the page to get their preview back.
-    let lastKickAt = 0;
-    const KICK_THROTTLE_MS = 5_000;
-
     async function tick() {
       if (cancelled.current) return;
+      let latest: SandboxSnapshot | null = null;
       try {
         // `credentials: 'include'` so the browser saves the signed
         // preview cookie the server returns. Same-origin would already
@@ -156,41 +150,18 @@ export function useSandboxStatus(sessionId: number | null): {
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = (await res.json()) as SandboxSnapshot;
+        latest = json;
         if (cancelled.current) return;
         setData(json);
         setError(null);
-        // Re-provision / auto-resume trigger:
-        //   - Session is in builder mode AND
-        //   - Either no sandbox exists OR the existing one is paused
-        //     by the idle TTL, AND
-        //   - We haven't fired a POST in the last 5s.
-        //
-        // A POST in the paused case hits the same `provision()` which
-        // short-circuits into `resumeSandbox()` → `podman start` +
-        // relaunch Vite (~5s). For a fresh session, same call does
-        // full provisioning. One idempotent endpoint, both cases.
-        const needsKick =
-          json.builder &&
-          (!json.sandbox || json.sandbox.status === 'paused');
-        if (needsKick && Date.now() - lastKickAt >= KICK_THROTTLE_MS) {
-          lastKickAt = Date.now();
-          void fetch(`/api/company/sessions/${sessionId}/sandbox`, {
-            method: 'POST',
-            credentials: 'include',
-          }).catch(() => {
-            // Transient failure — let the next tick re-trigger after
-            // the throttle window. We deliberately don't log: the
-            // user will see the spinner + "Waiting for sandbox…" and
-            // the next attempt will either succeed or surface an error.
-          });
-        }
       } catch (e) {
         if (cancelled.current) return;
         setError(e instanceof Error ? e.message : String(e));
       }
       if (cancelled.current) return;
-      const status = data?.sandbox?.status;
-      const terminal = !data?.builder || (status && TERMINAL.includes(status));
+      const snapshot = latest ?? data;
+      const status = snapshot?.sandbox?.status ?? (snapshot?.builder ? 'paused' : null);
+      const terminal = !snapshot?.builder || (status !== null && TERMINAL.includes(status));
       timer = setTimeout(tick, terminal ? SLOW_MS : FAST_MS);
     }
 

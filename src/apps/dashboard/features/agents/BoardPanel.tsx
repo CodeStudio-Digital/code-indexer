@@ -1,7 +1,8 @@
-import React, { memo, useEffect, useRef } from 'react';
+import React, { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MessageSquare, Zap, HelpCircle, Package, ArrowRightLeft } from 'lucide-react';
+import { MessageSquare, Zap, HelpCircle, Package, ArrowRightLeft, Check, Copy } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
+import { Button } from '../../components/ui/button.js';
 import { cn } from '../../lib/utils.js';
 import { Markdown } from '../chat/messages/Markdown.js';
 import type { BoardMessage } from '../../hooks/useCompanyStream.js';
@@ -68,6 +69,55 @@ function parseAt(s: string): number {
   return new Date(hasZone ? s : s + 'Z').getTime();
 }
 
+function formatBoardTime(createdAt: string): string {
+  return new Date(parseAt(createdAt)).toLocaleString();
+}
+
+function buildBoardMarkdown(items: FeedItem[], sessionName?: string, sessionId?: number): string {
+  const heading = sessionName
+    ? `# ${sessionName}${sessionId !== undefined ? ` (#${sessionId})` : ''}`
+    : '# Board';
+  const blocks = [heading];
+
+  for (const item of items) {
+    if (item.type === 'message') {
+      const msg = item.message;
+      blocks.push(
+        [
+          `## @${msg.author_role} - ${msg.kind} - ${formatBoardTime(msg.created_at)}`,
+          '',
+          msg.content.trim() || '_No content_',
+        ].join('\n'),
+      );
+      continue;
+    }
+
+    const prompt = item.prompt;
+    const statusLines = [
+      `**Status:** ${prompt.status}`,
+    ];
+    if (prompt.status === 'answered') {
+      if (prompt.kind === 'plan') {
+        statusLines.push(`**Decision:** ${prompt.approved ? 'approved' : 'rejected'}`);
+        if (prompt.feedback) statusLines.push(`**Feedback:** ${prompt.feedback}`);
+      } else if (prompt.answer != null) {
+        statusLines.push(`**Answer:** ${prompt.answer}`);
+      }
+    }
+    blocks.push(
+      [
+        `## @master - ${prompt.kind} - ${formatBoardTime(prompt.created_at)}`,
+        '',
+        ...statusLines,
+        '',
+        prompt.body.trim() || '_No content_',
+      ].join('\n'),
+    );
+  }
+
+  return `${blocks.join('\n\n').trim()}\n`;
+}
+
 export const BoardPanel = memo(function BoardPanel({
   messages,
   masterPrompts = [],
@@ -78,6 +128,8 @@ export const BoardPanel = memo(function BoardPanel({
 }: BoardPanelProps) {
   const { t } = useTranslation('agents');
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [copiedMarkdown, setCopiedMarkdown] = useState(false);
+  const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null);
 
   const items: FeedItem[] = [
     ...messages.map<FeedItem>((m) => ({
@@ -97,6 +149,28 @@ export const BoardPanel = memo(function BoardPanel({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [items.length]);
 
+  async function handleCopyMarkdown() {
+    try {
+      await navigator.clipboard.writeText(buildBoardMarkdown(items, sessionName, sessionId));
+      setCopiedMarkdown(true);
+      setTimeout(() => setCopiedMarkdown(false), 1500);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  async function handleCopyMessageMarkdown(message: BoardMessage) {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopiedMessageId(message.id);
+      setTimeout(() => {
+        setCopiedMessageId((current) => (current === message.id ? null : current));
+      }, 1500);
+    } catch {
+      /* best effort */
+    }
+  }
+
   return (
     <div className="flex flex-col h-full">
       <div className="px-3 py-2 border-b flex items-center gap-2">
@@ -108,6 +182,22 @@ export const BoardPanel = memo(function BoardPanel({
             {sessionName}{sessionId !== undefined && ` · #${sessionId}`}
           </span>
         )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn('h-7 w-7 shrink-0', !sessionName && 'ml-auto')}
+          onClick={handleCopyMarkdown}
+          disabled={items.length === 0}
+          title={copiedMarkdown ? t('board.copiedMarkdown') : t('board.copyMarkdown')}
+          aria-label={copiedMarkdown ? t('board.copiedMarkdown') : t('board.copyMarkdown')}
+        >
+          {copiedMarkdown ? (
+            <Check className="h-3.5 w-3.5 text-green-500" />
+          ) : (
+            <Copy className="h-3.5 w-3.5" />
+          )}
+        </Button>
       </div>
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {items.length === 0 && (
@@ -137,6 +227,21 @@ export const BoardPanel = memo(function BoardPanel({
                 <span className="text-[10px] text-muted-foreground ml-auto">
                   {new Date(msg.created_at).toLocaleTimeString()}
                 </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-5 w-5 shrink-0 -mr-1 text-muted-foreground hover:text-foreground"
+                  onClick={() => handleCopyMessageMarkdown(msg)}
+                  title={copiedMessageId === msg.id ? t('board.copiedMessageMarkdown') : t('board.copyMessageMarkdown')}
+                  aria-label={copiedMessageId === msg.id ? t('board.copiedMessageMarkdown') : t('board.copyMessageMarkdown')}
+                >
+                  {copiedMessageId === msg.id ? (
+                    <Check className="h-3 w-3 text-green-500" />
+                  ) : (
+                    <Copy className="h-3 w-3" />
+                  )}
+                </Button>
               </div>
               <div className="text-foreground/90 text-xs leading-relaxed">
                 <Markdown text={msg.content} />

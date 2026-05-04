@@ -34,7 +34,7 @@ export function PreviewToolbar({
       </div>
       <button
         onClick={onRestartDev}
-        disabled={restartingDev}
+        disabled={restartingDev || status === 'paused'}
         className="p-1.5 rounded-md hover:bg-muted disabled:opacity-40"
         title="Restart dev-server (keeps files, relaunches Vite + resets vite.config.ts)"
       >

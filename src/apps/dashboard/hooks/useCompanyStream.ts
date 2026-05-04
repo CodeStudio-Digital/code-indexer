@@ -9,7 +9,7 @@
  * implemented once and reused across hooks.
  */
 import { useCallback, useRef, useState } from 'react';
-import type { Usage } from './agent-stream/types.js';
+import type { Usage, AgentAttachment } from './agent-stream/types.js';
 import type { KanbanCardFull, KanbanComment, KanbanChecklistItem, MasterPrompt } from '../../../core/coder/company/types.js';
 import { ReconnectingSSEClient } from '../../../shared/sse/ReconnectingSSEClient.js';
 import type { SSEEvent } from '../../../shared/sse/SSEFramer.js';
@@ -590,7 +590,7 @@ export function useCompanyStream(companySessionId: number | null) {
 
   // ─── Public actions ──────────────────────────────────────────
 
-  const start = useCallback(async (userMessage: string) => {
+  const start = useCallback(async (userMessage: string, attachments?: AgentAttachment[]) => {
     if (!companySessionId) return;
     lastSeenSeqRef.current = -1;
     setState({
@@ -602,11 +602,11 @@ export function useCompanyStream(companySessionId: number | null) {
     await openStream({
       url: `/api/company/sessions/${companySessionId}/start`,
       method: 'POST',
-      body: { user_message: userMessage },
+      body: { user_message: userMessage, attachments: attachments?.length ? attachments : undefined },
     });
   }, [companySessionId]);
 
-  const resume = useCallback(async (message: string) => {
+  const resume = useCallback(async (message: string, attachments?: AgentAttachment[]) => {
     if (!companySessionId) return;
     // Don't clear boardMessages or agent states — preserve existing context
     setState((prev) => ({
@@ -619,7 +619,7 @@ export function useCompanyStream(companySessionId: number | null) {
     await openStream({
       url: `/api/company/sessions/${companySessionId}/resume`,
       method: 'POST',
-      body: { message },
+      body: { message, attachments: attachments?.length ? attachments : undefined },
     });
   }, [companySessionId]);
 
@@ -692,13 +692,13 @@ export function useCompanyStream(companySessionId: number | null) {
     }
   }, [companySessionId]);
 
-  const sendMessage = useCallback(async (message: string) => {
+  const sendMessage = useCallback(async (message: string, attachments?: AgentAttachment[]) => {
     if (!companySessionId) return;
     try {
       const res = await fetch(`/api/company/sessions/${companySessionId}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, attachments: attachments?.length ? attachments : undefined }),
       });
       if (!res.ok) {
         const body = await res.text().catch(() => '');

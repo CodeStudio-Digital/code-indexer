@@ -3,16 +3,18 @@
  * retry attempts per subordinate.
  *
  * Transient triggers (worth auto-retrying):
+ *   - HTTP 400 from the provider (often model/message-shape specific; fallback may recover)
  *   - HTTP 429 (rate limit)
  *   - HTTP 5xx (server errors)
  *   - Timeouts (408, 504, or message contains "timeout")
  *   - Network drops (ECONNRESET, ECONNREFUSED, ETIMEDOUT)
  *
  * Permanent (don't retry — notify master directly):
- *   - Tool misuse, logic errors, 4xx (non-429), aborts
+ *   - Tool misuse, logic errors, non-provider 4xx, aborts
  */
 
 const TRANSIENT_PATTERNS = [
+  /\b400\b/,
   /\b429\b/,
   /\b(5\d{2})\b/,
   /\btimeout\b/i,
@@ -30,7 +32,7 @@ export function isTransientError(detail: string | undefined | null): boolean {
 }
 
 export interface RetryPolicyOpts {
-  /** Max auto-retries before giving up and notifying master. Default 1. */
+  /** Max auto-retries before giving up and notifying master. Hard-capped at 1. */
   maxAutoRetries?: number;
 }
 
@@ -44,9 +46,10 @@ export class RetryPolicy {
 
   constructor(opts: RetryPolicyOpts = {}) {
     const envDefault = Number(process.env.CODER_SUBORDINATE_MAX_RETRIES);
-    this.maxRetries = Number.isFinite(envDefault) && envDefault >= 0
+    const configured = Number.isFinite(envDefault) && envDefault >= 0
       ? envDefault
       : (opts.maxAutoRetries ?? 1);
+    this.maxRetries = Math.min(configured, 1);
   }
 
   /**
