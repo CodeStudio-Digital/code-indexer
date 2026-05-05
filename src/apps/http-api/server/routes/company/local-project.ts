@@ -20,7 +20,7 @@
 
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import { parseIdParam, notFound, resolveRootSessionId } from '../_helpers.js';
 import { getLocalProcessManager } from '../../../../../core/sandbox/local-process/LocalProcessManager.js';
 
 export function mountCompanyLocalProjectRoutes(app: Hono, deps: ServerDeps): void {
@@ -28,7 +28,7 @@ export function mountCompanyLocalProjectRoutes(app: Hono, deps: ServerDeps): voi
 
   // GET status — used by the UI to render the "host" row in the sidebar.
   app.get('/api/company/sessions/:id/local-project', (c) => {
-    const id = parseIdParam(c);
+    const id = resolveRootSessionId(companyStore, parseIdParam(c));
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
     const live = getLocalProcessManager().get(String(id));
@@ -92,7 +92,7 @@ export function mountCompanyLocalProjectRoutes(app: Hono, deps: ServerDeps): voi
   //      'orphaned'. A user-initiated DELETE is the only path that
   //      hard-deletes — otherwise the row could never be cleared.
   app.delete('/api/company/sessions/:id/local-project', async (c) => {
-    const id = parseIdParam(c);
+    const id = resolveRootSessionId(companyStore, parseIdParam(c));
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
     await getLocalProcessManager().stop(String(id), 'user-stopped');

@@ -94,6 +94,9 @@ export function validateTasksInput(raw: unknown): { summary: string; tasks: Code
   const summary = String(o.summary ?? '').trim();
   if (!summary) return 'summary required';
   if (!Array.isArray(o.tasks) || o.tasks.length === 0) return 'tasks must be a non-empty array';
+  if (o.tasks.length < 2) {
+    return 'submit_tasks requires 2+ independent tasks. For a single linear action, call submit_plan instead — it is lighter and faster to approve.';
+  }
   const tasks: CoderTask[] = [];
   const seen = new Set<string>();
   for (let i = 0; i < o.tasks.length; i++) {

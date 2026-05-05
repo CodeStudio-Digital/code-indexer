@@ -24,6 +24,11 @@ import {
   LIST_DIRECTORY_NATIVE_DESC,
   maybeTerse,
 } from './descriptions.js';
+import {
+  extractSymbolBodyFromContent,
+  findSymbolDeclLineFromContent,
+  findEnclosingDeclLine,
+} from '../../services/code-reader.js';
 
 function resolveSafe(filePath: string, ctx: ToolContext): string | null {
   return resolveSafePath(filePath, ctx.cwd);
@@ -401,6 +406,16 @@ const readFile: CoderTool = {
       start_line: { type: 'number', description: '1-indexed start line (optional)' },
       end_line: { type: 'number', description: '1-indexed inclusive end line (optional)' },
       max_lines: { type: 'number', description: 'Max lines to return when no range is given (default 400)' },
+      symbol: {
+        type: 'string',
+        description:
+          'Return only the body of this symbol (function/class/etc.). Locates the declaration via regex and extracts the brace/indent block. Wins over start_line/end_line when set.',
+      },
+      around_line: {
+        type: 'number',
+        description:
+          'Return the symbol body that contains this 1-indexed line. Useful when you have a stack frame or grep hit and want the enclosing function. Wins over start_line/end_line when set.',
+      },
     },
     required: ['path'],
     additionalProperties: false,
@@ -419,6 +434,33 @@ const readFile: CoderTool = {
 
     const lines = content.split('\n');
     const total = lines.length;
+
+    // Symbol-targeted modes: locate declaration, then extract the body block.
+    const symbolArg = typeof args.symbol === 'string' ? args.symbol.trim() : '';
+    const aroundLine = typeof args.around_line === 'number' ? args.around_line : null;
+    if (symbolArg || aroundLine !== null) {
+      let anchor: number | null = null;
+      if (symbolArg) {
+        anchor = findSymbolDeclLineFromContent(content, symbolArg);
+        if (anchor === null) {
+          return err(
+            `Symbol '${symbolArg}' not found in ${path}. ` +
+              `Fall back to a line range (start_line/end_line) or grep first.`,
+          );
+        }
+      } else if (aroundLine !== null) {
+        // around_line points anywhere inside the symbol — walk backward to
+        // its declaration so the brace-matcher returns the whole body, not
+        // the suffix from the cursor.
+        anchor = findEnclosingDeclLine(content, aroundLine);
+      }
+      if (anchor !== null) {
+        const body = extractSymbolBodyFromContent(path, content, anchor);
+        const header = `${path} — symbol body (lines ${body.start_line}-${body.end_line} of ${total})\n`;
+        return ok(header + body.body);
+      }
+    }
+
     let startLine = typeof args.start_line === 'number' ? Math.max(1, args.start_line) : 1;
     let endLine: number;
 

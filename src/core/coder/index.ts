@@ -4,7 +4,7 @@ import { CodeIndexDB } from '../../store/db.js';
 import { getDbWriter, isDbWriterEnabled, type DbWriter } from '../workers/dbWriter/client.js';
 import { loadConfig } from '../../utils/config.js';
 import { createCoderProvider } from '../providers/factory.js';
-import type { CoderProviderName } from './providers/adapter.js';
+import type { ChatProvider, CoderProviderName } from './providers/adapter.js';
 import { ToolRegistry } from './core/registry.js';
 import { CoderRunner } from './core/runner.js';
 import { buildSystemPrompt } from './core/system-prompt.js';
@@ -23,6 +23,7 @@ import { tasksTools, executeTask, taskComplete } from './tools/tasks.js';
 import { interactionTools } from './tools/interaction.js';
 import { buildExpandTools } from './tools/expand.js';
 import { McpToolBridge } from './tools/mcp-bridge.js';
+import { buildMcpResourceTools } from './tools/mcp-resources.js';
 import { McpServerManager } from './tools/mcp-server-manager.js';
 import { McpServerStore } from '../../store/mcp-server-store.js';
 import { buildSubagentTool, buildSpawnAgentsTool } from './tools/subagent.js';
@@ -52,6 +53,8 @@ import { ptyTools } from './tools/pty.js';
 import { webTools } from './tools/web.js';
 import { globTools } from './tools/glob.js';
 import { todoTools } from './tools/todo.js';
+import { viewImageTools } from './tools/view-image.js';
+import { goalTools } from './tools/goal.js';
 import { worktreeTools, createProjectWorktree } from './tools/worktree.js';
 import { SkillStore } from '../../store/skill-store.js';
 import type { ResolvedSkill, SkillTemplateContext } from './skills/types.js';
@@ -157,6 +160,19 @@ export interface RunCoderOptions {
    * advance so the API surface is stable when strict mode is enabled.
    */
   adminOverride?: boolean;
+  /**
+   * Synchronous hook fired right after the `CoderRunner` is constructed
+   * and all internal listeners are attached, but BEFORE `runner.run()`
+   * is called. Callers register listeners that must observe the very
+   * first turn — e.g. company HumanInTheLoop's `question_posted` /
+   * `plan_posted` / `tasks_posted` capture, which would otherwise miss
+   * an `ask_user` made on turn 1 because `runCoder` returns the handle
+   * after the run loop has already started emitting.
+   *
+   * Multiple listeners can be wired here: this fires once. Errors thrown
+   * here propagate (refuse to start the run with a broken wire-up).
+   */
+  onRunnerReady?: (runner: CoderRunner) => void;
 }
 
 export interface IndexStatus {
@@ -298,6 +314,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(webTools);
   registry.registerAll(globTools);
   registry.registerAll(todoTools);
+  registry.registerAll(viewImageTools);
+  registry.registerAll(goalTools);
   registry.registerAll(worktreeTools);
 
   // MCP bridges — Master gets N bridges (one per company project, prefixed tools),
@@ -336,6 +354,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       await bridge.connect();
       const mcpTools = await bridge.listTools({ projectName: project.name, overlay });
       registry.registerAll(mcpTools);
+      // Resource discovery/read tools — companion to the bridged tools.
+      // Cheap to expose: handlers no-op when the server publishes nothing.
+      registry.registerAll(buildMcpResourceTools(bridge));
       mcpBridgeOk = mcpTools.length > 0;
     } catch (e) {
       console.warn(`[coder] MCP bridge failed to connect: ${e instanceof Error ? e.message : String(e)}`);
@@ -430,7 +451,24 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     const parentTools = allDisabled.size > 0
       ? registry.list().filter((t) => !allDisabled.has(t.name))
       : registry.list();
-    const subagentDeps = { provider, parentTools, sessionStore: store };
+    let subagentProvider: ChatProvider | undefined;
+    try {
+      const ps = new ProviderStore(config.dbPath);
+      const subagentTarget = ps.getSubagentTarget(session.provider);
+      ps.close();
+      const targetProviderId = subagentTarget?.providerId ?? session.provider;
+      const targetModel = subagentTarget?.modelId ?? undefined;
+      const usesDifferentProvider = targetProviderId !== session.provider;
+      const usesDifferentModel = !!targetModel && targetModel !== session.model;
+      if (usesDifferentProvider || usesDifferentModel) {
+        subagentProvider = await createCoderProvider(targetProviderId, targetModel);
+        console.log(
+          `[coder] subagent provider override: ${targetProviderId}:${subagentProvider.model}`,
+        );
+      }
+    } catch { /* non-fatal — falls back to parent provider */ }
+
+    const subagentDeps = { provider, parentTools, sessionStore: store, subagentProvider };
     registry.register(buildSubagentTool(subagentDeps));
     registry.register(buildSpawnAgentsTool(subagentDeps));
   }
@@ -569,6 +607,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     },
     companyContext: opts.companyContext,
+    // Surface indexing status to tools so DB-dependent paths can fall back
+    // to disk/regex/tree-sitter instead of returning empty results.
+    projectIndexed: undefined, // set after isIndexed is computed (see below)
     // Ports: sandbox-backed when the session is in builder mode,
     // otherwise local host filesystem/shell. Tools consume `ctx.ports`
     // uniformly and never branch on mode.
@@ -644,6 +685,36 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const projectStats = db.getStats(project.id);
   const isIndexed = (projectStats?.file_count ?? 0) > 0 && (projectStats?.run_count ?? 0) > 0;
   const indexStatus: IndexStatus = { isIndexed, mcpAvailable: mcpBridgeOk };
+  toolContext.projectIndexed = isIndexed;
+
+  // Strip MCP tools that strictly depend on the symbol DB when the project
+  // has never been indexed. These would otherwise return empty/error
+  // results and waste turns. Disk-aware tools (mcp__read_file,
+  // mcp__list_directory, mcp__grep_code via ripgrep, etc.) stay registered.
+  if (!isIndexed) {
+    const indexDependent = new Set<string>([
+      'get_symbol_details', 'get_class_members', 'find_references',
+      'get_hierarchy', 'find_implementations', 'trace_usage',
+      'prepare_edit', 'semantic_neighbors',
+      'get_dependencies', 'get_dependents',
+      'search', 'search_global', 'search_concepts', 'search_by_kind',
+      'get_project_overview', 'get_project_pulse',
+      'get_architecture', 'get_repo_map',
+      'get_context_for', 'query_snapshots', 'get_project_context',
+    ]);
+    const isIndexDep = (toolName: string): boolean => {
+      // Strip mcp__ prefix and any company-master per-project slug
+      // (mcp__{slug}__name → name).
+      const tail = toolName.replace(/^mcp__/, '').replace(/^[^_]+__/, '');
+      return indexDependent.has(tail);
+    };
+    const before = registry.list().length;
+    registry.filterInPlace((t) => t.source === 'native' || !isIndexDep(t.name));
+    const after = registry.list().length;
+    if (before !== after) {
+      console.log(`[coder] project not indexed — stripped ${before - after} index-dependent MCP tools`);
+    }
+  }
 
   let systemPrompt = buildSystemPrompt({
     projectName: project.name,
@@ -661,6 +732,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         }))
       : undefined,
     mcpAvailable: mcpBridgeOk,
+    isIndexed,
   });
 
   // Append company prompt block (master orchestration or subordinate instructions)
@@ -757,6 +829,42 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           // best-effort — never crash the runner on a UI-notification hook
         }
       }, 300);
+    });
+  }
+
+  // ─── Incremental symbol re-indexing ──────────────────────────
+  // Keep the symbol DB fresh as the agent edits files. Tree-sitter only —
+  // no LLM cost. Only runs when the project is already indexed (a brand-new
+  // project still needs the full pipeline to populate `files` rows). Fire
+  // and forget: the hook returns immediately and the indexer runs in the
+  // background while the next turn begins.
+  if (isIndexed && !sandboxBinding) {
+    const FILE_MUTATING_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'multi_edit']);
+    hookRegistry.onToolCall('after', (ctx) => {
+      if (!FILE_MUTATING_TOOLS.has(ctx.toolName)) return;
+      if (ctx.result?.isError) return;
+      const raw = ctx.toolArgs.path ?? ctx.toolArgs.file_path ?? '';
+      const rawStr = typeof raw === 'string' ? raw : String(raw);
+      if (!rawStr) return;
+      // Normalize to the same shape the scanner stores in `files.path`:
+      // forward slashes, no leading `./`, no trailing slash. Without this,
+      // `db.getFile(projectId, relPath)` misses on Windows (backslashes) or
+      // when the agent passes `./src/foo.ts`, and the tree-sitter refresh
+      // is silently skipped.
+      const relPath = rawStr.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+      // Async, non-blocking. We re-import to avoid pulling tree-sitter wasm
+      // into sessions that never edit code.
+      void (async () => {
+        try {
+          const { indexFileNow } = await import('../indexer/incremental.js');
+          const { resolve: resolveAbs } = await import('node:path');
+          const abs = resolveAbs(toolContext.cwd, relPath);
+          const content = await (toolContext.ports?.fs ?? defaultLocalFilesystemPort()).readFile(abs);
+          await indexFileNow(db, project.id, relPath, content);
+        } catch {
+          // best-effort — never crash on incremental refresh failures
+        }
+      })();
     });
   }
 
@@ -1069,6 +1177,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   let lastRunnerError: Error | undefined;
   runner.on('done', (_reason: string, error?: Error) => { lastRunnerError = error; });
 
+  // Fire the caller's pre-run hook so they can attach listeners that
+  // must observe the FIRST turn. Critical for company HumanInTheLoop
+  // (`question_posted` from a master that calls `ask_user` on turn 1).
+  // See `RunCoderOptions.onRunnerReady` for the contract.
+  if (opts.onRunnerReady) {
+    opts.onRunnerReady(runner);
+  }
+
   const donePromise = runner
     .run()
     .then(async (res) => {
@@ -1110,6 +1226,8 @@ function defaultModelFor(provider: CoderProviderName): string {
       return 'glm-5.1';
     case 'deepseek':
       return 'deepseek-chat';
+    case 'kimi-code':
+      return 'kimi-k2.6';
     case 'gemini':
       // 2.5-flash is the current free-tier model; 2.0-flash has its free
       // quota set to 0 as of April 2026 and returns 429 immediately.

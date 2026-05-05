@@ -6,7 +6,8 @@ export type ProviderKind =
   | 'bedrock'
   | 'copilot'
   | 'chatgpt'
-  | 'google-oauth';
+  | 'google-oauth'
+  | 'kimi-code';
 
 export interface AdminProvider {
   id: string;
@@ -32,6 +33,8 @@ export interface AdminModel {
   name: string;
   enabled: boolean;
   source: string;
+  default_reasoning_level: string | null;
+  supported_reasoning_levels: string[] | null;
 }
 
 export interface TestResult {
@@ -49,6 +52,7 @@ export const KINDS: ProviderKind[] = [
   'copilot',
   'chatgpt',
   'google-oauth',
+  'kimi-code',
 ];
 
 export interface CopilotOpts {
@@ -80,5 +84,18 @@ export type ClaudeCodeFlowState =
 export type GoogleFlowState =
   | { state: 'idle' }
   | { state: 'waiting'; authorizeUrl: string; flowState: string }
+  | { state: 'success'; providerId?: string; modelCount?: number }
+  | { state: 'error'; message: string };
+
+export type KimiCodeFlowState =
+  | { state: 'idle' }
+  | {
+      state: 'waiting';
+      verificationUrl: string;
+      verificationUriComplete?: string;
+      userCode: string;
+      flowState: string;
+      interval: number;
+    }
   | { state: 'success'; providerId?: string; modelCount?: number }
   | { state: 'error'; message: string };

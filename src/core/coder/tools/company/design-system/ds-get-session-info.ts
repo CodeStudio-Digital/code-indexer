@@ -29,10 +29,10 @@ export function dsGetSessionInfo(
       try {
         const store = getDesignSystemStore();
         if (!store) return err('ds_get_session_info: DesignSystemStore not wired.');
-        const session = store.getSessionByCompanySessionId(orchestrator.companySessionId);
+        const session = store.getSessionByCompanySessionId(orchestrator.effectiveSessionId);
         if (!session) {
           return err(
-            `No DesignSystemSession bound to company_session_id=${orchestrator.companySessionId}.`,
+            `No DesignSystemSession bound to company_session_id=${orchestrator.effectiveSessionId}.`,
           );
         }
         const draft = store.getLatestVersionAny(session.id);

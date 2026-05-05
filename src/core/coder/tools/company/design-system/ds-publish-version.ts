@@ -88,10 +88,10 @@ export function dsPublishVersion(
         const verdaccio = tryGetVerdaccioService();
         if (!verdaccio) return err('ds_publish_version: VerdaccioService not wired.');
 
-        const session = store.getSessionByCompanySessionId(orchestrator.companySessionId);
+        const session = store.getSessionByCompanySessionId(orchestrator.effectiveSessionId);
         if (!session) {
           return err(
-            `No DesignSystemSession bound to company_session_id=${orchestrator.companySessionId}.`,
+            `No DesignSystemSession bound to company_session_id=${orchestrator.effectiveSessionId}.`,
           );
         }
         let draft = store.getLatestVersionAny(session.id);

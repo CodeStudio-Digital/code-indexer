@@ -38,8 +38,8 @@ interface CodexModelInfo {
   description?: string;
   context_window?: number;
   max_context_window?: number;
-  default_reasoning_level?: string;
-  supported_reasoning_levels?: string[];
+  default_reasoning_level?: unknown;
+  supported_reasoning_levels?: unknown[];
   apply_patch_tool_type?: string;
   available_in_plans?: string[];
   minimal_client_version?: string;
@@ -137,8 +137,8 @@ function toUpsertInput(m: CodexModelInfo): UpsertModelInput {
     default_enabled: isListed && isApi,
     display_name: m.display_name ?? null,
     description: m.description ?? null,
-    default_reasoning_level: m.default_reasoning_level ?? null,
-    supported_reasoning_levels: m.supported_reasoning_levels ?? null,
+    default_reasoning_level: normalizeReasoningLevel(m.default_reasoning_level),
+    supported_reasoning_levels: normalizeReasoningLevels(m.supported_reasoning_levels),
     apply_patch_tool_type: m.apply_patch_tool_type ?? null,
     available_in_plans: m.available_in_plans ?? null,
     minimal_client_version: m.minimal_client_version ?? null,
@@ -146,6 +146,24 @@ function toUpsertInput(m: CodexModelInfo): UpsertModelInput {
     supported_in_api: m.supported_in_api ?? null,
     input_modalities: m.input_modalities ?? null,
   };
+}
+
+function normalizeReasoningLevel(lv: unknown): string | null {
+  if (typeof lv === 'string') return lv;
+  if (lv && typeof lv === 'object' && 'effort' in lv && typeof (lv as Record<string, unknown>).effort === 'string') {
+    return (lv as Record<string, unknown>).effort as string;
+  }
+  return null;
+}
+
+function normalizeReasoningLevels(levels: unknown[] | undefined): string[] | null {
+  if (!Array.isArray(levels)) return null;
+  const result: string[] = [];
+  for (const lv of levels) {
+    const s = normalizeReasoningLevel(lv);
+    if (s) result.push(s);
+  }
+  return result.length > 0 ? result : null;
 }
 
 function seedFallback(): UpsertModelInput[] {

@@ -11,6 +11,12 @@ export interface PlanPrompt {
   id: string;
   plan: string;
   resolved?: 'approved' | 'rejected';
+  /**
+   * Hint emitted by the coder when calling submit_plan: 'informational'
+   * means the plan is an answer-only deliverable (no edit/shell follow-up).
+   * The dashboard surfaces a quick-approve cue for these.
+   */
+  kind?: 'informational' | 'mutating';
 }
 
 export interface QuestionPrompt {
@@ -71,6 +77,8 @@ export interface ParallelAgent {
   label: string;
   status: AgentStatus;
   toolCallCount: number;
+  provider?: string;
+  model?: string;
   usage?: Usage;
   summary?: string;
   error?: string;
@@ -79,6 +87,8 @@ export interface ParallelAgent {
 export interface AgentsGroup {
   groupId: string;
   agents: ParallelAgent[];
+  provider?: string;
+  model?: string;
   totalUsage?: Usage;
   status: 'running' | 'completed';
 }

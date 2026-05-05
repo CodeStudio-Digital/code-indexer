@@ -14,7 +14,6 @@
  * shared resource and coordination is easier with one registry.
  */
 
-import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,7 +33,6 @@ import type {
 } from './types.js';
 import { DEFAULT_SANDBOX_ISOLATION, DEFAULT_SANDBOX_LIMITS } from './types.js';
 
-const MAX_LOG_LINES = 200;
 import { getScaffolder } from './scaffolders/registry.js';
 import { resolveDriver, getResolvedRuntime } from './drivers/driver-factory.js';
 import { CliOciDriver } from './drivers/cli-oci-driver.js';
@@ -58,6 +56,49 @@ import type {
 import type { CompanySessionEnvStore } from '../../store/company-session-env-store.js';
 import { detectManifest } from './manifest-detector/detect.js';
 import type { NodeManifest, NodePackageManager } from './manifest-detector/types.js';
+import {
+  ensureSafeRelPath,
+  absolutize,
+  hasInitializedWorkdir,
+} from './manager/util/paths.js';
+import {
+  resolvePublicBase,
+  defaultPreviewUrl,
+  previewPathPrefixOf,
+} from './manager/util/preview-url.js';
+import {
+  nodeModulesVolumeFor,
+  projectImageTag,
+  sessionNetworkName,
+  resolveRuntimeBinary,
+} from './manager/util/naming.js';
+import { shQuote, truncateForLog } from './manager/util/shell.js';
+import {
+  parseDotEnv,
+  renderDotEnv,
+  resolveHostWorkdirMount,
+  resolveSessionEnvs as resolveSessionEnvsFrom,
+  importDotEnvIntoStore as importDotEnvIntoStoreFrom,
+} from './manager/io/env-helpers.js';
+import { sandboxStores } from './manager/state/stores.js';
+import { SandboxRegistry } from './manager/state/registry.js';
+import { SandboxEventBus } from './manager/events/event-bus.js';
+import {
+  SandboxPersister,
+  toPersistedStatus,
+  parseLimits,
+} from './manager/persistence/persister.js';
+import { WorkspaceIO } from './manager/io/workspace-io.js';
+import { IntervalTimer } from './manager/reaper/interval-timer.js';
+import { installShutdownHandlers as installShutdownHandlersImpl } from './manager/runtime/shutdown.js';
+import {
+  buildPrimarySandboxFromRow,
+  buildServiceSandboxFromRow,
+  buildAttachedServiceSandboxFromRow,
+} from './manager/persistence/sandbox-from-row.js';
+
+export { sessionNetworkName };
+export { cleanupSessionPersistence } from './manager/persistence/cleanup.js';
 
 /**
  * Module-level binding of the persistence store. The SandboxManager
@@ -87,18 +128,21 @@ let qaPreviewConfig: {
 
 export function setCompanySandboxStore(store: CompanySandboxStore | null): void {
   sandboxStore = store;
+  sandboxStores.setSandboxStore(store);
 }
 
 export function setCompanySandboxServicesStore(
   store: CompanySandboxServicesStore | null,
 ): void {
   servicesStore = store;
+  sandboxStores.setServicesStore(store);
 }
 
 export function setCompanySessionEnvStore(
   store: CompanySessionEnvStore | null,
 ): void {
   envStore = store;
+  sandboxStores.setEnvStore(store);
 }
 
 /**
@@ -115,6 +159,7 @@ export function setQaPreviewConfig(
   } | null,
 ): void {
   qaPreviewConfig = cfg;
+  sandboxStores.setQaPreviewConfig(cfg);
 }
 
 function getStore(): CompanySandboxStore | null {
@@ -142,169 +187,14 @@ function shouldHardDeleteService(reason: string): boolean {
   return reason === 'user-removed' || reason === 'user-removed-offline';
 }
 
-/**
- * Resolve shared env vars for a session. Returns an empty record when
- * the store isn't wired (tests, CLI paths) or the session id isn't
- * numeric. Used by both primary and secondary provision paths.
- */
+/** Wrapper: passes the module-level envStore into the pure helper. */
 function resolveSessionEnvs(sessionId: string): Record<string, string> {
-  if (!envStore) return {};
-  const numericId = Number(sessionId);
-  if (!Number.isFinite(numericId)) return {};
-  try {
-    return envStore.asRecord(numericId);
-  } catch {
-    return {};
-  }
+  return resolveSessionEnvsFrom(envStore, sessionId);
 }
 
-/**
- * Parse a dotenv-style file body into key→value pairs. Minimal
- * implementation — supports `KEY=VALUE`, trims surrounding whitespace,
- * strips a single matching pair of `"`/`'` quotes from the value, and
- * skips blank/comment lines. Good enough for the one-shot import on
- * provision; complex cases (multiline values, variable expansion) are
- * explicitly out of scope.
- */
-function parseDotEnv(content: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const raw of content.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const eq = line.indexOf('=');
-    if (eq <= 0) continue;
-    const key = line.slice(0, eq).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
-    let value = line.slice(eq + 1).trim();
-    // Drop an inline `# comment` when the value is unquoted.
-    if (!(value.startsWith('"') || value.startsWith("'"))) {
-      const hashIdx = value.indexOf(' #');
-      if (hashIdx >= 0) value = value.slice(0, hashIdx).trim();
-    }
-    if (
-      value.length >= 2 &&
-      ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'")))
-    ) {
-      value = value.slice(1, -1);
-    }
-    out[key] = value;
-  }
-  return out;
-}
-
-/**
- * Best-effort import of an existing `.env` file sitting in a sandbox's
- * host workdir into `company_session_envs`. Silently no-ops when the
- * file is missing, the store isn't wired, the session id isn't
- * numeric, or the read fails for any reason — the provision must not
- * abort over env-import hiccups.
- *
- * Rows are written with `source: 'imported'` and `onlyIfAbsent: true`
- * so a user-managed value (set via the Env tab) always wins over the
- * checked-in default.
- */
+/** Wrapper: passes the module-level envStore into the pure helper. */
 function importDotEnvIntoStore(hostWorkdirMount: string, sessionId: string): void {
-  if (!envStore) return;
-  const numericId = Number(sessionId);
-  if (!Number.isFinite(numericId)) return;
-  const envPath = join(hostWorkdirMount, '.env');
-  if (!existsSync(envPath)) return;
-  try {
-    const content = readFileSync(envPath, 'utf8');
-    const pairs = parseDotEnv(content);
-    for (const [key, value] of Object.entries(pairs)) {
-      envStore.upsert(numericId, key, value, false, {
-        source: 'imported',
-        onlyIfAbsent: true,
-      });
-    }
-  } catch (e) {
-    console.warn(
-      `[sandbox-manager] import .env for session ${sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-}
-
-/**
- * Resolve the operator-configured public base URL used to absolutize
- * preview URLs in managed envs. Operators set this to whatever origin
- * the dashboard is reachable at — dev usually `http://localhost:5173`,
- * prod `https://mcp.example.com`. When unset we return `null` and the
- * caller falls back to emitting relative URLs.
- *
- * Precedence: `MCP_PUBLIC_URL` → `MCP_DASHBOARD_URL` → null.
- * Trailing slashes are stripped so `${base}${relative}` produces a
- * clean concatenation.
- */
-function resolvePublicBase(): string | null {
-  const raw = process.env.MCP_PUBLIC_URL ?? process.env.MCP_DASHBOARD_URL ?? '';
-  const trimmed = raw.trim().replace(/\/+$/, '');
-  return trimmed || null;
-}
-
-/**
- * Pure: validate that a workspace-relative path is safe for HTTP
- * callers to traverse. Rejects absolute paths, empty strings, and any
- * `..` segment that could climb out of the workdir. Normalises slashes.
- *
- * Exported is unnecessary — only used by the manager; tests can drive
- * it via `readWorkspaceFile` thrown errors.
- */
-function ensureSafeRelPath(relPath: string): string {
-  if (typeof relPath !== 'string' || relPath.trim() === '') {
-    throw new Error('workspace path must be a non-empty string');
-  }
-  const normalised = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
-  if (normalised.startsWith('/')) {
-    throw new Error('absolute paths are not allowed');
-  }
-  const parts = normalised.split('/');
-  if (parts.some((p) => p === '..' || p === '.')) {
-    throw new Error('relative path must not contain `..` or `.` segments');
-  }
-  // NUL bytes — unusual but a known shell-escape vector.
-  if (normalised.includes('\0')) {
-    throw new Error('path contains illegal NUL byte');
-  }
-  return parts.join('/');
-}
-
-/**
- * Prepend `base` to `relative` when `relative` is origin-less. Absolute
- * URLs pass through unchanged. Returns the original string verbatim
- * when no base is configured so managed envs degrade gracefully (the
- * iframe still works because it's same-origin; only external callers
- * need absolute URLs).
- */
-function absolutize(relative: string, base: string | null): string {
-  if (!relative) return relative;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(relative)) return relative;
-  if (!base) return relative;
-  return relative.startsWith('/') ? `${base}${relative}` : `${base}/${relative}`;
-}
-
-/**
- * Render a `.env` file body from a flat map — one line per key, values
- * lightly quoted when they contain whitespace or shell metacharacters.
- * Written into the workdir so dev-servers that auto-load `.env`
- * (vite, wrangler, node --env-file) see the values without a cold restart.
- */
-function renderDotEnv(envs: Record<string, string>): string {
-  const safeKey = /^[A-Za-z_][A-Za-z0-9_]*$/;
-  const lines: string[] = [
-    '# Managed by MCP SandboxService — shared session env.',
-    '# Regenerated on every provision + when agents run env_set/env_delete.',
-  ];
-  for (const [key, value] of Object.entries(envs)) {
-    if (!safeKey.test(key)) continue;
-    const needsQuote = /[\s"'`$\\]/.test(value) || value === '';
-    const escaped = needsQuote
-      ? `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')}"`
-      : value;
-    lines.push(`${key}=${escaped}`);
-  }
-  return lines.join('\n') + '\n';
+  importDotEnvIntoStoreFrom(envStore, hostWorkdirMount, sessionId);
 }
 
 export interface SandboxManagerOptions {
@@ -337,96 +227,6 @@ const DEFAULT_NODE_IMAGE = 'mcp-sandbox-node:20-py';
 const DEFAULT_DEV_PORT = 5173;
 const DEFAULT_WORKDIR = '/app';
 
-/**
- * Clean up per-session persistence state: the bind-mount host dir AND
- * the named `node_modules` volume. Invoked from the DELETE /sessions
- * handler after the container has already been destroyed. Best effort
- * — failures are logged, not thrown (session deletion should not be
- * blocked by stale persistence artifacts).
- */
-export async function cleanupSessionPersistence(
-  sessionId: string,
-  opts: {
-    mountKind?: SandboxMountKind;
-    builtImageTags?: readonly string[];
-    removeHostWorkdir?: boolean;
-    removeNodeModulesVolume?: boolean;
-    nodeModulesVolumeNames?: readonly string[];
-  } = {},
-): Promise<void> {
-  // 1. Host workdir dir.
-  const hostDir = resolveHostWorkdirMount(sessionId);
-  if (opts.removeHostWorkdir !== false && opts.mountKind !== 'external' && hostDir && existsSync(hostDir)) {
-    try {
-      rmSync(hostDir, { recursive: true, force: true });
-    } catch (e) {
-      console.warn(
-        `[sandbox-manager] remove host workdir ${hostDir} failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-  }
-
-  // 2. Named node_modules volume. Route through the active CLI driver
-  //    when available — falls back to `docker`/`podman` discovery via
-  //    env. Silently no-ops when the volume doesn't exist.
-  const volumeNames = opts.nodeModulesVolumeNames
-    ? [...new Set(opts.nodeModulesVolumeNames)]
-    : opts.removeNodeModulesVolume !== false
-      ? [nodeModulesVolumeFor(sessionId)]
-      : [];
-  if (volumeNames.length > 0) {
-    const binary =
-      process.env.MCP_SANDBOX_RUNTIME === 'podman' ? 'podman' : 'docker';
-    await Promise.all(
-      volumeNames.map((volName) => new Promise<void>((resolve) => {
-        const child = spawnChild(binary, ['volume', 'rm', '-f', volName], {
-          stdio: 'ignore',
-        });
-        child.once('error', () => resolve());
-        child.once('close', () => resolve());
-      })),
-    );
-  }
-
-  const tags = [...new Set((opts.builtImageTags ?? []).filter(Boolean))];
-  if (tags.length > 0) {
-    const driver = await resolveDriver().catch(() => null);
-    await Promise.allSettled(
-      tags.map((tag) => driver?.removeImage(tag).catch(() => void 0)),
-    );
-  }
-}
-
-/**
- * Resolve the host directory that's bind-mounted onto the sandbox workdir.
- * Default layout: `<cwd>/data/virtual-projects/<sessionId>`. Operators can
- * relocate via `MCP_SANDBOX_WORKDIR_HOST_DIR` (absolute path — sessionId
- * is appended as a subdir).
- *
- * Returns `null` when persistence via bind-mount is explicitly disabled
- * (`MCP_SANDBOX_BIND_MOUNT=0`), preserving the legacy ephemeral-fs
- * behavior for environments where bind mounts are unavailable (e.g.
- * remote docker host with no shared FS).
- */
-function resolveHostWorkdirMount(sessionId: string): string | null {
-  if (process.env.MCP_SANDBOX_BIND_MOUNT === '0') return null;
-  const base =
-    process.env.MCP_SANDBOX_WORKDIR_HOST_DIR ??
-    resolvePath(process.cwd(), 'data', 'virtual-projects');
-  return join(base, String(sessionId));
-}
-
-/** Deterministic name for the per-session `node_modules` named volume. */
-function nodeModulesVolumeFor(sessionId: string): string {
-  const safe = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 48);
-  return `mcp-sbx-nm-${safe}`;
-}
-
-function projectImageTag(sessionId: string, serviceId = 'main'): string {
-  const safeSession = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 48);
-  const safeService = String(serviceId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 32);
-  return `mcp-session-${safeSession}-${safeService}:latest`;
-}
 
 interface ExternalNodeDevSpec {
   manifest: NodeManifest;
@@ -435,16 +235,6 @@ interface ExternalNodeDevSpec {
   scriptBody: string;
   containerPort: number;
   framework: 'angular' | 'next' | 'vite' | 'generic';
-}
-
-/** True when `dir` exists and contains at least a `package.json`. */
-function hasInitializedWorkdir(dir: string): boolean {
-  try {
-    const entries = readdirSync(dir);
-    return entries.includes('package.json');
-  } catch {
-    return false;
-  }
 }
 
 export interface ProvisionRequest {
@@ -552,16 +342,24 @@ export interface ProvisionServiceRequest {
 }
 
 export class SandboxManager {
-  private readonly emitter = new EventEmitter();
+  private readonly registry = new SandboxRegistry();
+  private readonly bus = new SandboxEventBus();
+  private readonly persister = new SandboxPersister(sandboxStores);
+  private readonly workspaceIO = new WorkspaceIO(this.registry, () => this.driver);
   private readonly allocator: PortAllocator;
-  private readonly sandboxes = new Map<string, Sandbox>();
+  /** Backwards-compat accessor — primary sandboxes by sessionId. */
+  private get sandboxes(): Map<string, Sandbox> {
+    return this.registry.primary;
+  }
   /**
-   * Secondary containers (`service_id !== 'main'`) keyed by composite
-   * `sessionId:serviceId`. Kept in a separate map so the primary-
-   * container paths (reconcile, reap, TTL) don't accidentally touch
-   * services. Service lifecycle is driven by explicit REST calls.
+   * Backwards-compat accessor — secondary containers (`service_id !== 'main'`)
+   * keyed by composite `sessionId:serviceId`. Kept in a separate map so
+   * primary-container paths (reconcile, reap, TTL) don't accidentally
+   * touch services. Service lifecycle is driven by explicit REST calls.
    */
-  private readonly services = new Map<string, Sandbox>();
+  private get services(): Map<string, Sandbox> {
+    return this.registry.services;
+  }
   private driver: ISandboxDriver | null;
   private readonly maxSandboxes: number;
   private readonly idleTtlMs: number;
@@ -573,8 +371,8 @@ export class SandboxManager {
   private readonly devServerPort: number;
   private readonly workdir: string;
   private readonly buildPreviewUrl: (sessionId: string, hostPort: number) => string;
-  private reaperTimer: NodeJS.Timeout | null = null;
-  private statsTimer: NodeJS.Timeout | null = null;
+  private reaperTimer: IntervalTimer | null = null;
+  private statsTimer: IntervalTimer | null = null;
   private readonly statsIntervalMs: number;
   private shuttingDown = false;
 
@@ -604,13 +402,11 @@ export class SandboxManager {
   // ──────────────────────────────────────────────────────────── observers
 
   subscribe(observer: SandboxObserver): () => void {
-    const wrapped = (event: SandboxEvent) => observer(event);
-    this.emitter.on('event', wrapped);
-    return () => this.emitter.off('event', wrapped);
+    return this.bus.subscribe(observer);
   }
 
   private emit(event: SandboxEvent): void {
-    this.emitter.emit('event', event);
+    this.bus.emit(event);
   }
 
   // ────────────────────────────────────────────────────────────── queries
@@ -638,20 +434,12 @@ export class SandboxManager {
    * sandbox is missing.
    */
   async readWorkspaceFile(sessionId: string, relPath: string): Promise<string | null> {
-    const { driver, sb, abs } = this.resolveWorkspacePath(sessionId, relPath);
-    try {
-      return await driver.readFile(sb.containerId, abs);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (/no such file|ENOENT|not found/i.test(msg)) return null;
-      throw e;
-    }
+    return this.workspaceIO.readText(sessionId, relPath);
   }
 
   /** Write a workspace-relative text file (creates parents). */
   async writeWorkspaceFile(sessionId: string, relPath: string, data: string): Promise<void> {
-    const { driver, sb, abs } = this.resolveWorkspacePath(sessionId, relPath);
-    await driver.writeFile(sb.containerId, abs, data, { recursive: true });
+    return this.workspaceIO.writeText(sessionId, relPath, data);
   }
 
   /**
@@ -668,30 +456,7 @@ export class SandboxManager {
     relPath: string,
     opts?: { maxBytes?: number },
   ): Promise<Buffer> {
-    const maxBytes = opts?.maxBytes ?? 25 * 1024 * 1024; // 25 MiB default
-    const { driver, sb, abs } = this.resolveWorkspacePath(sessionId, relPath);
-    // Cheap size guard via `wc -c` before pulling bytes; avoids loading
-    // a runaway file into memory only to reject it.
-    const sizeProbe = await driver.exec(sb.containerId, `wc -c < "${abs}"`, {
-      cwd: undefined,
-      timeoutMs: 5_000,
-    });
-    if (sizeProbe.exitCode !== 0) {
-      throw new Error(`workspace file not readable: ${sizeProbe.stderr || sizeProbe.stdout}`);
-    }
-    const size = Number(sizeProbe.stdout.trim());
-    if (Number.isFinite(size) && size > maxBytes) {
-      throw new Error(`file ${relPath} is ${size} bytes, max ${maxBytes}`);
-    }
-    const b64 = await driver.exec(sb.containerId, `base64 -w0 < "${abs}"`, {
-      cwd: undefined,
-      timeoutMs: 30_000,
-      maxOutputBytes: Math.ceil(maxBytes * 1.4) + 1024, // base64 inflation
-    });
-    if (b64.exitCode !== 0) {
-      throw new Error(`base64 read failed: ${b64.stderr || b64.stdout}`);
-    }
-    return Buffer.from(b64.stdout.trim(), 'base64');
+    return this.workspaceIO.readBuffer(sessionId, relPath, opts);
   }
 
   /**
@@ -710,31 +475,7 @@ export class SandboxManager {
     relPath: string,
     opts?: { maxBytes?: number },
   ): Promise<Buffer> {
-    const isPrimary = !serviceId || serviceId === 'main';
-    if (isPrimary) return this.readWorkspaceFileBuffer(sessionId, relPath, opts);
-
-    const maxBytes = opts?.maxBytes ?? 25 * 1024 * 1024;
-    const { driver, sb, abs } = this.resolveServiceWorkspacePath(sessionId, serviceId, relPath);
-    const sizeProbe = await driver.exec(sb.containerId, `wc -c < "${abs}"`, {
-      cwd: undefined,
-      timeoutMs: 5_000,
-    });
-    if (sizeProbe.exitCode !== 0) {
-      throw new Error(`workspace file not readable: ${sizeProbe.stderr || sizeProbe.stdout}`);
-    }
-    const size = Number(sizeProbe.stdout.trim());
-    if (Number.isFinite(size) && size > maxBytes) {
-      throw new Error(`file ${relPath} is ${size} bytes, max ${maxBytes}`);
-    }
-    const b64 = await driver.exec(sb.containerId, `base64 -w0 < "${abs}"`, {
-      cwd: undefined,
-      timeoutMs: 30_000,
-      maxOutputBytes: Math.ceil(maxBytes * 1.4) + 1024,
-    });
-    if (b64.exitCode !== 0) {
-      throw new Error(`base64 read failed: ${b64.stderr || b64.stdout}`);
-    }
-    return Buffer.from(b64.stdout.trim(), 'base64');
+    return this.workspaceIO.readBufferOnService(sessionId, serviceId, relPath, opts);
   }
 
   /**
@@ -755,33 +496,7 @@ export class SandboxManager {
     serviceId: string | undefined,
     relDir: string,
   ): Promise<string[]> {
-    const isPrimary = !serviceId || serviceId === 'main';
-    const { driver, sb, abs } = isPrimary
-      ? this.resolveWorkspacePath(sessionId, relDir)
-      : this.resolveServiceWorkspacePath(sessionId, serviceId, relDir);
-
-    // Probe existence first — `find` on a missing dir would emit to
-    // stderr with exit 1, which is indistinguishable from a real failure
-    // to read a known file. A test on the directory makes the
-    // not-yet-produced case explicit + cheap.
-    const probe = await driver.exec(sb.containerId, `[ -d "${abs}" ] && echo y || echo n`, {
-      cwd: undefined,
-      timeoutMs: 5_000,
-    });
-    if (probe.exitCode !== 0 || probe.stdout.trim() !== 'y') return [];
-
-    const list = await driver.exec(sb.containerId, `find "${abs}" -type f -printf '%P\\n'`, {
-      cwd: undefined,
-      timeoutMs: 30_000,
-      maxOutputBytes: 4 * 1024 * 1024, // 4 MiB of paths is enough for tens of thousands of files
-    });
-    if (list.exitCode !== 0) {
-      throw new Error(`listWorkspaceFilesOnService failed: ${list.stderr || list.stdout}`);
-    }
-    return list.stdout
-      .split('\n')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+    return this.workspaceIO.listFilesOnService(sessionId, serviceId, relDir);
   }
 
   /**
@@ -796,22 +511,7 @@ export class SandboxManager {
     serviceId: string | undefined,
     relDir: string,
   ): Promise<void> {
-    const isPrimary = !serviceId || serviceId === 'main';
-    const { driver, sb, abs } = isPrimary
-      ? this.resolveWorkspacePath(sessionId, relDir)
-      : this.resolveServiceWorkspacePath(sessionId, serviceId, relDir);
-    // Refuse to wipe an empty / root-equivalent path. The
-    // ensureSafeRelPath validator already rejects '.', '..', and
-    // absolute paths, so the only way `abs` could equal the workdir
-    // root is if `relDir` was an empty string.
-    if (!relDir || relDir.trim() === '') return;
-    const r = await driver.exec(sb.containerId, `rm -rf "${abs}"`, {
-      cwd: undefined,
-      timeoutMs: 30_000,
-    });
-    if (r.exitCode !== 0 && !/no such file|not found/i.test(r.stderr || '')) {
-      throw new Error(`removeWorkspaceDirOnService failed: ${r.stderr || r.stdout}`);
-    }
+    return this.workspaceIO.removeDirOnService(sessionId, serviceId, relDir);
   }
 
   /**
@@ -823,46 +523,7 @@ export class SandboxManager {
     serviceId: string | undefined,
     relPath: string,
   ): Promise<string | null> {
-    const isPrimary = !serviceId || serviceId === 'main';
-    if (isPrimary) return this.readWorkspaceFile(sessionId, relPath);
-    const { driver, sb, abs } = this.resolveServiceWorkspacePath(sessionId, serviceId, relPath);
-    try {
-      return await driver.readFile(sb.containerId, abs);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (/no such file|ENOENT|not found/i.test(msg)) return null;
-      throw e;
-    }
-  }
-
-  private resolveServiceWorkspacePath(
-    sessionId: string,
-    serviceId: string,
-    relPath: string,
-  ): { driver: ISandboxDriver; sb: Sandbox; abs: string } {
-    if (!this.driver) throw new Error('SandboxManager has no driver wired');
-    const sb = this.getService(sessionId, serviceId);
-    if (!sb) throw new Error(`No sandbox for session ${sessionId} service ${serviceId}`);
-    const safe = ensureSafeRelPath(relPath);
-    const base = sb.workdir.replace(/\/+$/, '');
-    return { driver: this.driver, sb, abs: `${base}/${safe}` };
-  }
-
-  /**
-   * Pure(ish) helper: validate a workspace-relative path and resolve
-   * it against the sandbox's container workdir. Rejects absolute paths
-   * and any `..` segment so HTTP callers can't escape the workspace.
-   */
-  private resolveWorkspacePath(
-    sessionId: string,
-    relPath: string,
-  ): { driver: ISandboxDriver; sb: Sandbox; abs: string } {
-    if (!this.driver) throw new Error('SandboxManager has no driver wired');
-    const sb = this.sandboxes.get(sessionId);
-    if (!sb) throw new Error(`No sandbox for session ${sessionId}`);
-    const safe = ensureSafeRelPath(relPath);
-    const base = sb.workdir.replace(/\/+$/, '');
-    return { driver: this.driver, sb, abs: `${base}/${safe}` };
+    return this.workspaceIO.readTextOnService(sessionId, serviceId, relPath);
   }
 
   // ───────────────────────────────────────────────────── services (multi)
@@ -873,7 +534,7 @@ export class SandboxManager {
 
   /** In-memory lookup for an additional service of a session. */
   getService(sessionId: string, serviceId: string): Sandbox | undefined {
-    return this.services.get(this.serviceKey(sessionId, serviceId));
+    return this.registry.getService(sessionId, serviceId);
   }
 
   /**
@@ -894,12 +555,7 @@ export class SandboxManager {
 
   /** Every additional service (primary excluded) belonging to a session. */
   listServices(sessionId: string): Sandbox[] {
-    const prefix = `${sessionId}:`;
-    const out: Sandbox[] = [];
-    for (const [key, sb] of this.services.entries()) {
-      if (key.startsWith(prefix)) out.push(sb);
-    }
-    return out;
+    return this.registry.listServicesForSession(sessionId);
   }
 
   private runtimePauseTarget(
@@ -923,14 +579,7 @@ export class SandboxManager {
    * a server restart — need this to avoid a DB round-trip.
    */
   listServicesWithIds(sessionId: string): Array<{ serviceId: string; sandbox: Sandbox }> {
-    const prefix = `${sessionId}:`;
-    const out: Array<{ serviceId: string; sandbox: Sandbox }> = [];
-    for (const [key, sb] of this.services.entries()) {
-      if (!key.startsWith(prefix)) continue;
-      const serviceId = key.slice(prefix.length);
-      out.push({ serviceId, sandbox: sb });
-    }
-    return out;
+    return this.registry.listServicesWithIdsForSession(sessionId);
   }
 
   /**
@@ -1761,61 +1410,7 @@ export class SandboxManager {
     sb: Sandbox,
     statusOverride?: PersistedSandboxStatus,
   ): void {
-    const store = getServicesStore();
-    if (!store) return;
-    const numericId = Number(sessionId);
-    if (!Number.isFinite(numericId)) return;
-    try {
-      // Defensive: free up any stale row sitting on this container_id
-      // (non-destroyed state) from a prior provisioning attempt that
-      // crashed before its success UPDATE landed. The partial unique
-      // index `idx_company_sandbox_services_container` (migration 035)
-      // would otherwise reject the upsert below with a
-      // `UNIQUE constraint failed: company_sandbox_services.container_id`.
-      const released = store.releaseStaleContainerId(sb.containerId, numericId, serviceId);
-      if (released > 0) {
-        console.warn(
-          `[sandbox-manager] persistService ${sessionId}:${serviceId} freed ${released} stale row(s) on container_id=${sb.containerId.slice(0, 12)}`,
-        );
-      }
-      // Same defensive release for `host_port` — the partial unique
-      // index `idx_company_sandbox_services_port` rejects the upsert
-      // when an old non-destroyed row still claims the same port.
-      // This is the typical aftermath of a provider crash where the
-      // old container was reaped but the row never got demoted.
-      const releasedPort = store.releaseStaleHostPort(sb.hostPort, numericId, serviceId);
-      if (releasedPort > 0) {
-        console.warn(
-          `[sandbox-manager] persistService ${sessionId}:${serviceId} freed ${releasedPort} stale row(s) on host_port=${sb.hostPort}`,
-        );
-      }
-      store.upsert({
-        session_id: numericId,
-        service_id: serviceId,
-        name,
-        container_id: sb.containerId,
-        runtime: sb.runtime,
-        stack: sb.stack,
-        workdir: sb.workdir,
-        host_workdir_mount: sb.hostWorkdirMount ?? null,
-        host_port: sb.hostPort,
-        limits: sb.limits as unknown as Record<string, unknown>,
-        status: statusOverride ?? this.toPersistedStatus(sb.status),
-        error: sb.error ?? null,
-        mount_kind: sb.mountKind,
-        image_source: sb.imageSource,
-        built_image_tag: sb.builtImageTag ?? null,
-        dockerfile_path: sb.dockerfilePath ?? null,
-        dockerfile_exposed_port: sb.dockerfileExposedPort ?? null,
-        is_primary: false,
-        last_access_at_ms: sb.lastAccessAt,
-        paused_at_ms: sb.status === 'paused' ? Date.now() : null,
-      });
-    } catch (e) {
-      console.warn(
-        `[sandbox-manager] persistService ${sessionId}:${serviceId} failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    this.persister.persistService(sessionId, serviceId, name, sb, statusOverride);
   }
 
   // ─────────────────────────────────────────────────────────── provision
@@ -2620,21 +2215,11 @@ export class SandboxManager {
    * event so UIs that prefer SSE can react without re-polling.
    */
   private recordStep(sb: Sandbox, step: SandboxStep, message: string): void {
-    sb.step = step;
-    this.appendLog(sb, 'info', message);
-    this.emit({ kind: 'step', sandboxId: sb.id, step, message });
+    this.bus.recordStep(sb, step, message);
   }
 
   private appendLog(sb: Sandbox, level: SandboxLogLine['level'], text: string): void {
-    // Normalize: strip trailing newlines from scaffolder chunks, cap
-    // each individual message so a runaway `npm install` stderr line
-    // can't bloat the ring buffer.
-    const clean = text.replace(/\s+$/g, '').slice(0, 2_000);
-    if (!clean) return;
-    sb.recentLogs.push({ at: Date.now(), level, text: clean });
-    if (sb.recentLogs.length > MAX_LOG_LINES) {
-      sb.recentLogs.splice(0, sb.recentLogs.length - MAX_LOG_LINES);
-    }
+    this.bus.appendLog(sb, level, text);
   }
 
   private async resolveDriverOnce(): Promise<ISandboxDriver> {
@@ -2740,34 +2325,10 @@ export class SandboxManager {
           ? 'paused'
           : 'paused'; // running-in-DB but stopped-in-runtime -> now paused
 
-    const limits = this.parseLimits(row.limits_json);
-    const previewUrl = this.buildPreviewUrl(String(row.session_id), row.host_port);
-    const sb: Sandbox = {
-      id: String(row.session_id),
-      containerId: row.container_id,
-      runtime: row.runtime,
-      stack: row.stack as SandboxStack,
-      hostPort: row.host_port,
-      workdir: row.workdir,
-      containerPort: row.dockerfile_exposed_port ?? this.devServerPort,
-      previewUrl,
-      limits,
-      status: effectiveStatus,
-      runtimePaused: inspect.paused,
-      step: effectiveStatus === 'ready' ? 'ready' : 'queued',
-      recentLogs: [
-        { at: Date.now(), level: 'info', text: `Reclaimed from DB (status=${effectiveStatus})` },
-      ],
-      createdAt: new Date(row.created_at).getTime() || Date.now(),
-      lastAccessAt: row.last_access_at_ms,
-      error: row.error ?? undefined,
-      hostWorkdirMount: row.host_workdir_mount ?? undefined,
-      mountKind: row.mount_kind ?? 'owned',
-      imageSource: row.image_source ?? 'default',
-      builtImageTag: row.built_image_tag ?? undefined,
-      dockerfilePath: row.dockerfile_path ?? undefined,
-      dockerfileExposedPort: row.dockerfile_exposed_port ?? undefined,
-    };
+    const sb = buildPrimarySandboxFromRow(row, effectiveStatus, inspect.paused, {
+      devServerPort: this.devServerPort,
+      buildPreviewUrl: this.buildPreviewUrl,
+    });
     this.sandboxes.set(sb.id, sb);
 
     if (effectiveStatus === 'paused' && row.status !== 'paused') {
@@ -2787,36 +2348,7 @@ export class SandboxManager {
       // Attached rows: pure inspect, no port reservation, never offer
       // "Press Play to recreate" — the user owns the container.
       const state = await this.resolveAttachedState(driver, row.external_container_ref);
-      const serviceSandboxId = `${row.session_id}:${row.service_id}`;
-      const sb: Sandbox = {
-        id: serviceSandboxId,
-        containerId: row.external_container_ref,
-        runtime: row.runtime,
-        stack: 'node-only',
-        hostPort: 0,
-        workdir: '/',
-        containerPort: 0,
-        previewUrl: '',
-        limits: this.parseLimits(row.limits_json),
-        status: state.status,
-        runtimePaused: state.runtimePaused,
-        step: state.status === 'ready' ? 'ready' : 'queued',
-        recentLogs: [
-          {
-            at: Date.now(),
-            level: state.error ? 'error' : 'info',
-            text: state.error ?? `Reclaimed attached service (status=${state.status})`,
-          },
-        ],
-        createdAt: new Date(row.created_at).getTime() || Date.now(),
-        lastAccessAt: row.last_access_at_ms,
-        error: state.error ?? undefined,
-        mountKind: 'external',
-        imageSource: 'default',
-        attached: true,
-        externalContainerRef: row.external_container_ref,
-        attachedHostname: row.attached_hostname || row.service_id,
-      };
+      const sb = buildAttachedServiceSandboxFromRow(row, state);
       this.services.set(this.serviceKey(String(row.session_id), row.service_id), sb);
       svcStore?.patch(row.session_id, row.service_id, {
         status: this.toPersistedStatus(sb.status),
@@ -2844,41 +2376,9 @@ export class SandboxManager {
 
     const effectiveStatus: SandboxStatus =
       inspect.running || inspect.paused ? 'ready' : 'paused';
-    const limits = this.parseLimits(row.limits_json);
-    // Service previewUrl scheme matches the one `provisionAdditionalService`
-    // emits — the `_svc` sentinel route in preview.ts relies on it.
-    const previewUrl = `/preview/${encodeURIComponent(String(row.session_id))}/_svc/${encodeURIComponent(row.service_id)}/`;
-    const serviceSandboxId = `${row.session_id}:${row.service_id}`;
-    const sb: Sandbox = {
-      id: serviceSandboxId,
-      containerId: row.container_id,
-      runtime: row.runtime,
-      stack: row.stack as SandboxStack,
-      hostPort: row.host_port,
-      workdir: row.workdir,
-      containerPort: row.dockerfile_exposed_port ?? this.devServerPort,
-      previewUrl,
-      limits,
-      status: effectiveStatus,
-      runtimePaused: inspect.paused,
-      step: effectiveStatus === 'ready' ? 'ready' : 'queued',
-      recentLogs: [
-        {
-          at: Date.now(),
-          level: 'info',
-          text: `Reclaimed service from DB (status=${inspect.paused ? 'runtime-paused' : effectiveStatus})`,
-        },
-      ],
-      createdAt: new Date(row.created_at).getTime() || Date.now(),
-      lastAccessAt: row.last_access_at_ms,
-      error: row.error ?? undefined,
-      hostWorkdirMount: row.host_workdir_mount ?? undefined,
-      mountKind: row.mount_kind ?? 'owned',
-      imageSource: row.image_source ?? 'default',
-      builtImageTag: row.built_image_tag ?? undefined,
-      dockerfilePath: row.dockerfile_path ?? undefined,
-      dockerfileExposedPort: row.dockerfile_exposed_port ?? undefined,
-    };
+    const sb = buildServiceSandboxFromRow(row, effectiveStatus, inspect.paused, {
+      devServerPort: this.devServerPort,
+    });
     this.services.set(this.serviceKey(String(row.session_id), row.service_id), sb);
 
     if (effectiveStatus === 'paused') {
@@ -2989,62 +2489,15 @@ export class SandboxManager {
   }
 
   private parseLimits(limitsJson: string): import('./types.js').SandboxLimits {
-    try {
-      const parsed = JSON.parse(limitsJson) as Partial<import('./types.js').SandboxLimits>;
-      return { ...DEFAULT_SANDBOX_LIMITS, ...parsed };
-    } catch {
-      return DEFAULT_SANDBOX_LIMITS;
-    }
+    return parseLimits(limitsJson);
   }
 
-  /**
-   * Map sandbox's domain status to the subset persisted to DB.
-   * Transient values ('pending', 'destroying') collapse onto their
-   * semantically nearest persisted state.
-   */
   private toPersistedStatus(status: SandboxStatus): PersistedSandboxStatus {
-    if (status === 'pending' || status === 'provisioning') return 'provisioning';
-    if (status === 'ready') return 'running';
-    if (status === 'paused') return 'paused';
-    if (status === 'destroying' || status === 'destroyed') return 'destroying';
-    return 'error';
+    return toPersistedStatus(status);
   }
 
-  /**
-   * Write the current state of a sandbox to the DB. Called after every
-   * transition so a crash/restart can reconstruct. No-op when the
-   * store isn't wired (tests, CLI paths without DB).
-   */
   private persist(sb: Sandbox, statusOverride?: PersistedSandboxStatus): void {
-    const store = getStore();
-    if (!store) return;
-    const numericId = Number(sb.id);
-    if (!Number.isFinite(numericId)) return; // non-numeric ids are only used by tests
-    try {
-      store.upsert({
-        session_id: numericId,
-        container_id: sb.containerId,
-        runtime: sb.runtime,
-        stack: sb.stack,
-        workdir: sb.workdir,
-        host_workdir_mount: sb.hostWorkdirMount ?? null,
-        host_port: sb.hostPort,
-        limits: sb.limits as unknown as Record<string, unknown>,
-        status: statusOverride ?? this.toPersistedStatus(sb.status),
-        error: sb.error ?? null,
-        mount_kind: sb.mountKind,
-        image_source: sb.imageSource,
-        built_image_tag: sb.builtImageTag ?? null,
-        dockerfile_path: sb.dockerfilePath ?? null,
-        dockerfile_exposed_port: sb.dockerfileExposedPort ?? null,
-        last_access_at_ms: sb.lastAccessAt,
-        paused_at_ms: sb.status === 'paused' ? Date.now() : null,
-      });
-    } catch (e) {
-      console.warn(
-        `[sandbox-manager] persist ${sb.id} failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    this.persister.persist(sb, statusOverride);
   }
 
   private persistRuntimePauseState(
@@ -3052,24 +2505,7 @@ export class SandboxManager {
     serviceId: string | null,
     sb: Sandbox,
   ): void {
-    if (serviceId) {
-      const store = getServicesStore();
-      const numericId = Number(sessionId);
-      if (!store || !Number.isFinite(numericId)) return;
-      try {
-        store.patch(numericId, serviceId, {
-          status: 'running',
-          last_access_at_ms: sb.lastAccessAt,
-          paused_at_ms: null,
-        });
-      } catch (e) {
-        console.warn(
-          `[sandbox-manager] persist runtime pause ${sessionId}:${serviceId} failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-      return;
-    }
-    this.persist(sb, 'running');
+    this.persister.persistRuntimePauseState(sessionId, serviceId, sb);
   }
 
   /**
@@ -3734,11 +3170,11 @@ export class SandboxManager {
 
   private startStatsSampler(): void {
     if (this.statsIntervalMs <= 0 || this.statsTimer) return;
-    this.statsTimer = setInterval(() => {
+    this.statsTimer = new IntervalTimer(this.statsIntervalMs, () => {
       if (this.shuttingDown) return;
       void this.sampleAll();
-    }, this.statsIntervalMs);
-    this.statsTimer.unref();
+    });
+    this.statsTimer.start();
   }
 
   private async sampleAll(): Promise<void> {
@@ -3765,7 +3201,7 @@ export class SandboxManager {
   private startReaper(): void {
     if (this.reaperTimer) return;
     // Check every 60s — TTL granularity doesn't need sub-minute accuracy.
-    this.reaperTimer = setInterval(async () => {
+    this.reaperTimer = new IntervalTimer(60_000, async () => {
       if (this.shuttingDown) return;
       const now = Date.now();
 
@@ -3823,119 +3259,23 @@ export class SandboxManager {
           void this.destroyInternal(sb.id, 'stale-error');
         }
       }
-    }, 60_000);
-    // Don't hold the event loop open — the reaper is a best-effort hygiene job.
-    this.reaperTimer.unref();
+    });
+    this.reaperTimer.start();
   }
 
   private stopReaper(): void {
-    if (this.reaperTimer) {
-      clearInterval(this.reaperTimer);
-      this.reaperTimer = null;
-    }
-    if (this.statsTimer) {
-      clearInterval(this.statsTimer);
-      this.statsTimer = null;
-    }
+    this.reaperTimer?.stop();
+    this.reaperTimer = null;
+    this.statsTimer?.stop();
+    this.statsTimer = null;
   }
 
   private installShutdownHandlers(): void {
-    // Blocking shutdown: we AWAIT `destroyAll` so the process doesn't
-    // exit until every sandbox has been archived + destroyed. Without
-    // this, the original fire-and-forget `void destroyAll(...)` let
-    // Node terminate before `driver.exportWorkdir` (a ~30s podman cp
-    // for node_modules) completed — users lost everything on every
-    // server restart. The orphan reaper on next boot is a safety net,
-    // not a primary mechanism.
-    //
-    // Timeout cap: nodemon / systemd SIGKILL after ~10s if the process
-    // doesn't exit. We give ourselves 8s by default (env-tunable), then
-    // exit even if destroyAll isn't done — leaving orphans for the
-    // next-boot reaper to salvage.
-    const timeoutMs = Number(process.env.MCP_SHUTDOWN_TIMEOUT_MS ?? 8_000);
-    const handler = async (signal: NodeJS.Signals) => {
-      const n = this.sandboxes.size;
-      if (n > 0) {
-        console.log(
-          `[sandbox-manager] ${signal} received, archiving ${n} sandbox(es) (${timeoutMs}ms budget)…`,
-        );
-      }
-      try {
-        await Promise.race([
-          this.destroyAll(`signal:${signal}`),
-          new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error(`shutdown timeout after ${timeoutMs}ms`)), timeoutMs),
-          ),
-        ]);
-      } catch (e) {
-        console.warn(
-          `[sandbox-manager] shutdown: ${e instanceof Error ? e.message : String(e)} ` +
-            `(remaining sandboxes will be salvaged by next-boot reaper)`,
-        );
-      }
-      // Explicit exit so we don't race with other listeners that may
-      // have taken ownership of the signal.
-      process.exit(0);
-    };
-    // `once` so repeated signals don't re-enter. We don't remove existing
-    // listeners — other subsystems (db, http server) have their own.
-    process.once('SIGTERM', handler);
-    process.once('SIGINT', handler);
+    installShutdownHandlersImpl({
+      countSandboxes: () => this.sandboxes.size,
+      destroyAll: (reason) => this.destroyAll(reason),
+    });
   }
-}
-
-function defaultPreviewUrl(sessionId: string, _hostPort: number): string {
-  // Relative to the API origin; the preview proxy rewrites `/preview/:id/*`
-  // onto `http://127.0.0.1:<hostPort>/`. Subdomain strategies override
-  // this via `SandboxManagerOptions.buildPreviewUrl`.
-  return `/preview/${encodeURIComponent(sessionId)}/`;
-}
-
-/**
- * Minimal POSIX shell quoting — wraps in single quotes and escapes
- * embedded single quotes by closing, escaping, reopening. Used for
- * argv fragments we assemble into `sh -c "…"` strings. Inputs come
- * from code, never from LLM/user, so we don't need to defend against
- * weird bytes beyond what the shell parser expects.
- */
-function shQuote(s: string): string {
-  if (/^[a-zA-Z0-9_.\-/:@=]+$/.test(s)) return s;
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
-function truncateForLog(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max)} …[+${s.length - max} bytes]` : s;
-}
-
-function previewPathPrefixOf(previewUrl: string): string {
-  // When `previewUrl` is absolute, strip origin to get the path prefix
-  // Vite's `base` config needs.
-  try {
-    const u = new URL(previewUrl, 'http://placeholder.invalid');
-    return u.pathname.endsWith('/') ? u.pathname : `${u.pathname}/`;
-  } catch {
-    return previewUrl.endsWith('/') ? previewUrl : `${previewUrl}/`;
-  }
-}
-
-/**
- * Deterministic docker/podman network name shared by every service of a
- * single company session. Containers attached here address each other
- * by service_id (e.g. `fetch('http://api/ping')` from the frontend).
- */
-export function sessionNetworkName(sessionId: string): string {
-  const safe = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 48);
-  return `mcp-sbx-net-${safe}`;
-}
-
-/**
- * Resolve the runtime CLI binary (docker|podman) to shell out to. Mirrors
- * the logic in `cleanupSessionPersistence` — we can't go through
- * `ISandboxDriver` because network management is CLI-specific and the
- * port intentionally stays small (E2B drivers skip these helpers).
- */
-function resolveRuntimeBinary(): 'docker' | 'podman' {
-  return process.env.MCP_SANDBOX_RUNTIME === 'podman' ? 'podman' : 'docker';
 }
 
 /**

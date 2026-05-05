@@ -32,7 +32,7 @@ export class KanbanService implements IKanbanNotifier {
     created_by?: string;
     checklist?: string[];
   }): KanbanCardFull {
-    const card = this.ctx.companyStore.createKanbanCard(this.ctx.companySessionId, input);
+    const card = this.ctx.companyStore.createKanbanCard(this.ctx.effectiveSessionId, input);
     if (input.checklist) {
       for (let i = 0; i < input.checklist.length; i++) {
         this.ctx.companyStore.addChecklistItem(card.id, input.checklist[i], i);
@@ -130,7 +130,7 @@ export class KanbanService implements IKanbanNotifier {
   }
 
   listCards(opts?: { column?: KanbanColumn }): KanbanCard[] {
-    return this.ctx.companyStore.listKanbanCards(this.ctx.companySessionId, opts);
+    return this.ctx.companyStore.listKanbanCards(this.ctx.effectiveSessionId, opts);
   }
 
   getCard(cardId: number): KanbanCardFull | null {
@@ -138,12 +138,12 @@ export class KanbanService implements IKanbanNotifier {
   }
 
   listCardsFull(): KanbanCardFull[] {
-    return this.ctx.companyStore.listKanbanCardsFull(this.ctx.companySessionId);
+    return this.ctx.companyStore.listKanbanCardsFull(this.ctx.effectiveSessionId);
   }
 
   /** Find the kanban card currently assigned to the given agent run. */
   findCardForAgent(agentRunId: number): number | null {
-    const cards = this.ctx.companyStore.listKanbanCardsFull(this.ctx.companySessionId);
+    const cards = this.ctx.companyStore.listKanbanCardsFull(this.ctx.effectiveSessionId);
     const myCard = cards.find(
       (c) => c.agents.some((a) => a.agent_run_id === agentRunId && !a.unassigned_at),
     );

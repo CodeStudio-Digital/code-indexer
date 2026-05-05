@@ -27,7 +27,14 @@ import {
 import {
   fetchClaudeCodeModels,
 } from '../../../core/services/oauth/claude-code.js';
-import { resolveClaudeCodeCreds } from '../../../core/providers/shared/oauth.js';
+import {
+  fetchKimiCodeModels,
+  refreshIfExpired as refreshKimiCodeToken,
+} from '../../../core/services/oauth/kimi-code.js';
+import {
+  resolveClaudeCodeCreds,
+  resolveKimiCodeCreds,
+} from '../../../core/providers/shared/oauth.js';
 import { publicProvider } from './shared/mask.js';
 import { resolveCopilotApiBase } from './shared/copilot-opts.js';
 import { refreshAllProviderModels } from '../../../core/indexer/providers/scheduled-refresh.js';
@@ -208,6 +215,23 @@ export function providersRouter(store: ProviderStore): Hono {
           headers: creds.extraHeaders,
           fetch: creds.fetch,
         });
+      } else if (cfg.kind === 'kimi-code') {
+        const creds = await resolveKimiCodeCreds(cfg);
+        try {
+          await fetchKimiCodeModels({
+            baseURL: creds.baseURL ?? cfg.base_url,
+            apiKey: creds.apiKey,
+            headers: creds.extraHeaders,
+          });
+        } catch (e) {
+          if (!/HTTP 401/.test((e as Error).message)) throw e;
+          const fresh = await refreshKimiCodeToken(store, cfg.id, { force: true });
+          await fetchKimiCodeModels({
+            baseURL: creds.baseURL ?? cfg.base_url,
+            apiKey: fresh ?? creds.apiKey,
+            headers: creds.extraHeaders,
+          });
+        }
       } else if (cfg.kind === 'anthropic') {
         // Instantiate the adapter to validate key+baseURL; no network call is
         // cheaper than a minimal /v1/messages ping, so use that.

@@ -7,7 +7,7 @@ import { cn } from '../../../lib/utils.js';
 import { Markdown } from '../messages/Markdown.js';
 
 interface PlanPromptViewProps {
-  plan: { id: string; plan: string; resolved?: 'approved' | 'rejected' };
+  plan: { id: string; plan: string; resolved?: 'approved' | 'rejected'; kind?: 'informational' | 'mutating' };
   onResponse: (approved: boolean, feedback?: string) => Promise<void>;
 }
 
@@ -31,8 +31,13 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
         <div className="h-7 w-7 rounded-md bg-warning/15 text-warning flex items-center justify-center">
           <ClipboardList className="h-4 w-4" />
         </div>
-        <div className="text-xs font-semibold text-warning uppercase tracking-wider flex-1">
-          {t('chat:plan.awaitingApproval')}
+        <div className="text-xs font-semibold text-warning uppercase tracking-wider flex-1 flex items-center gap-2">
+          <span>{t('chat:plan.awaitingApproval')}</span>
+          {plan.kind === 'informational' && (
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal text-muted-foreground">
+              {t('chat:plan.kindInformational')}
+            </span>
+          )}
         </div>
         <Button size="sm" variant="outline" onClick={handleCopy} className="h-7 px-2 text-[11px]">
           {copied ? (

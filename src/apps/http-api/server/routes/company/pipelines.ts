@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { activeOrchestrators } from './stream.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import { parseIdParam, parseJsonBody, notFound, resolveRootSessionId } from '../_helpers.js';
 import { validatePipelineGraph } from '../../../../../core/coder/company/services/PipelineService.js';
 import type {
   PipelineGraph,
@@ -148,7 +148,9 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Pipeline executions (session-scoped) ────────────────────
 
   app.post('/api/company/sessions/:id/pipelines/:pid/start', async (c) => {
-    const sessionId = parseIdParam(c);
+    // Pipelines are project-wide (migration 067): a child tab routes to
+    // the root so the same orchestrator + execution rows are used.
+    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     const pipelineId = parseIdParam(c, 'pid');
     const body = await parseJsonBody<{ initial_input?: string }>(c);
 
@@ -171,7 +173,7 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.get('/api/company/sessions/:id/pipelines/executions', (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     const orchestrator = activeOrchestrators.get(sessionId);
     const status = c.req.query('status') as PipelineExecutionStatus | undefined;
     const pipelineRaw = c.req.query('pipeline_id');
@@ -192,7 +194,7 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.get('/api/company/sessions/:id/pipelines/executions/:execId', (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     const execId = parseIdParam(c, 'execId');
 
     const orchestrator = activeOrchestrators.get(sessionId);

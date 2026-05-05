@@ -767,6 +767,27 @@ export function useCompanyStream(companySessionId: number | null) {
     }
   }, [companySessionId]);
 
+  /**
+   * Merge master prompts loaded from the session's initial `useApi` fetch
+   * into `state.masterPrompts`. Idempotent: existing entries with the
+   * same id keep their (possibly more up-to-date) state. Used by
+   * `CompanySessionView` so a tab that opens with the master already
+   * blocked on a pending `ask_user`/`submit_plan` shows the card
+   * immediately, without waiting for an SSE event that may already
+   * have fired before the client subscribed.
+   */
+  const hydrateMasterPrompts = useCallback((prompts: MasterPrompt[]) => {
+    if (!Array.isArray(prompts) || prompts.length === 0) return;
+    setState((prev) => {
+      const next = new Map(prev.masterPrompts);
+      for (const p of prompts) {
+        if (!next.has(p.id)) next.set(p.id, p);
+      }
+      if (next.size === prev.masterPrompts.size) return prev;
+      return { ...prev, masterPrompts: next };
+    });
+  }, []);
+
   const reset = useCallback(() => {
     abortRef.current?.abort();
     lastSeenSeqRef.current = -1;
@@ -785,5 +806,6 @@ export function useCompanyStream(companySessionId: number | null) {
     switchProvider,
     respondToMasterPlan,
     respondToMasterQuestion,
+    hydrateMasterPrompts,
   };
 }

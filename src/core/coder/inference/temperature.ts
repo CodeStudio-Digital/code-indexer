@@ -55,10 +55,16 @@ export interface TemperatureResolution {
  */
 function shouldSkip(ctx: TemperatureResolutionContext): TemperatureResolution['reason'] | null {
   if (REASONING_MODEL_PATTERN.test(ctx.model)) return 'reasoning_model';
-  // Anthropic extended thinking requires temperature=1 OR omitted. Easier to
-  // omit. Other providers (Gemini, OpenAI Codex) handle thinking via separate
-  // fields and don't conflict with temperature.
+  // Anthropic extended thinking and Kimi K2/thinking models require fixed
+  // sampling (or ignore sampling), so omit temperature. Other providers handle
+  // thinking via separate fields and don't conflict with temperature.
   if (ctx.thinking === true && ctx.providerName === 'anthropic') return 'thinking_enabled';
+  if (
+    ctx.providerName === 'kimi-code' &&
+    (ctx.thinking === true || /thinking|^kimi-k2\.(5|6)/i.test(ctx.model))
+  ) {
+    return 'thinking_enabled';
+  }
   return null;
 }
 

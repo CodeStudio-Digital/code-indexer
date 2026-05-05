@@ -14,6 +14,7 @@ import { cn } from '../../lib/utils.js';
 import { useApi, apiPost } from '../../hooks/useApi.js';
 import { useCompanyStream } from '../../hooks/useCompanyStream.js';
 import type { AgentAttachment } from '../../hooks/agent-stream/types.js';
+import type { MasterPrompt } from '../../../../core/coder/company/types.js';
 import { useProviders } from '../../hooks/useProviders.js';
 import { AgentPane } from './AgentPane.js';
 import { BoardPanel } from './BoardPanel.js';
@@ -47,6 +48,14 @@ interface SessionFullData {
   projects: Array<{ project_id: number; project_name: string; root_path: string; label: string | null }>;
   agentRuns: Array<{ id: number; role: string; status: string; provider: string; model: string; project_ids_json: string; coder_session_id: number }>;
   recentBoard: Array<{ id: number; author_role: string; agent_run_id: number | null; kind: string; content: string; mentions_json: string; created_at: string }>;
+  /**
+   * Pending + recently-resolved master prompts (ask_user / submit_plan).
+   * Used to rehydrate `stream.masterPrompts` on first load so a tab that
+   * opens with the master already blocked on a question shows the card
+   * immediately (no SSE event needed). Backed by the `getCompanySessionFull`
+   * route's `masterPrompts` field.
+   */
+  masterPrompts?: MasterPrompt[];
 }
 
 export function CompanySessionView({ sessionId, sessionName, sessionStatus }: CompanySessionViewProps) {
@@ -76,6 +85,17 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
   // or explicit session change). Each sub-session has its own metaBus
   // and own state — re-mounting the hook on a fresh id does the rest.
   useEffect(() => { stream.reset(); }, [activeSessionId]);
+
+  // Hydrate pending master prompts from the initial /sessions/:id load.
+  // Without this, a tab that opens while the master is already blocked
+  // on `ask_user` shows nothing in the feed until the user pokes the
+  // session — the SSE event may have fired before the client connected
+  // (or before the tab was even open).
+  useEffect(() => {
+    if (sessionData?.masterPrompts) {
+      stream.hydrateMasterPrompts(sessionData.masterPrompts);
+    }
+  }, [sessionData?.masterPrompts]);
 
   // On mount, attempt ONE reattach if the session is already running.
   // The cleanup fn resets the flag so navigating away and back retries once more.

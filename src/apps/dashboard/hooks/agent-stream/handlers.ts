@@ -83,8 +83,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     },
 
     plan: (data) => {
-      const d = data as { id: string; plan: string };
-      blocks.push({ type: 'plan', plan: { id: d.id, plan: d.plan } });
+      const d = data as { id: string; plan: string; kind?: 'informational' | 'mutating' };
+      blocks.push({ type: 'plan', plan: { id: d.id, plan: d.plan, kind: d.kind } });
       flush();
     },
 
@@ -115,15 +115,24 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     task_finished: (data, eventName) => patchTask(blocks, flush, data, eventName),
 
     agents_group_start: (data) => {
-      const d = data as { groupId: string; agents: Array<{ index: number; label: string }> };
+      const d = data as {
+        groupId: string;
+        provider?: string;
+        model?: string;
+        agents: Array<{ index: number; label: string; provider?: string; model?: string }>;
+      };
       const group: AgentsGroup = {
         groupId: d.groupId,
         status: 'running',
+        provider: d.provider,
+        model: d.model,
         agents: d.agents.map((a) => ({
           index: a.index,
           label: a.label,
           status: 'pending' as AgentStatus,
           toolCallCount: 0,
+          provider: a.provider ?? d.provider,
+          model: a.model ?? d.model,
         })),
       };
       blocks.push({ type: 'agents', group });
@@ -136,6 +145,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         agentIndex: number;
         label: string;
         event: 'spawned' | 'tool_call' | 'completed' | 'error';
+        provider?: string;
+        model?: string;
         toolCallCount?: number;
         usage?: Usage;
         summary?: string;
@@ -145,6 +156,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         if (b.type !== 'agents' || b.group.groupId !== d.groupId) continue;
         const agent = b.group.agents[d.agentIndex];
         if (!agent) continue;
+        if (d.provider) agent.provider = d.provider;
+        if (d.model) agent.model = d.model;
         switch (d.event) {
           case 'spawned':
             agent.status = 'running';

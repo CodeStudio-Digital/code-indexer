@@ -1,12 +1,20 @@
-import type { Hono } from 'hono';
+import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { publish } from '../../../coder-bus.js';
 import { activeOrchestrators } from './stream.js';
 import type { KanbanColumn, KanbanTag } from '../../../../../core/coder/company/types.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import { parseIdParam, notFound, resolveRootSessionId } from '../_helpers.js';
 
 export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   const { companyStore } = deps;
+
+  /**
+   * Kanban is a project-wide artefact (migration 067). Sub-sessions
+   * resolve to the parent's id so all tabs see the same board. Use this
+   * helper everywhere `:id` is the company session id.
+   */
+  const sessionRoot = (c: Context) =>
+    resolveRootSessionId(companyStore, parseIdParam(c));
 
   /** Helper: publish a kanban event through the active orchestrator's metaBus if available. */
   function publishKanbanEvent(sessionId: number, event: string, data: unknown): void {
@@ -19,7 +27,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── List all cards (full) ──────────────────────────────────
 
   app.get('/api/company/sessions/:id/kanban', (c) => {
-    const id = parseIdParam(c);
+    const id = sessionRoot(c);
     const column = c.req.query('column') as KanbanColumn | undefined;
     if (column) {
       const cards = companyStore.listKanbanCardsFull(id).filter(c => c.column === column);
@@ -40,7 +48,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Create card ────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = sessionRoot(c);
     const body = await c.req.json<{
       title: string;
       description?: string;
@@ -74,7 +82,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Update card ────────────────────────────────────────────
 
   app.patch('/api/company/sessions/:id/kanban/:cardId', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{
       title?: string;
@@ -92,7 +100,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Move card ──────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/move', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{
       column: KanbanColumn;
@@ -130,7 +138,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Delete card ────────────────────────────────────────────
 
   app.delete('/api/company/sessions/:id/kanban/:cardId', (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const ok = companyStore.deleteKanbanCard(cardId);
     if (!ok) return notFound(c, 'Card not found');
@@ -142,7 +150,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Add comment ────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/comments', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{ content: string }>();
 
@@ -163,7 +171,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Add checklist item ─────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/checklist', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{ text: string }>();
 
@@ -177,7 +185,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Update checklist item ──────────────────────────────────
 
   app.patch('/api/company/sessions/:id/kanban/checklist/:itemId', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = sessionRoot(c);
     const itemId = parseIdParam(c, 'itemId');
     const body = await c.req.json<{
       text?: string;
@@ -194,7 +202,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Delete checklist item ──────────────────────────────────
 
   app.delete('/api/company/sessions/:id/kanban/checklist/:itemId', (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = sessionRoot(c);
     const itemId = parseIdParam(c, 'itemId');
     const ok = companyStore.removeChecklistItem(itemId);
     if (!ok) return notFound(c, 'Item not found');
@@ -205,7 +213,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Add dependency ─────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/dependencies', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{ depends_on_card_id: number }>();
 
@@ -223,7 +231,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Remove dependency ──────────────────────────────────────
 
   app.delete('/api/company/sessions/:id/kanban/:cardId/dependencies/:depCardId', (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const depCardId = parseIdParam(c, 'depCardId');
     const ok = companyStore.removeCardDependency(cardId, depCardId);

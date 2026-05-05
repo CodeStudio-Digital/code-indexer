@@ -32,6 +32,12 @@ function store(): CompanySessionEnvStore | null {
 }
 
 function sessionIdOf(ctx: ToolContext): number | null {
+  // Env vars are project-wide → resolve to the root session via the
+  // orchestrator's effective id (sub-sessions delegate to parent). Falls
+  // back to the raw companySessionId when the orchestrator isn't wired
+  // (legacy callers / tests that build a context manually).
+  const orch = ctx.companyContext?.orchestrator as { effectiveSessionId?: number } | undefined;
+  if (typeof orch?.effectiveSessionId === 'number') return orch.effectiveSessionId;
   const raw = ctx.companyContext?.companySessionId;
   if (raw === undefined || raw === null) return null;
   return typeof raw === 'number' ? raw : Number(raw);

@@ -64,6 +64,15 @@ vi.mock('../core/services/oauth/openai.js', () => ({
 vi.mock('../core/services/oauth/google.js', () => ({
   refreshIfExpired: vi.fn().mockResolvedValue('fresh-google-token'),
 }));
+vi.mock('../core/services/oauth/kimi-code.js', async () => {
+  const actual = await vi.importActual<typeof import('../core/services/oauth/kimi-code.js')>(
+    '../core/services/oauth/kimi-code.js',
+  );
+  return {
+    ...actual,
+    refreshIfExpired: vi.fn().mockResolvedValue('fresh-kimi-token'),
+  };
+});
 vi.mock('../core/coder/providers/chatgpt.js', async () => {
   const actual = await vi.importActual<typeof import('../core/coder/providers/chatgpt.js')>(
     '../core/coder/providers/chatgpt.js',
@@ -426,6 +435,29 @@ describe('resolveGoogleOAuthCreds — api_key mirror writeback', () => {
       const creds = await resolveGoogleOAuthCreds(cfg);
       expect(creds.extra?.refreshToken).toBe('rt');
       expect(creds.extra?.projectId).toBe('proj-1');
+    });
+  });
+});
+
+describe('resolveKimiCodeCreds — api_key mirror writeback', () => {
+  it('writes the fresh token back to providers.api_key when it changed', async () => {
+    const { store, upsertCalls } = fakeStore();
+    const { resolveKimiCodeCreds } = await import('../core/providers/shared/oauth.js');
+    await withMockedStore(store, async () => {
+      const cfg: ProviderConfig = {
+        ...baseCfg,
+        id: 'kimi-code',
+        kind: 'kimi-code',
+        base_url: 'https://api.kimi.com/coding/v1',
+        api_key: 'stale-token',
+        extra: { kimi_code_thinking_mode: 'disabled' },
+      };
+      const creds = await resolveKimiCodeCreds(cfg);
+      expect(creds.apiKey).toBe('fresh-kimi-token');
+      expect(creds.baseURL).toBe('https://api.kimi.com/coding/v1');
+      expect(creds.extra?.thinkingMode).toBe('disabled');
+      expect(upsertCalls).toHaveLength(1);
+      expect(upsertCalls[0].api_key).toBe('fresh-kimi-token');
     });
   });
 });

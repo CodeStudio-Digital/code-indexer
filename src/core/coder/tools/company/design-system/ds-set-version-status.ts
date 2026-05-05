@@ -41,7 +41,7 @@ export function dsSetVersionStatus(
       try {
         const store = getDesignSystemStore();
         if (!store) return err('ds_set_version_status: DesignSystemStore not wired.');
-        const session = store.getSessionByCompanySessionId(orchestrator.companySessionId);
+        const session = store.getSessionByCompanySessionId(orchestrator.effectiveSessionId);
         if (!session) return err('No DesignSystemSession bound to this company session.');
         const draft = store.getLatestVersionAny(session.id);
         if (!draft || (draft.status !== 'draft' && draft.status !== 'building')) {

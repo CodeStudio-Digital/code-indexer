@@ -31,7 +31,7 @@ export async function discoverClaudeCode(
   const liveIds = new Set(liveModels.map((model) => model.id));
   const accountInfo = claudeCodeAccountInfo(creds.extra);
 
-  return CLAUDE_CODE_SEED_MODELS.map((model) => {
+  return CLAUDE_CODE_SEED_MODELS.map((model): UpsertModelInput => {
     const resolved = resolveClaudeCodeModel(model.model_id, accountInfo, {
       includeOAuth: !!creds.authToken,
       thinking: true,
@@ -40,10 +40,20 @@ export async function discoverClaudeCode(
       ? ' Not returned by live /v1/models?beta=true.'
       : '';
     return {
-      ...model,
+      model_id: model.model_id,
+      name: model.name,
+      display_name: model.display_name,
       description: `${model.description} Resolved: ${resolved.requestedModel} -> ${resolved.apiModel}. Betas: ${resolved.betas.join(',')}.${liveNote}`,
+      context_window: model.context_window,
       default_max_tokens: resolved.maxTokens,
-      source: 'live' as const,
+      can_reason: model.can_reason,
+      supports_attachments: model.supports_attachments,
+      // Strip the `as const` readonly so the upsert input type accepts it.
+      default_reasoning_level: model.default_reasoning_level,
+      supported_reasoning_levels: model.supported_reasoning_levels
+        ? [...model.supported_reasoning_levels]
+        : null,
+      source: 'live',
     };
   });
 }

@@ -160,6 +160,7 @@
   "plan.copied": "Copiado",
   "plan.approved": "aprovado",
   "plan.rejected": "rejeitado",
+  "plan.kindInformational": "só-info",
   "question.title": "Pergunta",
   "question.customAnswer": "Ou digite uma resposta customizada",
   "question.answerPlaceholder": "Digite sua resposta…",

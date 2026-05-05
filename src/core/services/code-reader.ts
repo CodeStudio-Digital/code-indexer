@@ -22,6 +22,15 @@ export function readFileSlice(absPath: string, start: number, end: number): { li
 export function extractSymbolBody(rootPath: string, relPath: string, line: number): SymbolBody {
   const absPath = join(rootPath, relPath);
   const content = readFileSync(absPath, 'utf-8');
+  return extractSymbolBodyFromContent(relPath, content, line);
+}
+
+/**
+ * Same as extractSymbolBody but operates on already-loaded content. Used by
+ * tools that read via the filesystem port (sandbox-aware) before delegating
+ * to the brace/indent matcher.
+ */
+export function extractSymbolBodyFromContent(relPath: string, content: string, line: number): SymbolBody {
   const lines = content.split('\n');
   const ext = relPath.split('.').pop()?.toLowerCase() ?? '';
   let startIdx = Math.max(0, Math.min(line - 1, lines.length - 1));
@@ -130,6 +139,52 @@ export function grepInFiles(
 export function findSymbolDeclLine(absPath: string, symbolName: string): number | null {
   let content: string;
   try { content = readFileSync(absPath, 'utf-8'); } catch { return null; }
+  return findSymbolDeclLineFromContent(content, symbolName);
+}
+
+/**
+ * Walk backward from a 1-indexed line and return the nearest declaration
+ * line. Used by `read_file({ around_line })` to anchor on the enclosing
+ * symbol when the model has a stack frame or grep hit and wants the whole
+ * function. Falls back to the input line when no declaration is found
+ * (the brace-matcher will then return a 1-line "body").
+ */
+export function findEnclosingDeclLine(content: string, line: number): number {
+  const lines = content.split('\n');
+  // Same set used by findSymbolDeclLine — keeps behavior consistent.
+  const declRe = [
+    /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+\w+/,
+    /^\s*(?:export\s+)?(?:abstract\s+)?class\s+\w+/,
+    /^\s*(?:export\s+)?interface\s+\w+/,
+    /^\s*(?:export\s+)?type\s+\w+\s*=/,
+    /^\s*(?:export\s+)?(?:const|let|var)\s+\w+\s*[=:]/,
+    // Method-shaped declaration; reject control-flow keywords so a line
+     // like `if (x) {` doesn't anchor the search.
+    /^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:async\s+)?(?!if|for|while|switch|catch|return|do|else|with)\w+\s*\([^)]*\)\s*[:{]/,
+    // Python / Ruby
+    /^\s*def\s+\w+/,
+    /^\s*class\s+\w+/,
+    // Go
+    /^\s*func\s+\w+/,
+    /^\s*func\s*\([^)]*\)\s*\w+/,
+    // Rust
+    /^\s*(?:pub\s+)?(?:async\s+)?fn\s+\w+/,
+    /^\s*(?:pub\s+)?(?:struct|enum|trait|impl)\s+\w+/,
+  ];
+  const start = Math.max(0, Math.min(line - 1, lines.length - 1));
+  for (let i = start; i >= 0; i--) {
+    const text = lines[i];
+    for (const re of declRe) {
+      if (re.test(text)) return i + 1;
+    }
+  }
+  return line;
+}
+
+/**
+ * Same as findSymbolDeclLine but operates on already-loaded content.
+ */
+export function findSymbolDeclLineFromContent(content: string, symbolName: string): number | null {
   const lines = content.split('\n');
   const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // Match function/class/interface/method/const/let/var declarations

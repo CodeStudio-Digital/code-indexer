@@ -96,6 +96,13 @@ export interface ToolContext {
   /** True when the runner was started in plan mode. */
   planMode?: boolean;
   /**
+   * True when the project has at least one completed indexing run
+   * (`projects.last_indexed` non-null and `file_count > 0`). Tools that
+   * depend on the symbol DB should short-circuit to a regex/tree-sitter
+   * fallback when this is false instead of returning empty results.
+   */
+  projectIndexed?: boolean;
+  /**
    * Optional persistence sinks for the submit_plan tool. When wired by
    * runCoder() they delegate to the SessionStore so plans show up in
    * the dashboard's "Plans" tab. Tools (and tests) that don't have a
@@ -154,6 +161,14 @@ export interface ToolResult {
    * session's billing and the dashboard token counters.
    */
   subUsage?: import('./messages.js').ChatUsage;
+  /**
+   * Optional user-message content blocks the runner should append AFTER the
+   * tool result. Used by tools like `view_image` that need to inject content
+   * (an image, a document) the model can actually perceive on its next turn.
+   * The runner emits a synthetic `{ role: 'user', content: extraUserBlocks }`
+   * message immediately after the tool batch.
+   */
+  extraUserBlocks?: import('./messages.js').ContentBlock[];
 }
 
 export function ok(content: string): ToolResult {

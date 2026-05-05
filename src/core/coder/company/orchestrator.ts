@@ -86,6 +86,15 @@ export class CompanyOrchestrator {
   readonly parentSessionId: number | null;
   readonly metaBus: CoderRunBus;
 
+  /**
+   * Effective session id for SHARED resources (kanban, pipelines, env,
+   * services, drive, docs, databases, design-system). Sub-sessions
+   * resolve to the parent's id so all tabs see the same project-wide
+   * artefacts. Tools that touch shared tables should use this getter
+   * instead of `companySessionId` directly.
+   */
+  get effectiveSessionId(): number { return this.ctx.effectiveSessionId; }
+
   // ─── Services (composed) ────────────────────────────────────────
 
   private readonly ctx: SessionContext;

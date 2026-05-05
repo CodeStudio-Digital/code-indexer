@@ -51,6 +51,17 @@ export interface SubagentDeps {
    * `coder_session_inputs` on the parent session for the Input tab.
    */
   sessionStore?: SessionStore;
+  /**
+   * When set, subagents use this provider (possibly from a different
+   * provider family) instead of the parent's. Created from admin subagent config.
+   */
+  subagentProvider?: ChatProvider;
+}
+
+function describeProvider(provider: ChatProvider): { provider: string; model: string; label: string } {
+  const providerName = provider.name || 'provider';
+  const model = provider.model || 'default';
+  return { provider: providerName, model, label: `${providerName}:${model}` };
 }
 
 const subagentSchema: JsonSchema = {
@@ -105,8 +116,10 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
       ];
 
       const parentSessionId = ctx.runner?.sessionId;
+      const activeProvider = deps.subagentProvider ?? deps.provider;
+      const providerInfo = describeProvider(activeProvider);
       console.log(
-        `[coder s=${parentSessionId ?? '?'}] spawn_subagent: type=${type} max_turns=${maxTurns}`,
+        `[coder s=${parentSessionId ?? '?'}] spawn_subagent: type=${type} provider=${providerInfo.label} max_turns=${maxTurns}`,
       );
 
       if (deps.sessionStore && parentSessionId != null) {
@@ -124,7 +137,7 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
       }
 
       const result = await runSubagent(
-        { provider: deps.provider, tools: deps.parentTools, ctx, sessionId: parentSessionId },
+        { provider: activeProvider, tools: deps.parentTools, ctx, sessionId: parentSessionId },
         {
           systemPrompt: EXPLORE_SYSTEM_PROMPT,
           allowlist: EXPLORE_ALLOWLIST,
@@ -135,7 +148,7 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
       );
 
       const cached = result.usage.cache_read_input_tokens ?? 0;
-      const header = `[subagent type=${type} reason=${result.reason} input=${result.usage.input_tokens} output=${result.usage.output_tokens} cache_hit=${cached}]\n\n`;
+      const header = `[subagent provider=${providerInfo.provider} model=${providerInfo.model} type=${type} reason=${result.reason} input=${result.usage.input_tokens} output=${result.usage.output_tokens} cache_hit=${cached}]\n\n`;
       const body = result.finalText
         ? result.finalText
         : `(subagent did not produce a final summary — reason=${result.reason}. Recommendation: retry with a narrower task or investigate directly with MCP tools.)`;
@@ -221,14 +234,23 @@ export function buildSpawnAgentsTool(deps: SubagentDeps): CoderTool {
 
       const groupId = randomUUID().slice(0, 8);
       const parentSessionId = ctx.runner?.sessionId;
+      const activeProvider = deps.subagentProvider ?? deps.provider;
+      const providerInfo = describeProvider(activeProvider);
       console.log(
-        `[coder s=${parentSessionId ?? '?'}] spawn_agents: ${agentSpecs.length} parallel — labels=[${agentSpecs.map((a) => a.label).join(', ')}] group=${groupId}`,
+        `[coder s=${parentSessionId ?? '?'}] spawn_agents: ${agentSpecs.length} parallel provider=${providerInfo.label} labels=[${agentSpecs.map((a) => a.label).join(', ')}] group=${groupId}`,
       );
 
       // Emit group start so the UI can create the parallel agents container.
       ctx.runner?.emit('agents_group_start', {
         groupId,
-        agents: agentSpecs.map((a, i) => ({ index: i, label: a.label })),
+        provider: providerInfo.provider,
+        model: providerInfo.model,
+        agents: agentSpecs.map((a, i) => ({
+          index: i,
+          label: a.label,
+          provider: providerInfo.provider,
+          model: providerInfo.model,
+        })),
       });
 
       if (deps.sessionStore && parentSessionId != null) {
@@ -250,12 +272,17 @@ export function buildSpawnAgentsTool(deps: SubagentDeps): CoderTool {
       }
 
       const { results, totalUsage } = await runParallelAgents(
-        { provider: deps.provider, tools: deps.parentTools, ctx, sessionId: parentSessionId },
+        { provider: activeProvider, tools: deps.parentTools, ctx, sessionId: parentSessionId },
         agentSpecs,
         EXPLORE_SYSTEM_PROMPT,
         EXPLORE_ALLOWLIST,
         (progress) => {
-          ctx.runner?.emit('agent_progress', { groupId, ...progress });
+          ctx.runner?.emit('agent_progress', {
+            groupId,
+            provider: providerInfo.provider,
+            model: providerInfo.model,
+            ...progress,
+          });
         },
       );
 
@@ -269,11 +296,11 @@ export function buildSpawnAgentsTool(deps: SubagentDeps): CoderTool {
 
       // Build combined text result for the parent conversation.
       const cached = totalUsage.cache_read_input_tokens ?? 0;
-      const header = `[parallel agents: ${results.length} agents, input=${totalUsage.input_tokens} output=${totalUsage.output_tokens} cache_hit=${cached}]\n\n`;
+      const header = `[parallel agents: ${results.length} agents, provider=${providerInfo.provider} model=${providerInfo.model}, input=${totalUsage.input_tokens} output=${totalUsage.output_tokens} cache_hit=${cached}]\n\n`;
 
       const body = results
         .map((r, i) => {
-          const meta = `[reason=${r.reason} tools=${r.toolCallCount} input=${r.usage.input_tokens} output=${r.usage.output_tokens}]`;
+          const meta = `[provider=${providerInfo.provider} model=${providerInfo.model} reason=${r.reason} tools=${r.toolCallCount} input=${r.usage.input_tokens} output=${r.usage.output_tokens}]`;
           const text = r.finalText || '(no summary produced)';
           return `### Agent ${i + 1}: ${r.label}\n${meta}\n${text}`;
         })

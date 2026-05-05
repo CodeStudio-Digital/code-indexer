@@ -434,6 +434,8 @@ export interface ParallelAgentProgress {
   agentIndex: number;
   label: string;
   event: 'spawned' | 'tool_call' | 'completed' | 'error';
+  provider?: string;
+  model?: string;
   toolCallCount?: number;
   usage?: ChatUsage;
   summary?: string;

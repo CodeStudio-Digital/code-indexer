@@ -54,10 +54,14 @@ export const MULTI_EDIT_DESC =
 
 export const READ_FILE_NATIVE_DESC =
   'Read a file from disk directly (bypasses the indexer). Default: first 400 lines.\n' +
+  'TARGETED MODES (cheaper than ranges, work without indexing):\n' +
+  '  • `symbol: "<name>"` — returns just that function/class body via regex+brace/indent extraction.\n' +
+  '  • `around_line: <n>` — returns the symbol body that contains line n.\n' +
   "USE: file you just created/modified that mcp__read_file says is unknown (session overlay covers the common case, but this is the fallback).\n" +
   "USE: quick sanity-check of a config/dotfile that the indexer skipped.\n" +
-  "DON'T: use as your default reader. Prefer mcp__read_file (overlay-aware) or mcp__get_symbol_body (outputs only the function you need, ~10x cheaper).\n" +
-  "DON'T: read a 2000-line file when you only need one symbol — use mcp__get_file_skeleton to find the symbol first, then mcp__get_symbol_body.";
+  "USE: in a non-indexed project (no MCP symbol DB), `symbol`/`around_line` is the cheapest way to read one function.\n" +
+  "DON'T: use as your default reader when the project IS indexed. Prefer mcp__read_file (overlay-aware) or mcp__get_symbol_body (DB-backed, also ~10x cheaper).\n" +
+  "DON'T: read a 2000-line file when you only need one symbol — use `symbol:` here, or mcp__get_file_skeleton + mcp__get_symbol_body when indexed.";
 
 export const LIST_DIRECTORY_NATIVE_DESC =
   'List files and subdirectories at a path (non-recursive). Fallback path when the indexer listing is stale.\n' +
@@ -116,12 +120,14 @@ export const RUN_COMMAND_DESC =
 // ---------- interaction (src/core/coder/tools/interaction.ts) ----------
 
 export const ASK_USER_DESC =
-  'Pause and ask the user a question. Supports free-form answers or button options.\n' +
+  'Pause and ask the user a single question. Strongly prefer 2-3 button options over free-form.\n' +
   "USE: when you need a decision/preference the user alone can make (which of 3 libraries, scope of refactor, naming).\n" +
   "USE: when critical context is missing and guessing would waste work.\n" +
+  'PREFER: 2-3 mutually-exclusive `options` so the user clicks a button instead of typing. Free-form is for open answers only.\n' +
   "DON'T: ask things you can verify yourself (file existence, type signatures, config values — READ them).\n" +
   "DON'T: ask for confirmation of obvious next steps ('should I now run the tests?'). Just do it.\n" +
-  "DON'T: ask multiple small questions in sequence. Batch them into one question with options or a multi-line prompt.";
+  "DON'T: ask multiple small questions in sequence. Batch them into one question with options or a multi-line prompt.\n" +
+  "DON'T: pass options with 1 or 4+ items — the schema enforces 2-3. If only one path makes sense, just take it; if many, broaden the question.";
 
 // ---------- plan (src/core/coder/tools/plan.ts) ----------
 
@@ -137,6 +143,7 @@ export const SUBMIT_PLAN_DESC =
 
 export const SUBMIT_TASKS_DESC =
   'Submit a STRUCTURED task list and wait for user approval. Returns the (possibly-edited) tasks and chosen execution mode.\n' +
+  'REQUIRES tasks.length >= 2 — single-task submissions are rejected. Use submit_plan for linear work.\n' +
   "USE: when the work decomposes into 2+ independent items (refactors touching many files, multi-area fixes, migrations, analysis-with-followup-actions).\n" +
   "USE: when per-task context curation pays off — each task declares its files, references, and dependencies.\n" +
   "DON'T: use for linear single-action work. Use submit_plan — it's lighter and faster to approve.\n" +

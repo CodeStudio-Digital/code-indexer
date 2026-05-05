@@ -495,9 +495,12 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       companyPromptBlock: subordinateBlock,
       companyRoleOverride: spec.roleOverride,
       roleTemperature: spec.temperature,
+      // Wire HumanInTheLoop + meta-bus listeners BEFORE the runner takes
+      // turn 1, so a sub that calls `submit_plan_to_master` or
+      // `ask_master` immediately on turn 1 doesn't slip through (same
+      // race the master had — see MasterLifecycle.start).
+      onRunnerReady: (runner) => this.wireInterceptionsForRunner(runner, agentRun.id, spec.role),
     } as RunCoderOptions & { companyPromptBlock: string });
-
-    this.wireInterceptions(handle, agentRun.id, spec.role);
 
     this.deps.status.setStatus(agentRun.id, 'running');
     this.runningIds.add(agentRun.id);
@@ -622,6 +625,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
         companyContext,
         companyPromptBlock: subordinateBlock,
         companyRoleOverride: roleOverride,
+        onRunnerReady: (runner) => this.wireInterceptionsForRunner(runner, agentRun.id, agentRun.role),
       } as RunCoderOptions & { companyPromptBlock: string });
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
@@ -635,7 +639,6 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       throw e;
     }
 
-    this.wireInterceptions(handle, agentRun.id, agentRun.role);
     this.deps.status.setStatus(agentRun.id, 'running');
     this.runningIds.add(agentRun.id);
     this.deps.idle.onSubordinatesChanged();
@@ -947,6 +950,25 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     this.deps.humanInLoop.wireSubordinateQuestion(handle, agentRunId, role);
     this.deps.humanInLoop.wireSubordinateTasks(handle, agentRunId, role);
     this.deps.wirer.wire(handle, role, agentRunId);
+  }
+
+  /**
+   * Same as `wireInterceptions` but accepts a runner directly so it can
+   * fire from `runCoder({ onRunnerReady })` BEFORE the runner takes
+   * turn 1. Critical for `submit_plan_to_master` / `submit_tasks_to_master`
+   * called on the very first turn — without pre-run wiring those
+   * `plan_posted` / `tasks_posted` events would slip through silently.
+   */
+  private wireInterceptionsForRunner(
+    runner: import('../../core/runner.js').CoderRunner,
+    agentRunId: number,
+    role: string,
+  ): void {
+    const synthetic = { runner } as unknown as RunCoderHandle;
+    this.deps.humanInLoop.wireSubordinatePlan(synthetic, agentRunId, role);
+    this.deps.humanInLoop.wireSubordinateQuestion(synthetic, agentRunId, role);
+    this.deps.humanInLoop.wireSubordinateTasks(synthetic, agentRunId, role);
+    this.deps.wirer.wire(synthetic, role, agentRunId);
   }
 
   private attachCompletionHandler(

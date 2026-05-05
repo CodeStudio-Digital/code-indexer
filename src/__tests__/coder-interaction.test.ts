@@ -83,7 +83,10 @@ describe('runner interactive primitives', () => {
     let posted: string | null = null;
     r.on('question_posted', (b) => { posted = b.question; });
 
-    const resultP = tool.handler({ question: 'A or B?', options: [{ label: 'A', value: 'a' }] }, { cwd: '/tmp', projectName: 'test', runner: r });
+    const resultP = tool.handler(
+      { question: 'A or B?', options: [{ label: 'A', value: 'a' }, { label: 'B', value: 'b' }] },
+      { cwd: '/tmp', projectName: 'test', runner: r },
+    );
     await new Promise((res) => setTimeout(res, 0));
     expect(posted).toBe('A or B?');
     r.provideUserInput(JSON.stringify({ answer: 'a' }));

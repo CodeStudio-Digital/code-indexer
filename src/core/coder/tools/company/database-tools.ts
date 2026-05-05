@@ -39,6 +39,10 @@ export function setDatabaseToolStores(
 // ─── Resolution helpers ──────────────────────────────────────────
 
 function sessionIdOf(ctx: ToolContext): number | null {
+  // Database configs are project-wide → resolve to root via the
+  // orchestrator's effective id when available.
+  const orch = ctx.companyContext?.orchestrator as { effectiveSessionId?: number } | undefined;
+  if (typeof orch?.effectiveSessionId === 'number') return orch.effectiveSessionId;
   const raw = ctx.companyContext?.companySessionId;
   if (raw === undefined || raw === null) return null;
   return typeof raw === 'number' ? raw : Number(raw);

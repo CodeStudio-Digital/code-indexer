@@ -499,7 +499,9 @@ export interface RunnerEvents {
   /** Emitted when spawn_agents starts a parallel agent group. */
   agents_group_start: (payload: {
     groupId: string;
-    agents: Array<{ index: number; label: string }>;
+    provider?: string;
+    model?: string;
+    agents: Array<{ index: number; label: string; provider?: string; model?: string }>;
   }) => void;
   /** Emitted for per-agent progress within a parallel group. */
   agent_progress: (payload: {
@@ -507,6 +509,8 @@ export interface RunnerEvents {
     agentIndex: number;
     label: string;
     event: 'spawned' | 'tool_call' | 'completed' | 'error';
+    provider?: string;
+    model?: string;
     toolCallCount?: number;
     usage?: ChatUsage;
     summary?: string;
@@ -877,15 +881,20 @@ export class CoderRunner extends EventEmitter {
 
   /**
    * Break a pending waitForUserInput() by resolving it with an interrupt
-   * signal. The blocked tool receives { interrupted: true } and should
-   * return an error result so the master can handle the urgent request
-   * (e.g. a subordinate blocked on ask_master) before re-asking.
+   * signal. The blocked tool receives { interrupted: true, ...info } and
+   * should return an error result so the master can handle the urgent
+   * request (e.g. a subordinate blocked on ask_master) before re-asking.
+   *
+   * Optional `info` is forwarded so blocked tools can surface a structured
+   * `next_action` to the agent (which subordinate, which master tool to
+   * call) instead of relying on a notification user-message arriving in
+   * time.
    */
-  interruptWait(): boolean {
+  interruptWait(info?: { kind?: 'plan' | 'question' | 'tasks'; agentRunId?: number; role?: string }): boolean {
     if (!this.pendingResolve) return false;
     const r = this.pendingResolve;
     this.pendingResolve = null;
-    r(JSON.stringify({ interrupted: true }));
+    r(JSON.stringify({ interrupted: true, ...(info ?? {}) }));
     return true;
   }
 
@@ -1189,6 +1198,7 @@ export class CoderRunner extends EventEmitter {
               messages: compactHistoryForLLM(this.messages, compactionLimits),
               tools,
               thinking: this.opts.thinking,
+              sessionId: this.opts.sessionId,
               ...(typeof tempResolution.temperature === 'number'
                 ? { inference: { temperature: tempResolution.temperature } }
                 : {}),
@@ -1465,6 +1475,12 @@ export class CoderRunner extends EventEmitter {
         // Execute each tool call sequentially and collect results.
         // (tool_batch was emitted before the doom-loop guards — see above.)
         const toolResultBlocks: ContentBlock[] = [];
+        // Tools like `view_image` can inject extra user-visible content
+        // (images, documents) the model needs to perceive. We collect those
+        // here and push them as a synthetic user message after the tool
+        // batch — providers then route them through their image-handling
+        // path on the next turn.
+        const extraUserBlocks: ContentBlock[] = [];
         for (const block of toolUseBlocks) {
           if (this.aborted) break;
           this.emit('tool_call_start', block.id, block.name, block.input);
@@ -1577,9 +1593,24 @@ export class CoderRunner extends EventEmitter {
           toolResultBlocks.push(
             buildToolResultBlock(block.id, result.content, result.isError, cap, persistedId ?? undefined),
           );
+          if (result.extraUserBlocks && result.extraUserBlocks.length > 0) {
+            extraUserBlocks.push(...result.extraUserBlocks);
+          }
         }
 
         this.messages.push({ role: 'tool', content: toolResultBlocks });
+        if (extraUserBlocks.length > 0) {
+          // Append as a separate user message — providers expect tool results
+          // and human content in distinct messages. The text preface keeps the
+          // transcript readable when the user reopens the session.
+          this.messages.push({
+            role: 'user',
+            content: [
+              { type: 'text', text: '[tool-injected content]' },
+              ...extraUserBlocks,
+            ],
+          });
+        }
       } // end inner while (turn < maxTurns)
 
       // If aborted during the inner loop, don't auto-continue.

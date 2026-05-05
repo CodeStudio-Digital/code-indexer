@@ -8,6 +8,7 @@ import { ChatgptConnectionDialog } from './ChatgptConnectionDialog.js';
 import { ClaudeCodeConnectionDialog } from './ClaudeCodeConnectionDialog.js';
 import { CopilotConnectionDialog } from './CopilotConnectionDialog.js';
 import { GoogleConnectionDialog } from './GoogleConnectionDialog.js';
+import { KimiCodeConnectionDialog } from './KimiCodeConnectionDialog.js';
 import { EditDialog } from './EditDialog.js';
 import { ProviderCard } from './ProviderCard.js';
 import { McpServersPanel } from './McpServersPanel.js';
@@ -39,6 +40,9 @@ export default function Admin() {
     test,
     refresh,
     toggleModel,
+    setModelEffort,
+    setSubagentTarget,
+    setKimiCodeThinkingMode,
     setFallback,
   } = useAdminProviders();
 
@@ -48,6 +52,7 @@ export default function Admin() {
   const [claudeCodeOpen, setClaudeCodeOpen] = useState(false);
   const [chatgptOpen, setChatgptOpen] = useState(false);
   const [googleOpen, setGoogleOpen] = useState(false);
+  const [kimiCodeOpen, setKimiCodeOpen] = useState(false);
 
   const handleConnected = async (providerId?: string) => {
     await load();
@@ -94,6 +99,9 @@ export default function Admin() {
             <Button variant="outline" onClick={() => setChatgptOpen(true)}>
               {t('admin:connectChatgpt')}
             </Button>
+            <Button variant="outline" onClick={() => setKimiCodeOpen(true)}>
+              {t('admin:connectKimiCode')}
+            </Button>
             <Button variant="outline" onClick={() => setBedrockOpen(true)}>
               {t('admin:awsBedrock')}
             </Button>
@@ -124,17 +132,23 @@ export default function Admin() {
                 models={models[p.id] ?? []}
                 testResult={testResults[p.id]}
                 refreshing={refreshing === p.id}
+                providerModelsById={models}
                 onTest={() => test(p.id)}
                 onToggleExpand={async () => {
                   const next = expanded === p.id ? null : p.id;
                   setExpanded(next);
                   if (next && !models[p.id]) await loadModels(p.id);
                 }}
+                onLoadProviderModels={loadModels}
                 onRefresh={() => refresh(p.id)}
                 onEdit={() => setEditing(p)}
+                onConnect={p.kind === 'kimi-code' ? () => setKimiCodeOpen(true) : undefined}
                 onRemove={() => remove(p.id)}
                 onToggleModel={(modelId, mode, enabled) => toggleModel(p.id, modelId, mode, enabled)}
+                onSetModelEffort={(modelId, mode, level) => setModelEffort(p.id, modelId, mode, level)}
                 onSetFallback={setFallback}
+                onSetSubagentTarget={setSubagentTarget}
+                onSetKimiCodeThinkingMode={setKimiCodeThinkingMode}
               />
             ))}
             {!loading && providers.length === 0 && (
@@ -213,6 +227,12 @@ export default function Admin() {
       {googleOpen && (
         <GoogleConnectionDialog
           onClose={() => setGoogleOpen(false)}
+          onConnected={handleConnected}
+        />
+      )}
+      {kimiCodeOpen && (
+        <KimiCodeConnectionDialog
+          onClose={() => setKimiCodeOpen(false)}
           onConnected={handleConnected}
         />
       )}

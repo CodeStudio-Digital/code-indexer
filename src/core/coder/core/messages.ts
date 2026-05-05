@@ -61,6 +61,8 @@ export interface QuestionBlock {
   options?: Array<{ label: string; value: string }>;
   allowFreeform?: boolean;
   answer?: string;
+  /** Optional ≤16-char UI label rendered above the question. */
+  header?: string;
 }
 
 export interface PlanBlock {
@@ -69,6 +71,12 @@ export interface PlanBlock {
   plan: string;
   approved?: boolean;
   feedback?: string;
+  /**
+   * Optional hint from the model: "informational" plans are answer-only
+   * deliverables (no edits/shell follow-up). The dashboard can surface a
+   * quick-approve cue for these without bypassing user review.
+   */
+  kind?: 'informational' | 'mutating';
 }
 
 export interface ThinkingBlock {

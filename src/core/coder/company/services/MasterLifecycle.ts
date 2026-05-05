@@ -14,6 +14,7 @@
  */
 
 import { runCoder, type CoderAttachment, type RunCoderOptions, type RunCoderHandle } from '../../index.js';
+import type { CoderRunner } from '../../core/runner.js';
 import { attachmentsToBlocks } from '../../core/messages.js';
 import { createCoderProvider } from '../../../providers/factory.js';
 import { SessionStore } from '../../sessions/store.js';
@@ -406,10 +407,15 @@ export class MasterLifecycle implements IMasterNotifier {
       profile: 'full',
       companyContext,
       companyPromptBlock: promptBlock,
+      // Wire HumanInTheLoop BEFORE the runner takes turn 1, so a master
+      // that calls `ask_user` immediately is still captured. Without
+      // this, the prompt is created in the runner but the
+      // `question_posted` listener doesn't exist yet → the question is
+      // silently lost and the master blocks forever.
+      onRunnerReady: (runner) => this.wireAllForRunner(runner, masterRun.id),
     } as RunCoderOptions & { companyPromptBlock: string });
 
     this._handle = handle;
-    this.wireAll(handle, masterRun.id);
     this.attachCompletionHandler(handle, masterRun.id);
 
     store.close();
@@ -532,10 +538,10 @@ export class MasterLifecycle implements IMasterNotifier {
       profile: 'full',
       companyContext,
       companyPromptBlock: promptBlock,
+      onRunnerReady: (runner) => this.wireAllForRunner(runner, masterRun.id),
     } as RunCoderOptions & { companyPromptBlock: string });
 
     this._handle = handle;
-    this.wireAll(handle, masterRun.id);
     this.attachCompletionHandler(handle, masterRun.id);
 
     return handle;
@@ -573,12 +579,12 @@ export class MasterLifecycle implements IMasterNotifier {
         profile: 'full',
         companyContext: this._companyContext!,
         companyPromptBlock: this._promptBlock,
+        onRunnerReady: (runner) => this.wireAllForRunner(runner, this._agentRunId!),
       } as RunCoderOptions & { companyPromptBlock: string });
 
       this._ended = false;
       this._endedWithError = null;
       this._handle = { ...this._handle!, runner: handle.runner, done: handle.done };
-      this.wireAll(handle, this._agentRunId!);
 
       // Flush queued messages that arrived during spin-up.
       const queued = this.resumeQueue.splice(0, this.resumeQueue.length);
@@ -674,10 +680,20 @@ export class MasterLifecycle implements IMasterNotifier {
 
   // ─── Internal ───────────────────────────────────────────────────
 
-  private wireAll(handle: RunCoderHandle, runId: number): void {
-    this.deps.wirer.wire(handle, 'master', runId);
-    this.deps.humanInLoop.wireMasterPlan(handle);
-    this.deps.humanInLoop.wireMasterQuestion(handle);
+  /**
+   * Wire HumanInTheLoop + meta-bus listeners onto the runner. Called
+   * via `runCoder({ onRunnerReady })` BEFORE the runner takes its first
+   * turn — otherwise an `ask_user` made on turn 1 emits `question_posted`
+   * before any listener exists and the prompt is silently lost (master
+   * stays blocked in `waitForUserInput` with no `master_prompts` row to
+   * resolve). Accepts `runner` directly because at call time we don't
+   * have a full `RunCoderHandle` yet.
+   */
+  private wireAllForRunner(runner: CoderRunner, runId: number): void {
+    const synthetic = { runner } as unknown as RunCoderHandle;
+    this.deps.wirer.wire(synthetic, 'master', runId);
+    this.deps.humanInLoop.wireMasterPlan(synthetic);
+    this.deps.humanInLoop.wireMasterQuestion(synthetic);
   }
 
   private attachCompletionHandler(handle: RunCoderHandle, runId: number): void {

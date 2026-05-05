@@ -1,4 +1,5 @@
 import type { Context } from 'hono';
+import type { CompanyStore } from '../../../../store/company-store.js';
 
 /**
  * Small helpers shared across route modules to cut the boilerplate that
@@ -40,4 +41,17 @@ export async function parseJsonBody<T extends object>(c: Context): Promise<Parti
  */
 export function notFound(c: Context, message = 'Not found') {
   return c.json({ error: message }, 404);
+}
+
+/**
+ * Resolve a `:id` URL param to its ROOT company session id (sub-sessions
+ * → parent). Used by routes that mutate project-wide tables (kanban,
+ * pipelines, env, services, databases, docs, design-system) so a
+ * caller hitting them with a child id still operates on the parent's
+ * shared state. Returns the input id when the row is missing or already
+ * a root.
+ */
+export function resolveRootSessionId(companyStore: CompanyStore, sessionId: number): number {
+  const session = companyStore.getCompanySession(sessionId);
+  return session?.parent_session_id ?? sessionId;
 }

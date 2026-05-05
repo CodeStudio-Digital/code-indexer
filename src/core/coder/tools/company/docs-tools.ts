@@ -47,7 +47,11 @@ async function resolveTargetBinding(
   if (!serviceId || serviceId === primary.serviceId || serviceId === 'main') {
     return { binding: primary };
   }
-  const sessionId = String(ctx.companyContext?.companySessionId ?? '');
+  // Sandbox manager keys services by the ROOT session id (sub-sessions
+  // share the parent's container). Resolve to effective id so a tool
+  // running inside a child orchestrator finds the parent's service.
+  const orchEff = (ctx.companyContext?.orchestrator as { effectiveSessionId?: number } | undefined)?.effectiveSessionId;
+  const sessionId = String(orchEff ?? ctx.companyContext?.companySessionId ?? '');
   if (!sessionId) return { error: 'No company session id in context' };
   const secondary = getSandboxManager().getService(sessionId, serviceId);
   if (!secondary || !secondary.containerId) {

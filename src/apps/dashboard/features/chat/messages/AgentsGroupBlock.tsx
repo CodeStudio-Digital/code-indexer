@@ -15,6 +15,8 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
   // or when the group status/totalUsage changes.
   if (prev.group.status !== next.group.status) return false;
   if (prev.group.totalUsage !== next.group.totalUsage) return false;
+  if (prev.group.provider !== next.group.provider) return false;
+  if (prev.group.model !== next.group.model) return false;
   if (prev.group.agents.length !== next.group.agents.length) return false;
   for (let i = 0; i < prev.group.agents.length; i++) {
     const a = prev.group.agents[i];
@@ -22,6 +24,8 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
     if (
       a.status !== b.status ||
       a.toolCallCount !== b.toolCallCount ||
+      a.provider !== b.provider ||
+      a.model !== b.model ||
       a.summary !== b.summary ||
       a.error !== b.error
     )
@@ -38,6 +42,7 @@ function AgentsGroupBlockInner({ group }: AgentsGroupBlockProps) {
   const isRunning = group.status === 'running';
   const completedCount = group.agents.filter((a) => a.status === 'completed').length;
   const totalToolCalls = group.agents.reduce((sum, a) => sum + a.toolCallCount, 0);
+  const providerLabel = formatProviderLabel(group.provider, group.model);
 
   const toggleAgent = (index: number) => {
     setExpandedAgents((prev) => {
@@ -79,6 +84,15 @@ function AgentsGroupBlockInner({ group }: AgentsGroupBlockProps) {
         <Badge variant="outline" className="shrink-0 tabular-nums">
           {t('agentGroup.toolCalls', { count: totalToolCalls })}
         </Badge>
+        {providerLabel && (
+          <Badge
+            variant="secondary"
+            className="shrink min-w-0 max-w-[220px] truncate text-[10px]"
+            title={providerLabel}
+          >
+            {providerLabel}
+          </Badge>
+        )}
         {!isRunning && (
           <span className="text-muted-foreground tabular-nums">
             {t('agentGroup.completed', { completed: completedCount, total: group.agents.length })}
@@ -129,6 +143,7 @@ function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
         : 'text-success bg-success/10';
 
   const hasSummary = agent.summary || agent.error;
+  const providerLabel = formatProviderLabel(agent.provider, agent.model);
 
   return (
     <div className="border-b last:border-b-0">
@@ -162,6 +177,15 @@ function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
         <Badge variant="outline" className="shrink-0 tabular-nums text-[10px]">
           {agent.toolCallCount} tool{agent.toolCallCount !== 1 ? 's' : ''}
         </Badge>
+        {providerLabel && (
+          <Badge
+            variant="secondary"
+            className="shrink min-w-0 max-w-[180px] truncate text-[10px]"
+            title={providerLabel}
+          >
+            {providerLabel}
+          </Badge>
+        )}
         {agent.usage && (
           <span className="ml-auto text-muted-foreground tabular-nums shrink-0 text-[10px]">
             {formatTokens(agent.usage.input_tokens + agent.usage.output_tokens)}
@@ -189,4 +213,10 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
+}
+
+function formatProviderLabel(provider?: string, model?: string): string | null {
+  if (!provider && !model) return null;
+  if (provider && model) return `${provider}:${model}`;
+  return provider ?? model ?? null;
 }

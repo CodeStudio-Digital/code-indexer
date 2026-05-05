@@ -132,6 +132,8 @@ export class ModelDiscovery {
         return this.fetchOpenAICompatModels('https://api.deepseek.com/models', apiKey, 'deepseek', now);
       case 'zai':
         return this.fetchOpenAICompatModels('https://api.z.ai/api/paas/v4/models', apiKey, 'zai', now);
+      case 'kimi-code':
+        return this.fetchOpenAICompatModels('https://api.kimi.com/coding/v1/models', apiKey, 'kimi-code', now);
       case 'gemini':
         return this.fetchGeminiModels(apiKey, now);
       default:

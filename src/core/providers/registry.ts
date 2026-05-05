@@ -9,6 +9,7 @@ import { copilot } from './definitions/copilot.js';
 import { chatgpt } from './definitions/chatgpt.js';
 import { bedrock } from './definitions/bedrock.js';
 import { googleOAuth } from './definitions/google-oauth.js';
+import { kimiCode } from './definitions/kimi-code.js';
 
 /**
  * Provider registry — single source of truth for all provider shapes.
@@ -38,6 +39,7 @@ const ALL_DEFINITIONS: ProviderDefinition[] = [
   chatgpt,
   bedrock,
   googleOAuth,
+  kimiCode,
 ];
 
 let cachedRegistry: Map<string, ProviderDefinition> | null = null;

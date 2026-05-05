@@ -64,10 +64,10 @@ export function dsRecordComponent(
         const props_schema_json = optString(args.props_schema_json) ?? null;
         const example_code = optString(args.example_code) ?? null;
 
-        const session = store.getSessionByCompanySessionId(orchestrator.companySessionId);
+        const session = store.getSessionByCompanySessionId(orchestrator.effectiveSessionId);
         if (!session) {
           return err(
-            `No DesignSystemSession bound to company_session_id=${orchestrator.companySessionId}. Was this session created via the Design Systems tab?`,
+            `No DesignSystemSession bound to company_session_id=${orchestrator.effectiveSessionId}. Was this session created via the Design Systems tab?`,
           );
         }
 

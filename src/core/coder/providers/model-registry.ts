@@ -49,6 +49,12 @@ export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
   'deepseek-chat':              { maxTools: 128, contextWindow: 1_000_000, note: 'deprecated → deepseek-v4-flash' },
   'deepseek-coder':             { maxTools: 128, contextWindow: 1_000_000, note: 'deprecated → deepseek-v4-flash' },
   'deepseek-reasoner':          { maxTools: 128, contextWindow: 1_000_000, note: 'deprecated → deepseek-v4-pro' },
+  // ── Kimi Code ──────────────────────────────────────────────────────────
+  'kimi-k2.6':                  { maxTools: 128, contextWindow: 262_144 },
+  'kimi-k2.5':                  { maxTools: 128, contextWindow: 262_144 },
+  'kimi-k2-thinking':           { maxTools: 128, contextWindow: 262_144, note: 'always_thinking' },
+  'kimi-k2-thinking-turbo':     { maxTools: 128, contextWindow: 262_144, note: 'always_thinking' },
+  'kimi-k2-turbo-preview':      { maxTools: 128, contextWindow: 262_144 },
   // ── Gemini ───────────────────────────────────────────────────────────────
   'gemini-2.5-flash':           { maxTools: 64,  contextWindow: 1_048_576 },
   'gemini-2.5-flash-preview-04-17': { maxTools: 64, contextWindow: 1_048_576 },

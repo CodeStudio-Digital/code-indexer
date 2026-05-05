@@ -1,10 +1,10 @@
 # Claude Code OAuth Parity
 
-Verified against `@anthropic-ai/claude-code@2.1.123`, downloaded from npm at implementation time.
+Verified against `@anthropic-ai/claude-code@2.1.126`, downloaded from npm at implementation time.
 
-- Native package: `@anthropic-ai/claude-code-win32-x64@2.1.123`
-- Build time: `2026-04-29T00:34:52Z`
-- Git SHA: `54903ade25087ef906df59ec6a608cc3a50a3f06`
+- Native package: `@anthropic-ai/claude-code-win32-x64@2.1.126`
+- Build time: `2026-04-30T16:01:00Z`
+- Git SHA: `e44c1d97bd39dbf2525164f3fd33be6edbf1661e`
 - OAuth client id: `9d1c250a-e61b-44d9-88ed-5944d1962f5e`
 
 ## Wire Details
@@ -35,7 +35,7 @@ It intentionally does not POST Claude Code telemetry/metrics. The admin displays
 
 ## API Request Parity (Inference)
 
-Verified by extracting strings from `claude.exe` (SEA binary, v2.1.123).
+Verified by extracting strings from `claude.exe` (SEA binary, v2.1.126).
 
 ### Beta headers sent per request
 

@@ -87,7 +87,7 @@ export class PipelineExecutor {
 
     const execution = this.deps.ctx.companyStore.createPipelineExecution({
       pipelineId,
-      companySessionId: this.deps.ctx.companySessionId,
+      companySessionId: this.deps.ctx.effectiveSessionId,
       initialInput,
       context,
       startedBy,
@@ -221,7 +221,7 @@ export class PipelineExecutor {
     limit?: number;
   }): PipelineExecution[] {
     return this.deps.ctx.companyStore.listPipelineExecutions({
-      companySessionId: this.deps.ctx.companySessionId,
+      companySessionId: this.deps.ctx.effectiveSessionId,
       pipelineId: opts?.pipelineId,
       status: opts?.status,
       limit: opts?.limit,
@@ -236,7 +236,7 @@ export class PipelineExecutor {
    */
   async recoverRunning(): Promise<{ paused: number }> {
     const running = this.deps.ctx.companyStore.listPipelineExecutions({
-      companySessionId: this.deps.ctx.companySessionId,
+      companySessionId: this.deps.ctx.effectiveSessionId,
       status: 'running',
     });
     let paused = 0;
@@ -613,7 +613,7 @@ export function pickNextEdge(
  */
 function readQaVerdictForCard(ctx: SessionContext, cardId: number): 'pass' | 'fail' | null {
   try {
-    return ctx.companyStore.getLatestQaVerdictForCard(ctx.companySessionId, cardId);
+    return ctx.companyStore.getLatestQaVerdictForCard(ctx.effectiveSessionId, cardId);
   } catch {
     return null;
   }

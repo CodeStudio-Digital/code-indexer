@@ -2,9 +2,9 @@
  * Claude Code OAuth and wire helpers.
  *
  * Source of truth checked at implementation time:
- *   @anthropic-ai/claude-code@2.1.123
- *   build: 2026-04-29T00:34:52Z
- *   git:   54903ade25087ef906df59ec6a608cc3a50a3f06
+ *   @anthropic-ai/claude-code@2.1.126
+ *   build: 2026-04-30T16:01:00Z
+ *   git:   e44c1d97bd39dbf2525164f3fd33be6edbf1661e
  *
  * The official client uses PKCE OAuth and then calls Anthropic's normal
  * `/v1/messages` API with either:
@@ -20,9 +20,9 @@ import nodeFetch, { type RequestInit as NodeFetchRequestInit } from 'node-fetch'
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import type { ProviderStore } from '../../../store/provider-store.js';
 
-export const CLAUDE_CODE_PACKAGE_VERSION = '2.1.123';
-export const CLAUDE_CODE_BUILD_TIME = '2026-04-29T00:34:52Z';
-export const CLAUDE_CODE_GIT_SHA = '54903ade25087ef906df59ec6a608cc3a50a3f06';
+export const CLAUDE_CODE_PACKAGE_VERSION = '2.1.126';
+export const CLAUDE_CODE_BUILD_TIME = '2026-04-30T16:01:00Z';
+export const CLAUDE_CODE_GIT_SHA = 'e44c1d97bd39dbf2525164f3fd33be6edbf1661e';
 
 export const CLAUDE_CODE_BASE_URL =
   process.env.CLAUDE_CODE_API_BASE_URL ?? 'https://api.anthropic.com';
@@ -38,6 +38,7 @@ export const CLAUDE_CODE_CONTEXT_MANAGEMENT_BETA = 'context-management-2025-06-2
 export const CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA = 'prompt-caching-scope-2026-01-05';
 export const CLAUDE_CODE_CONTEXT_1M_BETA = 'context-1m-2025-08-07';
 export const CLAUDE_CODE_EFFORT_BETA = 'effort-2025-11-24';
+export const CLAUDE_CODE_TOKEN_EFFICIENT_TOOLS_BETA = 'token-efficient-tools-2026-03-28';
 export const CLAUDE_CODE_ANTHROPIC_VERSION = '2023-06-01';
 export const CLAUDE_CODE_SMALL_FAST_MODEL =
   process.env.ANTHROPIC_SMALL_FAST_MODEL ?? 'claude-haiku-4-5-20251001';
@@ -184,6 +185,12 @@ export interface ResolveClaudeCodeModelOptions {
   thinking?: boolean;
   thinkingDisplay?: string | null;
   effort?: ClaudeCodeEffort | 'auto' | null;
+  /**
+   * True when the request will include tools — gates the
+   * `token-efficient-tools-2026-03-28` beta. The flag has no effect for
+   * tool-less requests since the beta only changes tool-call serialization.
+   */
+  hasTools?: boolean;
 }
 
 export interface ClaudeCodeResolvedModel {
@@ -561,6 +568,8 @@ export function normalizeClaudeCodeModelAlias(model: string | null | undefined):
     case 'haiku':
     case 'opus':
     case 'opus[1m]':
+    case 'opus-4-6':
+    case 'opus-4-6[1m]':
       return lower;
     default:
       return trimmed;
@@ -598,6 +607,10 @@ export function resolveClaudeCodeRequestedModel(
       return CLAUDE_CODE_DEFAULT_OPUS_MODEL;
     case 'opus[1m]':
       return `${CLAUDE_CODE_DEFAULT_OPUS_MODEL}[1m]`;
+    case 'opus-4-6':
+      return 'claude-opus-4-6';
+    case 'opus-4-6[1m]':
+      return 'claude-opus-4-6[1m]';
     default:
       return alias;
   }
@@ -688,19 +701,33 @@ function getClaudeCodeDisplayName(alias: string, requestedModel: string): string
   if (lowerAlias === 'default') {
     return 'Default (recommended) - Sonnet 4.6';
   }
-  if (lowerAlias === 'sonnet[1m]' || isClaudeCodeOneMillionContext(requestedModel)) {
+  const oneMillion = isClaudeCodeOneMillionContext(requestedModel);
+  if (lowerAlias === 'sonnet[1m]' || (oneMillion && cleanModel.includes('claude-sonnet-4-6'))) {
     return 'Sonnet (1M context) - Sonnet 4.6 with 1M context';
+  }
+  if (lowerAlias === 'opus[1m]' || (oneMillion && cleanModel.includes('claude-opus-4-7'))) {
+    return 'Opus (1M context) - Opus 4.7 with 1M context';
+  }
+  if (lowerAlias === 'opus-4-6[1m]' || (oneMillion && cleanModel.includes('claude-opus-4-6'))) {
+    return 'Opus 4.6 (1M context) - Opus 4.6 with 1M context';
   }
   if (cleanModel.includes('claude-haiku-4-5')) return 'Haiku - Haiku 4.5';
   if (cleanModel.includes('claude-opus-4-7')) return 'Opus - Opus 4.7';
+  if (cleanModel.includes('claude-opus-4-6')) return 'Opus - Opus 4.6';
+  if (cleanModel.includes('claude-opus-4-5')) return 'Opus - Opus 4.5';
   if (cleanModel.includes('claude-sonnet-4-6')) return 'Sonnet - Sonnet 4.6';
+  if (cleanModel.includes('claude-sonnet-4-5')) return 'Sonnet - Sonnet 4.5';
   return requestedModel;
 }
 
 export function getClaudeCodeBetasForModel(
   model: string,
   includeOAuth = true,
-  opts?: { hasEffort?: boolean; thinkingDisplay?: string | null },
+  opts?: {
+    hasEffort?: boolean;
+    thinkingDisplay?: string | null;
+    hasTools?: boolean;
+  },
 ): string[] {
   const cleanModel = claudeCodeModelFamily(model);
   const experimentalBetasEnabled =
@@ -724,6 +751,19 @@ export function getClaudeCodeBetasForModel(
   }
   if (experimentalBetasEnabled) betas.push(CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA);
   if (opts?.hasEffort) betas.push(CLAUDE_CODE_EFFORT_BETA);
+  // token-efficient-tools-2026-03-28 only matters when tools are present and
+  // the request runs against a modern Claude 4+ model. The upstream bundle
+  // registers it but doesn't push it yet (forward-looking); we opt in here
+  // because it shrinks tool-call serialization with no behavioral downside,
+  // gated by an env opt-out.
+  if (
+    experimentalBetasEnabled &&
+    modernFirstPartyModel &&
+    opts?.hasTools &&
+    !isTruthyEnv(process.env.CLAUDE_CODE_DISABLE_TOKEN_EFFICIENT_TOOLS)
+  ) {
+    betas.push(CLAUDE_CODE_TOKEN_EFFICIENT_TOOLS_BETA);
+  }
   return betas;
 }
 
@@ -753,6 +793,7 @@ export function resolveClaudeCodeModel(
   const betas = getClaudeCodeBetasForModel(requestedModel, opts?.includeOAuth ?? true, {
     hasEffort: Boolean(outputConfig),
     thinkingDisplay: opts?.thinkingDisplay,
+    hasTools: opts?.hasTools,
   });
   return {
     alias,

@@ -1,0 +1,76 @@
+import { promises as fs } from 'node:fs';
+import { extname } from 'node:path';
+import type { CoderTool, ToolContext, ToolResult } from '../core/tool.js';
+import type { ImageBlock } from '../core/messages.js';
+import { ok, err } from '../core/tool.js';
+import { resolveSafe as resolveSafePath } from './paths.js';
+import { maybeTerse } from './descriptions.js';
+
+const VIEW_IMAGE_DESC =
+  'Load a project image file so you can actually see it on the next turn. ' +
+  'The image is appended as a user-visible block; your next prompt observes it like any user attachment.\n' +
+  "USE: when the user asked about a screenshot, design asset, or test artifact stored in the project tree.\n" +
+  "USE: to inspect a chart/figure your tools just generated.\n" +
+  "DON'T: load the same image twice in a session — once it's in the thread you keep seeing it.\n" +
+  "DON'T: load images outside the project root. The path argument is project-relative and validated.";
+
+const IMAGE_EXT_TO_MEDIA: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+};
+
+const MAX_BYTES = 8 * 1024 * 1024; // 8 MB
+
+export const viewImage: CoderTool = {
+  name: 'view_image',
+  description: maybeTerse(VIEW_IMAGE_DESC),
+  source: 'native',
+  mutates: false,
+  parallelSafe: true,
+  riskLevel: 'read',
+  parameters: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'Project-relative path to a PNG/JPEG/WebP/GIF file.' },
+    },
+    required: ['path'],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    const path = String(args.path ?? '');
+    const abs = resolveSafePath(path, ctx.cwd);
+    if (!abs) return err(`Path '${path}' is outside project root`);
+
+    const ext = extname(path).replace(/^\./, '').toLowerCase();
+    const mediaType = IMAGE_EXT_TO_MEDIA[ext];
+    if (!mediaType) {
+      return err(
+        `view_image: '${path}' has unsupported extension '.${ext}'. ` +
+          `Supported: ${Object.keys(IMAGE_EXT_TO_MEDIA).join(', ')}.`,
+      );
+    }
+
+    let buf: Buffer;
+    try {
+      buf = await fs.readFile(abs);
+    } catch (e) {
+      return err(`view_image: cannot read ${path}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (buf.length > MAX_BYTES) {
+      return err(`view_image: ${path} is ${(buf.length / 1024 / 1024).toFixed(1)} MB — over the ${MAX_BYTES / 1024 / 1024} MB cap.`);
+    }
+
+    const base64 = buf.toString('base64');
+    const block: ImageBlock = { type: 'image', mediaType, base64 };
+
+    return {
+      content: `Loaded ${path} (${mediaType}, ${(buf.length / 1024).toFixed(1)} KB). The image is now visible to you on the next turn.`,
+      extraUserBlocks: [block],
+    };
+  },
+};
+
+export const viewImageTools: CoderTool[] = [viewImage];

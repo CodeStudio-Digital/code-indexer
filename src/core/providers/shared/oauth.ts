@@ -21,6 +21,11 @@ import {
   getClaudeCodeRequestMetadata,
   getClaudeCodeRuntimeHeaders,
 } from '../../services/oauth/claude-code.js';
+import {
+  refreshIfExpired as refreshKimiCodeToken,
+  KIMI_CODE_BASE_URL,
+  getKimiCodeRuntimeHeaders,
+} from '../../services/oauth/kimi-code.js';
 import { extractAccountIdFromIdToken } from '../../coder/providers/chatgpt.js';
 import { getStore } from './store.js';
 
@@ -225,4 +230,54 @@ export async function resolveClaudeCodeCreds(cfg: ProviderConfig): Promise<Resol
       metadata,
     },
   };
+}
+
+/**
+ * Resolve Kimi Code OAuth credentials. The access token is mirrored into
+ * provider_configs.api_key at login/refresh so OpenAI-compatible clients can
+ * use normal Bearer auth while oauth_tokens remains the source of truth.
+ */
+export async function resolveKimiCodeCreds(cfg: ProviderConfig): Promise<ResolvedCreds> {
+  const store = getStore();
+  if (!store) throw new Error('Kimi Code requires the ProviderStore');
+
+  let token = cfg.api_key ?? store.getOAuth(cfg.id)?.access_token ?? '';
+  try {
+    const fresh = await refreshKimiCodeToken(store, cfg.id);
+    if (fresh && fresh !== cfg.api_key) {
+      token = fresh;
+      const maybeStore = store as ProviderConfigAwareStore;
+      const latest = maybeStore.getProvider?.(cfg.id) ?? cfg;
+      store.upsertProvider({ ...latest, api_key: fresh });
+    } else if (fresh) {
+      token = fresh;
+    }
+  } catch (e) {
+    console.warn(`[kimi-code] refresh failed: ${(e as Error).message}`);
+  }
+
+  if (!token) throw new Error('no Kimi Code access token stored - re-connect');
+  const tok = store.getOAuth(cfg.id);
+  const extraHeaders = getKimiCodeRuntimeHeaders(store, cfg.id);
+  return {
+    apiKey: token,
+    baseURL: (cfg.base_url ?? KIMI_CODE_BASE_URL).replace(/\/$/, ''),
+    extraHeaders,
+    extra: {
+      refreshToken: tok?.refresh_token,
+      deviceId: extraHeaders['X-Msh-Device-Id'],
+      tokenType: tok?.extra?.token_type,
+      thinkingMode: normalizeKimiCodeThinkingMode(cfg.extra?.kimi_code_thinking_mode),
+    },
+  };
+}
+
+interface ProviderConfigAwareStore {
+  getProvider?(id: string): ProviderConfig | null;
+}
+
+function normalizeKimiCodeThinkingMode(value: unknown): 'auto' | 'enabled' | 'disabled' {
+  return value === 'enabled' || value === 'disabled' || value === 'auto'
+    ? value
+    : 'auto';
 }

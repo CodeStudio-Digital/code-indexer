@@ -276,7 +276,10 @@ const get_symbol_body = defineTool({
       }
     }
     if (!targetFile || !targetLine) {
-      throw new Error(`Symbol "${symbolName}" not found. Use search or get_file_skeleton to find the correct symbol name. Do not retry with the same arguments.`);
+      throw new Error(
+        `Symbol "${symbolName}" not found. Use search or get_file_skeleton to find the correct symbol name. ` +
+        `If you already know the file path but the index is stale, call native read_file({ path, symbol: "${symbolName}" }) — it runs the same regex+brace fallback straight from disk. Do not retry with the same arguments.`,
+      );
     }
     try {
       const result = extractSymbolBody(project.root_path, targetFile, targetLine);

@@ -23,6 +23,7 @@ export type ProviderFamily =
   | 'zai'
   | 'gemini'
   | 'deepseek'
+  | 'kimi-code'
   | 'generic';
 
 export interface PromptContext {
@@ -46,6 +47,13 @@ export interface PromptContext {
    * turns on `mcp__*` calls that would fail.
    */
   mcpAvailable?: boolean;
+  /**
+   * Whether the project has at least one completed indexing run. When false
+   * (even with `mcpAvailable === true`), tools that depend on the symbol DB
+   * are stripped at the registry level; the prompt reflects that and steers
+   * the agent toward disk-based reads + tree-sitter-aware `read_file`.
+   */
+  isIndexed?: boolean;
 }
 
 /**
@@ -105,6 +113,14 @@ Coding agent (Gemini family).
 - Terse markdown. Code citations as \`file:line\`.
 - No preamble, no summary unless asked.
 `;
+    case 'kimi-code':
+      return `# Role: Coding agent (Kimi Code family)
+
+# Rules
+- Prefer tool calls over narration. Emit independent tool calls in parallel.
+- Preserve useful reasoning internally, but keep user-facing text concise.
+- Markdown, terse. Cite code as \`file:line\`.
+`;
     case 'generic':
     default:
       return `# Role
@@ -127,7 +143,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     projectRoot: ctx.projectRoot,
     os: ctx.os,
     tierHint: tierHint(ctx.profile, ctx.customTiers),
-    mcpSection: mcpSection(ctx.mcpAvailable),
+    mcpSection: mcpSection(ctx.mcpAvailable, ctx.isIndexed),
   });
 
   // Plan section — optional, only when planMode is true. Loaded from plan.txt.
@@ -215,18 +231,32 @@ ${customBlock}
  * returns the full semantic navigation guide. When unavailable (project not
  * indexed or bridge failed), tells the agent to stick to native tools.
  */
-function mcpSection(mcpAvailable?: boolean): string {
+function mcpSection(mcpAvailable?: boolean, isIndexed?: boolean): string {
   if (mcpAvailable === false) {
-    return `# Tool strategy — native only (project not indexed)
+    return `# Tool strategy — native only (MCP bridge unavailable)
 MCP semantic tools (\`mcp__*\`) are NOT available this session. Do NOT call any \`mcp__\` prefixed tool — they will error with "Unknown tool".
 
 Use native tools for all code exploration:
 1. \`list_directory\` — browse project structure.
-2. \`read_file\` — read file contents (use line ranges for large files).
-3. \`run_command\` with \`grep -rn\` or \`rg\` — text search across files.
+2. \`read_file\` — read file contents. Pass \`symbol: "<name>"\` to get just one function/class body, or \`around_line: <n>\` to grab the symbol that contains that line. Falls back to a line range when the file's language has no AST grammar.
+3. \`glob\` (native) or \`run_command\` with \`rg\`/\`grep -rn\` — text search across files.
 4. \`run_command\` with \`find\` (or \`dir /s\` on Windows) — file discovery by name/pattern.
+`;
+  }
+  if (isIndexed === false) {
+    return `# Tool strategy — project NOT indexed
+The MCP bridge is connected, but this project has never been indexed. Symbol-DB tools (\`get_symbol_details\`, \`find_references\`, \`trace_usage\`, \`prepare_edit\`, \`semantic_neighbors\`, \`get_dependencies\`, \`get_dependents\`, \`search\`, \`search_global\`, \`get_project_overview\`, \`get_project_pulse\`, \`get_architecture\`, \`get_repo_map\`, \`get_context_for\`, \`query_snapshots\`) are STRIPPED from the registry — do not call them.
 
-To enable the full 41-tool MCP suite, ask the user to index the project via the admin panel.
+Disk-aware MCP tools that DO work without an index:
+- \`mcp__read_file\`, \`mcp__list_directory\` — overlay-aware (sees session edits).
+- \`mcp__grep_code\` — ripgrep-backed text search.
+
+Native tools that always work:
+1. \`read_file\` — pass \`symbol: "<name>"\` for one function/class body, or \`around_line: <n>\` to grab the symbol containing that line. Tree-sitter-/regex-driven, runs straight from disk.
+2. \`glob\` — fast filename matching.
+3. \`run_command\` with \`rg\` for text search, \`find\`/\`dir /s\` for path discovery.
+
+If symbol/structural navigation becomes essential, ask the user to index the project via the admin panel — it unlocks the full 41-tool MCP suite for the rest of the session once a re-run of the agent picks it up.
 `;
   }
   return `# Tool strategy — token economy

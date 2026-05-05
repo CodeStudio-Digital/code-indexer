@@ -405,21 +405,38 @@ function parsePersistedAgentsGroup(
 
   // Parse per-agent results from the combined result text.
   // Format: "### Agent N: <label>\n[reason=... tools=N input=N output=N]\n<summary>"
-  const agentResults = new Map<number, { reason: string; tools: number; input: number; output: number; summary: string }>();
+  const agentResults = new Map<number, {
+    provider?: string;
+    model?: string;
+    reason: string;
+    tools: number;
+    input: number;
+    output: number;
+    summary: string;
+  }>();
+  const groupProviderMatch = result?.content?.match(
+    /\[parallel agents:[^\]]*provider=([^\s,\]]+)\s+model=([^\s,\]]+)/,
+  );
+  const groupProvider = groupProviderMatch?.[1];
+  const groupModel = groupProviderMatch?.[2];
   if (result?.content) {
     const sections = result.content.split(/^---$/m);
     for (const section of sections) {
       const headerMatch = section.match(/###\s+Agent\s+(\d+):\s+(.+)/);
       if (!headerMatch) continue;
       const idx = parseInt(headerMatch[1], 10) - 1;
-      const metaMatch = section.match(/\[reason=(\w+)\s+tools=(\d+)\s+input=(\d+)\s+output=(\d+)\]/);
+      const metaMatch = section.match(
+        /\[(?:provider=([^\s\]]+)\s+model=([^\s\]]+)\s+)?reason=(\w+)\s+tools=(\d+)\s+input=(\d+)\s+output=(\d+)\]/,
+      );
       const summaryStart = section.indexOf('\n', section.indexOf(']') + 1);
       const summary = summaryStart >= 0 ? section.slice(summaryStart).trim() : '';
       agentResults.set(idx, {
-        reason: metaMatch?.[1] ?? 'unknown',
-        tools: parseInt(metaMatch?.[2] ?? '0', 10),
-        input: parseInt(metaMatch?.[3] ?? '0', 10),
-        output: parseInt(metaMatch?.[4] ?? '0', 10),
+        provider: metaMatch?.[1],
+        model: metaMatch?.[2],
+        reason: metaMatch?.[3] ?? 'unknown',
+        tools: parseInt(metaMatch?.[4] ?? '0', 10),
+        input: parseInt(metaMatch?.[5] ?? '0', 10),
+        output: parseInt(metaMatch?.[6] ?? '0', 10),
         summary,
       });
     }
@@ -430,6 +447,8 @@ function parsePersistedAgentsGroup(
   return {
     groupId: `persisted-${Date.now()}`,
     status: isCompleted ? 'completed' : 'running',
+    provider: groupProvider,
+    model: groupModel,
     totalUsage: isCompleted
       ? {
           input_tokens: Array.from(agentResults.values()).reduce((s, r) => s + r.input, 0),
@@ -450,6 +469,8 @@ function parsePersistedAgentsGroup(
             ? ('completed' as const)
             : ('pending' as const),
         toolCallCount: parsed?.tools ?? 0,
+        provider: parsed?.provider ?? groupProvider,
+        model: parsed?.model ?? groupModel,
         usage: parsed ? { input_tokens: parsed.input, output_tokens: parsed.output } : undefined,
         summary: parsed?.summary || undefined,
         error: parsed?.reason === 'error' ? parsed.summary : undefined,

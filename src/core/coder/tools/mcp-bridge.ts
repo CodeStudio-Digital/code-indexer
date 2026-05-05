@@ -173,6 +173,60 @@ export class McpToolBridge {
     });
   }
 
+  /**
+   * Return the list of static resources exposed by the connected MCP server,
+   * plus any URI templates. Falls through to an empty list when the server
+   * advertises no resources or when the call fails (e.g., older servers
+   * without resource support — the SDK throws "Method not found").
+   */
+  async listResources(): Promise<{
+    resources: Array<{ uri: string; name: string; description?: string; mimeType?: string }>;
+    templates: Array<{ uriTemplate: string; name: string; description?: string; mimeType?: string }>;
+  }> {
+    if (!this.client) throw new Error('McpToolBridge not connected');
+    let resources: Array<{ uri: string; name: string; description?: string; mimeType?: string }> = [];
+    let templates: Array<{ uriTemplate: string; name: string; description?: string; mimeType?: string }> = [];
+    try {
+      const res = await this.client.listResources();
+      resources = (res.resources ?? []).map((r) => ({
+        uri: r.uri, name: r.name, description: r.description, mimeType: r.mimeType,
+      }));
+    } catch {
+      // No resource capability — leave empty.
+    }
+    try {
+      const res = await this.client.listResourceTemplates();
+      templates = (res.resourceTemplates ?? []).map((t) => ({
+        uriTemplate: t.uriTemplate, name: t.name, description: t.description, mimeType: t.mimeType,
+      }));
+    } catch {
+      // No templates — leave empty.
+    }
+    return { resources, templates };
+  }
+
+  /**
+   * Read a resource by URI. Returns the concatenated text contents (binary
+   * `blob` resources are reported as a placeholder line so the agent can see
+   * they exist without us trying to render them as text).
+   */
+  async readResource(uri: string): Promise<{ contents: string; mimeType?: string }> {
+    if (!this.client) throw new Error('McpToolBridge not connected');
+    const res = await this.client.readResource({ uri });
+    const parts: string[] = [];
+    let mimeType: string | undefined;
+    for (const c of res.contents ?? []) {
+      mimeType = mimeType ?? (c as { mimeType?: string }).mimeType;
+      if ('text' in c && typeof c.text === 'string') {
+        parts.push(c.text);
+      } else if ('blob' in c) {
+        const blob = (c as { blob: string }).blob;
+        parts.push(`[binary resource: ${blob.length} base64 chars, mimeType=${mimeType ?? 'unknown'}]`);
+      }
+    }
+    return { contents: parts.join('\n'), mimeType };
+  }
+
   async close(): Promise<void> {
     try {
       await this.client?.close();

@@ -1,6 +1,12 @@
 // ─── Provider Types ───────────────────────────────────────────────
 
-export type ProviderName = 'anthropic' | 'openai' | 'deepseek' | 'gemini' | 'zai';
+export type ProviderName =
+  | 'anthropic'
+  | 'openai'
+  | 'deepseek'
+  | 'gemini'
+  | 'zai'
+  | 'kimi-code';
 
 export type SnapshotCategory = 'architecture' | 'decision' | 'pattern' | 'convention' | 'todo' | 'note';
 

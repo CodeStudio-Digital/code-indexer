@@ -241,7 +241,7 @@ export class HumanInTheLoop {
 
       // Wake the master in real time so `wait_for_subordinates` returns
       // instead of polling until the subordinate eventually completes.
-      this.master.handle?.runner.interruptWait();
+      this.master.handle?.runner.interruptWait({ kind: 'plan', agentRunId, role });
       this.master.notify(
         `[SYSTEM] @${role} (agent_run_id=${agentRunId}) submitted a plan for approval and is BLOCKED.\n` +
         `Plan:\n${block.plan}\n` +
@@ -285,7 +285,7 @@ export class HumanInTheLoop {
       // may process the stale ask_user result and the new notification out of
       // order, leading to a stuck state where the subordinate is never
       // answered.
-      this.master.handle?.runner.interruptWait();
+      this.master.handle?.runner.interruptWait({ kind: 'question', agentRunId, role });
       this.master.notify(
         `[SYSTEM] @${role} (agent_run_id=${agentRunId}) is asking a question and BLOCKED waiting for your answer.\n` +
         `Question: "${block.question}"${optionsText}\n` +
@@ -319,7 +319,7 @@ export class HumanInTheLoop {
       });
 
       // Interrupt FIRST, then notify — see wireSubordinateQuestion for rationale.
-      this.master.handle?.runner.interruptWait();
+      this.master.handle?.runner.interruptWait({ kind: 'tasks', agentRunId, role });
       this.master.notify(
         `[SYSTEM] @${role} (agent_run_id=${agentRunId}) submitted a task list for approval and is BLOCKED.\n` +
         `Summary: "${summary}"\n` +

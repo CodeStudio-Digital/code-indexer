@@ -7,6 +7,9 @@ import {
   refreshProviderModels,
   saveProvider,
   setFallbackProvider as setFallbackProviderApi,
+  setKimiCodeThinkingMode as setKimiCodeThinkingModeApi,
+  setModelReasoningLevel,
+  setSubagentTarget as setSubagentTargetApi,
   testProvider,
   toggleModelEnabled,
 } from '../api.js';
@@ -95,6 +98,59 @@ export function useAdminProviders() {
     await loadModels(providerId);
   };
 
+  const setModelEffort = async (
+    providerId: string,
+    modelId: string,
+    mode: string,
+    level: string | null,
+  ) => {
+    try {
+      await setModelReasoningLevel(providerId, modelId, mode, level);
+      await loadModels(providerId);
+    } catch (e) {
+      await notify({
+        title: 'Reasoning level update failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const setSubagentTarget = async (
+    providerId: string,
+    subagentProviderId: string | null,
+    modelId: string | null,
+  ) => {
+    try {
+      await setSubagentTargetApi(providerId, subagentProviderId, modelId);
+      await load();
+    } catch (e) {
+      await notify({
+        title: 'Subagent settings update failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const setKimiCodeThinkingMode = async (
+    providerId: string,
+    mode: 'auto' | 'enabled' | 'disabled',
+  ) => {
+    const provider = providers.find((p) => p.id === providerId);
+    if (!provider) return;
+    try {
+      await setKimiCodeThinkingModeApi(provider, mode);
+      await load();
+    } catch (e) {
+      await notify({
+        title: 'Kimi Code thinking update failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
   const setFallback = async (providerId: string, fallbackProviderId: string | null) => {
     try {
       await setFallbackProviderApi(providerId, fallbackProviderId);
@@ -123,6 +179,9 @@ export function useAdminProviders() {
     test,
     refresh,
     toggleModel,
+    setModelEffort,
+    setSubagentTarget,
+    setKimiCodeThinkingMode,
     setFallback,
   };
 }

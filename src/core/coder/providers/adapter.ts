@@ -25,6 +25,8 @@ export interface ChatRequest {
    * server side. The provider ships `messages.slice(previousResponseMessageCount)`.
    */
   previousResponseMessageCount?: number;
+  /** Stable local session id, used by providers that expose prompt/cache affinity knobs. */
+  sessionId?: string | number;
   /**
    * Sampling parameters resolved by the runner via `resolveTemperature()`.
    * Each provider reads `inference.temperature` and translates it to its
@@ -51,4 +53,11 @@ export interface ChatProvider {
   chat(req: ChatRequest): AsyncIterable<ChatDelta>;
 }
 
-export type CoderProviderName = 'anthropic' | 'claude-code' | 'openai' | 'zai' | 'deepseek' | 'gemini';
+export type CoderProviderName =
+  | 'anthropic'
+  | 'claude-code'
+  | 'openai'
+  | 'zai'
+  | 'deepseek'
+  | 'gemini'
+  | 'kimi-code';

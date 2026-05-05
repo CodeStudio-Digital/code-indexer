@@ -56,6 +56,23 @@ export class SessionContext {
     return this._projects;
   }
 
+  /**
+   * Effective company_session_id for **shared** project-wide artefacts:
+   * kanban, pipelines, env, services management, databases, docs,
+   * design-system, drive (the drive store has its own resolution but
+   * uses the same logic). For sub-sessions (`parent_session_id != null`)
+   * this returns the parent's id so every tab of the same root reads
+   * and writes to the same project-level rows.
+   *
+   * Per-tab data — `company_board`, `company_agent_runs`,
+   * `company_master_prompts`, `agent_inbox` — keeps using
+   * `companySessionId` directly. Those are isolated by FK on purpose so
+   * each tab's master / subs / board / questions stay independent.
+   */
+  get effectiveSessionId(): number {
+    return this.parentSessionId ?? this.companySessionId;
+  }
+
   get isAborted(): boolean {
     return this._aborted;
   }

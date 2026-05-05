@@ -118,6 +118,24 @@ describe('resolveTemperature', () => {
       });
       expect(r.source).not.toBe('skipped');
     });
+
+    it('skips for Kimi Code K2 and thinking models', () => {
+      const k26 = resolveTemperature({
+        agent: 'build',
+        providerName: 'kimi-code',
+        model: 'kimi-k2.6',
+      });
+      expect(k26.source).toBe('skipped');
+      expect(k26.reason).toBe('thinking_enabled');
+
+      const thinking = resolveTemperature({
+        agent: 'build',
+        providerName: 'kimi-code',
+        model: 'kimi-k2-thinking',
+        thinking: false,
+      });
+      expect(thinking.source).toBe('skipped');
+    });
   });
 
   describe('clamping', () => {

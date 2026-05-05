@@ -7,7 +7,7 @@ const base = {
   os: 'linux',
 };
 
-const families: ProviderFamily[] = ['anthropic', 'openai', 'zai', 'gemini', 'deepseek', 'generic'];
+const families: ProviderFamily[] = ['anthropic', 'openai', 'zai', 'gemini', 'deepseek', 'kimi-code', 'generic'];
 
 describe('buildSystemPrompt per-provider preambles', () => {
   it('produces a distinct prefix for each provider family', () => {
@@ -16,7 +16,7 @@ describe('buildSystemPrompt per-provider preambles', () => {
       const p = buildSystemPrompt({ ...base, providerFamily: f });
       prefixes.add(p.slice(0, 120));
     }
-    // 6 families → 6 distinct prefixes
+    // Each family has a stable, distinct prefix.
     expect(prefixes.size).toBe(families.length);
   });
 

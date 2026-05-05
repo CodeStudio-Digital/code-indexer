@@ -72,3 +72,59 @@ export async function toggleModelEnabled(
     },
   );
 }
+
+export async function setSubagentTarget(
+  providerId: string,
+  subagentProviderId: string | null,
+  modelId: string | null,
+): Promise<void> {
+  const r = await fetch(`/api/admin/providers/${providerId}/subagent-model`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider_id: subagentProviderId, model_id: modelId }),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+}
+
+export async function setKimiCodeThinkingMode(
+  provider: AdminProvider,
+  mode: 'auto' | 'enabled' | 'disabled',
+): Promise<void> {
+  const r = await fetch(`/api/admin/providers/${provider.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      extra: {
+        ...provider.extra,
+        kimi_code_thinking_mode: mode,
+      },
+    }),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+}
+
+export async function setModelReasoningLevel(
+  providerId: string,
+  modelId: string,
+  mode: string,
+  level: string | null,
+): Promise<void> {
+  const r = await fetch(
+    `/api/admin/providers/${providerId}/models/${encodeURIComponent(modelId)}?mode=${encodeURIComponent(mode)}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ default_reasoning_level: level }),
+    },
+  );
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+}

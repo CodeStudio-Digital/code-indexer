@@ -15,7 +15,7 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import { parseIdParam, parseJsonBody, notFound, resolveRootSessionId } from '../_helpers.js';
 import { getSandboxManager } from '../../../../../core/sandbox/index.js';
 import {
   PROVIDERS,
@@ -159,7 +159,7 @@ export function mountCompanyDatabaseRoutes(app: Hono, deps: ServerDeps): void {
   // ─── GET list ────────────────────────────────────────────────
 
   app.get('/api/company/sessions/:id/databases', (c) => {
-    const id = parseIdParam(c);
+    const id = resolveRootSessionId(deps.companyStore, parseIdParam(c));
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
     const reveal = c.req.query('reveal') === '1';
@@ -173,7 +173,7 @@ export function mountCompanyDatabaseRoutes(app: Hono, deps: ServerDeps): void {
   // ─── POST create ─────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/databases', async (c) => {
-    const id = parseIdParam(c);
+    const id = resolveRootSessionId(deps.companyStore, parseIdParam(c));
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
     const body = await parseJsonBody<CreateBody>(c);
@@ -229,7 +229,7 @@ export function mountCompanyDatabaseRoutes(app: Hono, deps: ServerDeps): void {
   // ─── PUT edit ────────────────────────────────────────────────
 
   app.put('/api/company/sessions/:id/databases/:dbId', async (c) => {
-    const id = parseIdParam(c);
+    const id = resolveRootSessionId(deps.companyStore, parseIdParam(c));
     const dbId = parseIdParam(c, 'dbId');
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
@@ -295,7 +295,7 @@ export function mountCompanyDatabaseRoutes(app: Hono, deps: ServerDeps): void {
   // ─── POST promote ────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/databases/:dbId/promote', async (c) => {
-    const id = parseIdParam(c);
+    const id = resolveRootSessionId(deps.companyStore, parseIdParam(c));
     const dbId = parseIdParam(c, 'dbId');
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
@@ -352,7 +352,7 @@ export function mountCompanyDatabaseRoutes(app: Hono, deps: ServerDeps): void {
   // ─── DELETE ──────────────────────────────────────────────────
 
   app.delete('/api/company/sessions/:id/databases/:dbId', async (c) => {
-    const id = parseIdParam(c);
+    const id = resolveRootSessionId(deps.companyStore, parseIdParam(c));
     const dbId = parseIdParam(c, 'dbId');
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);

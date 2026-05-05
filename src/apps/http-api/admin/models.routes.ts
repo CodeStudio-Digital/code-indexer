@@ -54,7 +54,25 @@ export function modelsRouter(store: ProviderStore): Hono {
     const id = c.req.param('id');
     const modelId = c.req.param('modelId');
     const mode = c.req.query('mode') ?? '';
-    const body = await c.req.json<{ enabled?: boolean; name?: string }>();
+    const body = await c.req.json<{
+      enabled?: boolean;
+      name?: string;
+      default_reasoning_level?: string | null;
+    }>();
+    if (body.default_reasoning_level !== undefined && body.default_reasoning_level !== null) {
+      // Validate against the model's persisted supported_reasoning_levels — if
+      // the row says null, we don't know what the model accepts, so don't gate.
+      const row = store.listModels(id).find((m) => m.model_id === modelId && m.mode === mode);
+      const supported = row?.supported_reasoning_levels;
+      if (supported && !supported.includes(body.default_reasoning_level)) {
+        return c.json(
+          {
+            error: `reasoning_level '${body.default_reasoning_level}' not supported for ${modelId}; supported: ${supported.join(',')}`,
+          },
+          400,
+        );
+      }
+    }
     store.updateModel(id, modelId, mode, body);
     return c.json({ ok: true });
   });
@@ -85,6 +103,19 @@ export function modelsRouter(store: ProviderStore): Hono {
     } catch (e) {
       return c.json({ ok: false, error: (e as Error).message }, 500);
     }
+  });
+
+  app.patch('/providers/:id/subagent-model', async (c) => {
+    const id = c.req.param('id');
+    if (!store.getProvider(id)) return c.json({ error: 'not found' }, 404);
+    const body = await c.req.json<{ provider_id?: string | null; model_id?: string | null }>();
+    const targetProviderId = body.provider_id && body.provider_id.length > 0 ? body.provider_id : id;
+    const targetProvider = store.getProvider(targetProviderId);
+    if (!targetProvider || !targetProvider.enabled || !targetProvider.use_for_coder) {
+      return c.json({ error: 'subagent provider must be an enabled coder provider' }, 400);
+    }
+    store.setSubagentTarget(id, targetProviderId, body.model_id ?? null);
+    return c.json({ ok: true });
   });
 
   return app;

@@ -23,7 +23,7 @@ type DB = InstanceType<typeof Database>;
  * shapes. The union listed below is kept as a docstring for the known
  * built-ins so IDE autocompletion still shows something useful.
  *
- * Known built-ins: 'anthropic' | 'claude-code' | 'openai' | 'gemini' | 'bedrock' | 'copilot' | 'chatgpt' | 'deepseek' | 'zai'
+ * Known built-ins: 'anthropic' | 'claude-code' | 'openai' | 'gemini' | 'bedrock' | 'copilot' | 'chatgpt' | 'deepseek' | 'zai' | 'kimi-code'
  */
 export type ProviderKind = string;
 
@@ -226,6 +226,19 @@ function hydrateProvider(r: ProviderConfigRaw): ProviderConfig {
   };
 }
 
+function normalizeStoredLevels(levels: unknown[] | null): string[] | null {
+  if (!levels) return null;
+  const result: string[] = [];
+  for (const lv of levels) {
+    if (typeof lv === 'string') {
+      result.push(lv);
+    } else if (lv && typeof lv === 'object' && 'effort' in lv && typeof (lv as Record<string, unknown>).effort === 'string') {
+      result.push((lv as Record<string, unknown>).effort as string);
+    }
+  }
+  return result.length > 0 ? result : null;
+}
+
 function hydrateModel(r: ProviderModelRaw): ProviderModel {
   return {
     provider_id: r.provider_id,
@@ -242,7 +255,7 @@ function hydrateModel(r: ProviderModelRaw): ProviderModel {
     display_name: r.display_name,
     description: r.description,
     default_reasoning_level: r.default_reasoning_level,
-    supported_reasoning_levels: parseJson<string[] | null>(r.supported_reasoning_levels, null),
+    supported_reasoning_levels: normalizeStoredLevels(parseJson<unknown[] | null>(r.supported_reasoning_levels, null)),
     apply_patch_tool_type: r.apply_patch_tool_type,
     available_in_plans: parseJson<string[] | null>(r.available_in_plans, null),
     minimal_client_version: r.minimal_client_version,
@@ -609,12 +622,24 @@ export class ProviderStore {
     const tx = this.db.transaction(() => {
       const existingRows = this.db
         .prepare(
-          'SELECT model_id, mode, enabled FROM provider_models WHERE provider_id = ? AND source = ?'
+          'SELECT model_id, mode, enabled, default_reasoning_level FROM provider_models WHERE provider_id = ? AND source = ?'
         )
-        .all(providerId, source) as { model_id: string; mode: string; enabled: number }[];
+        .all(providerId, source) as {
+          model_id: string;
+          mode: string;
+          enabled: number;
+          default_reasoning_level: string | null;
+        }[];
       const existingEnabled = new Map<string, boolean>();
+      // Track whether each row existed before (regardless of whether the
+      // stored level is null) so we can distinguish "admin explicitly chose
+      // auto" (= null, but row existed) from "first time we see the model"
+      // (= no entry in this map, fall back to seed default).
+      const existingReasoning = new Map<string, string | null>();
       for (const row of existingRows) {
-        existingEnabled.set(`${row.model_id}|${row.mode}`, !!row.enabled);
+        const key = `${row.model_id}|${row.mode}`;
+        existingEnabled.set(key, !!row.enabled);
+        existingReasoning.set(key, row.default_reasoning_level);
       }
 
       this.db
@@ -651,8 +676,15 @@ export class ProviderStore {
       );
       for (const m of models) {
         const mode = m.mode ?? '';
-        const prev = existingEnabled.get(`${m.model_id}|${mode}`);
+        const key = `${m.model_id}|${mode}`;
+        const prev = existingEnabled.get(key);
         const finalEnabled = m.enabled ?? prev ?? m.default_enabled ?? true;
+        // If a row existed before, the admin's pick (or explicit `auto` =
+        // null) wins over the seed value — same policy as `enabled`. Only
+        // newly-seen rows pick up the seed's `default_reasoning_level`.
+        const finalReasoningLevel = existingReasoning.has(key)
+          ? existingReasoning.get(key) ?? null
+          : m.default_reasoning_level ?? null;
         insert.run(
           providerId,
           m.model_id,
@@ -667,7 +699,7 @@ export class ProviderStore {
           now,
           m.display_name ?? null,
           m.description ?? null,
-          m.default_reasoning_level ?? null,
+          finalReasoningLevel,
           m.supported_reasoning_levels ? JSON.stringify(m.supported_reasoning_levels) : null,
           m.apply_patch_tool_type ?? null,
           m.available_in_plans ? JSON.stringify(m.available_in_plans) : null,
@@ -689,7 +721,11 @@ export class ProviderStore {
     providerId: string,
     modelId: string,
     mode: string,
-    patch: { enabled?: boolean; name?: string }
+    patch: {
+      enabled?: boolean;
+      name?: string;
+      default_reasoning_level?: string | null;
+    }
   ): void {
     const sets: string[] = [];
     const args: unknown[] = [];
@@ -700,6 +736,10 @@ export class ProviderStore {
     if (patch.name !== undefined) {
       sets.push('name = ?');
       args.push(patch.name);
+    }
+    if (patch.default_reasoning_level !== undefined) {
+      sets.push('default_reasoning_level = ?');
+      args.push(patch.default_reasoning_level);
     }
     if (!sets.length) return;
     sets.push("updated_at = datetime('now')");
@@ -730,6 +770,45 @@ export class ProviderStore {
     const nextExtra = { ...cfg.extra };
     if (etag === null || etag === '') delete nextExtra.catalog_etag;
     else nextExtra.catalog_etag = etag;
+    this.db
+      .prepare('UPDATE provider_configs SET extra = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(nextExtra), new Date().toISOString(), providerId);
+  }
+
+  // ─── Subagent Provider/Model ─────────────────────────────────
+
+  getSubagentTarget(providerId: string): { providerId: string; modelId: string | null } | null {
+    const cfg = this.getProvider(providerId);
+    if (!cfg) return null;
+    const targetProvider = cfg.extra?.subagent_provider_id;
+    const provider = typeof targetProvider === 'string' && targetProvider.length > 0
+      ? targetProvider
+      : providerId;
+    const model = this.getSubagentModel(providerId);
+    if (provider === providerId && !model) return null;
+    return { providerId: provider, modelId: model };
+  }
+
+  getSubagentModel(providerId: string): string | null {
+    const cfg = this.getProvider(providerId);
+    if (!cfg) return null;
+    const value = cfg.extra?.subagent_model;
+    return typeof value === 'string' && value.length > 0 ? value : null;
+  }
+
+  setSubagentModel(providerId: string, modelId: string | null): void {
+    const current = this.getSubagentTarget(providerId);
+    this.setSubagentTarget(providerId, current?.providerId ?? providerId, modelId);
+  }
+
+  setSubagentTarget(providerId: string, targetProviderId: string | null, modelId: string | null): void {
+    const cfg = this.getProvider(providerId);
+    if (!cfg) return;
+    const nextExtra = { ...cfg.extra };
+    if (!targetProviderId || targetProviderId === providerId) delete nextExtra.subagent_provider_id;
+    else nextExtra.subagent_provider_id = targetProviderId;
+    if (modelId === null || modelId === '') delete nextExtra.subagent_model;
+    else nextExtra.subagent_model = modelId;
     this.db
       .prepare('UPDATE provider_configs SET extra = ?, updated_at = ? WHERE id = ?')
       .run(JSON.stringify(nextExtra), new Date().toISOString(), providerId);

@@ -28,6 +28,7 @@ import { discoverClaudeCode } from './claude-code.js';
 import { discoverGemini } from './gemini.js';
 import { discoverBedrock } from './bedrock.js';
 import { discoverGoogleOAuth } from './google-oauth.js';
+import { discoverKimiCode } from './kimi-code.js';
 
 export interface DiscoveryResult {
   models: UpsertModelInput[];
@@ -62,6 +63,8 @@ export async function discoverModels(
       return wrap(await discoverBedrock(store, cfg));
     case 'google-oauth':
       return wrap(await discoverGoogleOAuth(store, cfg));
+    case 'kimi-code':
+      return wrap(await discoverKimiCode(store, cfg));
     default:
       throw new Error(`Live discovery not implemented for kind=${cfg.kind}`);
   }

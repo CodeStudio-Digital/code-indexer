@@ -159,6 +159,7 @@
   "plan.copied": "Copied",
   "plan.approved": "approved",
   "plan.rejected": "rejected",
+  "plan.kindInformational": "info-only",
   "question.title": "Question",
   "question.customAnswer": "Or type a custom answer",
   "question.answerPlaceholder": "Type your answer…",
