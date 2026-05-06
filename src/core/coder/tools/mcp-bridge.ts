@@ -38,8 +38,8 @@ function loadDefaultMaxTokens(): Record<string, number> {
   }
 }
 
-const MCP_OUTPUT_HARD_CAP = Number(process.env.CODER_MCP_OUTPUT_HARD_CAP ?? 12_000);
-const READ_FILE_HARD_MAX = Number(process.env.CODER_READ_FILE_HARD_MAX ?? 300);
+const MCP_OUTPUT_HARD_CAP = Number(process.env.CODER_MCP_OUTPUT_HARD_CAP ?? 16_000);
+const READ_FILE_HARD_MAX = Number(process.env.CODER_READ_FILE_HARD_MAX ?? 800);
 
 function loadDisabledTools(): Set<string> {
   const raw = process.env.CODER_DISABLED_MCP_TOOLS;
@@ -145,10 +145,18 @@ export class McpToolBridge {
           if (hasMaxTokens && finalArgs.max_tokens === undefined && builtinDefault) {
             finalArgs.max_tokens = builtinDefault;
           }
-          // Clamp read_file.max_lines to a hard absolute maximum.
+          // Clamp read_file.max_lines to a hard absolute maximum and tell
+          // the caller via a tiny synthetic prefix on the response when the
+          // clamp actually kicks in. Default (no max_lines) goes to the
+          // server-side default (400) — we only clamp when the caller
+          // explicitly asked for more than HARD_MAX.
+          let clampNote = '';
           if (t.name === 'read_file') {
-            const requested = typeof finalArgs.max_lines === 'number' ? finalArgs.max_lines : 100;
-            finalArgs.max_lines = Math.min(requested, READ_FILE_HARD_MAX);
+            const requested = typeof finalArgs.max_lines === 'number' ? finalArgs.max_lines : null;
+            if (requested != null && requested > READ_FILE_HARD_MAX) {
+              finalArgs.max_lines = READ_FILE_HARD_MAX;
+              clampNote = `[clamped from ${requested} to ${READ_FILE_HARD_MAX} lines — bridge cap]\n`;
+            }
           }
           let mcpText: string;
           try {
@@ -165,9 +173,9 @@ export class McpToolBridge {
 
           // 3. Post-process — merge overlay data into the MCP output
           if (overlay && overlayHandler?.postProcess) {
-            return capResult(overlayHandler.postProcess(mcpText, args, overlay, projectRoot));
+            return capResult(overlayHandler.postProcess(clampNote + mcpText, args, overlay, projectRoot));
           }
-          return ok(applyOutputCap(mcpText));
+          return ok(applyOutputCap(clampNote + mcpText));
         },
       };
     });

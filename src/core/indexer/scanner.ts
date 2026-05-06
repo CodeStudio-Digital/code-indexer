@@ -5,6 +5,7 @@ import { glob } from 'glob';
 import ignore from 'ignore';
 import type { CodeIndexDB } from '../../store/db.js';
 import type { ScannedFile, ScanResult } from '../../types.js';
+import { applyGraphPromotion, classifyPath, isHardExcluded, type FileIndexTier } from './mapper.js';
 
 const BINARY_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.ico', '.bmp', '.webp', '.svg',
@@ -76,16 +77,24 @@ export class FileScanner {
       absolute: false,
     });
 
-    // Filter by ignore rules and binary extensions
+    // Filter by ignore rules, binary extensions, and the auto-mapper's
+    // hard-exclude list. Mapper exclusions cover common cases that
+    // gitignore tends to miss in monorepos (vendored bundles, .min.js,
+    // .tsbuildinfo, lockfiles checked in by accident).
     const validFiles = allFiles.filter(relPath => {
       const ext = this.getExtension(relPath);
       if (BINARY_EXTENSIONS.has(ext)) return false;
-      return !this.ig.ignores(relPath);
+      if (this.ig.ignores(relPath)) return false;
+      if (isHardExcluded(relPath)) return false;
+      return true;
     });
 
     // Get existing files from DB
     const existingFiles = db.listFiles(projectId);
     const existingMap = new Map(existingFiles.map(f => [f.path, f.content_hash]));
+    // In-degree from prior indexing — drives mapper promotion. Empty on
+    // first run; refined on every subsequent reindex.
+    const indegrees = db.getFileIndegrees(projectId);
 
     const toIndex: ScannedFile[] = [];
     const unchanged: string[] = [];
@@ -110,6 +119,17 @@ export class FileScanner {
       if (existingHash === hash) {
         unchanged.push(normalizedPath);
       } else {
+        const classification = classifyPath(normalizedPath, sizeBytes);
+        // `classifyPath` may demote a file to `excluded` based on size or
+        // path tokens that the cheap `isHardExcluded` upstream missed
+        // (e.g. files that needed to be read to know their size).
+        if (classification.tier === 'excluded') continue;
+        const indegree = indegrees.get(normalizedPath);
+        const promotedTier = applyGraphPromotion(classification.tier, indegree);
+        const reason =
+          promotedTier !== classification.tier
+            ? `${classification.reason} + graph promotion (indegree=${indegree})`
+            : classification.reason;
         toIndex.push({
           path: absPath,
           relativePath: normalizedPath,
@@ -117,6 +137,8 @@ export class FileScanner {
           hash,
           sizeBytes,
           lineCount: FileScanner.countLines(content),
+          tier: promotedTier as Exclude<FileIndexTier, 'excluded'>,
+          mapperReason: reason,
         });
       }
 

@@ -24,7 +24,7 @@ function mapProjectError(c: Context, err: unknown) {
 }
 
 export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
-  const { db } = deps;
+  const { db, vectorStore } = deps;
 
   const createService = new CreateProjectService(db);
   const updateService = new UpdateProjectService(db);
@@ -65,9 +65,48 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
-  app.delete('/api/projects/:id', (c) => {
-    db.deleteProject(parseIdParam(c));
-    return c.json({ ok: true });
+  /**
+   * Cascading delete: pull every vector_id we have on record for the
+   * project, hand them to the remote vector store, then drop the
+   * SQLite row (which cascades to vector_ids/files/symbols/etc).
+   *
+   * If the remote delete fails — Worker offline, network blip — we
+   * still drop the local rows but enqueue the ids in
+   * `pending_vector_deletes` so the Hygiene panel can retry. Without
+   * this, deleting a project from the dashboard accumulated orphans
+   * in Cloudflare Vectorize indefinitely.
+   */
+  app.delete('/api/projects/:id', async (c) => {
+    const id = parseIdParam(c);
+    const project = db.getProject(id);
+    if (!project) return notFound(c);
+
+    const vectorIds = db.snapshotVectorIdsForProject(id);
+    let remoteDeleted = 0;
+    let remoteError: string | null = null;
+
+    if (vectorIds.length > 0) {
+      try {
+        remoteDeleted = await vectorStore.deleteByIds(vectorIds);
+      } catch (err) {
+        remoteError = err instanceof Error ? err.message : String(err);
+        db.enqueuePendingVectorDeletes(
+          vectorIds.map((vid) => ({
+            vector_id: vid,
+            project_name: project.name,
+            error: remoteError,
+          })),
+        );
+      }
+    }
+
+    db.deleteProject(id);
+    return c.json({
+      ok: true,
+      vectors_known: vectorIds.length,
+      vectors_deleted_remote: remoteDeleted,
+      remote_error: remoteError,
+    });
   });
 
   app.post('/api/projects/:id/index', async (c) => {

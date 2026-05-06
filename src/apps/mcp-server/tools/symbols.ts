@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { defineTool, type McpTool } from '../tool.js';
 import {
   extractSymbolBody,
@@ -6,8 +7,69 @@ import {
   findSymbolDeclLine,
   locateSymbolInFiles,
 } from '../../../core/services/code-reader.js';
+import { treeSitterSymbols } from '../../../core/indexer/incremental.js';
 import type { DBSymbol } from '../../../types.js';
 import { withProject } from './_helpers.js';
+import { scanDiskForGrep } from './search.js';
+
+/**
+ * Disk-only fallback that locates a symbol's defining file/line/body without
+ * touching the symbol DB. Used by find_references / prepare_edit / trace_usage
+ * when the project is not indexed (or the symbol is too new for the DB).
+ *
+ * Returns null when no candidate file matches.
+ */
+async function findSymbolOnDisk(
+  projectRoot: string,
+  symbolName: string,
+  hintPath?: string,
+): Promise<{
+  file: string;
+  line: number;
+  body: { start_line: number; end_line: number; body: string } | null;
+  fileSymbols: Array<{ name: string; kind: string; line: number; signature: string }>;
+} | null> {
+  const candidateFiles = hintPath ? [hintPath] : await scanDiskForGrep(projectRoot, '**/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,cs,kt,swift,rb,php,c,h,cpp,hpp}');
+  const located = locateSymbolInFiles(projectRoot, candidateFiles, symbolName);
+  if (!located) return null;
+  const abs = join(projectRoot, located.file);
+  let content: string;
+  try { content = readFileSync(abs, 'utf-8'); } catch { return null; }
+  let body: { start_line: number; end_line: number; body: string } | null = null;
+  try {
+    const b = extractSymbolBody(projectRoot, located.file, located.line);
+    body = { start_line: b.start_line, end_line: b.end_line, body: b.body };
+  } catch { /* ignore */ }
+  const ts = await treeSitterSymbols(located.file, content);
+  const fileSymbols = (ts?.symbols ?? []).map((s) => ({
+    name: s.name,
+    kind: s.kind,
+    line: s.line,
+    signature: s.signature,
+  }));
+  return { file: located.file, line: located.line, body, fileSymbols };
+}
+
+/**
+ * Disk-only caller search. Greps the project tree for `\bname\b` and reports
+ * raw text hits. The `excludeFile` and `excludeLine` args drop the symbol's
+ * own definition line so it doesn't masquerade as a caller.
+ */
+async function findCallersOnDisk(
+  projectRoot: string,
+  symbolName: string,
+  excludeFile: string | null,
+  excludeLine: number | null,
+  max: number,
+): Promise<Array<{ file: string; line: number; text: string }>> {
+  const files = await scanDiskForGrep(projectRoot, '**/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,cs,kt,swift,rb,php,c,h,cpp,hpp}');
+  const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`\\b${escaped}\\b`);
+  const hits = grepInFiles(projectRoot, files, re, max + 5);
+  return hits
+    .filter((h) => !(h.file === excludeFile && h.line === excludeLine))
+    .slice(0, max);
+}
 
 const get_symbol_details = defineTool({
   name: 'get_symbol_details',
@@ -70,7 +132,7 @@ const find_references = defineTool({
     },
     required: ['project_name', 'symbol_name'],
   },
-  handler: withProject((args, { db }, project) => {
+  handler: withProject(async (args, { db }, project) => {
     const symbolName = args.symbol_name as string;
     const filePath = args.file_path as string | undefined;
     const asJson = args.format === 'json';
@@ -112,22 +174,33 @@ const find_references = defineTool({
       }
       return defBlock.join('\n') + refs.map(r => `${r.referencing_file_path}:${r.line ?? '?'}${r.context ? `: ${r.context}` : ''}`).join('\n');
     }
-    // Fallback: grep the project files directly
+    // Fallback: grep the project files directly. Prefer the indexed file
+    // list; when empty (project never indexed), scan the disk so the agent
+    // still gets useful results instead of an empty response.
     const allFiles = db.listFiles(project.id).map(f => f.path);
     const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pattern = new RegExp(`\\b${escaped}\\b`);
-    const hits = grepInFiles(project.root_path, allFiles, pattern, 50);
+    let hits = grepInFiles(project.root_path, allFiles, pattern, 50);
+    let usedDisk = false;
+    if (hits.length === 0) {
+      const diskFiles = await scanDiskForGrep(project.root_path, '**/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,cs,kt,swift,rb,php,c,h,cpp,hpp}');
+      hits = grepInFiles(project.root_path, diskFiles, pattern, 50);
+      usedDisk = hits.length > 0;
+    }
     if (asJson) {
       return JSON.stringify({
         symbol_name: symbolName,
-        source: 'grep_fallback',
+        source: usedDisk ? 'disk_grep_fallback' : 'grep_fallback',
         ambiguous,
         total: hits.length,
         references: hits.map(h => ({ file_path: h.file, line: h.line, context: h.text })),
       });
     }
     if (hits.length === 0) return 'No references found.';
-    return `[grep fallback — symbol_references DB empty]\n` +
+    const tag = usedDisk
+      ? '[disk-grep fallback — project not indexed; results from on-disk scan]'
+      : '[grep fallback — symbol_references DB empty]';
+    return `${tag}\n` +
       hits.map(h => `${h.file}:${h.line}: ${h.text}`).join('\n');
   }),
 });
@@ -177,9 +250,42 @@ const trace_usage = defineTool({
     },
     required: ['project_name', 'symbol_name'],
   },
-  handler: withProject((args, { db }, project) => {
+  handler: withProject(async (args, { db }, project) => {
     const depth = (args.depth as number) ?? 3;
-    const tree = db.traceSymbolUsage(project.id, args.symbol_name as string, depth);
+    const symbolName = args.symbol_name as string;
+    const tree = db.traceSymbolUsage(project.id, symbolName, depth);
+
+    // Disk fallback: when the index has no record of the symbol, walk the
+    // project tree and report direct callers via grep. Depth>1 isn't viable
+    // without a caller graph, so we cap at 1 and tell the agent why.
+    if (!tree.defined_in && tree.callers.length === 0) {
+      const located = await findSymbolOnDisk(project.root_path, symbolName);
+      const callers = await findCallersOnDisk(
+        project.root_path,
+        symbolName,
+        located?.file ?? null,
+        located?.line ?? null,
+        20,
+      );
+      const lines: string[] = [
+        `# Usage Tree: \`${symbolName}\``,
+        located ? `Defined in: ${located.file}:${located.line} [tree-sitter fallback]` : 'Definition not found in index nor on disk',
+        '',
+      ];
+      if (callers.length === 0) {
+        lines.push('No usages found.');
+      } else {
+        lines.push(`## Callers (depth: 1, disk-grep fallback — project not indexed)`);
+        for (const c of callers) {
+          lines.push(`- **${c.file}**:${c.line}: ${c.text}`);
+        }
+        if (depth > 1) {
+          lines.push('');
+          lines.push(`[note] requested depth=${depth} but disk fallback only supports depth=1 — re-index the project for full caller-graph traversal.`);
+        }
+      }
+      return lines.join('\n');
+    }
 
     const formatTree = (callers: typeof tree.callers, indent: string): string => {
       const MAX_CALLERS_PER_NODE = 5;
@@ -319,7 +425,7 @@ const prepare_edit = defineTool({
     },
     required: ['project_name', 'symbol_name'],
   },
-  handler: withProject((args, { db }, project) => {
+  handler: withProject(async (args, { db }, project) => {
     const symbolName = args.symbol_name as string;
     const filePath = args.file_path as string | undefined;
     const maxCallers = (args.max_callers as number) ?? 10;
@@ -331,7 +437,63 @@ const prepare_edit = defineTool({
     if (!sym) {
       const candidates = db.findSymbolsByName(project.id, symbolName);
       if (candidates.length === 0) {
-        throw new Error(`Symbol "${symbolName}" not found. Use search or get_file_skeleton to find the correct symbol name. Do not retry with the same arguments.`);
+        // Disk fallback: locate the symbol via tree-sitter + regex on disk,
+        // build a slim prepare_edit-shaped bundle. Body, neighbors and a
+        // disk-grep callers list — no imports/tests because those need DB
+        // dependency tables that are populated only by the LLM indexer.
+        const located = await findSymbolOnDisk(project.root_path, symbolName, filePath);
+        if (!located) {
+          throw new Error(
+            `Symbol "${symbolName}" not found. Use search or get_file_skeleton to find the correct symbol name. ` +
+            `If the project has not been indexed, call native read_file({ path, symbol: "${symbolName}" }) instead. Do not retry with the same arguments.`,
+          );
+        }
+        const callers = await findCallersOnDisk(
+          project.root_path,
+          symbolName,
+          located.file,
+          located.line,
+          maxCallers,
+        );
+        const targetIdx = located.fileSymbols.findIndex((s) => s.name === symbolName && s.line === located.line);
+        const neighbors = targetIdx >= 0
+          ? located.fileSymbols.slice(Math.max(0, targetIdx - 3), targetIdx + 4)
+          : located.fileSymbols.slice(0, 6);
+        if (asJson) {
+          return JSON.stringify({
+            symbol: { name: symbolName, kind: '?', signature: null, file_path: located.file, line: located.line, stable_id: null },
+            source: 'disk_fallback',
+            body: located.body ? { file: located.file, ...located.body } : null,
+            callers: {
+              total: callers.length,
+              shown: callers.length,
+              truncated: false,
+              items: callers.map((c) => ({ file_path: c.file, line: c.line, context: c.text })),
+            },
+            neighbors: neighbors.map((n) => ({
+              name: n.name,
+              kind: n.kind,
+              line: n.line,
+              is_target: n.name === symbolName && n.line === located.line,
+            })),
+            imports: [],
+            tests_covering: [],
+          });
+        }
+        const sectionsX: string[] = [
+          `=== prepare_edit: ${symbolName} ===`,
+          '[disk fallback — project not indexed; imports/tests omitted]',
+          `file: ${located.file}:${located.body?.start_line ?? located.line}-${located.body?.end_line ?? located.line}`,
+        ];
+        if (located.body) sectionsX.push('\n[BODY]\n' + located.body.body);
+        sectionsX.push(`\n[CALLERS] (${callers.length}, disk-grep)`);
+        sectionsX.push(callers.map((c) => `${c.file}:${c.line}: ${c.text}`).join('\n') || 'none');
+        sectionsX.push(`\n[NEIGHBORS]`);
+        sectionsX.push(neighbors.map((n) => {
+          const marker = n.name === symbolName && n.line === located.line ? ' <- target' : '';
+          return `${String(n.line ?? '?').padStart(5)} ${n.kind} ${n.name}${marker}`;
+        }).join('\n') || 'none');
+        return sectionsX.join('\n');
       }
       if (candidates.length > 1 && !filePath) {
         if (asJson) {

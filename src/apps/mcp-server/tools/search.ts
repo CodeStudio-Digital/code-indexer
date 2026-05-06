@@ -18,7 +18,7 @@ const DISK_FALLBACK_IGNORE = [
   '**/*.map',
 ];
 
-async function scanDiskForGrep(rootPath: string, glob: string | undefined): Promise<string[]> {
+export async function scanDiskForGrep(rootPath: string, glob: string | undefined): Promise<string[]> {
   const pattern = glob && glob.length > 0 ? glob : '**/*';
   try {
     const matches = await fastGlob(pattern, {

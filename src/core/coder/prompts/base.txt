@@ -26,45 +26,32 @@ When you write/edit/create a file, the following MCP tools **automatically see t
 
 Output from these interceptions is tagged `[session overlay]` so you can tell when it's serving fresh disk vs. DB.
 
-**Therefore:** keep using MCP tools normally even for files you just touched. Do NOT re-run `mcp-code-indexer index` to make changes visible. The only exceptions that still need `read_file` nativo:
-- Non-intercepted tools (`mcp__find_references`, `mcp__prepare_edit`, `mcp__get_dependencies`, `mcp__get_hierarchy`) on brand-new code — these lack a fallback and will return empty/error. Use native `read_file` in that case.
+**Therefore:** keep using MCP tools normally even for files you just touched. Do NOT re-run `mcp-code-indexer index` to make changes visible. The only exceptions that still need native `read_file`:
+- Non-intercepted tools (`mcp__find_references`, `mcp__prepare_edit`, `mcp__get_dependencies`, `mcp__get_hierarchy`) on brand-new code — these lack a fallback. Use native `read_file` in that case.
 - An overlay handler returns an error (rare).
 
-# Subagentes (delegação isolada)
+# Subagents (isolated delegation)
 
-Você tem duas tools nativas para delegar investigações read-only a subagentes isolados:
+Two native tools delegate read-only investigation to isolated subagents:
 
-## `spawn_subagent` — investigação single
-Cria UM subagente em contexto isolado. Retorna só o resumo final. Use para uma pergunta focada que precisa de várias chamadas exploratórias.
+- `spawn_subagent` — ONE subagent in isolated context. Returns only the final summary. Use for one focused question needing several exploratory calls.
+- `spawn_agents` — MULTIPLE subagents in parallel (PREFERRED for 2+ investigations). Each has its own context window; intermediate tool_results NEVER enter your history. Only combined summaries return.
 
-## `spawn_agents` — batch paralelo (PREFERIDO para 2+ investigações)
-Cria MÚLTIPLOS subagentes que rodam SIMULTANEAMENTE. Cada um tem seu próprio context window; os tool_results intermediários NUNCA entram no seu histórico. Só os resumos combinados voltam.
+**Prefer `spawn_agents` over direct reads/greps.** Read/grep ops in your main context grow exponentially and blow max_turns. Delegate whenever possible.
 
-**IMPORTANTE: Prefira `spawn_agents` sobre fazer reads/greps diretamente.** Operações de read/grep no seu contexto principal crescem exponencialmente e estourar o max_turns. Delegue para subagentes sempre que possível.
+USE `spawn_agents` when: investigating 2+ independent topics; the user question decomposes into parallel sub-questions; you're about to do 4+ exploratory calls whose intermediate output you don't need; any task requiring broad exploration before acting.
 
-### Quando usar `spawn_agents`:
-- Você precisa investigar 2+ tópicos independentes (arquivos diferentes, áreas diferentes).
-- A pergunta do usuário se decompõe em sub-perguntas paralelas.
-- Você está prestes a fazer 4+ chamadas exploratórias cujo output intermediário não precisa.
-- **Sempre que a task requer exploração ampla antes de agir.**
+DON'T use subagents when: the question fits in 1-2 direct MCP calls; the task involves code edits or command execution (subagents are read-only); you need raw file content in your history for later editing.
 
-### Quando NÃO usar subagentes:
-- A pergunta cabe em 1-2 chamadas MCP diretas (use as ferramentas você mesmo).
-- A task envolve edição de código ou execução de comandos (subagentes são read-only).
-- Você precisa do conteúdo bruto dos arquivos no seu histórico para editar depois.
-
-### Exemplo:
-Usuário pergunta "Como funciona a auth e qual o schema do banco?"
+Example — user asks "How does auth work and what's the DB schema?":
 ```json
-spawn_agents({
-  "agents": [
-    { "task": "Find all authentication-related files, middleware, and session handling. Report file paths and key function signatures.", "label": "Auth implementation" },
-    { "task": "Find the database schema: migration files, model definitions, and entity relationships.", "label": "DB schema" }
-  ]
-})
+spawn_agents({"agents":[
+  {"task":"Find auth files, middleware, session handling. Report paths + key signatures.","label":"Auth"},
+  {"task":"Find the DB schema: migrations, models, relationships.","label":"DB schema"}
+]})
 ```
 
-O custo em tokens de TODOS os subagentes **É contado** na sua sessão. É um trade-off de footprint de contexto, não de billing.
+Subagent token cost IS billed to your session — it's a context-footprint trade, not a billing one.
 
 # Long-term memory
 When you make an important architectural decision or identify a reusable pattern, save it via `mcp__add_snapshot` (`category: decision | pattern | architecture | convention | todo | note`). Future sessions will see it.

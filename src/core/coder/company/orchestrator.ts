@@ -282,6 +282,18 @@ export class CompanyOrchestrator {
     this.master.notify(message);
   }
 
+  /**
+   * Force the master's runner to release any pending `waitForUserInput()`
+   * call (e.g. an `ask_user` paused on the user). Used by `send_input` so a
+   * subordinate that posted a notification can also wake the master right
+   * now instead of waiting for it to come back from a wait. Returns true
+   * when an actual wait was interrupted, false when the master was not
+   * currently blocked.
+   */
+  interruptMasterWait(info?: { kind?: 'plan' | 'question' | 'tasks'; agentRunId?: number; role?: string }): boolean {
+    return this.master.handle?.runner.interruptWait(info) ?? false;
+  }
+
   respondToMasterPlan(approved: boolean, feedback?: string, promptId?: number) {
     return this.humanInLoop.respondToMasterPlan(approved, feedback, promptId);
   }

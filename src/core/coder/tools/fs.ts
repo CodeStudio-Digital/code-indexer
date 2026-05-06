@@ -416,6 +416,14 @@ const readFile: CoderTool = {
         description:
           'Return the symbol body that contains this 1-indexed line. Useful when you have a stack frame or grep hit and want the enclosing function. Wins over start_line/end_line when set.',
       },
+      search_term: {
+        type: 'string',
+        description: 'Center the read window on the first match of this regex (case-insensitive). Useful when you know a unique string but not the line number.',
+      },
+      force: {
+        type: 'boolean',
+        description: 'Return the full file in one call regardless of size. Use for files >800 lines when you need everything.',
+      },
     },
     required: ['path'],
     additionalProperties: false,
@@ -461,11 +469,45 @@ const readFile: CoderTool = {
       }
     }
 
-    let startLine = typeof args.start_line === 'number' ? Math.max(1, args.start_line) : 1;
+    const startLineArg = typeof args.start_line === 'number' ? args.start_line : undefined;
+    const endLineArg = typeof args.end_line === 'number' ? args.end_line : undefined;
+    const force = args.force === true;
+    // auto_full env-toggle preserved for tests; not exposed in schema.
+    const autoFull = process.env.CODER_READ_FILE_AUTOFULL_DISABLE !== '1';
+    const AUTO_FULL_THRESHOLD = 800;
+
+    let startLine = startLineArg !== undefined ? Math.max(1, startLineArg) : 1;
     let endLine: number;
 
-    if (typeof args.end_line === 'number') {
-      endLine = Math.min(total, args.end_line);
+    const isAutoFull =
+      autoFull &&
+      startLineArg === undefined &&
+      endLineArg === undefined &&
+      !args.search_term &&
+      total <= AUTO_FULL_THRESHOLD;
+
+    // search_term: locate first regex match (case-insensitive) and center the window on it.
+    let headerNote = '';
+    if (typeof args.search_term === 'string' && args.search_term.length > 0) {
+      const term = args.search_term;
+      try {
+        const re = new RegExp(term, 'i');
+        const idx = lines.findIndex((l) => re.test(l));
+        if (idx === -1) {
+          return ok(`[Search term "${term}" not found in ${path}. Use mcp__grep_code to search across files.]`);
+        }
+        const win = typeof args.max_lines === 'number' ? args.max_lines : 400;
+        startLine = Math.max(1, idx + 1 - Math.floor(win / 2));
+        headerNote = `[Auto-scrolled to line ${idx + 1} matching "${term}"]\n`;
+      } catch (e) {
+        return err(`Invalid search_term regex: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    if (endLineArg !== undefined) {
+      endLine = Math.min(total, endLineArg);
+    } else if (force || isAutoFull) {
+      endLine = total;
     } else {
       const maxLines = typeof args.max_lines === 'number' ? args.max_lines : 400;
       endLine = Math.min(total, startLine + maxLines - 1);
@@ -473,9 +515,18 @@ const readFile: CoderTool = {
 
     const slice = lines.slice(startLine - 1, endLine);
     const numbered = slice.map((line, i) => `${(startLine + i).toString().padStart(5)}\t${line}`).join('\n');
-    const header = `${path} (lines ${startLine}-${endLine} of ${total})\n`;
-    const footer = endLine < total ? `\n... [${total - endLine} more lines — use start_line/end_line to read more]` : '';
-    return ok(header + numbered + footer);
+    const ext = path.split('.').pop() ?? '';
+    const remaining = total - endLine;
+    const tag = isAutoFull
+      ? ' [auto-full: file ≤800 lines]'
+      : remaining > 0 && total > AUTO_FULL_THRESHOLD
+        ? ' [auto-full off — file > 800 lines, pass force=true to read all]'
+        : '';
+    const richHeader = `${path} | ${total} lines | ${ext}\n[lines ${startLine}-${endLine}]${tag}\n`;
+    const footer = remaining > 0
+      ? `\n... [${remaining} more lines — pass force=true, symbol, around_line, or search_term]`
+      : '';
+    return ok(richHeader + headerNote + numbered + footer);
   },
 };
 

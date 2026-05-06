@@ -4,6 +4,7 @@ import type { EmbeddingService } from './embeddings.js';
 import { NullEmbeddingService } from './embeddings.js';
 import type { HyDEService } from './hyde.js';
 import type { RerankerService } from './reranker.js';
+import { planQuery } from './planner.js';
 import { NullReranker } from './reranker.js';
 import type { HybridSearchResult, SearchMode, SearchType, DBFile, DBSymbol, ContextSnapshot } from '../../types.js';
 
@@ -16,6 +17,9 @@ export interface SearchDiagnostics {
   vectorRehydrated?: number;
   vectorError?: string;
   ftsCount?: number;
+  /** Set when the planner chose a backend on the caller's behalf. */
+  plannerMode?: 'fts' | 'vector' | 'hybrid';
+  plannerReason?: string;
 }
 
 const RRF_K = 60;
@@ -86,12 +90,26 @@ export class HybridSearch {
     query: string,
     options?: { mode?: SearchMode; type?: SearchType; limit?: number }
   ): Promise<{ results: HybridSearchResult[]; diagnostics: SearchDiagnostics }> {
-    const mode = options?.mode ?? 'hybrid';
+    const requestedMode = options?.mode ?? 'auto';
     const type = options?.type ?? 'all';
     const limit = options?.limit ?? 20;
     const overFetch = limit * 3;
 
-    // Check cache
+    // Resolve `auto` via the planner so callers don't pay hybrid cost
+    // for queries that FTS handles in a tenth of the time. The chosen
+    // mode is surfaced via diagnostics.
+    let mode: 'fts' | 'vector' | 'hybrid';
+    let plannerReason: string | undefined;
+    if (requestedMode === 'auto') {
+      const plan = planQuery(query);
+      mode = plan.mode;
+      plannerReason = plan.reason;
+    } else {
+      mode = requestedMode;
+    }
+
+    // Check cache (key includes resolved mode so `auto` and `hybrid`
+    // share a result row when the planner picks `hybrid`).
     const cacheKey = `${projectId}:${query}:${mode}:${type}:${limit}`;
     const cached = this.queryCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < this.queryCacheTtlMs) {
@@ -101,6 +119,7 @@ export class HybridSearch {
     const diag: SearchDiagnostics = {
       vectorAvailable: !!this.vectorStore,
       embeddingAvailable: !(this.embeddingService instanceof NullEmbeddingService),
+      ...(plannerReason ? { plannerMode: mode, plannerReason } : {}),
     };
 
     const cacheAndReturn = (r: { results: HybridSearchResult[]; diagnostics: SearchDiagnostics }) => {

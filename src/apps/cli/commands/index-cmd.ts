@@ -9,6 +9,9 @@ import { WebhookDispatcher } from '../../../core/services/webhooks.js';
 import { getEmbeddingService, getVectorStore } from '../helpers.js';
 import { createAndSeedProviderStore } from '../../../core/bootstrap/index.js';
 import type { ProviderName } from '../../../types.js';
+import type { IndexProfile } from '../../../utils/config.js';
+
+const PROFILES: IndexProfile[] = ['aggressive', 'balanced', 'conservative'];
 
 export function register(program: Command): void {
   program
@@ -20,9 +23,17 @@ export function register(program: Command): void {
     .option('-f, --force', 'Force reindex all files')
     .option('-b, --budget <amount>', 'Budget limit in USD', parseFloat)
     .option('-e, --embeddings-only', 'Retry only failed/missing embeddings (skip LLM analysis)')
-    .action(async (path: string | undefined, opts: { provider?: string; model?: string; concurrency?: number; force?: boolean; budget?: number; embeddingsOnly?: boolean }) => {
+    .option('--profile <name>', 'Indexer profile: aggressive | balanced | conservative')
+    .action(async (path: string | undefined, opts: { provider?: string; model?: string; concurrency?: number; force?: boolean; budget?: number; embeddingsOnly?: boolean; profile?: string }) => {
       const config = loadConfig();
       if (opts.budget !== undefined) config.budget = opts.budget;
+      if (opts.profile) {
+        if (!PROFILES.includes(opts.profile as IndexProfile)) {
+          console.error(`Invalid profile "${opts.profile}". Use one of: ${PROFILES.join(', ')}`);
+          process.exit(1);
+        }
+        config.indexProfile = opts.profile as IndexProfile;
+      }
       const db = new CodeIndexDB(config.dbPath);
       const embeddingService = getEmbeddingService(config.dbPath);
       const vectorStore = getVectorStore(config.dbPath);

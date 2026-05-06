@@ -32,6 +32,38 @@ async function ensureInit(): Promise<void> {
 }
 
 /**
+ * Public helper: run tree-sitter on `(relPath, content)` and return the
+ * extracted symbols (or null when the language is unsupported / extraction
+ * fails). Used by tools that need on-the-fly structural data without
+ * touching the symbol DB — e.g. `get_file_skeleton` falling back when the
+ * project is not indexed.
+ */
+export async function treeSitterSymbols(
+  relPath: string,
+  content: string,
+): Promise<{ symbols: Array<{ name: string; kind: string; signature: string; line: number; end_line?: number; parent: string | null }> } | null> {
+  const ext = extname(relPath).replace(/^\./, '').toLowerCase();
+  if (!getGrammarForExtension(ext)) return null;
+  try {
+    await ensureInit();
+    const result = await sharedExtractor.extract(relPath, content);
+    if (!result.supported || !result.analysis.symbols) return null;
+    return {
+      symbols: result.analysis.symbols.map((s) => ({
+        name: s.name,
+        kind: s.kind,
+        signature: s.signature,
+        line: s.line ?? 0,
+        end_line: (s as { end_line?: number }).end_line,
+        parent: s.parent ?? null,
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Re-extract symbols for one file and upsert them. Returns true when the
  * symbol table was updated, false otherwise (unsupported language, unknown
  * file, extraction error). Never throws.

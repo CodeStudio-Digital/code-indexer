@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Bot, Info, PanelLeft, Sparkles, Wrench } from 'lucide-react';
+import { AlertTriangle, Bot, Gauge, Info, PanelLeft, Sparkles, Wrench } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -27,9 +27,10 @@ interface ChatHeaderProps {
   onOpenSidebar?: () => void;
   onOpenToolConfig?: () => void;
   onOpenSkillConfig?: () => void;
+  onOpenMetrics?: () => void;
 }
 
-export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig }: ChatHeaderProps) {
+export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics }: ChatHeaderProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Persisted (from DB) + runtime delta (current run, if streaming).
   const totalIn = session.total_input_tokens;
@@ -156,6 +157,21 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
               </button>
             </TooltipTrigger>
             <TooltipContent>{t('chat:header.toolConfig')}</TooltipContent>
+          </Tooltip>
+        )}
+        {onOpenMetrics && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('chat:header.metrics')}
+                onClick={onOpenMetrics}
+                className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Gauge className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{t('chat:header.metrics')}</TooltipContent>
           </Tooltip>
         )}
         <Tooltip>

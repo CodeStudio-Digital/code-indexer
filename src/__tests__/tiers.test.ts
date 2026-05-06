@@ -11,9 +11,9 @@ import {
 describe('tool tiers', () => {
   it('bootstrap tier contains exactly the expected tools', () => {
     // Locked-down count so accidental additions show up in CI.
-    // Bumped to 37 when `ds_validate_stories` was added as the Phase 2
-    // story-fidelity gate (master + subordinate both call it).
-    expect(TIER_COUNTS.bootstrap).toBe(37);
+    // Bumped to 39 when `get_skills_list` + `get_skill_content` were added
+    // explicitly so the lazy/compact skills modes are guaranteed visible.
+    expect(TIER_COUNTS.bootstrap).toBe(39);
   });
 
   it('navigate tier contains the expected tools', () => {

@@ -25,6 +25,24 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   'invoke_skill',
   // Minimal exploration (structure only, no code reading)
   'glob',
+  // Unified agent-tree tools — observability + messaging across tiers.
+  // Pure orchestration: no code reads, no mutations.
+  'list_agents',
+  'wait_agents',
+  'send_message',
+  'send_input',
+  'spawn_agent',
+  // Session-level objective + visual context. Useful for orchestration
+  // (set goal once, re-read after compaction; load a screenshot the user
+  // attached). Both are read-only and don't touch code.
+  'goal',
+  'create_goal',
+  'get_goal',
+  'update_goal',
+  'view_image',
+  // MCP resource discovery — read-only static content, doesn't expose code.
+  'mcp_list_resources',
+  'mcp_read_resource',
 ]);
 
 /**

@@ -15,6 +15,7 @@ import { McpServersPanel } from './McpServersPanel.js';
 import { SkillsPanel } from './SkillsPanel.js';
 import { StoragePanel } from './StoragePanel.js';
 import { HydePanel } from './HydePanel.js';
+import { HygienePanel } from './HygienePanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
 import { AuthPanel } from './AuthPanel.js';
 import { GeneralAiPanel } from './GeneralAiPanel.js';
@@ -75,6 +76,7 @@ export default function Admin() {
         <TabsList>
           <TabsTrigger value="providers">{t('admin:tabs.providers')}</TabsTrigger>
           <TabsTrigger value="storage">{t('admin:tabs.embeddings')}</TabsTrigger>
+          <TabsTrigger value="hygiene">Higiene</TabsTrigger>
           <TabsTrigger value="search">{t('admin:tabs.search')}</TabsTrigger>
           <TabsTrigger value="tools">{t('admin:tabs.tools')}</TabsTrigger>
           <TabsTrigger value="mcp-servers">{t('admin:tabs.mcpServers')}</TabsTrigger>
@@ -161,6 +163,10 @@ export default function Admin() {
 
         <TabsContent value="storage">
           <StoragePanel />
+        </TabsContent>
+
+        <TabsContent value="hygiene">
+          <HygienePanel />
         </TabsContent>
 
         <TabsContent value="search">

@@ -151,7 +151,8 @@ export type SessionInputKind =
   | 'system_prompt'
   | 'skill_content'
   | 'system_reminder'
-  | 'subagent_prompt';
+  | 'subagent_prompt'
+  | 'tools_snapshot';
 
 /**
  * One row per hidden prompt the agent sees: the run-start system prompt,

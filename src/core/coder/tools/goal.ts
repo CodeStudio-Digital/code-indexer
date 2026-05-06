@@ -8,9 +8,12 @@
  * at all". Models lose the original ask after compaction — anchoring it in
  * a structured slot they can re-read fixes that.
  *
- * Persistence: in-memory per-runner only. The goal vanishes on runner
- * restart. A future migration can persist it on `coder_sessions` if the
- * session-resume case proves to need it.
+ * Persistence: when `ctx.getGoalState` / `ctx.upsertGoalState` are wired
+ * (by `runCoder` against the session store), the goal lives in
+ * `coder_sessions.goal_*` columns and survives runner restarts and
+ * dashboard reloads. When those callbacks are absent (tests, ephemeral
+ * subagents), the tool falls back to a per-runner WeakMap so existing
+ * call-sites continue to work without a database.
  */
 import type { CoderTool, ToolContext, ToolResult } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
@@ -21,14 +24,51 @@ interface GoalState {
   status: 'in_progress' | 'complete';
   createdAt: string;
   updatedAt: string;
-  budgetTokens?: number;
-  completionNote?: string;
+  budgetTokens: number | null;
+  completionNote: string | null;
 }
 
 const GOAL_BY_RUNNER = new WeakMap<object, GoalState>();
 
 function readKey(ctx: ToolContext): object | null {
   return (ctx.runner as unknown as object) ?? null;
+}
+
+function readGoal(ctx: ToolContext): GoalState | null {
+  if (ctx.getGoalState) {
+    const persisted = ctx.getGoalState();
+    if (persisted) {
+      return {
+        text: persisted.text,
+        status: persisted.status,
+        createdAt: persisted.createdAt,
+        updatedAt: persisted.updatedAt,
+        budgetTokens: persisted.budgetTokens,
+        completionNote: persisted.completionNote,
+      };
+    }
+    return null;
+  }
+  const key = readKey(ctx);
+  if (!key) return null;
+  return GOAL_BY_RUNNER.get(key) ?? null;
+}
+
+function writeGoal(ctx: ToolContext, goal: GoalState): void {
+  if (ctx.upsertGoalState) {
+    ctx.upsertGoalState({
+      text: goal.text,
+      status: goal.status,
+      budgetTokens: goal.budgetTokens,
+      completionNote: goal.completionNote,
+      createdAt: goal.createdAt,
+      updatedAt: goal.updatedAt,
+    });
+    return;
+  }
+  const key = readKey(ctx);
+  if (!key) return;
+  GOAL_BY_RUNNER.set(key, goal);
 }
 
 const CREATE_GOAL_DESC =
@@ -65,9 +105,10 @@ const createGoal: CoderTool = {
   handler: async (args, ctx): Promise<ToolResult> => {
     const text = String(args.goal ?? '').trim();
     if (!text) return err('goal cannot be empty');
-    const key = readKey(ctx);
-    if (!key) return err('create_goal requires runner context');
-    const existing = GOAL_BY_RUNNER.get(key);
+    if (!ctx.upsertGoalState && !readKey(ctx)) {
+      return err('create_goal requires runner context');
+    }
+    const existing = readGoal(ctx);
     if (existing && existing.status !== 'complete') {
       return err(
         `A goal is already active: "${existing.text.slice(0, 120)}${existing.text.length > 120 ? '…' : ''}". ` +
@@ -75,13 +116,14 @@ const createGoal: CoderTool = {
       );
     }
     const now = new Date().toISOString();
-    const budget = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : undefined;
-    GOAL_BY_RUNNER.set(key, {
+    const budget = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : null;
+    writeGoal(ctx, {
       text,
       status: 'in_progress',
       createdAt: now,
       updatedAt: now,
       budgetTokens: budget,
+      completionNote: null,
     });
     return ok(`Goal set. Status: in_progress${budget ? ` (budget: ${budget} tokens)` : ''}.`);
   },
@@ -96,9 +138,10 @@ const getGoal: CoderTool = {
   riskLevel: 'read',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   handler: async (_args, ctx): Promise<ToolResult> => {
-    const key = readKey(ctx);
-    if (!key) return err('get_goal requires runner context');
-    const g = GOAL_BY_RUNNER.get(key);
+    if (!ctx.getGoalState && !readKey(ctx)) {
+      return err('get_goal requires runner context');
+    }
+    const g = readGoal(ctx);
     if (!g) return ok('(no goal set)');
     const lines: string[] = [
       `Status: ${g.status}`,
@@ -107,6 +150,14 @@ const getGoal: CoderTool = {
     ];
     if (g.budgetTokens) lines.push(`Budget: ${g.budgetTokens} tokens (soft, not enforced)`);
     if (g.completionNote) lines.push(`Completion note: ${g.completionNote}`);
+    // When the goal is already complete, surface a hard "stop polling" line.
+    // Without this nudge the model that doesn't know what to do next falls
+    // back to re-checking the goal indefinitely (real loop seen in the
+    // wild — get_goal called 30+ times after update_goal).
+    if (g.status === 'complete') {
+      lines.push('');
+      lines.push('IMPORTANT: This goal is already marked complete. Do NOT call get_goal again — there is nothing new to read. Write your final summary to the user (or post your deliverable) and end the run.');
+    }
     return ok(lines.join('\n'));
   },
 };
@@ -129,15 +180,21 @@ const updateGoal: CoderTool = {
   },
   handler: async (args, ctx): Promise<ToolResult> => {
     if (args.status !== 'complete') return err('update_goal: only status="complete" is allowed');
-    const key = readKey(ctx);
-    if (!key) return err('update_goal requires runner context');
-    const g = GOAL_BY_RUNNER.get(key);
+    if (!ctx.upsertGoalState && !readKey(ctx)) {
+      return err('update_goal requires runner context');
+    }
+    const g = readGoal(ctx);
     if (!g) return err('No goal set. Call create_goal first.');
     if (g.status === 'complete') return err('Goal is already complete.');
-    g.status = 'complete';
-    g.updatedAt = new Date().toISOString();
-    if (typeof args.note === 'string' && args.note.trim()) g.completionNote = args.note.trim();
-    return ok(`Goal marked complete${g.completionNote ? `: ${g.completionNote}` : '.'}`);
+    const note = typeof args.note === 'string' && args.note.trim() ? args.note.trim() : g.completionNote;
+    const updated: GoalState = {
+      ...g,
+      status: 'complete',
+      updatedAt: new Date().toISOString(),
+      completionNote: note,
+    };
+    writeGoal(ctx, updated);
+    return ok(`Goal marked complete${updated.completionNote ? `: ${updated.completionNote}` : '.'}`);
   },
 };
 

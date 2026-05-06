@@ -233,6 +233,104 @@ export class SessionStore {
       .run(worktreePath, id);
   }
 
+  // ─── Session goal (migration 068) ─────────────────────────────
+
+  /**
+   * Read the current goal for a session, or null when none was ever set
+   * AND when the migration columns are absent (older sqlite files).
+   */
+  getSessionGoal(id: number): {
+    text: string;
+    status: 'in_progress' | 'complete';
+    budgetTokens: number | null;
+    completionNote: string | null;
+    createdAt: string;
+    updatedAt: string;
+  } | null {
+    let row: {
+      goal_text: string | null;
+      goal_status: string | null;
+      goal_budget_tokens: number | null;
+      goal_completion_note: string | null;
+      goal_created_at: string | null;
+      goal_updated_at: string | null;
+    } | undefined;
+    try {
+      row = this.db
+        .prepare(
+          'SELECT goal_text, goal_status, goal_budget_tokens, goal_completion_note, goal_created_at, goal_updated_at ' +
+          'FROM coder_sessions WHERE id = ?',
+        )
+        .get(id) as typeof row;
+    } catch {
+      return null; // table missing migration — degrade gracefully
+    }
+    if (!row || !row.goal_text || !row.goal_status) return null;
+    return {
+      text: row.goal_text,
+      status: row.goal_status === 'complete' ? 'complete' : 'in_progress',
+      budgetTokens: row.goal_budget_tokens,
+      completionNote: row.goal_completion_note,
+      createdAt: row.goal_created_at ?? '',
+      updatedAt: row.goal_updated_at ?? row.goal_created_at ?? '',
+    };
+  }
+
+  /**
+   * Persist or replace the goal for a session. The runCoder wiring funnels
+   * `create_goal` / `update_goal` here so the goal survives runner death and
+   * shows up after a dashboard reload.
+   */
+  upsertSessionGoal(
+    id: number,
+    goal: {
+      text: string;
+      status: 'in_progress' | 'complete';
+      budgetTokens?: number | null;
+      completionNote?: string | null;
+      createdAt: string;
+      updatedAt: string;
+    },
+  ): void {
+    try {
+      this.db
+        .prepare(
+          'UPDATE coder_sessions SET ' +
+          'goal_text = ?, goal_status = ?, goal_budget_tokens = ?, goal_completion_note = ?, ' +
+          'goal_created_at = ?, goal_updated_at = ?, updated_at = datetime(\'now\') ' +
+          'WHERE id = ?',
+        )
+        .run(
+          goal.text,
+          goal.status,
+          goal.budgetTokens ?? null,
+          goal.completionNote ?? null,
+          goal.createdAt,
+          goal.updatedAt,
+          id,
+        );
+    } catch (e) {
+      // Older db without migration 068 — log and let the in-memory
+      // fallback in goal.ts keep things working for the live runner.
+      console.warn(`[session-store] upsertSessionGoal failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** Clear the goal for a session (used by tests, never by the tool itself). */
+  clearSessionGoal(id: number): void {
+    try {
+      this.db
+        .prepare(
+          'UPDATE coder_sessions SET goal_text = NULL, goal_status = NULL, goal_budget_tokens = NULL, ' +
+          'goal_completion_note = NULL, goal_created_at = NULL, goal_updated_at = NULL, ' +
+          'updated_at = datetime(\'now\') WHERE id = ?',
+        )
+        .run(id);
+    } catch {
+      /* ignore */
+    }
+  }
+
   /** Get existing cloudcode_session_id or generate + persist a new one. */
   getOrCreateCloudCodeSessionId(id: number): string {
     const row = this.db
@@ -1165,5 +1263,413 @@ export class SessionStore {
       .prepare('SELECT * FROM coder_tasks_state WHERE session_id = ?')
       .get(sessionId) as CoderTasksRow | undefined;
     return row ?? null;
+  }
+
+  // ─── Per-turn telemetry (migration 069) ───────────────────────
+  //
+  // One row per (run_id, turn). Captures token + tool usage so dashboards
+  // can answer "where are tokens being spent?" with data instead of guesses.
+  // Best-effort: failures are swallowed because telemetry must never break
+  // a real turn.
+
+  recordTurnTelemetry(input: {
+    session_id: number | null;
+    run_id: string;
+    turn: number;
+    is_subagent: boolean;
+    provider: string | null;
+    model: string | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cache_read_input_tokens: number | null;
+    cache_creation_input_tokens: number | null;
+    thinking_tokens: number | null;
+    history_chars: number | null;
+    tool_count: number;
+    tools_called: string[];
+    largest_tool_result_chars: number | null;
+    compaction_triggered: boolean;
+    summarizer_ran: boolean;
+    paginate_count: number;
+  }): void {
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO coder_turn_telemetry (
+            session_id, run_id, turn, is_subagent,
+            provider, model,
+            input_tokens, output_tokens,
+            cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens,
+            history_chars, tool_count, tools_called_json,
+            largest_tool_result_chars, compaction_triggered, summarizer_ran, paginate_count
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.session_id,
+          input.run_id,
+          input.turn,
+          input.is_subagent ? 1 : 0,
+          input.provider,
+          input.model,
+          input.input_tokens,
+          input.output_tokens,
+          input.cache_read_input_tokens,
+          input.cache_creation_input_tokens,
+          input.thinking_tokens,
+          input.history_chars,
+          input.tool_count,
+          JSON.stringify(input.tools_called),
+          input.largest_tool_result_chars,
+          input.compaction_triggered ? 1 : 0,
+          input.summarizer_ran ? 1 : 0,
+          input.paginate_count,
+        );
+    } catch (e) {
+      // Telemetry must never break a turn — surface as warn and move on.
+      console.warn(
+        `[coder] recordTurnTelemetry failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  /**
+   * Diagnostic breakdown of the first-turn payload — what the runner
+   * actually shipped to the provider before any tool calls were made. This
+   * is the answer to "why did turn 1 cost N tokens?".
+   *
+   *   system_prompt   — chars from the persisted 'system_prompt' input row
+   *                     (the fully assembled system prompt, including
+   *                     preamble + base + tier hint + skills + interaction
+   *                     footer). NULL when the session never recorded one
+   *                     (subagent / legacy session).
+   *   tools_array     — chars + count from the persisted 'tools_snapshot'
+   *                     input row (JSON-stringified tools array shipped to
+   *                     the LLM). NULL when the session never recorded one.
+   *   first_turn      — input/output tokens of turn=1 from the telemetry
+   *                     table (best estimate of what the provider billed).
+   *
+   * The dashboard divides these to show a "system N% / tools M% / other R%"
+   * pie of the first-turn input tokens, which makes payload bloat diagnose
+   * itself instead of forcing the developer to re-derive it from logs.
+   */
+  getFirstTurnPayloadBreakdown(sessionId: number): {
+    system_prompt_chars: number | null;
+    tools_array_chars: number | null;
+    tools_count: number | null;
+    first_turn_input_tokens: number | null;
+    first_turn_output_tokens: number | null;
+    estimated_chars_per_token: number;
+    skills_mode: string | null;
+    skills_count: number | null;
+  } {
+    const sysRow = this.db
+      .prepare(
+        `SELECT content, meta_json FROM coder_session_inputs
+         WHERE session_id = ? AND kind = 'system_prompt'
+         ORDER BY id ASC LIMIT 1`,
+      )
+      .get(sessionId) as { content: string; meta_json: string | null } | undefined;
+    const toolsRow = this.db
+      .prepare(
+        `SELECT content, meta_json FROM coder_session_inputs
+         WHERE session_id = ? AND kind = 'tools_snapshot'
+         ORDER BY id ASC LIMIT 1`,
+      )
+      .get(sessionId) as { content: string; meta_json: string | null } | undefined;
+    const turn1 = this.db
+      .prepare(
+        `SELECT input_tokens, output_tokens FROM coder_turn_telemetry
+         WHERE session_id = ? AND is_subagent = 0
+         ORDER BY turn ASC LIMIT 1`,
+      )
+      .get(sessionId) as { input_tokens: number | null; output_tokens: number | null } | undefined;
+
+    let toolsCount: number | null = null;
+    if (toolsRow?.meta_json) {
+      try {
+        const meta = JSON.parse(toolsRow.meta_json) as { tool_count?: number };
+        if (typeof meta.tool_count === 'number') toolsCount = meta.tool_count;
+      } catch {
+        /* malformed meta */
+      }
+    }
+
+    let skillsMode: string | null = null;
+    let skillsCount: number | null = null;
+    if (sysRow?.meta_json) {
+      try {
+        const meta = JSON.parse(sysRow.meta_json) as { skills_mode?: string; skill_ids?: string[] };
+        if (typeof meta.skills_mode === 'string') skillsMode = meta.skills_mode;
+        if (Array.isArray(meta.skill_ids)) skillsCount = meta.skill_ids.length;
+      } catch {
+        /* malformed meta */
+      }
+    }
+
+    return {
+      system_prompt_chars: sysRow?.content.length ?? null,
+      tools_array_chars: toolsRow?.content.length ?? null,
+      tools_count: toolsCount,
+      first_turn_input_tokens: turn1?.input_tokens ?? null,
+      first_turn_output_tokens: turn1?.output_tokens ?? null,
+      // Conservative ratio (matches the chars-per-token heuristic in
+      // compaction.ts so estimated tokens are consistent with the
+      // compaction trigger thresholds).
+      estimated_chars_per_token: 4,
+      skills_mode: skillsMode,
+      skills_count: skillsCount,
+    };
+  }
+
+  /** Read all telemetry rows for a session, ordered by turn ascending. */
+  getTurnTelemetry(sessionId: number): Array<Record<string, unknown>> {
+    return this.db
+      .prepare(
+        `SELECT * FROM coder_turn_telemetry WHERE session_id = ? ORDER BY turn ASC, id ASC`,
+      )
+      .all(sessionId) as Array<Record<string, unknown>>;
+  }
+
+  /**
+   * Aggregate per-session telemetry for the metrics modal in the chat view.
+   * Returns totals across every turn (including subagent turns) plus a few
+   * derived ratios. All values may be null when the session has no
+   * telemetry rows yet (e.g. fresh session before turn 1).
+   */
+  getSessionTelemetrySummary(sessionId: number): {
+    turn_count: number;
+    subagent_turn_count: number;
+    total_input_tokens: number;
+    total_output_tokens: number;
+    total_cache_read_tokens: number;
+    total_cache_creation_tokens: number;
+    total_thinking_tokens: number;
+    cache_hit_ratio: number | null;
+    total_tool_calls: number;
+    compaction_turns: number;
+    summarizer_turns: number;
+    paginate_total: number;
+    largest_tool_result_chars: number | null;
+    last_history_chars: number | null;
+    last_turn_at: string | null;
+    tools_breakdown: Array<{ name: string; calls: number }>;
+  } {
+    const totals = this.db
+      .prepare(
+        `SELECT
+           COUNT(*)                                   AS turn_count,
+           COALESCE(SUM(is_subagent), 0)              AS subagent_turn_count,
+           COALESCE(SUM(input_tokens), 0)             AS total_input_tokens,
+           COALESCE(SUM(output_tokens), 0)            AS total_output_tokens,
+           COALESCE(SUM(cache_read_input_tokens), 0)  AS total_cache_read_tokens,
+           COALESCE(SUM(cache_creation_input_tokens), 0) AS total_cache_creation_tokens,
+           COALESCE(SUM(thinking_tokens), 0)          AS total_thinking_tokens,
+           COALESCE(SUM(tool_count), 0)               AS total_tool_calls,
+           COALESCE(SUM(compaction_triggered), 0)     AS compaction_turns,
+           COALESCE(SUM(summarizer_ran), 0)           AS summarizer_turns,
+           COALESCE(SUM(paginate_count), 0)           AS paginate_total,
+           MAX(largest_tool_result_chars)             AS largest_tool_result_chars,
+           MAX(history_chars)                         AS last_history_chars,
+           MAX(created_at)                            AS last_turn_at
+         FROM coder_turn_telemetry
+         WHERE session_id = ?`,
+      )
+      .get(sessionId) as {
+        turn_count: number;
+        subagent_turn_count: number;
+        total_input_tokens: number;
+        total_output_tokens: number;
+        total_cache_read_tokens: number;
+        total_cache_creation_tokens: number;
+        total_thinking_tokens: number;
+        total_tool_calls: number;
+        compaction_turns: number;
+        summarizer_turns: number;
+        paginate_total: number;
+        largest_tool_result_chars: number | null;
+        last_history_chars: number | null;
+        last_turn_at: string | null;
+      };
+
+    // Tools breakdown: parse tools_called_json across rows. Cheap because
+    // the table is bounded by turns_per_session and we group in JS rather
+    // than dragging json_each into the SQL.
+    const rows = this.db
+      .prepare(
+        `SELECT tools_called_json FROM coder_turn_telemetry WHERE session_id = ?`,
+      )
+      .all(sessionId) as Array<{ tools_called_json: string | null }>;
+    const breakdown = new Map<string, number>();
+    for (const r of rows) {
+      if (!r.tools_called_json) continue;
+      try {
+        const names = JSON.parse(r.tools_called_json) as unknown;
+        if (Array.isArray(names)) {
+          for (const n of names) {
+            if (typeof n === 'string') breakdown.set(n, (breakdown.get(n) ?? 0) + 1);
+          }
+        }
+      } catch {
+        /* malformed row — ignore */
+      }
+    }
+    const tools_breakdown = [...breakdown.entries()]
+      .map(([name, calls]) => ({ name, calls }))
+      .sort((a, b) => b.calls - a.calls);
+
+    const inputTotal = totals.total_input_tokens;
+    const cacheRead = totals.total_cache_read_tokens;
+    const cache_hit_ratio = inputTotal > 0 ? cacheRead / inputTotal : null;
+
+    return {
+      ...totals,
+      cache_hit_ratio,
+      tools_breakdown,
+    };
+  }
+
+  /**
+   * Global telemetry aggregates for the admin dashboard. One row per session,
+   * plus an overall totals object. Limit caps the number of session summaries
+   * returned (default 50, ordered by total tokens desc).
+   */
+  getGlobalTelemetrySummary(limit = 50): {
+    overall: {
+      session_count: number;
+      turn_count: number;
+      total_input_tokens: number;
+      total_output_tokens: number;
+      total_cache_read_tokens: number;
+      cache_hit_ratio: number | null;
+      compaction_turns: number;
+      paginate_total: number;
+    };
+    by_provider: Array<{ provider: string; turns: number; input_tokens: number; output_tokens: number }>;
+    by_model: Array<{ model: string; turns: number; input_tokens: number; output_tokens: number }>;
+    skills_modes: Array<{ mode: string; sessions: number }>;
+    top_sessions: Array<{
+      session_id: number | null;
+      title: string | null;
+      provider: string | null;
+      model: string | null;
+      turn_count: number;
+      total_input_tokens: number;
+      total_output_tokens: number;
+      cache_hit_ratio: number | null;
+      last_turn_at: string | null;
+    }>;
+  } {
+    const overall = this.db
+      .prepare(
+        `SELECT
+           COUNT(DISTINCT session_id)                 AS session_count,
+           COUNT(*)                                   AS turn_count,
+           COALESCE(SUM(input_tokens), 0)             AS total_input_tokens,
+           COALESCE(SUM(output_tokens), 0)            AS total_output_tokens,
+           COALESCE(SUM(cache_read_input_tokens), 0)  AS total_cache_read_tokens,
+           COALESCE(SUM(compaction_triggered), 0)     AS compaction_turns,
+           COALESCE(SUM(paginate_count), 0)           AS paginate_total
+         FROM coder_turn_telemetry`,
+      )
+      .get() as {
+        session_count: number;
+        turn_count: number;
+        total_input_tokens: number;
+        total_output_tokens: number;
+        total_cache_read_tokens: number;
+        compaction_turns: number;
+        paginate_total: number;
+      };
+    const cache_hit_ratio = overall.total_input_tokens > 0
+      ? overall.total_cache_read_tokens / overall.total_input_tokens
+      : null;
+
+    const by_provider = this.db
+      .prepare(
+        `SELECT provider, COUNT(*) AS turns,
+                COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+                COALESCE(SUM(output_tokens), 0) AS output_tokens
+         FROM coder_turn_telemetry
+         WHERE provider IS NOT NULL
+         GROUP BY provider
+         ORDER BY input_tokens DESC`,
+      )
+      .all() as Array<{ provider: string; turns: number; input_tokens: number; output_tokens: number }>;
+
+    const by_model = this.db
+      .prepare(
+        `SELECT model, COUNT(*) AS turns,
+                COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+                COALESCE(SUM(output_tokens), 0) AS output_tokens
+         FROM coder_turn_telemetry
+         WHERE model IS NOT NULL
+         GROUP BY model
+         ORDER BY input_tokens DESC`,
+      )
+      .all() as Array<{ model: string; turns: number; input_tokens: number; output_tokens: number }>;
+
+    // Skills mode adoption: count distinct sessions by the persisted
+    // skills_mode meta. NULL meta (legacy rows) bucketed as 'unknown'.
+    const skillsModes = this.db
+      .prepare(
+        `SELECT
+            COALESCE(json_extract(meta_json, '$.skills_mode'), 'unknown') AS mode,
+            COUNT(DISTINCT session_id)                                     AS sessions
+         FROM coder_session_inputs
+         WHERE kind = 'system_prompt'
+         GROUP BY mode
+         ORDER BY sessions DESC`,
+      )
+      .all() as Array<{ mode: string; sessions: number }>;
+
+    const top_sessions = this.db
+      .prepare(
+        `SELECT t.session_id,
+                s.title,
+                s.provider,
+                s.model,
+                COUNT(*) AS turn_count,
+                COALESCE(SUM(t.input_tokens), 0)            AS total_input_tokens,
+                COALESCE(SUM(t.output_tokens), 0)           AS total_output_tokens,
+                COALESCE(SUM(t.cache_read_input_tokens), 0) AS total_cache_read,
+                MAX(t.created_at)                           AS last_turn_at
+         FROM coder_turn_telemetry t
+         LEFT JOIN coder_sessions s ON s.id = t.session_id
+         WHERE t.session_id IS NOT NULL
+         GROUP BY t.session_id, s.title, s.provider, s.model
+         ORDER BY total_input_tokens DESC
+         LIMIT ?`,
+      )
+      .all(limit) as Array<{
+        session_id: number | null;
+        title: string | null;
+        provider: string | null;
+        model: string | null;
+        turn_count: number;
+        total_input_tokens: number;
+        total_output_tokens: number;
+        total_cache_read: number;
+        last_turn_at: string | null;
+      }>;
+
+    return {
+      overall: { ...overall, cache_hit_ratio },
+      by_provider,
+      by_model,
+      skills_modes: skillsModes,
+      top_sessions: top_sessions.map((r) => ({
+        session_id: r.session_id,
+        title: r.title,
+        provider: r.provider,
+        model: r.model,
+        turn_count: r.turn_count,
+        total_input_tokens: r.total_input_tokens,
+        total_output_tokens: r.total_output_tokens,
+        cache_hit_ratio: r.total_input_tokens > 0
+          ? r.total_cache_read / r.total_input_tokens
+          : null,
+        last_turn_at: r.last_turn_at,
+      })),
+    };
   }
 }

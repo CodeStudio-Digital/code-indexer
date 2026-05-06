@@ -5,6 +5,7 @@ import { loadConfig } from '../../utils/config.js';
 import { createAdminRouter } from './admin/index.js';
 import { createDeps } from './server/deps.js';
 import { mountProjectsRoutes } from './server/routes/projects.js';
+import { mountHygieneRoutes } from './server/routes/hygiene.js';
 import { mountSearchRoutes } from './server/routes/search.js';
 import { mountFilesRoutes } from './server/routes/files.js';
 import { mountGraphRoutes } from './server/routes/graph.js';
@@ -16,6 +17,7 @@ import { mountWebhooksRoutes } from './server/routes/webhooks.js';
 import { mountExportRoutes } from './server/routes/export.js';
 import { mountModelsRoutes } from './server/routes/models.js';
 import { mountStatsRoutes } from './server/routes/stats.js';
+import { mountTelemetryRoutes } from './server/routes/telemetry.js';
 import { mountCoderRoutes } from './server/routes/coder/index.js';
 import { mountPreviewRoutes, attachPreviewUpgrade } from './server/routes/preview.js';
 import { mountWorkspaceRoutes } from './server/routes/workspace/index.js';
@@ -261,6 +263,7 @@ export function createApp() {
   }
 
   mountProjectsRoutes(app, deps);
+  mountHygieneRoutes(app, deps);
   mountSearchRoutes(app, deps);
   mountFilesRoutes(app, deps);
   mountGraphRoutes(app, deps);
@@ -272,6 +275,7 @@ export function createApp() {
   mountExportRoutes(app, deps);
   mountModelsRoutes(app, deps);
   mountStatsRoutes(app, deps);
+  mountTelemetryRoutes(app, deps);
   app.route('/api/admin', createAdminRouter(deps.providerStore));
   mountCoderRoutes(app, deps);
   // Design System Creator routes (sessions / versions / storybook proxy).

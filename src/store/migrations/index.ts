@@ -82,6 +82,10 @@ import { attachedServices064 } from './064_attached_services.js';
 import { companyFronts065 } from './065_company_fronts.js';
 import { companySubsessions067 } from './067_company_subsessions.js';
 import { companyDriveFiles066 } from './066_company_drive_files.js';
+import { coderSessionGoal068 } from './068_coder_session_goal.js';
+import { coderTurnTelemetry069 } from './069_coder_turn_telemetry.js';
+import { indexHygiene070 } from './070_index_hygiene.js';
+import { fileIndexTier071 } from './071_file_index_tier.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -158,6 +162,10 @@ export const MIGRATIONS: Migration[] = [
   companyFronts065,
   companyDriveFiles066,
   companySubsessions067,
+  coderSessionGoal068,
+  coderTurnTelemetry069,
+  indexHygiene070,
+  fileIndexTier071,
 ];
 
 /**

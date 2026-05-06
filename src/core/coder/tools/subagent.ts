@@ -4,7 +4,7 @@ import { ok, err } from '../core/tool.js';
 import type { ChatProvider } from '../providers/adapter.js';
 import type { AgentMessage } from '../core/messages.js';
 import type { SessionStore } from '../sessions/store.js';
-import { runSubagent, EXPLORE_ALLOWLIST, extractLastAssistantText, runParallelAgents } from './implement-subagent.js';
+import { runSubagent, EXPLORE_ALLOWLIST, IMPLEMENT_ALLOWLIST, extractLastAssistantText, runParallelAgents } from './implement-subagent.js';
 
 const EXPLORE_SYSTEM_PROMPT = `You are the EXPLORE subagent. A parent coder agent delegated a focused investigation to you.
 
@@ -64,21 +64,52 @@ function describeProvider(provider: ChatProvider): { provider: string; model: st
   return { provider: providerName, model, label: `${providerName}:${model}` };
 }
 
+const IMPLEMENT_SYSTEM_PROMPT = `You are an IMPLEMENTATION subagent. The parent agent delegated a specific change to you to execute end-to-end and return a brief summary.
+
+You have read AND write access to the project files plus shell. You do NOT have access to interactive prompts (no submit_plan, no ask_user, no submit_tasks): the parent already decided WHAT to do — your job is to DO it.
+
+# Rules
+1. Use the tools to read what you need, then make the edits.
+2. Verify your work (run tests / lints when relevant).
+3. Stop and write a final summary listing files changed + a 1-line description of what each change does.
+4. NEVER end your run with only tool calls and no text — the parent reads ONLY your final assistant text. If you hit max_turns without a summary, the entire effort is wasted.
+5. If you discover the task can't be done as described (missing prerequisite, ambiguous scope), stop and report findings instead of guessing.
+
+# Output format
+
+## Files changed
+- src/foo.ts — added \`bar()\` per the task
+- src/foo.test.ts — covered the happy path
+
+## Verification
+- ran \`npm test foo\`: passing
+- ran \`tsc --noEmit\`: clean
+
+## Notes (only if relevant)
+<edge cases, assumptions, follow-ups>
+`;
+
 const subagentSchema: JsonSchema = {
   type: 'object',
   properties: {
     type: {
       type: 'string',
-      enum: ['explore'],
-      description: 'Subagent type. Currently only "explore" (read-only investigation) is supported.',
+      enum: ['explore', 'implement'],
+      description:
+        '"explore" (default): read-only investigation; subagent returns a findings summary. "implement": read+write+shell; subagent executes a delegated change and returns a list of files modified. Implement is meant for self-contained changes where the parent has already decided what to do.',
     },
     task: {
       type: 'string',
-      description: 'Self-contained natural-language description of what the subagent must find. Include all context needed — the subagent has no access to the parent conversation.',
+      description: 'Self-contained natural-language description of what the subagent must do. Include all context needed — the subagent has no access to the parent conversation.',
     },
     max_turns: {
       type: 'number',
-      description: 'Max turns for the subagent loop (default 50).',
+      description: 'Max turns for the subagent loop (default 50, min 50).',
+    },
+    files: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Implement-mode only: optional whitelist of project-relative paths the subagent is allowed to write to. When provided, edits outside the list are refused. Omit for unscoped implement (full project write access).',
     },
   },
   required: ['type', 'task'],
@@ -107,9 +138,14 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
       const MIN_TURNS = 50;
       const requestedMaxTurns = typeof args.max_turns === 'number' ? args.max_turns : 100;
       const maxTurns = Math.max(MIN_TURNS, requestedMaxTurns);
+      const filesArg = Array.isArray(args.files)
+        ? (args.files as unknown[]).filter((f): f is string => typeof f === 'string' && f.length > 0)
+        : undefined;
 
       if (!task) return err('spawn_subagent: missing required parameter `task`');
-      if (type !== 'explore') return err(`spawn_subagent: unknown type '${type}' (only 'explore' supported)`);
+      if (type !== 'explore' && type !== 'implement') {
+        return err(`spawn_subagent: unknown type '${type}' (supported: 'explore', 'implement')`);
+      }
 
       const initialMessages: AgentMessage[] = [
         { role: 'user', content: [{ type: 'text', text: task }] },
@@ -119,17 +155,22 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
       const activeProvider = deps.subagentProvider ?? deps.provider;
       const providerInfo = describeProvider(activeProvider);
       console.log(
-        `[coder s=${parentSessionId ?? '?'}] spawn_subagent: type=${type} provider=${providerInfo.label} max_turns=${maxTurns}`,
+        `[coder s=${parentSessionId ?? '?'}] spawn_subagent: type=${type} provider=${providerInfo.label} max_turns=${maxTurns}` +
+        (filesArg ? ` files=[${filesArg.join(', ')}]` : ''),
       );
+
+      const isImplement = type === 'implement';
+      const systemPrompt = isImplement ? IMPLEMENT_SYSTEM_PROMPT : EXPLORE_SYSTEM_PROMPT;
+      const allowlist = isImplement ? IMPLEMENT_ALLOWLIST : EXPLORE_ALLOWLIST;
 
       if (deps.sessionStore && parentSessionId != null) {
         try {
           deps.sessionStore.recordSessionInput({
             session_id: parentSessionId,
             kind: 'subagent_prompt',
-            source_label: 'subagent:explore',
-            content: EXPLORE_SYSTEM_PROMPT,
-            meta: { task, max_turns: maxTurns },
+            source_label: `subagent:${type}`,
+            content: systemPrompt,
+            meta: { task, max_turns: maxTurns, files: filesArg },
           });
         } catch {
           // best-effort
@@ -139,11 +180,14 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
       const result = await runSubagent(
         { provider: activeProvider, tools: deps.parentTools, ctx, sessionId: parentSessionId },
         {
-          systemPrompt: EXPLORE_SYSTEM_PROMPT,
-          allowlist: EXPLORE_ALLOWLIST,
+          systemPrompt,
+          allowlist,
           initialMessages,
           maxTurns,
-          // No pathScope: explore is read-only and may need to roam.
+          // pathScope only when the caller declared files for an implement
+          // run. Explore stays unscoped (read-only) and unscoped implement
+          // mirrors the parent's full project write access.
+          pathScope: isImplement && filesArg && filesArg.length > 0 ? filesArg : undefined,
         }
       );
 

@@ -134,6 +134,30 @@ export interface ToolContext {
     patch: Partial<import('../sessions/types.js').CoderTask>,
   ) => void;
   getTasksState?: () => import('../sessions/types.js').TasksState | null;
+  /**
+   * Optional persistence sinks for the goal tools (`create_goal`,
+   * `get_goal`, `update_goal`). Wired by `runCoder` so the goal survives
+   * runner restarts and shows the same value across dashboard reloads.
+   * Tools that don't have a session-store available (tests, ephemeral
+   * subagents) leave these undefined and the goal tool falls back to its
+   * in-memory WeakMap.
+   */
+  getGoalState?: () => {
+    text: string;
+    status: 'in_progress' | 'complete';
+    budgetTokens: number | null;
+    completionNote: string | null;
+    createdAt: string;
+    updatedAt: string;
+  } | null;
+  upsertGoalState?: (goal: {
+    text: string;
+    status: 'in_progress' | 'complete';
+    budgetTokens?: number | null;
+    completionNote?: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }) => void;
   /** Company orchestrator context — present when this runner is part of a company session. */
   companyContext?: import('../company/types.js').CompanyContext;
   /**

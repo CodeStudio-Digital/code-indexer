@@ -5,6 +5,7 @@ import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { useApi } from '../../hooks/useApi.js';
 import { Markdown } from '../chat/messages/Markdown.js';
+import { SessionStateBanner } from '../chat/SessionStateBanner.js';
 
 interface PersistedMessage {
   id: number;
@@ -68,6 +69,9 @@ export function AgentSessionModal({ coderSessionId, role, status, onClose }: Age
             <X className="h-4 w-4" />
           </Button>
         </div>
+
+        {/* Goal + active tasks (persisted, survives reloads) */}
+        <SessionStateBanner sessionId={coderSessionId} />
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">

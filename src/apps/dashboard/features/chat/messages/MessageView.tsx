@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Brain, ChevronDown, ChevronRight, GitBranch, Paperclip, User } from 'lucide-react';
+import { Bot, Brain, ChevronDown, ChevronRight, FileText, GitBranch, ImageIcon, Loader2, Paperclip, User } from 'lucide-react';
 import type { AgentsGroup, ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Avatar, AvatarFallback } from '../../../components/ui/avatar.js';
 import { cn } from '../../../lib/utils.js';
@@ -19,11 +19,15 @@ import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { CopyMarkdownButton } from './CopyMarkdownButton.js';
 import { Markdown } from './Markdown.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
+import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 
 interface MessageViewProps {
   message: PersistedMessage;
   /** DB id of the persisted message row — used to fork from a user turn. */
   messageId?: number;
+  /** Session id — needed to lazy-fetch attachment base64 stripped from the
+   *  list payload (see sessions.ts trimMessageBlocks). */
+  sessionId?: number;
   toolResultsById: Map<string, { content: string; isError: boolean }>;
   usage?: MessageRow;
   providerId: string;
@@ -43,6 +47,7 @@ export const MessageView = React.memo(MessageViewInner, (prev, next) => {
   return (
     prev.message === next.message &&
     prev.messageId === next.messageId &&
+    prev.sessionId === next.sessionId &&
     prev.usage === next.usage &&
     prev.toolResultsById === next.toolResultsById &&
     prev.tasksState === next.tasksState &&
@@ -57,6 +62,7 @@ export const MessageView = React.memo(MessageViewInner, (prev, next) => {
 function MessageViewInner({
   message,
   messageId,
+  sessionId,
   toolResultsById,
   usage,
   providerId,
@@ -84,6 +90,8 @@ function MessageViewInner({
     return (
       <UserMessage
         message={message}
+        sessionId={sessionId}
+        messageId={messageId}
         tokenBadge={tokenBadge}
         onFork={onFork && messageId != null ? () => onFork(messageId) : undefined}
       />
@@ -121,16 +129,59 @@ function MessageViewInner({
 
 function UserMessage({
   message,
+  sessionId,
+  messageId,
   tokenBadge,
   onFork,
 }: {
   message: PersistedMessage;
+  sessionId?: number;
+  messageId?: number;
   tokenBadge: React.ReactNode;
   onFork?: () => void;
 }) {
   const text = message.content.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n');
   const images = message.content.filter((b) => b.type === 'image');
   const docs = message.content.filter((b) => b.type === 'document');
+  const hasStripped = useMemo(
+    () => [...images, ...docs].some((b) => b._hasBase64 && !b.base64),
+    [images, docs],
+  );
+  const [resolved, setResolved] = useState<ContentBlock[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  const ensureFull = async () => {
+    if (resolved || loading) return;
+    if (!sessionId || messageId == null || !hasStripped) return;
+    setLoading(true);
+    setFetchError(null);
+    try {
+      const r = await fetch(`/api/coder/sessions/${sessionId}/messages/${messageId}/full`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = (await r.json()) as { content: ContentBlock[] };
+      setResolved(data.content);
+    } catch (e) {
+      setFetchError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Resolve a stripped attachment block against the lazy-fetched full payload.
+  // Match by id when present, then by name; fall back to positional index
+  // among same-type blocks (user image blocks have no id).
+  const resolveBlock = (b: ContentBlock, idx: number): ContentBlock => {
+    if (b.base64 || !resolved) return b;
+    const sameType = resolved.filter((r) => r.type === b.type);
+    const byId = b.id ? sameType.find((r) => r.id === b.id && r.base64) : undefined;
+    if (byId) return byId;
+    const byName = b.name ? sameType.find((r) => r.name === b.name && r.base64) : undefined;
+    if (byName) return byName;
+    const positional = sameType[idx];
+    return positional?.base64 ? positional : b;
+  };
+
   return (
     <div className="flex gap-3 items-start justify-end group/user group/msg">
       <div className="flex-1 min-w-0 max-w-[100%] flex flex-col items-end">
@@ -158,32 +209,29 @@ function UserMessage({
           {images.length > 0 && (
             <div className="flex flex-wrap gap-2 mt-2">
               {images.map((img, i) => (
-                <a
-                  key={i}
-                  href={`data:${img.mediaType};base64,${img.base64}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <img
-                    src={`data:${img.mediaType};base64,${img.base64}`}
-                    alt="attachment"
-                    className="max-h-48 rounded-lg border border-primary-foreground/20"
-                  />
-                </a>
+                <AttachmentImage
+                  key={`img-${i}`}
+                  block={resolveBlock(img, i)}
+                  loading={loading}
+                  onNeedsFetch={ensureFull}
+                />
               ))}
             </div>
           )}
           {docs.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mt-2">
               {docs.map((d, i) => (
-                <span
-                  key={i}
-                  className="text-[11px] px-2 py-0.5 rounded-md bg-primary-foreground/15 inline-flex items-center gap-1"
-                >
-                  <Paperclip className="h-3 w-3" /> {d.name ?? 'document'}
-                </span>
+                <AttachmentDoc
+                  key={`doc-${i}`}
+                  block={resolveBlock(d, i)}
+                  loading={loading}
+                  onNeedsFetch={ensureFull}
+                />
               ))}
             </div>
+          )}
+          {fetchError && (
+            <div className="text-[11px] text-destructive mt-1">attachment fetch failed: {fetchError}</div>
           )}
         </div>
       </div>
@@ -193,6 +241,139 @@ function UserMessage({
         </AvatarFallback>
       </Avatar>
     </div>
+  );
+}
+
+/**
+ * User-uploaded image: shows a thumbnail. If the base64 was stripped from
+ * the list payload (server trims user attachments — see
+ * sessions.ts trimMessageBlocks), the thumbnail is a placeholder card and
+ * clicking it lazy-fetches the full message and opens a fullscreen modal.
+ */
+function AttachmentImage({
+  block,
+  loading,
+  onNeedsFetch,
+}: {
+  block: ContentBlock;
+  loading: boolean;
+  onNeedsFetch: () => void | Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pendingOpen, setPendingOpen] = useState(false);
+  const hasData = !!block.base64;
+  const src = hasData ? `data:${block.mediaType};base64,${block.base64}` : null;
+
+  // Open the modal automatically once a click-triggered fetch resolves.
+  useEffect(() => {
+    if (pendingOpen && hasData) {
+      setOpen(true);
+      setPendingOpen(false);
+    }
+  }, [pendingOpen, hasData]);
+
+  const handleClick = () => {
+    if (hasData) {
+      setOpen(true);
+      return;
+    }
+    setPendingOpen(true);
+    void onNeedsFetch();
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={handleClick}
+        className="relative rounded-lg border border-primary-foreground/20 overflow-hidden cursor-zoom-in hover:opacity-90 transition-opacity"
+        title={hasData ? 'Open preview' : 'Load preview'}
+      >
+        {src ? (
+          <img src={src} alt="attachment" className="max-h-48 block" />
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-1 w-32 h-32 bg-muted/50 text-muted-foreground">
+            {loading || pendingOpen ? (
+              <Loader2 className="h-6 w-6 animate-spin" />
+            ) : (
+              <ImageIcon className="h-6 w-6" />
+            )}
+            <span className="text-[10px]">
+              {loading || pendingOpen ? 'Loading…' : 'Preview'}
+            </span>
+          </div>
+        )}
+      </button>
+      {open && src && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 cursor-zoom-out"
+          onClick={() => setOpen(false)}
+          role="button"
+          tabIndex={-1}
+        >
+          <img
+            src={src}
+            alt="attachment full size"
+            className="max-w-full max-h-full rounded shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * User-uploaded document chip. Click lazy-fetches the full base64 (when
+ * stripped) and opens it in a new tab as a data URL.
+ */
+function AttachmentDoc({
+  block,
+  loading,
+  onNeedsFetch,
+}: {
+  block: ContentBlock;
+  loading: boolean;
+  onNeedsFetch: () => void | Promise<void>;
+}) {
+  const [pendingOpen, setPendingOpen] = useState(false);
+  const hasData = !!block.base64;
+  const src = hasData ? `data:${block.mediaType};base64,${block.base64}` : null;
+
+  useEffect(() => {
+    if (pendingOpen && src) {
+      window.open(src, '_blank', 'noopener,noreferrer');
+      setPendingOpen(false);
+    }
+  }, [pendingOpen, src]);
+
+  const handleClick = () => {
+    if (src) {
+      window.open(src, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    setPendingOpen(true);
+    void onNeedsFetch();
+  };
+
+  const busy = loading || pendingOpen;
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className="text-[11px] px-2 py-0.5 rounded-md bg-primary-foreground/15 inline-flex items-center gap-1 hover:bg-primary-foreground/25 transition-colors"
+      title={hasData ? 'Open document' : 'Load document'}
+    >
+      {busy ? (
+        <Loader2 className="h-3 w-3 animate-spin" />
+      ) : block.mediaType?.startsWith('application/pdf') ? (
+        <FileText className="h-3 w-3" />
+      ) : (
+        <Paperclip className="h-3 w-3" />
+      )}
+      {block.name ?? 'document'}
+    </button>
   );
 }
 
@@ -325,6 +506,11 @@ export function renderAssistantBlock(
     result: result ? { content: result.content, isError: result.isError } : undefined,
     status: result ? (result.isError ? 'error' : 'done') : 'running',
   };
+  // Goal tools get a richer block — they're session-wide events that the
+  // generic collapsed ToolCallBlock makes too easy to miss.
+  if (isGoalTool(tc.name)) {
+    return <GoalCallBlock key={`gl-${b.id}-${i}`} call={tc} />;
+  }
   return <ToolCallBlock key={`tu-${b.id}-${i}`} call={tc} />;
 }
 

@@ -84,6 +84,15 @@ const EXTENSION_MAP: Record<string, GrammarInfo> = {
   html: { wasmFile: 'tree-sitter-html.wasm',       language: 'html' },
   htm:  { wasmFile: 'tree-sitter-html.wasm',       language: 'html' },
   css:  { wasmFile: 'tree-sitter-css.wasm',        language: 'css' },
+  // SCSS / Sass / Less / Stylus reuse the CSS grammar — tree-sitter is
+  // error-tolerant, so SCSS-only constructs (nested selectors, @mixin,
+  // parent &) appear as ERROR nodes but top-level rule_set / at_rule
+  // continue to parse. Good enough for skeleton purposes; a dedicated
+  // SCSS wasm can replace this later if precision becomes an issue.
+  scss: { wasmFile: 'tree-sitter-css.wasm',        language: 'css' },
+  sass: { wasmFile: 'tree-sitter-css.wasm',        language: 'css' },
+  less: { wasmFile: 'tree-sitter-css.wasm',        language: 'css' },
+  styl: { wasmFile: 'tree-sitter-css.wasm',        language: 'css' },
   vue:  { wasmFile: 'tree-sitter-vue.wasm',        language: 'vue' },
   // Other
   dart: { wasmFile: 'tree-sitter-dart.wasm',       language: 'dart' },
@@ -109,6 +118,8 @@ const EXTRACTABLE_LANGUAGES = new Set([
   'cpp', 'c',
   'php',
   'swift',
+  // Web markup / styles — selectors and elements as symbols.
+  'css', 'html', 'vue',
 ]);
 
 /** Get grammar info for a file extension (without dot). Returns null if unsupported. */

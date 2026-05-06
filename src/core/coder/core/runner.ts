@@ -9,6 +9,8 @@ import { compactMessages, PRUNE_PROTECT, computeCutoffIndex, totalChars, PRUNE_M
 import { evaluateToolInvocation, findScopeViolations, type PolicyContext } from './policy.js';
 import { isSummarizerEnabled, summarizeSpan, renderSummary } from './summarizer.js';
 import { filterByTiers, profileToTiers, type ToolTier, type CoderProfile } from '../tools/tiers.js';
+import { terseDescription } from '../tools/descriptions.js';
+import { applySmartReducer } from './smart-reducers.js';
 import { getModelContextWindow, getModelMaxTools } from '../providers/capabilities.js';
 import { runToolFilterHook } from './hooks.js';
 import { resolveTemperature } from '../inference/temperature.js';
@@ -148,8 +150,12 @@ const TURN_BUDGET_CHARS = Number(process.env.CODER_TURN_BUDGET_CHARS ?? 30_000);
  * many turns in a row, abort the run. Prevents cost blowups when a model
  * latches onto a failing tool call and keeps retrying it verbatim. Set to 0
  * (or any N<2) to disable. Default 3 matches opencode's processor.ts.
+ *
+ * Default 3 (was 0/disabled): a real session that hit `get_goal` repeatedly
+ * 30+ times burned through tokens with no guard. Strict-sig threshold of 3
+ * is conservative — only triggers on byte-identical tool calls.
  */
-const DOOM_LOOP_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_THRESHOLD ?? 0);
+const DOOM_LOOP_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_THRESHOLD ?? 3);
 /**
  * Fuzzy doom-loop threshold: catches "same tool names, slightly different args"
  * patterns that the strict signature misses (e.g., agent keeps calling
@@ -157,8 +163,11 @@ const DOOM_LOOP_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_THRESHOLD ?? 0);
  * replacements that never land). Higher than the strict threshold because the
  * false-positive risk is larger — a legitimate iterative workflow may legally
  * call the same tool set many turns in a row.
+ *
+ * Default 6 (was 0): more tolerant than strict, still catches the
+ * "model paginates the same file 6+ turns" pattern. Tweak via env.
  */
-const DOOM_LOOP_FUZZY_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_FUZZY_THRESHOLD ?? 0);
+const DOOM_LOOP_FUZZY_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_FUZZY_THRESHOLD ?? 6);
 /**
  * Auto-continue: when the runner exhausts maxTurns, instead of dying it
  * compacts the history (summarizer → deterministic fallback) and resets the
@@ -748,6 +757,64 @@ export class CoderRunner extends EventEmitter {
     }
   }
 
+  /**
+   * Per-turn telemetry hook. Captures token + tool usage at the end of each
+   * turn so dashboards can answer "where are tokens being spent?" with data.
+   *
+   * Intentionally best-effort: a missing sessionStore (subagents, tests) is a
+   * no-op, and any DB error is swallowed inside SessionStore.recordTurnTelemetry.
+   */
+  private persistTurnTelemetry(input: {
+    turn: number;
+    lastUsage: ChatUsage | null;
+    toolUseBlocks: ReadonlyArray<ToolUseBlock>;
+    toolResultBlocks: ReadonlyArray<ContentBlock>;
+    historyChars: number;
+    compactionTriggered: boolean;
+    summarizerRan: boolean;
+  }): void {
+    if (!this.sessionStore) return;
+    // Largest tool_result content size (post-truncation) — surfaces tools
+    // that routinely produce big outputs and benefit from smart reducers.
+    let largest = 0;
+    for (const b of input.toolResultBlocks) {
+      const c = (b as { content?: unknown }).content;
+      if (typeof c === 'string' && c.length > largest) largest = c.length;
+    }
+    // Pagination signal: same read_file path called 2+ times within one turn.
+    let paginate = 0;
+    const readFilePaths = new Map<string, number>();
+    for (const b of input.toolUseBlocks) {
+      if (b.name === 'read_file' || b.name === 'mcp__read_file') {
+        const inp = b.input as { path?: unknown; file_path?: unknown };
+        const p = typeof inp.path === 'string' ? inp.path : typeof inp.file_path === 'string' ? inp.file_path : '';
+        if (p) readFilePaths.set(p, (readFilePaths.get(p) ?? 0) + 1);
+      }
+    }
+    for (const count of readFilePaths.values()) if (count > 1) paginate += count - 1;
+
+    this.sessionStore.recordTurnTelemetry({
+      session_id: this.sessionId ?? null,
+      run_id: this.runId,
+      turn: input.turn,
+      is_subagent: this.isSubagent,
+      provider: this.opts.provider.name ?? null,
+      model: this.opts.provider.model ?? null,
+      input_tokens: input.lastUsage?.input_tokens ?? null,
+      output_tokens: input.lastUsage?.output_tokens ?? null,
+      cache_read_input_tokens: input.lastUsage?.cache_read_input_tokens ?? null,
+      cache_creation_input_tokens: input.lastUsage?.cache_creation_input_tokens ?? null,
+      thinking_tokens: input.lastUsage?.thinking_tokens ?? null,
+      history_chars: input.historyChars,
+      tool_count: input.toolUseBlocks.length,
+      tools_called: input.toolUseBlocks.map((b) => b.name),
+      largest_tool_result_chars: input.toolResultBlocks.length > 0 ? largest : null,
+      compaction_triggered: input.compactionTriggered,
+      summarizer_ran: input.summarizerRan,
+      paginate_count: paginate,
+    });
+  }
+
   constructor(opts: RunnerOptions) {
     super();
     this.opts = opts;
@@ -1045,14 +1112,27 @@ export class CoderRunner extends EventEmitter {
           console.log(`[coder] tool-filter hook removed ${before - filtered.length} tool(s)`);
         }
       }
+      // Stable alphabetical sort. The provider sees the tools array in
+      // every request; any reordering between turns invalidates server-side
+      // prompt caches (Anthropic ephemeral, OpenAI/ZAI auto-cache). Sorting
+      // by name eliminates the dependency on registry insertion order, hot-
+      // reload sequencing of MCP tools, or filter pass ordering.
+      filtered = filtered.slice().sort((a, b) => a.name.localeCompare(b.name));
       const maxTools = getModelMaxTools(this.opts.provider.model ?? '');
       if (filtered.length > maxTools) {
         console.log(`[coder] tool cap: ${filtered.length} → ${maxTools} (model limit for ${this.opts.provider.model})`);
         filtered = filtered.slice(0, maxTools);
       }
+      // Bootstrap-only profile: aggressively shorten descriptions to their
+      // first sentence. The bootstrap turn is the most expensive (no cache
+      // warmth yet) and the agent only needs to know which tool routes
+      // where — full USE/DON'T text becomes useful only after promotion.
+      const bootstrapOnly = !!this.activeTiers
+        && !this.activeTiers.has('navigate')
+        && !this.activeTiers.has('admin');
       return filtered.map((t) => ({
         name: t.name,
-        description: t.description,
+        description: bootstrapOnly ? terseDescription(t.description) : t.description,
         parameters: t.parameters,
       }));
     };
@@ -1062,6 +1142,31 @@ export class CoderRunner extends EventEmitter {
         `[coder] company board tools visible: post_to_board=${tools.some((t) => t.name === 'post_to_board')} ` +
         `read_board=${tools.some((t) => t.name === 'read_board')}`,
       );
+    }
+
+    // Persist a snapshot of the tools array so the dashboard's "session
+    // metrics" view can show what was actually shipped to the provider.
+    // Critical for debugging "why are we paying X tokens on turn 1?" —
+    // without this the breakdown between system prompt and tools array is
+    // invisible.  Dedup by hash inside SessionStore — most sessions ship
+    // a byte-identical array on every turn (sort + tier-stable).
+    if (this.sessionStore && this.sessionId != null) {
+      try {
+        const toolsJson = JSON.stringify(tools);
+        this.sessionStore.recordSessionInput({
+          session_id: this.sessionId,
+          kind: 'tools_snapshot',
+          source_label: 'turn-start',
+          content: toolsJson,
+          meta: {
+            tool_count: tools.length,
+            tool_names: tools.map((t) => t.name),
+            profile: this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : 'all',
+          },
+        });
+      } catch {
+        /* best-effort */
+      }
     }
     let lastTiersKey = this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : '*';
 
@@ -1098,6 +1203,10 @@ export class CoderRunner extends EventEmitter {
           }
         }
 
+        // Per-turn telemetry flags — captured below by persistTurnTelemetry.
+        let summarizerRanThisTurn = false;
+        let compactionTriggeredThisTurn = false;
+
         // LLM summarizer — opt-in via CODER_SUMMARIZER_ENABLE=1. Runs ONCE
         // per session the first turn the history grows big enough to trigger
         // compaction. Replaces the pre-cutoff span with a single synthetic
@@ -1116,6 +1225,7 @@ export class CoderRunner extends EventEmitter {
               ? lastKnownInputTokens >= compactionLimits.triggerTokens
               : total > compactionLimits.minimum;
           if (shouldCompact) {
+            compactionTriggeredThisTurn = true;
             const cutoff = snapCutoffToRoleBoundary(this.messages, computeCutoffIndex(this.messages, compactionLimits.protect));
             if (cutoff > 1) {
               const span = this.messages.slice(0, cutoff);
@@ -1134,6 +1244,7 @@ export class CoderRunner extends EventEmitter {
                 // deterministic compaction path.
                 this.messages.splice(0, cutoff, syntheticAssistant);
                 this.summarizedOnce = true;
+                summarizerRanThisTurn = true;
                 console.log(`[coder] summarizer collapsed ${cutoff} messages into 1 synthetic summary`);
               } else {
                 // Mark as attempted so we don't retry every turn on a broken
@@ -1413,6 +1524,16 @@ export class CoderRunner extends EventEmitter {
 
           this.recentTurnSignatures.length = 0;
           this.recentTurnNamesSignatures.length = 0;
+          // Telemetry: text-only completion turn — no tools, no tool_results.
+          this.persistTurnTelemetry({
+            turn,
+            lastUsage,
+            toolUseBlocks,
+            toolResultBlocks: [],
+            historyChars,
+            compactionTriggered: compactionTriggeredThisTurn,
+            summarizerRan: summarizerRanThisTurn,
+          });
           // Hook: completion
           await this.opts.hookRegistry?.fireCompletion({
             sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
@@ -1588,10 +1709,17 @@ export class CoderRunner extends EventEmitter {
           const cap = this.opts.pushTimeCap ?? PUSH_TIME_CAP;
           let persistedId: string | null = null;
           if (result.content.length > cap && this.opts.toolContext.toolOutputStore) {
+            // Persist the RAW content so get_tool_output can return everything;
+            // the reducer below only shapes what goes into the prompt.
             persistedId = this.opts.toolContext.toolOutputStore.put(result.content);
           }
+          // Smart reducer (B4): tool-aware truncation that preserves the
+          // most useful slices for git_log/git_diff/grep/run_command before
+          // the generic head-cut kicks in. Determinism is part of the
+          // contract — same input → same output, so prefix cache stays stable.
+          const shapedContent = applySmartReducer(block.name, result.content, cap);
           toolResultBlocks.push(
-            buildToolResultBlock(block.id, result.content, result.isError, cap, persistedId ?? undefined),
+            buildToolResultBlock(block.id, shapedContent, result.isError, cap, persistedId ?? undefined),
           );
           if (result.extraUserBlocks && result.extraUserBlocks.length > 0) {
             extraUserBlocks.push(...result.extraUserBlocks);
@@ -1599,6 +1727,18 @@ export class CoderRunner extends EventEmitter {
         }
 
         this.messages.push({ role: 'tool', content: toolResultBlocks });
+        // Telemetry: tool-emitting turn. Capture AFTER tool execution so
+        // largest_tool_result_chars and paginate_count reflect what actually
+        // happened.
+        this.persistTurnTelemetry({
+          turn,
+          lastUsage,
+          toolUseBlocks,
+          toolResultBlocks,
+          historyChars,
+          compactionTriggered: compactionTriggeredThisTurn,
+          summarizerRan: summarizerRanThisTurn,
+        });
         if (extraUserBlocks.length > 0) {
           // Append as a separate user message — providers expect tool results
           // and human content in distinct messages. The text preface keeps the

@@ -57,14 +57,28 @@ describe('CodeIndexDB', () => {
 
   describe('migrations', () => {
     it('applies all migrations on a fresh DB', () => {
-      expect(db.getSchemaVersion()).toBe(67);
+      expect(db.getSchemaVersion()).toBe(71);
     });
 
     it('re-opening an existing DB does not re-apply migrations', () => {
       db.close();
       const db2 = new CodeIndexDB(dbPath);
-      expect(db2.getSchemaVersion()).toBe(67);
+      expect(db2.getSchemaVersion()).toBe(71);
       db2.close();
+    });
+
+    it('coder_sessions has goal_* columns from migration 068', () => {
+      // @ts-expect-error - accessing internal for test
+      const cols = db.db.prepare("PRAGMA table_info(coder_sessions)").all() as {
+        name: string;
+      }[];
+      const names = new Set(cols.map((c) => c.name));
+      expect(names.has('goal_text')).toBe(true);
+      expect(names.has('goal_status')).toBe(true);
+      expect(names.has('goal_budget_tokens')).toBe(true);
+      expect(names.has('goal_completion_note')).toBe(true);
+      expect(names.has('goal_created_at')).toBe(true);
+      expect(names.has('goal_updated_at')).toBe(true);
     });
 
     it('symbols.stable_id column exists', () => {

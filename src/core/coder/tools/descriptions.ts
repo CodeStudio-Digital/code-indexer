@@ -53,15 +53,21 @@ export const MULTI_EDIT_DESC =
   'If ANY edit fails (not found, ambiguous without replace_all), nothing is written to disk — the file is untouched and the tool reports which op failed.';
 
 export const READ_FILE_NATIVE_DESC =
-  'Read a file from disk directly (bypasses the indexer). Default: first 400 lines.\n' +
-  'TARGETED MODES (cheaper than ranges, work without indexing):\n' +
-  '  • `symbol: "<name>"` — returns just that function/class body via regex+brace/indent extraction.\n' +
-  '  • `around_line: <n>` — returns the symbol body that contains line n.\n' +
-  "USE: file you just created/modified that mcp__read_file says is unknown (session overlay covers the common case, but this is the fallback).\n" +
+  'Read a file from disk directly (bypasses the indexer). Auto-returns the whole file when it has ≤800 lines.\n' +
+  '\n' +
+  'Decision tree (follow this BEFORE calling read_file):\n' +
+  '1. Don\'t know total_lines? → call mcp__get_file_skeleton FIRST. It returns file size + outline in <100 tokens.\n' +
+  '2. File ≤800 lines → read_file returns the whole file in one call (auto-full).\n' +
+  '3. File >800 + you know the symbol name → pass `symbol: "<name>"` (or call mcp__get_symbol_body).\n' +
+  '4. File >800 + you have a stack frame / grep hit → pass `around_line: <n>` to get the enclosing function.\n' +
+  '5. File >800 + you know a string → pass `search_term:` to center the window on the first match.\n' +
+  '6. File >800 + you need everything → pass `force: true` (returns the full file in one call).\n' +
+  '\n' +
+  'NEVER: paginate more than twice on the same file. After 2 calls without finding what you need, switch tactics (skeleton, symbol, grep, force). The doom-loop guard aborts repetitive turns.\n' +
+  '\n' +
+  "USE: file you just created/modified that mcp__read_file says is unknown.\n" +
   "USE: quick sanity-check of a config/dotfile that the indexer skipped.\n" +
-  "USE: in a non-indexed project (no MCP symbol DB), `symbol`/`around_line` is the cheapest way to read one function.\n" +
-  "DON'T: use as your default reader when the project IS indexed. Prefer mcp__read_file (overlay-aware) or mcp__get_symbol_body (DB-backed, also ~10x cheaper).\n" +
-  "DON'T: read a 2000-line file when you only need one symbol — use `symbol:` here, or mcp__get_file_skeleton + mcp__get_symbol_body when indexed.";
+  "USE: in a non-indexed project, `symbol`/`around_line` is the cheapest way to read one function.";
 
 export const LIST_DIRECTORY_NATIVE_DESC =
   'List files and subdirectories at a path (non-recursive). Fallback path when the indexer listing is stale.\n' +
@@ -165,6 +171,18 @@ export const TASK_COMPLETE_DESC =
   "DON'T: list files in `files_modified` that you didn't actually touch — the sandbox audits this.";
 
 /**
+ * Pure terse transform: collapses a description down to its first sentence.
+ * Always shortens — no env check. Use this when you want the terse form
+ * unconditionally (e.g., bootstrap-tier filtering at the runner level).
+ */
+export function terseDescription(desc: string): string {
+  if (desc.length <= 150) return desc;
+  const firstPeriod = desc.indexOf('. ');
+  if (firstPeriod > 0 && firstPeriod < 200) return desc.slice(0, firstPeriod + 1);
+  return desc.slice(0, 150) + '…';
+}
+
+/**
  * Optional terse-mode transform: collapses any description down to its first
  * sentence when the CODER_TERSE_TOOLS env flag is set. Called once per tool
  * at registration time (not per-turn) so the result is still cache-stable
@@ -172,8 +190,5 @@ export const TASK_COMPLETE_DESC =
  */
 export function maybeTerse(desc: string): string {
   if (process.env.CODER_TERSE_TOOLS !== '1') return desc;
-  if (desc.length <= 150) return desc;
-  const firstPeriod = desc.indexOf('. ');
-  if (firstPeriod > 0 && firstPeriod < 200) return desc.slice(0, firstPeriod + 1);
-  return desc.slice(0, 150) + '…';
+  return terseDescription(desc);
 }

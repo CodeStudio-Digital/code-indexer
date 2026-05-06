@@ -127,6 +127,32 @@ const SWIFT_SYMBOL_NODES: Record<string, SymbolKind> = {
   protocol_declaration:          'interface',
 };
 
+/**
+ * CSS family (also reused for SCSS/Sass/Less/Stylus via the CSS wasm).
+ * Each rule_set is a "class" symbol whose name is the selector text;
+ * at-rules (mixins, keyframes, media queries) become "function"-kind
+ * entries so the skeleton groups them visibly. SCSS-only constructs
+ * (parent `&`, nested rules, `@mixin`) appear inside ERROR nodes but
+ * top-level rule_sets keep parsing — error-tolerance is the point here.
+ */
+const CSS_SYMBOL_NODES: Record<string, SymbolKind> = {
+  rule_set:           'class',
+  at_rule:            'function',
+  keyframes_statement:'function',
+};
+
+/**
+ * HTML / Vue / Svelte. Most `element` nodes are noise (every <div> is one),
+ * so getSymbolName filters down to elements with `id=...` or named/custom
+ * tags worth surfacing. Top-level <script> and <style> blocks always
+ * appear as separate symbols so the agent sees the file's structure.
+ */
+const HTML_SYMBOL_NODES: Record<string, SymbolKind> = {
+  element:            'class',
+  script_element:     'function',
+  style_element:      'function',
+};
+
 function getSymbolNodesForLanguage(lang: string): Record<string, SymbolKind> {
   switch (lang) {
     case 'typescript': case 'tsx': case 'javascript': return TS_SYMBOL_NODES;
@@ -140,6 +166,8 @@ function getSymbolNodesForLanguage(lang: string): Record<string, SymbolKind> {
     case 'cpp': case 'c': return CPP_SYMBOL_NODES;
     case 'php':       return PHP_SYMBOL_NODES;
     case 'swift':     return SWIFT_SYMBOL_NODES;
+    case 'css':       return CSS_SYMBOL_NODES;
+    case 'html': case 'vue': return HTML_SYMBOL_NODES;
     default:          return {};
   }
 }
@@ -330,6 +358,57 @@ export class TreeSitterExtractor {
 
   /** Extract symbol name from node based on language conventions. */
   private getSymbolName(node: Parser.SyntaxNode, language: string): string | null {
+    // CSS family — symbol name comes from the selector text or the at-rule name.
+    if (language === 'css') {
+      if (node.type === 'rule_set') {
+        const selectors = node.namedChildren.find((c) => c.type === 'selectors');
+        const text = (selectors ?? node.firstNamedChild)?.text ?? '';
+        const trimmed = text.split('\n')[0]?.trim() ?? '';
+        if (!trimmed) return null;
+        return trimmed.length > 80 ? trimmed.slice(0, 77) + '...' : trimmed;
+      }
+      if (node.type === 'at_rule' || node.type === 'keyframes_statement') {
+        // Examples: "@mixin name(args)", "@keyframes spin", "@media (max-width: 600px)".
+        // First line minus leading whitespace, capped.
+        const first = node.text.split('\n')[0]?.trim() ?? '';
+        if (!first) return null;
+        // Strip trailing "{" or ";" so "@mixin foo { … }" reads "@mixin foo".
+        const cleaned = first.replace(/\s*\{$/, '').replace(/;\s*$/, '');
+        return cleaned.length > 80 ? cleaned.slice(0, 77) + '...' : cleaned;
+      }
+    }
+
+    // HTML / Vue / Svelte — prefer id="...", fall back to a custom/named tag.
+    // Generic <div>/<span> with no id are filtered out (return null) to avoid
+    // dumping every node in a template into the skeleton.
+    if (language === 'html' || language === 'vue') {
+      if (node.type === 'script_element') return '<script>';
+      if (node.type === 'style_element') return '<style>';
+      if (node.type === 'element') {
+        const startTag = node.namedChildren.find((c) => c.type === 'start_tag' || c.type === 'self_closing_tag');
+        if (!startTag) return null;
+        const tagNameNode = startTag.namedChildren.find((c) => c.type === 'tag_name');
+        const tagName = tagNameNode?.text ?? '';
+        // Look for id="..." attribute
+        let idValue: string | null = null;
+        for (const attr of startTag.namedChildren.filter((c) => c.type === 'attribute')) {
+          const an = attr.namedChildren.find((c) => c.type === 'attribute_name');
+          if (an?.text === 'id') {
+            const av = attr.namedChildren.find((c) => c.type === 'quoted_attribute_value' || c.type === 'attribute_value');
+            const inner = av?.namedChildren.find((c) => c.type === 'attribute_value');
+            idValue = (inner ?? av)?.text?.replace(/^["']|["']$/g, '') ?? null;
+            break;
+          }
+        }
+        if (idValue) return `${tagName}#${idValue}`;
+        // Surface only custom/named elements (with hyphen — Web Components,
+        // Angular components, Vue components) and known structural tags.
+        const STRUCTURAL = new Set(['header', 'main', 'footer', 'nav', 'section', 'article', 'aside', 'form', 'router-outlet']);
+        if (tagName.includes('-') || STRUCTURAL.has(tagName)) return `<${tagName}>`;
+        return null; // <div>, <span>, etc. without id — skip
+      }
+    }
+
     // Most languages use a 'name' field
     const nameNode = node.childForFieldName('name');
     if (nameNode) return nameNode.text;

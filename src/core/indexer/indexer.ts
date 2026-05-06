@@ -182,7 +182,7 @@ export class IndexAgent {
 
     // 6. Process files concurrently
     const concurrency = options?.concurrency ?? this.config.concurrency;
-    const indexedFiles: Array<{ path: string; fileId: number; analysis: import('../../types.js').LLMFileAnalysis; content: string }> = [];
+    const indexedFiles: Array<{ path: string; fileId: number; analysis: import('../../types.js').LLMFileAnalysis; content: string; tier?: 'core' | 'support' | 'on_demand' }> = [];
     // Tree-sitter parsing is CPU-bound and was the largest source of main-thread
     // blocking during indexing. When MCP_INDEX_WORKERS=1, dispatch to a worker
     // pool sized to ~min(8, available cores). Result objects are plain JS and
@@ -320,7 +320,8 @@ export class IndexAgent {
         totalOutputTokens += result.outputTokens;
         totalCostUsd += cost;
 
-        // Upsert file
+        // Upsert file (tier persisted by the auto-mapper at scan time;
+        // missing on legacy callers and reindexes from before migration 071)
         const fileId = this.db.upsertFile(project.id, {
           path: file.relativePath,
           language: result.analysis.language,
@@ -338,6 +339,8 @@ export class IndexAgent {
           isEntryPoint: result.analysis.is_entry_point,
           isTest: result.analysis.is_test,
           isGenerated: result.analysis.is_generated,
+          indexTier: file.tier,
+          mapperReason: file.mapperReason,
         });
 
         // Persist structure hash and embedding if tree-sitter produced one
@@ -371,7 +374,7 @@ export class IndexAgent {
           symbols: result.analysis.symbols,
         });
 
-        indexedFiles.push({ path: file.relativePath, fileId, analysis: result.analysis, content });
+        indexedFiles.push({ path: file.relativePath, fileId, analysis: result.analysis, content, tier: file.tier });
 
         // Release the scanner's copy of the content. The indexedFiles entry
         // keeps its own reference (needed for embeddings later), but freeing
@@ -770,9 +773,28 @@ export class IndexAgent {
   private async processEmbeddings(
     project: { id: number; name: string },
     runId: number,
-    indexedFiles: Array<{ path: string; fileId: number; analysis: import('../../types.js').LLMFileAnalysis; content: string }>
+    indexedFiles: Array<{ path: string; fileId: number; analysis: import('../../types.js').LLMFileAnalysis; content: string; tier?: 'core' | 'support' | 'on_demand' }>
   ): Promise<void> {
-    const files = indexedFiles.map((f) => ({
+    // Aggressive profile skips embeddings for `on_demand` files (tests,
+    // docs, migrations, fixtures). They stay searchable via FTS but
+    // no longer consume embedding tokens or vector store rows. Files
+    // without a tier (legacy / pre-migration-071 entries) are treated
+    // as `support` and embedded.
+    const profile = this.config.indexProfile ?? 'balanced';
+    const skipped: string[] = [];
+    const eligible = indexedFiles.filter((f) => {
+      if (profile === 'aggressive' && f.tier === 'on_demand') {
+        skipped.push(f.path);
+        return false;
+      }
+      return true;
+    });
+
+    if (skipped.length > 0) {
+      console.error(`[indexer] Skipping ${skipped.length} on_demand embedding(s) (aggressive profile)`);
+    }
+
+    const files = eligible.map((f) => ({
       path: f.path,
       fileId: f.fileId,
       language: f.analysis.language,

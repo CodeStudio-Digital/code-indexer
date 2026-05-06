@@ -24,12 +24,27 @@ export interface McpOAuthConfig {
   allowDcr: boolean;
 }
 
+/**
+ * Indexer profile — controls how aggressive the auto-mapper is.
+ *
+ *   `aggressive` — `on_demand` files (tests, docs, migrations, fixtures)
+ *                  skip embeddings entirely. They still go into FTS via
+ *                  symbols + summary, but consume zero embedding tokens.
+ *   `balanced`   — every non-excluded file gets the full pipeline
+ *                  (default; matches pre-mapper behavior for safety).
+ *   `conservative` — same as balanced, reserved for future opt-out
+ *                  hooks (e.g. embedding all symbols regardless of size).
+ */
+export type IndexProfile = 'aggressive' | 'balanced' | 'conservative';
+
 export interface IndexerConfig {
   dbPath: string;
   concurrency: number;
   maxFileSize: number;
   ignorePatterns: string[];
   budget?: number;
+  /** Mapper aggressiveness (default: balanced). */
+  indexProfile?: IndexProfile;
   dashboard: {
     port: number;
     host: string;
@@ -48,6 +63,7 @@ const DEFAULT_CONFIG: IndexerConfig = {
   concurrency: 5,
   maxFileSize: 200,
   ignorePatterns: [],
+  indexProfile: 'balanced',
   dashboard: {
     port: 3333,
     host: '0.0.0.0',

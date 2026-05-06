@@ -9,6 +9,7 @@ import type { PromptHandlers } from '../types.js';
 import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { Markdown } from './Markdown.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
+import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 
 function LiveThinkingBlock({ text }: { text: string }) {
   const { t } = useTranslation('chat');
@@ -45,6 +46,9 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
     );
   }
   if (block.type === 'tool') {
+    if (isGoalTool(block.call.name)) {
+      return <GoalCallBlock key={`tc-${block.call.id}`} call={block.call} />;
+    }
     return <ToolCallBlock key={`tc-${block.call.id}`} call={block.call} />;
   }
   if (block.type === 'plan') {

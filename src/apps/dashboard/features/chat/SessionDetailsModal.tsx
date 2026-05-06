@@ -28,7 +28,7 @@ interface TodoHistoryEntry {
   created_at: string;
 }
 
-type SessionInputKind = 'system_prompt' | 'skill_content' | 'system_reminder' | 'subagent_prompt';
+type SessionInputKind = 'system_prompt' | 'skill_content' | 'system_reminder' | 'subagent_prompt' | 'tools_snapshot';
 
 interface SessionInputRow {
   id: number;
@@ -46,6 +46,7 @@ const INPUT_KIND_STYLES: Record<SessionInputKind, string> = {
   skill_content: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
   system_reminder: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
   subagent_prompt: 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
+  tools_snapshot: 'bg-pink-500/15 text-pink-600 dark:text-pink-400',
 };
 
 interface TodoItem {

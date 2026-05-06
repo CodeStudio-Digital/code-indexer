@@ -9,6 +9,7 @@ import { ok, err } from '../../core/tool.js';
 import type { CompanyOrchestrator } from '../../company/orchestrator.js';
 import { attachmentsToBlocks } from '../../core/messages.js';
 import { buildPipelineMasterTools } from './pipeline-tools.js';
+import { resolveAgentRunId } from './path-resolution.js';
 
 export function buildMasterTools(orchestrator: CompanyOrchestrator): CoderTool[] {
   return [
@@ -235,25 +236,28 @@ function approveSubordinatePlan(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run' },
+      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run. Equivalent to passing `path` — use whichever you have.' },
+      path: { type: 'string', description: 'Agent path as returned by list_agents (e.g. "/root/master/qa-7"). Alternative to agent_run_id.' },
       approved: { type: 'boolean', description: 'Whether to approve (true) or reject (false) the plan' },
       feedback: { type: 'string', description: 'Optional feedback for the subordinate' },
     },
-    required: ['agent_run_id', 'approved'],
+    required: ['approved'],
   };
 
   return {
     name: 'approve_subordinate_plan',
-    description: "Approve or reject a subordinate agent's pending plan. The subordinate is blocked until you respond. Check the board for the plan content.",
+    description: "Approve or reject a subordinate agent's pending plan. Pass either agent_run_id or path. The subordinate is blocked until you respond. Check the board for the plan content.",
     parameters,
     source: 'native',
     handler: async (args) => {
-      const agentRunId = args.agent_run_id as number;
+      const target = resolveAgentRunId(args);
+      if (!target.ok) return err(`approve_subordinate_plan: ${target.detail}`);
+      const { agentRunId } = target;
       const approved = args.approved as boolean;
       const feedback = args.feedback as string | undefined;
 
       if (!orchestrator.hasPendingPlan(agentRunId)) {
-        return err(`No pending plan found for agent_run_id ${agentRunId}. Use list_subordinates to check status.`);
+        return err(`No pending plan found for agent_run_id ${agentRunId}. Use list_agents or list_subordinates to check status.`);
       }
 
       const resolved = orchestrator.resolveSubordinatePlan(agentRunId, approved, feedback);
@@ -272,25 +276,28 @@ function answerSubordinateQuestion(orchestrator: CompanyOrchestrator): CoderTool
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run' },
+      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run. Equivalent to passing `path`.' },
+      path: { type: 'string', description: 'Agent path as returned by list_agents (e.g. "/root/master/qa-7"). Alternative to agent_run_id.' },
       answer: { type: 'string', description: 'Your answer to the subordinate\'s question' },
     },
-    required: ['agent_run_id', 'answer'],
+    required: ['answer'],
   };
 
   return {
     name: 'answer_subordinate_question',
     description:
-      "Answer a subordinate agent's pending question. The subordinate is blocked until you respond. " +
+      "Answer a subordinate agent's pending question. Pass either agent_run_id or path. The subordinate is blocked until you respond. " +
       "If you don't know the answer, use ask_user to escalate to the human, then relay their response with this tool.",
     parameters,
     source: 'native',
     handler: async (args) => {
-      const agentRunId = args.agent_run_id as number;
+      const target = resolveAgentRunId(args);
+      if (!target.ok) return err(`answer_subordinate_question: ${target.detail}`);
+      const { agentRunId } = target;
       const answer = args.answer as string;
 
       if (!orchestrator.hasPendingQuestion(agentRunId)) {
-        return err(`No pending question found for agent_run_id ${agentRunId}. Use list_subordinates to check status.`);
+        return err(`No pending question found for agent_run_id ${agentRunId}. Use list_agents or list_subordinates to check status.`);
       }
 
       const resolved = orchestrator.resolveSubordinateQuestion(agentRunId, answer);
@@ -309,7 +316,8 @@ function approveSubordinateTasks(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run' },
+      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run. Equivalent to passing `path`.' },
+      path: { type: 'string', description: 'Agent path as returned by list_agents (e.g. "/root/master/qa-7"). Alternative to agent_run_id.' },
       approved: { type: 'boolean', description: 'Whether to approve (true) or reject (false) the task list' },
       feedback: { type: 'string', description: 'Optional feedback for the subordinate' },
       execution_mode: {
@@ -318,24 +326,26 @@ function approveSubordinateTasks(orchestrator: CompanyOrchestrator): CoderTool {
         description: 'How the subordinate should execute tasks (default: inline)',
       },
     },
-    required: ['agent_run_id', 'approved'],
+    required: ['approved'],
   };
 
   return {
     name: 'approve_subordinate_tasks',
     description:
-      "Approve or reject a subordinate agent's pending task list. The subordinate is blocked until you respond. " +
+      "Approve or reject a subordinate agent's pending task list. Pass either agent_run_id or path. The subordinate is blocked until you respond. " +
       "Check the board for the task list content.",
     parameters,
     source: 'native',
     handler: async (args) => {
-      const agentRunId = args.agent_run_id as number;
+      const target = resolveAgentRunId(args);
+      if (!target.ok) return err(`approve_subordinate_tasks: ${target.detail}`);
+      const { agentRunId } = target;
       const approved = args.approved as boolean;
       const feedback = args.feedback as string | undefined;
       const executionMode = args.execution_mode as string | undefined;
 
       if (!orchestrator.hasPendingTasks(agentRunId)) {
-        return err(`No pending task list found for agent_run_id ${agentRunId}. Use list_subordinates to check status.`);
+        return err(`No pending task list found for agent_run_id ${agentRunId}. Use list_agents or list_subordinates to check status.`);
       }
 
       const resolved = orchestrator.resolveSubordinateTasks(agentRunId, approved, feedback, executionMode);
@@ -354,19 +364,22 @@ function abortSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run to abort' },
+      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run to abort. Equivalent to passing `path`.' },
+      path: { type: 'string', description: 'Agent path as returned by list_agents (e.g. "/root/master/qa-7"). Alternative to agent_run_id.' },
       reason: { type: 'string', description: 'Optional reason for the abort' },
     },
-    required: ['agent_run_id'],
+    required: [],
   };
 
   return {
     name: 'abort_subordinate_agent',
-    description: "Abort a running subordinate agent. This immediately stops the agent's execution.",
+    description: "Abort a running subordinate agent. Pass either agent_run_id or path. This immediately stops the agent's execution.",
     parameters,
     source: 'native',
     handler: async (args) => {
-      const agentRunId = args.agent_run_id as number;
+      const target = resolveAgentRunId(args);
+      if (!target.ok) return err(`abort_subordinate_agent: ${target.detail}`);
+      const { agentRunId } = target;
       const aborted = orchestrator.abortSubordinate(agentRunId);
       if (!aborted) {
         return err(`Agent run ${agentRunId} not found or already stopped`);
@@ -446,23 +459,26 @@ function forwardToAgent(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      agent_run_id: { type: 'number', description: 'ID of the target subordinate agent' },
+      agent_run_id: { type: 'number', description: 'ID of the target subordinate agent. Equivalent to passing `path`.' },
+      path: { type: 'string', description: 'Agent path as returned by list_agents (e.g. "/root/master/qa-7"). Alternative to agent_run_id.' },
       message: { type: 'string', description: 'Message to forward to the agent' },
       forward_user_attachments: {
         type: 'boolean',
         description: 'When true, includes the images the user attached to their most recent message so the subordinate sees them natively. Set this whenever the visual context matters for what you are forwarding.',
       },
     },
-    required: ['agent_run_id', 'message'],
+    required: ['message'],
   };
 
   return {
     name: 'forward_to_agent',
-    description: "Send a task or message to a subordinate agent. If the agent is 'waiting' (finished previous task), it auto-reactivates with full context preserved. Use this to reuse agents instead of spawning new ones.",
+    description: "Send a task or message to a subordinate agent. Pass either agent_run_id or path. If the agent is 'waiting' (finished previous task), it auto-reactivates with full context preserved. Use this to reuse agents instead of spawning new ones.",
     parameters,
     source: 'native',
     handler: async (args) => {
-      const agentRunId = args.agent_run_id as number;
+      const target = resolveAgentRunId(args);
+      if (!target.ok) return err(`forward_to_agent: ${target.detail}`);
+      const agentRunId = target.agentRunId;
       const message = args.message as string;
       const forwardAtts = args.forward_user_attachments as boolean | undefined;
       const attachments = forwardAtts

@@ -505,6 +505,9 @@ export class CodeIndexDB {
       isEntryPoint?: boolean;
       isTest?: boolean;
       isGenerated?: boolean;
+      /** Mapper tier persisted by migration 071. Optional for backwards compat. */
+      indexTier?: 'core' | 'support' | 'on_demand';
+      mapperReason?: string;
     }
   ): number {
     const upsert = this.db.transaction(() => {
@@ -528,6 +531,8 @@ export class CodeIndexDB {
             internal_deps = ?, external_deps = ?,
             notes = ?, complexity = ?,
             layer = ?, is_entry_point = ?, is_test = ?, is_generated = ?,
+            index_tier = COALESCE(?, index_tier),
+            mapper_reason = COALESCE(?, mapper_reason),
             updated_at = datetime('now')
           WHERE id = ?
         `).run(
@@ -536,6 +541,7 @@ export class CodeIndexDB {
           JSON.stringify(data.internalDeps), JSON.stringify(data.externalDeps),
           JSON.stringify(data.notes), data.complexity,
           data.layer ?? 'unknown', data.isEntryPoint ? 1 : 0, data.isTest ? 1 : 0, data.isGenerated ? 1 : 0,
+          data.indexTier ?? null, data.mapperReason ?? null,
           existing.id
         );
 
@@ -546,14 +552,15 @@ export class CodeIndexDB {
         const result = this.db.prepare(`
           INSERT INTO files (project_id, path, language, size, line_count, content_hash,
             summary, concepts, dependencies, internal_deps, external_deps, notes, complexity,
-            layer, is_entry_point, is_test, is_generated)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            layer, is_entry_point, is_test, is_generated, index_tier, mapper_reason)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           projectId, data.path, data.language, data.size, data.lineCount, data.contentHash,
           data.summary, JSON.stringify(data.concepts), JSON.stringify(data.dependencies),
           JSON.stringify(data.internalDeps), JSON.stringify(data.externalDeps),
           JSON.stringify(data.notes), data.complexity,
-          data.layer ?? 'unknown', data.isEntryPoint ? 1 : 0, data.isTest ? 1 : 0, data.isGenerated ? 1 : 0
+          data.layer ?? 'unknown', data.isEntryPoint ? 1 : 0, data.isTest ? 1 : 0, data.isGenerated ? 1 : 0,
+          data.indexTier ?? null, data.mapperReason ?? null
         );
         fileId = result.lastInsertRowid as number;
       }
@@ -1721,5 +1728,284 @@ export class CodeIndexDB {
       defined_in: definedIn,
       callers: trace(symbolName, 0),
     };
+  }
+
+  // ─── Hygiene ────────────────────────────────────────────────────
+  //
+  // Surfaces dashboard counters and runs the SQL-side cleanup steps that
+  // don't touch the remote vector store. Anything that needs to talk to
+  // Cloudflare/Qdrant/etc. lives in the route handler so the DB layer
+  // stays sync-only and unit-testable without network.
+
+  /**
+   * Per-project health counters used by the Hygiene panel. Keep this query
+   * cheap — it runs every time the admin opens the page.
+   */
+  getProjectsHygiene(): Array<{
+    id: number;
+    name: string;
+    root_path: string;
+    pending_vector_gc: number;
+    file_count: number;
+    vector_count: number;
+    orphan_vector_ids: number;
+    stale_runs: number;
+    duplicate_vector_ids: number;
+    mixed_case_languages: number;
+  }> {
+    return this.db
+      .prepare(
+        `
+        SELECT
+          p.id,
+          p.name,
+          p.root_path,
+          COALESCE(p.pending_vector_gc, 0) AS pending_vector_gc,
+          (SELECT COUNT(*) FROM files f WHERE f.project_id = p.id) AS file_count,
+          (SELECT COUNT(*) FROM vector_ids v WHERE v.project_id = p.id) AS vector_count,
+          (SELECT COUNT(*) FROM vector_ids v
+            WHERE v.project_id = p.id
+              AND v.file_path IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM files f
+                WHERE f.project_id = v.project_id AND f.path = v.file_path
+              )
+          ) AS orphan_vector_ids,
+          (SELECT COUNT(*) FROM runs r
+            WHERE r.project_id = p.id
+              AND r.status = 'running'
+              AND r.started_at < datetime('now', '-2 hours')
+          ) AS stale_runs,
+          (SELECT COALESCE(SUM(c - 1), 0) FROM (
+              SELECT COUNT(*) AS c FROM vector_ids v
+               WHERE v.project_id = p.id
+               GROUP BY v.vector_id HAVING COUNT(*) > 1
+          )) AS duplicate_vector_ids,
+          (SELECT COUNT(*) FROM files f
+            WHERE f.project_id = p.id AND f.language <> LOWER(f.language)
+          ) AS mixed_case_languages
+        FROM projects p
+        ORDER BY p.name
+        `,
+      )
+      .all() as Array<{
+        id: number;
+        name: string;
+        root_path: string;
+        pending_vector_gc: number;
+        file_count: number;
+        vector_count: number;
+        orphan_vector_ids: number;
+        stale_runs: number;
+        duplicate_vector_ids: number;
+        mixed_case_languages: number;
+      }>;
+  }
+
+  /**
+   * In-degree per file path — how many other files in this project
+   * import it. Built from `file_dependencies`; reflects the previous
+   * indexing run (zero on first index, refined on each rebuild).
+   *
+   * Used by the auto-mapper to promote heavily-imported files from
+   * `support` to `core`. Only resolved internal imports (target_file_id
+   * IS NOT NULL) count — external deps don't tell us which local file
+   * gets re-read at search time.
+   */
+  getFileIndegrees(projectId: number): Map<string, number> {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT f.path AS path, COUNT(*) AS indegree
+        FROM file_dependencies fd
+        JOIN files f ON f.id = fd.target_file_id
+        WHERE fd.project_id = ? AND fd.target_file_id IS NOT NULL
+        GROUP BY f.path
+        `,
+      )
+      .all(projectId) as Array<{ path: string; indegree: number }>;
+    const out = new Map<string, number>();
+    for (const r of rows) out.set(r.path, r.indegree);
+    return out;
+  }
+
+  /**
+   * Tier breakdown per project. Returns one row per (project, tier);
+   * untagged files (legacy rows from before migration 071) come back
+   * with `tier = 'untagged'` so the panel can flag them.
+   */
+  getProjectTierBreakdown(): Array<{ project_id: number; tier: string; count: number }> {
+    return this.db
+      .prepare(
+        `
+        SELECT
+          project_id,
+          COALESCE(index_tier, 'untagged') AS tier,
+          COUNT(*) AS count
+        FROM files
+        GROUP BY project_id, tier
+        `,
+      )
+      .all() as Array<{ project_id: number; tier: string; count: number }>;
+  }
+
+  /** Total rows in the retry queue. Cheap counter for the panel header. */
+  countPendingVectorDeletes(): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS c FROM pending_vector_deletes')
+      .get() as { c: number };
+    return row.c;
+  }
+
+  /**
+   * Vector ids whose `file_path` no longer exists in `files`. Returned
+   * before delete so the route handler can pass them to the remote
+   * vector store first.
+   */
+  getOrphanVectorIds(projectId: number): Array<{ vector_id: string; file_path: string | null; type: string }> {
+    return this.db
+      .prepare(
+        `
+        SELECT v.vector_id, v.file_path, v.type
+        FROM vector_ids v
+        WHERE v.project_id = ?
+          AND v.file_path IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM files f
+            WHERE f.project_id = v.project_id AND f.path = v.file_path
+          )
+        `,
+      )
+      .all(projectId) as Array<{ vector_id: string; file_path: string | null; type: string }>;
+  }
+
+  /** Delete the SQLite rows for the given vector ids. Returns rows removed. */
+  deleteVectorIdRows(projectId: number, vectorIds: string[]): number {
+    if (vectorIds.length === 0) return 0;
+    const stmt = this.db.prepare(
+      'DELETE FROM vector_ids WHERE project_id = ? AND vector_id = ?',
+    );
+    const tx = this.db.transaction((ids: string[]) => {
+      let n = 0;
+      for (const id of ids) {
+        const r = stmt.run(projectId, id);
+        n += r.changes;
+      }
+      return n;
+    });
+    return tx(vectorIds);
+  }
+
+  /**
+   * Drop duplicate `vector_ids` rows keeping the highest `id` per
+   * (project_id, vector_id). Idempotent — once the unique index from
+   * migration 070 is in place no further dups can land, but old DBs that
+   * predate the index still benefit from a manual run.
+   */
+  dedupVectorIds(projectId?: number): number {
+    const where = projectId != null ? 'WHERE project_id = ?' : '';
+    const stmt = this.db.prepare(`
+      DELETE FROM vector_ids
+      WHERE id NOT IN (
+        SELECT MAX(id) FROM vector_ids ${where}
+        GROUP BY project_id, vector_id
+      )
+      ${where ? `AND project_id = ?` : ''}
+    `);
+    const result = projectId != null ? stmt.run(projectId, projectId) : stmt.run();
+    return result.changes;
+  }
+
+  /** Lowercase any remaining mixed-case language values. */
+  normalizeFileLanguages(projectId?: number): number {
+    const stmt = projectId != null
+      ? this.db.prepare(
+          `UPDATE files SET language = LOWER(language)
+            WHERE language <> LOWER(language) AND project_id = ?`,
+        )
+      : this.db.prepare(
+          `UPDATE files SET language = LOWER(language)
+            WHERE language <> LOWER(language)`,
+        );
+    const result = projectId != null ? stmt.run(projectId) : stmt.run();
+    return result.changes;
+  }
+
+  /** Mark long-running runs as 'abandoned'. Returns number of rows updated. */
+  markStaleRuns(olderThanHours = 2, projectId?: number): number {
+    const sql = `
+      UPDATE runs
+      SET status = 'abandoned',
+          finished_at = COALESCE(finished_at, datetime('now'))
+      WHERE status = 'running'
+        AND started_at < datetime('now', '-' || ? || ' hours')
+        ${projectId != null ? 'AND project_id = ?' : ''}
+    `;
+    const stmt = this.db.prepare(sql);
+    const result =
+      projectId != null ? stmt.run(olderThanHours, projectId) : stmt.run(olderThanHours);
+    return result.changes;
+  }
+
+  /** Toggle the pending_vector_gc flag. Set when remote delete fails. */
+  setProjectPendingVectorGc(projectId: number, pending: boolean): void {
+    this.db
+      .prepare('UPDATE projects SET pending_vector_gc = ? WHERE id = ?')
+      .run(pending ? 1 : 0, projectId);
+  }
+
+  /** Atomically capture vector_ids for a project (used by the delete cascade). */
+  snapshotVectorIdsForProject(projectId: number): string[] {
+    return (
+      this.db
+        .prepare('SELECT vector_id FROM vector_ids WHERE project_id = ?')
+        .all(projectId) as Array<{ vector_id: string }>
+    ).map((r) => r.vector_id);
+  }
+
+  /**
+   * Queue vector ids for later remote deletion. Used when Vectorize is
+   * unreachable mid-cascade. Idempotent on `vector_id` thanks to UNIQUE.
+   */
+  enqueuePendingVectorDeletes(
+    rows: Array<{ vector_id: string; project_name?: string | null; error?: string | null }>,
+  ): number {
+    if (rows.length === 0) return 0;
+    const insert = this.db.prepare(`
+      INSERT INTO pending_vector_deletes (vector_id, project_name, last_attempt, attempts, last_error)
+      VALUES (?, ?, datetime('now'), 1, ?)
+      ON CONFLICT(vector_id) DO UPDATE SET
+        last_attempt = datetime('now'),
+        attempts = attempts + 1,
+        last_error = excluded.last_error
+    `);
+    const tx = this.db.transaction((rs: typeof rows) => {
+      for (const r of rs) {
+        insert.run(r.vector_id, r.project_name ?? null, r.error ?? null);
+      }
+      return rs.length;
+    });
+    return tx(rows);
+  }
+
+  /** Drain the retry queue in batches. Caller passes them to the vector store. */
+  takePendingVectorDeletes(limit = 5000): Array<{ id: number; vector_id: string; project_name: string | null }> {
+    return this.db
+      .prepare(
+        'SELECT id, vector_id, project_name FROM pending_vector_deletes ORDER BY id LIMIT ?',
+      )
+      .all(limit) as Array<{ id: number; vector_id: string; project_name: string | null }>;
+  }
+
+  /** Remove rows by id (after successful remote delete). */
+  deletePendingVectorDeletesByIds(ids: number[]): number {
+    if (ids.length === 0) return 0;
+    const stmt = this.db.prepare('DELETE FROM pending_vector_deletes WHERE id = ?');
+    const tx = this.db.transaction((items: number[]) => {
+      let n = 0;
+      for (const id of items) n += stmt.run(id).changes;
+      return n;
+    });
+    return tx(ids);
   }
 }

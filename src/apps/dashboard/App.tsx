@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Boxes, ChevronLeft, ChevronRight, FolderGit2, Home, Menu, Moon, Palette, Settings, Sun, Users, X } from 'lucide-react';
+import { Activity, Boxes, ChevronLeft, ChevronRight, FolderGit2, Home, Menu, Moon, Palette, Settings, Sun, Users, X } from 'lucide-react';
 import { Button } from './components/ui/button.js';
 import { DialogProvider } from './components/ui/dialog-provider.js';
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from './components/ui/tooltip.js';
@@ -11,6 +11,7 @@ import { ProjectList } from './features/project/index.js';
 import { RecentSessionsList } from './features/recent/RecentSessionsList.js';
 import { AgentsTab } from './features/agents/AgentsTab.js';
 import { DesignSystemsTab } from './features/design-systems/DesignSystemsTab.js';
+import { TelemetryDashboard } from './features/telemetry/TelemetryDashboard.js';
 import { cn } from './lib/utils.js';
 
 type View =
@@ -18,7 +19,8 @@ type View =
   | { page: 'project'; id: number; name: string; sessionId?: number }
   | { page: 'admin' }
   | { page: 'agents' }
-  | { page: 'design-systems' };
+  | { page: 'design-systems' }
+  | { page: 'telemetry' };
 
 function NavButton({
   icon,
@@ -147,6 +149,13 @@ export default function App() {
               onClick={() => { setView({ page: 'design-systems' }); setMobileSidebarOpen(false); }}
             />
             <NavButton
+              icon={<Activity className="h-4 w-4 shrink-0" />}
+              label={t('nav.telemetry')}
+              active={view.page === 'telemetry'}
+              collapsed={sidebarCollapsed}
+              onClick={() => { setView({ page: 'telemetry' }); setMobileSidebarOpen(false); }}
+            />
+            <NavButton
               icon={<Settings className="h-4 w-4 shrink-0" />}
               label={t('nav.admin')}
               active={view.page === 'admin'}
@@ -237,6 +246,12 @@ export default function App() {
                 <span className="text-sm font-semibold">{t('nav.admin')}</span>
               </>
             )}
+            {view.page === 'telemetry' && (
+              <>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-semibold">{t('nav.telemetry')}</span>
+              </>
+            )}
             <div className="ml-auto flex items-center gap-2">
               <LanguageSwitcher />
               <Button variant="ghost" size="icon" onClick={() => setDark((d) => !d)} title={t('theme.toggle')}>
@@ -263,6 +278,7 @@ export default function App() {
             {view.page === 'agents' && <AgentsTab />}
             {view.page === 'design-systems' && <DesignSystemsTab />}
             {view.page === 'admin' && <Admin />}
+            {view.page === 'telemetry' && <TelemetryDashboard />}
           </main>
         </div>
       </div>

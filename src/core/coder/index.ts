@@ -8,6 +8,7 @@ import type { ChatProvider, CoderProviderName } from './providers/adapter.js';
 import { ToolRegistry } from './core/registry.js';
 import { CoderRunner } from './core/runner.js';
 import { buildSystemPrompt } from './core/system-prompt.js';
+import { buildRepoMap } from './core/repo-map.js';
 import { fsTools } from './tools/fs.js';
 import { applyPatchTool } from './tools/apply-patch.js';
 import { shellTools } from './tools/shell.js';
@@ -27,6 +28,7 @@ import { buildMcpResourceTools } from './tools/mcp-resources.js';
 import { McpServerManager } from './tools/mcp-server-manager.js';
 import { McpServerStore } from '../../store/mcp-server-store.js';
 import { buildSubagentTool, buildSpawnAgentsTool } from './tools/subagent.js';
+import { buildSpawnAgentTool } from './tools/spawn-agent.js';
 import { buildMasterTools } from './tools/company/master-tools.js';
 import { buildKanbanTools } from './tools/company/kanban-tools.js';
 import { buildBoardTools } from './tools/company/board-tools.js';
@@ -42,7 +44,7 @@ import { buildSubordinateKanbanTools } from './tools/company/subordinate-kanban-
 import { isMasterAllowed } from './tools/company/master-filter.js';
 import { RuntimeHookRegistry } from './core/hook-registry.js';
 import { registerCompanyHooks } from './core/company-hooks.js';
-import { inferProfileFromMessage, profileToTiers, type CoderProfile } from './tools/tiers.js';
+import { inferProfileFromMessage, inferProfileFromHistory, profileToTiers, type CoderProfile } from './tools/tiers.js';
 import { AGENTS, isAgentId, type AgentId } from './agents/index.js';
 import { SessionOverlay } from './overlay/session-overlay.js';
 import { ToolOutputStore } from './overlay/tool-output-store.js';
@@ -55,11 +57,21 @@ import { globTools } from './tools/glob.js';
 import { todoTools } from './tools/todo.js';
 import { viewImageTools } from './tools/view-image.js';
 import { goalTools } from './tools/goal.js';
+import { buildCodeExecTool } from './tools/code-exec.js';
+import { listAgentsTools } from './tools/list-agents.js';
+import { waitAgentsTools } from './tools/wait-agents.js';
+import { sendMessageTools } from './tools/send-message.js';
+import { sendInputTools } from './tools/send-input.js';
 import { worktreeTools, createProjectWorktree } from './tools/worktree.js';
 import { SkillStore } from '../../store/skill-store.js';
 import type { ResolvedSkill, SkillTemplateContext } from './skills/types.js';
 import { buildInvokeSkillTool, buildSkillDiscoveryTools } from './skills/skill-tool-builder.js';
-import { buildMatchedSkillsPromptSection, buildSkillsPromptSection } from './skills/prompt-injector.js';
+import {
+  buildCompactSkillsSection,
+  buildLazySkillsSection,
+  buildMatchedSkillsPromptSection,
+  buildSkillsPromptSection,
+} from './skills/prompt-injector.js';
 import { matchSkills, type SkillMatchContext } from './skills/skill-matcher.js';
 import { SessionStore } from './sessions/store.js';
 import { ProviderStore } from '../../store/provider-store.js';
@@ -316,6 +328,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(todoTools);
   registry.registerAll(viewImageTools);
   registry.registerAll(goalTools);
+  registry.registerAll(listAgentsTools);
+  registry.registerAll(waitAgentsTools);
+  registry.registerAll(sendMessageTools);
+  registry.registerAll(sendInputTools);
+  // code_exec — registered last in the native batch so its tools-proxy
+  // closes over a registry that already includes fs/git/web/lsp/glob/etc.
+  // The proxy itself is rebuilt per invocation (`registry.list()` at call
+  // time), so MCP/company tools added later are also picked up.
+  registry.register(buildCodeExecTool(registry));
   registry.registerAll(worktreeTools);
 
   // MCP bridges — Master gets N bridges (one per company project, prefixed tools),
@@ -512,6 +533,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   }
 
+  // Unified spawn dispatcher — registered after BOTH spawn_subagent (always,
+  // when subagents are enabled) and spawn_subordinate_agent (master-only).
+  // Resolution is lazy at call time, so kind="ephemeral" works in any
+  // session that has spawn_subagent registered, and kind="persistent" works
+  // only when spawn_subordinate_agent is in the registry.
+  if (registry.get('spawn_subagent') || registry.get('spawn_subordinate_agent')) {
+    registry.register(buildSpawnAgentTool(registry));
+  }
+
   // Builder mode: when the company context carries a sandbox binding,
   // we pin `cwd` to the container workdir and swap the default ports
   // for sandbox-backed adapters. Every filesystem/shell tool from here
@@ -599,6 +629,21 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         console.warn(`[coder] updateTaskStatus failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
+    getGoalState: () => {
+      try {
+        return store.getSessionGoal(session.id);
+      } catch (e) {
+        console.warn(`[coder] getSessionGoal failed: ${e instanceof Error ? e.message : String(e)}`);
+        return null;
+      }
+    },
+    upsertGoalState: (goal) => {
+      try {
+        store.upsertSessionGoal(session.id, goal);
+      } catch (e) {
+        console.warn(`[coder] upsertSessionGoal failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
     getTasksState: () => {
       try {
         return store.getTasksState(session.id);
@@ -635,14 +680,26 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // Resolve profile here (before buildSystemPrompt) so the prompt can render
   // the tier hint. Priority: explicit opts.profile → CODER_PROFILE env →
-  // 'bootstrap' for fresh sessions, 'full' for resumed ones. Resumed sessions
-  // skip tier filtering because the stored history may already reference
-  // tools from higher tiers — hiding them now would confuse the model.
+  // agentDef.profile → derived from history (resumed) or 'bootstrap' (fresh).
+  //
+  // Resumed sessions: instead of blanket 'full', scan the history's tool_use
+  // blocks and pick the smallest profile that covers what was actually used.
+  // Most resumed conversations only ever used bootstrap tools — promoting to
+  // 'full' just to avoid hiding tools from history was paying tokens for
+  // nothing on every turn.
+  const historyToolNames: string[] = [];
+  if (hasHistory0) {
+    for (const m of initialMessagesEarly) {
+      for (const b of m.content) {
+        if (b.type === 'tool_use') historyToolNames.push(b.name);
+      }
+    }
+  }
   const rawProfile0 =
     opts.profile ??
     (process.env.CODER_PROFILE as CoderProfile | 'auto' | undefined) ??
     (agentDef?.profile) ??
-    (hasHistory0 ? 'full' : 'bootstrap');
+    (hasHistory0 ? inferProfileFromHistory(historyToolNames) : 'bootstrap');
   const preResolvedProfile: CoderProfile =
     rawProfile0 === 'auto' ? inferProfileFromMessage(opts.userMessage ?? '') : rawProfile0;
 
@@ -692,10 +749,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // results and waste turns. Disk-aware tools (mcp__read_file,
   // mcp__list_directory, mcp__grep_code via ripgrep, etc.) stay registered.
   if (!isIndexed) {
+    // Tools that genuinely need the symbol DB or vector store. Tools that
+    // gained a tree-sitter / disk-grep fallback (find_references,
+    // prepare_edit, trace_usage, get_symbol_body, get_file_skeleton,
+    // get_file_structure, grep_code) are kept registered — they work
+    // without an index and degrade gracefully.
     const indexDependent = new Set<string>([
-      'get_symbol_details', 'get_class_members', 'find_references',
-      'get_hierarchy', 'find_implementations', 'trace_usage',
-      'prepare_edit', 'semantic_neighbors',
+      'get_symbol_details', 'get_class_members',
+      'get_hierarchy', 'find_implementations',
+      'semantic_neighbors',
       'get_dependencies', 'get_dependents',
       'search', 'search_global', 'search_concepts', 'search_by_kind',
       'get_project_overview', 'get_project_pulse',
@@ -716,6 +778,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   }
 
+  // Optional repo map (B6). Off by default — set CODER_REPOMAP_TOKENS to a
+  // char budget (e.g. 4000 ≈ 1000 tokens) to enable. Skipped when the
+  // project has never been indexed (no symbols to map).
+  const repoMapBudget = Number(process.env.CODER_REPOMAP_TOKENS ?? 0);
+  const repoMap = repoMapBudget > 0 && isIndexed
+    ? buildRepoMap(db, project.id, repoMapBudget)
+    : '';
+
   let systemPrompt = buildSystemPrompt({
     projectName: project.name,
     projectRoot: project.root_path,
@@ -733,6 +803,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       : undefined,
     mcpAvailable: mcpBridgeOk,
     isIndexed,
+    repoMap,
   });
 
   // Append company prompt block (master orchestration or subordinate instructions)
@@ -740,25 +811,59 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     systemPrompt += '\n' + opts.companyPromptBlock;
   }
 
-  // Append skill awareness block. Strategy:
-  //   1. If we have a company context (master/subordinate), use the matcher
-  //      to filter skills by role/tags/paths and inject the matched ones
-  //      with full body (high confidence) or as suggestions (lower).
-  //   2. Otherwise (legacy / non-company sessions), fall back to the
-  //      compact awareness block listing all enabled skills.
+  // Append skill awareness block. Mode resolution priority:
+  //   1. Explicit env CODER_SKILLS_PROMPT_MODE = lazy | compact | matched | full
+  //   2. Company context present (master/subordinate) → 'matched' (existing
+  //      behaviour: matcher filters skills by role/tag/path)
+  //   3. Otherwise → 'lazy' (default — skills discoverable via get_skills_list
+  //      tool, ~30 tokens vs ~3000 for full)
+  //
+  // Sessions with 30+ skills used to spend ~3000 tokens of every turn just
+  // describing skills the agent would never call. The lazy default trims
+  // that to a single pointer while keeping discovery a tool call away.
+  let skillsModeUsed: 'lazy' | 'compact' | 'matched' | 'full' | 'none' = 'none';
   if (resolvedSkills.length > 0) {
-    const matchCtx: SkillMatchContext = {
-      role: opts.companyContext?.agentRole,
-      mode: opts.companyContext?.isMaster ? 'master' : opts.companyContext ? 'subordinate' : undefined,
-      cwd: project.root_path,
-      recentFiles: [],
-      sessionTags: [],
-    };
-    const matched = matchSkills(resolvedSkills, matchCtx);
-    if (matched.length > 0) {
-      systemPrompt += buildMatchedSkillsPromptSection(matched, skillTemplateCtx);
+    const envMode = (process.env.CODER_SKILLS_PROMPT_MODE ?? '').toLowerCase().trim();
+    const inCompany = !!opts.companyContext;
+    const mode: 'lazy' | 'compact' | 'matched' | 'full' =
+      envMode === 'lazy' || envMode === 'compact' || envMode === 'matched' || envMode === 'full'
+        ? envMode
+        : inCompany
+          ? 'matched'
+          : 'lazy';
+
+    if (mode === 'lazy') {
+      systemPrompt += buildLazySkillsSection(resolvedSkills.length);
+      skillsModeUsed = 'lazy';
+    } else if (mode === 'compact') {
+      systemPrompt += buildCompactSkillsSection(resolvedSkills);
+      skillsModeUsed = 'compact';
+    } else if (mode === 'matched') {
+      // Path triggers fire from `recentFiles`. Outside company context we
+      // approximate that with file-shaped tokens in the user message
+      // (relative paths and *.ext mentions). Misses some — that's fine,
+      // the skill is still discoverable via get_skills_list.
+      const userMsg = opts.userMessage ?? '';
+      const recentFiles = extractFilePathsFromText(userMsg);
+      const matchCtx: SkillMatchContext = {
+        role: opts.companyContext?.agentRole,
+        mode: opts.companyContext?.isMaster ? 'master' : opts.companyContext ? 'subordinate' : undefined,
+        cwd: project.root_path,
+        recentFiles,
+        sessionTags: [],
+      };
+      const matched = matchSkills(resolvedSkills, matchCtx);
+      if (matched.length > 0) {
+        systemPrompt += buildMatchedSkillsPromptSection(matched, skillTemplateCtx);
+        skillsModeUsed = 'matched';
+      } else {
+        // No matches: degrade to lazy rather than dumping the full list.
+        systemPrompt += buildLazySkillsSection(resolvedSkills.length);
+        skillsModeUsed = 'lazy';
+      }
     } else {
       systemPrompt += buildSkillsPromptSection(resolvedSkills, skillTemplateCtx);
+      skillsModeUsed = 'full';
     }
   }
 
@@ -776,6 +881,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       planMode: !!opts.planMode,
       mcp_available: mcpBridgeOk,
       skill_ids: resolvedSkills.map((s) => s.id),
+      skills_mode: skillsModeUsed,
       company_role: opts.companyContext?.agentRole ?? null,
       is_master: !!opts.companyContext?.isMaster,
     },
@@ -1213,6 +1319,28 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     });
 
   return { session, runner, done: donePromise, indexStatus };
+}
+
+/**
+ * Extract file-shaped tokens from arbitrary text (typically the user's
+ * message). Used by the skills 'matched' mode to feed `recentFiles` into
+ * the matcher when no formal file context is available — relative paths
+ * and `*.ext` mentions are good enough for path-glob triggers.
+ *
+ * Pure heuristic; misses are fine — when the matcher returns empty, we
+ * degrade to the lazy section instead of dumping every skill.
+ */
+function extractFilePathsFromText(text: string): string[] {
+  if (!text) return [];
+  const paths = new Set<string>();
+  // Tokens that look like a file path (with at least one slash or a dotted
+  // extension) — non-greedy to avoid swallowing surrounding prose.
+  const re = /(?:[a-zA-Z0-9_\-./@]+\/)?[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]{1,8}\b/g;
+  for (const m of text.matchAll(re)) {
+    paths.add(m[0]);
+    if (paths.size >= 20) break;
+  }
+  return [...paths];
 }
 
 function defaultModelFor(provider: CoderProviderName): string {

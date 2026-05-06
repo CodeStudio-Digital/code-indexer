@@ -412,6 +412,45 @@ export function mountCoderSessionsRoutes(
   });
 
   /**
+   * Goal + active tasks summary. Single endpoint so the dashboard can pin
+   * a "session header" widget without juggling two requests. Both fields
+   * are nullable — a session with no goal AND no tasks returns nulls.
+   */
+  app.get('/api/coder/sessions/:id/state-summary', (c) => {
+    const id = parseIdParam(c);
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c, 'session not found');
+    const goal = sessionStore.getSessionGoal(id);
+    const tasks = sessionStore.getTasksState(id);
+    return c.json({
+      goal: goal
+        ? {
+            text: goal.text,
+            status: goal.status,
+            budget_tokens: goal.budgetTokens,
+            completion_note: goal.completionNote,
+            created_at: goal.createdAt,
+            updated_at: goal.updatedAt,
+          }
+        : null,
+      tasks: tasks
+        ? {
+            summary: tasks.summary,
+            approved: tasks.approved,
+            execution_mode: tasks.execution_mode,
+            current_task_id: tasks.current_task_id,
+            tasks: tasks.tasks.map((t) => ({
+              id: t.id,
+              title: t.title,
+              status: t.status,
+              files: t.files,
+            })),
+          }
+        : null,
+    });
+  });
+
+  /**
    * Probe endpoint: returns whether a live run is currently attached to
    * the bus for this session. Used by the dashboard on session mount to
    * decide if it should open GET /attach instead of waiting for a new

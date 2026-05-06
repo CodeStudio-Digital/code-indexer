@@ -47,6 +47,41 @@ export function buildSkillsPromptSection(
   return `\n\n# Active Skills\n\nYou have ${skills.length} skill(s) configured for this session. Before starting a task that may be covered by a skill, load its instructions with \`get_skill_content\`.\n\n${lines.join('\n')}\n\nUse \`get_skills_list\` to see all skills or \`get_skill_content\` with a skill ID to load full instructions.`;
 }
 
+/**
+ * Lazy mode (default) — sends only a one-line awareness pointer instead of
+ * any skill names or descriptions. The agent calls `get_skills_list` when
+ * it actually needs to discover what's available, and `get_skill_content`
+ * to load a specific skill body. Designed for sessions where 30+ skills
+ * are configured and the per-turn cost of listing them dwarfs the cost of
+ * one extra round-trip on the rare occasions a skill is needed.
+ *
+ * Cost: ~30 tokens regardless of how many skills are active (vs ~3000
+ * tokens for `buildSkillsPromptSection` with 47 skills).
+ */
+export function buildLazySkillsSection(skillCount: number): string {
+  if (skillCount === 0) return '';
+  return `\n\n# Active Skills\n\nYou have ${skillCount} skill(s) available. Call \`get_skills_list\` to see IDs + descriptions, then \`get_skill_content\` to load a specific skill body before starting a task it covers.`;
+}
+
+/**
+ * Compact-list mode — lists every skill ID without descriptions. Trade-off
+ * between full visibility and token cost. For 47 skills with id-only lines
+ * (~50 chars each) this is ~600 tokens vs ~3000 for the full mode.
+ *
+ * The agent still has to call `get_skill_content` for the body, but at
+ * least it can scan the IDs for keywords. Useful when a project has a
+ * handful of project-specific skills that don't pattern-match well via
+ * the matcher.
+ */
+export function buildCompactSkillsSection(
+  skills: ResolvedSkill[],
+): string {
+  if (skills.length === 0) return '';
+  const sorted = [...skills].sort((a, b) => a.id.localeCompare(b.id));
+  const lines = sorted.map((s) => `- \`${s.id}\``);
+  return `\n\n# Active Skills (${skills.length})\n\nIDs only. Call \`get_skill_content\` with an ID to load the full instructions.\n\n${lines.join('\n')}`;
+}
+
 /** Confidence threshold above which a matched skill is inlined verbatim. */
 const INLINE_CONFIDENCE_THRESHOLD = 0.9;
 

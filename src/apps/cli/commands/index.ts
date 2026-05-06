@@ -14,6 +14,7 @@ import { register as deps } from './deps.js';
 import { register as init } from './init.js';
 import { register as serve } from './serve.js';
 import { register as agent } from './agent.js';
+import { register as hygiene } from './hygiene.js';
 
 const registrars: Array<(program: Command) => void> = [
   projects,
@@ -31,6 +32,7 @@ const registrars: Array<(program: Command) => void> = [
   init,
   serve,
   agent,
+  hygiene,
 ];
 
 export function registerAll(program: Command): void {

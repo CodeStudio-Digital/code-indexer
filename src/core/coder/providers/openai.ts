@@ -72,6 +72,16 @@ export class OpenAIChatProvider implements ChatProvider {
       deepseekExtras.thinking = { type: 'enabled' };
     }
 
+    // Stable cache hint per session. OpenAI accepts `prompt_cache_key`
+    // (https://platform.openai.com/docs/guides/prompt-caching#prompt-cache-key)
+    // and routes the request to a server that has the prefix cached. DeepSeek
+    // and other OpenAI-compatible vendors silently ignore unknown params, so
+    // there's no harm sending it everywhere — when the vendor honors it we
+    // get the cache hit, when it doesn't, no behavior change. Mirrors the
+    // wiring already in kimi-code.ts for GLM-Code.
+    const cacheKeyExtras: Record<string, unknown> =
+      req.sessionId != null ? { prompt_cache_key: `coder-session-${req.sessionId}` } : {};
+
     // OpenAI o-series and gpt-5 reasoning variants reject `temperature !== 1`.
     // The runner's resolver already filters these models, but guard here too
     // since this adapter is shared across vendors. Copilot has been observed
@@ -94,6 +104,7 @@ export class OpenAIChatProvider implements ChatProvider {
         ...(typeof temperature === 'number' ? { temperature } : {}),
         ...zaiExtras,
         ...deepseekExtras,
+        ...cacheKeyExtras,
       };
       stream = await this.client.chat.completions.create(
         params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming

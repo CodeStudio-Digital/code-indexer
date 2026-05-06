@@ -54,6 +54,13 @@ export interface PromptContext {
    * the agent toward disk-based reads + tree-sitter-aware `read_file`.
    */
   isIndexed?: boolean;
+  /**
+   * Optional repo map (top-level symbols of recently-modified files).
+   * Appended at the END of the system prompt so it doesn't invalidate the
+   * cached preamble/body prefix when files are edited. Gated by index.ts
+   * via the CODER_REPOMAP_TOKENS env var (off when 0, which is the default).
+   */
+  repoMap?: string;
 }
 
 /**
@@ -173,7 +180,32 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   });
   const extraBlock = extra ? `\n\n# Project-specific instructions\n${extra}` : '';
 
-  return `${preamble}${base}${planSection}${interactionSection}${extraBlock}`;
+  // Optional Agentless-style pipeline hint (B7). Off by default. When the
+  // CODER_AGENTLESS_MODE=1 env is set, we add a short procedural directive:
+  // localize → plan → patch → verify. Pure prompt-engineering, no tool
+  // changes — the existing submit_plan/submit_tasks/execute_task lifecycle
+  // is the substrate, this just nudges the agent to use it linearly for
+  // bug-fix-style tasks instead of free-form exploration.
+  const agentlessHint = process.env.CODER_AGENTLESS_MODE === '1'
+    ? `
+
+# Pipeline mode (procedural)
+Follow this order for code-fix tasks; do NOT free-explore:
+1. **Localize** — use grep_code / get_symbol_body to identify the smallest set of files+symbols that need to change. Stop as soon as you have a hypothesis you can verify.
+2. **Plan** — call submit_plan with the exact files you intend to touch. Wait for approval.
+3. **Patch** — make the edits in one or two passes (multi_edit when feasible). Do not browse around.
+4. **Verify** — run the relevant test/lint/build and report the result.
+
+This pipeline is more token-efficient than free agents on isolated tasks. If the work decomposes into multiple independent changes, use submit_tasks instead and run the same loop per task.
+`
+    : '';
+
+  // Repo map goes LAST so file-edit churn doesn't invalidate the cached
+  // prefix above. When CODER_REPOMAP_TOKENS=0 (default) ctx.repoMap is
+  // empty/undefined and this collapses to nothing.
+  const repoMapBlock = ctx.repoMap && ctx.repoMap.length > 0 ? `\n\n${ctx.repoMap}` : '';
+
+  return `${preamble}${base}${planSection}${interactionSection}${extraBlock}${agentlessHint}${repoMapBlock}`;
 }
 
 /**
@@ -245,18 +277,23 @@ Use native tools for all code exploration:
   }
   if (isIndexed === false) {
     return `# Tool strategy — project NOT indexed
-The MCP bridge is connected, but this project has never been indexed. Symbol-DB tools (\`get_symbol_details\`, \`find_references\`, \`trace_usage\`, \`prepare_edit\`, \`semantic_neighbors\`, \`get_dependencies\`, \`get_dependents\`, \`search\`, \`search_global\`, \`get_project_overview\`, \`get_project_pulse\`, \`get_architecture\`, \`get_repo_map\`, \`get_context_for\`, \`query_snapshots\`) are STRIPPED from the registry — do not call them.
+The MCP bridge is connected, but this project has never been indexed. The runtime kept the tools that have a tree-sitter / disk-grep fallback and stripped the ones that strictly need the symbol DB.
 
-Disk-aware MCP tools that DO work without an index:
-- \`mcp__read_file\`, \`mcp__list_directory\` — overlay-aware (sees session edits).
-- \`mcp__grep_code\` — ripgrep-backed text search.
+Stripped (do not call): \`get_symbol_details\`, \`get_class_members\`, \`get_hierarchy\`, \`find_implementations\`, \`semantic_neighbors\`, \`get_dependencies\`, \`get_dependents\`, \`search\`, \`search_global\`, \`search_concepts\`, \`search_by_kind\`, \`get_project_overview\`, \`get_project_pulse\`, \`get_architecture\`, \`get_repo_map\`, \`get_context_for\`, \`query_snapshots\`, \`get_project_context\`.
+
+Still available — fall back to tree-sitter or disk grep automatically:
+- \`mcp__read_file\`, \`mcp__list_directory\` — overlay-aware.
+- \`mcp__grep_code\` — ripgrep on disk.
+- \`mcp__get_file_skeleton\`, \`mcp__get_file_structure\` — tree-sitter on disk; outputs are tagged "tree-sitter fallback".
+- \`mcp__get_symbol_body\` — regex declaration locator + brace/indent body extractor.
+- \`mcp__find_references\`, \`mcp__trace_usage\` (depth=1 only), \`mcp__prepare_edit\` — disk-grep callers + tree-sitter neighbors. Imports/tests are omitted by prepare_edit because they need DB dependency tables.
 
 Native tools that always work:
-1. \`read_file\` — pass \`symbol: "<name>"\` for one function/class body, or \`around_line: <n>\` to grab the symbol containing that line. Tree-sitter-/regex-driven, runs straight from disk.
+1. \`read_file\` — pass \`symbol: "<name>"\` for one function/class body, or \`around_line: <n>\` to grab the symbol containing that line.
 2. \`glob\` — fast filename matching.
 3. \`run_command\` with \`rg\` for text search, \`find\`/\`dir /s\` for path discovery.
 
-If symbol/structural navigation becomes essential, ask the user to index the project via the admin panel — it unlocks the full 41-tool MCP suite for the rest of the session once a re-run of the agent picks it up.
+If you want full caller graphs / search scoring / vector neighbors, ask the user to index the project via the admin panel.
 `;
   }
   return `# Tool strategy — token economy

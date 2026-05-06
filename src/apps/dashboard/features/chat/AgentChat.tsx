@@ -15,11 +15,13 @@ import {
 import { Input } from '../../components/ui/input.js';
 import { TooltipProvider } from '../../components/ui/tooltip.js';
 import { ChatHeader } from './ChatHeader.js';
+import { SessionStateBanner } from './SessionStateBanner.js';
 import { Composer, type ComposerHandle } from './composer/Composer.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { MessageList } from './messages/MessageList.js';
 import { SessionDetailsModal } from './SessionDetailsModal.js';
+import { SessionMetricsModal } from './SessionMetricsModal.js';
 import { TodosSidebar } from './TodosSidebar.js';
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
 import { ToolConfigDialog } from './ToolConfigDialog.js';
@@ -66,6 +68,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [toolConfigOpen, setToolConfigOpen] = useState(false);
   const [skillConfigOpen, setSkillConfigOpen] = useState(false);
+  const [metricsOpen, setMetricsOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [thinking, setThinking] = useState(false);
 
@@ -157,6 +160,20 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
       clearCurrentTurn();
     }
   }, [persistedMessageCount, streaming, currentTurn, clearCurrentTurn, liveTurnDuplicatedInHistory]);
+
+  // Bump the SessionStateBanner refresh key whenever a turn ends — that's
+  // the cheapest place to catch goal / tasks state mutations without
+  // wiring a per-tool listener. Network cost is negligible (1 fetch / turn
+  // boundary) and the user gets fresh banner state right after each model
+  // response. Also bumps on session change.
+  const [stateRefreshKey, setStateRefreshKey] = useState(0);
+  const wasStreamingRef = useRef(false);
+  useEffect(() => {
+    if (wasStreamingRef.current && !streaming) {
+      setStateRefreshKey((k) => k + 1);
+    }
+    wasStreamingRef.current = streaming;
+  }, [streaming]);
 
   const createSession = async (title?: string) => {
     const created = await apiPost<CoderSession>('/coder/sessions', {
@@ -558,6 +575,11 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
         session={sessionData?.session ?? null}
         stats={stats}
       />
+      <SessionMetricsModal
+        open={metricsOpen}
+        onOpenChange={setMetricsOpen}
+        sessionId={selectedId}
+      />
       <ToolConfigDialog
         sessionId={selectedId}
         open={toolConfigOpen}
@@ -631,6 +653,13 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                   onOpenSidebar={() => setMobileSidebarOpen(true)}
                   onOpenToolConfig={() => setToolConfigOpen(true)}
                   onOpenSkillConfig={() => setSkillConfigOpen(true)}
+                  onOpenMetrics={() => setMetricsOpen(true)}
+                />
+              )}
+              {sessionData?.session && (
+                <SessionStateBanner
+                  sessionId={sessionData.session.id}
+                  refreshKey={stateRefreshKey}
                 />
               )}
               <div className="flex flex-1 min-h-0 overflow-hidden">

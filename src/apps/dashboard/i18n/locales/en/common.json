@@ -3,6 +3,7 @@
   "nav.agents": "Agents",
   "nav.designSystems": "Design Systems",
   "nav.admin": "Admin",
+  "nav.telemetry": "Telemetry",
   "nav.dashboard": "Dashboard",
   "actions.save": "Save",
   "actions.saving": "Saving…",

@@ -91,6 +91,10 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'glob',
   'todo_write',
   'invoke_skill',
+  // Skill discovery — needed in lazy/compact modes so the agent can fetch
+  // skill descriptions and bodies on demand without paying for them up front.
+  'get_skills_list',
+  'get_skill_content',
   // MCP — token-efficient discovery / search
   'mcp__get_project_pulse',
   'mcp__query_snapshots',
@@ -219,6 +223,31 @@ export function filterByTiers<T extends { name: string }>(
   tierOverrides?: ReadonlyMap<string, ToolTier>,
 ): T[] {
   return tools.filter((t) => activeTiers.has(getToolTier(t.name, tierOverrides)));
+}
+
+/**
+ * Inspect the tool calls actually made in a resumed session's history and
+ * pick the smallest profile that covers them. Used to avoid promoting every
+ * resumed session to 'full' when the conversation only used bootstrap tools.
+ *
+ *  - any 'admin' tool used → 'full'
+ *  - any 'navigate' tool used → 'navigate'
+ *  - else → 'bootstrap'
+ *
+ * `tierOverrides` is the same runtime map the runner already passes down for
+ * external MCP tools, so custom-tiered tools count toward the right ceiling.
+ */
+export function inferProfileFromHistory(
+  toolNames: Iterable<string>,
+  tierOverrides?: ReadonlyMap<string, ToolTier>,
+): CoderProfile {
+  let sawNavigate = false;
+  for (const name of toolNames) {
+    const tier = getToolTier(name, tierOverrides);
+    if (tier === 'admin') return 'full';
+    if (tier === 'navigate') sawNavigate = true;
+  }
+  return sawNavigate ? 'navigate' : 'bootstrap';
 }
 
 /**

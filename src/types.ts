@@ -306,7 +306,14 @@ export interface ExportOptions {
 
 // ─── Search ───────────────────────────────────────────────────────
 
-export type SearchMode = 'fts' | 'vector' | 'hybrid';
+/**
+ * `auto` is the planner-routed mode: the heuristics in
+ * `core/search/planner.ts` pick the cheapest backend that still
+ * answers the query well (fts for symbol lookups, hybrid+expanded
+ * for natural-language questions). The other values are still
+ * accepted for callers that want to force a specific path.
+ */
+export type SearchMode = 'fts' | 'vector' | 'hybrid' | 'auto';
 export type SearchType = 'files' | 'symbols' | 'all';
 
 export interface HybridSearchResult {
@@ -347,6 +354,14 @@ export interface ScannedFile {
   hash: string;
   sizeBytes: number;
   lineCount: number;
+  /**
+   * Mapper tier — `core`, `support`, or `on_demand`. `excluded` files
+   * never reach this stage, so the field is one of the three positive
+   * tiers. Optional for backwards compatibility; older callers ignore.
+   */
+  tier?: 'core' | 'support' | 'on_demand';
+  /** Why the mapper picked this tier — surfaced in cost dashboards. */
+  mapperReason?: string;
 }
 
 export interface ScanResult {
