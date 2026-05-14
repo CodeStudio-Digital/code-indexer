@@ -662,7 +662,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     // not a hard dependency.
     if (body.builder && isBuilderStack(body.builder.stack)) {
       try {
-        stackSnapshotSeeder.seedForSession(effectiveProjectIds, body.builder.stack);
+        await stackSnapshotSeeder.seedForSession(effectiveProjectIds, body.builder.stack);
       } catch (err) {
         console.error(
           '[company/sessions] stack-snapshot seeding failed:',

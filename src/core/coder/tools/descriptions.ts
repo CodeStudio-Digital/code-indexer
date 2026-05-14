@@ -126,14 +126,14 @@ export const RUN_COMMAND_DESC =
 // ---------- interaction (src/core/coder/tools/interaction.ts) ----------
 
 export const ASK_USER_DESC =
-  'Pause and ask the user a single question. Strongly prefer 2-3 button options over free-form.\n' +
-  "USE: when you need a decision/preference the user alone can make (which of 3 libraries, scope of refactor, naming).\n" +
+  'Pause and ask the user a single question. Strongly prefer button options (2–8) over free-form when the answer space is bounded.\n' +
+  "USE: when you need a decision/preference the user alone can make (which library, scope of refactor, naming, focus area).\n" +
   "USE: when critical context is missing and guessing would waste work.\n" +
-  'PREFER: 2-3 mutually-exclusive `options` so the user clicks a button instead of typing. Free-form is for open answers only.\n' +
+  'PREFER: 2–8 mutually-exclusive `options` so the user clicks instead of types. Buttons render in a 2-column grid. Free-form is for open answers only.\n' +
   "DON'T: ask things you can verify yourself (file existence, type signatures, config values — READ them).\n" +
   "DON'T: ask for confirmation of obvious next steps ('should I now run the tests?'). Just do it.\n" +
   "DON'T: ask multiple small questions in sequence. Batch them into one question with options or a multi-line prompt.\n" +
-  "DON'T: pass options with 1 or 4+ items — the schema enforces 2-3. If only one path makes sense, just take it; if many, broaden the question.";
+  "DON'T: pass 1 option (just take that path) or 9+ (the question is too broad — split into a coarser top-level question, then drill down).";
 
 // ---------- plan (src/core/coder/tools/plan.ts) ----------
 

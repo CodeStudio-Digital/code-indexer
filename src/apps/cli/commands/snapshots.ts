@@ -1,5 +1,9 @@
 import type { Command } from 'commander';
 import { SnapshotService } from '../../../core/services/snapshots.js';
+import { backfillSnapshotEmbeddings } from '../../../core/services/snapshot-backfill.js';
+import { createAndSeedProviderStore, createSearchBundle } from '../../../core/bootstrap/index.js';
+import { createReranker } from '../../../core/search/reranker.js';
+import { loadConfig } from '../../../utils/config.js';
 import { getDB } from '../helpers.js';
 import type { SnapshotCategory } from '../../../types.js';
 
@@ -17,22 +21,22 @@ export function register(program: Command): void {
   });
 
   snapshots.command('add <project>').requiredOption('-t, --title <title>', 'Title').requiredOption('-c, --category <cat>', 'Category').requiredOption('--content <text>', 'Content')
-    .action((projectName: string, opts: { title: string; category: string; content: string }) => {
+    .action(async (projectName: string, opts: { title: string; category: string; content: string }) => {
       const db = getDB();
       const svc = new SnapshotService(db);
       const project = db.getProjectByName(projectName);
       if (!project) { console.error('Project not found'); process.exit(1); }
-      const snap = svc.create(project.id, { title: opts.title, category: opts.category as SnapshotCategory, content: opts.content });
-      console.log(`Snapshot #${snap.id} created.`);
+      const { snap, embedError } = await svc.create(project.id, { title: opts.title, category: opts.category as SnapshotCategory, content: opts.content });
+      console.log(`Snapshot #${snap.id} created.${embedError ? ` (warning: vector index not updated — ${embedError})` : ''}`);
       db.close();
     });
 
   snapshots.command('edit <id>').option('-t, --title <title>').option('-c, --category <cat>').option('--content <text>')
-    .action((id: string, opts: { title?: string; category?: string; content?: string }) => {
+    .action(async (id: string, opts: { title?: string; category?: string; content?: string }) => {
       const db = getDB();
       const svc = new SnapshotService(db);
-      svc.update(parseInt(id, 10), { title: opts.title, category: opts.category as SnapshotCategory | undefined, content: opts.content });
-      console.log(`Snapshot #${id} updated.`);
+      const { embedError } = await svc.update(parseInt(id, 10), { title: opts.title, category: opts.category as SnapshotCategory | undefined, content: opts.content });
+      console.log(`Snapshot #${id} updated.${embedError ? ` (warning: vector index not updated — ${embedError})` : ''}`);
       db.close();
     });
 
@@ -43,6 +47,39 @@ export function register(program: Command): void {
     console.log(`Snapshot #${id} deleted.`);
     db.close();
   });
+
+  snapshots
+    .command('backfill <project>')
+    .description('Embed any snapshots that are missing a vector index (idempotent — already-embedded rows short-circuit on hash).')
+    .action(async (projectName: string) => {
+      const db = getDB();
+      const project = db.getProjectByName(projectName);
+      if (!project) {
+        console.error('Project not found');
+        db.close();
+        process.exit(1);
+      }
+      const config = loadConfig();
+      const providerStore = createAndSeedProviderStore(config.dbPath);
+      const { embeddingService, searchableVectorStore } = createSearchBundle(
+        db,
+        providerStore,
+        createReranker(),
+      );
+      const svc = new SnapshotService(db, embeddingService, searchableVectorStore);
+      if (!svc.hasEmbeddingBackend()) {
+        console.error('No embedding/vector backend configured. Configure one in the dashboard or via env first.');
+        db.close();
+        process.exit(1);
+      }
+      console.log(`Backfilling snapshot embeddings for "${projectName}"...`);
+      const result = await backfillSnapshotEmbeddings(db, svc, project.id);
+      console.log(
+        `embedded=${result.embedded} failed=${result.failed} skipped=${result.skipped}` +
+        (result.errors.length > 0 ? `\nfirst errors: ${result.errors.join(' | ')}` : ''),
+      );
+      db.close();
+    });
 
   program.command('context <project>').description('Show project context').action((projectName: string) => {
     const db = getDB();

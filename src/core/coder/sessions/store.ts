@@ -8,17 +8,21 @@ import type {
   SessionInputKind, SessionInputRow,
 } from './types.js';
 
-type SessionRow = Omit<CoderSession, 'is_archived' | 'is_favorite'> & {
+type SessionRow = Omit<CoderSession, 'is_archived' | 'is_favorite' | 'unrestricted_tool_output'> & {
   is_archived: number;
   is_favorite: number;
+  /** SQLite stores INTEGER 0|1|NULL — coerced to boolean|null at map time. */
+  unrestricted_tool_output: number | null;
 };
 
 function mapSessionRow(row: SessionRow | undefined | null): CoderSession | null {
   if (!row) return null;
+  const unrestricted = row.unrestricted_tool_output;
   return {
     ...row,
     is_archived: !!row.is_archived,
     is_favorite: !!row.is_favorite,
+    unrestricted_tool_output: unrestricted == null ? null : !!unrestricted,
   } as CoderSession;
 }
 
@@ -46,6 +50,15 @@ export class SessionStore {
     this.db.close();
   }
 
+  /**
+   * Escape hatch for sibling stores that operate on the same SQLite file.
+   * Avoids opening a second WAL connection — the snapshot store and any
+   * future side-store can construct against the same handle.
+   */
+  getDb(): DB {
+    return this.db;
+  }
+
   // ─── Sessions ─────────────────────────────────────────────────
 
   createSession(input: {
@@ -55,15 +68,22 @@ export class SessionStore {
     model: string;
     cloudcode_session_id?: string;
     agent?: string | null;
+    /**
+     * Optional phase profile binding (Camada 2). When set, the runner's
+     * PhaseRouter resolves to this profile instead of walking the cascade
+     * to project/global defaults. Null falls back to the cascade.
+     */
+    phase_profile_id?: number | null;
   }): CoderSession {
     const stmt = this.db.prepare(`
-      INSERT INTO coder_sessions (project_id, title, provider, model, cloudcode_session_id, agent)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO coder_sessions (project_id, title, provider, model, cloudcode_session_id, agent, phase_profile_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     const r = stmt.run(
       input.project_id, input.title, input.provider, input.model,
       input.cloudcode_session_id ?? null,
       input.agent ?? null,
+      input.phase_profile_id ?? null,
     );
     return this.getSession(Number(r.lastInsertRowid))!;
   }
@@ -86,6 +106,19 @@ export class SessionStore {
         "UPDATE coder_sessions SET temperature_override = ?, updated_at = datetime('now') WHERE id = ?",
       )
       .run(temperature, id);
+  }
+
+  /**
+   * Persist the per-session "unrestricted tool output" toggle. Pass `null`
+   * to clear (back to the production cap defaults). Stored as 0|1|NULL.
+   */
+  setSessionUnrestrictedToolOutput(id: number, enabled: boolean | null): void {
+    const v = enabled == null ? null : enabled ? 1 : 0;
+    this.db
+      .prepare(
+        "UPDATE coder_sessions SET unrestricted_tool_output = ?, updated_at = datetime('now') WHERE id = ?",
+      )
+      .run(v, id);
   }
 
   /**
@@ -406,10 +439,15 @@ export class SessionStore {
       cache_creation_input_tokens?: number;
     },
   ): number {
+    // PR-4 (R8): persist `isMeta` so the dashboard can hide synthetic
+    // runtime-injected reminders on resumed sessions too. Migration 075
+    // adds the column with default 0 — pre-PR-4 rows read back as
+    // isMeta=undefined, which renders the same as the legacy "always
+    // visible" behaviour.
     const stmt = this.db.prepare(`
       INSERT INTO coder_messages
-        (session_id, role, content_json, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+        (session_id, role, content_json, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, is_meta)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const r = stmt.run(
       sessionId,
@@ -419,6 +457,7 @@ export class SessionStore {
       usage?.output_tokens ?? 0,
       usage?.cache_read_input_tokens ?? 0,
       usage?.cache_creation_input_tokens ?? 0,
+      message.isMeta ? 1 : 0,
     );
     this.db
       .prepare('UPDATE coder_sessions SET updated_at = datetime(\'now\') WHERE id = ?')
@@ -440,6 +479,8 @@ export class SessionStore {
           total_cache_read_tokens,
           total_cache_creation_tokens,
           last_turn_input_tokens,
+          provider,
+          model,
           CAST((julianday(updated_at) - julianday(created_at)) * 86400000 AS INTEGER) AS duration_ms
         FROM coder_sessions
         WHERE id = ?
@@ -451,6 +492,8 @@ export class SessionStore {
           total_cache_read_tokens: number;
           total_cache_creation_tokens: number;
           last_turn_input_tokens: number;
+          provider: string;
+          model: string;
           duration_ms: number;
         }
       | undefined;
@@ -486,6 +529,23 @@ export class SessionStore {
         total_tool_duration_ms: number;
       };
 
+    // Resolve context_window for the dashboard fallback path. Mirrors the
+    // runner's resolution chain (DB → registry prefix). Cheap — we don't
+    // hit the DB for the model row twice; we look up via the in-memory
+    // capabilities cache populated by mergeDBCapabilities() at boot.
+    let contextWindow: number | null = null;
+    try {
+      // Lazy require keeps types.ts free of a hard dep on capabilities.
+      // capabilities.getModelContextWindow itself walks: env → DB cache →
+      // registry → prefix fallback.
+      const capabilities = require('../providers/capabilities.js') as {
+        getModelContextWindow?: (model: string) => number | null;
+      };
+      contextWindow = capabilities.getModelContextWindow?.(session.model) ?? null;
+    } catch {
+      /* best-effort */
+    }
+
     return {
       total_input_tokens: session.total_input_tokens,
       total_output_tokens: session.total_output_tokens,
@@ -500,6 +560,7 @@ export class SessionStore {
       subagent_call_count: tools.subagent_call_count ?? 0,
       total_tool_duration_ms: tools.total_tool_duration_ms ?? 0,
       duration_ms: session.duration_ms ?? 0,
+      context_window: contextWindow,
     };
   }
 
@@ -511,12 +572,17 @@ export class SessionStore {
     result_text: string;
     is_error: boolean;
     duration_ms: number;
+    output_chars?: number;
+    truncated?: boolean;
+    phase?: string | null;
+    turn_telemetry_id?: number | null;
   }): void {
     this.db
       .prepare(`
         INSERT INTO coder_tool_calls
-          (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+          (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
+           output_chars, truncated, phase, turn_telemetry_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         input.message_id,
@@ -525,7 +591,11 @@ export class SessionStore {
         JSON.stringify(input.args),
         input.result_text,
         input.is_error ? 1 : 0,
-        input.duration_ms
+        input.duration_ms,
+        input.output_chars ?? (input.result_text?.length ?? 0),
+        input.truncated ? 1 : 0,
+        input.phase ?? null,
+        input.turn_telemetry_id ?? null,
       );
   }
 
@@ -553,6 +623,10 @@ export class SessionStore {
       result_text: string;
       is_error: boolean;
       duration_ms: number;
+      output_chars?: number;
+      truncated?: boolean;
+      phase?: string | null;
+      turn_telemetry_id?: number | null;
     }>;
     subagent_usage?: {
       input_tokens: number;
@@ -571,8 +645,9 @@ export class SessionStore {
     );
     const insertTool = this.db.prepare(`
       INSERT INTO coder_tool_calls
-        (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+        (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
+         output_chars, truncated, phase, turn_telemetry_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const bumpStmt = this.db.prepare(`
       UPDATE coder_sessions
@@ -606,6 +681,10 @@ export class SessionStore {
           tc.result_text,
           tc.is_error ? 1 : 0,
           tc.duration_ms,
+          tc.output_chars ?? (tc.result_text?.length ?? 0),
+          tc.truncated ? 1 : 0,
+          tc.phase ?? null,
+          tc.turn_telemetry_id ?? null,
         );
       }
       if (input.usage) {
@@ -756,6 +835,7 @@ export class SessionStore {
     const messages: AgentMessage[] = rows.map((r) => ({
       role: r.role,
       content: JSON.parse(r.content_json),
+      ...(r.is_meta ? { isMeta: true as const } : {}),
     }));
     return { session, messages, message_rows: rows };
   }
@@ -819,6 +899,7 @@ export class SessionStore {
     const messages: AgentMessage[] = rows.map((r) => ({
       role: r.role,
       content: JSON.parse(r.content_json),
+      ...(r.is_meta ? { isMeta: true as const } : {}),
     }));
     return { session, messages, message_rows: rows };
   }
@@ -866,6 +947,7 @@ export class SessionStore {
     const messages: AgentMessage[] = rows.map((r) => ({
       role: r.role,
       content: JSON.parse(r.content_json),
+      ...(r.is_meta ? { isMeta: true as const } : {}),
     }));
     return { messages, message_rows: rows };
   }
@@ -1009,16 +1091,54 @@ export class SessionStore {
 
   /**
    * Persist a fresh submit_tasks call. UPSERT keyed by session_id — there's
-   * one task list per session at a time. Replacing means starting a new
-   * decomposition discards the previous one (history lives in the message
-   * log either way).
+   * one task list per session at a time.
+   *
+   * MERGE BEHAVIOR (added to fix the "agent recria tarefas e substitui as
+   * atuais" complaint): when a previous task list exists, runtime state for
+   * tasks whose `id` survives the re-submission is preserved — `status`,
+   * `mode_used`, `started_at`, `finished_at`, and `result`. Plan-time fields
+   * (`title`, `description`, `files`, `references`, `depends_on`,
+   * `suggested_mode`, `estimated_complexity`) are taken from the new
+   * submission so the agent can refine the plan. Tasks that disappear from
+   * the new list are dropped (the agent decided to remove them); tasks with
+   * a new id enter as plain `pending`.
+   *
+   * If the agent wants a true reset, it can use entirely new ids — none
+   * match, nothing is preserved.
    */
   recordTasks(input: {
     session_id: number;
     tool_use_id: string;
     state: TasksState;
   }): CoderTasksRow {
-    const json = JSON.stringify(input.state);
+    const previous = this.getTasksState(input.session_id);
+    let mergedState: TasksState = input.state;
+    if (previous && previous.tasks.length > 0) {
+      const prevById = new Map(previous.tasks.map((t) => [t.id, t]));
+      const mergedTasks: CoderTask[] = input.state.tasks.map((incoming) => {
+        const prior = prevById.get(incoming.id);
+        if (!prior) return incoming;
+        // Preserve runtime/lifecycle fields from prior; take plan-time fields from incoming.
+        return {
+          ...incoming,
+          status: prior.status,
+          mode_used: prior.mode_used,
+          started_at: prior.started_at,
+          finished_at: prior.finished_at,
+          result: prior.result,
+        };
+      });
+      // Preserve current_task_id only if that id still exists in the new list.
+      const survivedCurrent = previous.current_task_id && mergedTasks.some((t) => t.id === previous.current_task_id)
+        ? previous.current_task_id
+        : null;
+      mergedState = {
+        ...input.state,
+        tasks: mergedTasks,
+        current_task_id: survivedCurrent,
+      };
+    }
+    const json = JSON.stringify(mergedState);
     this.db
       .prepare(`
         INSERT INTO coder_tasks_state (session_id, tool_use_id, state, version, created_at, updated_at)
@@ -1291,9 +1411,15 @@ export class SessionStore {
     compaction_triggered: boolean;
     summarizer_ran: boolean;
     paginate_count: number;
-  }): void {
+    /** System prompt size in chars on this turn. Migration 072. */
+    system_prompt_chars?: number | null;
+    /** Tools array (JSON-stringified) size in chars on this turn. Migration 072. */
+    tools_def_chars?: number | null;
+    /** USD cost computed from pricing table. Migration 072. */
+    estimated_cost_usd?: number | null;
+  }): number | null {
     try {
-      this.db
+      const r = this.db
         .prepare(
           `INSERT INTO coder_turn_telemetry (
             session_id, run_id, turn, is_subagent,
@@ -1301,8 +1427,9 @@ export class SessionStore {
             input_tokens, output_tokens,
             cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens,
             history_chars, tool_count, tools_called_json,
-            largest_tool_result_chars, compaction_triggered, summarizer_ran, paginate_count
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            largest_tool_result_chars, compaction_triggered, summarizer_ran, paginate_count,
+            system_prompt_chars, tools_def_chars, estimated_cost_usd
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.session_id,
@@ -1323,12 +1450,17 @@ export class SessionStore {
           input.compaction_triggered ? 1 : 0,
           input.summarizer_ran ? 1 : 0,
           input.paginate_count,
+          input.system_prompt_chars ?? null,
+          input.tools_def_chars ?? null,
+          input.estimated_cost_usd ?? null,
         );
+      return Number(r.lastInsertRowid);
     } catch (e) {
       // Telemetry must never break a turn — surface as warn and move on.
       console.warn(
         `[coder] recordTurnTelemetry failed: ${e instanceof Error ? e.message : String(e)}`,
       );
+      return null;
     }
   }
 
@@ -1378,20 +1510,47 @@ export class SessionStore {
       .get(sessionId) as { content: string; meta_json: string | null } | undefined;
     const turn1 = this.db
       .prepare(
-        `SELECT input_tokens, output_tokens FROM coder_turn_telemetry
+        `SELECT input_tokens, output_tokens, tools_def_chars, system_prompt_chars FROM coder_turn_telemetry
          WHERE session_id = ? AND is_subagent = 0
          ORDER BY turn ASC LIMIT 1`,
       )
-      .get(sessionId) as { input_tokens: number | null; output_tokens: number | null } | undefined;
+      .get(sessionId) as
+        | { input_tokens: number | null; output_tokens: number | null; tools_def_chars: number | null; system_prompt_chars: number | null }
+        | undefined;
 
     let toolsCount: number | null = null;
+    // Migration 072 introduced `manifest-v1`: content is a SHA-1 fingerprint
+    // (40 chars) and the real byte count lives in `meta.content_chars`.
+    // Legacy rows still have the full JSON in `content`. Detect and fall
+    // back to the legacy semantics when the meta marker is missing.
+    let toolsArrayChars: number | null = null;
     if (toolsRow?.meta_json) {
       try {
-        const meta = JSON.parse(toolsRow.meta_json) as { tool_count?: number };
+        const meta = JSON.parse(toolsRow.meta_json) as {
+          tool_count?: number;
+          content_chars?: number;
+          schema?: string;
+        };
         if (typeof meta.tool_count === 'number') toolsCount = meta.tool_count;
+        if (meta.schema === 'manifest-v1' && typeof meta.content_chars === 'number') {
+          toolsArrayChars = meta.content_chars;
+        }
       } catch {
         /* malformed meta */
       }
+    }
+    // Preferred source: per-turn telemetry (Sprint 1) — captures the actual
+    // tools array size on turn 1 even when no session-input row was written.
+    if (toolsArrayChars == null && turn1?.tools_def_chars != null) {
+      toolsArrayChars = turn1.tools_def_chars;
+    }
+    // Legacy fallback: pre-072 rows still have the full JSON in `content`,
+    // so its length matches what was actually shipped.
+    if (toolsArrayChars == null && toolsRow?.content) {
+      // Heuristic: a 40-char hex string is almost certainly the new
+      // fingerprint, not legacy content. Avoid reporting "tools = 40 chars".
+      const isFingerprint = toolsRow.content.length === 40 && /^[0-9a-f]{40}$/.test(toolsRow.content);
+      if (!isFingerprint) toolsArrayChars = toolsRow.content.length;
     }
 
     let skillsMode: string | null = null;
@@ -1406,9 +1565,15 @@ export class SessionStore {
       }
     }
 
+    // System prompt size: prefer per-turn telemetry (Sprint 1, accurate
+    // for what's actually on the wire), fall back to the legacy session-
+    // input content length.
+    const systemPromptChars =
+      turn1?.system_prompt_chars ?? sysRow?.content.length ?? null;
+
     return {
-      system_prompt_chars: sysRow?.content.length ?? null,
-      tools_array_chars: toolsRow?.content.length ?? null,
+      system_prompt_chars: systemPromptChars,
+      tools_array_chars: toolsArrayChars,
       tools_count: toolsCount,
       first_turn_input_tokens: turn1?.input_tokens ?? null,
       first_turn_output_tokens: turn1?.output_tokens ?? null,
@@ -1452,7 +1617,28 @@ export class SessionStore {
     largest_tool_result_chars: number | null;
     last_history_chars: number | null;
     last_turn_at: string | null;
-    tools_breakdown: Array<{ name: string; calls: number }>;
+    tools_breakdown: Array<{
+      name: string;
+      calls: number;
+      total_output_chars: number;
+      avg_duration_ms: number;
+      truncated_count: number;
+    }>;
+    /** Migration 072 — total USD cost for this session (estimated). */
+    estimated_cost_usd: number;
+    /** Migration 072 — average system prompt size on assistant turns. */
+    system_prompt_avg_chars: number | null;
+    /** Migration 072 — average tools array size on assistant turns. */
+    tools_def_avg_chars: number | null;
+    /** Migration 072 — fraction of tool calls that hit a truncation cap. */
+    truncation_rate: number | null;
+    /** Migration 072 — token+cost breakdown per phase (Camada 2). */
+    phase_breakdown: Array<{
+      phase: string;
+      tool_calls: number;
+      total_output_chars: number;
+      total_duration_ms: number;
+    }>;
   } {
     const totals = this.db
       .prepare(
@@ -1470,7 +1656,10 @@ export class SessionStore {
            COALESCE(SUM(paginate_count), 0)           AS paginate_total,
            MAX(largest_tool_result_chars)             AS largest_tool_result_chars,
            MAX(history_chars)                         AS last_history_chars,
-           MAX(created_at)                            AS last_turn_at
+           MAX(created_at)                            AS last_turn_at,
+           COALESCE(SUM(estimated_cost_usd), 0)       AS estimated_cost_usd,
+           AVG(system_prompt_chars)                   AS system_prompt_avg_chars,
+           AVG(tools_def_chars)                       AS tools_def_avg_chars
          FROM coder_turn_telemetry
          WHERE session_id = ?`,
       )
@@ -1489,33 +1678,116 @@ export class SessionStore {
         largest_tool_result_chars: number | null;
         last_history_chars: number | null;
         last_turn_at: string | null;
+        estimated_cost_usd: number;
+        system_prompt_avg_chars: number | null;
+        tools_def_avg_chars: number | null;
       };
 
-    // Tools breakdown: parse tools_called_json across rows. Cheap because
-    // the table is bounded by turns_per_session and we group in JS rather
-    // than dragging json_each into the SQL.
-    const rows = this.db
+    // Migration 072: tools breakdown now JOINs coder_tool_calls for richer
+    // metrics (output_chars, duration, truncation count) — the previous
+    // tools_called_json path only knew counts. Falls back to that path
+    // when no tool_calls rows exist for the session (e.g. sessions older
+    // than migration 072 deployment).
+    const toolStats = this.db
       .prepare(
-        `SELECT tools_called_json FROM coder_turn_telemetry WHERE session_id = ?`,
+        `SELECT
+            tc.tool_name                              AS name,
+            COUNT(*)                                  AS calls,
+            COALESCE(SUM(tc.output_chars), 0)         AS total_output_chars,
+            COALESCE(AVG(tc.duration_ms), 0)          AS avg_duration_ms,
+            COALESCE(SUM(tc.truncated), 0)            AS truncated_count
+         FROM coder_tool_calls tc
+         JOIN coder_messages m ON m.id = tc.message_id
+         WHERE m.session_id = ?
+         GROUP BY tc.tool_name
+         ORDER BY total_output_chars DESC, calls DESC`,
       )
-      .all(sessionId) as Array<{ tools_called_json: string | null }>;
-    const breakdown = new Map<string, number>();
-    for (const r of rows) {
-      if (!r.tools_called_json) continue;
-      try {
-        const names = JSON.parse(r.tools_called_json) as unknown;
-        if (Array.isArray(names)) {
-          for (const n of names) {
-            if (typeof n === 'string') breakdown.set(n, (breakdown.get(n) ?? 0) + 1);
+      .all(sessionId) as Array<{
+        name: string;
+        calls: number;
+        total_output_chars: number;
+        avg_duration_ms: number;
+        truncated_count: number;
+      }>;
+
+    let tools_breakdown: Array<{
+      name: string;
+      calls: number;
+      total_output_chars: number;
+      avg_duration_ms: number;
+      truncated_count: number;
+    }>;
+    if (toolStats.length > 0) {
+      tools_breakdown = toolStats.map((r) => ({
+        ...r,
+        avg_duration_ms: Math.round(r.avg_duration_ms),
+      }));
+    } else {
+      // Legacy fallback — only call counts.
+      const rows = this.db
+        .prepare(
+          `SELECT tools_called_json FROM coder_turn_telemetry WHERE session_id = ?`,
+        )
+        .all(sessionId) as Array<{ tools_called_json: string | null }>;
+      const breakdown = new Map<string, number>();
+      for (const r of rows) {
+        if (!r.tools_called_json) continue;
+        try {
+          const names = JSON.parse(r.tools_called_json) as unknown;
+          if (Array.isArray(names)) {
+            for (const n of names) {
+              if (typeof n === 'string') breakdown.set(n, (breakdown.get(n) ?? 0) + 1);
+            }
           }
+        } catch {
+          /* malformed row — ignore */
         }
-      } catch {
-        /* malformed row — ignore */
       }
+      tools_breakdown = [...breakdown.entries()]
+        .map(([name, calls]) => ({
+          name,
+          calls,
+          total_output_chars: 0,
+          avg_duration_ms: 0,
+          truncated_count: 0,
+        }))
+        .sort((a, b) => b.calls - a.calls);
     }
-    const tools_breakdown = [...breakdown.entries()]
-      .map(([name, calls]) => ({ name, calls }))
-      .sort((a, b) => b.calls - a.calls);
+
+    // Migration 072: phase breakdown. NULL phase rows bucket as 'unknown'
+    // until PhaseRouter (Camada 2) populates it. Useful day-1 because it
+    // makes the empty-state visible (the dashboard renders the panel and
+    // says "phase routing not active yet").
+    const phaseRows = this.db
+      .prepare(
+        `SELECT
+            COALESCE(tc.phase, 'unknown')             AS phase,
+            COUNT(*)                                  AS tool_calls,
+            COALESCE(SUM(tc.output_chars), 0)         AS total_output_chars,
+            COALESCE(SUM(tc.duration_ms), 0)          AS total_duration_ms
+         FROM coder_tool_calls tc
+         JOIN coder_messages m ON m.id = tc.message_id
+         WHERE m.session_id = ?
+         GROUP BY phase
+         ORDER BY tool_calls DESC`,
+      )
+      .all(sessionId) as Array<{
+        phase: string;
+        tool_calls: number;
+        total_output_chars: number;
+        total_duration_ms: number;
+      }>;
+
+    // Truncation rate across all tool calls (NULL when no rows).
+    const truncRow = this.db
+      .prepare(
+        `SELECT COUNT(*) AS total, COALESCE(SUM(truncated), 0) AS trunc
+         FROM coder_tool_calls tc
+         JOIN coder_messages m ON m.id = tc.message_id
+         WHERE m.session_id = ?`,
+      )
+      .get(sessionId) as { total: number; trunc: number };
+    const truncation_rate = truncRow.total > 0 ? truncRow.trunc / truncRow.total : null;
 
     const inputTotal = totals.total_input_tokens;
     const cacheRead = totals.total_cache_read_tokens;
@@ -1525,6 +1797,8 @@ export class SessionStore {
       ...totals,
       cache_hit_ratio,
       tools_breakdown,
+      phase_breakdown: phaseRows,
+      truncation_rate,
     };
   }
 
@@ -1533,7 +1807,7 @@ export class SessionStore {
    * plus an overall totals object. Limit caps the number of session summaries
    * returned (default 50, ordered by total tokens desc).
    */
-  getGlobalTelemetrySummary(limit = 50): {
+  getGlobalTelemetrySummary(opts: { limit?: number; project_id?: number | null; since?: string | null } = {}): {
     overall: {
       session_count: number;
       turn_count: number;
@@ -1543,10 +1817,41 @@ export class SessionStore {
       cache_hit_ratio: number | null;
       compaction_turns: number;
       paginate_total: number;
+      /** Migration 072. */
+      total_estimated_cost_usd: number;
+      /** Migration 072. */
+      truncation_rate: number | null;
     };
-    by_provider: Array<{ provider: string; turns: number; input_tokens: number; output_tokens: number }>;
-    by_model: Array<{ model: string; turns: number; input_tokens: number; output_tokens: number }>;
+    by_provider: Array<{
+      provider: string;
+      turns: number;
+      input_tokens: number;
+      output_tokens: number;
+      estimated_cost_usd: number;
+    }>;
+    by_model: Array<{
+      model: string;
+      turns: number;
+      input_tokens: number;
+      output_tokens: number;
+      estimated_cost_usd: number;
+    }>;
     skills_modes: Array<{ mode: string; sessions: number }>;
+    /** Migration 072 — top tools globally by output_chars. */
+    top_tools: Array<{
+      name: string;
+      calls: number;
+      total_output_chars: number;
+      avg_duration_ms: number;
+      truncated_count: number;
+    }>;
+    /** Migration 072 — phase breakdown (Camada 2). */
+    phase_breakdown: Array<{
+      phase: string;
+      tool_calls: number;
+      total_output_chars: number;
+      total_duration_ms: number;
+    }>;
     top_sessions: Array<{
       session_id: number | null;
       title: string | null;
@@ -1557,21 +1862,53 @@ export class SessionStore {
       total_output_tokens: number;
       cache_hit_ratio: number | null;
       last_turn_at: string | null;
+      /** Migration 072. */
+      estimated_cost_usd: number;
     }>;
   } {
+    const limit = opts.limit ?? 50;
+    // Build common WHERE clause for project + since filters. We index on
+    // session.project_id and on telemetry.created_at, so a parameterized
+    // string is fine — values are SQL-bound, not concatenated.
+    const turnFilters: string[] = [];
+    const turnParams: Array<string | number> = [];
+    if (opts.project_id != null) {
+      turnFilters.push(`t.session_id IN (SELECT id FROM coder_sessions WHERE project_id = ?)`);
+      turnParams.push(opts.project_id);
+    }
+    if (opts.since) {
+      turnFilters.push(`t.created_at >= ?`);
+      turnParams.push(opts.since);
+    }
+    const turnWhere = turnFilters.length > 0 ? ' AND ' + turnFilters.join(' AND ') : '';
+    const turnWhereStandalone = turnFilters.length > 0 ? 'WHERE ' + turnFilters.join(' AND ') : '';
+
+    const toolFilters: string[] = [];
+    const toolParams: Array<string | number> = [];
+    if (opts.project_id != null) {
+      toolFilters.push(`m.session_id IN (SELECT id FROM coder_sessions WHERE project_id = ?)`);
+      toolParams.push(opts.project_id);
+    }
+    if (opts.since) {
+      toolFilters.push(`tc.created_at >= ?`);
+      toolParams.push(opts.since);
+    }
+    const toolWhere = toolFilters.length > 0 ? 'WHERE ' + toolFilters.join(' AND ') : '';
     const overall = this.db
       .prepare(
         `SELECT
-           COUNT(DISTINCT session_id)                 AS session_count,
+           COUNT(DISTINCT t.session_id)               AS session_count,
            COUNT(*)                                   AS turn_count,
-           COALESCE(SUM(input_tokens), 0)             AS total_input_tokens,
-           COALESCE(SUM(output_tokens), 0)            AS total_output_tokens,
-           COALESCE(SUM(cache_read_input_tokens), 0)  AS total_cache_read_tokens,
-           COALESCE(SUM(compaction_triggered), 0)     AS compaction_turns,
-           COALESCE(SUM(paginate_count), 0)           AS paginate_total
-         FROM coder_turn_telemetry`,
+           COALESCE(SUM(t.input_tokens), 0)           AS total_input_tokens,
+           COALESCE(SUM(t.output_tokens), 0)          AS total_output_tokens,
+           COALESCE(SUM(t.cache_read_input_tokens), 0) AS total_cache_read_tokens,
+           COALESCE(SUM(t.compaction_triggered), 0)   AS compaction_turns,
+           COALESCE(SUM(t.paginate_count), 0)         AS paginate_total,
+           COALESCE(SUM(t.estimated_cost_usd), 0)     AS total_estimated_cost_usd
+         FROM coder_turn_telemetry t
+         WHERE 1=1${turnWhere}`,
       )
-      .get() as {
+      .get(...turnParams) as {
         session_count: number;
         turn_count: number;
         total_input_tokens: number;
@@ -1579,48 +1916,129 @@ export class SessionStore {
         total_cache_read_tokens: number;
         compaction_turns: number;
         paginate_total: number;
+        total_estimated_cost_usd: number;
       };
     const cache_hit_ratio = overall.total_input_tokens > 0
       ? overall.total_cache_read_tokens / overall.total_input_tokens
       : null;
 
+    const truncOverall = this.db
+      .prepare(
+        `SELECT COUNT(*) AS total, COALESCE(SUM(tc.truncated), 0) AS trunc
+         FROM coder_tool_calls tc
+         JOIN coder_messages m ON m.id = tc.message_id
+         ${toolWhere}`,
+      )
+      .get(...toolParams) as { total: number; trunc: number };
+    const truncation_rate = truncOverall.total > 0
+      ? truncOverall.trunc / truncOverall.total
+      : null;
+
     const by_provider = this.db
       .prepare(
-        `SELECT provider, COUNT(*) AS turns,
-                COALESCE(SUM(input_tokens), 0)  AS input_tokens,
-                COALESCE(SUM(output_tokens), 0) AS output_tokens
-         FROM coder_turn_telemetry
-         WHERE provider IS NOT NULL
-         GROUP BY provider
+        `SELECT t.provider AS provider, COUNT(*) AS turns,
+                COALESCE(SUM(t.input_tokens), 0)         AS input_tokens,
+                COALESCE(SUM(t.output_tokens), 0)        AS output_tokens,
+                COALESCE(SUM(t.estimated_cost_usd), 0)   AS estimated_cost_usd
+         FROM coder_turn_telemetry t
+         WHERE t.provider IS NOT NULL${turnWhere}
+         GROUP BY t.provider
          ORDER BY input_tokens DESC`,
       )
-      .all() as Array<{ provider: string; turns: number; input_tokens: number; output_tokens: number }>;
+      .all(...turnParams) as Array<{
+        provider: string;
+        turns: number;
+        input_tokens: number;
+        output_tokens: number;
+        estimated_cost_usd: number;
+      }>;
 
     const by_model = this.db
       .prepare(
-        `SELECT model, COUNT(*) AS turns,
-                COALESCE(SUM(input_tokens), 0)  AS input_tokens,
-                COALESCE(SUM(output_tokens), 0) AS output_tokens
-         FROM coder_turn_telemetry
-         WHERE model IS NOT NULL
-         GROUP BY model
+        `SELECT t.model AS model, COUNT(*) AS turns,
+                COALESCE(SUM(t.input_tokens), 0)         AS input_tokens,
+                COALESCE(SUM(t.output_tokens), 0)        AS output_tokens,
+                COALESCE(SUM(t.estimated_cost_usd), 0)   AS estimated_cost_usd
+         FROM coder_turn_telemetry t
+         WHERE t.model IS NOT NULL${turnWhere}
+         GROUP BY t.model
          ORDER BY input_tokens DESC`,
       )
-      .all() as Array<{ model: string; turns: number; input_tokens: number; output_tokens: number }>;
+      .all(...turnParams) as Array<{
+        model: string;
+        turns: number;
+        input_tokens: number;
+        output_tokens: number;
+        estimated_cost_usd: number;
+      }>;
 
     // Skills mode adoption: count distinct sessions by the persisted
     // skills_mode meta. NULL meta (legacy rows) bucketed as 'unknown'.
+    // Project filter rebinds via session_id; since filter rebinds via created_at.
+    const skillsFilters: string[] = [`kind = 'system_prompt'`];
+    const skillsParams: Array<string | number> = [];
+    if (opts.project_id != null) {
+      skillsFilters.push(`session_id IN (SELECT id FROM coder_sessions WHERE project_id = ?)`);
+      skillsParams.push(opts.project_id);
+    }
+    if (opts.since) {
+      skillsFilters.push(`created_at >= ?`);
+      skillsParams.push(opts.since);
+    }
     const skillsModes = this.db
       .prepare(
         `SELECT
             COALESCE(json_extract(meta_json, '$.skills_mode'), 'unknown') AS mode,
             COUNT(DISTINCT session_id)                                     AS sessions
          FROM coder_session_inputs
-         WHERE kind = 'system_prompt'
+         WHERE ${skillsFilters.join(' AND ')}
          GROUP BY mode
          ORDER BY sessions DESC`,
       )
-      .all() as Array<{ mode: string; sessions: number }>;
+      .all(...skillsParams) as Array<{ mode: string; sessions: number }>;
+
+    const top_tools = this.db
+      .prepare(
+        `SELECT
+            tc.tool_name                              AS name,
+            COUNT(*)                                  AS calls,
+            COALESCE(SUM(tc.output_chars), 0)         AS total_output_chars,
+            COALESCE(AVG(tc.duration_ms), 0)          AS avg_duration_ms,
+            COALESCE(SUM(tc.truncated), 0)            AS truncated_count
+         FROM coder_tool_calls tc
+         JOIN coder_messages m ON m.id = tc.message_id
+         ${toolWhere}
+         GROUP BY tc.tool_name
+         ORDER BY total_output_chars DESC, calls DESC
+         LIMIT 25`,
+      )
+      .all(...toolParams) as Array<{
+        name: string;
+        calls: number;
+        total_output_chars: number;
+        avg_duration_ms: number;
+        truncated_count: number;
+      }>;
+
+    const phase_breakdown = this.db
+      .prepare(
+        `SELECT
+            COALESCE(tc.phase, 'unknown')             AS phase,
+            COUNT(*)                                  AS tool_calls,
+            COALESCE(SUM(tc.output_chars), 0)         AS total_output_chars,
+            COALESCE(SUM(tc.duration_ms), 0)          AS total_duration_ms
+         FROM coder_tool_calls tc
+         JOIN coder_messages m ON m.id = tc.message_id
+         ${toolWhere}
+         GROUP BY phase
+         ORDER BY tool_calls DESC`,
+      )
+      .all(...toolParams) as Array<{
+        phase: string;
+        tool_calls: number;
+        total_output_chars: number;
+        total_duration_ms: number;
+      }>;
 
     const top_sessions = this.db
       .prepare(
@@ -1632,15 +2050,16 @@ export class SessionStore {
                 COALESCE(SUM(t.input_tokens), 0)            AS total_input_tokens,
                 COALESCE(SUM(t.output_tokens), 0)           AS total_output_tokens,
                 COALESCE(SUM(t.cache_read_input_tokens), 0) AS total_cache_read,
+                COALESCE(SUM(t.estimated_cost_usd), 0)      AS estimated_cost_usd,
                 MAX(t.created_at)                           AS last_turn_at
          FROM coder_turn_telemetry t
          LEFT JOIN coder_sessions s ON s.id = t.session_id
-         WHERE t.session_id IS NOT NULL
+         WHERE t.session_id IS NOT NULL${turnWhere}
          GROUP BY t.session_id, s.title, s.provider, s.model
          ORDER BY total_input_tokens DESC
          LIMIT ?`,
       )
-      .all(limit) as Array<{
+      .all(...turnParams, limit) as Array<{
         session_id: number | null;
         title: string | null;
         provider: string | null;
@@ -1649,14 +2068,18 @@ export class SessionStore {
         total_input_tokens: number;
         total_output_tokens: number;
         total_cache_read: number;
+        estimated_cost_usd: number;
         last_turn_at: string | null;
       }>;
+    void turnWhereStandalone; // reserved for future filtered queries
 
     return {
-      overall: { ...overall, cache_hit_ratio },
+      overall: { ...overall, cache_hit_ratio, truncation_rate },
       by_provider,
       by_model,
       skills_modes: skillsModes,
+      top_tools: top_tools.map((r) => ({ ...r, avg_duration_ms: Math.round(r.avg_duration_ms) })),
+      phase_breakdown,
       top_sessions: top_sessions.map((r) => ({
         session_id: r.session_id,
         title: r.title,
@@ -1668,8 +2091,32 @@ export class SessionStore {
         cache_hit_ratio: r.total_input_tokens > 0
           ? r.total_cache_read / r.total_input_tokens
           : null,
+        estimated_cost_usd: r.estimated_cost_usd,
         last_turn_at: r.last_turn_at,
       })),
     };
+  }
+
+  // ─── Phase profiles (migration 073) — REMOVED ──────────────────
+  //
+  // The PhaseRouter feature was removed because mid-turn provider/model
+  // swaps were too disruptive in practice. The DB tables remain in place
+  // (`coder_phase_profiles`, `coder_sessions.phase_profile_id`) so any
+  // future re-enable doesn't need a new migration. CRUD methods are gone.
+
+  // ─── Session helpers used by other features ────────────────────
+
+  /** Camada 4 — base commit captured at session creation for the reviewer subagent. */
+  setSessionBaseCommit(sessionId: number, sha: string | null): void {
+    this.db
+      .prepare("UPDATE coder_sessions SET base_commit_sha = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(sha, sessionId);
+  }
+
+  /** Camada 4 — stamp last_review_at when request_review finishes. */
+  markSessionReviewedNow(sessionId: number): void {
+    this.db
+      .prepare("UPDATE coder_sessions SET last_review_at = datetime('now'), updated_at = datetime('now') WHERE id = ?")
+      .run(sessionId);
   }
 }

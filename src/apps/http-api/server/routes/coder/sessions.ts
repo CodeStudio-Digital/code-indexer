@@ -55,6 +55,8 @@ interface CreateSessionBody {
   model?: string;
   /** Initial agent preset (explore | plan | build | admin). Persisted on the session row. */
   agent?: 'explore' | 'plan' | 'build' | 'admin';
+  /** Optional phase profile binding (Camada 2). Null = walk cascade. */
+  phase_profile_id?: number | null;
 }
 
 export function mountCoderSessionsRoutes(
@@ -318,6 +320,19 @@ export function mountCoderSessionsRoutes(
     return c.json(session);
   });
 
+  app.patch('/api/coder/sessions/:id/unrestricted-output', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ enabled?: boolean | null }>(c);
+    const v = body.enabled;
+    if (v !== null && v !== undefined && typeof v !== 'boolean') {
+      return c.json({ error: 'enabled:boolean|null required' }, 400);
+    }
+    sessionStore.setSessionUnrestrictedToolOutput(id, v ?? null);
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    return c.json(session);
+  });
+
   app.patch('/api/coder/sessions/:id/group', async (c) => {
     const id = parseIdParam(c);
     const body = await parseJsonBody<{ group_id?: number | null }>(c);
@@ -341,7 +356,25 @@ export function mountCoderSessionsRoutes(
       provider: body.provider,
       model: body.model ?? '',
       agent: body.agent ?? null,
+      phase_profile_id: body.phase_profile_id ?? null,
     });
+    // Best-effort base_commit_sha capture for Camada 4's reviewer subagent.
+    // We need the project workdir to run `git rev-parse HEAD`. If the project
+    // isn't a git repo, or the workdir lookup fails, leave it null and the
+    // reviewer will fall back to running `git_diff` itself (or report no diff).
+    try {
+      const project = (deps as { projectStore?: { getProject?: (id: number) => { workdir?: string | null } | null } }).projectStore?.getProject?.(body.project_id);
+      const workdir = project?.workdir;
+      if (workdir) {
+        const { execSync } = await import('node:child_process');
+        const sha = execSync('git rev-parse HEAD', { cwd: workdir, encoding: 'utf8', timeout: 2000 }).trim();
+        if (sha && /^[0-9a-f]{40}$/i.test(sha)) {
+          sessionStore.setSessionBaseCommit(session.id, sha);
+        }
+      }
+    } catch {
+      /* not a git repo or no workdir — fine, reviewer handles this */
+    }
     return c.json(session, 201);
   });
 
@@ -422,6 +455,28 @@ export function mountCoderSessionsRoutes(
     if (!session) return notFound(c, 'session not found');
     const goal = sessionStore.getSessionGoal(id);
     const tasks = sessionStore.getTasksState(id);
+    // Parse the persisted todos JSON so a fresh dashboard mount can populate
+    // the sidebar immediately, without waiting for the runner to emit a
+    // todos_updated SSE event. Resolves the "estado some no resume" report.
+    let todos: Array<{ id?: string; content: string; activeForm: string; status: string }> = [];
+    if (session.todos_json) {
+      try {
+        const parsed = JSON.parse(session.todos_json) as unknown;
+        if (Array.isArray(parsed)) {
+          todos = parsed.map((t) => {
+            const o = (t ?? {}) as Record<string, unknown>;
+            return {
+              id: typeof o.id === 'string' ? o.id : undefined,
+              content: typeof o.content === 'string' ? o.content : '',
+              activeForm: typeof o.activeForm === 'string' ? o.activeForm : '',
+              status: typeof o.status === 'string' ? o.status : 'pending',
+            };
+          });
+        }
+      } catch {
+        // Malformed JSON: fall through with todos = []
+      }
+    }
     return c.json({
       goal: goal
         ? {
@@ -447,6 +502,7 @@ export function mountCoderSessionsRoutes(
             })),
           }
         : null,
+      todos,
     });
   });
 

@@ -112,7 +112,18 @@ interface DialogHostProps {
 
 function DialogHost({ state, onClose }: DialogHostProps) {
   const open = state !== null;
-  const variant = state?.options.variant ?? (state?.kind === 'confirm' ? 'warning' : 'info');
+  // Defensive validation: a caller passing an unknown variant (e.g.
+  // 'default' from a third-party styling convention) used to crash the
+  // host because VARIANT_ICON[bad] is undefined → <undefined /> tears the
+  // tree. Now we silently fall back to 'info'/'warning' so a typo only
+  // costs the wrong icon, never the whole dashboard.
+  const rawVariant = state?.options.variant;
+  const variant: DialogVariant =
+    rawVariant && rawVariant in VARIANT_ICON
+      ? rawVariant
+      : state?.kind === 'confirm'
+        ? 'warning'
+        : 'info';
   const Icon = VARIANT_ICON[variant];
   const isConfirm = state?.kind === 'confirm';
   const confirmOpts = isConfirm ? (state.options as ConfirmOptions) : null;

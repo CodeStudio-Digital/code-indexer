@@ -5,9 +5,15 @@
  */
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Trash2 } from 'lucide-react';
+import { HelpCircle, Trash2 } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '../../../components/ui/tooltip.js';
 import type { KanbanTag } from '../../../../../core/coder/company/types.js';
 import type { PipelineEdge } from './PipelineBuilder.js';
 
@@ -41,16 +47,30 @@ export function EdgeEditPanel({ edge, onChange, onDelete }: EdgeEditPanelProps) 
   };
 
   return (
-    <aside className="w-80 border-l overflow-auto">
-      <div className="border-b px-3 py-2 flex items-center justify-between">
+    <TooltipProvider>
+    <aside className="w-80 border-l overflow-auto bg-card/40">
+      <div className="border-b px-3 py-2 flex items-center justify-between sticky top-0 bg-card/95 backdrop-blur z-10">
         <span className="font-medium text-sm">{t('agents:pipelines.edge.title')}</span>
-        <Button size="sm" variant="ghost" onClick={onDelete}>
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="sm" variant="ghost" onClick={onDelete}>
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="left">
+            {t('agents:pipelines.edge.deleteTip', { defaultValue: 'Remove this wire.' })}
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       <div className="p-3 space-y-3 text-xs">
-        <Field label={t('agents:pipelines.edge.kind')}>
+        <Field
+          label={t('agents:pipelines.edge.kind')}
+          hint={t('agents:pipelines.edge.kindTip', {
+            defaultValue:
+              'linear: always advance. pass-fail: route by validator verdict. by-tag: kanban tag. by-text-match: regex over agent output.',
+          })}
+        >
           <select
             value={edge.kind}
             onChange={(e) => switchKind(e.target.value as PipelineEdge['kind'])}
@@ -68,13 +88,17 @@ export function EdgeEditPanel({ edge, onChange, onDelete }: EdgeEditPanelProps) 
             <select
               value={edge.on}
               onChange={(e) =>
-                onChange({ ...edge, on: e.target.value as 'pass' | 'fail' })
+                onChange({ ...edge, on: e.target.value as 'pass' | 'fail' | 'review' })
               }
               className="w-full h-7 rounded border bg-background px-2"
             >
               <option value="pass">pass</option>
               <option value="fail">fail</option>
+              <option value="review">review</option>
             </select>
+            <div className="text-[10px] text-muted-foreground mt-1">
+              {t('agents:pipelines.edge.onReviewHelp')}
+            </div>
           </Field>
         )}
 
@@ -113,13 +137,34 @@ export function EdgeEditPanel({ edge, onChange, onDelete }: EdgeEditPanelProps) 
         </div>
       </div>
     </aside>
+    </TooltipProvider>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+  hint,
+}: {
+  label: string;
+  children: React.ReactNode;
+  hint?: string;
+}) {
   return (
     <label className="block">
-      <span className="text-muted-foreground">{label}</span>
+      <span className="text-muted-foreground inline-flex items-center gap-1">
+        {label}
+        {hint && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <HelpCircle className="h-3 w-3 opacity-60 hover:opacity-100" />
+            </TooltipTrigger>
+            <TooltipContent side="left" className="max-w-xs">
+              {hint}
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </span>
       <div className="mt-1">{children}</div>
     </label>
   );

@@ -124,7 +124,11 @@ describe('KimiCodeChatProvider stream handler', () => {
     expect(args.thinking).toEqual({ type: 'enabled' });
   });
 
-  it('provider disabled thinking mode overrides a per-request thinking=true', async () => {
+  // Per-request `thinking` wins over the admin global `thinkingMode`. The
+  // admin value is the default; the composer toggle in a chat session is
+  // authoritative when the user clicks it. Same precedence applies in both
+  // directions (re-enable vs force off).
+  it('per-request thinking=true overrides admin thinkingMode=disabled', async () => {
     const provider = new KimiCodeChatProvider({
       apiKey: 'token',
       baseURL: 'https://api.kimi.com/coding/v1',
@@ -142,6 +146,75 @@ describe('KimiCodeChatProvider stream handler', () => {
     };
 
     await collect(provider, { ...baseReq, thinking: true });
+
+    const args = createSpy(provider).mock.calls[0][0] as Record<string, unknown>;
+    expect(args.thinking).toEqual({ type: 'enabled' });
+  });
+
+  it('per-request thinking=false overrides admin thinkingMode=enabled', async () => {
+    const provider = new KimiCodeChatProvider({
+      apiKey: 'token',
+      baseURL: 'https://api.kimi.com/coding/v1',
+      model: 'kimi-k2.6',
+      thinkingMode: 'enabled',
+    });
+    (provider as unknown as { client: unknown }).client = {
+      chat: {
+        completions: {
+          create: vi.fn().mockResolvedValue(
+            chunks({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+          ),
+        },
+      },
+    };
+
+    await collect(provider, { ...baseReq, thinking: false });
+
+    const args = createSpy(provider).mock.calls[0][0] as Record<string, unknown>;
+    expect(args.thinking).toEqual({ type: 'disabled' });
+  });
+
+  it('admin thinkingMode=enabled is honored when the request is silent', async () => {
+    const provider = new KimiCodeChatProvider({
+      apiKey: 'token',
+      baseURL: 'https://api.kimi.com/coding/v1',
+      model: 'kimi-k2.6',
+      thinkingMode: 'enabled',
+    });
+    (provider as unknown as { client: unknown }).client = {
+      chat: {
+        completions: {
+          create: vi.fn().mockResolvedValue(
+            chunks({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+          ),
+        },
+      },
+    };
+
+    await collect(provider, { ...baseReq });
+
+    const args = createSpy(provider).mock.calls[0][0] as Record<string, unknown>;
+    expect(args.thinking).toEqual({ type: 'enabled' });
+  });
+
+  it('admin thinkingMode=disabled is honored when the request is silent', async () => {
+    const provider = new KimiCodeChatProvider({
+      apiKey: 'token',
+      baseURL: 'https://api.kimi.com/coding/v1',
+      model: 'kimi-k2.6',
+      thinkingMode: 'disabled',
+    });
+    (provider as unknown as { client: unknown }).client = {
+      chat: {
+        completions: {
+          create: vi.fn().mockResolvedValue(
+            chunks({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+          ),
+        },
+      },
+    };
+
+    await collect(provider, { ...baseReq });
 
     const args = createSpy(provider).mock.calls[0][0] as Record<string, unknown>;
     expect(args.thinking).toEqual({ type: 'disabled' });

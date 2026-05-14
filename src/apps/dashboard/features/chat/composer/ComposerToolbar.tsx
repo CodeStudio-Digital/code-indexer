@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Paperclip, Repeat, Send, Settings2, Shield, Square, Thermometer } from 'lucide-react';
+import { Maximize2, Network, Paperclip, Repeat, Send, Settings2, Shield, Square, Thermometer } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -9,6 +9,7 @@ import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
 import { FallbackPicker } from '../../../components/FallbackPicker.js';
+import { PipelinePicker } from './PipelinePicker.js';
 
 type AgentId = 'explore' | 'plan' | 'build' | 'admin';
 
@@ -36,10 +37,22 @@ interface ComposerToolbarProps {
    */
   temperature: number | null;
   setTemperature: (v: number | null) => void;
+  /**
+   * Per-session "unrestricted tool output" toggle (migration 078). When on,
+   * the runner / mcp-bridge / code_exec lift the per-tool-call truncation
+   * cap from ~24 KB to ~1 MB. Auto-compaction still runs.
+   */
+  unrestrictedOutput: boolean;
+  setUnrestrictedOutput?: (v: boolean) => void;
   fallbackProvider: string | null;
   fallbackModel: string | null;
   onFallbackChange: (provider: string | null, model: string | null) => void;
   getModelsForProvider: (providerId: string) => EnrichedProviderModel[];
+  /** Chat session id — needed by the PipelinePicker to scope its list. */
+  sessionId: number | null;
+  /** Currently-selected pipeline id, or null when not in pipeline mode. */
+  selectedPipelineId: number | null;
+  setSelectedPipelineId?: (v: number | null) => void;
 }
 
 export const ComposerToolbar = React.memo(function ComposerToolbar({
@@ -61,14 +74,19 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   setMaxTurns,
   temperature,
   setTemperature,
+  unrestrictedOutput,
+  setUnrestrictedOutput,
   fallbackProvider,
   fallbackModel,
   onFallbackChange,
   getModelsForProvider,
+  sessionId,
+  selectedPipelineId,
+  setSelectedPipelineId,
 }: ComposerToolbarProps) {
   const { t } = useTranslation(['chat', 'common']);
   return (
-    <div className="flex items-center gap-2 px-2 pb-2 flex-wrap sm:flex-nowrap">
+    <div className="flex items-center gap-2 px-2 pb-2 flex-wrap sm:flex-wrap">
       <label className="cursor-pointer">
         <input
           type="file"
@@ -86,6 +104,14 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
       </label>
 
       <AgentPicker value={agent} onChange={setAgent} autoSuggestFor={autoSuggestText} />
+
+      {setSelectedPipelineId && (
+        <PipelinePicker
+          sessionId={sessionId}
+          selectedPipelineId={selectedPipelineId}
+          onChange={setSelectedPipelineId}
+        />
+      )}
 
       <div className="hidden sm:block w-[110px]">
         <Combobox
@@ -168,6 +194,30 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
           className="h-7 w-16 text-xs font-mono px-1.5"
         />
       </div>
+
+      {/* Unrestricted-tool-output toggle (migration 078). When on, lifts the
+          per-tool-call truncation cap from ~24 KB to ~1 MB so verbose MCP
+          tools (Unity, large file reads, batched code_exec) arrive intact.
+          Auto-compaction in the runner still runs. */}
+      {setUnrestrictedOutput && (
+        <button
+          type="button"
+          onClick={() => setUnrestrictedOutput(!unrestrictedOutput)}
+          className={`hidden sm:inline-flex items-center gap-1 h-7 px-2 rounded-md text-xs font-mono transition-colors ${
+            unrestrictedOutput
+              ? 'bg-amber-500/15 text-amber-600 hover:bg-amber-500/25'
+              : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+          }`}
+          title={t('chat:toolbar.unrestrictedOutput', {
+            defaultValue:
+              'Tool output: full. Raises per-tool-call truncation cap to ~1 MB (default ~24 KB). Useful for Unity / large file reads. Auto-compaction still runs. Applied on the next message.',
+          })}
+          aria-pressed={unrestrictedOutput}
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+          <span>{unrestrictedOutput ? 'full' : 'cap'}</span>
+        </button>
+      )}
 
       {/* Desktop fallback popover */}
       <div className="hidden sm:block">
@@ -311,6 +361,10 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
         {streaming ? (
           <Button onClick={onAbort} variant="destructive" size="sm">
             <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}
+          </Button>
+        ) : selectedPipelineId != null ? (
+          <Button onClick={onSend} disabled={!hasInput} size="sm" variant="default">
+            <Network className="h-3.5 w-3.5" /> {t('chat:pipelinePicker.runButton')}
           </Button>
         ) : (
           <Button onClick={onSend} disabled={!hasInput} size="sm">

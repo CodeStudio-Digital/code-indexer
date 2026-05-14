@@ -7,6 +7,7 @@
 import { Hono } from 'hono';
 import type { ProviderStore, UpsertModelInput } from '../../../store/provider-store.js';
 import { discoverModels } from './model-discovery/index.js';
+import { getRegistryContextWindow, mergeDBCapabilities } from '../../../core/coder/providers/capabilities.js';
 
 export function modelsRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -58,6 +59,7 @@ export function modelsRouter(store: ProviderStore): Hono {
       enabled?: boolean;
       name?: string;
       default_reasoning_level?: string | null;
+      context_window?: number | null;
     }>();
     if (body.default_reasoning_level !== undefined && body.default_reasoning_level !== null) {
       // Validate against the model's persisted supported_reasoning_levels — if
@@ -73,8 +75,46 @@ export function modelsRouter(store: ProviderStore): Hono {
         );
       }
     }
+    if (body.context_window !== undefined && body.context_window !== null) {
+      // Sanity bounds: 1k–10M tokens. Avoids fat-finger like 200 (instead
+      // of 200_000) silently destroying the dashboard.
+      if (body.context_window < 1024 || body.context_window > 10_000_000) {
+        return c.json(
+          { error: `context_window must be between 1024 and 10_000_000 (got ${body.context_window})` },
+          400,
+        );
+      }
+    }
     store.updateModel(id, modelId, mode, body);
+    // If we just changed a context_window, rehydrate the in-memory cache so
+    // newly-created sessions pick up the value without a server restart.
+    if (body.context_window !== undefined) {
+      try {
+        mergeDBCapabilities(store.listAllModels());
+      } catch {
+        /* best-effort */
+      }
+    }
     return c.json({ ok: true });
+  });
+
+  /**
+   * POST /providers/models/backfill-context-windows — walks every row in
+   * provider_models that has context_window=NULL and fills it from the
+   * static registry's prefix-aware lookup. Idempotent, no network.
+   * Returns counts so the admin UI can show "X models updated, Y still
+   * unknown — add them manually or via env override".
+   */
+  app.post('/providers/models/backfill-context-windows', (c) => {
+    const result = store.backfillContextWindowsFromRegistry(getRegistryContextWindow);
+    if (result.updated > 0) {
+      try {
+        mergeDBCapabilities(store.listAllModels());
+      } catch {
+        /* best-effort */
+      }
+    }
+    return c.json(result);
   });
 
   /**

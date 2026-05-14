@@ -29,11 +29,41 @@ const MAX_TIMEOUT_MS = 30_000;
 const MAX_TOOL_CALLS = 50;
 const MAX_OUTPUT_BYTES = 50_000;
 
+/**
+ * Promises returned by an active code_exec toolsProxy. The module-level
+ * `unhandledRejection` listener below swallows ONLY rejections whose promise
+ * sits in this set — anything outside code_exec keeps Node's default
+ * "terminate on unhandled rejection" behavior. Without this guard, a script
+ * that writes `files.forEach(f => edit_file({...}))` (fire-and-forget) takes
+ * the whole host down: the proxy throw becomes an unhandled rejection that
+ * never reached the script's `await`.
+ */
+const ownedToolPromises = new WeakSet<Promise<unknown>>();
+let unhandledHandlerInstalled = false;
+function ensureUnhandledHandler(): void {
+  if (unhandledHandlerInstalled) return;
+  unhandledHandlerInstalled = true;
+  process.on('unhandledRejection', (reason, promise) => {
+    if (!ownedToolPromises.has(promise as Promise<unknown>)) return;
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    console.warn(`[code_exec] swallowed fire-and-forget tool rejection: ${msg}`);
+  });
+}
+/**
+ * Raised ceiling for sessions with `unrestricted_tool_output` on. NOT
+ * Infinity — large outputs still pay context cost; this just lets verbose
+ * Unity/MCP batches arrive intact in the turn that produced them. Override
+ * with `CODER_UNRESTRICTED_CODE_EXEC_BYTES`.
+ */
+const UNRESTRICTED_MAX_OUTPUT_BYTES = Number(
+  process.env.CODER_UNRESTRICTED_CODE_EXEC_BYTES ?? 1_000_000,
+);
+
 const CODE_EXEC_DESC =
   'Execute a JS snippet that batches tool calls in one turn. Saves round-trips when you need to chain reads/searches/edits with logic, loops, or filtering.\n' +
   '\n' +
   'API inside the snippet:\n' +
-  '  - `tools.<name>(args)` — calls a registered tool, returns its text content (string). Throws on tool error.\n' +
+  '  - `tools.<name>(args)` OR `<name>(args)` — both work. The latter is a bare-global alias for every registered tool whose name does not collide with a JS builtin (read_file, edit_file, mcp__grep_code, etc). Returns the tool\'s text content (string). Throws on tool error.\n' +
   '  - `log(...)` — appends to the captured output. JSON-friendly.\n' +
   '  - `JSON`, `Math`, `String`, `Number`, `Boolean`, `Array`, `Object`, `Promise`, `Set`, `Map` are available.\n' +
   '  - The snippet runs as an async IIFE; use top-level `await` and `return` the result.\n' +
@@ -121,6 +151,18 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       const requested = typeof args.timeout_ms === 'number' ? args.timeout_ms : DEFAULT_TIMEOUT_MS;
       const timeout = Math.min(MAX_TIMEOUT_MS, Math.max(500, requested));
 
+      // Per-session "unrestricted tool output" toggle. Lifts the script's
+      // output cap from 50 KB to ~1 MB so batched Unity / MCP work isn't
+      // truncated mid-flight. Auto-compaction in the runner still runs.
+      const effectiveMaxOutput = ctx.unrestrictedToolOutput
+        ? UNRESTRICTED_MAX_OUTPUT_BYTES
+        : MAX_OUTPUT_BYTES;
+
+      // Make sure the host doesn't crash if the model's script fires a
+      // tool call without awaiting it (the proxy throws into a Promise
+      // nobody owns). Idempotent — installs the listener at most once.
+      ensureUnhandledHandler();
+
       // Build the tools proxy: one async function per safe registered tool.
       const safe = registry.list().filter(isSafeTool);
       const exposedNames = safe.map((t) => t.name).sort();
@@ -134,8 +176,8 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
           try { return JSON.stringify(p); } catch { return String(p); }
         }).join(' ');
         outputBytes += line.length + 1;
-        if (outputBytes > MAX_OUTPUT_BYTES) {
-          throw new Error(`code_exec: output cap (${MAX_OUTPUT_BYTES} bytes) exceeded`);
+        if (outputBytes > effectiveMaxOutput) {
+          throw new Error(`code_exec: output cap (${effectiveMaxOutput} bytes) exceeded`);
         }
         logBuffer.push(line);
       };
@@ -158,7 +200,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
 
       const toolsProxy: Record<string, (a: unknown) => Promise<string>> = {};
       for (const t of safe) {
-        toolsProxy[t.name] = async (rawArgs: unknown) => {
+        const impl = async (rawArgs: unknown): Promise<string> => {
           if (++toolCalls > MAX_TOOL_CALLS) {
             throw new Error(`code_exec: exceeded ${MAX_TOOL_CALLS} tool calls per script`);
           }
@@ -195,9 +237,37 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
           }
           return result.content;
         };
+        toolsProxy[t.name] = (rawArgs: unknown): Promise<string> => {
+          const p = impl(rawArgs);
+          ownedToolPromises.add(p);
+          return p;
+        };
+      }
+
+      // Names of JS globals we never want to shadow with a tool. Any tool
+      // that happens to share one of these gets the `tools.<name>` form
+      // only — keeps `JSON`, `Math`, `Promise`, etc. predictable inside
+      // user scripts.
+      const RESERVED_GLOBALS = new Set([
+        'JSON', 'Math', 'Number', 'String', 'Boolean', 'Array', 'Object',
+        'Promise', 'Set', 'Map', 'Date', 'RegExp', 'Error', 'console', 'log',
+        'tools',
+      ]);
+      // Shadow-safe bare-global aliases. Without this, the agent's natural
+      // `await edit_file(...)` throws ReferenceError; with this, both
+      // `tools.edit_file(...)` and `edit_file(...)` work. The sandbox has
+      // no security boundary (declared above) so this is a UX choice, not
+      // a privilege boundary.
+      const bareGlobals: Record<string, (a: unknown) => Promise<string>> = {};
+      for (const [name, fn] of Object.entries(toolsProxy)) {
+        if (RESERVED_GLOBALS.has(name)) continue;
+        bareGlobals[name] = fn;
       }
 
       const sandbox: Context = {
+        // Bare aliases first so the explicit fields below win on conflict
+        // (e.g. a future tool named `JSON` would not shadow the global).
+        ...bareGlobals,
         tools: toolsProxy,
         log: appendLog,
         console: { log: appendLog, warn: appendLog, error: appendLog },
@@ -241,8 +311,30 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         returnValue = await Promise.race([scriptPromise, timeoutPromise]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        // Defense-in-depth hint: a ReferenceError on a name that IS a
+        // registered tool means the model wrote the wrong call shape (e.g.
+        // shadowed by a `let` / typo). With Fix 2a the bare alias should
+        // make this rare, but still surface a precise nudge so the next
+        // turn corrects itself instead of guessing.
+        let hint = '';
+        if (e instanceof ReferenceError) {
+          const refMatch = /^([A-Za-z_$][\w$]*) is not defined/.exec(msg);
+          if (refMatch) {
+            const name = refMatch[1];
+            if (exposedNames.includes(name)) {
+              hint =
+                `\n\nHint: \`${name}\` is a registered tool. Call it as ` +
+                `\`await ${name}(args)\` or \`await tools.${name}(args)\`.`;
+            } else {
+              const close = exposedNames.find((t) => t.toLowerCase() === name.toLowerCase());
+              if (close) {
+                hint = `\n\nHint: did you mean \`${close}\`? (case-sensitive)`;
+              }
+            }
+          }
+        }
         const stderr = logBuffer.length > 0 ? `\n[output before failure]\n${logBuffer.join('\n')}` : '';
-        return err(`code_exec failed: ${msg}${stderr}`);
+        return err(`code_exec failed: ${msg}${hint}${stderr}`);
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
       }
@@ -264,8 +356,8 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         }
       }
       const out = lines.join('\n');
-      if (out.length > MAX_OUTPUT_BYTES) {
-        return ok(out.slice(0, MAX_OUTPUT_BYTES) + `\n[truncated: output exceeded ${MAX_OUTPUT_BYTES} bytes]`);
+      if (out.length > effectiveMaxOutput) {
+        return ok(out.slice(0, effectiveMaxOutput) + `\n[truncated: output exceeded ${effectiveMaxOutput} bytes]`);
       }
       return ok(out);
     },

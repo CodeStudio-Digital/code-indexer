@@ -107,6 +107,7 @@ export function validatePipelineGraph(
   }
 
   const nodeIds = new Set<string>();
+  const nodesById = new Map<string, PipelineNode>();
   for (const node of graph.nodes) {
     if (!node.id || typeof node.id !== 'string') {
       errors.push({ message: 'Node is missing a string id.' });
@@ -117,9 +118,14 @@ export function validatePipelineGraph(
       continue;
     }
     nodeIds.add(node.id);
+    nodesById.set(node.id, node);
+    const kind = node.kind ?? 'agent';
     if (!node.role || typeof node.role !== 'string') {
       errors.push({ nodeId: node.id, message: `Node "${node.id}" is missing role.` });
-    } else if (validRoles && !validRoles.has(node.role)) {
+    } else if (validRoles && !validRoles.has(node.role) && kind !== 'validate') {
+      // Validators don't dispatch to a role-bound subordinate, so an
+      // unknown role on a validator is harmless. We still leave the
+      // field on the node so the dashboard list view stays consistent.
       errors.push({
         nodeId: node.id,
         message: `Node "${node.id}" references unknown role "${node.role}".`,
@@ -131,11 +137,26 @@ export function validatePipelineGraph(
     if (typeof node.maxAttempts === 'number' && node.maxAttempts < 1) {
       errors.push({ nodeId: node.id, message: `Node "${node.id}" maxAttempts must be ≥ 1.` });
     }
+    if (kind === 'validate') {
+      if (node.branchMode && node.branchMode !== 'pass-fail') {
+        errors.push({
+          nodeId: node.id,
+          message: `Validator node "${node.id}" must use branchMode='pass-fail' (got '${node.branchMode}').`,
+        });
+      }
+      if (!node.validatorPrompt || typeof node.validatorPrompt !== 'string' || !node.validatorPrompt.trim()) {
+        errors.push({
+          nodeId: node.id,
+          message: `Validator node "${node.id}" requires a non-empty validatorPrompt.`,
+        });
+      }
+    }
   }
 
   const edgeIds = new Set<string>();
   const passByFrom = new Map<string, number>();
   const failByFrom = new Map<string, number>();
+  const reviewByFrom = new Map<string, number>();
   for (const edge of graph.edges) {
     if (!edge.id || typeof edge.id !== 'string') {
       errors.push({ message: 'Edge is missing a string id.' });
@@ -153,8 +174,22 @@ export function validatePipelineGraph(
       errors.push({ edgeId: edge.id, message: `Edge "${edge.id}" to-node "${edge.to}" not found.` });
     }
     if (edge.kind === 'pass-fail') {
-      const map = edge.on === 'pass' ? passByFrom : failByFrom;
+      const map =
+        edge.on === 'pass' ? passByFrom : edge.on === 'fail' ? failByFrom : reviewByFrom;
       map.set(edge.from, (map.get(edge.from) ?? 0) + 1);
+      // A 'review' verdict is only emitted by validator-kind nodes. Edge
+      // routing for it on a non-validator from-node is unreachable at
+      // runtime — flag it so the author catches the mistake before the
+      // execution starts.
+      if (edge.on === 'review') {
+        const fromNode = nodesById.get(edge.from);
+        if (fromNode && (fromNode.kind ?? 'agent') !== 'validate') {
+          errors.push({
+            edgeId: edge.id,
+            message: `Edge "${edge.id}" with on='review' must originate from a validator node ("${edge.from}" is kind='${fromNode.kind ?? 'agent'}').`,
+          });
+        }
+      }
     }
   }
 
@@ -166,6 +201,11 @@ export function validatePipelineGraph(
   for (const [from, count] of failByFrom) {
     if (count > 1) {
       errors.push({ nodeId: from, message: `Node "${from}" has more than one 'fail' branch.` });
+    }
+  }
+  for (const [from, count] of reviewByFrom) {
+    if (count > 1) {
+      errors.push({ nodeId: from, message: `Node "${from}" has more than one 'review' branch.` });
     }
   }
 

@@ -25,8 +25,9 @@ const touchSession = db.prepare(
 );
 const insertTool = db.prepare(`
   INSERT INTO coder_tool_calls
-    (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms)
-  VALUES (?, ?, ?, ?, ?, ?, ?)
+    (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
+     output_chars, truncated, phase, turn_telemetry_id)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const bumpStmt = db.prepare(`
   UPDATE coder_sessions
@@ -61,6 +62,10 @@ const persistAssistantTurnTx = db.transaction((p: PersistAssistantTurnPayload) =
       tc.result_text,
       tc.is_error ? 1 : 0,
       tc.duration_ms,
+      tc.output_chars ?? (tc.result_text?.length ?? 0),
+      tc.truncated ? 1 : 0,
+      tc.phase ?? null,
+      tc.turn_telemetry_id ?? null,
     );
   }
   if (p.usage) {

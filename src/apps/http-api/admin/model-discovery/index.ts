@@ -29,6 +29,8 @@ import { discoverGemini } from './gemini.js';
 import { discoverBedrock } from './bedrock.js';
 import { discoverGoogleOAuth } from './google-oauth.js';
 import { discoverKimiCode } from './kimi-code.js';
+import { discoverCloudflare } from './cloudflare.js';
+import { discoverMoonshot } from './moonshot.js';
 
 export interface DiscoveryResult {
   models: UpsertModelInput[];
@@ -65,6 +67,10 @@ export async function discoverModels(
       return wrap(await discoverGoogleOAuth(store, cfg));
     case 'kimi-code':
       return wrap(await discoverKimiCode(store, cfg));
+    case 'cloudflare':
+      return wrap(await discoverCloudflare(cfg));
+    case 'moonshot':
+      return wrap(await discoverMoonshot(cfg));
     default:
       throw new Error(`Live discovery not implemented for kind=${cfg.kind}`);
   }

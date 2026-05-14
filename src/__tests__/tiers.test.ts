@@ -11,9 +11,9 @@ import {
 describe('tool tiers', () => {
   it('bootstrap tier contains exactly the expected tools', () => {
     // Locked-down count so accidental additions show up in CI.
-    // Bumped to 39 when `get_skills_list` + `get_skill_content` were added
-    // explicitly so the lazy/compact skills modes are guaranteed visible.
-    expect(TIER_COUNTS.bootstrap).toBe(39);
+    // Bumped to 41 when `find_tools` + `request_review` were added (Camadas
+    // 3 and 4 — lazy tool discovery and reviewer subagent).
+    expect(TIER_COUNTS.bootstrap).toBe(41);
   });
 
   it('navigate tier contains the expected tools', () => {

@@ -1,12 +1,22 @@
 import { useTranslation } from 'react-i18next';
 import { useState } from 'react';
-import { Activity, AlertTriangle, BarChart3, ChevronDown, ChevronRight, Database, FileText, History, Loader2, Wrench } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, ChevronDown, ChevronRight, Database, DollarSign, FileText, History, Loader2, Scissors, Wrench } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { useApi } from '../../hooks/useApi.js';
 
 interface ToolBreakdown {
   name: string;
   calls: number;
+  total_output_chars: number;
+  avg_duration_ms: number;
+  truncated_count: number;
+}
+
+interface PhaseBreakdown {
+  phase: string;
+  tool_calls: number;
+  total_output_chars: number;
+  total_duration_ms: number;
 }
 
 interface FirstTurnPayload {
@@ -60,6 +70,16 @@ interface SessionTelemetrySummary {
   tools_breakdown: ToolBreakdown[];
   first_turn_payload: FirstTurnPayload;
   turns: TurnRow[];
+  /** Migration 072. */
+  estimated_cost_usd: number;
+  /** Migration 072 — average across assistant turns. */
+  system_prompt_avg_chars: number | null;
+  /** Migration 072 — average across assistant turns. */
+  tools_def_avg_chars: number | null;
+  /** Migration 072. */
+  truncation_rate: number | null;
+  /** Migration 072 — populated by Camada 2 (PhaseRouter). */
+  phase_breakdown: PhaseBreakdown[];
 }
 
 interface SessionMetricsModalProps {
@@ -77,6 +97,15 @@ function formatK(n: number): string {
 function formatPct(ratio: number | null): string {
   if (ratio === null || !isFinite(ratio)) return '—';
   return `${Math.round(ratio * 100)}%`;
+}
+
+function formatUsd(value: number): string {
+  if (!isFinite(value) || value === 0) return '$0';
+  if (value < 0.01) return '<$0.01';
+  if (value < 1) return `$${value.toFixed(2)}`;
+  if (value < 100) return `$${value.toFixed(2)}`;
+  if (value < 10_000) return `$${value.toFixed(0)}`;
+  return `$${(value / 1000).toFixed(1)}k`;
 }
 
 export function SessionMetricsModal({ open, onOpenChange, sessionId }: SessionMetricsModalProps) {
@@ -128,6 +157,36 @@ export function SessionMetricsModal({ open, onOpenChange, sessionId }: SessionMe
                 />
               </Section>
 
+              {/* Cost & bloat (migration 072) */}
+              <Section title={t('chat:metrics.cost.title')} icon={<DollarSign className="h-3.5 w-3.5" />}>
+                <Stat label={t('chat:metrics.cost.estimatedUsd')} value={formatUsd(data.estimated_cost_usd)} />
+                <Stat
+                  label={t('chat:metrics.cost.systemPromptAvg')}
+                  value={data.system_prompt_avg_chars != null ? `${formatK(Math.round(data.system_prompt_avg_chars))} ch` : '—'}
+                  intent={
+                    data.system_prompt_avg_chars != null && data.system_prompt_avg_chars > 8_000
+                      ? 'warn'
+                      : undefined
+                  }
+                />
+                <Stat
+                  label={t('chat:metrics.cost.toolsDefAvg')}
+                  value={data.tools_def_avg_chars != null ? `${formatK(Math.round(data.tools_def_avg_chars))} ch` : '—'}
+                  intent={
+                    data.tools_def_avg_chars != null && data.tools_def_avg_chars > 15_000
+                      ? 'warn'
+                      : undefined
+                  }
+                />
+                <Stat
+                  label={t('chat:metrics.cost.truncation')}
+                  value={formatPct(data.truncation_rate)}
+                  intent={
+                    data.truncation_rate !== null && data.truncation_rate >= 0.2 ? 'warn' : undefined
+                  }
+                />
+              </Section>
+
               {/* Turns + context signals */}
               <Section title={t('chat:metrics.turns.title')} icon={<Database className="h-3.5 w-3.5" />}>
                 <Stat label={t('chat:metrics.turns.count')} value={String(data.turn_count)} />
@@ -150,20 +209,75 @@ export function SessionMetricsModal({ open, onOpenChange, sessionId }: SessionMe
                 <FirstTurnBreakdown payload={data.first_turn_payload} t={t} />
               )}
 
-              {/* Tools breakdown */}
+              {/* Tools breakdown — migration 072 enriches with output/duration/truncation. */}
               <Section title={t('chat:metrics.tools.title')} icon={<Wrench className="h-3.5 w-3.5" />}>
                 {data.tools_breakdown.length === 0 ? (
                   <div className="col-span-full text-sm text-muted-foreground">
                     {t('chat:metrics.tools.empty')}
                   </div>
                 ) : (
-                  <div className="col-span-full space-y-1.5">
-                    {data.tools_breakdown.map((row) => (
-                      <ToolBar key={row.name} name={row.name} calls={row.calls} max={data.tools_breakdown[0]?.calls ?? 1} />
-                    ))}
+                  <div className="col-span-full">
+                    <table className="w-full text-xs">
+                      <thead className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        <tr className="text-left">
+                          <th className="font-normal py-1">{t('chat:metrics.tools.name')}</th>
+                          <th className="font-normal py-1 text-right">{t('chat:metrics.tools.calls')}</th>
+                          <th className="font-normal py-1 text-right">{t('chat:metrics.tools.outputChars')}</th>
+                          <th className="font-normal py-1 text-right">{t('chat:metrics.tools.avgDuration')}</th>
+                          <th className="font-normal py-1 text-right">{t('chat:metrics.tools.truncated')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.tools_breakdown.map((row) => (
+                          <tr key={row.name} className="border-t">
+                            <td className="font-mono text-[11px] py-1 truncate max-w-[220px]" title={row.name}>{row.name}</td>
+                            <td className="text-right tabular-nums py-1">{row.calls}</td>
+                            <td className="text-right tabular-nums py-1">{formatK(row.total_output_chars)}</td>
+                            <td className="text-right tabular-nums py-1 text-muted-foreground">{row.avg_duration_ms}ms</td>
+                            <td className={`text-right tabular-nums py-1 ${row.truncated_count > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
+                              {row.truncated_count || '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </Section>
+
+              {/* Phase breakdown — empty (`unknown`) until Camada 2 ships PhaseRouter. */}
+              {data.phase_breakdown && data.phase_breakdown.length > 0 && (
+                <Section title={t('chat:metrics.phase.title')} icon={<Scissors className="h-3.5 w-3.5" />}>
+                  <div className="col-span-full">
+                    {data.phase_breakdown.length === 1 && data.phase_breakdown[0].phase === 'unknown' ? (
+                      <div className="text-[11px] text-muted-foreground">
+                        {t('chat:metrics.phase.notRoutedYet')}
+                      </div>
+                    ) : (
+                      <table className="w-full text-xs">
+                        <thead className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                          <tr className="text-left">
+                            <th className="font-normal py-1">{t('chat:metrics.phase.phase')}</th>
+                            <th className="font-normal py-1 text-right">{t('chat:metrics.phase.calls')}</th>
+                            <th className="font-normal py-1 text-right">{t('chat:metrics.phase.outputChars')}</th>
+                            <th className="font-normal py-1 text-right">{t('chat:metrics.phase.totalDuration')}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.phase_breakdown.map((row) => (
+                            <tr key={row.phase} className="border-t">
+                              <td className="font-mono text-[11px] py-1">{row.phase}</td>
+                              <td className="text-right tabular-nums py-1">{row.tool_calls}</td>
+                              <td className="text-right tabular-nums py-1">{formatK(row.total_output_chars)}</td>
+                              <td className="text-right tabular-nums py-1 text-muted-foreground">{row.total_duration_ms}ms</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </Section>
+              )}
 
               {/* Per-turn timeline */}
               {data.turns && data.turns.length > 0 && (

@@ -85,12 +85,30 @@ describe('goal — DB-persisted across runner restarts', () => {
     expect(g.content).toContain('tagged v2.0.0');
   });
 
-  it('refuses a second create while persisted goal is in_progress', async () => {
+  it('replace_active=false is currently ignored — supersede happens regardless (user disabled the strict branch in goal.ts)', async () => {
+    // Historical: this test asserted the strict refusal path. The user
+    // commented out the `if (!replaceActive)` block to make create_goal
+    // always supersede. Test now mirrors the live behaviour.
     await createGoal.handler({ goal: 'first' }, ctxFor(sessionId));
     const fresh = ctxFor(sessionId);
-    const r = await createGoal.handler({ goal: 'second' }, fresh);
-    expect(r.isError).toBe(true);
-    expect(r.content).toContain('already active');
+    const r = await createGoal.handler({ goal: 'second', replace_active: false }, fresh);
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('superseded');
+  });
+
+  it('auto-supersedes a persisted in-progress goal by default and persists the new one', async () => {
+    await createGoal.handler({ goal: 'phase 1' }, ctxFor(sessionId));
+    const fresh = ctxFor(sessionId);
+    // No replace_active arg → default true → auto-replace.
+    const r = await createGoal.handler({ goal: 'phase 2' }, fresh);
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('superseded');
+
+    // The new goal is what survives a runner restart.
+    const fresh2 = ctxFor(sessionId);
+    const g = await getGoal.handler({}, fresh2);
+    expect(g.content).toContain('Goal: phase 2');
+    expect(g.content).toContain('in_progress');
   });
 
   it('isolates goal per session (sessionA does not see sessionB goal)', async () => {

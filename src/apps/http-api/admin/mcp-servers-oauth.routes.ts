@@ -119,7 +119,19 @@ export function createMcpServersOauthRouter(
     const clientName = typeof body.client_name === 'string' && body.client_name
       ? body.client_name
       : `mcp-coder-${serverId}`;
-    const scopes = stringArrayOr(body.scopes, ['mcp:read', 'mcp:write']);
+    // Default scopes come from the PR metadata first (most specific), then
+    // the AS metadata, and only fall back to the generic mcp:read/write
+    // pair when the server declared nothing. Hardcoding mcp:read/write
+    // breaks providers like Figma (`mcp:connect`) and Clerk-style servers
+    // (`email`, `profile`, …) that reject unknown scopes.
+    const discoveredScopes =
+      discovered.value.resource.scopesSupported.length > 0
+        ? discovered.value.resource.scopesSupported
+        : discovered.value.as.scopesSupported;
+    const scopes = stringArrayOr(
+      body.scopes,
+      discoveredScopes.length > 0 ? [...discoveredScopes] : ['mcp:read', 'mcp:write'],
+    );
 
     const registered = await bundle.registerDynamic.execute({
       serverId,
@@ -129,8 +141,16 @@ export function createMcpServersOauthRouter(
       scopes,
     });
     if (!registered.ok) {
+      // Surface the discovered AS so the dashboard can offer a manual
+      // registration path (some providers — e.g. Figma — advertise a
+      // registration_endpoint but only accept pre-registered clients).
       return c.json(
-        { error: registered.error.kind, error_description: mcpAuthClientErrorMessage(registered.error) },
+        {
+          error: registered.error.kind,
+          error_description: mcpAuthClientErrorMessage(registered.error),
+          as: discovered.value.as,
+          scopes_supported: discoveredScopes,
+        },
         errorStatus(registered.error.kind),
       );
     }

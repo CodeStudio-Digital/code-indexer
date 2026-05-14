@@ -21,3 +21,9 @@ export type {
   ShellRunOptions,
 } from './shell-port.js';
 export { LocalShellAdapter, defaultLocalShellPort } from './shell-port.js';
+
+export {
+  SnapshotRecorder,
+  SnapshotRecordingFilesystemPort,
+} from './snapshot-recording-filesystem-port.js';
+export type { SnapshotRecorderDeps } from './snapshot-recording-filesystem-port.js';

@@ -29,7 +29,119 @@ import {
   maybeTerse,
 } from './descriptions.js';
 
+// ─── Burst guard for submit_tasks ───────────────────────────────
+//
+// Mirrors the create_goal / todo_write burst guards. When the agent
+// reissues `submit_tasks` with the same logical task list 3+ times in 90s
+// without anything changing in between, refuse hard and point at
+// update_task. The signature includes the summary plus sorted task ids,
+// so refining (adding/removing tasks, renaming) resets the counter.
+
+const SUBMIT_BURST_BY_RUNNER = new WeakMap<object, { count: number; lastAt: number; lastSig: string }>();
+const SUBMIT_BURST_THRESHOLD = 3;
+const SUBMIT_BURST_WINDOW_MS = 90_000;
+
+function tasksSignature(summary: string, tasks: ReadonlyArray<{ id: string; title: string }>): string {
+  const ids = tasks.map((t) => `${t.id}:${t.title}`).sort().join('|');
+  return `${summary.trim()}::${ids}`;
+}
+
+function readRunnerKey(ctx: { runner?: unknown }): object | null {
+  return (ctx.runner as unknown as object) ?? null;
+}
+
+function bumpSubmitBurst(ctx: { runner?: unknown }, sig: string): { count: number } {
+  const key = readRunnerKey(ctx);
+  if (!key) return { count: 0 };
+  const now = Date.now();
+  const prior = SUBMIT_BURST_BY_RUNNER.get(key);
+  if (!prior || now - prior.lastAt > SUBMIT_BURST_WINDOW_MS || prior.lastSig !== sig) {
+    SUBMIT_BURST_BY_RUNNER.set(key, { count: 1, lastAt: now, lastSig: sig });
+    return { count: 1 };
+  }
+  const next = { count: prior.count + 1, lastAt: now, lastSig: sig };
+  SUBMIT_BURST_BY_RUNNER.set(key, next);
+  return { count: next.count };
+}
+
+/** Test-only: clear submit_tasks burst tracker for a runner key. */
+export function _resetSubmitBurstForKey(key: object): void {
+  SUBMIT_BURST_BY_RUNNER.delete(key);
+}
+
 // ─── Validation helpers ─────────────────────────────────────────
+
+/**
+ * Levenshtein distance for short strings — used to suggest "did you mean"
+ * when the model passes a hallucinated task_id.
+ */
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const dp = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) dp[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let prev = i - 1;
+    dp[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev : Math.min(prev, dp[j - 1], dp[j]) + 1;
+      prev = tmp;
+    }
+  }
+  return dp[b.length];
+}
+
+/**
+ * Build a structured, recovery-oriented error message for execute_task.
+ * Lists valid IDs by status group and suggests the closest match if any
+ * id or title is within Levenshtein distance 3 of the bad input.
+ */
+function buildTaskIdErrorMessage(badId: string, state: TasksState, prefix: string): string {
+  const pending: CoderTask[] = [];
+  const failed: CoderTask[] = [];
+  const inProgress: CoderTask[] = [];
+  for (const t of state.tasks) {
+    if (t.status === 'pending' || t.status === 'interrupted') pending.push(t);
+    else if (t.status === 'failed') failed.push(t);
+    else if (t.status === 'running') inProgress.push(t);
+  }
+
+  const fmt = (t: CoderTask) => `  - id=${t.id} "${t.title}"`;
+  const sections: string[] = [`${prefix}`];
+  if (pending.length) {
+    sections.push('Valid pending tasks:');
+    sections.push(...pending.map(fmt));
+  }
+  if (failed.length) {
+    sections.push('Failed tasks (retryable):');
+    sections.push(...failed.map(fmt));
+  }
+  if (inProgress.length) {
+    sections.push('Currently running:');
+    sections.push(...inProgress.map(fmt));
+  }
+  if (!pending.length && !failed.length && !inProgress.length) {
+    sections.push('(no actionable tasks remain — all may be done/skipped)');
+  }
+
+  // Did-you-mean: closest match across ids and titles within distance 3.
+  const candidates: { id: string; label: string; dist: number }[] = [];
+  for (const t of [...pending, ...failed, ...inProgress]) {
+    const dId = levenshtein(badId.toLowerCase(), t.id.toLowerCase());
+    const dTitle = levenshtein(badId.toLowerCase(), t.title.toLowerCase());
+    const dist = Math.min(dId, dTitle);
+    if (dist <= 3) candidates.push({ id: t.id, label: t.title, dist });
+  }
+  candidates.sort((a, b) => a.dist - b.dist);
+  if (candidates.length > 0) {
+    sections.push(`Did you mean '${candidates[0].id}' ("${candidates[0].label}")?`);
+  }
+
+  sections.push('Hint: pass an exact id from the list above. If unsure, the orchestrator can re-list tasks.');
+  return sections.join('\n');
+}
 
 function validateReference(r: unknown): TaskReference | string {
   if (!r || typeof r !== 'object') return 'reference must be an object';
@@ -201,6 +313,19 @@ export const submitTasks: CoderTool = {
     const runner = ctx.runner;
     if (!runner) return err('submit_tasks requires runner context');
 
+    // Burst guard: refuse repeated re-submissions of the same logical list.
+    const sig = tasksSignature(validated.summary, validated.tasks);
+    const burst = bumpSubmitBurst(ctx, sig);
+    if (burst.count > SUBMIT_BURST_THRESHOLD) {
+      const ids = validated.tasks.map((t) => t.id).join(', ');
+      return err(
+        `Refused: submit_tasks called ${burst.count} times in the last ${Math.round(SUBMIT_BURST_WINDOW_MS / 1000)}s ` +
+          `with the same summary and task ids. Use update_task({task_id: "...", status: "..."}) to mutate ` +
+          `existing tasks (status, files, title) instead of resubmitting the whole list. ` +
+          `Current ids: ${ids}.`,
+      );
+    }
+
     const toolUseId = `tasks_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const initialState: TasksState = {
       summary: validated.summary,
@@ -309,19 +434,36 @@ export const executeTask: CoderTool = {
     if (!state.approved) return err('execute_task: task list not yet approved by user.');
 
     const task = state.tasks.find((t) => t.id === taskId);
-    if (!task) return err(`execute_task: unknown task_id '${taskId}'`);
+    if (!task) {
+      return err(buildTaskIdErrorMessage(taskId, state, `execute_task: unknown task_id '${taskId}'.`));
+    }
     const retryable: ReadonlySet<string> = new Set(['pending', 'interrupted', 'failed']);
     if (!retryable.has(task.status)) {
       return err(
-        `execute_task: task ${taskId} status is '${task.status}', expected one of: ${[...retryable].join(', ')}.`
+        buildTaskIdErrorMessage(
+          taskId,
+          state,
+          `execute_task: task '${taskId}' has status '${task.status}', expected one of: ${[...retryable].join(', ')}.`,
+        ),
       );
     }
     // Check dependencies
     for (const dep of task.depends_on) {
       const depTask = state.tasks.find((t) => t.id === dep);
-      if (!depTask) return err(`execute_task: task ${taskId} depends on unknown '${dep}'`);
+      if (!depTask) {
+        return err(
+          buildTaskIdErrorMessage(
+            dep,
+            state,
+            `execute_task: task '${taskId}' depends on unknown id '${dep}'.`,
+          ),
+        );
+      }
       if (depTask.status !== 'done' && depTask.status !== 'skipped') {
-        return err(`execute_task: task ${taskId} depends on '${dep}' which is '${depTask.status}'.`);
+        return err(
+          `execute_task: task '${taskId}' is blocked — dependency '${dep}' ("${depTask.title}") has status '${depTask.status}'. ` +
+            `Wait for it to reach 'done' or 'skipped' (run execute_task on '${dep}' first if it is 'pending'/'failed'/'interrupted').`,
+        );
       }
     }
 
@@ -349,6 +491,8 @@ export const executeTask: CoderTool = {
             ctx,
             sessionId: runner.sessionId,
             sessionStore: runner.sessionStore,
+            // PR-6 R23: propagate v2 framing/features to the inline implement subagent.
+            agentLoopV2: runner.agentLoopV2,
           },
           task
         );
@@ -542,7 +686,135 @@ export const taskComplete: CoderTool = {
   },
 };
 
+// ─── update_task ────────────────────────────────────────────────
+//
+// Surgical patch for a single task in the persisted state. Lets the agent
+// adjust scope (files), retry a failed task, skip a pending one, or rename
+// a task without resubmitting the whole list (which would pause for user
+// approval and reset version metadata).
+//
+// Status transitions are restricted: lifecycle states (running/done/failed)
+// flow through execute_task / task_complete. update_task only handles the
+// "manual nudge" cases: skip, retry, rename, scope tweak.
+
+const ALLOWED_STATUS_TRANSITIONS: Record<string, ReadonlySet<string>> = {
+  pending: new Set(['skipped']),
+  failed: new Set(['pending', 'skipped']),
+  interrupted: new Set(['pending', 'skipped']),
+  skipped: new Set(['pending']),
+  // running/done are owned by execute_task / task_complete — refuse here.
+  running: new Set([]),
+  done: new Set([]),
+};
+
+const updateTaskSchema: JsonSchema = {
+  type: 'object',
+  properties: {
+    task_id: { type: 'string', description: 'id of the task to patch.' },
+    status: {
+      type: 'string',
+      enum: ['pending', 'skipped'],
+      description:
+        "New status. Allowed: 'skipped' (drop a pending/failed/interrupted task), 'pending' (retry a failed/interrupted/skipped task). " +
+        "running/done/failed transitions are owned by execute_task / task_complete and cannot be set here.",
+    },
+    files_add: { type: 'array', items: { type: 'string' }, description: 'Add these paths to the task scope.' },
+    files_remove: { type: 'array', items: { type: 'string' }, description: 'Remove these paths from the task scope.' },
+    title: { type: 'string', description: 'Replace the task title.' },
+    description: { type: 'string', description: 'Replace the task description.' },
+  },
+  required: ['task_id'],
+} as unknown as JsonSchema;
+
+export const updateTask: CoderTool = {
+  name: 'update_task',
+  description:
+    'Patch a single task by id without resubmitting the whole list. Use to: skip a task that is no longer relevant, retry a failed/interrupted task, ' +
+    'add or remove files from its scope, or rename it. ' +
+    'Status transitions other than skip/retry are owned by execute_task / task_complete — call those instead for running/done/failed.',
+  source: 'native',
+  parameters: updateTaskSchema,
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const taskId = String((args as { task_id?: unknown }).task_id ?? '').trim();
+    if (!taskId) return err('update_task: task_id required');
+
+    const runner = ctx.runner;
+    if (!runner) return err('update_task requires runner context');
+
+    const state = ctx.getTasksState?.();
+    if (!state) return err('update_task: no task list found. Call submit_tasks first.');
+
+    const task = state.tasks.find((t) => t.id === taskId);
+    if (!task) {
+      return err(buildTaskIdErrorMessage(taskId, state, `update_task: unknown task_id '${taskId}'.`));
+    }
+
+    const newStatus = (args as { status?: unknown }).status;
+    const filesAddRaw = (args as { files_add?: unknown }).files_add;
+    const filesRemoveRaw = (args as { files_remove?: unknown }).files_remove;
+    const newTitle = typeof (args as { title?: unknown }).title === 'string' ? String((args as { title: string }).title).trim() : undefined;
+    const newDescription = typeof (args as { description?: unknown }).description === 'string' ? String((args as { description: string }).description).trim() : undefined;
+
+    const wantsAnyChange =
+      newStatus !== undefined ||
+      Array.isArray(filesAddRaw) ||
+      Array.isArray(filesRemoveRaw) ||
+      (newTitle !== undefined && newTitle.length > 0) ||
+      (newDescription !== undefined && newDescription.length > 0);
+    if (!wantsAnyChange) {
+      return err('update_task: at least one of {status, files_add, files_remove, title, description} must be provided.');
+    }
+
+    const patch: Partial<CoderTask> = {};
+
+    if (newStatus !== undefined) {
+      if (typeof newStatus !== 'string' || (newStatus !== 'pending' && newStatus !== 'skipped')) {
+        return err(`update_task: status must be 'pending' or 'skipped', got '${String(newStatus)}'. ` +
+          'For running/done/failed, use execute_task / task_complete.');
+      }
+      const allowed = ALLOWED_STATUS_TRANSITIONS[task.status] ?? new Set<string>();
+      if (!allowed.has(newStatus)) {
+        return err(
+          `update_task: cannot move task '${taskId}' from '${task.status}' to '${newStatus}'. ` +
+            `Allowed transitions from '${task.status}': ${[...allowed].join(', ') || '(none)'}. ` +
+            `If the task is running or done, call task_complete or wait for it to finish naturally.`,
+        );
+      }
+      patch.status = newStatus as CoderTask['status'];
+    }
+
+    if (Array.isArray(filesAddRaw) || Array.isArray(filesRemoveRaw)) {
+      const additions = Array.isArray(filesAddRaw) ? filesAddRaw.filter((f): f is string => typeof f === 'string' && !!f.trim()) : [];
+      const removals = new Set(Array.isArray(filesRemoveRaw) ? filesRemoveRaw.filter((f): f is string => typeof f === 'string' && !!f.trim()) : []);
+      const next = task.files.filter((f) => !removals.has(f));
+      for (const f of additions) {
+        if (!next.includes(f)) next.push(f);
+      }
+      patch.files = next;
+    }
+
+    if (newTitle && newTitle !== task.title) patch.title = newTitle;
+    if (newDescription && newDescription !== task.description) patch.description = newDescription;
+
+    const updated = ctx.updateTaskStatus?.(taskId, patch);
+    if (!updated) return err(`update_task: failed to persist update for '${taskId}'.`);
+
+    // Emit a dedicated event so the dashboard sidebar can refresh immediately
+    // — task_started / task_finished are owned by the lifecycle handlers and
+    // we don't want to fake one of those.
+    runner.emit('task_updated', { task_id: taskId, patch });
+
+    const newTask = updated.tasks.find((t) => t.id === taskId);
+    const lines = [`Task '${taskId}' updated.`];
+    if (patch.status) lines.push(`  status: ${task.status} → ${newTask?.status}`);
+    if (patch.files) lines.push(`  files: [${(newTask?.files ?? []).join(', ')}]`);
+    if (patch.title) lines.push(`  title: "${newTask?.title}"`);
+    if (patch.description) lines.push(`  description updated`);
+    return ok(lines.join('\n'));
+  },
+};
+
 // Avoid the unused-import linter complaint until Phase 2 needs them.
 void extractPathsFromToolArgs;
 
-export const tasksTools: CoderTool[] = [submitTasks, executeTask, taskComplete];
+export const tasksTools: CoderTool[] = [submitTasks, executeTask, taskComplete, updateTask];

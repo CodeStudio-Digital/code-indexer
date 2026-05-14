@@ -24,7 +24,6 @@
  * The handler fully parses + applies inside the project sandbox via the
  * same filesystem port the other fs tools use, so tests can swap the FS.
  */
-import { unlink } from 'node:fs/promises';
 import type { CoderTool, ToolContext, ToolResult } from '../core/tool.js';
 import { ok, err } from '../core/tool.js';
 import { resolveSafe as resolveSafePath, pathFor } from './paths.js';
@@ -188,6 +187,69 @@ export function parseApplyPatch(input: string): ParsedPatch {
   return { actions };
 }
 
+// ─── Normalization helpers ────────────────────────────────────────
+//
+// The Codex patch format is LF-only by construction (the parser splits on
+// /\r?\n/). But files on Windows usually have CRLF, and some have a UTF-8
+// BOM. If we `indexOf` an LF-built search string in CRLF content the match
+// fails on every multi-line hunk — that's the "apply_patch never works"
+// bug. We normalize on read, then restore the original convention on
+// write so unrelated lines aren't churned in the diff.
+
+const BOM = '﻿';
+
+interface NormalizedContent {
+  text: string;
+  eol: '\r\n' | '\n';
+  bom: boolean;
+}
+
+function detectEOL(s: string): '\r\n' | '\n' {
+  // Sample the first 4 KB — enough to classify any real-world source file
+  // without scanning megabytes when only the leading hunk matters.
+  const head = s.length > 4096 ? s.slice(0, 4096) : s;
+  return head.includes('\r\n') ? '\r\n' : '\n';
+}
+
+function normalize(raw: string): NormalizedContent {
+  let text = raw;
+  const bom = text.charCodeAt(0) === 0xfeff;
+  if (bom) text = text.slice(1);
+  const eol = detectEOL(text);
+  if (eol === '\r\n') text = text.replace(/\r\n/g, '\n');
+  return { text, eol, bom };
+}
+
+function denormalize(text: string, eol: '\r\n' | '\n', bom: boolean): string {
+  let out = eol === '\r\n' ? text.replace(/\n/g, '\r\n') : text;
+  if (bom) out = BOM + out;
+  return out;
+}
+
+function formatHunkError(
+  path: string,
+  hunk: PatchHunk,
+  search: string,
+  norm: NormalizedContent,
+  fileLineCount: number,
+): string {
+  // Render \n as ⏎ so the diagnostic survives the JSON encoding chain to
+  // the model — escaped \n in error messages reads as a literal `\n`,
+  // which is confusing. Truncate to 80 chars; the failure cause almost
+  // always sits in the first line or two of context.
+  const previewRaw = search.slice(0, 80).replace(/\n/g, '⏎');
+  const suffix = search.length > 80 ? '…' : '';
+  const bomFlag = norm.bom ? ', BOM' : ', no BOM';
+  const eolLabel = norm.eol === '\r\n' ? 'CRLF' : 'LF';
+  return (
+    `apply_patch: hunk for '${path}' did not match source.\n` +
+    `  Searched for ${search.length} chars (before=${hunk.contextBefore.length} ` +
+    `removed=${hunk.removed.length} after=${hunk.contextAfter.length}).\n` +
+    `  File: ${fileLineCount} lines, ${eolLabel} endings${bomFlag}.\n` +
+    `  Search starts with: "${previewRaw}${suffix}"`
+  );
+}
+
 // ─── Applier ──────────────────────────────────────────────────────
 
 export interface ApplyResult {
@@ -197,36 +259,70 @@ export interface ApplyResult {
   moved: Array<{ from: string; to: string }>;
 }
 
+type PlannedOp =
+  | { kind: 'add'; abs: string; data: string; relPath: string }
+  | { kind: 'delete'; abs: string; relPath: string }
+  | { kind: 'write'; abs: string; data: string; relPath: string }
+  | {
+      kind: 'move';
+      oldAbs: string;
+      newAbs: string;
+      data: string;
+      oldRel: string;
+      newRel: string;
+    };
+
 export async function applyParsedPatch(
   patch: ParsedPatch,
   ctx: ToolContext,
 ): Promise<ApplyResult> {
   const fs = fsPort(ctx);
-  const result: ApplyResult = { added: [], updated: [], deleted: [], moved: [] };
+  const planned: PlannedOp[] = [];
+  // Maps the *post-action* path (movePath when present, else path) to the
+  // already-computed final content. Covers the rare case of a patch that
+  // updates the same file twice, or updates then moves it: phase 1 must
+  // chain through in-memory results because nothing has been written yet.
+  const inMemoryUpdates = new Map<string, string>();
 
+  // ─── Phase 1: plan ────────────────────────────────────────────
+  // Validate every hunk, compute every final file content. No disk
+  // writes. Any `throw` here leaves the working tree untouched.
   for (const action of patch.actions) {
     if (action.kind === 'add') {
       const abs = resolveSafePath(action.path, ctx.cwd);
       if (!abs) throw new Error(`apply_patch: path '${action.path}' outside project root`);
-      const content = action.lines.join('\n');
-      await fs.mkdir(pathFor(ctx.cwd).dirname(abs), { recursive: true });
-      await fs.writeFile(abs, content);
-      ctx.overlay?.mark(action.path);
-      result.added.push(action.path);
+      planned.push({
+        kind: 'add',
+        abs,
+        data: action.lines.join('\n'),
+        relPath: action.path,
+      });
       continue;
     }
+
     if (action.kind === 'delete') {
       const abs = resolveSafePath(action.path, ctx.cwd);
       if (!abs) throw new Error(`apply_patch: path '${action.path}' outside project root`);
-      await unlink(abs);
-      ctx.overlay?.mark(action.path);
-      result.deleted.push(action.path);
+      planned.push({ kind: 'delete', abs, relPath: action.path });
       continue;
     }
+
     // update
     const abs = resolveSafePath(action.path, ctx.cwd);
     if (!abs) throw new Error(`apply_patch: path '${action.path}' outside project root`);
-    let content = (await fs.readFile(abs)).toString();
+    let newAbs: string | null = null;
+    if (action.movePath) {
+      newAbs = resolveSafePath(action.movePath, ctx.cwd);
+      if (!newAbs) {
+        throw new Error(`apply_patch: move target '${action.movePath}' outside project root`);
+      }
+    }
+
+    const buffered = inMemoryUpdates.get(abs);
+    const raw = buffered ?? (await fs.readFile(abs)).toString();
+    const norm = normalize(raw);
+    let text = norm.text;
+    const fileLineCount = text.split('\n').length;
 
     for (const hunk of action.hunks) {
       const before = hunk.contextBefore.join('\n');
@@ -237,35 +333,86 @@ export async function applyParsedPatch(
       const search = [before, removed, after].filter((s) => s.length > 0).join('\n');
       const replace = [before, added, after].filter((s) => s.length > 0).join('\n');
 
-      const idx = content.indexOf(search);
+      const idx = text.indexOf(search);
       if (idx === -1) {
-        throw new Error(
-          `apply_patch: hunk for '${action.path}' did not match source. ` +
-            `Searched for ${search.length} chars (before=${hunk.contextBefore.length} ` +
-            `removed=${hunk.removed.length} after=${hunk.contextAfter.length}).`,
-        );
+        throw new Error(formatHunkError(action.path, hunk, search, norm, fileLineCount));
       }
-      content = content.slice(0, idx) + replace + content.slice(idx + search.length);
+      text = text.slice(0, idx) + replace + text.slice(idx + search.length);
     }
 
-    if (action.movePath) {
-      const newAbs = resolveSafePath(action.movePath, ctx.cwd);
-      if (!newAbs) throw new Error(`apply_patch: move target '${action.movePath}' outside project root`);
-      await unlink(abs);
-      await fs.mkdir(pathFor(ctx.cwd).dirname(newAbs), { recursive: true });
-      await fs.writeFile(newAbs, content);
-      ctx.overlay?.mark(action.path);
-      ctx.overlay?.mark(action.movePath);
-      result.moved.push({ from: action.path, to: action.movePath });
-      result.updated.push(action.movePath);
+    const finalContent = denormalize(text, norm.eol, norm.bom);
+    // Key on the post-action absolute path so subsequent updates target
+    // the correct buffer even after a Move.
+    inMemoryUpdates.set(newAbs ?? abs, finalContent);
+
+    if (newAbs) {
+      planned.push({
+        kind: 'move',
+        oldAbs: abs,
+        newAbs,
+        data: finalContent,
+        oldRel: action.path,
+        newRel: action.movePath!,
+      });
     } else {
-      await fs.writeFile(abs, content);
-      ctx.overlay?.mark(action.path);
-      result.updated.push(action.path);
+      planned.push({ kind: 'write', abs, data: finalContent, relPath: action.path });
+    }
+  }
+
+  // ─── Phase 2: commit ───────────────────────────────────────────
+  // Sequential FS writes. Phase 1 already proved every hunk matches; the
+  // only failures here are environmental (permissions, disk full, concurrent
+  // mutation). Best-effort — on failure we surface what got committed so a
+  // human can decide whether to retry. Not crash-safe (no temp+rename);
+  // tracked as a follow-up.
+  const result: ApplyResult = { added: [], updated: [], deleted: [], moved: [] };
+  const path = pathFor(ctx.cwd);
+  for (let i = 0; i < planned.length; i++) {
+    const op = planned[i];
+    try {
+      if (op.kind === 'add') {
+        await fs.mkdir(path.dirname(op.abs), { recursive: true });
+        await fs.writeFile(op.abs, op.data);
+        ctx.overlay?.mark(op.relPath);
+        result.added.push(op.relPath);
+      } else if (op.kind === 'delete') {
+        await fs.unlink(op.abs);
+        ctx.overlay?.mark(op.relPath);
+        result.deleted.push(op.relPath);
+      } else if (op.kind === 'write') {
+        await fs.writeFile(op.abs, op.data);
+        ctx.overlay?.mark(op.relPath);
+        result.updated.push(op.relPath);
+      } else {
+        // move: write new first, then unlink old. If write fails the
+        // original file still exists — never both gone.
+        await fs.mkdir(path.dirname(op.newAbs), { recursive: true });
+        await fs.writeFile(op.newAbs, op.data);
+        await fs.unlink(op.oldAbs);
+        ctx.overlay?.mark(op.oldRel);
+        ctx.overlay?.mark(op.newRel);
+        result.moved.push({ from: op.oldRel, to: op.newRel });
+        result.updated.push(op.newRel);
+      }
+    } catch (e) {
+      const failedLabel = describeOp(op);
+      const committedLabel = planned
+        .slice(0, i)
+        .map(describeOp)
+        .join(', ');
+      throw new Error(
+        `apply_patch: partial commit at op ${i + 1}/${planned.length} (${failedLabel}). ` +
+          `committed=[${committedLabel}]. cause: ${(e as Error).message}`,
+      );
     }
   }
 
   return result;
+}
+
+function describeOp(op: PlannedOp): string {
+  if (op.kind === 'move') return `move:${op.oldRel}->${op.newRel}`;
+  return `${op.kind}:${op.relPath}`;
 }
 
 // ─── Tool definition ──────────────────────────────────────────────

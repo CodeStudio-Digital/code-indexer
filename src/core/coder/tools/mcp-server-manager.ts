@@ -40,6 +40,21 @@ function looksLikeAuthError(e: unknown): boolean {
 }
 
 /**
+ * Heuristic for recognising a transient network failure — a server that's
+ * temporarily down (process restart, container redeploy, Unity Editor's
+ * AppDomain reload after a script change). These are exactly the cases where
+ * a single retry after a fresh connection succeeds; treating them as
+ * permanent disconnect — like the original code did — pinned the slot to
+ * 'disconnected' for the rest of the session, forcing a manual restart of
+ * the coder to recover.
+ */
+function looksLikeNetworkError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|EHOSTUNREACH|ENOTFOUND|\b503\b|\b502\b|\b504\b|fetch failed|socket hang up|connection refused|connection reset|server (?:closed|unavailable)|connect ECONN/i
+    .test(msg);
+}
+
+/**
  * Build auth headers from config. Async because OAuth requires a resolver
  * that may refresh the access token from a remote AS.
  *
@@ -223,12 +238,24 @@ export class McpServerManager {
 
           tierMap.set(prefixedName, conn.config.default_tier);
 
+          // Auto-flag polling-style tools so the runner's per-arg dup-call
+          // cap doesn't refuse legitimate repeated calls. Pattern matches
+          // the server-author convention: wait_for_compile_clean (Unity),
+          // tail_logs, await_*, poll_*, monitor_*. The runner has its own
+          // name-pattern fallback for safety, but setting the typed flag
+          // here also exempts the tool from the post-call result-content
+          // dedup which the runner gates on the same flag. Server authors
+          // can opt non-conventional names in by renaming, or in the
+          // future via per-server config (`repeatable_tools: [...]`).
+          const repeatable = /^(?:wait_for|await|poll|tail|monitor)_/.test(t.name);
+
           allTools.push({
             name: prefixedName,
             description: t.description ?? '',
             parameters: schema,
             source: 'mcp_external',
             handler: this.createHandler(serverId, t.name),
+            repeatable,
           });
         }
       } catch (e) {
@@ -248,22 +275,42 @@ export class McpServerManager {
 
   /**
    * Create a tool call handler for a specific server + tool combination.
+   *
+   * Two layers of resilience on top of the bare callToolOnce:
+   *
+   *  1. **Pre-call lazy reconnect** — if the connection is already marked
+   *     disconnected/error (from an earlier failed call), try ONE reconnect
+   *     before refusing. Covers the case where the server was down, recovered
+   *     in the background, but our cached state still says dead.
+   *
+   *  2. **Post-call retry on network error** — if a call fails with what
+   *     looks like a transient network drop (ECONNREFUSED/RESET, 502/503/504,
+   *     socket hang up), reconnect and retry once. Covers Unity Editor's
+   *     AppDomain reload after a script compile (HttpListener dies for
+   *     ~1-2s, comes back at the same port) and analogous container/process
+   *     restarts on other MCP servers.
+   *
+   * OAuth 401/403 retains its own dedicated path (refresh token via the
+   * resolver). Both retries use reconnectServer (close + connectServer +
+   * patch local conn fields), which is the same primitive the existing OAuth
+   * path uses.
    */
   private createHandler(serverId: string, toolName: string): CoderTool['handler'] {
     return async (args: Record<string, unknown>): Promise<ToolResult> => {
       const conn = this.connections.get(serverId);
       if (!conn) return err(`External MCP server "${serverId}" not found`);
+
+      // Layer 1: pre-call lazy reconnect when state is stale.
       if (conn.state !== 'connected') {
-        return err(`External MCP server "${serverId}" is ${conn.state}: ${conn.error ?? 'unknown error'}`);
+        if (!(await this.lazyReconnect(conn))) {
+          return err(`External MCP server "${serverId}" is ${conn.state}: ${conn.error ?? 'unknown error'}`);
+        }
       }
 
       try {
         return await this.callToolOnce(conn, toolName, args);
       } catch (e) {
-        // OAuth 401/403: the access token is likely expired. Try ONE reconnect
-        // with a fresh resolver call (the resolver itself will refresh if it
-        // can) before giving up. Any other failure goes straight to the
-        // disconnected path.
+        // OAuth 401/403: refresh token + retry (existing behavior).
         if (conn.config.auth_type === 'oauth2' && this.bearerResolver && looksLikeAuthError(e)) {
           try {
             await this.reconnectServer(conn);
@@ -277,6 +324,21 @@ export class McpServerManager {
             );
           }
         }
+
+        // Layer 2: transient network drop → lazy reconnect + retry once.
+        if (looksLikeNetworkError(e) && (await this.lazyReconnect(conn))) {
+          try {
+            return await this.callToolOnce(conn, toolName, args);
+          } catch (e2) {
+            conn.state = 'disconnected';
+            conn.error = e2 instanceof Error ? e2.message : String(e2);
+            return err(
+              `External MCP server "${serverId}" reconnected but retry failed: ${conn.error}.`,
+            );
+          }
+        }
+
+        // Non-recoverable.
         conn.state = 'disconnected';
         conn.error = e instanceof Error ? e.message : String(e);
         return err(
@@ -285,6 +347,27 @@ export class McpServerManager {
         );
       }
     };
+  }
+
+  /**
+   * Best-effort reconnect of a single connection. Wraps reconnectServer so
+   * createHandler can ignore exceptions and simply branch on the boolean
+   * result. Sets conn.state to 'error' (with the failure message) when the
+   * reconnect itself throws — keeps the cached state honest.
+   */
+  private async lazyReconnect(conn: ServerConnection): Promise<boolean> {
+    try {
+      await this.reconnectServer(conn);
+      if (conn.state === 'connected') {
+        console.log(`[mcp-ext] server "${conn.config.id}" reconnected (lazy)`);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      conn.state = 'error';
+      conn.error = e instanceof Error ? e.message : String(e);
+      return false;
+    }
   }
 
   /** Single tool call with no retry logic — used by createHandler. */

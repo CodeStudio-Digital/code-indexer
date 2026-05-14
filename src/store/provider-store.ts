@@ -725,6 +725,7 @@ export class ProviderStore {
       enabled?: boolean;
       name?: string;
       default_reasoning_level?: string | null;
+      context_window?: number | null;
     }
   ): void {
     const sets: string[] = [];
@@ -741,12 +742,49 @@ export class ProviderStore {
       sets.push('default_reasoning_level = ?');
       args.push(patch.default_reasoning_level);
     }
+    if (patch.context_window !== undefined) {
+      sets.push('context_window = ?');
+      args.push(patch.context_window);
+    }
     if (!sets.length) return;
     sets.push("updated_at = datetime('now')");
     args.push(providerId, modelId, mode);
     this.db
       .prepare(`UPDATE provider_models SET ${sets.join(', ')} WHERE provider_id = ? AND model_id = ? AND mode = ?`)
       .run(...args);
+  }
+
+  /**
+   * Backfill context_window for every model row that has it null. Pulls the
+   * value from the static registry's prefix-aware lookup (capabilities.ts).
+   * Returns counts of updated/skipped rows. Cheap, idempotent, no network.
+   */
+  backfillContextWindowsFromRegistry(
+    lookup: (modelId: string) => number | null,
+  ): { updated: number; still_null: number; total: number } {
+    const rows = this.db
+      .prepare(`SELECT provider_id, model_id, mode, context_window FROM provider_models`)
+      .all() as Array<{ provider_id: string; model_id: string; mode: string; context_window: number | null }>;
+    let updated = 0;
+    let stillNull = 0;
+    const stmt = this.db.prepare(
+      `UPDATE provider_models SET context_window = ?, updated_at = datetime('now')
+        WHERE provider_id = ? AND model_id = ? AND mode = ?`,
+    );
+    const tx = this.db.transaction(() => {
+      for (const r of rows) {
+        if (r.context_window != null) continue;
+        const cw = lookup(r.model_id);
+        if (cw != null) {
+          stmt.run(cw, r.provider_id, r.model_id, r.mode);
+          updated++;
+        } else {
+          stillNull++;
+        }
+      }
+    });
+    tx();
+    return { updated, still_null: stillNull, total: rows.length };
   }
 
   // ─── Catalog ETag ─────────────────────────────────────────────

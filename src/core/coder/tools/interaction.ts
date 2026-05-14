@@ -61,8 +61,10 @@ export const askUser: CoderTool = {
       options: {
         type: 'array',
         description:
-          'Pre-defined answer options. STRONGLY PREFERRED — when provided, must be 2-3 mutually exclusive choices. ' +
-          'UI renders buttons. If you only need free-form (no buttons), omit this field.',
+          'Pre-defined answer options. STRONGLY PREFERRED — when provided, must be 2–8 mutually exclusive choices. ' +
+          'UI renders them as buttons in a 2-column grid. Keep the list short and decision-shaped — if you find yourself ' +
+          'reaching 8, consider whether two of them collapse into one or whether the question itself is too broad. ' +
+          'If you only need free-form (no buttons), omit this field.',
         items: {
           type: 'object',
           properties: {
@@ -72,7 +74,7 @@ export const askUser: CoderTool = {
           required: ['label', 'value'],
         },
         minItems: 2,
-        maxItems: 3,
+        maxItems: 8,
       },
       allow_freeform: { type: 'boolean', description: 'When true and options are given, also allow a free-form answer alongside the buttons.' },
     },
@@ -92,10 +94,11 @@ export const askUser: CoderTool = {
 
     const optsRaw = Array.isArray(args.options) ? args.options : undefined;
     if (optsRaw !== undefined) {
-      if (optsRaw.length < 2 || optsRaw.length > 3) {
+      if (optsRaw.length < 2 || optsRaw.length > 8) {
         return err(
-          `ask_user: when options is provided, it must contain 2 or 3 mutually-exclusive choices (got ${optsRaw.length}). ` +
-            `If you only have one choice, omit options entirely. If you have more than 3, restructure into a question with broader categories.`,
+          `ask_user: when options is provided, it must contain 2–8 mutually-exclusive choices (got ${optsRaw.length}). ` +
+            `If you only have one choice, omit options entirely. If you have more than 8, the question is probably too ` +
+            `broad — split into a coarser top-level question first, then drill down based on the answer.`,
         );
       }
     }

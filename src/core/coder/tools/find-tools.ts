@@ -1,0 +1,164 @@
+import type { CoderTool, ToolResult } from '../core/tool.js';
+import { ok, err } from '../core/tool.js';
+import type { ToolRegistry } from '../core/registry.js';
+import { getToolTier, type ToolTier } from './tiers.js';
+
+/**
+ * find_tools — lazy tool discovery (Camada 3, "Tool Search Tool" pattern).
+ *
+ * Why this exists: the bootstrap tier ships ~30 tools as JSON schema on every
+ * provider call (~5K tokens). Anything in `navigate` / `admin` / a custom MCP
+ * tier is invisible until the agent calls `expand_toolset`, but to call it the
+ * agent has to know the tier exists AND know which tier hides which tool. That
+ * is exactly the kind of meta-knowledge a fresh model lacks.
+ *
+ * `find_tools(query)` lets the agent ask: "what tool do I need for X?" and
+ * receive a small list of candidates with their tier, source, and full
+ * description. The model can then call `expand_toolset(<tier>)` confidently
+ * (or skip it entirely if the candidate is already visible).
+ *
+ * Discovery does NOT promote any tier — it's read-only. The agent still has
+ * to call `expand_toolset` to actually unlock; this preserves cache stability
+ * (no surprise tool-array growth between turns) and gives the user an audit
+ * trail of which tiers were unlocked and why.
+ *
+ * Implementation notes:
+ *  - Cheap lexical match: substring + per-token overlap. No vector store
+ *    dependency — this tool is the cheap path; if you need semantic, use
+ *    mcp__search_concepts.
+ *  - Returns up to `limit` candidates (default 5, cap 10) — keep the result
+ *    small so it doesn't itself become a token tax.
+ *  - Excludes tools already in the active tier (those are visible already).
+ */
+export function buildFindToolsTool(
+  registry: ToolRegistry,
+  tierOverrides?: ReadonlyMap<string, ToolTier>,
+): CoderTool {
+  return {
+    name: 'find_tools',
+    source: 'native',
+    mutates: false,
+    parallelSafe: true,
+    description:
+      'Find tools by description (lazy discovery for tools NOT in the current tier).\n\n' +
+      'Use when you suspect a tool exists for a task but cannot see it in your current tools array. ' +
+      'Returns up to 5 candidates with their `name`, `tier` (which tier hides them), `source`, and a ' +
+      'short description. If the best candidate is in a higher tier, call `expand_toolset(<tier>)` ' +
+      'next to unlock it; otherwise call the tool directly.\n\n' +
+      'WHEN TO USE: before guessing tool names, before calling expand_toolset speculatively, when ' +
+      'a generic search/edit/git/web/lsp/mcp capability is needed but no matching tool is visible.\n\n' +
+      "DON'T: use this when you already see the tool you need in your tools array — call it directly. " +
+      'Avoid for things that are obviously code-search; use mcp__search/grep_code instead.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'Free-text description of the capability you need (e.g. "edit a file", "run shell command", ' +
+            '"find references to a symbol", "create a git commit"). The matcher is lexical — keywords ' +
+            'and verbs work better than full sentences.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max candidates to return (default 5, cap 10).',
+        },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    handler: async (args, ctx): Promise<ToolResult> => {
+      const query = typeof args.query === 'string' ? args.query.trim() : '';
+      if (!query) return err('find_tools: `query` is required and must be non-empty.');
+      const limit = Math.max(1, Math.min(10, Number(args.limit ?? 5) || 5));
+
+      // Pull active tiers from the runner via ctx if available. Subagents
+      // and tests may not have a runner — in that case treat all tiers as
+      // visible (no "hidden" tag) so the result is still useful.
+      const runner = ctx.runner as { activeTiers?: ReadonlySet<ToolTier> | null } | undefined;
+      const active = runner?.activeTiers ?? null;
+      const tools = registry.list();
+
+      // Tokenize query into lowercase keywords; keep words >=2 chars.
+      const qTokens = query
+        .toLowerCase()
+        .split(/[^a-z0-9_]+/)
+        .filter((t) => t.length >= 2);
+      if (qTokens.length === 0) {
+        return err('find_tools: query has no usable tokens.');
+      }
+
+      // Score each tool: count how many query tokens appear in name+description.
+      // Name matches weight more (they're terse and intentional). Substring
+      // match in name = +3 per token, description = +1 per token.
+      type Scored = {
+        name: string;
+        tier: ToolTier;
+        source: string;
+        description: string;
+        score: number;
+        visible: boolean;
+      };
+      const scored: Scored[] = [];
+      for (const t of tools) {
+        const name = t.name.toLowerCase();
+        const desc = (t.description ?? '').toLowerCase();
+        let score = 0;
+        for (const tok of qTokens) {
+          if (name.includes(tok)) score += 3;
+          if (desc.includes(tok)) score += 1;
+        }
+        if (score === 0) continue;
+        const tier = getToolTier(t.name, tierOverrides);
+        const visible = active ? active.has(tier) : true;
+        scored.push({
+          name: t.name,
+          tier,
+          source: t.source,
+          description: t.description ?? '',
+          score,
+          visible,
+        });
+      }
+
+      if (scored.length === 0) {
+        return ok(
+          `No tools matched "${query}". Try simpler verbs ("edit", "run", "search") or ` +
+            `mcp__search_concepts for code-level concepts.`,
+        );
+      }
+
+      // Sort by score desc, then prefer hidden tools (the whole point of this
+      // tool is surfacing tools the agent cannot already see). Tie-break by
+      // alphabetical name for determinism.
+      scored.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (a.visible !== b.visible) return a.visible ? 1 : -1;
+        return a.name.localeCompare(b.name);
+      });
+
+      const top = scored.slice(0, limit);
+
+      // Compact rendering — one line per candidate. The agent reads this in
+      // its tool result; verbose multi-paragraph output here would defeat the
+      // economy goal of Camada 3.
+      const lines: string[] = [`Top ${top.length} tool match${top.length === 1 ? '' : 'es'} for "${query}":`];
+      for (const r of top) {
+        const visTag = r.visible ? '' : ` [hidden — call expand_toolset('${r.tier}')]`;
+        // Trim description to one sentence-ish for compactness.
+        const shortDesc = r.description.split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) ?? '';
+        lines.push(`- ${r.name} (tier=${r.tier}, source=${r.source})${visTag}: ${shortDesc}`);
+      }
+      // Suggest the most likely unlock when top candidate is hidden.
+      const firstHidden = top.find((r) => !r.visible);
+      if (firstHidden) {
+        lines.push('');
+        lines.push(
+          `Hint: \`expand_toolset({ tier: "${firstHidden.tier}" })\` will reveal ${firstHidden.name} ` +
+            `and its tier-mates next turn.`,
+        );
+      }
+      return ok(lines.join('\n'));
+    },
+  };
+}

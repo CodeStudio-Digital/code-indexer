@@ -31,9 +31,9 @@ import type { IMetaBusPublisher } from './ports.js';
 import type { PipelineService } from './PipelineService.js';
 import { renderNodeTask, resolveStartNode } from './PipelineService.js';
 import { readFinalAssistantText } from './finalText.js';
+import { pickNextEdge, resolveBranchVerdictPure } from '../../pipelines/core/PipelineKernel.js';
 import type {
   Pipeline,
-  PipelineEdge,
   PipelineExecution,
   PipelineExecutionContext,
   PipelineExecutionStatus,
@@ -41,6 +41,10 @@ import type {
   PipelineNode,
   PipelineNodeExecution,
 } from '../types.js';
+
+// Re-exported for callers that imported from this file historically
+// (e.g. existing tests). Pure logic now lives in `PipelineKernel`.
+export { pickNextEdge };
 
 const DEFAULT_NODE_MAX_ATTEMPTS = 3;
 const GLOBAL_NODE_EXECUTION_CAP = 50;
@@ -479,41 +483,25 @@ export class PipelineExecutor {
   }
 
   /**
-   * Compute the verdict string used to pick the next branch. Returns
-   * `null` when the current branch mode does not produce a verdict
-   * (linear nodes never branch).
+   * Compute the verdict string used to pick the next branch. Thin wrapper
+   * around the pure kernel function — closes over the company-specific
+   * resolvers (QA verdict from `qa_test_runs`, kanban tag for the card).
    */
   private resolveBranchVerdict(
     mode: NonNullable<PipelineNode['branchMode']>,
     output: string,
     cardId: number,
   ): string | null {
-    switch (mode) {
-      case 'linear':
-        return null;
-      case 'pass-fail': {
-        // Prefer the QA verdict computed from real test counts; this
-        // sidesteps the agent's prose entirely. The session's own QA
-        // bridge keeps the linkage fresh whenever the agent fires
-        // a Playwright run scoped to the feature card.
-        const fromQa = readQaVerdictForCard(this.deps.ctx, cardId);
-        if (fromQa) return fromQa;
-        // Fallback: scan the agent's final message for an explicit
-        // PASS or FAIL token. Word-bounded so 'passing'/'failed'
-        // don't trigger; tests will show this is conservative on purpose.
-        const m = /\b(PASS|FAIL)\b/i.exec(output);
-        return m ? m[1].toLowerCase() : null;
-      }
-      case 'by-tag': {
-        const card = this.deps.kanban.getCard(cardId);
-        return card?.tag ?? null;
-      }
-      case 'by-text-match':
-        // The pattern lives on each edge, not on the node — so we
-        // return the raw output here and let `pickNextEdge` test the
-        // candidate edges' patterns against it.
-        return output;
-    }
+    return resolveBranchVerdictPure({
+      mode,
+      output,
+      // Prefer the QA verdict computed from real test counts; this
+      // sidesteps the agent's prose entirely. The session's own QA
+      // bridge keeps the linkage fresh whenever the agent fires
+      // a Playwright run scoped to the feature card.
+      qaResolver: () => readQaVerdictForCard(this.deps.ctx, cardId),
+      tagResolver: () => this.deps.kanban.getCard(cardId)?.tag ?? null,
+    });
   }
 
   // ─── Internal: terminal transitions ───────────────────────────
@@ -551,58 +539,6 @@ export class PipelineExecutor {
     const p = this.deps.pipelines.get(pipelineId);
     return p?.name ?? `pipeline-${pipelineId}`;
   }
-}
-
-interface PickedEdge {
-  outcome: string;
-  targetId: string;
-}
-
-/**
- * Pure, exported for unit tests. Walks the candidate edges from a node
- * and selects the one matching the verdict for the node's branch mode.
- */
-export function pickNextEdge(
-  outgoing: PipelineEdge[],
-  mode: NonNullable<PipelineNode['branchMode']>,
-  verdict: string | null,
-): PickedEdge | null {
-  if (mode === 'linear') {
-    const linear = outgoing.find((e) => e.kind === 'linear');
-    if (!linear) return null;
-    return { outcome: 'linear', targetId: linear.to };
-  }
-  if (mode === 'pass-fail') {
-    const want = verdict === 'pass' || verdict === 'fail' ? verdict : null;
-    if (!want) return null;
-    const match = outgoing.find((e) => e.kind === 'pass-fail' && e.on === want);
-    if (!match || match.kind !== 'pass-fail') return null;
-    return { outcome: want, targetId: match.to };
-  }
-  if (mode === 'by-tag') {
-    if (!verdict) return null;
-    const match = outgoing.find((e) => e.kind === 'by-tag' && e.tag === verdict);
-    if (!match || match.kind !== 'by-tag') return null;
-    return { outcome: verdict, targetId: match.to };
-  }
-  if (mode === 'by-text-match') {
-    if (verdict == null) return null;
-    for (const e of outgoing) {
-      if (e.kind !== 'by-text-match') continue;
-      try {
-        if (new RegExp(e.pattern).test(verdict)) {
-          // outcome is the pattern itself — gives the dashboard
-          // something more specific than "matched" without leaking
-          // the full agent output into the row.
-          return { outcome: e.pattern, targetId: e.to };
-        }
-      } catch {
-        // Bad regex on the edge — skip and let the next match win.
-      }
-    }
-    return null;
-  }
-  return null;
 }
 
 /**

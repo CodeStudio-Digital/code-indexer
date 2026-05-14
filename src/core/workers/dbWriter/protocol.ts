@@ -16,6 +16,14 @@ export interface PersistAssistantTurnPayload {
     result_text: string;
     is_error: boolean;
     duration_ms: number;
+    /** Char count of result_text at write time. Materialized for cheap aggregations. */
+    output_chars?: number;
+    /** 1 if the bridge clamped the output. Cheap "is this tool noisy?" signal. */
+    truncated?: boolean;
+    /** Phase detected by PhaseRouter (Camada 2). NULL until that lands. */
+    phase?: string | null;
+    /** FK to coder_turn_telemetry(id). Wires per-call metrics to the turn row. */
+    turn_telemetry_id?: number | null;
   }>;
   subagent_usage?: {
     input_tokens: number;

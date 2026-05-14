@@ -97,6 +97,18 @@ export type ContentBlock =
 export interface AgentMessage {
   role: AgentRole;
   content: ContentBlock[];
+  /**
+   * PR-4 (Row 8 from docs/agent-research/COMPARISON.md). When true, the
+   * dashboard hides the message from the user-visible transcript while the
+   * model still sees it in context. Used for runtime-injected reminders:
+   * stop-guard nudge, auto-continue recap, subordinate deliverable
+   * reminder, plan-mode "continue investigation" notes.
+   *
+   * Provider serializers ignore this field — it only affects rendering and
+   * persistence. Mirrors claude-code's `isMeta:true` carryover marker on
+   * its `task_budget` continuation messages (`query.ts`).
+   */
+  isMeta?: boolean;
 }
 
 /**

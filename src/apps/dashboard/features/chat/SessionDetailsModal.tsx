@@ -28,7 +28,13 @@ interface TodoHistoryEntry {
   created_at: string;
 }
 
-type SessionInputKind = 'system_prompt' | 'skill_content' | 'system_reminder' | 'subagent_prompt' | 'tools_snapshot';
+type SessionInputKind =
+  | 'system_prompt'
+  | 'skill_content'
+  | 'system_reminder'
+  | 'subagent_prompt'
+  | 'tools_snapshot'
+  | 'phase_route_skip_summary';
 
 interface SessionInputRow {
   id: number;
@@ -47,6 +53,7 @@ const INPUT_KIND_STYLES: Record<SessionInputKind, string> = {
   system_reminder: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
   subagent_prompt: 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
   tools_snapshot: 'bg-pink-500/15 text-pink-600 dark:text-pink-400',
+  phase_route_skip_summary: 'bg-orange-500/15 text-orange-600 dark:text-orange-400',
 };
 
 interface TodoItem {

@@ -40,6 +40,18 @@ function loadDefaultMaxTokens(): Record<string, number> {
 
 const MCP_OUTPUT_HARD_CAP = Number(process.env.CODER_MCP_OUTPUT_HARD_CAP ?? 16_000);
 const READ_FILE_HARD_MAX = Number(process.env.CODER_READ_FILE_HARD_MAX ?? 800);
+/**
+ * "Unrestricted tool output" overrides — picked when the active session has
+ * `unrestricted_tool_output = 1`. Deliberately not Infinity so the cap arithmetic
+ * keeps working on pathological outputs. Auto-compaction in the runner still
+ * runs above PRUNE_MINIMUM, so this is not a context-window bypass.
+ */
+const UNRESTRICTED_MCP_HARD_CAP = Number(
+  process.env.CODER_UNRESTRICTED_MCP_HARD_CAP ?? 1_000_000,
+);
+const UNRESTRICTED_READ_FILE_HARD_MAX = Number(
+  process.env.CODER_UNRESTRICTED_READ_FILE_HARD_MAX ?? 5_000,
+);
 
 function loadDisabledTools(): Set<string> {
   const raw = process.env.CODER_DISABLED_MCP_TOOLS;
@@ -133,7 +145,7 @@ export class McpToolBridge {
           // 1. Short-circuit via overlay when possible (dirty files skip MCP)
           if (overlay && overlayHandler?.pre) {
             const local = overlayHandler.pre(args, overlay, projectRoot);
-            if (local) return capResult(local);
+            if (local) return capResult(local, toolCtx);
           }
 
           // 2. Delegate to the real MCP server
@@ -149,13 +161,18 @@ export class McpToolBridge {
           // the caller via a tiny synthetic prefix on the response when the
           // clamp actually kicks in. Default (no max_lines) goes to the
           // server-side default (400) — we only clamp when the caller
-          // explicitly asked for more than HARD_MAX.
+          // explicitly asked for more than HARD_MAX. When the session has
+          // `unrestricted_tool_output` enabled, the ceiling is raised to
+          // UNRESTRICTED_READ_FILE_HARD_MAX (5 000 lines) instead of 800.
           let clampNote = '';
+          const effectiveReadFileHardMax = toolCtx.unrestrictedToolOutput
+            ? UNRESTRICTED_READ_FILE_HARD_MAX
+            : READ_FILE_HARD_MAX;
           if (t.name === 'read_file') {
             const requested = typeof finalArgs.max_lines === 'number' ? finalArgs.max_lines : null;
-            if (requested != null && requested > READ_FILE_HARD_MAX) {
-              finalArgs.max_lines = READ_FILE_HARD_MAX;
-              clampNote = `[clamped from ${requested} to ${READ_FILE_HARD_MAX} lines — bridge cap]\n`;
+            if (requested != null && requested > effectiveReadFileHardMax) {
+              finalArgs.max_lines = effectiveReadFileHardMax;
+              clampNote = `[clamped from ${requested} to ${effectiveReadFileHardMax} lines — bridge cap]\n`;
             }
           }
           let mcpText: string;
@@ -173,9 +190,12 @@ export class McpToolBridge {
 
           // 3. Post-process — merge overlay data into the MCP output
           if (overlay && overlayHandler?.postProcess) {
-            return capResult(overlayHandler.postProcess(clampNote + mcpText, args, overlay, projectRoot));
+            return capResult(
+              overlayHandler.postProcess(clampNote + mcpText, args, overlay, projectRoot),
+              toolCtx,
+            );
           }
-          return ok(applyOutputCap(clampNote + mcpText));
+          return ok(applyOutputCap(clampNote + mcpText, toolCtx));
         },
       };
     });
@@ -251,18 +271,24 @@ export class McpToolBridge {
  * (or one where the model forgot to pass max_tokens) from injecting tens of
  * thousands of tokens into the conversation history. The marker is
  * deterministic so identical truncations preserve prefix-cache stability.
+ *
+ * When `ctx?.unrestrictedToolOutput` is true, the cap is raised to
+ * `UNRESTRICTED_MCP_HARD_CAP` (≈1 MB) instead of `MCP_OUTPUT_HARD_CAP` (≈16k).
+ * Useful for sessions doing Unity work or large file reads where truncation
+ * actively degrades the agent's quality.
  */
-function applyOutputCap(text: string): string {
-  if (text.length <= MCP_OUTPUT_HARD_CAP) return text;
+function applyOutputCap(text: string, ctx?: ToolContext): string {
+  const cap = ctx?.unrestrictedToolOutput ? UNRESTRICTED_MCP_HARD_CAP : MCP_OUTPUT_HARD_CAP;
+  if (text.length <= cap) return text;
   return (
-    text.slice(0, MCP_OUTPUT_HARD_CAP) +
-    `\n\n[output truncated at ${MCP_OUTPUT_HARD_CAP} chars — refine your query, use max_tokens/limit, or paginate via offset]`
+    text.slice(0, cap) +
+    `\n\n[output truncated at ${cap} chars — refine your query, use max_tokens/limit, or paginate via offset]`
   );
 }
 
 /** Apply applyOutputCap to a ToolResult, preserving isError. */
-function capResult(r: ToolResult): ToolResult {
-  return { ...r, content: applyOutputCap(r.content) };
+function capResult(r: ToolResult, ctx?: ToolContext): ToolResult {
+  return { ...r, content: applyOutputCap(r.content, ctx) };
 }
 
 /**

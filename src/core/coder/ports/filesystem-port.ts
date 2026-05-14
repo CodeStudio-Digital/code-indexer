@@ -56,6 +56,9 @@ export interface IFilesystemPort {
 
   /** Read a directory. Only the `{ withFileTypes: true }` form is exposed. */
   readdir(absPath: string, options: FilesystemReaddirOptions): Promise<PortDirent[]>;
+
+  /** Remove a file at `absPath`. Throws if it does not exist. */
+  unlink(absPath: string): Promise<void>;
 }
 
 /**
@@ -83,6 +86,10 @@ export class LocalFilesystemAdapter implements IFilesystemPort {
     const entries = await fs.readdir(absPath, { withFileTypes: true });
     // Dirent from node:fs already satisfies PortDirent structurally.
     return entries;
+  }
+
+  async unlink(absPath: string): Promise<void> {
+    await fs.unlink(absPath);
   }
 }
 

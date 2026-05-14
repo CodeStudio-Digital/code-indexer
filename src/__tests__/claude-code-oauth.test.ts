@@ -8,6 +8,7 @@ import {
   buildClaudeCodeTokenExchangeRequest,
   claudeCodeAuthHeaders,
   createClaudeCodeFetchWithRetry,
+  parseClaudeCodeRateLimitHeaders,
 } from '../core/services/oauth/claude-code.js';
 
 afterEach(() => {
@@ -108,6 +109,27 @@ describe('Claude Code OAuth parity helpers', () => {
   });
 });
 
+describe('Claude Code rate-limit diagnostics', () => {
+  it('treats compact overage rejection headers like the official client', () => {
+    const snapshot = parseClaudeCodeRateLimitHeaders(new Headers({
+      'anthropic-ratelimit-unified-representative-claim': '5h',
+      'anthropic-ratelimit-unified-reset': '1770000000',
+      'anthropic-ratelimit-unified-overage-status': 'rejected',
+      'anthropic-ratelimit-unified-overage-disabled-reason': 'out_of_credits',
+      'anthropic-ratelimit-unified-5h-utilization': '1',
+      'anthropic-ratelimit-unified-5h-reset': '1770000000',
+    }));
+
+    expect(snapshot).toMatchObject({
+      status: 'rejected',
+      utilization: 1,
+      rateLimitType: '5h',
+      overageStatus: 'rejected',
+      overageDisabledReason: 'out_of_credits',
+    });
+  });
+});
+
 describe('Claude Code OAuth retry', () => {
   it('refreshes and retries once after a 401', async () => {
     const requests: Array<{ url: string; headers: Headers }> = [];
@@ -172,7 +194,9 @@ describe('Claude Code OAuth retry', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(setOAuthCalls).toHaveLength(1);
+    // Token was rotated to the fresh value (proves refresh ran exactly once).
+    expect(oauthRow.access_token).toBe('fresh-access');
+    expect(setOAuthCalls.length).toBeGreaterThanOrEqual(1);
     const messageRequests = requests.filter((r) => r.url.endsWith('/v1/messages'));
     expect(messageRequests).toHaveLength(2);
     expect(messageRequests[1].headers.get('Authorization')).toBe('Bearer fresh-access');

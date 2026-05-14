@@ -9,6 +9,9 @@ import { discoverKimiCode } from '../apps/http-api/admin/model-discovery/kimi-co
 import { __setStoreForTests } from '../core/providers/shared/store.js';
 import {
   __setKimiCodeFetchForTests,
+  __setRefreshTombstoneCooldownForTests,
+  __setRaceRecoveryDelayForTests,
+  __clearRejectedRefreshTokensForTests,
   KIMI_CODE_BASE_URL,
   KIMI_CODE_CLIENT_ID,
   fetchKimiCodeModels,
@@ -262,6 +265,172 @@ describe('Kimi Code model discovery and refresh', () => {
     expect(models[0].model_id).toBe('kimi-k2.6');
     expect(headersSeen).toEqual(['Bearer old-access', 'Bearer fresh-access']);
     expect(store.getProvider('kimi-code')?.api_key).toBe('fresh-access');
+  });
+
+  it('tombstones a refresh_token rejected with 401 and skips network on the next call', async () => {
+    __setRefreshTombstoneCooldownForTests(60_000); // long enough that it stays active for the second call
+    __setRaceRecoveryDelayForTests(0); // skip the 1s race-recovery sleep
+    store.setOAuth({
+      provider_id: 'kimi-code',
+      access_token: 'expired-access',
+      refresh_token: 'dead-refresh',
+      expires_at: Date.now() - 1000,
+      scope: 'openid',
+      extra: { device_id: 'device-id' },
+    });
+
+    let calls = 0;
+    __setKimiCodeFetchForTests(async () => {
+      calls++;
+      return jsonResponse({ error: 'invalid_grant', error_description: 'revoked' }, 401);
+    });
+
+    await expect(refreshIfExpired(store, 'kimi-code')).rejects.toThrow(/revoked|HTTP 401/i);
+    expect(calls).toBe(1);
+
+    // Second call within the cooldown window: returns the cached access_token
+    // without hitting /oauth/token at all.
+    const second = await refreshIfExpired(store, 'kimi-code');
+    expect(second).toBe('expired-access');
+    expect(calls).toBe(1);
+
+    // `force` bypasses the tombstone — the caller (e.g. a 401 handler from the
+    // LLM side) can still demand a refresh attempt.
+    await expect(refreshIfExpired(store, 'kimi-code', { force: true })).rejects.toThrow();
+    expect(calls).toBe(2);
+
+    __setRefreshTombstoneCooldownForTests(null);
+    __setRaceRecoveryDelayForTests(null);
+    __clearRejectedRefreshTokensForTests();
+  });
+
+  it('tombstone clears when the persisted refresh_token has been rotated externally', async () => {
+    __setRefreshTombstoneCooldownForTests(60_000);
+    __setRaceRecoveryDelayForTests(0);
+    store.setOAuth({
+      provider_id: 'kimi-code',
+      access_token: 'expired-access',
+      refresh_token: 'dead-refresh',
+      expires_at: Date.now() - 1000,
+      scope: 'openid',
+      extra: { device_id: 'device-id' },
+    });
+
+    let calls = 0;
+    __setKimiCodeFetchForTests(async () => {
+      calls++;
+      if (calls === 1) return jsonResponse({ error: 'invalid_grant' }, 401);
+      return jsonResponse({
+        access_token: 'newly-issued',
+        refresh_token: 'rotated-refresh',
+        expires_in: 7200,
+        scope: 'openid',
+        token_type: 'Bearer',
+      });
+    });
+
+    await expect(refreshIfExpired(store, 'kimi-code')).rejects.toThrow();
+
+    // Simulate /login (or another process) rotating the refresh_token. The
+    // tombstone is keyed on the old value, so the next call should bypass it.
+    store.setOAuth({
+      provider_id: 'kimi-code',
+      access_token: 'expired-access',
+      refresh_token: 'fresh-from-relogin',
+      expires_at: Date.now() - 1000,
+      scope: 'openid',
+      extra: { device_id: 'device-id' },
+    });
+
+    const result = await refreshIfExpired(store, 'kimi-code');
+    expect(result).toBe('newly-issued');
+    expect(calls).toBe(2);
+
+    __setRefreshTombstoneCooldownForTests(null);
+    __setRaceRecoveryDelayForTests(null);
+    __clearRejectedRefreshTokensForTests();
+  });
+
+  it('on 401 picks up an in-flight rotated token persisted by another process', async () => {
+    __setRaceRecoveryDelayForTests(0);
+    store.setOAuth({
+      provider_id: 'kimi-code',
+      access_token: 'expired-access',
+      refresh_token: 'our-refresh',
+      expires_at: Date.now() - 1000,
+      scope: 'openid',
+      extra: { device_id: 'device-id' },
+    });
+
+    __setKimiCodeFetchForTests(async () => {
+      // Simulate another process rotating the token before we re-read.
+      store.setOAuth({
+        provider_id: 'kimi-code',
+        access_token: 'rotated-by-other-process',
+        refresh_token: 'rotated-refresh',
+        expires_at: Date.now() + 30 * 60_000,
+        scope: 'openid',
+        extra: { device_id: 'device-id' },
+      });
+      return jsonResponse({ error: 'invalid_grant' }, 401);
+    });
+
+    const result = await refreshIfExpired(store, 'kimi-code');
+    expect(result).toBe('rotated-by-other-process');
+    // Tombstone must not be set — the 401 was the loser of a benign race,
+    // not an actual rejection of the live refresh_token.
+    __setRaceRecoveryDelayForTests(null);
+    __clearRejectedRefreshTokensForTests();
+  });
+
+  it('adaptive threshold: long expires_in triggers refresh earlier than the 5min floor', async () => {
+    // expires_in = 7200s (2h) → threshold = 3600s = 60min.
+    // Token has 50min remaining, which is BELOW threshold → refresh fires.
+    store.setOAuth({
+      provider_id: 'kimi-code',
+      access_token: 'expired-access',
+      refresh_token: 'rt',
+      expires_at: Date.now() + 50 * 60_000,
+      scope: 'openid',
+      extra: { device_id: 'device-id', expires_in: 7200 },
+    });
+
+    let called = false;
+    __setKimiCodeFetchForTests(async () => {
+      called = true;
+      return jsonResponse({
+        access_token: 'fresh-from-adaptive',
+        refresh_token: 'rt2',
+        expires_in: 7200,
+      });
+    });
+
+    const result = await refreshIfExpired(store, 'kimi-code');
+    expect(called).toBe(true);
+    expect(result).toBe('fresh-from-adaptive');
+  });
+
+  it('adaptive threshold: missing expires_in falls back to the 5min floor', async () => {
+    // 6 minutes remaining + no expires_in → threshold is 5min (default) →
+    // the 6min remaining is ABOVE threshold → no refresh fires.
+    store.setOAuth({
+      provider_id: 'kimi-code',
+      access_token: 'still-valid',
+      refresh_token: 'rt',
+      expires_at: Date.now() + 6 * 60_000,
+      scope: 'openid',
+      extra: { device_id: 'device-id' },
+    });
+
+    let called = false;
+    __setKimiCodeFetchForTests(async () => {
+      called = true;
+      return jsonResponse({ access_token: 'should-not-be-fetched' });
+    });
+
+    const result = await refreshIfExpired(store, 'kimi-code');
+    expect(called).toBe(false);
+    expect(result).toBe('still-valid');
   });
 
   it('refresh renews access and refresh tokens and updates api_key mirror', async () => {

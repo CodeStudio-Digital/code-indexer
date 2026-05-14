@@ -128,3 +128,38 @@ export async function setModelReasoningLevel(
     throw new Error(err.error ?? `HTTP ${r.status}`);
   }
 }
+
+export async function setModelContextWindow(
+  providerId: string,
+  modelId: string,
+  mode: string,
+  value: number | null,
+): Promise<void> {
+  const r = await fetch(
+    `/api/admin/providers/${providerId}/models/${encodeURIComponent(modelId)}?mode=${encodeURIComponent(mode)}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context_window: value }),
+    },
+  );
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+}
+
+/**
+ * Backfill `provider_models.context_window` for every row that has it null,
+ * pulling values from the static registry's prefix-aware lookup. Returns
+ * counts of updated/still-null rows so the UI can display "X resolved, Y
+ * still unknown".
+ */
+export async function backfillContextWindows(): Promise<{ updated: number; still_null: number; total: number }> {
+  const r = await fetch('/api/admin/providers/models/backfill-context-windows', { method: 'POST' });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+  return r.json() as Promise<{ updated: number; still_null: number; total: number }>;
+}

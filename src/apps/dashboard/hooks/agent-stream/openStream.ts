@@ -147,7 +147,18 @@ export async function openStream(
           },
         });
       } else {
-        updateSession(sid, { error: e instanceof Error ? e.message : String(e) });
+        let msg: string;
+        if (e instanceof Error) {
+          const status = (e as { status?: number }).status;
+          const httpBody = (e as { httpBody?: { error?: { message?: string }; message?: string } }).httpBody;
+          const body = httpBody?.error?.message ?? httpBody?.message;
+          msg = body
+            ? (status ? `HTTP ${status}: ${body}` : body)
+            : e.message;
+        } else {
+          msg = String(e);
+        }
+        updateSession(sid, { error: msg });
       }
     }
   } finally {

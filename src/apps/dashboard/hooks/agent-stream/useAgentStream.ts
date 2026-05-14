@@ -68,6 +68,12 @@ export function useAgentStream(sessionId: number | null) {
          * mid-loop master.
          */
         interject?: boolean;
+        /**
+         * Skill IDs the user pre-selected in the sidebar. The server expands
+         * them into an `<active_skills>` block prepended to the user message
+         * before passing to runCoder.
+         */
+        selectedSkillIds?: string[];
       },
     ) => {
       if (!sessionId) return;
@@ -89,6 +95,10 @@ export function useAgentStream(sessionId: number | null) {
             max_turns: extras?.maxTurns ?? undefined,
             thinking: extras?.thinking || undefined,
             interject: extras?.interject || undefined,
+            selected_skill_ids:
+              extras?.selectedSkillIds && extras.selectedSkillIds.length > 0
+                ? extras.selectedSkillIds
+                : undefined,
           },
         },
         onMessageComplete,
@@ -259,6 +269,9 @@ export function useAgentStream(sessionId: number | null) {
     contextStatus: active.contextStatus,
     indexStatus: active.indexStatus,
     interactionPending: active.interactionPending,
+    pipelineRuntime: active.pipelineRuntime,
+    sidebarRefreshTick: active.sidebarRefreshTick,
+    snapshotTick: active.snapshotTick,
     sendMessage,
     sendWithInterject,
     dismissInteractionPending,

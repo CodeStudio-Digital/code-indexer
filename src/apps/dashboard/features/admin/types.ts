@@ -7,7 +7,9 @@ export type ProviderKind =
   | 'copilot'
   | 'chatgpt'
   | 'google-oauth'
-  | 'kimi-code';
+  | 'kimi-code'
+  | 'cloudflare'
+  | 'moonshot';
 
 export interface AdminProvider {
   id: string;
@@ -35,6 +37,8 @@ export interface AdminModel {
   source: string;
   default_reasoning_level: string | null;
   supported_reasoning_levels: string[] | null;
+  /** Persisted context window in tokens. Null when discovery couldn't resolve it. */
+  context_window: number | null;
 }
 
 export interface TestResult {
@@ -53,6 +57,8 @@ export const KINDS: ProviderKind[] = [
   'chatgpt',
   'google-oauth',
   'kimi-code',
+  'cloudflare',
+  'moonshot',
 ];
 
 export interface CopilotOpts {

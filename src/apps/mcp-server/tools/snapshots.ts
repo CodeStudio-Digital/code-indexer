@@ -1,11 +1,42 @@
 import { defineTool, type McpTool } from '../tool.js';
 import { truncateToTokens } from '../utils.js';
 import type { SnapshotCategory } from '../../../types.js';
-import { withProject } from './_helpers.js';
+import { SnapshotService } from '../../../core/services/snapshots.js';
+import { withProject, type ProjectToolHandler } from './_helpers.js';
+
+/**
+ * Wrap a snapshot tool handler so any thrown error becomes a structured
+ * response instead of a raw stack trace at the MCP layer. JSON callers get
+ * `{ error: "..." }`, text callers get `Snapshot operation failed: ...`.
+ *
+ * Stays inside this file on purpose — the surrounding tool catalogue does
+ * its own error mapping, so a generic wrapper would overreach.
+ */
+function withSnapshotErrorHandling(
+  handler: ProjectToolHandler,
+): ProjectToolHandler {
+  return async (args, ctx, project, authCtx) => {
+    try {
+      return await handler(args, ctx, project, authCtx);
+    } catch (err) {
+      const message = (err as Error).message ?? String(err);
+      if (args.format === 'json') {
+        return JSON.stringify({ error: message });
+      }
+      return `Snapshot operation failed: ${message}`;
+    }
+  };
+}
+
+/** Shorten an embed error so it fits inside the success-with-warning line. */
+function summarizeEmbedError(err: string | undefined): string | null {
+  if (!err) return null;
+  return err.length > 140 ? err.slice(0, 137) + '...' : err;
+}
 
 const add_snapshot = defineTool({
   name: 'add_snapshot',
-  description: 'Add a context snapshot. Pass referenced_files to track files the snapshot depends on; the snapshot will be marked STALE when those files change.',
+  description: 'Add a context snapshot. Pass referenced_files to track files the snapshot depends on; the snapshot will be marked STALE when those files change. The snapshot is also embedded for semantic retrieval via query_snapshots / get_project_context.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -22,18 +53,27 @@ const add_snapshot = defineTool({
     },
     required: ['project_name', 'title', 'category', 'content'],
   },
-  handler: withProject((args, { snapshotService }, project) => {
-    const snap = snapshotService.create(project.id, {
+  handler: withProject(withSnapshotErrorHandling(async (args, { snapshotService }, project, authCtx) => {
+    const result = await snapshotService.create(project.id, {
       title: args.title as string,
       category: args.category as SnapshotCategory,
       content: args.content as string,
       tags: args.tags as string[] | undefined,
       referencedFiles: args.referenced_files as string[] | undefined,
+      createdBy: authCtx?.principal ?? 'mcp',
     });
     const refCount = (args.referenced_files as string[] | undefined)?.length ?? 0;
-    const refNote = refCount > 0 ? ` (tracking ${refCount} referenced file${refCount === 1 ? '' : 's'} for staleness)` : '';
-    return `Snapshot #${snap.id} "${snap.title}" created.${refNote}`;
-  }),
+    const trackedCount = refCount - (result.skippedFiles?.length ?? 0);
+    const refNote = trackedCount > 0
+      ? ` (tracking ${trackedCount} referenced file${trackedCount === 1 ? '' : 's'} for staleness)`
+      : '';
+    const skippedNote = result.skippedFiles && result.skippedFiles.length > 0
+      ? ` (warning: ${result.skippedFiles.length} file(s) not yet indexed — skipped: ${result.skippedFiles.join(', ')})`
+      : '';
+    const embed = summarizeEmbedError(result.embedError);
+    const embedNote = embed ? ` (warning: vector index failed — pending backfill: ${embed})` : '';
+    return `Snapshot #${result.snap.id} "${result.snap.title}" created.${refNote}${skippedNote}${embedNote}`;
+  })),
 });
 
 const list_snapshots = defineTool({
@@ -49,7 +89,7 @@ const list_snapshots = defineTool({
     },
     required: ['project_name'],
   },
-  handler: withProject((args, { snapshotService }, project) => {
+  handler: withProject(withSnapshotErrorHandling((args, { snapshotService }, project) => {
     const list = snapshotService.list(project.id, args.category as SnapshotCategory | undefined);
     const annotated = snapshotService.annotateStaleMany(project.id, list);
     const compact = args.compact !== false;
@@ -71,30 +111,42 @@ const list_snapshots = defineTool({
       ].filter(Boolean).join('\n');
     }).join('\n\n---\n\n');
     return truncateToTokens(out, args.max_tokens as number | undefined);
-  }),
+  })),
 });
 
 const update_snapshot = defineTool({
   name: 'update_snapshot',
-  description: 'Update a snapshot',
+  description: 'Update a snapshot. Pass referenced_files to replace the file references tracked for staleness. Editing title or content invalidates the cached embedding so the next access re-embeds.',
   inputSchema: {
     type: 'object',
     properties: {
+      project_name: { type: 'string' },
       snapshot_id: { type: 'number' },
       title: { type: 'string' },
-      category: { type: 'string' },
+      category: { type: 'string', enum: ['architecture', 'decision', 'pattern', 'convention', 'todo', 'note'] },
       content: { type: 'string' },
+      tags: { type: 'array', items: { type: 'string' } },
+      referenced_files: { type: 'array', items: { type: 'string' } },
     },
-    required: ['snapshot_id'],
+    required: ['project_name', 'snapshot_id'],
   },
-  handler: (args, { snapshotService }) => {
-    snapshotService.update(args.snapshot_id as number, {
+  handler: withProject(withSnapshotErrorHandling(async (args, { snapshotService }, project, authCtx) => {
+    const result = await snapshotService.update(args.snapshot_id as number, {
       title: args.title as string | undefined,
       category: args.category as SnapshotCategory | undefined,
       content: args.content as string | undefined,
+      tags: args.tags as string[] | undefined,
+      referencedFiles: args.referenced_files as string[] | undefined,
+      projectId: project.id,
+      updatedBy: authCtx?.principal ?? 'mcp',
     });
-    return `Snapshot #${args.snapshot_id} updated.`;
-  },
+    const skippedNote = result.skippedFiles && result.skippedFiles.length > 0
+      ? ` (warning: ${result.skippedFiles.length} file(s) not yet indexed — skipped: ${result.skippedFiles.join(', ')})`
+      : '';
+    const embed = summarizeEmbedError(result.embedError);
+    const embedNote = embed ? ` (warning: vector index failed — pending backfill: ${embed})` : '';
+    return `Snapshot #${args.snapshot_id} updated.${skippedNote}${embedNote}`;
+  })),
 });
 
 const delete_snapshot = defineTool({
@@ -106,8 +158,12 @@ const delete_snapshot = defineTool({
     required: ['snapshot_id'],
   },
   handler: (args, { snapshotService }) => {
-    snapshotService.delete(args.snapshot_id as number);
-    return `Snapshot #${args.snapshot_id} deleted.`;
+    try {
+      snapshotService.delete(args.snapshot_id as number);
+      return `Snapshot #${args.snapshot_id} deleted.`;
+    } catch (err) {
+      return `Snapshot operation failed: ${(err as Error).message}`;
+    }
   },
 });
 
@@ -120,33 +176,59 @@ const get_snapshot_history = defineTool({
     required: ['snapshot_id'],
   },
   handler: (args, { snapshotService }) => {
-    const history = snapshotService.getHistory(args.snapshot_id as number);
-    return history.map(v => [
-      `## Version ${v.version} — ${v.updated_at} by ${v.updated_by}`,
-      `Title: ${v.title} [${v.category}]`,
-      '',
-      v.content,
-    ].join('\n')).join('\n\n---\n\n') || 'No version history.';
+    try {
+      const history = snapshotService.getHistory(args.snapshot_id as number);
+      return history.map(v => [
+        `## Version ${v.version} — ${v.updated_at} by ${v.updated_by}`,
+        `Title: ${v.title} [${v.category}]`,
+        '',
+        v.content,
+      ].join('\n')).join('\n\n---\n\n') || 'No version history.';
+    } catch (err) {
+      return `Snapshot operation failed: ${(err as Error).message}`;
+    }
   },
 });
 
 const get_project_context = defineTool({
   name: 'get_project_context',
-  description: 'Get all context snapshots formatted as markdown',
+  description: 'Curated semantic context for a question. Provide `query` and the tool returns the most relevant snapshots ranked by hybrid (FTS + vector) search, grouped by category. Replaces the previous behaviour that dumped every snapshot.',
   inputSchema: {
     type: 'object',
-    properties: { project_name: { type: 'string' }, max_tokens: { type: 'number' } },
-    required: ['project_name'],
+    properties: {
+      project_name: { type: 'string' },
+      query: { type: 'string', description: 'Natural-language question. The hybrid search ranks snapshots by relevance.' },
+      limit: { type: 'number', description: 'Max snapshots to include in the rendered bundle. Default 10.' },
+      max_tokens: { type: 'number' },
+    },
+    required: ['project_name', 'query'],
   },
-  handler: withProject((args, { snapshotService }, project) => {
-    const ctx = snapshotService.getForContext(project.id) || 'No context snapshots available.';
-    return truncateToTokens(ctx, args.max_tokens as number | undefined);
-  }),
+  handler: withProject(withSnapshotErrorHandling(async (args, { db, snapshotService, hybridSearch }, project) => {
+    const query = (args.query as string).trim();
+    if (!query) {
+      return 'get_project_context requires a non-empty query. Pass `query` describing the topic you want context on.';
+    }
+    const limit = (args.limit as number) ?? 10;
+    const ranked = await hybridSearch.searchSnapshotsHybrid(project.id, project.name, query, limit);
+    if (ranked.length === 0) {
+      const total = db.countSnapshots(project.id);
+      if (total === 0) {
+        return 'This project has no snapshots yet. Use add_snapshot, or run the indexer to auto-generate context snapshots.';
+      }
+      return `No snapshots matched "${query}" (${total} snapshot(s) exist). Try broader terms or use list_snapshots to browse.`;
+    }
+    const annotated = snapshotService.annotateStaleMany(project.id, ranked);
+    const rendered = SnapshotService.renderGrouped(
+      annotated,
+      `# Context for: "${query}"`,
+    );
+    return truncateToTokens(rendered, args.max_tokens as number | undefined);
+  })),
 });
 
 const query_snapshots = defineTool({
   name: 'query_snapshots',
-  description: 'FTS search over project snapshots. Try this BEFORE exploring code — many questions are already answered in auto-snapshots. Results include a stale flag when referenced files have changed since the snapshot was created. Pass format="json" for a structured response.',
+  description: 'Hybrid (FTS + vector RRF) search over project snapshots. Try this BEFORE exploring code — many questions are already answered in auto-snapshots. Results include a stale flag when referenced files have changed since the snapshot was created. Pass format="json" for a structured response.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -159,7 +241,7 @@ const query_snapshots = defineTool({
     },
     required: ['project_name', 'query'],
   },
-  handler: withProject(async (args, { db, snapshotService, hybridSearch }, project) => {
+  handler: withProject(withSnapshotErrorHandling(async (args, { db, snapshotService, hybridSearch }, project) => {
     const query = args.query as string;
     const limit = (args.limit as number) ?? 5;
     const compact = args.compact !== false;
@@ -169,13 +251,10 @@ const query_snapshots = defineTool({
     const raw = await hybridSearch.searchSnapshotsHybrid(project.id, project.name, query, limit);
     if (raw.length === 0) {
       // Distinguish "project has no snapshots" from "query didn't match any".
-      const countFn = (db as unknown as Record<string, unknown>).countSnapshots as ((id: number) => number) | undefined;
-      const total = countFn?.(project.id) ?? -1;
+      const total = db.countSnapshots(project.id);
       const detail = total === 0
         ? 'This project has no snapshots yet. Use add_snapshot to create one, or index the project first.'
-        : total > 0
-          ? `No snapshots matched "${query}" (${total} snapshots exist). Try broader terms.`
-          : 'No matching snapshots.';
+        : `No snapshots matched "${query}" (${total} snapshots exist). Try broader terms.`;
       return asJson ? JSON.stringify({ query, total: 0, results: [], detail }) : detail;
     }
     const results = snapshotService.annotateStaleMany(project.id, raw);
@@ -202,7 +281,7 @@ const query_snapshots = defineTool({
       return `## ${s.title} [${s.category}]${staleTag}${staleNote}\n${body}`;
     }).join('\n\n---\n\n');
     return truncateToTokens(out, args.max_tokens as number | undefined);
-  }),
+  })),
 });
 
 const get_context_for = defineTool({
@@ -218,7 +297,7 @@ const get_context_for = defineTool({
     },
     required: ['project_name', 'question'],
   },
-  handler: withProject(async (args, { db, hybridSearch }, project) => {
+  handler: withProject(withSnapshotErrorHandling(async (args, { db, hybridSearch }, project) => {
     const question = args.question as string;
     const hyde = args.hyde === true;
     const sections: string[] = [`=== Context for: "${question}"${hyde ? ' (expanded)' : ''} ===`];
@@ -276,7 +355,7 @@ const get_context_for = defineTool({
     }
 
     return truncateToTokens(sections.join('\n'), (args.max_tokens as number | undefined) ?? 2000);
-  }),
+  })),
 });
 
 export const snapshotTools: McpTool[] = [

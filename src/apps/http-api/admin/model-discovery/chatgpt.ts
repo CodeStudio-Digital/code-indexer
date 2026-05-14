@@ -172,5 +172,11 @@ function seedFallback(): UpsertModelInput[] {
     name: m.name,
     context_window: getRegistryContextWindow(m.model_id),
     source: 'live' as const,
+    // Carry reasoning hints so the admin reasoning-effort dropdown renders
+    // even when the live `/models` discovery is unreachable. Live discovery
+    // overwrites these with the upstream-advertised values when it succeeds.
+    default_reasoning_level: m.default_reasoning_level ?? null,
+    supported_reasoning_levels: m.supported_reasoning_levels ?? null,
+    apply_patch_tool_type: m.apply_patch_tool_type ?? null,
   }));
 }

@@ -4,19 +4,14 @@ import { Target, ListChecks } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 
 /**
- * Session-level state header. Surfaces:
- *   - Goal (if create_goal was called) — text + status pip
- *   - Active task list (if submit_tasks was approved) — current task title
+ * Session-level state header (banner variant).
  *
- * Both are read from a single endpoint `/api/coder/sessions/:id/state-summary`
- * on mount and when `sessionId` changes. The values come from DB so they
- * survive runner restarts and dashboard reloads — the original gripe was
- * that stream-only state evaporates on session switch.
+ * Surfaces the goal text and tasks summary as a horizontal strip — used by
+ * `AgentSessionModal` where a sidebar layout doesn't fit. The main chat view
+ * uses `SessionStateSidebar` instead.
  *
- * Component renders nothing when both fields are null. No live updates
- * via SSE: the user sees the latest persisted state on entry; subsequent
- * stream events update the chat below as usual, and revisiting the
- * session re-fetches.
+ * Reads `/api/coder/sessions/:id/state-summary` on mount and `refreshKey`
+ * changes. Renders nothing when both goal and tasks are null.
  */
 interface GoalSummary {
   text: string;
@@ -49,14 +44,7 @@ interface StateSummary {
 
 interface SessionStateBannerProps {
   sessionId: number;
-  /**
-   * Bumped by the parent to force a re-fetch when an SSE event likely
-   * mutated the goal/tasks state (`goal_updated`, `tasks_resolved`, …).
-   * Optional — the banner re-fetches on session change regardless.
-   */
   refreshKey?: number;
-  /** Fired when a task transitions to status 'running' so the parent
-   *  can scroll the chat to the live execute_task block. Optional. */
   onActiveTaskChange?: (taskId: string | null) => void;
 }
 

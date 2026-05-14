@@ -20,6 +20,7 @@ function skill(partial: Partial<ResolvedSkill> & { id: string }): ResolvedSkill 
     triggerTags: null,
     tags: [],
     source: 'builtin',
+    author: null,
     sortOrder: 50,
     ...rest,
   };

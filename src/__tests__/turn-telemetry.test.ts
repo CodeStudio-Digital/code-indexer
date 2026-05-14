@@ -231,7 +231,7 @@ describe('SessionStore — telemetry aggregations (modal + dashboard)', () => {
   });
 
   it('getGlobalTelemetrySummary aggregates across sessions and breaks down by provider/model', () => {
-    const g = store.getGlobalTelemetrySummary(10);
+    const g = store.getGlobalTelemetrySummary({ limit: 10 });
     expect(g.overall.session_count).toBeGreaterThanOrEqual(2);
     expect(g.overall.turn_count).toBeGreaterThanOrEqual(4);
     expect(g.overall.total_input_tokens).toBe(28_000);
@@ -245,7 +245,7 @@ describe('SessionStore — telemetry aggregations (modal + dashboard)', () => {
   });
 
   it('top_sessions ranks sessions by total input tokens with title/provider joined', () => {
-    const g = store.getGlobalTelemetrySummary(10);
+    const g = store.getGlobalTelemetrySummary({ limit: 10 });
     expect(g.top_sessions[0].title).toBe('big');
     expect(g.top_sessions[0].total_input_tokens).toBe(27_000);
     expect(g.top_sessions[0].provider).toBe('anthropic');

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAgentStream } from '../../hooks/useAgentStream.js';
+import { usePipelineStream } from '../../hooks/usePipelineStream.js';
 import { apiDelete, apiPatch, apiPost, useApi } from '../../hooks/useApi.js';
 import { Button } from '../../components/ui/button.js';
 import { useConfirm } from '../../components/ui/dialog-provider.js';
@@ -15,17 +16,18 @@ import {
 import { Input } from '../../components/ui/input.js';
 import { TooltipProvider } from '../../components/ui/tooltip.js';
 import { ChatHeader } from './ChatHeader.js';
-import { SessionStateBanner } from './SessionStateBanner.js';
+import { SessionStateSidebar } from './SessionStateSidebar.js';
 import { Composer, type ComposerHandle } from './composer/Composer.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { MessageList } from './messages/MessageList.js';
 import { SessionDetailsModal } from './SessionDetailsModal.js';
 import { SessionMetricsModal } from './SessionMetricsModal.js';
-import { TodosSidebar } from './TodosSidebar.js';
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
 import { ToolConfigDialog } from './ToolConfigDialog.js';
 import { SkillConfigDialog } from './SkillConfigDialog.js';
+import { SnapshotsPanel } from '../snapshots/SnapshotsPanel.js';
+import { fetchSnapshotList } from '../snapshots/api.js';
 import type {
   AgentChatProps,
   CoderSession,
@@ -55,6 +57,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
   const [sessionTemperature, setSessionTemperature] = useState<number | null>(null);
+  const [unrestrictedOutput, setUnrestrictedOutput] = useState<boolean>(false);
   const composerRef = useRef<ComposerHandle>(null);
   const pendingAutoTitle = useRef<Set<number>>(new Set());
   const [newSessionOpen, setNewSessionOpen] = useState(false);
@@ -69,13 +72,18 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [toolConfigOpen, setToolConfigOpen] = useState(false);
   const [skillConfigOpen, setSkillConfigOpen] = useState(false);
   const [metricsOpen, setMetricsOpen] = useState(false);
+  const [snapshotsOpen, setSnapshotsOpen] = useState(false);
+  const [snapshotPending, setSnapshotPending] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [thinking, setThinking] = useState(false);
+  /** PR-4: when set, the Composer's send button flips to "Run pipeline". */
+  const [selectedPipelineId, setSelectedPipelineId] = useState<number | null>(null);
 
   const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=120` : '';
   const { data: sessionData, refetch: refetchSession, update: updateSessionData } = useApi<SessionData>(sessionUrl);
 
   const stream = useAgentStream(selectedId);
+  const { pipelineRuntime } = usePipelineStream(selectedId);
   const {
     streaming,
     currentTurn,
@@ -86,6 +94,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     todos,
     contextStatus,
     indexStatus,
+    sidebarRefreshTick,
+    snapshotTick,
     sendMessage,
     reattach,
     abort,
@@ -107,6 +117,31 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
       setProvider,
       setModel,
     });
+
+  // Pending-snapshot count — refetched on selection change and whenever the
+  // SSE stream pings `session_snapshot_changed`. Used as a badge on the
+  // Snapshots button in the chat header.
+  useEffect(() => {
+    if (!selectedId) {
+      setSnapshotPending(0);
+      return;
+    }
+    let cancelled = false;
+    fetchSnapshotList('coder', selectedId)
+      .then((r) => {
+        if (cancelled) return;
+        const pending = r.files
+          .filter((f) => f.status === 'active')
+          .reduce((acc, f) => acc + (f.pendingHunks || (f.hunkCount === 0 ? 1 : 0)), 0);
+        setSnapshotPending(pending);
+      })
+      .catch(() => {
+        if (!cancelled) setSnapshotPending(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, snapshotTick]);
 
   // Honor initialSessionId on mount and whenever it changes (e.g. the user
   // clicks a different recent-session entry while the same project is open).
@@ -161,7 +196,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     }
   }, [persistedMessageCount, streaming, currentTurn, clearCurrentTurn, liveTurnDuplicatedInHistory]);
 
-  // Bump the SessionStateBanner refresh key whenever a turn ends — that's
+  // Bump the SessionStateSidebar refresh key whenever a turn ends — that's
   // the cheapest place to catch goal / tasks state mutations without
   // wiring a per-tool listener. Network cost is negligible (1 fetch / turn
   // boundary) and the user gets fresh banner state right after each model
@@ -174,6 +209,74 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     }
     wasStreamingRef.current = streaming;
   }, [streaming]);
+
+  // Goal/tasks state lives in DB and the sidebar reads it via a separate
+  // /state-summary fetch. End-of-turn refresh isn't enough — a long turn that
+  // creates a goal and runs many tasks would leave the sidebar stale until it
+  // ends. So also bump the key whenever a goal/tasks-related tool finishes
+  // mid-stream. We track completion count and bump when it grows.
+  const goalToolDoneCountRef = useRef(0);
+  useEffect(() => {
+    if (!currentTurn) {
+      goalToolDoneCountRef.current = 0;
+      return;
+    }
+    const goalToolNames = new Set([
+      'create_goal',
+      'update_goal',
+      'get_goal',
+      'submit_tasks',
+      'execute_task',
+      'task_complete',
+      'approve_subordinate_tasks',
+      'submit_tasks_to_master',
+    ]);
+    let count = 0;
+    for (const b of currentTurn.blocks) {
+      if (b.type !== 'tool') continue;
+      if (b.call.status !== 'done') continue;
+      if (goalToolNames.has(b.call.name)) count += 1;
+    }
+    if (count > goalToolDoneCountRef.current) {
+      goalToolDoneCountRef.current = count;
+      setStateRefreshKey((k) => k + 1);
+    }
+  }, [currentTurn]);
+
+  // File picks: paths selected in ProjectFilesSection that get injected as
+  // `<file_refs>` into the next outgoing message. Lives here (not inside the
+  // sidebar) so it survives section collapse / scroll.
+  const [filePicks, setFilePicks] = useState<string[]>([]);
+  const togglePick = useCallback((path: string) => {
+    setFilePicks((prev) => (prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]));
+  }, []);
+  const setManyPicks = useCallback((paths: string[], select: boolean) => {
+    setFilePicks((prev) => {
+      if (select) {
+        const set = new Set(prev);
+        for (const p of paths) set.add(p);
+        return Array.from(set);
+      }
+      const drop = new Set(paths);
+      return prev.filter((p) => !drop.has(p));
+    });
+  }, []);
+  const clearPicks = useCallback(() => setFilePicks([]), []);
+
+  // Skill picks: skill ids selected in SkillsSection. The server expands them
+  // into an `<active_skills>` block prepended to the user message so the agent
+  // does not need to discover or load the skill content via tool calls first.
+  const [skillPicks, setSkillPicks] = useState<string[]>([]);
+  const toggleSkillPick = useCallback((id: string) => {
+    setSkillPicks((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }, []);
+  const clearSkillPicks = useCallback(() => setSkillPicks([]), []);
+
+  // Reset picks when switching sessions.
+  useEffect(() => {
+    setFilePicks([]);
+    setSkillPicks([]);
+  }, [selectedId]);
 
   const createSession = async (title?: string) => {
     const created = await apiPost<CoderSession>('/coder/sessions', {
@@ -199,7 +302,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     await createSession(title || undefined);
   };
 
-  const handleSend = useCallback(async (text: string, atts: AgentAttachment[]) => {
+  const handleSend = useCallback(async (text: string, atts: AgentAttachment[], selectedSkillIds?: string[]) => {
     if (!text.trim() || !selectedId) return;
     const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
     if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
@@ -218,8 +321,24 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
             console.warn('[auto-title] generate-title failed:', err);
           });
       }
-    }, { attachments: atts, agent, maxTurns, thinking });
+    }, { attachments: atts, agent, maxTurns, thinking, selectedSkillIds });
   }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking]);
+
+  /**
+   * Pipeline-mode send: post to `/pipelines/:pid/start` instead of
+   * /messages. Pipeline events arrive over a separate SSE stream — see
+   * `usePipelineStream` consumed by the SessionStateSidebar.
+   */
+  const handleRunPipeline = useCallback(async (pipelineId: number, initialInput: string) => {
+    if (!selectedId) return;
+    try {
+      await apiPost(`/coder/sessions/${selectedId}/pipelines/${pipelineId}/start`, {
+        initial_input: initialInput,
+      });
+    } catch (err) {
+      console.warn('[pipeline] start failed:', err);
+    }
+  }, [selectedId]);
 
 
   /**
@@ -279,11 +398,32 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     setSessionTemperature(typeof t === 'number' ? t : null);
   }, [sessionData?.session]);
 
+  // Unrestricted-tool-output toggle (migration 078). Same pattern as the
+  // temperature override above — reads from the session row, writes via PATCH.
+  useEffect(() => {
+    if (!sessionData?.session) {
+      setUnrestrictedOutput(false);
+      return;
+    }
+    const v = sessionData.session.unrestricted_tool_output;
+    setUnrestrictedOutput(!!v);
+  }, [sessionData?.session]);
+
   const handleTemperatureChange = async (next: number | null) => {
     setSessionTemperature(next);
     if (!selectedId) return;
     try {
       await apiPatch(`/coder/sessions/${selectedId}/temperature`, { temperature: next });
+    } catch {
+      /* ignore — UI optimistic, server is the source of truth on next refetch */
+    }
+  };
+
+  const handleUnrestrictedOutputChange = async (next: boolean) => {
+    setUnrestrictedOutput(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/unrestricted-output`, { enabled: next });
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
     }
@@ -319,6 +459,23 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     const ok = await confirm({
       title: t('chat:deleteSessions', { count: ids.length }),
       description: t('chat:deleteSessionsDescription'),
+      variant: 'destructive',
+      confirmLabel: t('common:actions.delete'),
+    });
+    if (!ok) return;
+    await apiPost('/coder/sessions/batch-delete', { ids });
+    if (selectedId != null && ids.includes(selectedId)) setSelectedId(null);
+    refetchSessions();
+  };
+
+  const handleDeleteAll = async () => {
+    const ids = (sessions ?? []).map((s) => s.id);
+    if (ids.length === 0) return;
+    const ok = await confirm({
+      title: t('chat:deleteAllSessions', { count: ids.length }),
+      description: t(
+        view === 'archived' ? 'chat:deleteAllArchivedDescription' : 'chat:deleteAllActiveDescription',
+      ),
       variant: 'destructive',
       confirmLabel: t('common:actions.delete'),
     });
@@ -611,6 +768,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
           onRename={handleRenameSession}
           onDuplicate={handleDuplicate}
           onBatchDelete={handleBatchDelete}
+          onDeleteAll={handleDeleteAll}
           onArchive={handleArchive}
           onFavorite={handleFavorite}
           onBatchArchive={handleBatchArchive}
@@ -631,7 +789,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
           currentProviderModels={currentProviderModels}
         />
 
-        <main className="flex flex-col rounded-xl border bg-card overflow-hidden min-h-0">
+        <main className="flex rounded-xl border bg-card overflow-hidden min-h-0">
           {!selectedId ? (
             <EmptyChatState
               onNew={handleNewSession}
@@ -640,6 +798,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
             />
           ) : (
             <>
+              <div className="flex-1 min-w-0 min-h-0 flex flex-col">
               {sessionData?.session && (
                 <ChatHeader
                   session={sessionData.session}
@@ -654,33 +813,32 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                   onOpenToolConfig={() => setToolConfigOpen(true)}
                   onOpenSkillConfig={() => setSkillConfigOpen(true)}
                   onOpenMetrics={() => setMetricsOpen(true)}
+                  onOpenSnapshots={() => setSnapshotsOpen(true)}
+                  pendingSnapshots={snapshotPending}
                 />
               )}
-              {sessionData?.session && (
-                <SessionStateBanner
-                  sessionId={sessionData.session.id}
-                  refreshKey={stateRefreshKey}
+              <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+                <MessageList
+                  sessionData={sessionData ?? null}
+                  currentTurn={currentTurn}
+                  streaming={streaming}
+                  doneReason={doneReason}
+                  error={error}
+                  liveTurnDuplicatedInHistory={liveTurnDuplicatedInHistory}
+                  fallbackProviderId={provider}
+                  tasksState={tasksState}
+                  handlers={handlers}
+                  onLoadEarlier={loadEarlierMessages}
                 />
-              )}
-              <div className="flex flex-1 min-h-0 overflow-hidden">
-                <div className="flex-1 min-w-0 flex flex-col">
-                  <MessageList
-                    sessionData={sessionData ?? null}
-                    currentTurn={currentTurn}
-                    streaming={streaming}
-                    doneReason={doneReason}
-                    error={error}
-                    liveTurnDuplicatedInHistory={liveTurnDuplicatedInHistory}
-                    fallbackProviderId={provider}
-                    tasksState={tasksState}
-                    handlers={handlers}
-                    onLoadEarlier={loadEarlierMessages}
-                  />
-                </div>
-                <TodosSidebar todos={todos} />
               </div>
               <Composer
                 ref={composerRef}
+                filePicks={filePicks}
+                onRemovePick={togglePick}
+                onClearPicks={clearPicks}
+                skillPicks={skillPicks}
+                onRemoveSkillPick={toggleSkillPick}
+                onClearSkillPicks={clearSkillPicks}
                 agent={agent}
                 setAgent={setAgent}
                 provider={provider}
@@ -698,8 +856,15 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 thinking={thinking}
                 setThinking={setThinking}
                 supportsThinking={
+                  // Match by provider `kind` first — the chatgpt provider's
+                  // DB id is `openai-chatgpt`, not `chatgpt`, so an id-only
+                  // check would miss it. Other providers below still match
+                  // by id because their id and kind happen to coincide.
+                  providerOptions.find((p) => p.id === provider)?.kind === 'chatgpt' ||
                   provider === 'google-oauth' ||
                   provider === 'gemini' ||
+                  provider === 'kimi-code' ||
+                  provider === 'moonshot' ||
                   (provider === 'zai' && /^glm-5(\.|-)/.test((model ?? '').split('::')[0]))
                 }
                 fallbackProvider={fallbackProvider}
@@ -707,7 +872,12 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 onFallbackChange={handleFallbackChange}
                 temperature={sessionTemperature}
                 setTemperature={handleTemperatureChange}
+                unrestrictedOutput={unrestrictedOutput}
+                setUnrestrictedOutput={handleUnrestrictedOutputChange}
                 getModelsForProvider={getModelsForProvider}
+                selectedPipelineId={selectedPipelineId}
+                setSelectedPipelineId={setSelectedPipelineId}
+                onRunPipeline={handleRunPipeline}
                 onInvokeSkill={async (skillId, input) => {
                   if (!selectedId) return;
                   try {
@@ -724,10 +894,43 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                   }
                 }}
               />
+              </div>
+              {sessionData?.session && (
+                <SessionStateSidebar
+                  sessionId={sessionData.session.id}
+                  refreshKey={stateRefreshKey + sidebarRefreshTick}
+                  todos={todos}
+                  projectId={projectId}
+                  filePicks={filePicks}
+                  onTogglePick={togglePick}
+                  onSetManyPicks={setManyPicks}
+                  onClearPicks={clearPicks}
+                  skillPicks={skillPicks}
+                  onToggleSkillPick={toggleSkillPick}
+                  pipelineRuntime={pipelineRuntime}
+                />
+              )}
             </>
           )}
         </main>
       </div>
+      {selectedId != null && (
+        <Dialog open={snapshotsOpen} onOpenChange={setSnapshotsOpen}>
+          <DialogContent
+            className="p-0 gap-0 max-w-[100vw] sm:max-w-[1400px] w-[100vw] sm:w-[95vw] h-[100dvh] sm:h-[90vh] sm:max-h-[90vh] rounded-none sm:rounded-xl overflow-hidden flex flex-col"
+          >
+            <DialogHeader className="px-4 py-2.5 border-b bg-card flex-shrink-0">
+              <DialogTitle className="text-sm">Session Snapshots</DialogTitle>
+              <DialogDescription className="sr-only">
+                Review every file altered by the agent in this session. Accept or revert per hunk, per file, or all at once.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex-1 min-h-0">
+              <SnapshotsPanel scope="coder" sessionId={selectedId} refreshKey={snapshotTick} />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </TooltipProvider>
   );
 }

@@ -57,6 +57,7 @@ interface SessionSidebarProps {
   onRename: (id: number, currentTitle: string) => void;
   onDuplicate: (id: number) => Promise<void> | void;
   onBatchDelete: (ids: number[]) => Promise<void> | void;
+  onDeleteAll: () => Promise<void> | void;
   onArchive: (id: number, archived: boolean) => Promise<void> | void;
   onFavorite: (id: number, favorite: boolean) => Promise<void> | void;
   onBatchArchive: (ids: number[], archived: boolean) => Promise<void> | void;
@@ -92,6 +93,7 @@ export function SessionSidebar({
   onRename,
   onDuplicate,
   onBatchDelete,
+  onDeleteAll,
   onArchive,
   onFavorite,
   onBatchArchive,
@@ -234,6 +236,22 @@ export function SessionSidebar({
               </TooltipTrigger>
               <TooltipContent>{t('chat:sidebar.newGroup')}</TooltipContent>
             </Tooltip>
+            {sessions && sessions.length > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                    onClick={() => onDeleteAll()}
+                    aria-label={t('chat:sidebar.deleteAll')}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t('chat:sidebar.deleteAll')}</TooltipContent>
+              </Tooltip>
+            )}
             {onMobileClose && (
               <Button
                 size="icon"

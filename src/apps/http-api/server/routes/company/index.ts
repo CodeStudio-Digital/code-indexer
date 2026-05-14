@@ -12,6 +12,7 @@ import { mountCompanyLocalProjectRoutes } from './local-project.js';
 import { mountCompanyPipelineRoutes } from './pipelines.js';
 import { mountCompanyInboxRoutes } from './inbox.js';
 import { mountCompanyDriveRoutes } from './drive.js';
+import { mountCompanySnapshotRoutes } from './snapshot.js';
 import { mountQaRoutes } from './qa/index.js';
 
 export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
@@ -27,5 +28,6 @@ export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyPipelineRoutes(app, deps);
   mountCompanyInboxRoutes(app, deps);
   mountCompanyDriveRoutes(app, deps);
+  mountCompanySnapshotRoutes(app, deps);
   mountQaRoutes(app, deps);
 }

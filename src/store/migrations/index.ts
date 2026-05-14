@@ -86,6 +86,14 @@ import { coderSessionGoal068 } from './068_coder_session_goal.js';
 import { coderTurnTelemetry069 } from './069_coder_turn_telemetry.js';
 import { indexHygiene070 } from './070_index_hygiene.js';
 import { fileIndexTier071 } from './071_file_index_tier.js';
+import { telemetryPerTool072 } from './072_telemetry_per_tool.js';
+import { phaseProfiles073 } from './073_phase_profiles.js';
+import { sessionBaseCommit074 } from './074_session_base_commit.js';
+import { coderMessageMeta075 } from './075_coder_message_meta.js';
+import { snapshotEmbeddingHash076 } from './076_snapshot_embedding_hash.js';
+import { pipelinesChat077 } from './077_pipelines_chat.js';
+import { sessionUnrestrictedToolOutput078 } from './078_session_unrestricted_tool_output.js';
+import { sessionFileSnapshots079 } from './079_session_file_snapshots.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -166,6 +174,14 @@ export const MIGRATIONS: Migration[] = [
   coderTurnTelemetry069,
   indexHygiene070,
   fileIndexTier071,
+  telemetryPerTool072,
+  phaseProfiles073,
+  sessionBaseCommit074,
+  coderMessageMeta075,
+  snapshotEmbeddingHash076,
+  pipelinesChat077,
+  sessionUnrestrictedToolOutput078,
+  sessionFileSnapshots079,
 ];
 
 /**

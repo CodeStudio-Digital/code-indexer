@@ -118,7 +118,7 @@ export function useAgentChatState({
 
   const providerOptions: ProviderOption[] =
     enrichedProviders.length > 0
-      ? enrichedProviders.map((p) => ({ id: p.id, label: p.name, models: p.models }))
+      ? enrichedProviders.map((p) => ({ id: p.id, label: p.name, kind: p.kind, models: p.models }))
       : PROVIDERS.map((p) => ({ id: p.id, label: p.label, models: [] as EnrichedProviderModel[] }));
   const currentProviderModels = providerOptions.find((p) => p.id === provider)?.models ?? [];
 

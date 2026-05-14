@@ -822,9 +822,16 @@ export class CodeIndexDB {
    * detect divergence and flag snapshots as stale.
    *
    * Replaces any existing references for the snapshot (idempotent).
-   * Files that are not indexed (no row in `files`) are silently skipped.
+   * Returns `{ inserted, skipped }` so callers can warn about paths that are
+   * not yet in the file index — these were silently dropped before.
    */
-  setSnapshotFiles(snapshotId: number, projectId: number, filePaths: string[]): void {
+  setSnapshotFiles(
+    snapshotId: number,
+    projectId: number,
+    filePaths: string[]
+  ): { inserted: number; skipped: string[] } {
+    let inserted = 0;
+    const skipped: string[] = [];
     const tx = this.db.transaction(() => {
       this.db.prepare('DELETE FROM snapshot_files WHERE snapshot_id = ?').run(snapshotId);
       if (filePaths.length === 0) return;
@@ -838,10 +845,14 @@ export class CodeIndexDB {
         const row = getHash.get(projectId, p) as { content_hash: string } | undefined;
         if (row) {
           insert.run(snapshotId, p, row.content_hash);
+          inserted++;
+        } else {
+          skipped.push(p);
         }
       }
     });
     tx();
+    return { inserted, skipped };
   }
 
   /**
@@ -877,7 +888,13 @@ export class CodeIndexDB {
     return rows.map((r) => r.file_path);
   }
 
-  updateSnapshot(id: number, updates: Partial<Pick<ContextSnapshot, 'title' | 'category' | 'content'>> & { tags?: string[] }): void {
+  updateSnapshot(
+    id: number,
+    updates: Partial<Pick<ContextSnapshot, 'title' | 'category' | 'content'>> & {
+      tags?: string[];
+      updatedBy?: string;
+    }
+  ): void {
     const fields: string[] = [];
     const values: unknown[] = [];
 
@@ -889,10 +906,19 @@ export class CodeIndexDB {
     if (fields.length === 0) return;
 
     fields.push("updated_at = datetime('now')");
+    // Editing title or content invalidates the cached embedding hash. The
+    // service re-embeds and writes a fresh hash on the next embed pass.
+    if (updates.title !== undefined || updates.content !== undefined) {
+      fields.push('embedding_hash = NULL');
+    }
     values.push(id);
 
+    const updatedBy = updates.updatedBy ?? 'manual';
+
     const doUpdate = this.db.transaction(() => {
-      // Save current version before overwriting
+      // Save current version before overwriting. The version row records who
+      // is making the change (updatedBy), not who originally created the
+      // snapshot — this is auditable history of edits.
       const current = this.db.prepare('SELECT * FROM snapshots WHERE id = ?').get(id) as ContextSnapshot | undefined;
       if (current) {
         const maxVersion = this.db.prepare(
@@ -902,7 +928,7 @@ export class CodeIndexDB {
         this.db.prepare(`
           INSERT INTO snapshot_versions (snapshot_id, version, title, category, content, tags, updated_at, updated_by)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(id, maxVersion.v + 1, current.title, current.category, current.content, current.tags, current.updated_at, current.created_by);
+        `).run(id, maxVersion.v + 1, current.title, current.category, current.content, current.tags, current.updated_at, updatedBy);
 
         // Delete old FTS entry
         this.db.prepare(
@@ -922,6 +948,47 @@ export class CodeIndexDB {
     });
 
     doUpdate();
+  }
+
+  /**
+   * Persist the embedding hash so the next embed pass can skip when content
+   * is unchanged. Write happens after a successful vector upsert.
+   */
+  updateSnapshotEmbeddingHash(id: number, hash: string): void {
+    this.db.prepare('UPDATE snapshots SET embedding_hash = ? WHERE id = ?').run(hash, id);
+  }
+
+  /**
+   * Snapshots that still need to be embedded — used by the backfill flow.
+   * `embedding_hash IS NULL` covers both never-embedded rows and rows whose
+   * hash was cleared by `updateSnapshot` after a content edit.
+   */
+  listSnapshotsMissingEmbedding(projectId?: number): ContextSnapshot[] {
+    if (projectId === undefined) {
+      return this.db
+        .prepare('SELECT * FROM snapshots WHERE embedding_hash IS NULL ORDER BY id')
+        .all() as ContextSnapshot[];
+    }
+    return this.db
+      .prepare('SELECT * FROM snapshots WHERE project_id = ? AND embedding_hash IS NULL ORDER BY id')
+      .all(projectId) as ContextSnapshot[];
+  }
+
+  /** Total snapshot count for a project — cheap predicate for "any snapshots?". */
+  countSnapshots(projectId: number): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS c FROM snapshots WHERE project_id = ?')
+      .get(projectId) as { c: number };
+    return row.c;
+  }
+
+  /** Count of vector_ids rows with type='snapshot' for a project. Used to
+   *  decide whether the boot-time auto-backfill should run. */
+  countSnapshotVectors(projectId: number): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS c FROM vector_ids WHERE project_id = ? AND type = 'snapshot'")
+      .get(projectId) as { c: number };
+    return row.c;
   }
 
   deleteSnapshot(id: number): void {

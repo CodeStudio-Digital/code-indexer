@@ -1195,6 +1195,15 @@ export class CompanyStore {
   listPipelines(opts?: {
     companySessionId?: number | null;
     templateId?: number | null;
+    /**
+     * Chat-mode filter: list pipelines that are EITHER global
+     * (`company_session_id IS NULL`) OR bound to a company session
+     * that includes this project. Joins through
+     * `company_session_projects`. Mutually exclusive with
+     * `companySessionId` — the orchestrator path always passes the
+     * latter; the chat path passes this.
+     */
+    projectIdForChat?: number;
   }): Pipeline[] {
     const where: string[] = [];
     const params: unknown[] = [];
@@ -1205,6 +1214,13 @@ export class CompanyStore {
         where.push('(company_session_id = ? OR company_session_id IS NULL)');
         params.push(opts.companySessionId);
       }
+    }
+    if (opts && typeof opts.projectIdForChat === 'number') {
+      where.push(
+        '(company_session_id IS NULL OR company_session_id IN ' +
+          '(SELECT company_session_id FROM company_session_projects WHERE project_id = ?))',
+      );
+      params.push(opts.projectIdForChat);
     }
     if (opts && typeof opts.templateId === 'number') {
       where.push('template_id = ?');
@@ -1252,22 +1268,38 @@ export class CompanyStore {
 
   // ─── Pipeline executions ──────────────────────────────────────
 
+  /**
+   * Exactly one of `companySessionId` / `coderSessionId` must be set —
+   * the DB-level CHECK in migration 077 enforces this. Company-path
+   * callers continue to pass `companySessionId`; chat-path callers
+   * pass `coderSessionId` and leave the other null.
+   */
   createPipelineExecution(input: {
     pipelineId: number;
-    companySessionId: number;
+    companySessionId?: number | null;
+    coderSessionId?: number | null;
     initialInput: string;
     context: PipelineExecutionContext;
     startedBy?: string;
     currentNodeId?: string | null;
   }): PipelineExecution {
+    const companyId = input.companySessionId ?? null;
+    const coderId = input.coderSessionId ?? null;
+    if ((companyId == null) === (coderId == null)) {
+      throw new Error(
+        'createPipelineExecution: exactly one of companySessionId / coderSessionId must be set',
+      );
+    }
     const stmt = this.db.prepare(`
       INSERT INTO pipeline_executions
-        (pipeline_id, company_session_id, status, current_node_id, initial_input, context_json, started_by)
-      VALUES (?, ?, 'running', ?, ?, ?, ?)
+        (pipeline_id, company_session_id, coder_session_id, status, current_node_id,
+         initial_input, context_json, started_by)
+      VALUES (?, ?, ?, 'running', ?, ?, ?, ?)
     `);
     const r = stmt.run(
       input.pipelineId,
-      input.companySessionId,
+      companyId,
+      coderId,
       input.currentNodeId ?? null,
       input.initialInput,
       JSON.stringify(input.context),
@@ -1285,6 +1317,7 @@ export class CompanyStore {
 
   listPipelineExecutions(opts: {
     companySessionId?: number;
+    coderSessionId?: number;
     pipelineId?: number;
     status?: PipelineExecutionStatus;
     limit?: number;
@@ -1294,6 +1327,10 @@ export class CompanyStore {
     if (typeof opts.companySessionId === 'number') {
       where.push('company_session_id = ?');
       params.push(opts.companySessionId);
+    }
+    if (typeof opts.coderSessionId === 'number') {
+      where.push('coder_session_id = ?');
+      params.push(opts.coderSessionId);
     }
     if (typeof opts.pipelineId === 'number') {
       where.push('pipeline_id = ?');
@@ -1343,11 +1380,13 @@ export class CompanyStore {
     attempt?: number;
     agentRunId?: number | null;
     kanbanCardId?: number | null;
+    coderSessionId?: number | null;
   }): PipelineNodeExecution {
     const stmt = this.db.prepare(`
       INSERT INTO pipeline_node_executions
-        (execution_id, node_id, node_label, role, status, agent_run_id, kanban_card_id, input_text, attempt, started_at)
-      VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, datetime('now'))
+        (execution_id, node_id, node_label, role, status, agent_run_id, kanban_card_id,
+         coder_session_id, input_text, attempt, started_at)
+      VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, datetime('now'))
     `);
     const r = stmt.run(
       input.executionId,
@@ -1356,6 +1395,7 @@ export class CompanyStore {
       input.role,
       input.agentRunId ?? null,
       input.kanbanCardId ?? null,
+      input.coderSessionId ?? null,
       input.inputText,
       input.attempt ?? 1,
     );
@@ -1382,10 +1422,12 @@ export class CompanyStore {
       status?: PipelineNodeStatus;
       agentRunId?: number | null;
       kanbanCardId?: number | null;
+      coderSessionId?: number | null;
       outputText?: string | null;
       outcomeBranch?: string | null;
       finishedAt?: string | null;
       errorMessage?: string | null;
+      usageJson?: string | null;
     },
   ): PipelineNodeExecution | null {
     const sets: string[] = [];
@@ -1393,10 +1435,12 @@ export class CompanyStore {
     if (patch.status !== undefined) { sets.push('status = ?'); params.push(patch.status); }
     if (patch.agentRunId !== undefined) { sets.push('agent_run_id = ?'); params.push(patch.agentRunId); }
     if (patch.kanbanCardId !== undefined) { sets.push('kanban_card_id = ?'); params.push(patch.kanbanCardId); }
+    if (patch.coderSessionId !== undefined) { sets.push('coder_session_id = ?'); params.push(patch.coderSessionId); }
     if (patch.outputText !== undefined) { sets.push('output_text = ?'); params.push(patch.outputText); }
     if (patch.outcomeBranch !== undefined) { sets.push('outcome_branch = ?'); params.push(patch.outcomeBranch); }
     if (patch.finishedAt !== undefined) { sets.push('finished_at = ?'); params.push(patch.finishedAt); }
     if (patch.errorMessage !== undefined) { sets.push('error_message = ?'); params.push(patch.errorMessage); }
+    if (patch.usageJson !== undefined) { sets.push('usage_json = ?'); params.push(patch.usageJson); }
     if (sets.length === 0) return this.getPipelineNodeExecution(id);
     params.push(id);
     this.db.prepare(`UPDATE pipeline_node_executions SET ${sets.join(', ')} WHERE id = ?`).run(...params);
@@ -1566,7 +1610,8 @@ function mapPipelineRow(row: PipelineRow): Pipeline {
 interface PipelineExecutionRow {
   id: number;
   pipeline_id: number;
-  company_session_id: number;
+  company_session_id: number | null;
+  coder_session_id: number | null;
   status: string;
   current_node_id: string | null;
   initial_input: string;
@@ -1593,6 +1638,7 @@ function mapPipelineExecutionRow(row: PipelineExecutionRow): PipelineExecution {
     id: row.id,
     pipeline_id: row.pipeline_id,
     company_session_id: row.company_session_id,
+    coder_session_id: row.coder_session_id,
     status: row.status as PipelineExecutionStatus,
     current_node_id: row.current_node_id,
     initial_input: row.initial_input,
@@ -1613,6 +1659,7 @@ interface PipelineNodeExecutionRow {
   status: string;
   agent_run_id: number | null;
   kanban_card_id: number | null;
+  coder_session_id: number | null;
   input_text: string;
   output_text: string | null;
   outcome_branch: string | null;
@@ -1620,6 +1667,7 @@ interface PipelineNodeExecutionRow {
   started_at: string | null;
   finished_at: string | null;
   error_message: string | null;
+  usage_json: string | null;
   created_at: string;
 }
 
@@ -1633,6 +1681,7 @@ function mapPipelineNodeExecutionRow(row: PipelineNodeExecutionRow): PipelineNod
     status: row.status as PipelineNodeStatus,
     agent_run_id: row.agent_run_id,
     kanban_card_id: row.kanban_card_id,
+    coder_session_id: row.coder_session_id,
     input_text: row.input_text,
     output_text: row.output_text,
     outcome_branch: row.outcome_branch,
@@ -1640,6 +1689,7 @@ function mapPipelineNodeExecutionRow(row: PipelineNodeExecutionRow): PipelineNod
     started_at: row.started_at,
     finished_at: row.finished_at,
     error_message: row.error_message,
+    usage_json: row.usage_json,
   };
 }
 

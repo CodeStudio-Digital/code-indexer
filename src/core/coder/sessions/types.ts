@@ -55,6 +55,18 @@ export interface CoderSession {
    * rejected at write-time, so the UI can be permissive.
    */
   temperature_override: number | null;
+  /**
+   * Per-session toggle that lifts the per-tool-call truncation caps when true.
+   * When null/false, the runner uses the production defaults
+   * (PUSH_TIME_CAP=24k, MCP_OUTPUT_HARD_CAP=16k, code_exec MAX_OUTPUT_BYTES=50k).
+   * When true, those caps are raised to a high safety ceiling (≈1 MB main /
+   * 500 KB subagent / 5 000 lines for read_file). Auto-compaction still runs.
+   *
+   * Surfaced in the Composer next to the temperature control. Useful when
+   * working with verbose MCP servers (Unity scene-analyzer, large file reads,
+   * batched code_exec scripts) where truncation hurts the agent's quality.
+   */
+  unrestricted_tool_output: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -85,6 +97,13 @@ export interface CoderMessageRow {
   cache_read_tokens: number;
   cache_creation_tokens: number;
   created_at: string;
+  /**
+   * PR-4 (Row 8): 1 when the row is a runtime-injected synthetic message
+   * (stop-guard nudge, auto-continue recap, subordinate reminder, etc.)
+   * that the dashboard should hide from the user-visible transcript.
+   * Migration 075 adds the column; pre-PR-4 rows are 0/null.
+   */
+  is_meta?: 0 | 1 | null;
 }
 
 /**
@@ -107,6 +126,14 @@ export interface CoderSessionStats {
   total_tool_duration_ms: number;
   /** Wall-clock duration of the session, in ms (updated_at - created_at). */
   duration_ms: number;
+  /**
+   * Resolved context window for this session's model. Sourced from
+   * provider_models.context_window when present, else from the static
+   * registry's prefix fallback (capabilities.getRegistryContextWindow).
+   * Null when the model is unknown — the dashboard hides the context bar
+   * in that case rather than fabricate a percentage.
+   */
+  context_window?: number | null;
 }
 
 export interface CoderToolCallRow {
@@ -152,7 +179,14 @@ export type SessionInputKind =
   | 'skill_content'
   | 'system_reminder'
   | 'subagent_prompt'
-  | 'tools_snapshot';
+  | 'tools_snapshot'
+  /**
+   * Phase router noticed a profile asked for a different provider family
+   * than the session is on, and silently skipped the swap. Recorded once
+   * per session run (dedup'd by content_hash) so the dashboard can flag
+   * "your profile was partially ignored". Body is JSON of skipped samples.
+   */
+  | 'phase_route_skip_summary';
 
 /**
  * One row per hidden prompt the agent sees: the run-start system prompt,

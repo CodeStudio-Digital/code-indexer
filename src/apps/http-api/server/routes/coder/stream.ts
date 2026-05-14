@@ -13,6 +13,7 @@ import type { CoderRuntime } from './state.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import { withSessionLock } from './sessionLock.js';
+import { enrichContentWithActiveSkills } from './active-skills.js';
 
 interface SendMessageBody {
   content: string;
@@ -37,6 +38,13 @@ interface SendMessageBody {
    * Default false — the canonical answer path is /answer or /plan-response.
    */
   interject?: boolean;
+  /**
+   * Skill IDs the user manually pre-selected in the sidebar's SkillsSection.
+   * Each id is expanded into an `<active_skills>` block prepended to
+   * `content` so the model gets the skill body inline without needing to
+   * call `get_skill_content` first.
+   */
+  selected_skill_ids?: string[];
 }
 
 /**
@@ -79,6 +87,24 @@ export function mountCoderStreamRoutes(
     const id = parseIdParam(c);
     const body = await c.req.json<SendMessageBody>();
     if (!body.content?.trim()) return c.json({ error: 'content required' }, 400);
+
+    // Expand manually-picked skills into an `<active_skills>` block. Mutates
+    // body.content so the enriched text flows through both the attach-mode
+    // (pushUserMessage / appendMessage) and fresh-run (runCoder) paths below.
+    if (body.selected_skill_ids && body.selected_skill_ids.length > 0) {
+      const enrich = await enrichContentWithActiveSkills(
+        body.content,
+        body.selected_skill_ids,
+        id,
+        deps,
+      );
+      body.content = enrich.content;
+      if (enrich.missing.length > 0) {
+        console.warn(
+          `[active-skills] session ${id}: skipped unknown skill ids: ${enrich.missing.join(', ')}`,
+        );
+      }
+    }
 
     // Serialize the "do we have an active run?" decision per session so two
     // concurrent POSTs cannot both observe `activeRuns.get(id) === undefined`
@@ -205,6 +231,7 @@ export function mountCoderStreamRoutes(
           thinking: body.thinking,
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
+          onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
         });
         setBusRunner(bus, handle.runner);
         publish(bus, 'session', handle.session);
@@ -272,6 +299,7 @@ export function mountCoderStreamRoutes(
           resume: true,
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
+          onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
         });
         setBusRunner(bus, handle.runner);
         publish(bus, 'session', handle.session);

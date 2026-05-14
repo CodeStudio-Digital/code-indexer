@@ -183,17 +183,23 @@ export async function resolveClaudeCodeCreds(cfg: ProviderConfig): Promise<Resol
 
   const baseURL = (cfg.base_url ?? CLAUDE_CODE_BASE_URL).replace(/\/$/, '');
   if (usesClaudeAi) {
-    let token = cfg.api_key ?? tok?.access_token ?? '';
+    // Source-of-truth for the OAuth Bearer is oauth_tokens.access_token.
+    // cfg.api_key is a mirror that older console-flow connections may have
+    // contaminated with an sk-ant-* API key; trust oauth_tokens first.
+    let token = tok?.access_token ?? cfg.api_key ?? '';
     try {
       const fresh = await refreshClaudeCodeToken(store, cfg.id);
-      if (fresh && fresh !== cfg.api_key) {
+      if (fresh) {
         token = fresh;
-        store.upsertProvider({ ...cfg, api_key: fresh });
-      } else if (fresh) {
-        token = fresh;
+        if (fresh !== cfg.api_key) {
+          store.upsertProvider({ ...cfg, api_key: fresh });
+        }
       }
     } catch (e) {
-      console.warn(`[claude-code] refresh failed: ${(e as Error).message}`);
+      const err = e as Error;
+      console.error(
+        `[claude-code] refresh FAILED for provider=${cfg.id} expires_at=${tok?.expires_at ?? 'null'} class=${err.constructor.name}: ${err.message}`,
+      );
     }
     if (!token) throw new Error('no Claude Code access token stored - re-connect');
 

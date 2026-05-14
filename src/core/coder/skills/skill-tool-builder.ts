@@ -9,12 +9,27 @@
 import type { CoderTool } from '../core/tool.js';
 import type { ResolvedSkill, SkillTemplateContext } from './types.js';
 import { interpolateSkillVars } from './prompt-injector.js';
+import { groupSkillsByNamespace } from './namespace.js';
+import type { InstalledNamespaceSummary } from './agent-skills-installer.js';
 import { SkillStore } from '../../../store/skill-store.js';
 import type { SessionStore } from '../sessions/store.js';
 
+const SAMPLE_SKILL_IDS_PER_NAMESPACE = 5;
+
 /**
- * Build discovery tools (`get_skills_list` + `get_skill_content`) for all active skills.
- * These are always registered regardless of contextMode and do not log usage.
+ * Build discovery tools (`list_skill_namespaces` + `get_skills_list` +
+ * `get_skill_content`) for all active skills. Always registered regardless
+ * of contextMode; do not log usage.
+ *
+ * The three tools form a 3-level discovery hierarchy taught to the agent
+ * via the system prompt:
+ *   1. `list_skill_namespaces` — see installed packs (counts, repo, sample IDs)
+ *   2. `get_skills_list({namespace})` — drill into a pack
+ *   3. `get_skill_content({skill_id})` — load instructions
+ *
+ * `installedNamespaces` (optional) enriches `list_skill_namespaces` with
+ * repo/commit metadata from agent-skills-installer. When omitted, the tool
+ * still returns the namespace list with counts and sample IDs.
  *
  * `sessionStore` + `sessionId` are optional; when provided, the body returned
  * by `get_skill_content` is mirrored into `coder_session_inputs` (kind
@@ -26,11 +41,17 @@ export function buildSkillDiscoveryTools(
   templateCtx: SkillTemplateContext,
   sessionStore?: SessionStore,
   sessionId?: number,
+  installedNamespaces?: InstalledNamespaceSummary[],
 ): CoderTool[] {
-  const listTool: CoderTool = {
-    name: 'get_skills_list',
+  const installedByName = new Map<string, InstalledNamespaceSummary>();
+  if (installedNamespaces) {
+    for (const ns of installedNamespaces) installedByName.set(ns.namespace, ns);
+  }
+
+  const namespacesTool: CoderTool = {
+    name: 'list_skill_namespaces',
     description:
-      'List all available skills with their ID, name, and description. Call this to discover which skills are available before fetching their content with get_skill_content.',
+      'List all skill packs (namespaces) available in this session, with counts, repo origin, and a few sample skill IDs to hint at each pack\'s theme. Call this first when starting a new task to choose which pack to explore. Then call get_skills_list({namespace}) to see specific skills inside a pack, and get_skill_content({skill_id}) to load instructions before doing the work.',
     source: 'native',
     parameters: {
       type: 'object',
@@ -38,18 +59,103 @@ export function buildSkillDiscoveryTools(
       required: [],
       additionalProperties: false,
     },
-    handler: async () => ({
-      content: JSON.stringify(
-        skills.map((s) => ({
-          id: s.id,
-          name: s.name,
-          description: s.description,
-          slashCommand: s.slashCommand ?? null,
-        })),
-        null,
-        2,
-      ),
-    }),
+    handler: async () => {
+      const grouped = groupSkillsByNamespace(skills);
+      const namespaces = [...grouped.entries()].map(([namespace, items]) => {
+        const sampleSkillIds = [...items]
+          .sort((a, b) => a.id.localeCompare(b.id))
+          .slice(0, SAMPLE_SKILL_IDS_PER_NAMESPACE)
+          .map((s) => s.id);
+        const installed = installedByName.get(namespace);
+        return {
+          namespace,
+          count: items.length,
+          repo: installed?.repo ?? null,
+          commit: installed?.commit ?? null,
+          sampleSkillIds,
+        };
+      });
+      return {
+        content: JSON.stringify(
+          {
+            totalSkills: skills.length,
+            namespaces,
+          },
+          null,
+          2,
+        ),
+      };
+    },
+  };
+
+  const listTool: CoderTool = {
+    name: 'get_skills_list',
+    description:
+      'List skills, optionally filtered to a single namespace. Pass `namespace` (from list_skill_namespaces) to drill into one pack and get the full set of {id, name, description, slashCommand}. Without `namespace` you get a compact overview {totalSkills, byNamespace[{namespace, count}]} — call list_skill_namespaces instead for richer metadata (repo, sample IDs). After picking a skill, call get_skill_content with its ID to load full instructions.',
+    source: 'native',
+    parameters: {
+      type: 'object',
+      properties: {
+        namespace: {
+          type: 'string',
+          description:
+            'Optional. Filter to one namespace. Use the namespace name from list_skill_namespaces (e.g. "user", "builtin", "anthropic-skills"). Omit for a compact overview.',
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const requested = typeof args.namespace === 'string' && args.namespace.length > 0
+        ? args.namespace
+        : null;
+      const grouped = groupSkillsByNamespace(skills);
+
+      if (!requested) {
+        const byNamespace = [...grouped.entries()].map(([namespace, items]) => ({
+          namespace,
+          count: items.length,
+        }));
+        return {
+          content: JSON.stringify(
+            {
+              totalSkills: skills.length,
+              byNamespace,
+              hint: 'Call list_skill_namespaces for richer metadata (repo, sample IDs) or get_skills_list({namespace: "X"}) to see skills inside a pack.',
+            },
+            null,
+            2,
+          ),
+        };
+      }
+
+      const items = grouped.get(requested);
+      if (!items || items.length === 0) {
+        const valid = [...grouped.keys()];
+        return {
+          content: `Namespace "${requested}" not found or has no active skills. Available namespaces: ${valid.join(', ')}. Call list_skill_namespaces to see counts and sample IDs.`,
+          isError: true,
+        };
+      }
+
+      const sortedItems = [...items].sort((a, b) => a.id.localeCompare(b.id));
+      return {
+        content: JSON.stringify(
+          {
+            namespace: requested,
+            count: sortedItems.length,
+            skills: sortedItems.map((s) => ({
+              id: s.id,
+              name: s.name,
+              description: s.description,
+              slashCommand: s.slashCommand ?? null,
+            })),
+          },
+          null,
+          2,
+        ),
+      };
+    },
   };
 
   const contentTool: CoderTool = {
@@ -108,7 +214,7 @@ export function buildSkillDiscoveryTools(
     },
   };
 
-  return [listTool, contentTool];
+  return [namespacesTool, listTool, contentTool];
 }
 
 /**

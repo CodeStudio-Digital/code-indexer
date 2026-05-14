@@ -10,9 +10,39 @@ import { buildContext } from './context.js';
 import { allTools, buildToolRegistry } from './tools/index.js';
 import { coerceArgs } from './utils.js';
 import { VERSION, PACKAGE_NAME } from '../../version.js';
+import { backfillSnapshotEmbeddings } from '../../core/services/snapshot-backfill.js';
 
 const ctx = buildContext();
 const registry = buildToolRegistry();
+
+/**
+ * Background reconciliation: any project whose snapshot count exceeds its
+ * snapshot-vector count gets the missing rows embedded. Skips silently when
+ * no embedding backend is configured. The work is intentionally fire-and-
+ * forget — boot continues immediately so the stdio handshake isn't blocked.
+ */
+function scheduleSnapshotBackfill(): void {
+  if (!ctx.snapshotService.hasEmbeddingBackend()) return;
+  void (async () => {
+    try {
+      const projects = ctx.db.listProjects();
+      for (const p of projects) {
+        const total = ctx.db.countSnapshots(p.id);
+        if (total === 0) continue;
+        const indexed = ctx.db.countSnapshotVectors(p.id);
+        if (indexed >= total) continue;
+        const result = await backfillSnapshotEmbeddings(ctx.db, ctx.snapshotService, p.id);
+        if (result.embedded > 0 || result.failed > 0) {
+          console.error(
+            `[snapshot-backfill] project=${p.name} embedded=${result.embedded} failed=${result.failed} skipped=${result.skipped}`,
+          );
+        }
+      }
+    } catch (err) {
+      console.error('[snapshot-backfill] error:', (err as Error).message);
+    }
+  })();
+}
 
 const server = new Server(
   { name: PACKAGE_NAME, version: VERSION },
@@ -43,6 +73,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(`MCP Code Indexer server running on stdio (${allTools.length} tools)`);
+  scheduleSnapshotBackfill();
 }
 
 main().catch(console.error);

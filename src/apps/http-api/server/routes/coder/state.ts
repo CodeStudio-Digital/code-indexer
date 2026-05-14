@@ -5,12 +5,16 @@ import {
   markEnded,
   type CoderRunBus,
 } from '../../../coder-bus.js';
+import { CoderPipelineRegistry } from './pipelines-state.js';
 
 /**
  * Runtime state shared by every coder route file. Holds the in-flight
  * `activeRuns` map keyed by session id, along with helpers to wire a
  * `CoderRunner` to its replay bus and to walk the persisted message log
  * when the live runner is no longer in memory.
+ *
+ * `coderPipelineRegistry` holds chat-pipeline executors that outlive a
+ * single chat turn. See `pipelines-state.ts`.
  */
 export interface CoderRuntime {
   activeRuns: Map<number, CoderRunBus>;
@@ -20,11 +24,13 @@ export interface CoderRuntime {
   findPendingInteraction(
     sessionId: number,
   ): { toolUseId: string; name: 'submit_plan' | 'ask_user' | 'submit_tasks' } | null;
+  coderPipelineRegistry: CoderPipelineRegistry;
 }
 
 export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
   const activeRuns = new Map<number, CoderRunBus>();
   const BUS_LINGER_MS = 30_000;
+  const coderPipelineRegistry = new CoderPipelineRegistry();
 
   /**
    * Wire a CoderRunner's events onto the bus. Same event shape the SSE
@@ -159,5 +165,11 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
     return null;
   }
 
-  return { activeRuns, BUS_LINGER_MS, wireRunnerToBus, findPendingInteraction };
+  return {
+    activeRuns,
+    BUS_LINGER_MS,
+    wireRunnerToBus,
+    findPendingInteraction,
+    coderPipelineRegistry,
+  };
 }

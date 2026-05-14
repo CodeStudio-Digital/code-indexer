@@ -36,7 +36,10 @@ export interface SubagentSpec {
 }
 
 export interface SubagentRunResult {
-  reason: 'completed' | 'max_turns' | 'aborted' | 'error' | 'plan_required';
+  /** PR-4 widened to StopReason — accepts new fine-grained reasons
+   *  (`recovery_capped`, `doom_loop`, `compact_failure`). Existing consumers
+   *  that switch only on `'completed' | 'error'` keep working. */
+  reason: import('../core/runner.js').StopReason;
   finalText: string;
   usage: ChatUsage;
   /** Path strings flagged by the path-scope wrapper, in arrival order. */
@@ -56,6 +59,15 @@ export interface SubagentParent {
    * for the Input tab in the session details modal.
    */
   sessionStore?: import('../sessions/store.js').SessionStore;
+  /**
+   * PR-6 (R23): when true, the parent is running with Agent Loop v2 enabled
+   * and the subagent inherits the v2 features (pre-read enforcement,
+   * result-content dedup, exp+jitter retry). The runner also appends the
+   * short subagent-specific framing (persistence + don't re-read) to the
+   * provided `systemPrompt`. Default false — subagents keep legacy behaviour
+   * if the parent isn't explicitly v2.
+   */
+  agentLoopV2?: boolean;
 }
 
 /**
@@ -84,20 +96,42 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     projectName: parent.ctx.projectName,
     overlay: parent.ctx.overlay,
     signal: parent.ctx.signal,
+    // Inherit the parent's "unrestricted tool output" toggle so MCP/code_exec
+    // calls inside the subagent honour the same per-call truncation policy
+    // as the main session (with the smaller subagent ceiling enforced by
+    // the runner's `effectivePushTimeCap`).
+    unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput,
     // Intentionally NO `runner` — interactive tools fail inside the subagent.
     planMode: false,
   };
 
+  // PR-6 (R23): when v2 is on, append the subagent-specific framing to the
+  // domain-specific system prompt so the subagent inherits the persistence
+  // + anti-rerun discipline. The active-context pointer is intentionally
+  // omitted because subagents don't receive that injection.
+  const v2Framing = parent.agentLoopV2
+    ? (await import('../core/system-prompt.js')).buildSubagentLoopFraming()
+    : '';
+  const finalSystemPrompt = spec.systemPrompt + v2Framing;
+
   const subRunner = new CoderRunner({
     provider: parent.provider,
     registry: subRegistry,
-    systemPrompt: spec.systemPrompt,
+    systemPrompt: finalSystemPrompt,
     toolContext: subContext,
     initialMessages: spec.initialMessages,
     maxTurns: spec.maxTurns,
     pushTimeCap: spec.pushTimeCap ?? SUBAGENT_TOOL_RESULT_CAP,
     sessionId: parent.sessionId,
     isSubagent: true,
+    // PR-6: subagent inherits the parent's v2 flag so pre-read cap, result-
+    // dup cap, and exp+jitter retry apply inside the subagent loop too.
+    agentLoopV2: parent.agentLoopV2,
+    // Inherit the parent's "unrestricted tool output" toggle so the subagent's
+    // `effectivePushTimeCap` is bumped to UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP
+    // (≈500 KB) instead of the default 12 KB when the parent session has the
+    // toggle on. Coherent with the user intent: "this whole session is free."
+    unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput ?? false,
   });
 
   if (parent.ctx.signal) {
@@ -477,19 +511,32 @@ export async function runParallelAgents(
       projectName: parent.ctx.projectName,
       overlay: parent.ctx.overlay,
       signal: parent.ctx.signal,
+      // Inherit the parent's "unrestricted tool output" toggle so MCP /
+      // code_exec calls inside parallel agents honour the same per-call
+      // truncation policy as the main session.
+      unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput,
       planMode: false,
     };
+
+    // PR-6 (R23): same v2 framing append as in runSubagent above.
+    const v2Framing = parent.agentLoopV2
+      ? (await import('../core/system-prompt.js')).buildSubagentLoopFraming()
+      : '';
+    const finalSystemPrompt = systemPrompt + v2Framing;
 
     const subRunner = new CoderRunner({
       provider: parent.provider,
       registry: subRegistry,
-      systemPrompt,
+      systemPrompt: finalSystemPrompt,
       toolContext: subContext,
       initialMessages: [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
       maxTurns: spec.maxTurns,
       pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
       sessionId: parent.sessionId,
       isSubagent: true,
+      agentLoopV2: parent.agentLoopV2,
+      // Subagent inherits parent's unrestricted-tool-output toggle.
+      unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput ?? false,
     });
 
     // Track tool calls for progress reporting.

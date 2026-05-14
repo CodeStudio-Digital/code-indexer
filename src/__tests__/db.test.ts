@@ -57,14 +57,23 @@ describe('CodeIndexDB', () => {
 
   describe('migrations', () => {
     it('applies all migrations on a fresh DB', () => {
-      expect(db.getSchemaVersion()).toBe(71);
+      expect(db.getSchemaVersion()).toBe(79);
     });
 
     it('re-opening an existing DB does not re-apply migrations', () => {
       db.close();
       const db2 = new CodeIndexDB(dbPath);
-      expect(db2.getSchemaVersion()).toBe(71);
+      expect(db2.getSchemaVersion()).toBe(79);
       db2.close();
+    });
+
+    it('coder_messages has is_meta column from migration 075 (PR-4)', () => {
+      // @ts-expect-error - accessing internal for test
+      const cols = db.db.prepare("PRAGMA table_info(coder_messages)").all() as {
+        name: string;
+      }[];
+      const names = cols.map((c) => c.name);
+      expect(names).toContain('is_meta');
     });
 
     it('coder_sessions has goal_* columns from migration 068', () => {

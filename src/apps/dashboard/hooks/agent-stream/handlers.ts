@@ -1,6 +1,8 @@
 import type {
   AgentStatus,
   AgentsGroup,
+  PipelineNodeRuntimeStatus,
+  PipelineRuntimeState,
   StreamBlock,
   StreamTask,
   StreamTaskMode,
@@ -108,11 +110,25 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         type: 'tasks',
         tasks: { tool_use_id: d.tool_use_id, summary: d.summary, tasks: d.tasks, version: d.version },
       });
+      // Bump the sidebar tick so the SessionStateSidebar refetches state-summary
+      // immediately, instead of waiting for the per-turn refresh.
+      updateSession(sid, (cur) => ({ sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
       flush();
     },
 
-    task_started: (data, eventName) => patchTask(blocks, flush, data, eventName),
-    task_finished: (data, eventName) => patchTask(blocks, flush, data, eventName),
+    task_started: (data, eventName) => {
+      patchTask(blocks, flush, data, eventName);
+      updateSession(sid, (cur) => ({ sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
+    },
+    task_finished: (data, eventName) => {
+      patchTask(blocks, flush, data, eventName);
+      updateSession(sid, (cur) => ({ sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
+    },
+    task_updated: () => {
+      // Surgical patch via update_task tool — sidebar must refetch so the
+      // user sees status/files/title changes immediately, not at turn end.
+      updateSession(sid, (cur) => ({ sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
+    },
 
     agents_group_start: (data) => {
       const d = data as {
@@ -218,10 +234,22 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       updateSession(sid, { indexStatus: d });
     },
 
+    /**
+     * Bumped whenever the SnapshotRecorder captures a new baseline or
+     * appends to an existing one. The Snapshots panel keys its refetch on
+     * this counter so the diff list updates as the agent writes files.
+     */
+    session_snapshot_changed: () => {
+      updateSession(sid, (cur) => ({ snapshotTick: cur.snapshotTick + 1 }));
+    },
+
     todos_updated: (data) => {
       const d = data as { todos?: TodoItem[] };
       const todos = Array.isArray(d.todos) ? d.todos : [];
-      updateSession(sid, { todos });
+      // Bump the sidebar tick alongside the todos patch so consumers that key
+      // off refreshKey (state-summary fetch, banners) update in lockstep with
+      // the prop-driven todo render.
+      updateSession(sid, (cur) => ({ todos, sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
     },
 
     message_complete: (data) => {
@@ -278,6 +306,193 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     },
   };
 }
+
+// ─── Chat pipeline events (PR-3) ─────────────────────────────────
+// Kept separately exported so the dedicated `usePipelineStream` hook
+// can wire them into a long-lived SSE connection without entangling
+// chat-turn state.
+
+interface PipelineHandlerContext {
+  sid: number;
+  updateSession: UpdateSession;
+}
+
+export function createPipelineEventHandlers(
+  ctx: PipelineHandlerContext,
+): Record<string, EventHandler> {
+  const { sid, updateSession } = ctx;
+  return {
+    pipeline_started: (data) => {
+      const d = data as { executionId: number; pipelineId: number; startNodeId?: string };
+      updateSession(sid, {
+        pipelineRuntime: {
+          executionId: d.executionId,
+          pipelineId: d.pipelineId,
+          status: 'running',
+          currentNodeId: d.startNodeId ?? null,
+          nodes: d.startNodeId ? { [d.startNodeId]: { status: 'pending' } } : {},
+          error: null,
+        },
+      });
+    },
+
+    pipeline_node_started: (data) => {
+      const d = data as {
+        executionId: number;
+        nodeId: string;
+        nodeLabel?: string;
+        kind?: 'agent' | 'validate';
+      };
+      updateSession(sid, (cur) => {
+        const cur_runtime = cur.pipelineRuntime;
+        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
+        return {
+          pipelineRuntime: {
+            ...cur_runtime,
+            currentNodeId: d.nodeId,
+            nodes: {
+              ...cur_runtime.nodes,
+              [d.nodeId]: {
+                ...(cur_runtime.nodes[d.nodeId] ?? {}),
+                status: 'running' as PipelineNodeRuntimeStatus,
+                label: d.nodeLabel ?? cur_runtime.nodes[d.nodeId]?.label,
+                kind: d.kind ?? cur_runtime.nodes[d.nodeId]?.kind,
+              },
+            },
+          } satisfies PipelineRuntimeState,
+        };
+      });
+    },
+
+    pipeline_node_completed: (data) => {
+      const d = data as {
+        executionId: number;
+        nodeId: string;
+        outcome?: string | null;
+        verdict?: 'pass' | 'fail' | 'review' | null;
+        outputPreview?: string;
+      };
+      updateSession(sid, (cur) => {
+        const cur_runtime = cur.pipelineRuntime;
+        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
+        return {
+          pipelineRuntime: {
+            ...cur_runtime,
+            nodes: {
+              ...cur_runtime.nodes,
+              [d.nodeId]: {
+                ...(cur_runtime.nodes[d.nodeId] ?? {}),
+                status: 'completed',
+                verdict: d.verdict ?? null,
+                outcome: d.outcome ?? null,
+                outputPreview: d.outputPreview,
+              },
+            },
+          } satisfies PipelineRuntimeState,
+        };
+      });
+    },
+
+    pipeline_node_failed: (data) => {
+      const d = data as { executionId: number; nodeId: string; error?: string };
+      updateSession(sid, (cur) => {
+        const cur_runtime = cur.pipelineRuntime;
+        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
+        return {
+          pipelineRuntime: {
+            ...cur_runtime,
+            nodes: {
+              ...cur_runtime.nodes,
+              [d.nodeId]: {
+                ...(cur_runtime.nodes[d.nodeId] ?? {}),
+                status: 'failed',
+                error: d.error,
+              },
+            },
+          } satisfies PipelineRuntimeState,
+        };
+      });
+    },
+
+    pipeline_paused: (data) => {
+      const d = data as { executionId: number; nodeId?: string | null };
+      updateSession(sid, (cur) => {
+        const cur_runtime = cur.pipelineRuntime;
+        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
+        return {
+          pipelineRuntime: {
+            ...cur_runtime,
+            status: 'paused',
+            currentNodeId: d.nodeId ?? cur_runtime.currentNodeId,
+          },
+        };
+      });
+    },
+
+    pipeline_resumed: (data) => {
+      const d = data as { executionId: number; nodeId?: string };
+      updateSession(sid, (cur) => {
+        const cur_runtime = cur.pipelineRuntime;
+        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
+        return {
+          pipelineRuntime: {
+            ...cur_runtime,
+            status: 'running',
+            currentNodeId: d.nodeId ?? cur_runtime.currentNodeId,
+          },
+        };
+      });
+    },
+
+    pipeline_completed: (data) => {
+      const d = data as { executionId: number };
+      updateSession(sid, (cur) => {
+        const cur_runtime = cur.pipelineRuntime;
+        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
+        return {
+          pipelineRuntime: {
+            ...cur_runtime,
+            status: 'completed',
+            currentNodeId: null,
+          },
+        };
+      });
+    },
+
+    pipeline_aborted: (data) => {
+      const d = data as { executionId: number; reason?: string | null };
+      updateSession(sid, (cur) => {
+        const cur_runtime = cur.pipelineRuntime;
+        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
+        return {
+          pipelineRuntime: {
+            ...cur_runtime,
+            status: 'aborted',
+            currentNodeId: null,
+            error: d.reason ?? null,
+          },
+        };
+      });
+    },
+
+    pipeline_failed: (data) => {
+      const d = data as { executionId: number; error?: string };
+      updateSession(sid, (cur) => {
+        const cur_runtime = cur.pipelineRuntime;
+        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
+        return {
+          pipelineRuntime: {
+            ...cur_runtime,
+            status: 'failed',
+            currentNodeId: null,
+            error: d.error ?? null,
+          },
+        };
+      });
+    },
+  };
+}
+
 
 function patchTask(
   blocks: StreamBlock[],

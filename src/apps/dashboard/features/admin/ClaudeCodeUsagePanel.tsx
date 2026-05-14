@@ -28,6 +28,19 @@ interface ClaudeCodeRateLimitSnapshot {
   buckets: ClaudeCodeRateLimitBucket[];
 }
 
+interface ClaudeCodeLastResponseSnapshot {
+  checkedAt: string;
+  status: number;
+  ok: boolean;
+  method: string;
+  path: string;
+  requestId: string | null;
+  retryAfter: string | null;
+  attempt: 'first' | 'retry';
+  xShouldRetry?: string | null;
+  bodyPreview?: string | null;
+}
+
 interface ClaudeCodeUsage {
   packageVersion: string;
   authType: string;
@@ -63,6 +76,7 @@ interface ClaudeCodeUsage {
     hasError: boolean;
   };
   rateLimits: ClaudeCodeRateLimitSnapshot | null;
+  lastResponse: ClaudeCodeLastResponseSnapshot | null;
   limitProbeError: string | null;
 }
 
@@ -279,6 +293,57 @@ export function ClaudeCodeUsagePanel({ providerId }: ClaudeCodeUsagePanelProps) 
           <div className="text-xs text-muted-foreground">
             {t('claudeCode.limitsUnavailable')}
           </div>
+        )}
+      </div>
+
+      <div className="space-y-2 rounded-md border border-border/70 p-3">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          {t('claudeCode.lastResponseTitle')}
+          {usage.lastResponse ? (
+            <Badge variant={usage.lastResponse.ok ? 'success' : 'destructive'}>
+              {t('claudeCode.lastResponseStatus', {
+                status: usage.lastResponse.status,
+                attempt: usage.lastResponse.attempt,
+              })}
+            </Badge>
+          ) : null}
+        </div>
+        {usage.lastResponse ? (
+          <div className="grid gap-2 text-xs sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <div className="text-muted-foreground">
+                {usage.lastResponse.method} {usage.lastResponse.path}
+              </div>
+            </div>
+            {usage.lastResponse.requestId ? (
+              <div>
+                <div className="text-muted-foreground">{t('claudeCode.lastResponseRequestId')}</div>
+                <div className="font-mono truncate">{usage.lastResponse.requestId}</div>
+              </div>
+            ) : null}
+            {usage.lastResponse.retryAfter ? (
+              <div>
+                <div className="text-muted-foreground">{t('claudeCode.lastResponseRetryAfter')}</div>
+                <div className="font-mono truncate">{usage.lastResponse.retryAfter}</div>
+              </div>
+            ) : null}
+            {usage.lastResponse.xShouldRetry ? (
+              <div>
+                <div className="text-muted-foreground">{t('claudeCode.lastResponseShouldRetry')}</div>
+                <div className="font-mono truncate">{usage.lastResponse.xShouldRetry}</div>
+              </div>
+            ) : null}
+            {usage.lastResponse.bodyPreview ? (
+              <div className="sm:col-span-2">
+                <div className="text-muted-foreground">{t('claudeCode.lastResponseBody')}</div>
+                <pre className="whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px]">
+                  {usage.lastResponse.bodyPreview}
+                </pre>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground">{t('claudeCode.lastResponseNone')}</div>
         )}
       </div>
     </div>

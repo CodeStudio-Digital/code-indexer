@@ -9,6 +9,8 @@ import {
   setFallbackProvider as setFallbackProviderApi,
   setKimiCodeThinkingMode as setKimiCodeThinkingModeApi,
   setModelReasoningLevel,
+  setModelContextWindow as setModelContextWindowApi,
+  backfillContextWindows as backfillContextWindowsApi,
   setSubagentTarget as setSubagentTargetApi,
   testProvider,
   toggleModelEnabled,
@@ -116,6 +118,44 @@ export function useAdminProviders() {
     }
   };
 
+  const setModelContextWindow = async (
+    providerId: string,
+    modelId: string,
+    mode: string,
+    value: number | null,
+  ) => {
+    try {
+      await setModelContextWindowApi(providerId, modelId, mode, value);
+      await loadModels(providerId);
+    } catch (e) {
+      await notify({
+        title: 'Context window update failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const backfillContextWindows = async () => {
+    try {
+      const result = await backfillContextWindowsApi();
+      // Refresh whatever provider is expanded so the new values render.
+      const providersToRefresh = Object.keys(models);
+      await Promise.all(providersToRefresh.map((id) => loadModels(id)));
+      await notify({
+        title: 'Backfill complete',
+        description: `${result.updated} updated, ${result.still_null} still unknown (of ${result.total})`,
+        variant: 'success',
+      });
+    } catch (e) {
+      await notify({
+        title: 'Context window backfill failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
   const setSubagentTarget = async (
     providerId: string,
     subagentProviderId: string | null,
@@ -180,6 +220,8 @@ export function useAdminProviders() {
     refresh,
     toggleModel,
     setModelEffort,
+    setModelContextWindow,
+    backfillContextWindows,
     setSubagentTarget,
     setKimiCodeThinkingMode,
     setFallback,

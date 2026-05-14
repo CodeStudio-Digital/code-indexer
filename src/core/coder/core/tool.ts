@@ -72,6 +72,23 @@ export interface CoderTool {
    * parallel, even if `parallelSafe` is otherwise `true`.
    */
   interactive?: boolean;
+  /**
+   * Tool legitimately produces different results when called repeatedly
+   * with identical args because it polls / awaits external state changes.
+   * Examples: `wait_for_compile_clean` (Unity assembly state), `wait_agents`
+   * (subordinate terminal status), tail-style log readers. Marking the tool
+   * `repeatable: true` exempts it from the per-arg duplicate-call cap (the
+   * runner's "Refused: called with these exact arguments N times" guard) —
+   * because for these tools, repeated identical calls are the entire use
+   * case, not a stuck-loop signal.
+   *
+   * Defaults to `false`. The dup-call cap remains active for all other
+   * tools, including MCP external tools that don't follow the
+   * `wait_for_/await_/poll_/tail_/monitor_` naming convention (which the
+   * MCP loader auto-flags). Only set this when repeated calls with
+   * identical args are an expected workflow, not a regression.
+   */
+  repeatable?: boolean;
 }
 
 export interface ToolContext {
@@ -88,6 +105,15 @@ export interface ToolContext {
    * can fetch the full content later. Undefined inside subagents and tests.
    */
   toolOutputStore?: import('../overlay/tool-output-store.js').ToolOutputStore;
+  /**
+   * Per-session "unrestricted tool output" flag. When true, the per-tool-call
+   * truncation caps (`MCP_OUTPUT_HARD_CAP` in mcp-bridge, `MAX_OUTPUT_BYTES` in
+   * code_exec, `READ_FILE_HARD_MAX` clamp on read_file) are raised to a high
+   * safety ceiling instead of using the production defaults. Auto-compaction
+   * still runs, so this is not the same as "no caps at all". Mirrors the
+   * `coder_sessions.unrestricted_tool_output` column.
+   */
+  unrestrictedToolOutput?: boolean;
   /** Optional abort signal for long-running operations. */
   signal?: AbortSignal;
   /** Back-reference to the runner so interactive tools (submit_plan, ask_user)
@@ -132,7 +158,7 @@ export interface ToolContext {
   updateTaskStatus?: (
     taskId: string,
     patch: Partial<import('../sessions/types.js').CoderTask>,
-  ) => void;
+  ) => import('../sessions/types.js').TasksState | null;
   getTasksState?: () => import('../sessions/types.js').TasksState | null;
   /**
    * Optional persistence sinks for the goal tools (`create_goal`,

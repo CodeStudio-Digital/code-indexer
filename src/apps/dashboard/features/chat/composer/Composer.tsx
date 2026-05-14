@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Paperclip, Sparkles, X } from 'lucide-react';
+import { Brain, FileText, Paperclip, Sparkles, X } from 'lucide-react';
 import { Textarea } from '../../../components/ui/textarea.js';
 import type { AgentAttachment, EnrichedProviderModel, ProviderOption } from '../types.js';
 import { fileToAttachment } from '../utils.js';
@@ -23,9 +23,20 @@ export interface ComposerHandle {
 }
 
 interface ComposerProps {
-  onSend: (text: string, attachments: AgentAttachment[]) => void;
+  onSend: (text: string, attachments: AgentAttachment[], selectedSkillIds?: string[]) => void;
   onAbort: () => void;
   streaming: boolean;
+  /** Project file paths chosen in the sidebar; injected into the prompt
+   *  as a `<file_refs>` block on send and cleared via `onClearPicks`. */
+  filePicks?: string[];
+  onRemovePick?: (path: string) => void;
+  onClearPicks?: () => void;
+  /** Skill ids chosen in the sidebar; forwarded to the server which prepends
+   *  their interpolated prompt bodies inside an `<active_skills>` block on
+   *  the user message. Cleared via `onClearSkillPicks` after send. */
+  skillPicks?: string[];
+  onRemoveSkillPick?: (id: string) => void;
+  onClearSkillPicks?: () => void;
   agent: AgentId;
   setAgent: (v: AgentId) => void;
   provider: string;
@@ -39,6 +50,14 @@ interface ComposerProps {
   /** Per-session temperature override. `null` = inherit from role/agent/default. */
   temperature: number | null;
   setTemperature: (v: number | null) => void;
+  /**
+   * Per-session "unrestricted tool output" toggle (migration 078). When true,
+   * the runner / mcp-bridge / code_exec lift their per-tool-call truncation
+   * caps to a high safety ceiling (≈1 MB). Useful for Unity / large file
+   * reads. Auto-compaction still runs.
+   */
+  unrestrictedOutput?: boolean;
+  setUnrestrictedOutput?: (v: boolean) => void;
   sessionId?: number | null;
   onInvokeSkill?: (skillId: string, input: string) => void;
   /** Thinking mode toggle — only shown when provider supports it. */
@@ -50,6 +69,14 @@ interface ComposerProps {
   fallbackModel?: string | null;
   onFallbackChange?: (provider: string | null, model: string | null) => void;
   getModelsForProvider?: (providerId: string) => EnrichedProviderModel[];
+  /**
+   * When set, the send button flips to "Run pipeline" and `onRunPipeline`
+   * receives the input text. Pipeline mode bypasses the chat /messages
+   * endpoint and posts to `/api/coder/sessions/:id/pipelines/:pid/start`.
+   */
+  selectedPipelineId?: number | null;
+  setSelectedPipelineId?: (v: number | null) => void;
+  onRunPipeline?: (pipelineId: number, initialInput: string) => Promise<void> | void;
 }
 
 export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
@@ -133,6 +160,21 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
     const handleSend = useCallback(() => {
       if (!input.trim()) return;
       const text = input;
+      const picks = props.filePicks ?? [];
+      const skillIds = props.skillPicks ?? [];
+
+      // Pipeline mode: route the raw input to the pipeline starter
+      // instead of the chat /messages endpoint. Picks and attachments
+      // aren't forwarded — pipelines are always text-driven for MVP.
+      if (props.selectedPipelineId != null && props.onRunPipeline) {
+        const pid = props.selectedPipelineId;
+        setInput('');
+        setAttachments([]);
+        props.onClearPicks?.();
+        props.onClearSkillPicks?.();
+        void props.onRunPipeline(pid, text);
+        return;
+      }
 
       // Intercept slash commands: /command args → invoke skill
       if (text.startsWith('/') && props.onInvokeSkill && props.sessionId) {
@@ -143,21 +185,117 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
         if (match) {
           setInput('');
           setAttachments([]);
+          props.onClearPicks?.();
+          props.onClearSkillPicks?.();
           props.onInvokeSkill(match.id, args);
           return;
         }
       }
 
+      const finalText = picks.length > 0
+        ? `<file_refs>\n${picks.map((p) => `- ${p}`).join('\n')}\n</file_refs>\n\n${text}`
+        : text;
       const atts = attachments;
       setInput('');
       setAttachments([]);
-      props.onSend(text, atts);
-    }, [input, attachments, slashCommands, props.onSend, props.onInvokeSkill, props.sessionId]);
+      props.onClearPicks?.();
+      props.onClearSkillPicks?.();
+      props.onSend(finalText, atts, skillIds.length > 0 ? skillIds : undefined);
+    }, [input, attachments, slashCommands, props.onSend, props.onInvokeSkill, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline]);
+
+    const filePicks = props.filePicks ?? [];
+    const PICKS_VISIBLE = 3;
+    const visiblePicks = filePicks.slice(0, PICKS_VISIBLE);
+    const overflowPicks = filePicks.slice(PICKS_VISIBLE);
+    const [picksOpen, setPicksOpen] = useState(false);
+    const picksRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+      if (!picksOpen) return;
+      const onDocClick = (e: MouseEvent) => {
+        if (picksRef.current && !picksRef.current.contains(e.target as Node)) {
+          setPicksOpen(false);
+        }
+      };
+      document.addEventListener('mousedown', onDocClick);
+      return () => document.removeEventListener('mousedown', onDocClick);
+    }, [picksOpen]);
+
+    const skillPicks = props.skillPicks ?? [];
 
     return (
       <div className="border-t bg-card p-4">
-        {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-3">
+        {(attachments.length > 0 || filePicks.length > 0 || skillPicks.length > 0) && (
+          <div className="flex flex-wrap items-center gap-1.5 mb-3">
+            {skillPicks.map((id) => (
+              <div
+                key={`skill-${id}`}
+                className="group inline-flex items-center gap-1 h-6 pl-1.5 pr-1 rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400 text-[11px] max-w-[180px]"
+                title={id}
+              >
+                <Sparkles className="h-3 w-3 shrink-0" />
+                <span className="truncate">{id}</span>
+                <button
+                  type="button"
+                  onClick={() => props.onRemoveSkillPick?.(id)}
+                  className="shrink-0 p-0.5 rounded hover:bg-violet-500/20 text-violet-500/70 hover:text-violet-600 dark:hover:text-violet-300"
+                  title={t('composer.remove')}
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </div>
+            ))}
+            {visiblePicks.map((p) => {
+              const name = p.split('/').pop() ?? p;
+              return (
+                <div key={`pick-${p}`} className="group inline-flex items-center gap-1 h-6 pl-1.5 pr-1 rounded-md border border-info/30 bg-info/10 text-info text-[11px] max-w-[180px]" title={p}>
+                  <FileText className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{name}</span>
+                  <button
+                    type="button"
+                    onClick={() => props.onRemovePick?.(p)}
+                    className="shrink-0 p-0.5 rounded hover:bg-info/20 text-info/70 hover:text-info"
+                    title={t('composer.remove')}
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </div>
+              );
+            })}
+            {overflowPicks.length > 0 && (
+              <div className="relative" ref={picksRef}>
+                <button
+                  type="button"
+                  onClick={() => setPicksOpen((v) => !v)}
+                  className="inline-flex items-center h-6 px-2 rounded-md border border-info/30 bg-info/10 text-info text-[11px] hover:bg-info/20"
+                >
+                  {t('composer.morePicks', { count: overflowPicks.length })}
+                </button>
+                {picksOpen && (
+                  <div className="absolute bottom-full left-0 mb-1 z-50 w-64 max-h-64 overflow-y-auto rounded-lg border bg-popover text-popover-foreground shadow-md p-1">
+                    <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                      {t('composer.allPicks')} ({filePicks.length})
+                    </div>
+                    {filePicks.map((p) => {
+                      const name = p.split('/').pop() ?? p;
+                      return (
+                        <div key={`menu-${p}`} className="group flex items-center gap-1.5 px-2 py-1 text-[11px] rounded hover:bg-muted/60" title={p}>
+                          <FileText className="h-3 w-3 shrink-0 text-info" />
+                          <span className="truncate flex-1 min-w-0">{name}</span>
+                          <button
+                            type="button"
+                            onClick={() => props.onRemovePick?.(p)}
+                            className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                            title={t('composer.remove')}
+                          >
+                            <X className="h-2.5 w-2.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
             {attachments.map((a, i) => {
               const isImg = a.mediaType.startsWith('image/') && a.base64;
               return (
@@ -295,10 +433,15 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             setMaxTurns={props.setMaxTurns}
             temperature={props.temperature}
             setTemperature={props.setTemperature}
+            unrestrictedOutput={props.unrestrictedOutput ?? false}
+            setUnrestrictedOutput={props.setUnrestrictedOutput}
             fallbackProvider={props.fallbackProvider ?? null}
             fallbackModel={props.fallbackModel ?? null}
             onFallbackChange={props.onFallbackChange ?? (() => {})}
             getModelsForProvider={props.getModelsForProvider ?? (() => [])}
+            sessionId={props.sessionId ?? null}
+            selectedPipelineId={props.selectedPipelineId ?? null}
+            setSelectedPipelineId={props.setSelectedPipelineId}
           />
         </div>
       </div>

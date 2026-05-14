@@ -21,5 +21,6 @@ export const deepseek = defineProvider({
       apiKey: creds.apiKey,
       baseURL: creds.baseURL ?? 'https://api.deepseek.com/v1',
       model: model ?? 'deepseek-chat',
+      vendor: 'deepseek',
     }),
 });

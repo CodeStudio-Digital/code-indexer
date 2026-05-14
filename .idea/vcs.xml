@@ -2,8 +2,7 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/data/virtual-projects/36d2f456-64c1-42f8-9561-4e78cf6c18bc" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/data/virtual-projects/9e0a60e4-2815-4b53-8318-0d277debd694" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/data/virtual-projects/b5872d8b-5b09-4273-8ee2-c2c4f6c22f08" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/data/virtual-projects/ae21a667-24cf-47d7-bf53-ba9a9c3f4a88" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/extensions/unity-scene-analyzer" vcs="Git" />
   </component>
 </project>

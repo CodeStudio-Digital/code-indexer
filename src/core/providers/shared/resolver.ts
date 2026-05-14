@@ -37,6 +37,10 @@ export async function resolveCreds(
       return {
         apiKey: cfg?.api_key ?? pickEnv(def.envVars),
         baseURL: cfg?.base_url ?? def.defaultBaseURL,
+        // Forward the cfg.extra blob so api-key shapes that need
+        // per-instance config (e.g. Cloudflare's account_id) can read it
+        // off ResolvedCreds.extra without a kind-specific branch here.
+        extra: cfg?.extra,
       };
 
     case 'oauth':

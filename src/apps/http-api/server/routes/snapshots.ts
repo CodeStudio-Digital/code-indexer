@@ -28,14 +28,14 @@ export function mountSnapshotsRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/projects/:id/snapshots', async (c) => {
     const projectId = parseIdParam(c);
     const body = await c.req.json<CreateSnapshotBody>();
-    const snap = snapshotService.create(projectId, body);
-    return c.json(snap, 201);
+    const result = await snapshotService.create(projectId, body);
+    return c.json({ ...result.snap, embed_error: result.embedError ?? null }, 201);
   });
 
   app.put('/api/snapshots/:id', async (c) => {
     const body = await c.req.json<UpdateSnapshotBody>();
-    snapshotService.update(parseIdParam(c), body);
-    return c.json({ ok: true });
+    const result = await snapshotService.update(parseIdParam(c), body);
+    return c.json({ ok: true, embed_error: result.embedError ?? null });
   });
 
   app.delete('/api/snapshots/:id', (c) => {

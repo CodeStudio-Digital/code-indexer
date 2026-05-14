@@ -2,9 +2,10 @@
  * Claude Code OAuth and wire helpers.
  *
  * Source of truth checked at implementation time:
- *   @anthropic-ai/claude-code@2.1.126
- *   build: 2026-04-30T16:01:00Z
- *   git:   e44c1d97bd39dbf2525164f3fd33be6edbf1661e
+ *   @anthropic-ai/claude-code@2.1.133
+ *   build: 2026-05-07T20:19:32Z
+ *   git:   cba57ffec4f5d5c279b5f66ea9d7a2544fa410ec
+ *   previous: 2.1.126 (build 2026-04-30T16:01:00Z, sha e44c1d9)
  *
  * The official client uses PKCE OAuth and then calls Anthropic's normal
  * `/v1/messages` API with either:
@@ -20,9 +21,9 @@ import nodeFetch, { type RequestInit as NodeFetchRequestInit } from 'node-fetch'
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import type { ProviderStore } from '../../../store/provider-store.js';
 
-export const CLAUDE_CODE_PACKAGE_VERSION = '2.1.126';
-export const CLAUDE_CODE_BUILD_TIME = '2026-04-30T16:01:00Z';
-export const CLAUDE_CODE_GIT_SHA = 'e44c1d97bd39dbf2525164f3fd33be6edbf1661e';
+export const CLAUDE_CODE_PACKAGE_VERSION = '2.1.133';
+export const CLAUDE_CODE_BUILD_TIME = '2026-05-07T20:19:32Z';
+export const CLAUDE_CODE_GIT_SHA = 'cba57ffec4f5d5c279b5f66ea9d7a2544fa410ec';
 
 export const CLAUDE_CODE_BASE_URL =
   process.env.CLAUDE_CODE_API_BASE_URL ?? 'https://api.anthropic.com';
@@ -38,7 +39,8 @@ export const CLAUDE_CODE_CONTEXT_MANAGEMENT_BETA = 'context-management-2025-06-2
 export const CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA = 'prompt-caching-scope-2026-01-05';
 export const CLAUDE_CODE_CONTEXT_1M_BETA = 'context-1m-2025-08-07';
 export const CLAUDE_CODE_EFFORT_BETA = 'effort-2025-11-24';
-export const CLAUDE_CODE_TOKEN_EFFICIENT_TOOLS_BETA = 'token-efficient-tools-2026-03-28';
+export const CLAUDE_CODE_TOKEN_EFFICIENT_TOOLS_BETA = 'token-efficient-tools-2025-02-19';
+export const CLAUDE_CODE_EXTENDED_CACHE_TTL_BETA = 'extended-cache-ttl-2025-04-11';
 export const CLAUDE_CODE_ANTHROPIC_VERSION = '2023-06-01';
 export const CLAUDE_CODE_SMALL_FAST_MODEL =
   process.env.ANTHROPIC_SMALL_FAST_MODEL ?? 'claude-haiku-4-5-20251001';
@@ -187,7 +189,7 @@ export interface ResolveClaudeCodeModelOptions {
   effort?: ClaudeCodeEffort | 'auto' | null;
   /**
    * True when the request will include tools — gates the
-   * `token-efficient-tools-2026-03-28` beta. The flag has no effect for
+   * `token-efficient-tools-2025-02-19` beta. The flag has no effect for
    * tool-less requests since the beta only changes tool-call serialization.
    */
   hasTools?: boolean;
@@ -270,6 +272,10 @@ export interface ClaudeCodeLastResponseSnapshot {
   betaHeader: string | null;
   rateLimits: ClaudeCodeRateLimitSnapshot | null;
   attempt: 'first' | 'retry';
+  /** Anthropic returns this on retryable errors. Null when absent or 2xx. */
+  xShouldRetry?: string | null;
+  /** First ~200 chars of the response body for non-2xx responses. Null on 2xx. */
+  bodyPreview?: string | null;
 }
 
 const CLAUDE_CODE_RATE_LIMIT_BUCKETS = [
@@ -751,7 +757,7 @@ export function getClaudeCodeBetasForModel(
   }
   if (experimentalBetasEnabled) betas.push(CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA);
   if (opts?.hasEffort) betas.push(CLAUDE_CODE_EFFORT_BETA);
-  // token-efficient-tools-2026-03-28 only matters when tools are present and
+  // token-efficient-tools-2025-02-19 only matters when tools are present and
   // the request runs against a modern Claude 4+ model. The upstream bundle
   // registers it but doesn't push it yet (forward-looking); we opt in here
   // because it shrinks tool-call serialization with no behavioral downside,
@@ -1012,14 +1018,17 @@ export function parseClaudeCodeRateLimitHeaders(
 ): ClaudeCodeRateLimitSnapshot | null {
   if (!hasClaudeCodeRateLimitHeaders(headers)) return null;
 
-  const status = headers.get('anthropic-ratelimit-unified-status') || 'allowed';
-  const resetsAt = normalizeEpochSeconds(
-    headerNumber(headers, 'anthropic-ratelimit-unified-reset'),
-  );
-  const rateLimitType =
+  const representativeClaim =
     headers.get('anthropic-ratelimit-unified-representative-claim') || null;
   const overageStatus =
     headers.get('anthropic-ratelimit-unified-overage-status') || null;
+  const status =
+    headers.get('anthropic-ratelimit-unified-status') ||
+    (representativeClaim || overageStatus ? 'rejected' : 'allowed');
+  const resetsAt = normalizeEpochSeconds(
+    headerNumber(headers, 'anthropic-ratelimit-unified-reset'),
+  );
+  const rateLimitType = representativeClaim;
   const overageResetsAt = normalizeEpochSeconds(
     headerNumber(headers, 'anthropic-ratelimit-unified-overage-reset'),
   );
@@ -1049,7 +1058,12 @@ export function parseClaudeCodeRateLimitHeaders(
     }];
   });
 
-  const activeBucket = buckets.find((bucket) => bucket.key === rateLimitType);
+  const activeBucketDef = CLAUDE_CODE_RATE_LIMIT_BUCKETS.find(
+    (bucket) => bucket.key === rateLimitType || bucket.claim === rateLimitType,
+  );
+  const activeBucket = activeBucketDef
+    ? buckets.find((bucket) => bucket.key === activeBucketDef.key)
+    : undefined;
   const fallbackUtilization =
     buckets.length > 0 ? Math.max(...buckets.map((bucket) => bucket.utilization)) : null;
 
@@ -1159,7 +1173,7 @@ function safeRequestBodyFields(body: BodyInit | null | undefined): {
   }
 }
 
-function storeClaudeCodeLastResponse(
+async function storeClaudeCodeLastResponse(
   store: ProviderStore,
   providerId: string,
   response: Response,
@@ -1168,7 +1182,7 @@ function storeClaudeCodeLastResponse(
   headers: Headers,
   rateLimits: ClaudeCodeRateLimitSnapshot | null,
   attempt: ClaudeCodeLastResponseSnapshot['attempt'],
-): void {
+): Promise<void> {
   const path = requestPath(requestUrl);
   const shouldStore =
     path.includes('/v1/messages') ||
@@ -1178,6 +1192,16 @@ function storeClaudeCodeLastResponse(
   if (!shouldStore) return;
   const tok = store.getOAuth(providerId);
   if (!tok) return;
+
+  let bodyPreview: string | null = null;
+  if (!response.ok) {
+    try {
+      const text = await response.clone().text();
+      bodyPreview = text.length > 200 ? `${text.slice(0, 200)}…` : text;
+    } catch {
+      bodyPreview = null;
+    }
+  }
 
   const bodyFields = safeRequestBodyFields(init?.body);
   const snapshot: ClaudeCodeLastResponseSnapshot = {
@@ -1200,6 +1224,8 @@ function storeClaudeCodeLastResponse(
     betaHeader: headers.get('anthropic-beta'),
     rateLimits,
     attempt,
+    xShouldRetry: response.headers.get('x-should-retry'),
+    bodyPreview,
   };
 
   store.setOAuth({
@@ -1423,6 +1449,58 @@ export async function claudeCodeFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
+  if (
+    isTruthyEnv(process.env.CLAUDE_CODE_DEBUG_REQUEST) &&
+    String(input).includes('/v1/messages')
+  ) {
+    const headers = new Headers(init?.headers);
+    const authHdr = headers.get('authorization') ?? headers.get('Authorization');
+    const xApiKey = headers.get('x-api-key');
+    const tokenPreview = authHdr
+      ? `${authHdr.slice(0, 16)}…${authHdr.slice(-6)} (len=${authHdr.length})`
+      : null;
+    const apiKeyPreview = xApiKey
+      ? `${xApiKey.slice(0, 12)}…${xApiKey.slice(-4)} (len=${xApiKey.length})`
+      : null;
+    const bodyPreview = (() => {
+      if (typeof init?.body !== 'string') return '<non-string body>';
+      try {
+        const parsed = JSON.parse(init.body) as {
+          model?: string;
+          betas?: string[];
+          system?: unknown;
+        };
+        const sys = Array.isArray(parsed.system)
+          ? (parsed.system as Array<{ type?: string; text?: string }>)
+              .slice(0, 3)
+              .map((b) => `[${b.type ?? '?'}] ${(b.text ?? '').slice(0, 80)}`)
+          : typeof parsed.system === 'string'
+            ? [(parsed.system as string).slice(0, 80)]
+            : ['<no system>'];
+        return JSON.stringify({ model: parsed.model, betas: parsed.betas, systemHead: sys });
+      } catch {
+        return '<unparseable body>';
+      }
+    })();
+    console.error(
+      '[claude-code:debug] base fetch (no retry wrapper)',
+      JSON.stringify(
+        {
+          url: String(input),
+          method: init?.method ?? 'GET',
+          authPath: xApiKey ? 'api_key (x-api-key)' : authHdr ? 'bearer' : 'no-auth',
+          authHeader: tokenPreview,
+          xApiKey: apiKeyPreview,
+          anthropicBeta: headers.get('anthropic-beta'),
+          userAgent: headers.get('user-agent') ?? headers.get('User-Agent'),
+          xApp: headers.get('x-app'),
+          body: bodyPreview,
+        },
+        null,
+        2,
+      ),
+    );
+  }
   return (testFetch ?? fetchWithClaudeCodeNetwork)(input, init);
 }
 
@@ -1705,9 +1783,61 @@ export function createClaudeCodeFetchWithRetry(
       ensureOAuthBetaHeader(firstHeaders);
     }
 
+    if (isTruthyEnv(process.env.CLAUDE_CODE_DEBUG_REQUEST)) {
+      const authHdr = firstHeaders.get('authorization') ?? firstHeaders.get('Authorization');
+      const xApiKey = firstHeaders.get('x-api-key');
+      const tokenPreview = authHdr
+        ? `${authHdr.slice(0, 16)}…${authHdr.slice(-6)} (len=${authHdr.length})`
+        : null;
+      const apiKeyPreview = xApiKey
+        ? `${xApiKey.slice(0, 12)}…${xApiKey.slice(-4)} (len=${xApiKey.length})`
+        : null;
+      const bodyPreview = (() => {
+        if (typeof init?.body !== 'string') return '<non-string body>';
+        try {
+          const parsed = JSON.parse(init.body) as {
+            model?: string;
+            betas?: string[];
+            system?: unknown;
+          };
+          const sys = Array.isArray(parsed.system)
+            ? (parsed.system as Array<{ type?: string; text?: string }>)
+                .slice(0, 3)
+                .map((b) => `[${b.type ?? '?'}] ${(b.text ?? '').slice(0, 80)}`)
+            : typeof parsed.system === 'string'
+              ? [(parsed.system as string).slice(0, 80)]
+              : ['<no system>'];
+          return JSON.stringify({ model: parsed.model, betas: parsed.betas, systemHead: sys });
+        } catch {
+          return '<unparseable body>';
+        }
+      })();
+      console.error(
+        '[claude-code:debug] outgoing request',
+        JSON.stringify(
+          {
+            url: String(url),
+            method: init?.method ?? 'GET',
+            authPath: currentUsesOAuth ? 'claude_ai (Bearer)' : 'api_key',
+            authHeader: tokenPreview,
+            xApiKey: apiKeyPreview,
+            anthropicBeta: firstHeaders.get('anthropic-beta'),
+            userAgent: firstHeaders.get('user-agent') ?? firstHeaders.get('User-Agent'),
+            xApp: firstHeaders.get('x-app'),
+            tokenAuthType: current?.extra?.auth_type ?? null,
+            tokenScopeHasInference: hasInferenceScope(current?.scope),
+            tokenExpiresAt: current?.expires_at ?? null,
+            body: bodyPreview,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+
     const first = await claudeCodeFetch(url, { ...init, headers: firstHeaders });
     const firstRateLimits = storeClaudeCodeRateLimitsFromHeaders(store, providerId, first.headers);
-    storeClaudeCodeLastResponse(
+    await storeClaudeCodeLastResponse(
       store,
       providerId,
       first,
@@ -1727,7 +1857,7 @@ export function createClaudeCodeFetchWithRetry(
     ensureOAuthBetaHeader(headers);
     const retried = await claudeCodeFetch(url, { ...init, headers });
     const retryRateLimits = storeClaudeCodeRateLimitsFromHeaders(store, providerId, retried.headers);
-    storeClaudeCodeLastResponse(
+    await storeClaudeCodeLastResponse(
       store,
       providerId,
       retried,
@@ -1862,6 +1992,7 @@ export async function probeClaudeCodeRateLimits(
       body: JSON.stringify({
         model: resolvedQuotaModel.apiModel,
         max_tokens: 1,
+        ...(authToken ? { system: getClaudeCodeSystemPrefixBlocks() } : {}),
         messages: [{ role: 'user', content: 'quota' }],
         metadata,
       }),

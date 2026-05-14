@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, PanelLeft, PanelLeftClose, MessageSquare, KanbanSquare, Check, Plus, BookText, BookOpen, KeyRound, X, Archive, RotateCcw, Database, FlaskConical, Network, Inbox, FolderOpen } from 'lucide-react';
+import { StopCircle, Users, FolderGit2, Bot, Crown, RefreshCw, AlertCircle, PanelLeft, PanelLeftClose, MessageSquare, KanbanSquare, Check, Plus, BookText, BookOpen, KeyRound, X, Archive, RotateCcw, Database, FlaskConical, Network, Inbox, FolderOpen, GitCompare } from 'lucide-react';
 import { TestsTab } from './tests/TestsTab.js';
 import { QaRunBadge } from './tests/shared/QaRunBadge.js';
 import DocsTab from './DocsTab.js';
@@ -30,6 +30,7 @@ import { ResetSessionDialog } from './ResetSessionDialog.js';
 import { ArchivedTab } from './ArchivedTab.js';
 import { CompanyApiReferenceTab } from './CompanyApiReferenceTab.js';
 import { RoleEditModal, type RoleConfig, type SkillDef } from './RoleEditModal.js';
+import { SnapshotsPanel } from '../snapshots/SnapshotsPanel.js';
 
 interface Project {
   id: number;
@@ -546,6 +547,9 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
               <TabsTrigger value="databases" className="text-xs gap-1">
                 <Database className="h-3 w-3" /> {t('agents:company.databases')}
               </TabsTrigger>
+              <TabsTrigger value="snapshots" className="text-xs gap-1">
+                <GitCompare className="h-3 w-3" /> Snapshots
+              </TabsTrigger>
               <TabsTrigger value="archived" className="text-xs gap-1">
                 <Archive className="h-3 w-3" /> {t('agents:company.archived')}
               </TabsTrigger>
@@ -599,6 +603,9 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
             </TabsContent>
             <TabsContent value="databases" className="flex-1 overflow-hidden mt-0">
               <DatabasesTab companySessionId={sessionId} />
+            </TabsContent>
+            <TabsContent value="snapshots" className="flex-1 overflow-hidden mt-0">
+              <SnapshotsPanel scope="company" sessionId={sessionId} />
             </TabsContent>
             <TabsContent value="archived" className="flex-1 overflow-hidden mt-0">
               <ArchivedTab companySessionId={sessionId} />

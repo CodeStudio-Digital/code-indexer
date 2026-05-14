@@ -39,11 +39,18 @@
  */
 
 import type { AgentMessage, ContentBlock } from './messages.js';
+import { estimateMessageTokens } from './token-accounting.js';
+import type { TokenSnapshot } from './token-accounting.js';
+import { getEffectiveContextWindow } from '../providers/capabilities.js';
 
 /**
  * Below this char total, auto-compaction is a no-op. Default 60k — fallback
  * for models without a known context_window. Use deriveCompactionLimits() to
  * get model-aware thresholds when context_window is available.
+ *
+ * @deprecated Char-based thresholds are retained only for the legacy code
+ * path (CODER_NEW_COMPACTION=0). New path uses token-based limits derived
+ * from the model's effective context window. Will be removed.
  */
 export const PRUNE_MINIMUM = Number(process.env.CODER_PRUNE_MINIMUM ?? 60_000);
 
@@ -51,6 +58,8 @@ export const PRUNE_MINIMUM = Number(process.env.CODER_PRUNE_MINIMUM ?? 60_000);
  * How many chars of the most-recent history are guaranteed to survive
  * compaction verbatim when using the fixed fallback. Use deriveCompactionLimits()
  * for model-aware protection budgets.
+ *
+ * @deprecated See PRUNE_MINIMUM.
  */
 export const PRUNE_PROTECT = Number(process.env.CODER_PRUNE_PROTECT ?? 80_000);
 
@@ -61,6 +70,31 @@ const PROTECT_RATIO = 0.55;
 /** chars-per-token heuristic, matching token-budget.ts. */
 const CHARS_PER_TOKEN = 4;
 
+// ─── Token-based triggers (new path) ────────────────────────────────────────
+//
+// Reasoning for these numbers (mirrors Claude Code's autoCompact constants):
+//
+//   AUTOCOMPACT_BUFFER_TOKENS = 13_000
+//     Reserve 13K tokens of headroom below the effective window before we
+//     trigger compaction. The model needs room to run at least one more
+//     tool-emitting turn while we're summarising, so we can't pack right
+//     to the edge.
+//
+//   PROTECT_TOKEN_RATIO = 0.55
+//     After compaction the most-recent N messages adding up to ~55% of the
+//     effective window are kept verbatim. Empirically the right tradeoff
+//     between losing recent context and freeing enough room.
+//
+// Both are env-overridable so we can tune in the field without a release.
+
+export const AUTOCOMPACT_BUFFER_TOKENS = Number(process.env.CODER_AUTOCOMPACT_BUFFER ?? 50_000);
+export const PROTECT_TOKEN_RATIO = Number(process.env.CODER_PROTECT_RATIO ?? 0.55);
+
+/** Feature flag — set to 0 to fall back to the legacy char-based path. */
+export function isNewCompactionEnabled(): boolean {
+  return process.env.CODER_NEW_COMPACTION !== '0';
+}
+
 export interface CompactionLimits {
     /** Char total above which compaction is triggered (char-based fallback). */
     minimum: number;
@@ -68,23 +102,67 @@ export interface CompactionLimits {
     protect: number;
     /** Input-token count above which compaction is triggered (null = no known context_window). */
     triggerTokens: number | null;
+    /** Token budget for the protected tail (null = no known context_window). */
+    protectTokens: number | null;
 }
 
 /**
  * Derive context-aware compaction limits from the model's known context window.
  * When contextWindowTokens is null/undefined, falls back to the hardcoded env
  * defaults so behaviour is unchanged for models without registered capacity.
+ *
+ * Note: when the new path is enabled, prefer `deriveTokenLimits(model)` which
+ * incorporates output reservation. This shim is kept for the legacy path and
+ * for code that only has a token count, not a model id.
  */
 export function deriveCompactionLimits(contextWindowTokens: number | null | undefined): CompactionLimits {
     if (!contextWindowTokens) {
-        return { minimum: PRUNE_MINIMUM, protect: PRUNE_PROTECT, triggerTokens: null };
+        return { minimum: PRUNE_MINIMUM, protect: PRUNE_PROTECT, triggerTokens: null, protectTokens: null };
     }
     const contextChars = contextWindowTokens * CHARS_PER_TOKEN;
     return {
         minimum: Math.floor(contextChars * TRIGGER_RATIO),
         protect: Math.floor(contextChars * PROTECT_RATIO),
         triggerTokens: Math.floor(contextWindowTokens * TRIGGER_RATIO),
+        protectTokens: Math.floor(contextWindowTokens * PROTECT_TOKEN_RATIO),
     };
+}
+
+export interface TokenLimits {
+    /** Effective context window (raw window − reserved output). */
+    effective: number;
+    /** Trigger compaction when total tokens ≥ this. = effective − buffer. */
+    trigger: number;
+    /** Tokens of recent tail to protect verbatim during compaction. */
+    protect: number;
+    /** Raw context window before output reservation (for telemetry). */
+    rawWindow: number;
+    /** True when we used the fallback (no registry/prefix entry). */
+    isFallback: boolean;
+}
+
+/**
+ * Token-based compaction limits derived from the effective window.
+ *
+ *   effective = window − min(max_output, 20K)
+ *   trigger   = effective − 13K        (autocompact buffer)
+ *   protect   = floor(effective * 0.55)
+ */
+export function deriveTokenLimits(model: string): TokenLimits {
+  const eff = getEffectiveContextWindow(model);
+  return {
+    effective: eff.effective,
+    trigger: Math.max(1, eff.effective - AUTOCOMPACT_BUFFER_TOKENS),
+    protect: Math.max(1, Math.floor(eff.effective * PROTECT_TOKEN_RATIO)),
+    rawWindow: eff.window,
+    isFallback: eff.isFallback,
+  };
+}
+
+/** Should we compact? `total` is the snapshot total (confirmed + estimate). */
+export function shouldCompact(snapshot: TokenSnapshot, model: string): boolean {
+  const limits = deriveTokenLimits(model);
+  return snapshot.total >= limits.trigger;
 }
 
 /**
@@ -148,12 +226,161 @@ export function computeCutoffIndex(messages: AgentMessage[], protect = PRUNE_PRO
 }
 
 /**
+ * Token-based cutoff: walk from the tail and keep messages until their
+ * combined token estimate exceeds `protectTokens`. The first index whose
+ * INCLUSION would push us over the budget is the cutoff — everything strictly
+ * before is compactable, everything from cutoff onward stays verbatim.
+ *
+ * Returns 0 if the entire history fits under the budget (no compaction needed).
+ */
+export function computeCutoffIndexByTokens(messages: AgentMessage[], protectTokens: number): number {
+    let running = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        running += estimateMessageTokens(messages[i]);
+        if (running > protectTokens) return i + 1;
+    }
+    return 0;
+}
+
+/**
+ * Atomic-pair-preserving cutoff: ensure no `tool_result` whose paired
+ * `tool_use` lives in the compactable prefix survives in the kept tail (the
+ * provider rejects orphaned tool_results with 400 "No tool call found").
+ * Likewise, no `tool_use` can be kept while its paired `tool_result` was
+ * compacted away.
+ *
+ * Algorithm:
+ *   1. Collect every `tool_use` id present in messages[cutoff..] (the tail).
+ *   2. For each such id, find the pairing `tool_result` somewhere in
+ *      messages[0..]. If the result lives BEFORE cutoff, the pair is
+ *      split — adjust cutoff to whichever side is cheaper:
+ *        - If pulling the assistant containing the tool_use INTO the prefix
+ *          is cheaper than pulling the tool_result OUT of the prefix, do
+ *          that (advance cutoff past the assistant + its tool message).
+ *        - Otherwise pull the tool_result into the tail (recede cutoff to
+ *          include the assistant + its tool message).
+ *   3. Symmetric pass for `tool_result` blocks in the tail whose `tool_use`
+ *      lives in the prefix.
+ *
+ * In practice the sane outcome is almost always: never split a pair — recede
+ * the cutoff to include both halves. We only advance when receding would push
+ * us above the protect budget, in which case we accept losing that one pair.
+ */
+export function snapCutoffPreservingPairs(messages: AgentMessage[], cutoff: number): number {
+    if (cutoff <= 0 || cutoff >= messages.length) return cutoff;
+
+    // Build maps: tool_use_id → { useMsgIdx, resultMsgIdx | null }
+    interface PairRef { useMsg: number; resultMsg: number | null; }
+    const pairs = new Map<string, PairRef>();
+    for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        if (m.role === 'assistant') {
+            for (const b of m.content) {
+                if (b.type === 'tool_use') {
+                    const id = (b as { id: string }).id;
+                    if (!pairs.has(id)) pairs.set(id, { useMsg: i, resultMsg: null });
+                    else pairs.get(id)!.useMsg = i;
+                }
+            }
+        } else if (m.role === 'tool') {
+            for (const b of m.content) {
+                if (b.type === 'tool_result') {
+                    const id = (b as { tool_use_id?: string }).tool_use_id ?? '';
+                    if (!id) continue;
+                    const existing = pairs.get(id);
+                    if (existing) existing.resultMsg = i;
+                    else pairs.set(id, { useMsg: -1, resultMsg: i });
+                }
+            }
+        }
+    }
+
+    // Walk pairs and find the smallest cutoff that places EVERY pair entirely
+    // on one side. We start from the proposed cutoff and only ever recede
+    // (move toward 0) — the protect budget guarantees we can't violate the
+    // tail size cap by receding (we'd just keep more of the prefix verbatim,
+    // which is always safe).
+    //
+    // For each split pair we try to recede cutoff to min(useMsg, resultMsg)
+    // so both halves end up in the tail. If both halves are after the
+    // current cutoff (no split), nothing to do.
+    let safe = cutoff;
+    for (const { useMsg, resultMsg } of pairs.values()) {
+        if (useMsg < 0 || resultMsg === null) continue; // half-known, leave alone
+        const minSide = Math.min(useMsg, resultMsg);
+        const maxSide = Math.max(useMsg, resultMsg);
+        // Pair straddles the cutoff iff minSide < cutoff && maxSide >= cutoff.
+        if (minSide < safe && maxSide >= safe) {
+            // Recede cutoff to include the earlier half in the kept tail.
+            safe = minSide;
+        }
+    }
+
+    // Defensive: if cutoff landed on a `tool` role (shouldn't happen after
+    // the pair pass above, but cheap to guarantee) advance past it so we
+    // never start the tail with a tool_result whose tool_use is gone.
+    while (safe < messages.length && messages[safe].role === 'tool') {
+        safe++;
+    }
+    // And: never start the tail with an assistant that has tool_use blocks
+    // when the next message (its tool_result message) is past safe — this
+    // would orphan the use. The pair-walk above handles this; the role
+    // check is belt-and-suspenders.
+    return safe;
+}
+
+/**
+ * Recede `cutoff` toward 0 until at least `n` user-role messages live in the
+ * tail (PR-3, R4 from docs/agent-research/COMPARISON.md). Mirrors kimi-cli's
+ * "preserve last 2 user/assistant turn pairs verbatim" rule
+ * (`compaction.py:170-189`). The downside of summarizing too aggressively
+ * is that fine-grained user-intent detail from the most recent turns gets
+ * paraphrased — observed in 609-style "what was I doing" regressions. By
+ * keeping the last N user messages plus everything after them as raw text,
+ * the model retains the exact wording of recent intent.
+ *
+ * Caller is expected to feed the result through `snapCutoffPreservingPairs`
+ * so atomic tool_use/tool_result pairs aren't split — this function only
+ * recedes; it never advances.
+ */
+export function recedeToPreserveLastNTurns(
+    messages: AgentMessage[],
+    cutoff: number,
+    n: number,
+): number {
+    if (n <= 0 || cutoff <= 0 || cutoff >= messages.length) return cutoff;
+
+    // Count user messages already in the tail (indices >= cutoff).
+    let userInTail = 0;
+    for (let i = cutoff; i < messages.length; i++) {
+        if (messages[i].role === 'user') userInTail++;
+    }
+    if (userInTail >= n) return cutoff;
+
+    // Walk backward from cutoff-1 looking for user messages. Stop when we
+    // have enough; recede to the index of the Nth-from-tail user message.
+    let needed = n - userInTail;
+    for (let i = cutoff - 1; i >= 0; i--) {
+        if (messages[i].role === 'user') {
+            needed--;
+            if (needed === 0) return i;
+        }
+    }
+    // Fewer than N user messages exist in the entire history — keep
+    // everything raw. This is the trivial case: a fresh session where the
+    // protect budget triggered compaction extremely early.
+    return 0;
+}
+
+/**
  * Adjust cutoff so it never falls between an assistant message (with tool_use
  * blocks) and its paired tool message (with tool_result blocks). If the
  * message at `cutoff` is role='tool', advance past it — those tool_results
  * reference tool_uses in the preceding assistant message, which would be
  * spliced away by the summarizer, causing a 400 "No tool call found" error
  * from the provider.
+ *
+ * @deprecated Use `snapCutoffPreservingPairs` — handles split pairs correctly.
  */
 export function snapCutoffToRoleBoundary(messages: AgentMessage[], cutoff: number): number {
     // Advance past tool messages (their tool_uses are in the preceding assistant)
@@ -185,20 +412,43 @@ export interface CompactionResult {
 /**
  * Apply deterministic compaction. Pure function: does not mutate `messages`.
  * Returns a fresh array with replaced tool_result blocks past the cutoff.
+ *
+ * Supports two modes:
+ *   - **char mode (legacy)**: pass `minimum`/`protect` (chars). Used when
+ *     CODER_NEW_COMPACTION=0 or no model id is available.
+ *   - **token mode (new)**: pass `protectTokens`. Cutoff computed by the
+ *     hybrid token estimator; pairs are preserved atomically.
  */
 export function compactMessages(
     messages: AgentMessage[],
-    opts: { minimum?: number; protect?: number } = {},
+    opts: {
+        minimum?: number;
+        protect?: number;
+        /** When set, use token-based cutoff via `computeCutoffIndexByTokens`. */
+        protectTokens?: number;
+        /** When set, skip the char-total guard (token mode decides via shouldCompact). */
+        skipMinimumGuard?: boolean;
+    } = {},
 ): CompactionResult {
     const minimum = opts.minimum ?? PRUNE_MINIMUM;
     const protect = opts.protect ?? PRUNE_PROTECT;
+    const useTokenCutoff = opts.protectTokens != null;
 
-    const total = totalChars(messages);
-    if (total <= minimum) {
-        return { messages, prunedBlocks: 0, prunedChars: 0, applied: false };
+    if (!opts.skipMinimumGuard) {
+        const total = totalChars(messages);
+        if (total <= minimum) {
+            return { messages, prunedBlocks: 0, prunedChars: 0, applied: false };
+        }
     }
 
-    const cutoff = computeCutoffIndex(messages, protect);
+    let cutoff: number;
+    if (useTokenCutoff) {
+        cutoff = computeCutoffIndexByTokens(messages, opts.protectTokens!);
+        cutoff = snapCutoffPreservingPairs(messages, cutoff);
+    } else {
+        cutoff = computeCutoffIndex(messages, protect);
+        cutoff = snapCutoffToRoleBoundary(messages, cutoff);
+    }
     if (cutoff === 0) {
         // Tail protection already covers the whole history; nothing to prune.
         return { messages, prunedBlocks: 0, prunedChars: 0, applied: false };
@@ -236,4 +486,297 @@ export function compactMessages(
         prunedChars,
         applied: prunedBlocks > 0,
     };
+}
+
+/**
+ * Rolling reduction (Camada 5 — AgentDiet pattern).
+ *
+ * Run on every turn (cheap). Replaces tool_result content for stale repeats
+ * BEFORE the size-based compactMessages even runs — so sessions grow more
+ * slowly and the heavy compaction kicks in less often. Two heuristics:
+ *
+ *   1. **Same-file re-reads.** If the same `read_file` / `mcp__read_file`
+ *      call (matched by file path) appears more than once in the protected
+ *      window, keep ONLY the most recent result; replace the others with
+ *      `[stale: superseded by later read of <path>]`.
+ *   2. **Stale searches.** Two consecutive `grep_code` / `mcp__search` /
+ *      `mcp__grep_code` results in the protected window: replace earlier
+ *      with `[stale: superseded by later <tool> query]`.
+ *
+ * What we DO NOT touch:
+ *   - The most-recent N messages (keep them verbatim — model needs them).
+ *   - Tool calls that mutated state (write_file, run_command, etc).
+ *   - Markers already left by earlier reductions (idempotent).
+ *
+ * Determinism: this is a pure function over the input array. The same
+ * sequence of messages always reduces to the same output — prefix cache
+ * remains stable across turns.
+ */
+export interface RollingReductionResult {
+    messages: AgentMessage[];
+    /** How many tool_result contents were replaced. */
+    reduced: number;
+    /** Approximate chars freed by the reduction. */
+    freedChars: number;
+}
+
+/** Tools whose outputs are cheap to invalidate when superseded. */
+export const REDUCIBLE_READ_TOOLS = new Set<string>([
+    'read_file',
+    'mcp__read_file',
+    'mcp__get_file_skeleton',
+    'mcp__get_file_structure',
+]);
+
+const REDUCIBLE_SEARCH_TOOLS = new Set<string>([
+    'mcp__grep_code',
+    'mcp__search',
+    'mcp__search_global',
+    'glob',
+]);
+
+interface ToolCallIndex {
+    msgIdx: number;
+    blockIdx: number;
+    name: string;
+    /**
+     * Composite key for "this tool returned the same INFORMATION before".
+     * For reads it's `path#<json of slice fields>` so two reads of the
+     * same file with DIFFERENT line ranges / symbols are NOT treated as
+     * duplicates — only re-fetches of the EXACT same slice are. Empty for
+     * non-read tools.
+     */
+    pathKey: string;
+    /** Bare path (no slice). Used by the human-readable retirement reason. */
+    pathLabel: string;
+    /** Tool use id — used to find matching tool_result. */
+    useId: string;
+}
+
+export function getStringField(input: Record<string, unknown> | undefined, ...keys: string[]): string {
+    if (!input) return '';
+    for (const k of keys) {
+        const v = input[k];
+        if (typeof v === 'string') return v;
+    }
+    return '';
+}
+
+/**
+ * Build the dedup key for a read_file-style tool call. Includes the slice
+ * fields so the rolling reducer doesn't collapse distinct chunks of the
+ * same file into one (the bug that caused session 609 to loop on
+ * itens-receita.component.ts: 5 ranges rotated 18–21× each).
+ *
+ * Stable JSON ordering is preserved by spelling out every field explicitly
+ * — protects prompt-cache stability across runs of the reducer.
+ */
+export function buildReadDedupKey(path: string, inp: Record<string, unknown> | undefined): string {
+    const slice = {
+        symbol: (inp?.['symbol'] as unknown) ?? null,
+        around_line: (inp?.['around_line'] as unknown) ?? null,
+        start_line: (inp?.['start_line'] as unknown) ?? null,
+        end_line: (inp?.['end_line'] as unknown) ?? null,
+        max_lines: (inp?.['max_lines'] as unknown) ?? null,
+    };
+    return `${path}#${JSON.stringify(slice)}`;
+}
+
+export function applyRollingReduction(messages: AgentMessage[], opts: { protectTail?: number } = {}): RollingReductionResult {
+    const protectTail = opts.protectTail ?? 6; // last 6 messages stay verbatim
+    if (messages.length <= protectTail + 2) {
+        return { messages, reduced: 0, freedChars: 0 };
+    }
+
+    // Walk forward and index every tool_use that looks reducible.
+    const readCalls: ToolCallIndex[] = [];
+    const searchCalls: ToolCallIndex[] = [];
+    for (let i = 0; i < messages.length - protectTail; i++) {
+        const m = messages[i];
+        if (m.role !== 'assistant') continue;
+        for (let bi = 0; bi < m.content.length; bi++) {
+            const b = m.content[bi];
+            if (b.type !== 'tool_use') continue;
+            const name = (b as { name: string }).name;
+            const inp = (b as { input?: Record<string, unknown> }).input;
+            const useId = (b as { id: string }).id;
+            if (REDUCIBLE_READ_TOOLS.has(name)) {
+                const path = getStringField(inp, 'path', 'file_path');
+                if (path) {
+                    const pathKey = buildReadDedupKey(path, inp);
+                    readCalls.push({ msgIdx: i, blockIdx: bi, name, pathKey, pathLabel: path, useId });
+                }
+            } else if (REDUCIBLE_SEARCH_TOOLS.has(name)) {
+                searchCalls.push({ msgIdx: i, blockIdx: bi, name, pathKey: '', pathLabel: '', useId });
+            }
+        }
+    }
+
+    // Decide which tool_use_ids to retire. A read is retired ONLY when a
+    // later read of the same SLICE (path + range/symbol) exists — distinct
+    // chunks of the same file are kept verbatim because they carry
+    // independent information. A search is retired if a LATER search exists.
+    const retiredIds = new Map<string, string>(); // useId → reason
+    const lastBySlice = new Map<string, ToolCallIndex>();
+    for (const r of readCalls) {
+        const prev = lastBySlice.get(r.pathKey);
+        if (prev) {
+            // Imperative marker (Fix H — session 609 regression). The earlier
+            // version said "superseded by later identical read" which models
+            // sometimes interpreted as "stale → re-read it". The current
+            // version is a direct instruction NOT to re-call. Combined with
+            // Fix F (dup-call cap) and Fix G (dominance guard) gives three
+            // layers of defense against rotating-read loops.
+            retiredIds.set(prev.useId, `${r.pathLabel} — DO NOT re-call this tool with these args`);
+        }
+        lastBySlice.set(r.pathKey, r);
+    }
+    for (let i = 0; i < searchCalls.length - 1; i++) {
+        const r = searchCalls[i];
+        retiredIds.set(r.useId, `superseded by later ${searchCalls[i + 1].name} query`);
+    }
+    if (retiredIds.size === 0) {
+        return { messages, reduced: 0, freedChars: 0 };
+    }
+
+    // Walk again, replace tool_result content for retired ids. Stable ordering
+    // → cache-safe.
+    let reduced = 0;
+    let freed = 0;
+    const out = messages.map((m): AgentMessage => {
+        if (m.role !== 'tool') return m;
+        let touched = false;
+        const newContent = m.content.map((b): ContentBlock => {
+            if (b.type !== 'tool_result') return b;
+            const tid = (b as { tool_use_id?: string }).tool_use_id;
+            if (!tid || !retiredIds.has(tid)) return b;
+            const original = typeof b.content === 'string' ? b.content : '';
+            // Idempotent: skip if already a stale marker.
+            // Idempotent: skip blocks that were already retired/compacted on
+            // a previous reducer pass (whether by the legacy `[stale: ...]`
+            // marker or the new `[duplicate-read elided]` text).
+            if (
+              original.startsWith('[stale:') ||
+              original.startsWith('[compacted:') ||
+              original.startsWith('[duplicate-read elided]')
+            ) return b;
+            reduced++;
+            freed += original.length;
+            touched = true;
+            return {
+                ...b,
+                content: `[duplicate-read elided] You already have the latest content of ${retiredIds.get(tid)} (original ${original.length} chars). Look at later reads in this conversation, or call a different tool — repeating this exact call will be refused.`,
+                truncated: true,
+                originalSize: (b as { originalSize?: number }).originalSize ?? original.length,
+            };
+        });
+        return touched ? { ...m, content: newContent } : m;
+    });
+
+    return { messages: out, reduced, freedChars: freed };
+}
+
+/**
+ * Post-compact cleanup pass.
+ *
+ * Runs AFTER the summarizer has produced a synthetic summary message and
+ * spliced it into the head of the history. The summary often mentions files
+ * by path, but the preserved tail also contains verbatim `tool_result`
+ * blocks for those same paths — re-injecting the same content twice is pure
+ * waste of context.
+ *
+ * This pass:
+ *   1. Walks the preserved tail and collects (path, slice) keys for every
+ *      file-read tool_result.
+ *   2. For any DUPLICATE read of the same key in the tail, replaces all but
+ *      the most recent with `[duplicate-read elided]` (cheap variant of the
+ *      rolling reducer, but applied across the whole tail not just last 6).
+ *   3. Returns counts so the caller can log/telemetry.
+ *
+ * Pure function — does not mutate input. Safe to chain after summarization.
+ */
+export interface PostCompactResult {
+    messages: AgentMessage[];
+    /** Number of duplicate read tool_results elided. */
+    elidedReads: number;
+    /** Approx chars freed. */
+    freedChars: number;
+}
+
+const POST_COMPACT_READ_TOOLS = new Set<string>([
+    'read_file',
+    'mcp__read_file',
+    'mcp__get_file_skeleton',
+    'mcp__get_file_structure',
+    'Read',
+    'glob',
+    'mcp__grep_code',
+    'mcp__search',
+    'mcp__search_global',
+    'web_fetch',
+    'WebFetch',
+]);
+
+export function postCompactCleanup(messages: AgentMessage[]): PostCompactResult {
+    if (messages.length < 4) return { messages, elidedReads: 0, freedChars: 0 };
+
+    // Pass 1: index tool_use → key for any read-style tool, across ALL messages.
+    interface UseRef { name: string; key: string; useId: string; msgIdx: number; }
+    const refs = new Map<string, UseRef>();
+    for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        if (m.role !== 'assistant') continue;
+        for (const b of m.content) {
+            if (b.type !== 'tool_use') continue;
+            const name = (b as { name: string }).name;
+            if (!POST_COMPACT_READ_TOOLS.has(name)) continue;
+            const inp = (b as { input?: Record<string, unknown> }).input;
+            const path = getStringField(inp, 'path', 'file_path', 'url');
+            const useId = (b as { id: string }).id;
+            const key = path ? buildReadDedupKey(path, inp) : `${name}#${useId}`;
+            refs.set(useId, { name, key, useId, msgIdx: i });
+        }
+    }
+
+    // Pass 2: group refs by key, find duplicates, retire all but the latest.
+    const lastByKey = new Map<string, string>(); // key → useId
+    const retired = new Set<string>();
+    // Walk in order so the last-seen wins.
+    for (const ref of refs.values()) {
+        const prev = lastByKey.get(ref.key);
+        if (prev) retired.add(prev);
+        lastByKey.set(ref.key, ref.useId);
+    }
+    if (retired.size === 0) return { messages, elidedReads: 0, freedChars: 0 };
+
+    // Pass 3: replace tool_result content for retired ids.
+    let elided = 0;
+    let freed = 0;
+    const out = messages.map((m): AgentMessage => {
+        if (m.role !== 'tool') return m;
+        let touched = false;
+        const newContent = m.content.map((b): ContentBlock => {
+            if (b.type !== 'tool_result') return b;
+            const tid = (b as { tool_use_id?: string }).tool_use_id;
+            if (!tid || !retired.has(tid)) return b;
+            const original = typeof b.content === 'string' ? b.content : '';
+            if (
+                original.startsWith('[stale:') ||
+                original.startsWith('[compacted:') ||
+                original.startsWith('[duplicate-read elided]')
+            ) return b;
+            elided++;
+            freed += original.length;
+            touched = true;
+            return {
+                ...b,
+                content: `[duplicate-read elided] Superseded by a later read of the same target. Original ${original.length} chars dropped — refer to the later result.`,
+                truncated: true,
+                originalSize: (b as { originalSize?: number }).originalSize ?? original.length,
+            };
+        });
+        return touched ? { ...m, content: newContent } : m;
+    });
+
+    return { messages: out, elidedReads: elided, freedChars: freed };
 }

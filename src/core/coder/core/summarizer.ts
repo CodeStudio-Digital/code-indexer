@@ -32,6 +32,75 @@ export interface CompactionSummary {
   user_preferences: string[];
 }
 
+/**
+ * 9-section summary used when CODER_NEW_COMPACTION is enabled. Mirrors
+ * Claude Code's compact prompt structure (Primary Request, Key Concepts,
+ * Files, Errors, Problem Solving, User Messages, Pending Tasks, Current
+ * Work, Next Step) — empirically the right level of detail to let the
+ * continuing agent resume cleanly without re-reading the pruned span.
+ *
+ * Backwards compatible: `toLegacy()` projects this onto the older 6-field
+ * shape so the existing `renderSummary` keeps working during the rollout.
+ */
+export interface CompactionSummaryV2 {
+  primary_request: string;
+  key_concepts: string[];
+  files_and_code: Array<{ path: string; state: string }>;
+  errors_and_fixes: string[];
+  problem_solving: string;
+  all_user_messages: string[];
+  pending_tasks: string[];
+  current_work: string;
+  next_step: string;
+  /**
+   * Live-state overlay populated by the runner AFTER the LLM summarization
+   * step (Agent Loop v2). Keeps the rendered summary anchored to ground truth
+   * even when the LLM-extracted pending_tasks/next_step drift from reality.
+   * Either field may be omitted when there is nothing to record.
+   */
+  active_goal?: string;
+}
+
+/**
+ * Replace the LLM-extracted `pending_tasks` with the live todo list and
+ * stamp the live goal into `active_goal`. Run this AFTER summarizeSpanV2
+ * so rendered summaries reflect ground truth, not what the LLM happened
+ * to extract from the message span.
+ */
+export function overlayLiveState(
+  summary: CompactionSummaryV2,
+  liveTodos: Array<{ content: string; activeForm: string; status: string }>,
+  liveGoal: { text: string; status: string } | null,
+): CompactionSummaryV2 {
+  const unfinished = liveTodos
+    .filter((t) => t.status === 'pending' || t.status === 'in_progress')
+    .map((t) => `[${t.status}] ${t.content}`);
+  return {
+    ...summary,
+    pending_tasks: unfinished.length > 0 ? unfinished : summary.pending_tasks,
+    active_goal: liveGoal ? `${liveGoal.text} (status=${liveGoal.status})` : summary.active_goal,
+  };
+}
+
+export function summaryV2ToLegacy(s: CompactionSummaryV2): CompactionSummary {
+  return {
+    what_done: s.problem_solving,
+    current_work: s.current_work,
+    files_touched: s.files_and_code.map((f) => f.path),
+    decisions: s.errors_and_fixes,
+    next_steps: s.pending_tasks.length > 0 ? s.pending_tasks : (s.next_step ? [s.next_step] : []),
+    user_preferences: s.all_user_messages.slice(0, 8),
+  };
+}
+
+export function isStructuredSummaryEnabled(): boolean {
+  // Coupled to the master compaction flag — if the new path is on, use the
+  // 9-section prompt. CODER_STRUCTURED_SUMMARY=0 forces back to the legacy
+  // 6-field shape for diagnostics.
+  if (process.env.CODER_STRUCTURED_SUMMARY === '0') return false;
+  return process.env.CODER_NEW_COMPACTION !== '0';
+}
+
 export function isSummarizerEnabled(): boolean {
   // Default ON (opt-out via CODER_SUMMARIZER_ENABLE=0). The summarizer uses
   // a cheap model and preserves semantic context far better than the
@@ -196,9 +265,12 @@ export async function summarizeSpan(
 ): Promise<CompactionSummary | null> {
   if (messages.length === 0) return null;
   try {
-    const systemPrompt = loadPrompt('summarize');
+    const useV2 = isStructuredSummaryEnabled();
+    const systemPrompt = loadPrompt(useV2 ? 'summarize-v2' : 'summarize');
     const userContent = formatSpanForPrompt(messages);
-    console.log(`[coder] summarizer input: ${userContent.length} chars from ${messages.length} messages`);
+    console.log(
+      `[coder] summarizer input: ${userContent.length} chars from ${messages.length} messages (${useV2 ? 'v2/9-section' : 'v1/6-field'})`
+    );
     let fullText = '';
     const stream = provider.chat({
       system: systemPrompt,
@@ -208,27 +280,87 @@ export async function summarizeSpan(
     for await (const delta of stream) {
       if (delta.type === 'text_delta') fullText += delta.text;
     }
-    // Find the JSON object in the response — some models wrap it in prose
-    // despite the instructions. Match the first top-level {..} block by
-    // counting brace depth (skipping braces inside JSON strings).
-    const start = fullText.indexOf('{');
-    if (start < 0) return null;
-    let depth = 0;
-    let inString = false;
-    let end = -1;
-    for (let i = start; i < fullText.length; i++) {
-      const ch = fullText[i];
-      if (inString) {
-        if (ch === '\\') { i++; continue; }   // skip escaped char
-        if (ch === '"') inString = false;
-        continue;
-      }
-      if (ch === '"') { inString = true; continue; }
-      if (ch === '{') depth++;
-      else if (ch === '}') { depth--; if (depth === 0) { end = i; break; } }
+    const json = extractFirstJsonObject(fullText);
+    if (!json) return null;
+    if (useV2) {
+      const v2 = parseV2(json);
+      if (!v2) return null;
+      return summaryV2ToLegacy(v2);
     }
-    if (end < 0) return null;
-    const parsed = JSON.parse(fullText.slice(start, end + 1)) as Partial<CompactionSummary>;
+    return parseV1(json);
+  } catch (e) {
+    console.warn(`[coder] summarizer failed, falling back to deterministic compaction: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
+/**
+ * Same as `summarizeSpan` but returns the V2 structure when the new path is
+ * enabled — used by the runner to render richer summary blocks. Falls back
+ * to a V2 wrapping of the V1 output when only the legacy prompt is on.
+ */
+export async function summarizeSpanV2(
+  messages: AgentMessage[],
+  provider: ChatProvider,
+): Promise<CompactionSummaryV2 | null> {
+  if (messages.length === 0) return null;
+  try {
+    const useV2 = isStructuredSummaryEnabled();
+    const systemPrompt = loadPrompt(useV2 ? 'summarize-v2' : 'summarize');
+    const userContent = formatSpanForPrompt(messages);
+    let fullText = '';
+    const stream = provider.chat({
+      system: systemPrompt,
+      messages: [{ role: 'user', content: [{ type: 'text', text: userContent }] }],
+      tools: [],
+    });
+    for await (const delta of stream) {
+      if (delta.type === 'text_delta') fullText += delta.text;
+    }
+    const json = extractFirstJsonObject(fullText);
+    if (!json) return null;
+    if (useV2) return parseV2(json);
+    const v1 = parseV1(json);
+    if (!v1) return null;
+    return {
+      primary_request: v1.what_done,
+      key_concepts: [],
+      files_and_code: v1.files_touched.map((p) => ({ path: p, state: '' })),
+      errors_and_fixes: v1.decisions,
+      problem_solving: v1.what_done,
+      all_user_messages: v1.user_preferences,
+      pending_tasks: v1.next_steps,
+      current_work: v1.current_work,
+      next_step: v1.next_steps[0] ?? '',
+    };
+  } catch (e) {
+    console.warn(`[coder] summarizerV2 failed: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
+function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === '\\') { i++; continue; }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (depth === 0) return text.slice(start, i + 1); }
+  }
+  return null;
+}
+
+function parseV1(json: string): CompactionSummary | null {
+  try {
+    const parsed = JSON.parse(json) as Partial<CompactionSummary>;
     return {
       what_done: String(parsed.what_done ?? ''),
       current_work: String(parsed.current_work ?? ''),
@@ -237,10 +369,111 @@ export async function summarizeSpan(
       next_steps: Array.isArray(parsed.next_steps) ? parsed.next_steps.map(String) : [],
       user_preferences: Array.isArray(parsed.user_preferences) ? parsed.user_preferences.map(String) : [],
     };
-  } catch (e) {
-    console.warn(`[coder] summarizer failed, falling back to deterministic compaction: ${e instanceof Error ? e.message : String(e)}`);
+  } catch {
     return null;
   }
+}
+
+function parseV2(json: string): CompactionSummaryV2 | null {
+  try {
+    const p = JSON.parse(json) as Partial<CompactionSummaryV2> & {
+      files_and_code?: Array<{ path?: unknown; state?: unknown }>;
+    };
+    return {
+      primary_request: String(p.primary_request ?? ''),
+      key_concepts: Array.isArray(p.key_concepts) ? p.key_concepts.map(String) : [],
+      files_and_code: Array.isArray(p.files_and_code)
+        ? p.files_and_code.map((f) => ({ path: String(f?.path ?? ''), state: String(f?.state ?? '') })).filter((f) => f.path)
+        : [],
+      errors_and_fixes: Array.isArray(p.errors_and_fixes) ? p.errors_and_fixes.map(String) : [],
+      problem_solving: String(p.problem_solving ?? ''),
+      all_user_messages: Array.isArray(p.all_user_messages) ? p.all_user_messages.map(String) : [],
+      pending_tasks: Array.isArray(p.pending_tasks) ? p.pending_tasks.map(String) : [],
+      current_work: String(p.current_work ?? ''),
+      next_step: String(p.next_step ?? ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Render a 9-section summary using kimi-cli-style tagged blocks (PR-3, R3
+ * from docs/agent-research/COMPARISON.md). Each section becomes a labeled
+ * `<tag>...</tag>` block instead of a `**Header:**` line. Tagged blocks
+ * are deterministically parseable: when the next compaction round runs,
+ * the LLM can find the prior `<current_focus>` content and carry it
+ * forward without hallucinating structure. Empty sections are omitted to
+ * keep the rendered text lean.
+ *
+ * Field → tag mapping (preserved across the existing v2 schema, so
+ * `overlayLiveState` and the Codex-fallback path keep working):
+ *   active_goal       → <active_goal>
+ *   primary_request   → <primary_request>
+ *   current_work +
+ *   next_step         → <current_focus>
+ *   key_concepts +
+ *   files_and_code    → <environment>
+ *   errors_and_fixes  → <active_issues>
+ *   pending_tasks     → <pending_tasks>
+ *   problem_solving   → <problem_solving>
+ *   all_user_messages → <user_messages>
+ */
+export function renderSummaryV2(s: CompactionSummaryV2): string {
+  const lines: string[] = ['[auto-compacted summary of older turns]', ''];
+
+  const block = (tag: string, body: string): void => {
+    if (!body || !body.trim()) return;
+    lines.push(`<${tag}>`);
+    lines.push(body.trimEnd());
+    lines.push(`</${tag}>`);
+    lines.push('');
+  };
+
+  if (s.active_goal) block('active_goal', s.active_goal);
+  if (s.primary_request) block('primary_request', s.primary_request);
+
+  // Current focus = current_work + next_step. Two short fields collapsed
+  // into one block so the model sees them together.
+  if (s.current_work || s.next_step) {
+    const focus: string[] = [];
+    if (s.current_work) focus.push(`work: ${s.current_work}`);
+    if (s.next_step) focus.push(`next: ${s.next_step}`);
+    block('current_focus', focus.join('\n'));
+  }
+
+  // Environment = key_concepts + files_and_code. Mirrors kimi-cli's
+  // <environment> tag which carries setup/config/dep info.
+  if (s.key_concepts.length || s.files_and_code.length) {
+    const env: string[] = [];
+    if (s.key_concepts.length) env.push(`key concepts: ${s.key_concepts.join(', ')}`);
+    if (s.files_and_code.length) {
+      env.push('files:');
+      for (const f of s.files_and_code) env.push(`- \`${f.path}\` — ${f.state}`);
+    }
+    block('environment', env.join('\n'));
+  }
+
+  if (s.errors_and_fixes.length) {
+    block('active_issues', s.errors_and_fixes.map((e) => `- ${e}`).join('\n'));
+  }
+
+  if (s.pending_tasks.length) {
+    block('pending_tasks', s.pending_tasks.map((t) => `- ${t}`).join('\n'));
+  }
+
+  if (s.problem_solving) {
+    block('problem_solving', s.problem_solving);
+  }
+
+  if (s.all_user_messages.length) {
+    block('user_messages', s.all_user_messages.map((m) => `- ${m}`).join('\n'));
+  }
+
+  // Drop any trailing blank line we may have appended by the last block().
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+
+  return lines.join('\n');
 }
 
 /** Render a summary as a single human-readable markdown block for injection into history. */

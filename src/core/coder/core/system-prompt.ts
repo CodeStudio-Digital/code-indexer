@@ -16,6 +16,45 @@
  */
 import { loadPrompt, interpolate } from '../prompts/loader.js';
 import { runSystemPromptHook } from './hooks.js';
+
+/**
+ * Cache-stratification marker. Everything BEFORE this line is intended to be
+ * byte-identical across sessions of the same (project, provider, profile,
+ * planMode, agentLoopV2) tuple — that's the prefix the model provider's
+ * cache can hit. Everything AFTER varies per session (custom MCP tiers
+ * registered, project-specific hook output, repo map of recently-edited
+ * files). Borrowed from claude-code's `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`
+ * (see docs/agent-research/COMPARISON.md, R2). Inert text — providers
+ * pass it through to the model as a comment line; cache logic can split
+ * on it for ephemeral-breakpoint placement.
+ */
+export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '<!-- SYSTEM_PROMPT_DYNAMIC_BOUNDARY -->';
+
+/**
+ * PR-6 (Row 23) — short agent-loop framing intended for SUBAGENT system
+ * prompts. Subagents don't receive the live `<active-context>` injection
+ * (no persistent goal/todos), so this block omits the active-context
+ * pointer but keeps the discipline rules: persist end-to-end, do not
+ * re-read already-fetched files. Append to a subagent's domain-specific
+ * system prompt when `agentLoopV2` is on.
+ */
+export function buildSubagentLoopFraming(): string {
+  return `
+
+# Agent loop (subagent)
+Persist until the assigned task is fully resolved end-to-end before yielding. Do not stop at analysis or partial fixes — carry changes through implementation, verification, and a clear final summary.
+
+Only stop when one of these holds:
+1. The delegated task is complete and verified.
+2. You are blocked by a structural constraint (missing file, permission denied, sandbox refusal) that the parent must resolve.
+3. You have produced the result block format the parent expects.
+
+If a tool call fails, persevere: read the error, adjust, retry. Do not stop on first failure.
+
+# Do not re-read what you already have
+Before reading a file (\`read_file\`, \`mcp__read_file\`, \`mcp__get_file_skeleton\`, \`mcp__get_file_structure\`) check the prior tool results. The slice resolver snaps line ranges to enclosing symbols, so shifting \`around_line\` by a few does NOT yield new content. The runner refuses identical-result reads after the second duplicate — repeating yourself burns the parent's tokens and stalls the session.`;
+}
+
 export type ProviderFamily =
   | 'anthropic'
   | 'claude-code'
@@ -61,6 +100,14 @@ export interface PromptContext {
    * via the CODER_REPOMAP_TOKENS env var (off when 0, which is the default).
    */
   repoMap?: string;
+  /**
+   * Opt-in to Agent Loop v2 framing — adds a static "Agent loop" + "Active
+   * context" block to the system prompt. The runner pairs this with a live
+   * <active-context> user-message injection each turn (goal, todos, active
+   * task scope). Gated per session so existing sessions keep their original
+   * prompt on resume; index.ts sets this for newly-created sessions.
+   */
+  agentLoopV2?: boolean;
 }
 
 /**
@@ -141,15 +188,25 @@ You are a coding agent.
 }
 
 export function buildSystemPrompt(ctx: PromptContext): string {
+  // ─── STATIC PREFIX ─────────────────────────────────────────────────
+  // Everything in this block is determined entirely by inputs that are
+  // fixed at session creation: provider family, project identity, OS,
+  // planMode, profile, agentLoopV2 flag, and the static MCP availability
+  // signals. Two sessions that share these inputs share this prefix
+  // byte-for-byte — that's what lets the model provider's prompt cache
+  // hit across sessions of the same (project, provider, profile, ...) tuple.
+
   const preamble = providerPreamble(ctx.providerFamily ?? 'generic');
 
   // Main body — loaded from src/core/coder/prompts/base.txt. Placeholders:
   //   {{projectName}}, {{projectRoot}}, {{os}}, {{tierHint}}, {{mcpSection}}
+  // tierHint here is the profile-only text; customTiers render below the
+  // boundary because the registered MCP-server tier set is volatile.
   const base = interpolate(loadPrompt('base'), {
     projectName: ctx.projectName,
     projectRoot: ctx.projectRoot,
     os: ctx.os,
-    tierHint: tierHint(ctx.profile, ctx.customTiers),
+    tierHint: tierHint(ctx.profile),
     mcpSection: mcpSection(ctx.mcpAvailable, ctx.isIndexed),
   });
 
@@ -168,24 +225,21 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 - \`execute_task\` / \`task_complete\`: companions to submit_tasks; call execute_task once per approved task in dependency order, then task_complete to close the inline scope.
 `;
 
-  // Plugin hook — projects can drop `.mcp-indexer/hooks/system-prompt.js` to
-  // append extra instructions without forking the coder. Runs in a vm
-  // sandbox with 200ms timeout; on failure returns '' so the prompt is
-  // unchanged.
-  const extra = runSystemPromptHook(ctx.projectRoot, {
-    projectName: ctx.projectName,
-    projectRoot: ctx.projectRoot,
-    os: ctx.os,
-    profile: ctx.profile,
-  });
-  const extraBlock = extra ? `\n\n# Project-specific instructions\n${extra}` : '';
+  // Static "agent loop" + "do not re-read" + "active context pointer". The
+  // dynamic payload (live goal / todos / active task scope) is injected as
+  // the last user message each turn under <active-context>...</active-context>
+  // by the runner — see buildActiveContextBlock in runner.ts. Keeping the
+  // pointer here static preserves prefix-cache stability; only the trailing
+  // user message changes turn over turn.
+  //
+  // Gated on ctx.agentLoopV2 so older sessions don't see the new framing on
+  // resume — they keep behaving the way they were started.
+  const agentLoopBlock = ctx.agentLoopV2 ? buildAgentLoopBlock() : '';
 
   // Optional Agentless-style pipeline hint (B7). Off by default. When the
   // CODER_AGENTLESS_MODE=1 env is set, we add a short procedural directive:
-  // localize → plan → patch → verify. Pure prompt-engineering, no tool
-  // changes — the existing submit_plan/submit_tasks/execute_task lifecycle
-  // is the substrate, this just nudges the agent to use it linearly for
-  // bug-fix-style tasks instead of free-form exploration.
+  // localize → plan → patch → verify. Env-gated at process startup so it is
+  // effectively static for a deployment — kept above the boundary.
   const agentlessHint = process.env.CODER_AGENTLESS_MODE === '1'
     ? `
 
@@ -200,43 +254,98 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
 `
     : '';
 
-  // Repo map goes LAST so file-edit churn doesn't invalidate the cached
-  // prefix above. When CODER_REPOMAP_TOKENS=0 (default) ctx.repoMap is
-  // empty/undefined and this collapses to nothing.
+  // ─── DYNAMIC SUFFIX ────────────────────────────────────────────────
+  // Everything below the boundary marker can vary across sessions of the
+  // same (project, provider, profile, ...) tuple. Cache logic that splits
+  // on SYSTEM_PROMPT_DYNAMIC_BOUNDARY can place ephemeral breakpoints
+  // exactly here.
+
+  const customTiersText = customTiersBlock(ctx.customTiers);
+
+  // Plugin hook — projects can drop `.mcp-indexer/hooks/system-prompt.js`
+  // to append extra instructions without forking the coder. Runs in a vm
+  // sandbox with 200ms timeout; on failure returns '' so the prompt is
+  // unchanged. Output is project-supplied and may read disk → treat as
+  // dynamic and place below the boundary.
+  const extra = runSystemPromptHook(ctx.projectRoot, {
+    projectName: ctx.projectName,
+    projectRoot: ctx.projectRoot,
+    os: ctx.os,
+    profile: ctx.profile,
+  });
+  const extraBlock = extra ? `\n\n# Project-specific instructions\n${extra}` : '';
+
+  // Repo map varies as files are edited — the most volatile dynamic section.
+  // When CODER_REPOMAP_TOKENS=0 (default) ctx.repoMap is empty/undefined and
+  // this collapses to nothing.
   const repoMapBlock = ctx.repoMap && ctx.repoMap.length > 0 ? `\n\n${ctx.repoMap}` : '';
 
-  return `${preamble}${base}${planSection}${interactionSection}${extraBlock}${agentlessHint}${repoMapBlock}`;
+  const dynamicSuffix = `${customTiersText}${extraBlock}${repoMapBlock}`;
+  // ALWAYS emit the boundary, even when the dynamic suffix is empty. The
+  // marker itself costs ~50 chars but it gives consumers a byte-stable
+  // hinge to split on — splitting tests, cache-instrumentation code, and
+  // future ephemeral-breakpoint placement can all rely on the marker
+  // being there. Without this guarantee, the static prefix's tail would
+  // differ between "no dynamic content" and "dynamic content present"
+  // sessions because of trailing-newline rules.
+  const boundary = `\n\n${SYSTEM_PROMPT_DYNAMIC_BOUNDARY}`;
+
+  return `${preamble}${base}${planSection}${interactionSection}${agentLoopBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+}
+
+/**
+ * Static "Agent loop" framing. Cache-stable: depends only on ctx.agentLoopV2
+ * (a session-fixed flag). Borrows from codex `gpt_5_1_prompt.md` for the
+ * persistence directive and preamble guidance — see
+ * docs/agent-research/COMPARISON.md, R6.
+ */
+function buildAgentLoopBlock(): string {
+  return `
+
+# Agent loop
+You are a coding agent. Persist until the user's request is fully resolved end-to-end within the current turn whenever feasible: do not stop at analysis, partial fixes, or "here's what I'd do" — carry changes through implementation, verification, and a clear final summary unless the user explicitly pauses or redirects you. Update todos progressively as you work — flip to in_progress before starting an item, completed immediately after finishing. Do not batch completions.
+
+Only stop when one of these holds:
+1. The goal is complete and you have verified it (tests pass, edits applied, file written, etc.).
+2. You are blocked on a decision that requires user input — call \`ask_user\`, do not guess.
+3. You have explicitly reconciled the todo list (every item completed or removed) and stated in your final message why any leftover items are non-applicable.
+
+If a tool call fails, persevere: read the error, adjust, retry. Do not stop on the first failure unless it is genuinely unrecoverable.
+
+# Preambles before tool calls
+Before each tool call (or grouped batch of related calls) emit a 1–2 sentence preamble explaining what you are about to do. Keep it tight: roughly 8–12 words for a quick update, longer only when the action is novel and needs context.
+- Group related calls into ONE preamble — do not narrate every individual read.
+- Build on prior context: connect to what was just done so the user sees momentum.
+- Skip preambles for trivial reads inside a larger grouped action you already announced.
+- Keep the tone collaborative and concrete; no apologies, no restating the user's question.
+
+# Do not re-read what you already have
+Before reading a file (\`read_file\`, \`mcp__read_file\`, \`mcp__get_file_skeleton\`, \`mcp__get_file_structure\`) check the prior tool results in this conversation:
+- If the same path/range/symbol was already returned, the content is in your context. Do NOT re-fetch — quote it from memory or scroll back.
+- The slice resolver snaps \`around_line\` to enclosing symbols, so shifting the line number by a few does NOT yield new content. If the previous read returned lines X–Y and your new \`around_line\` falls inside that range, you will get the same body back.
+- If you genuinely need a different region, change \`start_line\`/\`end_line\` or pass a different \`symbol\` — and only after confirming the previous slice did not cover it.
+- After \`apply_patch\`, \`edit_file\`, or \`multi_edit\`, the tool already reported the result. Re-reading just to verify is wasteful — only re-read if the edit failed or you need adjacent context not in your last view.
+The runner enforces this: identical-content tool results are refused after the second duplicate. Repeating yourself burns tokens and stalls the session.
+
+# Active context
+Each turn you will receive a final user message wrapped in \`<active-context>...</active-context>\` containing the live goal, todo list, and any active task scope. Read it before acting — it is the source of truth, more authoritative than older history.`;
 }
 
 /**
  * Emit a short hint about the tiered tool system when the runner started
  * with a profile smaller than 'full'. The agent needs to know that certain
- * tools are hidden and how to unlock them via `expand_toolset`. We keep this
- * cache-stable (same text for the same profile) so the system prompt prefix
- * stays byte-identical turn over turn.
+ * tools are hidden and how to unlock them via `expand_toolset`. Profile is
+ * fixed at session start, so this text is byte-stable for the session and
+ * lives in the cached prefix above SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
+ *
+ * NOTE: customTiers were previously inlined here, but they varied with MCP
+ * server registration and so polluted the cached prefix across sessions of
+ * the same project. They now render in `customTiersBlock` below the
+ * boundary instead.
  */
-function tierHint(
-  profile?: 'bootstrap' | 'navigate' | 'full',
-  customTiers?: Array<{ tier: string; displayName: string; toolCount: number }>,
-): string {
-  // Build the custom tiers block (shared across all profiles when custom tiers exist).
-  // Sort lexicographically by tier name so the block is byte-identical across
-  // turns even if MCP server registration order varies — critical for prompt
-  // caching (the block is part of the cached prefix).
-  const sortedTiers = customTiers
-    ? [...customTiers].sort((a, b) => a.tier.localeCompare(b.tier))
-    : undefined;
-  const customBlock = sortedTiers && sortedTiers.length > 0
-    ? '\n\n## External tool groups (hidden, on-demand)\n' +
-      'The following external MCP server tool groups are available but HIDDEN. ' +
-      'Call `expand_toolset({tier: "<name>"})` to unlock:\n' +
-      sortedTiers.map((t) => `- "${t.tier}" (${t.toolCount} tools) — ${t.displayName}`).join('\n') +
-      '\nUnlock ONLY when your task requires them. They stay active for the rest of the session.\n'
-    : '';
-
+function tierHint(profile?: 'bootstrap' | 'navigate' | 'full'): string {
   if (!profile || profile === 'full') {
-    // Full profile: core tiers are all active, but custom tiers still need expansion
-    return customBlock ? `# External tools\n${customBlock}\n` : '';
+    return '';
   }
 
   if (profile === 'bootstrap') {
@@ -248,14 +357,34 @@ Write/edit/git/shell tools and deep navigation tools (find_references, trace_usa
 Admin tools (git_commit, add_snapshot, index_project, ...) require \`expand_toolset({tier: "admin"})\` — unlock ONLY when the user explicitly asks.
 
 Rule of thumb: stay in bootstrap for informational questions. Unlock navigate the moment you realize the task requires code changes, shell commands, or deep cross-reference analysis.
-${customBlock}
 `;
   }
   // navigate
   return `# Tool tiers
 You started in the **navigate** tier. Bootstrap + write/edit/shell/git-read/deep-navigation tools are visible. Admin tools (git_commit, add_snapshot, index_project, costs/models, snapshot mutations) are HIDDEN — call \`expand_toolset({tier: "admin"})\` ONLY when the user explicitly asks for them.
-${customBlock}
 `;
+}
+
+/**
+ * Render the external-MCP custom-tiers listing. Lives BELOW the dynamic
+ * boundary because the set of registered tiers varies with MCP server
+ * connection state (a project may add or remove a server between sessions
+ * without touching its identity). Sorted lexicographically by tier name so
+ * within a single session the text is byte-stable across turns even if the
+ * registry's iteration order varies.
+ */
+function customTiersBlock(
+  customTiers?: Array<{ tier: string; displayName: string; toolCount: number }>,
+): string {
+  if (!customTiers || customTiers.length === 0) return '';
+  const sorted = [...customTiers].sort((a, b) => a.tier.localeCompare(b.tier));
+  return (
+    '\n\n# External tool groups (hidden, on-demand)\n' +
+    'The following external MCP server tool groups are available but HIDDEN. ' +
+    'Call `expand_toolset({tier: "<name>"})` to unlock:\n' +
+    sorted.map((t) => `- "${t.tier}" (${t.toolCount} tools) — ${t.displayName}`).join('\n') +
+    '\nUnlock ONLY when your task requires them. They stay active for the rest of the session.\n'
+  );
 }
 
 /**
@@ -297,16 +426,19 @@ If you want full caller graphs / search scoring / vector neighbors, ask the user
 `;
   }
   return `# Tool strategy — token economy
-This project ships with 41 MCP tools (prefixed \`mcp__\`) for semantic codebase navigation. ALWAYS prefer them over native file reads:
+This project ships ~41 MCP tools (prefixed \`mcp__\`) for semantic codebase navigation. The bootstrap tier shows the cheap, common ones; deeper tools (find_references, prepare_edit, semantic_neighbors, etc.) live in the \`navigate\` tier and are loaded on demand.
 
-1. Start exploration with \`mcp__get_project_pulse\` (~100 tokens) — never \`mcp__get_project_overview\` without a token budget. Check the \`vector_coverage\` line: if it says "none (search will use FTS only)" or shows very low %, prefer \`mcp__grep_code\`/FTS-mode searches over vector/semantic tools on this project.
-2. Search existing knowledge with \`mcp__query_snapshots\` BEFORE exploring code manually.
-3. For "how does X work?" questions use \`mcp__get_context_for\` (curated bundle). For short NL questions where the first attempt returns weak recall, retry with \`hyde: true\` — it runs an LLM-generated hypothetical-document expansion that dramatically improves recall for questions the codebase never phrases the same way.
-4. To understand a file, use \`mcp__get_file_skeleton\` (NOT \`mcp__read_file\` of the whole file, NOT \`mcp__get_file_structure\`).
-5. To read just one function/class body, use \`mcp__get_symbol_body\`.
-6. Before editing a symbol, use \`mcp__prepare_edit\` — it returns body + callers + neighbors + imports + tests in one call.
-7. To find where something is used: \`mcp__find_references\` or \`mcp__trace_usage\`. NEVER grep for that.
-8. For text search across files: \`mcp__grep_code\` with filters (\`language\`, \`layer\`, \`glob\`).
-9. To find symbols that *behave* similarly to a known one (wrappers, alternative implementations, helpers with different names), use \`mcp__semantic_neighbors\` with the seed symbol_id — it queries body embeddings, so it catches cases where names diverge but logic is alike. Requires \`expand_toolset('navigate')\`. Complements \`mcp__grep_code\` (literal) and \`mcp__find_references\` (syntactic).
+The 5 default cheap entry points (always visible):
+1. \`mcp__get_project_pulse\` — ultra-compact overview (~100 tokens). Start here.
+2. \`mcp__query_snapshots\` — full-text search over saved knowledge. Try this BEFORE exploring code.
+3. \`mcp__get_context_for\` — curated bundle for "how does X work?". Add \`hyde: true\` if recall is weak.
+4. \`mcp__search\` / \`mcp__grep_code\` — hybrid search and ripgrep with filters.
+5. \`mcp__get_file_skeleton\` — file outline; ALWAYS prefer over a full \`read_file\`.
+
+When you need a tool you cannot see in the visible tools array:
+- Call \`find_tools({ query: "<what you need>" })\` first — it searches the FULL catalog (all tiers) and returns up to 5 matches with their tier and a hint to unlock.
+- Then call \`expand_toolset({ tier: "<tier>" })\` if needed; the new tools become visible next turn.
+
+Always prefer MCP semantic tools over native file reads. Never grep when \`mcp__find_references\` exists.
 `;
 }

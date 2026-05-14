@@ -59,6 +59,20 @@ export class SandboxFilesystemAdapter implements IFilesystemPort {
     const entries = await this.driver.readdir(this.containerId, absPath);
     return entries.map(synthesizeDirent);
   }
+
+  async unlink(absPath: string): Promise<void> {
+    // No dedicated `unlink` on ISandboxDriver — shell out via `run` with
+    // argv (no shell parsing). Mirrors how `mkdir` / `access` are layered
+    // on top of `run` in cli-oci-driver. `rm -f` is silent on missing
+    // files; we surface absence by re-running `access` only on error.
+    const res = await this.driver.run(this.containerId, 'rm', ['-f', absPath], {
+      timeoutMs: 10_000,
+    });
+    if (res.exitCode !== 0) {
+      const detail = (res.stderr || res.stdout || '').trim();
+      throw new Error(`sandbox unlink failed (${res.exitCode}) at ${absPath}: ${detail}`);
+    }
+  }
 }
 
 function synthesizeDirent(entry: { name: string; kind: 'dir' | 'file' | 'other' }): PortDirent {

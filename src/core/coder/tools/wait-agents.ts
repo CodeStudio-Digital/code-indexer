@@ -105,6 +105,11 @@ export const waitAgents: CoderTool = {
   // Blocks the runner waiting for events; never run two of these in parallel.
   parallelSafe: false,
   riskLevel: 'read',
+  // Polling tool — exempt from per-arg dup-call cap and result-content dedup.
+  // Repeated calls with the same paths/ids are the legitimate use case while
+  // the targets are still running, and the result content is identical until
+  // a status flips.
+  repeatable: true,
   parameters: {
     type: 'object',
     properties: {

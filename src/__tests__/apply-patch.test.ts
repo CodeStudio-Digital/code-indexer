@@ -183,6 +183,273 @@ describe('apply_patch applier', () => {
   });
 });
 
+// ─── CRLF / BOM / atomicity regression tests ─────────────────────
+// These cover the "apply_patch never works on Windows" bug class: source
+// files with CRLF line endings or UTF-8 BOMs would fail every multi-line
+// hunk because the LF-built search string couldn't be found in the
+// CRLF/BOM-preserved buffer. Also cover the avalanche scenario where
+// one bad hunk in a multi-file patch left earlier files half-written.
+describe('apply_patch normalization & atomicity', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'apply-patch-norm-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('matches hunks against CRLF source and preserves CRLF on write', async () => {
+    const ctx = makeCtx(dir);
+    const crlf = 'const x = 1;\r\nconst y = 2;\r\nconst z = 3;\r\n';
+    writeFileSync(join(dir, 'foo.ts'), crlf);
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: foo.ts
+@@
+ const x = 1;
+-const y = 2;
++const y = 42;
+ const z = 3;
+*** End Patch`);
+    await applyParsedPatch(patch, ctx);
+    const result = readFileSync(join(dir, 'foo.ts'), 'utf8');
+    expect(result).toBe('const x = 1;\r\nconst y = 42;\r\nconst z = 3;\r\n');
+  });
+
+  it('preserves CRLF on lines added by a hunk', async () => {
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'foo.ts'), 'a\r\nb\r\nc\r\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: foo.ts
+@@
+ a
++inserted1
++inserted2
+ b
+ c
+*** End Patch`);
+    await applyParsedPatch(patch, ctx);
+    const result = readFileSync(join(dir, 'foo.ts'), 'utf8');
+    expect(result).toBe('a\r\ninserted1\r\ninserted2\r\nb\r\nc\r\n');
+    // No bare \n anywhere — every newline must be CRLF.
+    expect(/(?<!\r)\n/.test(result)).toBe(false);
+  });
+
+  it('preserves UTF-8 BOM on Update', async () => {
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'foo.ts'), '﻿const x = 1;\nconst y = 2;\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: foo.ts
+@@
+-const x = 1;
++const x = 99;
+ const y = 2;
+*** End Patch`);
+    await applyParsedPatch(patch, ctx);
+    const result = readFileSync(join(dir, 'foo.ts'), 'utf8');
+    expect(result.charCodeAt(0)).toBe(0xfeff);
+    expect(result).toBe('﻿const x = 99;\nconst y = 2;\n');
+  });
+
+  it('keeps BOM on Add File output when the patch emits one', async () => {
+    const ctx = makeCtx(dir);
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Add File: bom.ts
++﻿export const greeting = 'hi';
+*** End Patch`);
+    await applyParsedPatch(patch, ctx);
+    const result = readFileSync(join(dir, 'bom.ts'), 'utf8');
+    expect(result.charCodeAt(0)).toBe(0xfeff);
+  });
+
+  it('handles two files in one patch with different line endings', async () => {
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'lf.ts'), 'lf-a\nlf-b\n');
+    writeFileSync(join(dir, 'crlf.ts'), 'crlf-a\r\ncrlf-b\r\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: lf.ts
+@@
+-lf-a
++lf-A
+ lf-b
+*** Update File: crlf.ts
+@@
+-crlf-a
++crlf-A
+ crlf-b
+*** End Patch`);
+    await applyParsedPatch(patch, ctx);
+    expect(readFileSync(join(dir, 'lf.ts'), 'utf8')).toBe('lf-A\nlf-b\n');
+    expect(readFileSync(join(dir, 'crlf.ts'), 'utf8')).toBe('crlf-A\r\ncrlf-b\r\n');
+  });
+
+  it('mixed endings within one file normalize to dominant convention', async () => {
+    const ctx = makeCtx(dir);
+    // Two CRLF + one LF in a small file → CRLF wins (any \r\n in first 4 KB).
+    writeFileSync(join(dir, 'mix.ts'), 'a\r\nb\nc\r\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: mix.ts
+@@
+ a
+-b
++B
+ c
+*** End Patch`);
+    await applyParsedPatch(patch, ctx);
+    const result = readFileSync(join(dir, 'mix.ts'), 'utf8');
+    expect(result).toBe('a\r\nB\r\nc\r\n');
+  });
+
+  it('atomicity: multi-file patch with all valid hunks writes all files', async () => {
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'a.ts'), 'a\n');
+    writeFileSync(join(dir, 'b.ts'), 'b\n');
+    writeFileSync(join(dir, 'c.ts'), 'c\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: a.ts
+@@
+-a
++A
+*** Update File: b.ts
+@@
+-b
++B
+*** Update File: c.ts
+@@
+-c
++C
+*** End Patch`);
+    await applyParsedPatch(patch, ctx);
+    expect(readFileSync(join(dir, 'a.ts'), 'utf8')).toBe('A\n');
+    expect(readFileSync(join(dir, 'b.ts'), 'utf8')).toBe('B\n');
+    expect(readFileSync(join(dir, 'c.ts'), 'utf8')).toBe('C\n');
+  });
+
+  it('atomicity: failure in any hunk leaves every file untouched', async () => {
+    // Reproduces the user's bug: a 4-file patch failed on file 3, but
+    // files 1 and 2 had already been mutated. After the fix nothing
+    // should be written when phase 1 finds a bad hunk.
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'a.ts'), 'a\n');
+    writeFileSync(join(dir, 'b.ts'), 'b\n');
+    writeFileSync(join(dir, 'c.ts'), 'c\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: a.ts
+@@
+-a
++A
+*** Update File: b.ts
+@@
+-DOES_NOT_EXIST
++nope
+*** Update File: c.ts
+@@
+-c
++C
+*** End Patch`);
+    await expect(applyParsedPatch(patch, ctx)).rejects.toThrow(/did not match/);
+    expect(readFileSync(join(dir, 'a.ts'), 'utf8')).toBe('a\n');
+    expect(readFileSync(join(dir, 'b.ts'), 'utf8')).toBe('b\n');
+    expect(readFileSync(join(dir, 'c.ts'), 'utf8')).toBe('c\n');
+  });
+
+  it('atomicity: failure inside an Update aborts pending Add/Delete in same patch', async () => {
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'doomed.ts'), 'real content\n');
+    writeFileSync(join(dir, 'will-survive.ts'), 'survivor\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Add File: newcomer.ts
++I should not exist
+*** Update File: doomed.ts
+@@
+-no-such-line
++replacement
+*** Delete File: will-survive.ts
+*** End Patch`);
+    await expect(applyParsedPatch(patch, ctx)).rejects.toThrow(/did not match/);
+    expect(existsSync(join(dir, 'newcomer.ts'))).toBe(false);
+    expect(readFileSync(join(dir, 'doomed.ts'), 'utf8')).toBe('real content\n');
+    expect(existsSync(join(dir, 'will-survive.ts'))).toBe(true);
+  });
+
+  it('move + bad hunk: original file untouched, target not created', async () => {
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'src.ts'), 'original\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: src.ts
+*** Move to: dest.ts
+@@
+-does-not-match
++nope
+*** End Patch`);
+    await expect(applyParsedPatch(patch, ctx)).rejects.toThrow(/did not match/);
+    expect(readFileSync(join(dir, 'src.ts'), 'utf8')).toBe('original\n');
+    expect(existsSync(join(dir, 'dest.ts'))).toBe(false);
+  });
+
+  it('move: write target succeeds before unlinking source', async () => {
+    // Successful move case — verifies the order isn't broken by the
+    // refactor. New path has content, old path is gone.
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'src.ts'), 'hello\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: src.ts
+*** Move to: dest.ts
+@@
+-hello
++world
+*** End Patch`);
+    await applyParsedPatch(patch, ctx);
+    expect(existsSync(join(dir, 'src.ts'))).toBe(false);
+    expect(readFileSync(join(dir, 'dest.ts'), 'utf8')).toBe('world\n');
+  });
+
+  it('error message includes file metadata and search preview', async () => {
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'foo.ts'), 'line1\r\nline2\r\nline3\r\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: foo.ts
+@@
+ line1
+-nope
++yes
+ line3
+*** End Patch`);
+    let captured: Error | null = null;
+    try {
+      await applyParsedPatch(patch, ctx);
+    } catch (e) {
+      captured = e as Error;
+    }
+    expect(captured).not.toBeNull();
+    const msg = captured!.message;
+    expect(msg).toMatch(/did not match source/);
+    expect(msg).toMatch(/before=1 removed=1 after=1/);
+    expect(msg).toMatch(/CRLF endings, no BOM/);
+    expect(msg).toMatch(/Search starts with: "line1⏎nope⏎line3"/);
+  });
+
+  it('intra-file hunk cascade: second hunk searches the post-first-hunk text', async () => {
+    // Guards the deliberate behavior at apply-patch.ts:340 — hunks within
+    // an Update apply sequentially against a mutating buffer (matches
+    // `git apply` semantics). This test fails if a refactor switches to
+    // independent hunk matching against the original content.
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'foo.ts'), 'alpha\nbeta\ngamma\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: foo.ts
+@@
+-alpha
++ALPHA
+@@
+ ALPHA
+-beta
++BETA
+*** End Patch`);
+    await applyParsedPatch(patch, ctx);
+    expect(readFileSync(join(dir, 'foo.ts'), 'utf8')).toBe('ALPHA\nBETA\ngamma\n');
+  });
+});
+
 describe('apply_patch tool handler', () => {
   let dir: string;
   beforeEach(() => {

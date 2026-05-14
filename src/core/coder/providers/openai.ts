@@ -259,7 +259,7 @@ function toOpenAIMessages(system: string, messages: AgentMessage[], vendor?: Ope
       const msg: Record<string, unknown> = {
         role: 'assistant',
         content: text || "",
-        ...(vendor === 'deepseek' && reasoning ? { reasoning_content: reasoning } : {}),
+        ...(vendor === 'deepseek' ? { reasoning_content: reasoning } : {}),
       };
       if (toolUses.length > 0) {
         msg['tool_calls'] = toolUses.map((tu) => ({

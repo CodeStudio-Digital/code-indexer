@@ -7,6 +7,8 @@ export type {
   ContextStatus,
   IndexStatus,
   ParallelAgent,
+  PipelineNodeRuntimeStatus,
+  PipelineRuntimeState,
   PlanPrompt,
   QuestionPrompt,
   RunDelta,

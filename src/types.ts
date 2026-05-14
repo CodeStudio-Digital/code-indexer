@@ -227,6 +227,8 @@ export interface ContextSnapshot {
   created_at: string;
   updated_at: string;
   created_by: string;
+  /** MD5 of the text fed to the embedding service. NULL = needs embedding. */
+  embedding_hash: string | null;
 }
 
 // ─── Webhooks ─────────────────────────────────────────────────────
@@ -412,7 +414,7 @@ export interface VectorIdRecord {
   project_id: number;
   vector_id: string;
   file_path: string | null;
-  type: 'file' | 'symbol';
+  type: 'file' | 'symbol' | 'symbol_body' | 'snapshot';
   created_at: string;
 }
 

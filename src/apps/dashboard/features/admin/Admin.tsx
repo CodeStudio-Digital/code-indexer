@@ -42,6 +42,8 @@ export default function Admin() {
     refresh,
     toggleModel,
     setModelEffort,
+    setModelContextWindow,
+    backfillContextWindows,
     setSubagentTarget,
     setKimiCodeThinkingMode,
     setFallback,
@@ -148,6 +150,8 @@ export default function Admin() {
                 onRemove={() => remove(p.id)}
                 onToggleModel={(modelId, mode, enabled) => toggleModel(p.id, modelId, mode, enabled)}
                 onSetModelEffort={(modelId, mode, level) => setModelEffort(p.id, modelId, mode, level)}
+                onSetModelContextWindow={(modelId, mode, value) => setModelContextWindow(p.id, modelId, mode, value)}
+                onBackfillContextWindows={backfillContextWindows}
                 onSetFallback={setFallback}
                 onSetSubagentTarget={setSubagentTarget}
                 onSetKimiCodeThinkingMode={setKimiCodeThinkingMode}

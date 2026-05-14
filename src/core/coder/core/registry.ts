@@ -48,6 +48,13 @@ export class ToolRegistry {
     if (!tool) {
       return { content: `Unknown tool: ${name}`, isError: true };
     }
+    // Tag the recording filesystem port with the current tool name so its
+    // audit log shows the actual mutating tool (apply_patch / edit_file /
+    // multi_edit / etc.) instead of a generic "write_file" default.
+    const fsPort = ctx.ports?.fs as { setCurrentTool?: (n: string) => void } | undefined;
+    if (fsPort && typeof fsPort.setCurrentTool === 'function') {
+      try { fsPort.setCurrentTool(name); } catch { /* never let telemetry break tool dispatch */ }
+    }
     try {
       return await tool.handler(args, ctx);
     } catch (e) {

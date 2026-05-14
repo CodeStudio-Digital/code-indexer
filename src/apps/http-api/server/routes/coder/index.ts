@@ -7,6 +7,9 @@ import { mountCoderGroupsRoutes } from './groups.js';
 import { mountCoderInteractionRoutes } from './interaction.js';
 import { mountCoderStreamRoutes } from './stream.js';
 import { mountCoderSkillsRoutes } from './skills.js';
+import { mountCoderProjectTreeRoutes } from './project-tree.routes.js';
+import { mountCoderPipelineRoutes } from './pipelines.js';
+import { mountCoderSnapshotRoutes } from './snapshot.js';
 import { mountCompanyRoutes } from '../company/index.js';
 
 export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
@@ -17,5 +20,8 @@ export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
   mountCoderInteractionRoutes(app, deps, runtime);
   mountCoderStreamRoutes(app, deps, runtime);
   mountCoderSkillsRoutes(app, deps, runtime);
+  mountCoderProjectTreeRoutes(app, deps);
+  mountCoderPipelineRoutes(app, deps, runtime);
+  mountCoderSnapshotRoutes(app, deps);
   mountCompanyRoutes(app, deps);
 }

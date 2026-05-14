@@ -206,6 +206,7 @@ function toResolved(def: SkillDefinition): ResolvedSkill {
     triggerTags: triggerTags.length > 0 ? triggerTags : null,
     tags: def.tags,
     source: def.source,
+    author: def.author,
     sortOrder: def.sort_order,
   };
 }

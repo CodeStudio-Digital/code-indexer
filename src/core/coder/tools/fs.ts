@@ -299,6 +299,7 @@ const editFile: CoderTool = {
     const oldStr = String(args.old_string ?? '');
     const newStr = String(args.new_string ?? '');
     const replaceAll = Boolean(args.replace_all);
+    if (!path) return err('path is required and cannot be empty');
     if (!oldStr) return err('old_string cannot be empty');
 
     const abs = resolveSafe(path, ctx);
@@ -430,6 +431,7 @@ const readFile: CoderTool = {
   },
   handler: async (args, ctx): Promise<ToolResult> => {
     const path = String(args.path ?? '');
+    if (!path) return err('path is required and cannot be empty');
     const abs = resolveSafe(path, ctx);
     if (!abs) return err(`Path '${path}' is outside project root`);
 
@@ -677,6 +679,7 @@ const multiEdit: CoderTool = {
   handler: async (args, ctx): Promise<ToolResult> => {
     const path = String(args.path ?? '');
     const edits = Array.isArray(args.edits) ? args.edits : [];
+    if (!path) return err('path is required and cannot be empty');
     if (edits.length === 0) return err('edits array cannot be empty — use write_file to replace the whole file or edit_file for a single change.');
     if (edits.length > 50) return err(`edits array has ${edits.length} items, max 50 per call. Split into multiple calls.`);
 

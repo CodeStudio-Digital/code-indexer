@@ -15,7 +15,92 @@ export const KIMI_CODE_CLIENT_VERSION = process.env.KIMI_CODE_CLIENT_VERSION ?? 
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 const DEFAULT_EXPIRES_IN_SECONDS = 3600;
 const MIN_REFRESH_THRESHOLD_MS = 5 * 60 * 1000;
+const REFRESH_THRESHOLD_RATIO = 0.5;
 const RETRYABLE_REFRESH_STATUS = new Set([429, 500, 502, 503, 504]);
+
+// Mutable for test override — kept module-level so production callers see
+// the production defaults without plumbing options through every signature.
+let unauthorizedRefreshCooldownMs = 5 * 60 * 1000;
+let raceRecoveryDelayMs = 1000;
+
+export function __setRefreshTombstoneCooldownForTests(ms: number | null): void {
+  unauthorizedRefreshCooldownMs = ms ?? 5 * 60 * 1000;
+}
+
+export function __setRaceRecoveryDelayForTests(ms: number | null): void {
+  raceRecoveryDelayMs = ms ?? 1000;
+}
+
+/**
+ * Process-wide tombstone for refresh tokens that auth.kimi.com has rejected
+ * with 401/403. Mirrors kimi-cli's `_REJECTED_REFRESH_TOKENS` behavior:
+ * suppresses follow-up refresh attempts for `UNAUTHORIZED_REFRESH_RETRY_COOLDOWN_MS`
+ * so a revoked or out-of-band-rotated refresh_token doesn't generate a
+ * round-trip per LLM call. Auto-clears when the persisted refresh_token
+ * differs from the rejected one (i.e. another process rotated successfully).
+ *
+ * Keyed by providerId since the same machine may have multiple Kimi Code
+ * provider rows (different accounts).
+ */
+interface RejectedRefreshState {
+  refresh_token: string;
+  retry_after: number;
+}
+const REJECTED_REFRESH_TOKENS = new Map<string, RejectedRefreshState>();
+
+export function __clearRejectedRefreshTokensForTests(): void {
+  REJECTED_REFRESH_TOKENS.clear();
+}
+
+function markRefreshTokenRejected(providerId: string, refreshToken: string): void {
+  if (!refreshToken) return;
+  REJECTED_REFRESH_TOKENS.set(providerId, {
+    refresh_token: refreshToken,
+    retry_after: Date.now() + unauthorizedRefreshCooldownMs,
+  });
+}
+
+function clearRejectedRefreshToken(providerId: string): void {
+  REJECTED_REFRESH_TOKENS.delete(providerId);
+}
+
+/**
+ * Returns the active rejection state if `refreshToken` matches the tombstoned
+ * value AND the cooldown has not yet expired. Auto-clears the tombstone when
+ * the refresh_token differs (another process rotated) or when the cooldown
+ * has passed.
+ */
+function activeRejectionState(
+  providerId: string,
+  refreshToken: string | null | undefined,
+): RejectedRefreshState | null {
+  const state = REJECTED_REFRESH_TOKENS.get(providerId);
+  if (!state) return null;
+  if (!refreshToken || state.refresh_token !== refreshToken) {
+    REJECTED_REFRESH_TOKENS.delete(providerId);
+    return null;
+  }
+  if (Date.now() >= state.retry_after) {
+    REJECTED_REFRESH_TOKENS.delete(providerId);
+    return null;
+  }
+  return state;
+}
+
+/**
+ * Adaptive refresh threshold mirroring kimi-cli's policy: refresh when the
+ * remaining lifetime drops below `max(MIN_REFRESH_THRESHOLD_MS, expires_in * 0.5)`.
+ * `expires_in` lives on `oauth_tokens.extra.expires_in` in seconds — set by
+ * `kimiCodeProviderExtra` on every successful token response. Falls back to
+ * the flat 5-minute floor when the value is missing or invalid.
+ */
+function refreshThresholdMs(extra: Record<string, unknown> | undefined): number {
+  const raw = extra?.expires_in;
+  const expiresInSeconds =
+    typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 0;
+  if (expiresInSeconds <= 0) return MIN_REFRESH_THRESHOLD_MS;
+  return Math.max(MIN_REFRESH_THRESHOLD_MS, expiresInSeconds * 1000 * REFRESH_THRESHOLD_RATIO);
+}
 
 export const KIMI_CODE_SEED_MODELS = [
   {
@@ -341,10 +426,20 @@ export async function refreshIfExpired(
   if (!tok) return null;
   const existingToken = tok.access_token;
   const now = Date.now();
-  if (!opts?.force && tok.expires_at && tok.expires_at - now > MIN_REFRESH_THRESHOLD_MS) {
+  const threshold = refreshThresholdMs(tok.extra);
+  if (!opts?.force && tok.expires_at && tok.expires_at - now > threshold) {
     return existingToken;
   }
   if (!tok.refresh_token) return existingToken;
+
+  // Tombstone short-circuit — when this refresh_token was rejected recently,
+  // skip the round-trip and return the (likely-dead) cached access token. The
+  // caller's LLM request will surface an auth failure that prompts re-login,
+  // without each request adding a wasted /oauth/token POST. `force` ignores the
+  // tombstone so explicit refreshes (e.g. post-401 from the LLM) can retry.
+  if (!opts?.force && activeRejectionState(providerId, tok.refresh_token)) {
+    return existingToken;
+  }
 
   const cfg = store.getProvider(providerId);
   const deviceId =
@@ -408,7 +503,25 @@ export async function refreshIfExpired(
           },
         });
       }
+      // Successful rotation clears any tombstone for this provider — a fresh
+      // refresh_token is now in play and the previous rejection is irrelevant.
+      clearRejectedRefreshToken(providerId);
       return body.access_token;
+    }
+
+    // 401/403 on refresh: handle in-flight rotation race before tombstoning.
+    // If another process (CLI + dashboard scenario) just rotated the token,
+    // the persisted refresh_token will differ from ours within ~1s; pick up
+    // their fresh access_token instead of failing.
+    if (response.status === 401 || response.status === 403) {
+      await new Promise((resolve) => setTimeout(resolve, raceRecoveryDelayMs));
+      const latest = store.getOAuth(providerId);
+      if (latest && latest.refresh_token && latest.refresh_token !== tok.refresh_token) {
+        clearRejectedRefreshToken(providerId);
+        return latest.access_token;
+      }
+      markRefreshTokenRejected(providerId, tok.refresh_token);
+      throw new Error(body.error_description ?? body.error ?? `HTTP ${response.status}`);
     }
 
     lastError = new Error(body.error_description ?? body.error ?? `HTTP ${response.status}`);

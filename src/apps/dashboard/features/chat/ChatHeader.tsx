@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Bot, Gauge, Info, PanelLeft, Sparkles, Wrench } from 'lucide-react';
+import { AlertTriangle, Bot, Gauge, GitCompare, Info, PanelLeft, Sparkles, Wrench } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -28,9 +28,12 @@ interface ChatHeaderProps {
   onOpenToolConfig?: () => void;
   onOpenSkillConfig?: () => void;
   onOpenMetrics?: () => void;
+  onOpenSnapshots?: () => void;
+  /** Pending file-snapshot count to badge on the Snapshots button. 0 hides the badge. */
+  pendingSnapshots?: number;
 }
 
-export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics }: ChatHeaderProps) {
+export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, pendingSnapshots }: ChatHeaderProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Persisted (from DB) + runtime delta (current run, if streaming).
   const totalIn = session.total_input_tokens;
@@ -172,6 +175,26 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
               </button>
             </TooltipTrigger>
             <TooltipContent>{t('chat:header.metrics')}</TooltipContent>
+          </Tooltip>
+        )}
+        {onOpenSnapshots && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="Snapshots"
+                onClick={onOpenSnapshots}
+                className="relative p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <GitCompare className="h-4 w-4" />
+                {pendingSnapshots != null && pendingSnapshots > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-primary text-primary-foreground text-[9px] font-medium flex items-center justify-center tabular-nums">
+                    {pendingSnapshots > 99 ? '99+' : pendingSnapshots}
+                  </span>
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Snapshots ({pendingSnapshots ?? 0} pending)</TooltipContent>
           </Tooltip>
         )}
         <Tooltip>

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { askUser } from '../core/coder/tools/interaction.js';
 import { viewImage } from '../core/coder/tools/view-image.js';
-import { goalTools, _resetGoalForKey } from '../core/coder/tools/goal.js';
+import { goalTools, _resetGoalForKey, _resetCreateBurstForKey } from '../core/coder/tools/goal.js';
 import type { ToolContext } from '../core/coder/core/tool.js';
 
 const createGoal = goalTools.find((t) => t.name === 'create_goal')!;
@@ -34,32 +34,50 @@ function ctx(runner?: FakeRunner, cwd?: string): ToolContext {
 // ─── ask_user — tightened schema ─────────────────────────────────
 
 describe('ask_user — tightened schema', () => {
-  it('rejects 1 option (must be 2-3)', async () => {
+  it('rejects 1 option (must be 2–8)', async () => {
     const runner = new FakeRunner();
     const r = await askUser.handler(
       { question: 'pick', options: [{ label: 'A', value: 'a' }] },
       ctx(runner),
     );
     expect(r.isError).toBe(true);
-    expect(r.content).toContain('2 or 3');
+    expect(r.content).toContain('2–8');
   });
 
-  it('rejects 4 options', async () => {
+  it('accepts 6 options (was 4 before — bumped cap to 8 for real menu use)', async () => {
     const runner = new FakeRunner();
+    runner.enqueue(JSON.stringify({ answer: 'c' }));
     const r = await askUser.handler(
       {
-        question: 'pick',
+        question: 'Which area to analyze?',
         options: [
-          { label: 'A', value: 'a' },
-          { label: 'B', value: 'b' },
-          { label: 'C', value: 'c' },
-          { label: 'D', value: 'd' },
+          { label: 'Code quality', value: 'quality' },
+          { label: 'Architecture', value: 'arch' },
+          { label: 'Module', value: 'module' },
+          { label: 'Performance', value: 'perf' },
+          { label: 'Security', value: 'sec' },
+          { label: 'Full analysis', value: 'full' },
         ],
       },
       ctx(runner),
     );
+    expect(r.isError).toBeFalsy();
+  });
+
+  it('rejects 9 options (above cap)', async () => {
+    const runner = new FakeRunner();
+    const r = await askUser.handler(
+      {
+        question: 'pick',
+        options: Array.from({ length: 9 }, (_, i) => ({
+          label: `O${i}`,
+          value: `o${i}`,
+        })),
+      },
+      ctx(runner),
+    );
     expect(r.isError).toBe(true);
-    expect(r.content).toContain('2 or 3');
+    expect(r.content).toContain('2–8');
   });
 
   it('rejects duplicate option values', async () => {
@@ -182,13 +200,49 @@ describe('goal — create / get / update', () => {
     expect(g.content).toContain('Migrate auth to OAuth2');
   });
 
-  it('refuses a second create while one is active', async () => {
+  it('replace_active=false is currently ignored — supersede happens regardless (user disabled the strict branch in goal.ts)', async () => {
+    // Historical: this test asserted the strict refusal path. The user
+    // commented out the `if (!replaceActive)` block to make create_goal
+    // always supersede. Test now mirrors the live behaviour.
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
+    _resetCreateBurstForKey(runner as unknown as object);
     await createGoal.handler({ goal: 'first' }, ctx(runner));
-    const r = await createGoal.handler({ goal: 'second' }, ctx(runner));
-    expect(r.isError).toBe(true);
-    expect(r.content).toContain('already active');
+    const r = await createGoal.handler(
+      { goal: 'second', replace_active: false },
+      ctx(runner),
+    );
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('superseded');
+  });
+
+  it('auto-supersedes an active goal by default (replace_active defaults to true)', async () => {
+    const runner = new FakeRunner();
+    _resetGoalForKey(runner as unknown as object);
+    await createGoal.handler({ goal: 'old objective' }, ctx(runner));
+    // No replace_active arg → default true → auto-replace.
+    const r = await createGoal.handler({ goal: 'new objective' }, ctx(runner));
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('auto-completed');
+    expect(r.content).toContain('superseded');
+    // The active goal is now the new one.
+    const g = await getGoal.handler({}, ctx(runner));
+    expect(g.content).toContain('Goal: new objective');
+    expect(g.content).toContain('in_progress');
+  });
+
+  it('auto-supersede explicit (replace_active=true) preserves prior createdAt-style chain', async () => {
+    const runner = new FakeRunner();
+    _resetGoalForKey(runner as unknown as object);
+    await createGoal.handler({ goal: 'phase 1' }, ctx(runner));
+    const r = await createGoal.handler(
+      { goal: 'phase 2', replace_active: true },
+      ctx(runner),
+    );
+    expect(r.isError).toBeFalsy();
+    // Sanity: the new goal is in_progress and the message mentions the supersede.
+    const g = await getGoal.handler({}, ctx(runner));
+    expect(g.content).toContain('Goal: phase 2');
   });
 
   it('marks complete via update_goal', async () => {
@@ -225,6 +279,7 @@ describe('goal — create / get / update', () => {
   it('allows a new create after complete (reset cycle)', async () => {
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
+    _resetCreateBurstForKey(runner as unknown as object);
     await createGoal.handler({ goal: 'a' }, ctx(runner));
     await updateGoal.handler({ status: 'complete' }, ctx(runner));
     const c2 = await createGoal.handler({ goal: 'b' }, ctx(runner));
@@ -232,5 +287,57 @@ describe('goal — create / get / update', () => {
     const g = await getGoal.handler({}, ctx(runner));
     expect(g.content).toContain('Goal: b');
     expect(g.content).toContain('in_progress');
+  });
+
+  it('refuses with "stop loop" error after 4th create_goal in tight burst', async () => {
+    // Threshold=3 inside the 90s window. Calls 1-3 succeed; call 4 trips the
+    // burst cap regardless of whether they were supersedes or first-creates.
+    const runner = new FakeRunner();
+    _resetGoalForKey(runner as unknown as object);
+    _resetCreateBurstForKey(runner as unknown as object);
+    const r1 = await createGoal.handler({ goal: 'phase 1' }, ctx(runner));
+    const r2 = await createGoal.handler({ goal: 'phase 2' }, ctx(runner));
+    const r3 = await createGoal.handler({ goal: 'phase 3' }, ctx(runner));
+    const r4 = await createGoal.handler({ goal: 'phase 4' }, ctx(runner));
+    expect(r1.isError).toBeFalsy();
+    expect(r2.isError).toBeFalsy();
+    expect(r3.isError).toBeFalsy();
+    expect(r4.isError).toBe(true);
+    expect(r4.content).toContain('stuck-loop');
+    expect(r4.content).toContain('EXECUTE');
+  });
+
+  it('returns a quiet success message — no in-result nudge that would re-prime the model', async () => {
+    // The earlier "DO NOT call create_goal again" tail was paradoxically
+    // reinforcing the loop by keeping the tool name in the model's context.
+    // The real fix lives in the runner (filterGoalToolsByState removes the
+    // tool from the surface), so the success body is intentionally minimal.
+    const runner = new FakeRunner();
+    _resetGoalForKey(runner as unknown as object);
+    _resetCreateBurstForKey(runner as unknown as object);
+    const r1 = await createGoal.handler({ goal: 'phase 1' }, ctx(runner));
+    expect(r1.content).not.toContain('DO NOT call create_goal');
+    const r2 = await createGoal.handler({ goal: 'phase 2' }, ctx(runner));
+    expect(r2.content).not.toContain('DO NOT call create_goal');
+    expect(r2.content).toContain('superseded');
+    expect(r2.content).toContain('Goal set');
+  });
+
+  it('different runners have independent burst counters', async () => {
+    const r1 = new FakeRunner();
+    const r2 = new FakeRunner();
+    _resetGoalForKey(r1 as unknown as object);
+    _resetGoalForKey(r2 as unknown as object);
+    _resetCreateBurstForKey(r1 as unknown as object);
+    _resetCreateBurstForKey(r2 as unknown as object);
+    // Burn r1's quota.
+    await createGoal.handler({ goal: 'a1' }, ctx(r1));
+    await createGoal.handler({ goal: 'a2' }, ctx(r1));
+    await createGoal.handler({ goal: 'a3' }, ctx(r1));
+    const a4 = await createGoal.handler({ goal: 'a4' }, ctx(r1));
+    expect(a4.isError).toBe(true);
+    // r2 still has full quota.
+    const b1 = await createGoal.handler({ goal: 'b1' }, ctx(r2));
+    expect(b1.isError).toBeFalsy();
   });
 });

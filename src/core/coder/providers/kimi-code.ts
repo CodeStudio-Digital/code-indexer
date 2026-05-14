@@ -181,10 +181,15 @@ function resolveEffectiveThinking(
   requestThinking: boolean | undefined,
   providerMode: KimiCodeThinkingMode,
 ): boolean | undefined {
+  // Always-thinking model variants ignore both layers — they have no off switch.
   if (isAlwaysThinkingModel(model)) return true;
+  // Per-request value wins when explicitly provided. Admin is the default,
+  // not a hard cap — so a session can re-enable thinking even when the admin
+  // global is `disabled`, and vice versa.
+  if (requestThinking !== undefined) return requestThinking;
   if (providerMode === 'enabled') return true;
   if (providerMode === 'disabled') return false;
-  return requestThinking;
+  return undefined;
 }
 
 export function shouldOmitKimiTemperature(model: string, thinking?: boolean): boolean {

@@ -129,6 +129,8 @@ export interface RunDelta {
 
 /** Lightweight todo item maintained by the `todo_write` native tool. */
 export interface TodoItem {
+  /** Stable id (8-char hex) assigned server-side. Optional during the upgrade window for sessions with legacy payloads. */
+  id?: string;
   content: string;
   activeForm: string;
   status: 'pending' | 'in_progress' | 'completed';
@@ -167,6 +169,50 @@ export interface InteractionPending {
   pendingContent: string;
 }
 
+/**
+ * Per-node runtime status for the chat pipeline runtime overlay.
+ * Reduced from the SSE `pipeline_node_*` events. The dashboard mini-graph
+ * colors nodes by `status`.
+ */
+export type PipelineNodeRuntimeStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'aborted';
+
+export interface PipelineRuntimeState {
+  /** `pipeline_executions.id`. */
+  executionId: number;
+  /** `pipelines.id`. */
+  pipelineId: number;
+  /** Aggregate state machine — mirrors `pipeline_executions.status`. */
+  status: 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
+  /** Active node id (null when terminal). */
+  currentNodeId: string | null;
+  /** Per-node status keyed by node id. */
+  nodes: Record<
+    string,
+    {
+      status: PipelineNodeRuntimeStatus;
+      label?: string;
+      kind?: 'agent' | 'validate';
+      verdict?: 'pass' | 'fail' | 'review' | null;
+      outcome?: string | null;
+      outputPreview?: string;
+      error?: string;
+    }
+  >;
+  /** Last error message from a failed run (terminal). */
+  error: string | null;
+  /**
+   * Set when `requires_confirmation` paused the run between stages. The
+   * dashboard renders an Approve button (which calls `/confirm`) instead
+   * of the normal Resume button. Cleared on confirm/abort/resume.
+   */
+  awaitingConfirmation?: boolean;
+}
+
 export interface SessionState {
   streaming: boolean;
   currentTurn: AssistantTurn | null;
@@ -192,6 +238,26 @@ export interface SessionState {
    * when the user dismisses.
    */
   interactionPending: InteractionPending | null;
+  /**
+   * Latest snapshot of the in-flight chat pipeline (PR-3). Null when no
+   * pipeline has run in this session yet. Sticks around after terminal
+   * states so the user can read the final outcome until they dismiss.
+   */
+  pipelineRuntime: PipelineRuntimeState | null;
+  /**
+   * Monotonic counter bumped on every event that mutates the live goal /
+   * tasks / todos state (tasks_posted, task_started, task_finished,
+   * task_updated, todos_updated). The session sidebar combines this with
+   * the per-turn refreshKey so status changes show up mid-turn instead of
+   * waiting until the model finishes the turn.
+   */
+  sidebarRefreshTick: number;
+  /**
+   * Monotonic counter bumped on every `session_snapshot_changed` SSE event.
+   * The Snapshots panel re-fetches its list/diff whenever this changes,
+   * so the user sees new agent edits land in the review UI live.
+   */
+  snapshotTick: number;
 }
 
 export const ZERO_DELTA: RunDelta = {
@@ -214,6 +280,9 @@ export const EMPTY_STATE: SessionState = {
   contextStatus: null,
   indexStatus: null,
   interactionPending: null,
+  pipelineRuntime: null,
+  sidebarRefreshTick: 0,
+  snapshotTick: 0,
 };
 
 export type SessionPatch =

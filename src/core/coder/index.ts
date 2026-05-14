@@ -16,13 +16,18 @@ import { gitTools } from './tools/git.js';
 import {
   defaultLocalFilesystemPort,
   defaultLocalShellPort,
+  SnapshotRecorder,
+  SnapshotRecordingFilesystemPort,
 } from './ports/index.js';
+import { SessionFileSnapshotStore } from '../../store/session-file-snapshot-store.js';
 import { SandboxFilesystemAdapter } from '../sandbox/adapters/sandbox-filesystem-adapter.js';
 import { SandboxShellAdapter } from '../sandbox/adapters/sandbox-shell-adapter.js';
 import { planTools } from './tools/plan.js';
 import { tasksTools, executeTask, taskComplete } from './tools/tasks.js';
 import { interactionTools } from './tools/interaction.js';
 import { buildExpandTools } from './tools/expand.js';
+import { buildFindToolsTool } from './tools/find-tools.js';
+import { buildRequestReviewTool } from './tools/request-review.js';
 import { McpToolBridge } from './tools/mcp-bridge.js';
 import { buildMcpResourceTools } from './tools/mcp-resources.js';
 import { McpServerManager } from './tools/mcp-server-manager.js';
@@ -54,7 +59,7 @@ import { lspTools } from './tools/lsp.js';
 import { ptyTools } from './tools/pty.js';
 import { webTools } from './tools/web.js';
 import { globTools } from './tools/glob.js';
-import { todoTools } from './tools/todo.js';
+import { todoTools, generateTodoId } from './tools/todo.js';
 import { viewImageTools } from './tools/view-image.js';
 import { goalTools } from './tools/goal.js';
 import { buildCodeExecTool } from './tools/code-exec.js';
@@ -66,6 +71,7 @@ import { worktreeTools, createProjectWorktree } from './tools/worktree.js';
 import { SkillStore } from '../../store/skill-store.js';
 import type { ResolvedSkill, SkillTemplateContext } from './skills/types.js';
 import { buildInvokeSkillTool, buildSkillDiscoveryTools } from './skills/skill-tool-builder.js';
+import { listInstalledNamespaces } from './skills/agent-skills-installer.js';
 import {
   buildCompactSkillsSection,
   buildLazySkillsSection,
@@ -185,6 +191,17 @@ export interface RunCoderOptions {
    * here propagate (refuse to start the run with a broken wire-up).
    */
   onRunnerReady?: (runner: CoderRunner) => void;
+
+  /**
+   * Notification callback fired whenever the SnapshotRecorder captures
+   * (or appends to) a baseline for a file the agent just mutated. Lets the
+   * HTTP layer publish a `session_snapshot_changed` SSE event so the
+   * dashboard can refresh the Snapshots tab live, without polling.
+   *
+   * Optional — when undefined, snapshot recording still happens, the
+   * dashboard just has to pull on its own cadence.
+   */
+  onSnapshotRecorded?: (info: { baselineId: number; filePath: string }) => void;
 }
 
 export interface IndexStatus {
@@ -449,6 +466,28 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const customTierSummary = subordinateTierSummary ?? mcpServerManager.getCustomTierSummary();
   registry.registerAll(buildExpandTools(customTierSummary.size > 0 ? customTierSummary : undefined));
 
+  // find_tools — Camada 3 lazy discovery. Always registered (cheap, read-only,
+  // no tier promotion). Belongs in bootstrap so it's visible before the agent
+  // has unlocked anything else. Implementation lives in find-tools.ts.
+  registry.registerAll([buildFindToolsTool(registry)]);
+
+  // request_review — Camada 4 reviewer subagent. Registered with a placeholder
+  // tool snapshot; the runner snapshots the registry AFTER all tools are
+  // registered so the reviewer's REVIEW_ALLOWLIST resolves correctly. The
+  // reviewerProvider falls back to the parent provider when subagentTarget
+  // hasn't been configured (legacy single-family behaviour).
+  registry.registerAll([
+    buildRequestReviewTool({
+      provider,
+      parentTools: registry.list(),
+      sessionId: session.id,
+      sessionStore: store,
+      // Reuse the subagent provider plumbing: when an admin has set a
+      // different family for subagents (subagentTarget), use it for review.
+      reviewerProvider: undefined, // wired at run-time via subagentProvider in subagent.ts
+    }),
+  ]);
+
   // Load disabled tools early so the subagent parentTools snapshot is already
   // filtered. Must happen before registry.list() is captured below.
   let globalDisabledTools: ReadonlySet<string> | undefined;
@@ -571,7 +610,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const effectiveCwd = sandboxBinding
     ? sandboxBinding.workdir
     : resolvePath(project.root_path);
-  const fsPort = sandboxBinding
+  const rawFsPort = sandboxBinding
     ? new SandboxFilesystemAdapter({
         driver: sandboxBinding.driver,
         containerId: sandboxBinding.containerId,
@@ -585,11 +624,36 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       })
     : defaultLocalShellPort();
 
+  // Per-session file-snapshot recorder: every write/unlink that the agent
+  // performs is captured (baseline + edit-log row) so the user can review
+  // and selectively keep/undo via the Snapshots tab. Bypassed for the
+  // company subordinate path? No — subordinates write under the parent's
+  // ToolContext anyway, but here this runner is its own session and may
+  // also be a parent. We always record; UI scopes by `session_kind` +
+  // `session_id` from this exact `runCoder` call.
+  const snapshotStore = new SessionFileSnapshotStore(store.getDb());
+  // Always record under the actual coder_sessions.id of the runner — even
+  // inside company orchestration. Company-mode UI aggregates snapshots
+  // across master + subordinate coder sessions by joining
+  // `company_agent_runs.coder_session_id`, so per-project file paths
+  // stay namespaced and unambiguous.
+  let runnerRef: import('./core/runner.js').CoderRunner | null = null;
+  const recorder = new SnapshotRecorder({
+    sessionKind: 'coder',
+    sessionId: session.id,
+    projectRoot: resolvePath(project.root_path),
+    store: snapshotStore,
+    getTurn: () => runnerRef?.turn ?? null,
+    onRecorded: opts.onSnapshotRecorded,
+  });
+  const fsPort = new SnapshotRecordingFilesystemPort(rawFsPort, recorder);
+
   const toolContext: ToolContext = {
     cwd: effectiveCwd,
     projectName: project.name,
     overlay,
     toolOutputStore,
+    unrestrictedToolOutput: !!session.unrestricted_tool_output,
     signal: opts.signal,
     // Persistence hooks for submit_plan — let the dashboard list plans
     // long after the live tool_use scrolled out of view.
@@ -624,9 +688,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     },
     updateTaskStatus: (taskId, patch) => {
       try {
-        store.updateTaskStatus(session.id, taskId, patch);
+        return store.updateTaskStatus(session.id, taskId, patch);
       } catch (e) {
         console.warn(`[coder] updateTaskStatus failed: ${e instanceof Error ? e.message : String(e)}`);
+        return null;
       }
     },
     getGoalState: () => {
@@ -722,9 +787,23 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   };
 
   if (resolvedSkills.length > 0) {
-    // Discovery tools — always registered for all active skills
+    // Discovery tools — always registered for all active skills.
+    // installedNamespaces enriches list_skill_namespaces with repo/commit;
+    // best-effort (a DB read failure must not block the session).
+    let installedNamespaces: ReturnType<typeof listInstalledNamespaces> | undefined;
+    try {
+      installedNamespaces = listInstalledNamespaces();
+    } catch {
+      installedNamespaces = undefined;
+    }
     registry.registerAll(
-      buildSkillDiscoveryTools(resolvedSkills, skillTemplateCtx, store, session.id),
+      buildSkillDiscoveryTools(
+        resolvedSkills,
+        skillTemplateCtx,
+        store,
+        session.id,
+        installedNamespaces,
+      ),
     );
 
     // invoke_skill — only for tool-mode skills (logs usage)
@@ -786,6 +865,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     ? buildRepoMap(db, project.id, repoMapBudget)
     : '';
 
+  // Agent Loop v2 — ON by default for new sessions. Set CODER_AGENT_LOOP_V2=0
+  // to opt out (e.g. for cache-stability comparisons or to roll back without
+  // a deploy). Resolved here so the static "Agent loop" + "Active context"
+  // pointer in the system prompt and the runner's <active-context> injection
+  // stay in sync.
+  const agentLoopV2EnvFlag = process.env.CODER_AGENT_LOOP_V2 !== '0';
+
   let systemPrompt = buildSystemPrompt({
     projectName: project.name,
     projectRoot: project.root_path,
@@ -804,6 +890,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     mcpAvailable: mcpBridgeOk,
     isIndexed,
     repoMap,
+    agentLoopV2: agentLoopV2EnvFlag,
   });
 
   // Append company prompt block (master orchestration or subordinate instructions)
@@ -833,7 +920,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           : 'lazy';
 
     if (mode === 'lazy') {
-      systemPrompt += buildLazySkillsSection(resolvedSkills.length);
+      systemPrompt += buildLazySkillsSection(resolvedSkills);
       skillsModeUsed = 'lazy';
     } else if (mode === 'compact') {
       systemPrompt += buildCompactSkillsSection(resolvedSkills);
@@ -858,7 +945,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         skillsModeUsed = 'matched';
       } else {
         // No matches: degrade to lazy rather than dumping the full list.
-        systemPrompt += buildLazySkillsSection(resolvedSkills.length);
+        systemPrompt += buildLazySkillsSection(resolvedSkills);
         skillsModeUsed = 'lazy';
       }
     } else {
@@ -1000,7 +1087,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Fallback config not available (migration not run yet) — skip silently
   }
 
-  // ─── Context window (DB-first) ───────────────────────────────────
+  // ─── Context window (DB-first, registry fallback) ────────────────
+  // The DB is the source of truth WHEN populated, but ZAI / new model
+  // releases / hand-imported configs frequently leave it null. Fall back
+  // to the static registry (which now has prefix-matching, see
+  // capabilities.ts) so the dashboard's context bar renders for legacy
+  // sessions without forcing a re-discovery.
   let sessionContextWindow: number | null = null;
   try {
     const ps = new ProviderStore(config.dbPath);
@@ -1008,8 +1100,31 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     ps.close();
     sessionContextWindow = dbModel?.context_window ?? null;
   } catch {
-    // Non-fatal — runner falls back to static registry lookup
+    // Non-fatal — registry fallback below
   }
+  if (sessionContextWindow == null && session.model) {
+    const { getRegistryContextWindow } = await import('./providers/capabilities.js');
+    const fromRegistry = getRegistryContextWindow(session.model);
+    if (fromRegistry != null) {
+      sessionContextWindow = fromRegistry;
+      console.log(
+        `[coder] context_window resolved via registry fallback for ${session.provider}/${session.model}: ${fromRegistry}`,
+      );
+    }
+  }
+
+  // Phase Profiles (Camada 2) was REMOVED — sessions run on a single
+  // (provider, model) for their entire lifetime. The DB column
+  // `coder_sessions.phase_profile_id` is left untouched for any future
+  // re-enable; the runner ignores it.
+
+  // Agent Loop v2 — ON by default for new sessions. When enabled, the runner
+  // injects a live <active-context> block per turn, adds a static "Agent
+  // loop" framing to the system prompt, applies a stop-guard for unfinished
+  // todos, includes a recap on auto-continue, and refuses tool calls that
+  // produce identical content to a recent result. Set CODER_AGENT_LOOP_V2=0
+  // to disable.
+  const agentLoopV2 = agentLoopV2EnvFlag;
 
   const runner = new CoderRunner({
     provider,
@@ -1019,6 +1134,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     initialMessages,
     sessionId: session.id,
     sessionStore: store,
+    // (assignment below) — keeps recorder in sync with runner.turn
+    // even though the runner is constructed after recorder. The recorder
+    // reads `runnerRef?.turn` lazily, so this assignment closes the loop.
     maxTurns: opts.maxTurns ?? 50,
     planMode: opts.planMode,
     thinking: opts.thinking,
@@ -1036,6 +1154,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     agentId: effectiveAgentId,
     sessionTemperature: session.temperature_override,
     roleTemperature: opts.roleTemperature,
+    // Per-session unrestricted-tool-output toggle (migration 078). Lifts the
+    // per-block PUSH_TIME_CAP to the high safety ceiling so verbose MCP tools
+    // (Unity, large file reads, batched code_exec) arrive intact.
+    unrestrictedToolOutput: !!session.unrestricted_tool_output,
     // Stateful Responses API resume — populated only for ChatGPT/Codex sessions
     // that completed at least one turn with `store: true`. Other providers
     // ignore these fields.
@@ -1050,17 +1172,39 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         );
       }
     },
+    agentLoopV2,
   });
 
   // Rehydrate the lightweight todo list from the DB so a session resume
   // brings back the sidebar state the user saw before the restart.
   if (session.todos_json) {
     try {
-      const parsed = JSON.parse(session.todos_json) as import('./tools/todo.js').TodoItem[];
+      const parsed = JSON.parse(session.todos_json) as Array<Partial<import('./tools/todo.js').TodoItem>>;
       if (Array.isArray(parsed)) {
+        // Backfill missing ids on legacy rows (pre-id schema). Persist the
+        // mutated list back ONCE so future resumes see the same ids — without
+        // this the agent would see a different id on each resume and lose
+        // update_todo continuity.
+        let backfilled = false;
+        const hydrated = parsed.map((t) => {
+          const id = typeof t.id === 'string' && t.id.length >= 6 ? t.id : (backfilled = true, generateTodoId());
+          return {
+            id,
+            content: typeof t.content === 'string' ? t.content : '',
+            activeForm: typeof t.activeForm === 'string' ? t.activeForm : '',
+            status: t.status === 'in_progress' || t.status === 'completed' ? t.status : 'pending' as const,
+          };
+        });
         // Bypass the event emitter on rehydrate — the runner isn't listening
         // yet and we don't want to double-persist on startup.
-        runner.currentTodos = parsed.map((t) => ({ ...t }));
+        runner.currentTodos = hydrated;
+        if (backfilled) {
+          try {
+            store.setSessionTodos(session.id, JSON.stringify(hydrated));
+          } catch (e) {
+            console.warn(`[coder] failed to persist backfilled todo ids: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
       }
     } catch (e) {
       console.warn(`[coder] failed to parse todos_json: ${e instanceof Error ? e.message : String(e)}`);
@@ -1169,6 +1313,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       result_text: string;
       is_error: boolean;
       duration_ms: number;
+      output_chars: number;
+      truncated: boolean;
+      phase: string | null;
+      turn_telemetry_id: number | null;
     }>;
     subagentUsage: {
       input_tokens: number;
@@ -1177,12 +1325,29 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       cache_creation_input_tokens: number;
     };
   }
+  /**
+   * Cheap heuristic for the `truncated` flag in coder_tool_calls. Mirrors the
+   * markers emitted by mcp-bridge.ts (MCP_OUTPUT_HARD_CAP, READ_FILE clamp).
+   * False negatives are fine — the dashboard treats this as a noisy-tool
+   * signal, not a billing input.
+   */
+  const isTruncatedOutput = (s: string): boolean => {
+    if (!s) return false;
+    return s.includes('[output truncated') || s.includes('[clamped from ');
+  };
   let pendingTurn: PendingTurn | null = null;
 
   const flushPendingTurn = async (): Promise<void> => {
     if (!pendingTurn) return;
     const turn = pendingTurn;
     pendingTurn = null;
+    // By now persistTurnTelemetry has run for this turn (runner emits
+    // it before turn_start), so lastTurnTelemetryId points at the row we
+    // want to JOIN against. Stamp every tool call with it.
+    const telemetryId = runner.lastTurnTelemetryId;
+    if (telemetryId != null) {
+      for (const tc of turn.toolCalls) tc.turn_telemetry_id = telemetryId;
+    }
     const hasSubUsage = turn.subagentUsage.input_tokens > 0
       || turn.subagentUsage.output_tokens > 0;
     const payload = {
@@ -1230,13 +1395,23 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   runner.on('tool_call_result', (id, name, result, durationMs) => {
     if (!pendingTurn) return;
     const pending = pendingToolCalls.get(id);
+    const content = result.content ?? '';
     pendingTurn.toolCalls.push({
       tool_use_id: id,
       tool_name: name,
       args: pending?.input ?? {},
-      result_text: result.content,
+      result_text: content,
       is_error: Boolean(result.isError),
       duration_ms: durationMs,
+      output_chars: content.length,
+      truncated: isTruncatedOutput(content),
+      // PhaseRouter removed — column kept for backward compat with old rows
+      // that have it set. Always null going forward.
+      phase: null,
+      // Stamped at flushPendingTurn time, when persistTurnTelemetry has
+      // already run for this turn and runner.lastTurnTelemetryId is the
+      // id of THIS turn's row. Setting it here would point at the prior turn.
+      turn_telemetry_id: null,
     });
     // Accumulate subagent usage for this turn — flushed with the transaction
     // so dashboard cost totals can never show partial spend.
@@ -1283,6 +1458,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   let lastRunnerError: Error | undefined;
   runner.on('done', (_reason: string, error?: Error) => { lastRunnerError = error; });
 
+  // Phase-route skip summary handler removed along with PhaseRouter.
+
   // Fire the caller's pre-run hook so they can attach listeners that
   // must observe the FIRST turn. Critical for company HumanInTheLoop
   // (`question_posted` from a master that calls `ask_user` on turn 1).
@@ -1290,6 +1467,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (opts.onRunnerReady) {
     opts.onRunnerReady(runner);
   }
+
+  // Close the recorder ↔ runner loop now that both exist. The recorder
+  // reads `runnerRef?.turn` lazily so writes captured inside `runner.run()`
+  // are stamped with the right turn number.
+  runnerRef = runner;
 
   const donePromise = runner
     .run()

@@ -34,6 +34,15 @@ export interface CoderSession {
   /** Pin-to-top flag (migration 010). */
   is_favorite: boolean;
   favorited_at: string | null;
+  /** Phase profile bound to this session (Camada 2). Null = single-model. */
+  phase_profile_id?: number | null;
+  /**
+   * Per-session "unrestricted tool output" toggle (migration 078). When true,
+   * the runner / mcp-bridge / code_exec lift their per-tool-call truncation
+   * caps to a high safety ceiling (≈1 MB). Auto-compaction still runs.
+   * Surfaced as a switch in the Composer.
+   */
+  unrestricted_tool_output?: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -129,6 +138,10 @@ export interface EnrichedProvider {
 export interface ProviderOption {
   id: string;
   label: string;
+  /** The provider's `kind` (e.g. `'chatgpt'`, `'openai'`, `'gemini'`).
+   *  Distinct from `id` for providers whose DB id doesn't match the kind
+   *  (e.g. ChatGPT Codex has id `openai-chatgpt` but kind `chatgpt`). */
+  kind?: string;
   models: EnrichedProviderModel[];
 }
 

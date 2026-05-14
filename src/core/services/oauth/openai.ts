@@ -57,15 +57,32 @@ export const CHATGPT_CODEX_BASE_URL =
  * This array exists only so a flaky upstream doesn't leave the user
  * with an empty catalog after a refresh.
  */
-export const CHATGPT_SEED_MODELS: { model_id: string; name: string }[] = [
-  { model_id: 'gpt-5.4', name: 'GPT-5.4' },
-  { model_id: 'gpt-5.4-mini', name: 'GPT-5.4 mini' },
-  { model_id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex' },
-  { model_id: 'gpt-5.2', name: 'GPT-5.2' },
-  { model_id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex' },
-  { model_id: 'gpt-5.1-codex', name: 'GPT-5.1 Codex' },
-  { model_id: 'gpt-5.1-codex-max', name: 'GPT-5.1 Codex max' },
-  { model_id: 'gpt-5.1-codex-mini', name: 'GPT-5.1 Codex mini' },
+export const CHATGPT_SEED_MODELS: {
+  model_id: string;
+  name: string;
+  default_reasoning_level?: string;
+  supported_reasoning_levels?: string[];
+  apply_patch_tool_type?: string;
+}[] = [
+  // GPT-5.x families on the Codex Responses backend all accept the standard
+  // four reasoning efforts. `xhigh` is gated per-model and is left to live
+  // discovery to populate when the upstream `/models` call advertises it.
+  { model_id: 'gpt-5.4',            name: 'GPT-5.4',
+    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
+  { model_id: 'gpt-5.4-mini',       name: 'GPT-5.4 mini',
+    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
+  { model_id: 'gpt-5.3-codex',      name: 'GPT-5.3 Codex',
+    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
+  { model_id: 'gpt-5.2',            name: 'GPT-5.2',
+    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
+  { model_id: 'gpt-5.2-codex',      name: 'GPT-5.2 Codex',
+    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
+  { model_id: 'gpt-5.1-codex',      name: 'GPT-5.1 Codex',
+    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
+  { model_id: 'gpt-5.1-codex-max',  name: 'GPT-5.1 Codex max',
+    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
+  { model_id: 'gpt-5.1-codex-mini', name: 'GPT-5.1 Codex mini',
+    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
 ];
 
 interface PendingFlow {

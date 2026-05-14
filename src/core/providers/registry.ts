@@ -10,6 +10,8 @@ import { chatgpt } from './definitions/chatgpt.js';
 import { bedrock } from './definitions/bedrock.js';
 import { googleOAuth } from './definitions/google-oauth.js';
 import { kimiCode } from './definitions/kimi-code.js';
+import { cloudflare } from './definitions/cloudflare.js';
+import { moonshot } from './definitions/moonshot.js';
 
 /**
  * Provider registry — single source of truth for all provider shapes.
@@ -40,6 +42,8 @@ const ALL_DEFINITIONS: ProviderDefinition[] = [
   bedrock,
   googleOAuth,
   kimiCode,
+  cloudflare,
+  moonshot,
 ];
 
 let cachedRegistry: Map<string, ProviderDefinition> | null = null;

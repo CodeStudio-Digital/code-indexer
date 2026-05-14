@@ -24,7 +24,7 @@ export class StackSnapshotSeeder {
    * with zero projects (no-op). Safe to call twice (idempotent per
    * project+stack+version).
    */
-  seedForSession(projectIds: number[], stack: BuilderStack): void {
+  async seedForSession(projectIds: number[], stack: BuilderStack): Promise<void> {
     if (projectIds.length === 0) return;
     const docs = STACK_SEEDS[stack];
     if (!docs || docs.length === 0) return;
@@ -34,7 +34,7 @@ export class StackSnapshotSeeder {
       if (this.hasVersion(pid, versionTag)) continue;
       for (const d of docs) {
         try {
-          this.snapshotService.create(pid, {
+          await this.snapshotService.create(pid, {
             title: d.title,
             category: d.category,
             content: d.content,

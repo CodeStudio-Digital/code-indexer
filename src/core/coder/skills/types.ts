@@ -36,6 +36,12 @@ export interface ResolvedSkill {
   /** Free-form tag list (used by matcher and dashboard filtering). */
   tags: string[];
   source: SkillSource;
+  /**
+   * Pack origin — set to the namespace name for skills installed via
+   * agent-skills-installer (e.g. "anthropic-skills"). null for user-authored
+   * or built-in skills. Used by the discovery tools to group skills by pack.
+   */
+  author: string | null;
   sortOrder: number;
 }
 

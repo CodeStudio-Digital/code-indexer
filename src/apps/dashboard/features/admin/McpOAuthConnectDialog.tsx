@@ -7,8 +7,9 @@ import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '../../components/ui/dialog.js';
 import {
-  fetchOAuthStatus, registerOAuthClient, revokeMcpOAuth, startOAuthAuthorize,
-  type McpOAuthStatus,
+  discoverOAuthMetadata, fetchOAuthStatus, registerOAuthClient,
+  revokeMcpOAuth, startOAuthAuthorize,
+  type DiscoveredOAuthMetadata, type McpOAuthStatus, type RegisterDcrError,
 } from './mcp-servers-api.js';
 
 type Phase = 'idle' | 'registering' | 'ready' | 'awaiting-consent' | 'connected' | 'error';
@@ -22,7 +23,9 @@ interface Props {
 
 /**
  * Guides the user through:
- *   1. DCR (auto-register our app as a client)  OR manual registration
+ *   1. DCR (auto-register our app as a client) OR manual registration
+ *      (when the AS rejects DCR — e.g. Figma's `/v1/oauth/mcp/register`
+ *      advertises itself but returns 403 to non-pre-registered clients).
  *   2. Open /authorize in a popup
  *   3. Wait for postMessage from the callback page
  *   4. Show connected status (scopes)
@@ -34,6 +37,15 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
   const [error, setError] = useState<string | null>(null);
   const [resourceUrl, setResourceUrl] = useState(serverUrl);
   const [popup, setPopup] = useState<Window | null>(null);
+
+  // Manual-registration sub-form state. Activated either explicitly by
+  // the user, or automatically after a DCR failure (we keep the
+  // discovered AS metadata around so the manual call has what it needs).
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualClientId, setManualClientId] = useState('');
+  const [manualClientSecret, setManualClientSecret] = useState('');
+  const [manualScopes, setManualScopes] = useState('');
+  const [discoveredAs, setDiscoveredAs] = useState<DiscoveredOAuthMetadata['as'] | null>(null);
 
   useEffect(() => {
     void refresh();
@@ -77,6 +89,57 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
       await refresh();
       setPhase('ready');
     } catch (e) {
+      const dcrErr = e as RegisterDcrError;
+      setError(dcrErr.message);
+      setPhase('error');
+      // If the backend surfaced the discovered AS, preload the manual
+      // form so the user can paste credentials without re-running
+      // discovery — Figma's 403 path lands here.
+      if (dcrErr.as) {
+        setDiscoveredAs(dcrErr.as);
+        if (dcrErr.scopes_supported && dcrErr.scopes_supported.length > 0) {
+          setManualScopes(dcrErr.scopes_supported.join(' '));
+        }
+        setManualOpen(true);
+      }
+    }
+  };
+
+  const openManual = async (): Promise<void> => {
+    setError(null);
+    if (!discoveredAs) {
+      try {
+        const meta = await discoverOAuthMetadata(serverId, resourceUrl);
+        setDiscoveredAs(meta.as);
+        const supported = meta.resource.scopes_supported.length > 0
+          ? meta.resource.scopes_supported
+          : (meta.as.scopes_supported ?? []);
+        if (supported.length > 0) setManualScopes(supported.join(' '));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return;
+      }
+    }
+    setManualOpen(true);
+  };
+
+  const submitManual = async (): Promise<void> => {
+    if (!discoveredAs || !manualClientId.trim()) return;
+    setPhase('registering');
+    setError(null);
+    try {
+      const scopes = manualScopes.trim() ? manualScopes.trim().split(/\s+/) : undefined;
+      await registerOAuthClient(serverId, {
+        mode: 'manual',
+        as: discoveredAs,
+        client_id: manualClientId.trim(),
+        client_secret: manualClientSecret.trim() || undefined,
+        scopes,
+      });
+      await refresh();
+      setPhase('ready');
+      setManualOpen(false);
+    } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhase('error');
     }
@@ -103,6 +166,11 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
     await revokeMcpOAuth(serverId);
     setStatus(null);
     setPhase('idle');
+    setManualOpen(false);
+    setDiscoveredAs(null);
+    setManualClientId('');
+    setManualClientSecret('');
+    setManualScopes('');
   };
 
   return (
@@ -126,11 +194,68 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
                   placeholder={serverUrl || 'https://mcp.example.com'}
                 />
               </div>
-              <Button onClick={doRegister} disabled={!resourceUrl || phase === 'registering'}>
-                {phase === 'registering'
-                  ? t('admin:mcpServer.oauth.registering')
-                  : t('admin:mcpServer.oauth.register')}
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={doRegister} disabled={!resourceUrl || phase === 'registering'}>
+                  {phase === 'registering'
+                    ? t('admin:mcpServer.oauth.registering')
+                    : t('admin:mcpServer.oauth.register')}
+                </Button>
+                <Button variant="outline" onClick={openManual} disabled={phase === 'registering'}>
+                  {t('admin:mcpServer.oauth.useManual')}
+                </Button>
+              </div>
+
+              {manualOpen && (
+                <div className="space-y-3 rounded border p-3 bg-muted/30">
+                  <p className="text-xs text-muted-foreground">
+                    {t('admin:mcpServer.oauth.manualHint')}
+                  </p>
+                  {discoveredAs?.issuer && (
+                    <div className="text-xs">
+                      <strong>{t('admin:mcpServer.oauth.issuer')}:</strong>{' '}
+                      <code>{discoveredAs.issuer}</code>
+                    </div>
+                  )}
+                  <div>
+                    <label className="text-xs font-medium">{t('admin:mcpServer.oauth.manualClientId')}</label>
+                    <Input
+                      value={manualClientId}
+                      onChange={(e) => setManualClientId(e.target.value)}
+                      placeholder="abc123…"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">{t('admin:mcpServer.oauth.manualClientSecret')}</label>
+                    <Input
+                      type="password"
+                      value={manualClientSecret}
+                      onChange={(e) => setManualClientSecret(e.target.value)}
+                      placeholder={t('admin:mcpServer.oauth.manualClientSecretPlaceholder') as string}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">{t('admin:mcpServer.oauth.manualScopes')}</label>
+                    <Input
+                      value={manualScopes}
+                      onChange={(e) => setManualScopes(e.target.value)}
+                      placeholder="mcp:connect"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={submitManual}
+                      disabled={!manualClientId.trim() || !discoveredAs || phase === 'registering'}
+                    >
+                      {phase === 'registering'
+                        ? t('admin:mcpServer.oauth.registering')
+                        : t('admin:mcpServer.oauth.manualSubmit')}
+                    </Button>
+                    <Button variant="ghost" onClick={() => setManualOpen(false)}>
+                      {t('admin:mcpServer.oauth.cancel')}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <div className="space-y-2">

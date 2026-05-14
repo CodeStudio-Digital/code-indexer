@@ -178,7 +178,14 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
       }
 
       const result = await runSubagent(
-        { provider: activeProvider, tools: deps.parentTools, ctx, sessionId: parentSessionId },
+        {
+          provider: activeProvider,
+          tools: deps.parentTools,
+          ctx,
+          sessionId: parentSessionId,
+          // PR-6 R23: propagate v2 framing + features to the subagent.
+          agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+        },
         {
           systemPrompt,
           allowlist,
@@ -316,7 +323,13 @@ export function buildSpawnAgentsTool(deps: SubagentDeps): CoderTool {
       }
 
       const { results, totalUsage } = await runParallelAgents(
-        { provider: activeProvider, tools: deps.parentTools, ctx, sessionId: parentSessionId },
+        {
+          provider: activeProvider,
+          tools: deps.parentTools,
+          ctx,
+          sessionId: parentSessionId,
+          agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+        },
         agentSpecs,
         EXPLORE_SYSTEM_PROMPT,
         EXPLORE_ALLOWLIST,

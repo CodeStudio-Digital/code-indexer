@@ -28,9 +28,11 @@ interface EditDialogProps {
 export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
   const { t } = useTranslation(['admin', 'common']);
   const isNew = !initial.id;
-  const [form, setForm] = useState<Partial<AdminProvider> & { api_key?: string }>({
+  const initialAccountId = readAccountId(initial.extra);
+  const [form, setForm] = useState<Partial<AdminProvider> & { api_key?: string; account_id?: string }>({
     ...initial,
     api_key: '', // Never pre-fill; blank means "leave existing".
+    account_id: initialAccountId,
   });
 
   function update<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
@@ -53,6 +55,9 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
     // Only send api_key when the user typed something — avoids clobbering an
     // existing key with an empty string on edit.
     if (form.api_key && form.api_key.length > 0) payload.api_key = form.api_key;
+    if (form.kind === 'cloudflare') {
+      payload.extra = { ...(initial.extra ?? {}), account_id: form.account_id?.trim() ?? '' };
+    }
     onSave(payload);
   }
 
@@ -114,6 +119,16 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
               placeholder={isNew ? t('admin:editProvider.apiKeyPlaceholder') : t('admin:editProvider.apiKeyMasked')}
             />
           </div>
+          {form.kind === 'cloudflare' && (
+            <div>
+              <label className="text-xs font-medium">Cloudflare Account ID</label>
+              <Input
+                value={form.account_id ?? ''}
+                onChange={(e) => update('account_id', e.target.value)}
+                placeholder="e.g. 1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p"
+              />
+            </div>
+          )}
           <div className="flex items-center gap-6 pt-2">
             <label className="flex items-center gap-2 text-sm">
               <Switch checked={!!form.enabled} onCheckedChange={(v) => update('enabled', v)} />
@@ -148,4 +163,9 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
       </DialogContent>
     </Dialog>
   );
+}
+
+function readAccountId(extra: Record<string, unknown> | undefined): string {
+  const raw = extra?.account_id;
+  return typeof raw === 'string' ? raw : '';
 }

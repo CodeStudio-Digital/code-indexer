@@ -17,7 +17,19 @@ export function mountTelemetryRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/admin/telemetry/global', (c) => {
     const limitRaw = c.req.query('limit');
     const limit = limitRaw ? Math.max(1, Math.min(500, Number(limitRaw))) : 50;
-    return c.json(sessionStore.getGlobalTelemetrySummary(limit));
+    const projectIdRaw = c.req.query('project_id');
+    const project_id = projectIdRaw ? Number(projectIdRaw) : null;
+    // ISO 8601 string accepted directly — SQL compares lexicographically
+    // against `created_at`'s 'YYYY-MM-DD HH:MM:SS' format. Pass-through
+    // makes "since=2026-05-01" or "since=2026-05-01 12:00:00" both work.
+    const since = c.req.query('since') ?? null;
+    return c.json(
+      sessionStore.getGlobalTelemetrySummary({
+        limit,
+        project_id: Number.isFinite(project_id) ? project_id : null,
+        since,
+      }),
+    );
   });
 
   app.get('/api/sessions/:id/telemetry', (c) => {

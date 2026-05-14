@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, Loader2, RefreshCw, Trash2, XCircle, Zap } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
@@ -27,6 +27,8 @@ interface ProviderCardProps {
   onRemove: () => void;
   onToggleModel: (modelId: string, mode: string, enabled: boolean) => void;
   onSetModelEffort: (modelId: string, mode: string, level: string | null) => void;
+  onSetModelContextWindow: (modelId: string, mode: string, value: number | null) => void;
+  onBackfillContextWindows: () => void;
   onSetFallback: (providerId: string, fallbackProviderId: string | null) => void;
   onSetSubagentTarget: (
     providerId: string,
@@ -53,6 +55,8 @@ export function ProviderCard({
   onRemove,
   onToggleModel,
   onSetModelEffort,
+  onSetModelContextWindow,
+  onBackfillContextWindows,
   onSetFallback,
   onSetSubagentTarget,
   onSetKimiCodeThinkingMode,
@@ -143,7 +147,7 @@ export function ProviderCard({
           {p.kind === 'claude-code' && (
             <ClaudeCodeUsagePanel providerId={p.id} />
           )}
-          {p.kind === 'kimi-code' && (
+          {(p.kind === 'kimi-code' || p.kind === 'moonshot') && (
             <div className="flex items-center justify-between py-3">
               <label className="text-sm font-medium">
                 {t('admin:provider.kimiThinking')}
@@ -210,6 +214,12 @@ export function ProviderCard({
                           })}
                         </select>
                       )}
+                    <ContextWindowField
+                      modelId={m.model_id}
+                      mode={m.mode}
+                      value={m.context_window}
+                      onSet={onSetModelContextWindow}
+                    />
                     <Switch
                       checked={m.enabled}
                       onCheckedChange={(v) => onToggleModel(m.model_id, m.mode, v)}
@@ -217,6 +227,19 @@ export function ProviderCard({
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+          {models.length > 0 && (
+            <div className="pt-2 flex justify-end">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs"
+                onClick={onBackfillContextWindows}
+                title={t('admin:provider.backfillContextWindows.tooltip')}
+              >
+                {t('admin:provider.backfillContextWindows.label')}
+              </Button>
             </div>
           )}
           {/* Default subagent provider/model */}
@@ -298,3 +321,84 @@ function readSubagentProviderId(value: unknown): string | null {
 function readSubagentModelId(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
+
+/**
+ * Inline context-window editor for a single model row. Shows a read-only
+ * "ctx 200k" pill by default; clicking flips it into a numeric input. Empty
+ * input clears the override (sends null → DB null → registry fallback wins).
+ *
+ * Lazy state so we don't blow re-renders for every model row when nothing
+ * is being edited.
+ */
+function ContextWindowField({
+  modelId,
+  mode,
+  value,
+  onSet,
+}: {
+  modelId: string;
+  mode: string;
+  value: number | null;
+  onSet: (modelId: string, mode: string, value: number | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>('');
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className={
+          'h-7 px-2 rounded border text-[11px] font-mono ' +
+          (value == null ? 'border-amber-500/40 text-amber-700 dark:text-amber-400' : 'text-muted-foreground hover:bg-muted')
+        }
+        title={
+          value == null
+            ? 'Context window unknown — click to set manually'
+            : `Context window: ${value.toLocaleString()} tokens — click to edit`
+        }
+        onClick={() => {
+          setDraft(value != null ? String(value) : '');
+          setEditing(true);
+        }}
+      >
+        {value == null ? '? ctx' : `${formatCtx(value)} ctx`}
+      </button>
+    );
+  }
+  const commit = () => {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed === '') {
+      onSet(modelId, mode, null);
+      return;
+    }
+    const n = Number(trimmed.replace(/[_,]/g, ''));
+    if (!isFinite(n) || n < 1024) return; // server validates too
+    onSet(modelId, mode, n);
+  };
+  return (
+    <input
+      type="text"
+      autoFocus
+      className="h-7 w-24 rounded border bg-background px-1.5 text-xs font-mono"
+      placeholder="e.g. 200000"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commit();
+        if (e.key === 'Escape') {
+          setDraft(value != null ? String(value) : '');
+          setEditing(false);
+        }
+      }}
+    />
+  );
+}
+
+function formatCtx(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1e6).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1000)}k`;
+  return String(n);
+}
+

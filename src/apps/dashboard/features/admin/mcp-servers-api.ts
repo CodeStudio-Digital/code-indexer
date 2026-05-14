@@ -92,6 +92,50 @@ export async function fetchOAuthStatus(serverId: string): Promise<McpOAuthStatus
   return (await r.json()) as McpOAuthStatus;
 }
 
+export interface DiscoveredOAuthMetadata {
+  resource: {
+    resource: string;
+    authorization_servers: string[];
+    scopes_supported: string[];
+    bearer_methods_supported: string[];
+  };
+  as: Record<string, unknown> & {
+    issuer: string;
+    authorization_endpoint: string;
+    token_endpoint: string;
+    registration_endpoint?: string;
+    scopes_supported?: string[];
+  };
+}
+
+export async function discoverOAuthMetadata(
+  serverId: string,
+  resourceUrl: string,
+): Promise<DiscoveredOAuthMetadata> {
+  const r = await fetch(`/api/admin/mcp-servers/${serverId}/oauth/discover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resource_url: resourceUrl }),
+  });
+  if (!r.ok) {
+    const e = (await r.json().catch(() => ({}))) as { error_description?: string; error?: string };
+    throw new Error(e.error_description ?? e.error ?? 'discovery failed');
+  }
+  return (await r.json()) as DiscoveredOAuthMetadata;
+}
+
+/**
+ * Error from the DCR endpoint, augmented with discovered AS metadata so
+ * the UI can offer a manual fallback when DCR is not actually open
+ * (e.g. Figma's registration endpoint returns 403 even though it is
+ * advertised in the AS metadata).
+ */
+export interface RegisterDcrError extends Error {
+  as?: DiscoveredOAuthMetadata['as'];
+  scopes_supported?: string[];
+  status?: number;
+}
+
 /**
  * Runs discovery + DCR in one shot. Returns the newly registered client_id.
  * For manual registration (AS does not support DCR), pass a pre-obtained
@@ -128,8 +172,17 @@ export async function registerOAuthClient(
     body: JSON.stringify(body),
   });
   if (!r.ok) {
-    const e = (await r.json().catch(() => ({}))) as { error_description?: string; error?: string };
-    throw new Error(e.error_description ?? e.error ?? 'register failed');
+    const e = (await r.json().catch(() => ({}))) as {
+      error_description?: string;
+      error?: string;
+      as?: DiscoveredOAuthMetadata['as'];
+      scopes_supported?: string[];
+    };
+    const err = new Error(e.error_description ?? e.error ?? 'register failed') as RegisterDcrError;
+    err.as = e.as;
+    err.scopes_supported = e.scopes_supported;
+    err.status = r.status;
+    throw err;
   }
   return (await r.json()) as { client_id: string; source: 'dcr' | 'manual' };
 }

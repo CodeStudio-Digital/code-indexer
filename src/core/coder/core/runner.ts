@@ -1,19 +1,87 @@
 import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { resolve as pathResolve, relative as pathRelative, isAbsolute } from 'node:path';
 import type { ChatProvider } from '../providers/adapter.js';
 import type { ToolRegistry } from './registry.js';
 import type { AgentMessage, ChatDelta, ChatUsage, ContentBlock, ToolUseBlock, PlanBlock, QuestionBlock, ToolResultBlock } from './messages.js';
 import type { ToolContext } from './tool.js';
-import { compactMessages, PRUNE_PROTECT, computeCutoffIndex, totalChars, PRUNE_MINIMUM, snapCutoffToRoleBoundary, deriveCompactionLimits } from "./compaction.js";
+import {
+  compactMessages,
+  PRUNE_PROTECT,
+  computeCutoffIndex,
+  recedeToPreserveLastNTurns,
+  totalChars,
+  PRUNE_MINIMUM,
+  snapCutoffToRoleBoundary,
+  snapCutoffPreservingPairs,
+  computeCutoffIndexByTokens,
+  deriveCompactionLimits,
+  deriveTokenLimits,
+  shouldCompact as shouldCompactTokens,
+  isNewCompactionEnabled,
+  postCompactCleanup,
+  applyRollingReduction,
+  REDUCIBLE_READ_TOOLS,
+  buildReadDedupKey,
+  getStringField,
+} from "./compaction.js";
 import { evaluateToolInvocation, findScopeViolations, type PolicyContext } from './policy.js';
-import { isSummarizerEnabled, summarizeSpan, renderSummary } from './summarizer.js';
+import { isSummarizerEnabled, summarizeSpan, summarizeSpanV2, renderSummary, renderSummaryV2, isStructuredSummaryEnabled, overlayLiveState } from './summarizer.js';
+import { computeSnapshot, type TokenSnapshot } from './token-accounting.js';
 import { filterByTiers, profileToTiers, type ToolTier, type CoderProfile } from '../tools/tiers.js';
 import { terseDescription } from '../tools/descriptions.js';
 import { applySmartReducer } from './smart-reducers.js';
-import { getModelContextWindow, getModelMaxTools } from '../providers/capabilities.js';
+import { getModelContextWindow, getModelMaxTools, getEffectiveContextWindow } from '../providers/capabilities.js';
 import { runToolFilterHook } from './hooks.js';
 import { resolveTemperature } from '../inference/temperature.js';
+import { estimateCost } from '../providers/pricing.js';
+import { buildActiveContextBlock } from './active-context.js';
+
+/**
+ * Recovery transition kinds (PR-4, Row 3 from
+ * docs/agent-research/COMPARISON.md). Recorded on the runner whenever a
+ * recovery path is taken so the eventual `done` event carries an
+ * attribution trail. Mirrors claude-code's `state.transition.reason`
+ * watermark in `query.ts`.
+ */
+export type TransitionKind =
+  | 'compact-pre-turn'
+  | 'compact-auto-continue'
+  | 'provider-400-retry'
+  | 'provider-401-refresh'
+  | 'provider-transient-retry'
+  | 'provider-fallback'
+  | 'doom-loop-strict'
+  | 'doom-loop-fuzzy'
+  | 'dup-call-cap'
+  | 'result-dup-cap'
+  | 'pre-read-blocked'
+  | 'stop-guard-nudge';
+
+/**
+ * Stop reasons (PR-4, Row 2). Superset of the original 5 — additions are
+ * specific failure/abort modes the legacy 'error'/'aborted' lumped together.
+ * Existing consumers that only branch on `'completed'` keep working; new
+ * dashboards/billing can attribute cost to specific failure modes.
+ */
+export type StopReason =
+  // Original (preserve binary compatibility):
+  | 'completed'
+  | 'max_turns'
+  | 'aborted'
+  | 'error'
+  | 'plan_required'
+  // PR-4 additions:
+  | 'recovery_capped'   // a recovery-path circuit breaker (PR-2 R1) tripped
+  | 'doom_loop'         // doom-loop guard refused identical tool calls
+  | 'compact_failure';  // consecutive compaction failures hit the cap
+
+export interface RunResult {
+  totalUsage: ChatUsage;
+  reason: StopReason;
+  /** PR-4 — last recovery path taken before stopping, when applicable. */
+  transition?: TransitionKind | null;
+}
 
 export interface RunnerOptions {
   provider: ChatProvider;
@@ -30,6 +98,14 @@ export interface RunnerOptions {
   planMode?: boolean;
   /** Override the per-tool-result push-time cap. Subagents pass a tighter value. */
   pushTimeCap?: number;
+  /**
+   * Per-session "unrestricted tool output" toggle. When true, the
+   * `effectivePushTimeCap` member is bumped to the high safety ceiling
+   * (`UNRESTRICTED_PUSH_TIME_CAP` for main runners, `UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP`
+   * for subagents) instead of the production defaults. Auto-compaction
+   * still runs. Mirrors `coder_sessions.unrestricted_tool_output`.
+   */
+  unrestrictedToolOutput?: boolean | null;
   /**
    * Initial set of active tool tiers. When set, the runner filters its tools
    * array each turn to only those whose tier is active. The agent can unlock
@@ -118,6 +194,13 @@ export interface RunnerOptions {
    * need to wire a real DB.
    */
   sessionStore?: import('../sessions/store.js').SessionStore;
+  /**
+   * Agent Loop v2 — opt-in to the live <active-context> injection per turn,
+   * the stop-guard, and the auto-continue recap. Set per-session at
+   * creation time so existing in-flight sessions keep their original
+   * behavior on resume. See system-prompt.ts for the static-prompt half.
+   */
+  agentLoopV2?: boolean;
 }
 
 // Plan-mode mutating-tool block has moved to `core/policy.ts` (Phase 2).
@@ -143,6 +226,19 @@ const PUSH_TIME_CAP = Number(process.env.CODER_PUSH_TIME_CAP ?? 24_000);
 /** Tighter per-block cap used inside subagents — they accumulate many small
  *  tool results in a short window, so a 12k cap fits ~10 turns under the budget. */
 const SUBAGENT_PUSH_TIME_CAP = Number(process.env.CODER_SUBAGENT_PUSH_TIME_CAP ?? 12_000);
+/**
+ * "Unrestricted tool output" ceilings — picked when a session has
+ * `unrestricted_tool_output = 1`. Deliberately NOT `Infinity` so that
+ * the marker arithmetic (`content.length - cap`) and the `toolOutputStore.put`
+ * gate keep working even on pathological outputs. Auto-compaction still
+ * fires above PRUNE_MINIMUM (60k) so this is not a context-window bypass —
+ * it just lifts the per-tool-call ceiling so individual MCP/Unity outputs
+ * arrive intact in the turn that produced them.
+ */
+const UNRESTRICTED_PUSH_TIME_CAP = Number(process.env.CODER_UNRESTRICTED_PUSH_TIME_CAP ?? 1_000_000);
+const UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP = Number(
+  process.env.CODER_UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP ?? 500_000,
+);
 /** Per-turn safety budget — emits a warning when the about-to-send payload exceeds this. */
 const TURN_BUDGET_CHARS = Number(process.env.CODER_TURN_BUDGET_CHARS ?? 30_000);
 /**
@@ -155,7 +251,20 @@ const TURN_BUDGET_CHARS = Number(process.env.CODER_TURN_BUDGET_CHARS ?? 30_000);
  * 30+ times burned through tokens with no guard. Strict-sig threshold of 3
  * is conservative — only triggers on byte-identical tool calls.
  */
-const DOOM_LOOP_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_THRESHOLD ?? 3);
+/**
+ * Lazy env reader so tests can override these caps after module import
+ * (vi.stubEnv works because we re-resolve every call rather than capturing
+ * at module load).
+ */
+function envInt(name: string, fallback: number): number {
+  const v = process.env[name];
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return fallback;
+}
+function doomLoopThreshold(): number { return envInt('CODER_DOOM_LOOP_THRESHOLD', 3); }
 /**
  * Fuzzy doom-loop threshold: catches "same tool names, slightly different args"
  * patterns that the strict signature misses (e.g., agent keeps calling
@@ -168,6 +277,231 @@ const DOOM_LOOP_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_THRESHOLD ?? 3);
  * "model paginates the same file 6+ turns" pattern. Tweak via env.
  */
 const DOOM_LOOP_FUZZY_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_FUZZY_THRESHOLD ?? 6);
+
+/**
+ * Per-arg duplicate-call cap (Fix F — session 609 regression). The fuzzy
+ * guard above only catches identical tool *names* in a row; it misses
+ * cycles where the model rotates 5 different read_file slices and the
+ * names sig stays constant but the strict sig keeps changing. This cap
+ * tracks how many times each (toolName#argHash) has been called in a
+ * rolling window — when a single arg is repeated DUP_CALL_THRESHOLD
+ * times we refuse the call inline with a synthetic error result, so
+ * the model gets a clear nudge to change strategy without the runner
+ * having to abort the whole session.
+ *
+ * Default 5: balances "agent legitimately re-reads after editing"
+ * (1–2 calls) against "agent stuck rotating chunks" (>>5).
+ */
+const DUP_CALL_THRESHOLD = Number(process.env.CODER_DUP_CALL_THRESHOLD ?? 5);
+const DUP_CALL_WINDOW = Number(process.env.CODER_DUP_CALL_WINDOW ?? 20);
+
+/**
+ * Polling-tool name pattern. Matches `wait_for_*`, `await_*`, `poll_*`,
+ * `tail_*`, `monitor_*` either at the start of the name OR after the
+ * `__` separator that mcp-server-manager injects (so e.g.
+ * `ext_unity__wait_for_compile_clean` matches). Tools whose names match
+ * this pattern OR whose `CoderTool.repeatable` is `true` are exempt from:
+ *   - the per-arg dup-call cap (Fix F)
+ *   - the strict and fuzzy doom-loop guards
+ *   - the dominance guard
+ *   - the post-call result-content dedup
+ * Repeated identical calls are the legitimate workflow for these tools.
+ */
+const REPEATABLE_NAME_PATTERN = /(?:^|__)(?:wait_for|await|poll|tail|monitor)_/;
+
+/**
+ * Agent Loop v2 result-content dedup. Refuses a tool result that has the
+ * same byte content as a previous result from the same tool within the
+ * window. Threshold = how many earlier matches in the window before the
+ * NEXT call gets refused (default 1 — second duplicate is enough). Min
+ * chars guards against tiny no-op outputs like "" or "ok" tripping the
+ * cap on legitimate repeat tool calls (e.g. workflow status pings).
+ */
+const RESULT_DUP_THRESHOLD = Number(process.env.CODER_RESULT_DUP_THRESHOLD ?? 1);
+const RESULT_DUP_WINDOW = Number(process.env.CODER_RESULT_DUP_WINDOW ?? 15);
+const RESULT_DUP_MIN_CHARS = Number(process.env.CODER_RESULT_DUP_MIN_CHARS ?? 50);
+
+/**
+ * PR-5 (Row 32 from docs/agent-research/COMPARISON.md): pre-read enforcement.
+ * Refuses BEFORE dispatch when a read-family tool (read_file, mcp__read_file,
+ * mcp__get_file_skeleton, mcp__get_file_structure) is called with the SAME
+ * path + slice fields seen recently. Tighter than the generic dup-call cap
+ * (which fires only on the 5th identical call) and proactive — saves the
+ * round-trip the result-dup cap would otherwise burn. Lazy-resolved so tests
+ * can override.
+ */
+function readDupThreshold(): number {
+  const v = process.env.CODER_READ_DUP_THRESHOLD;
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 2; // refuse on the SECOND identical (path,slice) read
+}
+function readDupWindow(): number {
+  const v = process.env.CODER_READ_DUP_WINDOW;
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 20;
+}
+
+/**
+ * Per-recovery-path circuit breaker (PR-2, R1 from
+ * docs/agent-research/COMPARISON.md). Each recovery KIND has its own
+ * lifetime cap so a misbehaving server can't repeatedly trigger the same
+ * recovery path and balloon billing. Counts persist for the entire session
+ * (not reset on turn boundary) — the abuse pattern we are blocking is
+ * "this session has burned 6 OAuth refreshes, something is wrong".
+ *
+ * Distinct from the per-turn `transientRetries` counter that drives R5's
+ * exp+jitter retry — a single turn may issue a few transient retries; the
+ * circuit breaker only fires when this happens turn after turn.
+ */
+const RECOVERY_KINDS = [
+  'provider-400-retry',
+  'provider-401-refresh',
+  'provider-transient-retry',
+  'provider-fallback',
+  'compact-failure',
+] as const;
+type RecoveryKind = typeof RECOVERY_KINDS[number];
+
+/**
+ * Caps are read lazily from env each time tryRecord runs so tests can
+ * mutate process.env after the runner module is loaded. Defaults below.
+ */
+const RECOVERY_CAP_DEFAULTS: Record<RecoveryKind, number> = {
+  'provider-400-retry': 3,
+  'provider-401-refresh': 2,
+  // Transient (429/5xx/timeout) — large cap because R5 already bounds per
+  // turn; this catches "every turn for 20 turns gets one 429".
+  'provider-transient-retry': 30,
+  'provider-fallback': 5,
+  'compact-failure': 3,
+};
+const RECOVERY_CAP_ENV_KEYS: Record<RecoveryKind, string> = {
+  'provider-400-retry': 'CODER_RECOVERY_400_MAX',
+  'provider-401-refresh': 'CODER_RECOVERY_401_MAX',
+  'provider-transient-retry': 'CODER_RECOVERY_TRANSIENT_MAX',
+  'provider-fallback': 'CODER_RECOVERY_FALLBACK_MAX',
+  'compact-failure': 'CODER_RECOVERY_COMPACT_MAX',
+};
+function recoveryCap(kind: RecoveryKind): number {
+  const envVal = process.env[RECOVERY_CAP_ENV_KEYS[kind]];
+  if (envVal != null && envVal !== '') {
+    const n = Number(envVal);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return RECOVERY_CAP_DEFAULTS[kind];
+}
+
+/**
+ * Tenacity-style exp+jitter backoff (PR-2, R5 from
+ * docs/agent-research/COMPARISON.md). Mirrors kimi-cli's
+ * `wait_exponential_jitter(initial=0.3, max=5, jitter=0.5)`. Returns a
+ * delay in milliseconds for the given 1-based attempt number.
+ */
+/**
+ * PR-3 (R4): how many user-message turns to keep raw past the compaction
+ * boundary. Mirrors kimi-cli's `max_preserved_messages=2`. Lazy-resolved
+ * so tests can override post-import.
+ */
+function preserveLastNTurns(): number {
+  const v = process.env.CODER_COMPACT_PRESERVE_LAST_N_TURNS;
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 2;
+}
+
+/** Read lazily so tests can override after import. */
+function transientRetryMaxPerTurn(): number {
+  const v = process.env.CODER_TRANSIENT_RETRY_MAX_PER_TURN;
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 3;
+}
+function transientRetryInitialMs(): number {
+  const v = process.env.CODER_TRANSIENT_RETRY_INITIAL_MS;
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 300;
+}
+function transientRetryMaxMs(): number {
+  const v = process.env.CODER_TRANSIENT_RETRY_MAX_MS;
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 5000;
+}
+function transientRetryJitter(): number {
+  const v = process.env.CODER_TRANSIENT_RETRY_JITTER;
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 0.5;
+}
+
+function nonRetryableProviderErrorReason(error: Error, raw: unknown): string | null {
+  const candidates = [
+    error.message,
+    (raw as { error?: { message?: unknown } })?.error?.message,
+    (raw as { error?: { type?: unknown } })?.error?.type,
+    (raw as { code?: unknown })?.code,
+  ];
+  const text = candidates
+    .filter((value): value is string => typeof value === 'string')
+    .join('\n')
+    .toLowerCase();
+
+  if (
+    text.includes('out of extra usage') ||
+    text.includes('claude.ai/settings/usage') ||
+    text.includes('out_of_credits')
+  ) {
+    return 'provider quota/extra usage exhausted';
+  }
+  return null;
+}
+
+export function backoffDelayMs(
+  attempt: number,
+  opts: { initialMs?: number; maxMs?: number; jitter?: number; rng?: () => number } = {},
+): number {
+  const initial = opts.initialMs ?? transientRetryInitialMs();
+  const max = opts.maxMs ?? transientRetryMaxMs();
+  const jitter = opts.jitter ?? transientRetryJitter();
+  const rng = opts.rng ?? Math.random;
+  const a = Math.max(1, Math.floor(attempt));
+  // Exp curve (1 → initial, 2 → 2*initial, 3 → 4*initial, ...) capped at max.
+  const baseExp = Math.min(max, initial * Math.pow(2, a - 1));
+  // Symmetric jitter in [-j*base, +j*base].
+  const jitterAmount = baseExp * jitter * (rng() * 2 - 1);
+  return Math.max(0, Math.round(baseExp + jitterAmount));
+}
+
+/**
+ * Cycle-aware dominance guard (Fix G). Catches the pattern session 609
+ * exhibited: 50+ consecutive turns dominated by `mcp__read_file` with
+ * ZERO assistant text emitted between them. Without text the agent has
+ * no reasoning anchor — every "round" rediscovers the same content.
+ * When the dominance check trips we abort with a clear error rather
+ * than refuse a single call, because the agent has already shown it
+ * can't break out by itself.
+ *
+ * Default: 15 turns / 80% dominance / 0 text turns.
+ */
+const DOMINANCE_WINDOW = Number(process.env.CODER_DOMINANCE_WINDOW ?? 15);
+const DOMINANCE_RATIO = Number(process.env.CODER_DOMINANCE_RATIO ?? 0.8);
 /**
  * Auto-continue: when the runner exhausts maxTurns, instead of dying it
  * compacts the history (summarizer → deterministic fallback) and resets the
@@ -216,6 +550,35 @@ export function toolCallsSignature(
 export function toolNamesSignature(blocks: Array<{ name: string }>): string {
   if (blocks.length === 0) return '';
   return blocks.map((b) => b.name).sort().join('|');
+}
+
+/**
+ * Hide `create_goal` from the tool surface when a goal is already
+ * in_progress. Sessions 656/658 showed the model — even after explicit
+ * "ignore the GOAL" user instructions — emitting `create_goal` instead
+ * of doing the actual work, looping for many turns until the session
+ * went idle. Caps and nudges paradoxically reinforced the pattern by
+ * keeping the tool name in the model's context. Removing the option
+ * from the surface (the model literally never sees the tool) makes
+ * the loop impossible by construction.
+ *
+ * `get_goal` and `update_goal` stay visible always — the agent must
+ * be able to re-read the objective and mark it complete. Once
+ * update_goal flips the status to 'complete', the next turn's
+ * buildTools() sees no in-progress goal and re-exposes create_goal,
+ * so legitimate pivot flows still work.
+ *
+ * Pure function — pulled out of buildTools() so we can unit-test the
+ * filter directly without spinning up a full runner.
+ */
+export function filterGoalToolsByState<T extends { name: string }>(
+  tools: T[],
+  goalState: { status: 'in_progress' | 'complete' } | null | undefined,
+): T[] {
+  if (goalState && goalState.status === 'in_progress') {
+    return tools.filter((t) => t.name !== 'create_goal');
+  }
+  return tools;
 }
 
 export function approxChars(messages: AgentMessage[]): number {
@@ -281,16 +644,21 @@ export const SUBAGENT_TOOL_RESULT_CAP = SUBAGENT_PUSH_TIME_CAP;
  * may contain un-truncated tool_result blocks that would otherwise pollute
  * the cache prefix. Re-applying buildToolResultBlock() yields the same
  * deterministic shape used by fresh sessions.
+ *
+ * @param cap When omitted, falls back to the production `PUSH_TIME_CAP`.
+ *   Sessions with `unrestricted_tool_output` enabled pass their
+ *   `effectivePushTimeCap` so blocks that legitimately fit under the
+ *   raised ceiling are NOT re-truncated to 24k on resume.
  */
-export function normalizeMessageForCache(m: AgentMessage): AgentMessage {
+export function normalizeMessageForCache(m: AgentMessage, cap: number = PUSH_TIME_CAP): AgentMessage {
   if (m.role !== 'tool' && m.role !== 'user') return m;
   let mutated = false;
   const content = m.content.map((b): ContentBlock => {
     if (b.type !== 'tool_result') return b;
     if (b.truncated) return b; // already deterministic, leave alone
-    if (b.content.length <= PUSH_TIME_CAP) return b;
+    if (b.content.length <= cap) return b;
     mutated = true;
-    return buildToolResultBlock(b.tool_use_id, b.content, b.is_error);
+    return buildToolResultBlock(b.tool_use_id, b.content, b.is_error, cap);
   });
   return mutated ? { ...m, content } : m;
 }
@@ -316,7 +684,22 @@ export function compactHistoryForLLM(
   messages: AgentMessage[],
   limits?: { minimum: number; protect: number },
 ): AgentMessage[] {
-  const result = compactMessages(messages, limits);
+  // Camada 5 — rolling reduction runs FIRST and is cheap (linear scan,
+  // pure function, deterministic). It retires stale repeated reads/searches
+  // before the size-based compaction even sees them, so sessions grow
+  // sublinearly. Disabled via CODER_ROLLING_REDUCER=0 for diagnostics.
+  let working = messages;
+  if (process.env.CODER_ROLLING_REDUCER !== '0') {
+    const rolled = applyRollingReduction(messages);
+    if (rolled.reduced > 0) {
+      console.log(
+        `[coder] rolling reducer retired ${rolled.reduced} stale tool_result(s) ` +
+          `(~${rolled.freedChars} chars freed)`,
+      );
+      working = rolled.messages;
+    }
+  }
+  const result = compactMessages(working, limits);
   if (result.applied) {
     console.log(
       `[coder] compaction pruned ${result.prunedBlocks} tool_result blocks ` +
@@ -474,7 +857,18 @@ export interface RunnerEvents {
   tool_call_result: (id: string, name: string, result: { content: string; isError?: boolean; subUsage?: ChatUsage }, durationMs: number) => void;
   message_complete: (message: AgentMessage, usage: ChatUsage | null) => void;
   turn_start: (turn: number) => void;
-  done: (reason: 'completed' | 'max_turns' | 'aborted' | 'error' | 'plan_required', error?: Error) => void;
+  /**
+   * Emitted exactly once when the run terminates. `reason` is the most
+   * specific applicable value from {@link StopReason}. `error` carries the
+   * underlying Error for failure modes (`error`, `recovery_capped`,
+   * `doom_loop`); undefined for clean exits. `transition` records the
+   * recovery path that led here (when applicable) — pairs with the
+   * `recoveryAttempts` map for billing/debug attribution.
+   *
+   * Existing consumers that only read the first 1–2 args remain
+   * source-compatible; the new args default to undefined.
+   */
+  done: (reason: StopReason, error?: Error, transition?: TransitionKind | null) => void;
   /** Emitted when the agent calls submit_plan; payload waits for /plan-response. */
   plan_posted: (block: PlanBlock) => void;
   /** Emitted when the agent calls ask_user; payload waits for /answer. */
@@ -497,9 +891,28 @@ export interface RunnerEvents {
     result: import('../sessions/types.js').TaskResult | null;
     finished_at: string;
   }) => void;
+  /** Emitted by `update_task` when the agent surgically patches one task
+   *  (status/files/title/description) without resubmitting the whole list.
+   *  Lets the dashboard sidebar refetch state-summary on the spot instead of
+   *  waiting until the turn ends. */
+  task_updated: (payload: {
+    task_id: string;
+    patch: Partial<import('../sessions/types.js').CoderTask>;
+  }) => void;
   /** Emitted when `todo_write` replaces the session's lightweight checklist. */
   todos_updated: (payload: {
     todos: import('../tools/todo.js').TodoItem[];
+  }) => void;
+  /** Agent Loop v2: emitted when the stop-guard intercepts a 'completed' turn
+   *  and pushes back a single recap because todos are still unfinished. */
+  stop_nudged: (payload: { turn: number; recap: string }) => void;
+  /** PR-2 (R1): emitted when a per-recovery-path circuit breaker exceeds
+   *  its cap and the loop bails with reason='error'. */
+  recovery_aborted: (payload: {
+    kind: 'provider-400-retry' | 'provider-401-refresh' | 'provider-transient-retry' | 'provider-fallback' | 'compact-failure';
+    attempts: number;
+    cap: number;
+    contextHint: string | null;
   }) => void;
   /** Emitted when `enter_worktree` swaps the session cwd for a worktree. */
   worktree_entered: (payload: { path: string; originalCwd: string }) => void;
@@ -648,6 +1061,13 @@ export class CoderRunner extends EventEmitter {
   private opts: RunnerOptions;
   private readonly maxTurns: number;
   private aborted = false;
+  /**
+   * Live turn counter — mirrored from the loop-local `turn` variable so
+   * external observers (e.g. SnapshotRecorder via ctx.runner) can stamp
+   * audit rows with the correct turn number while a turn is in flight.
+   * 0 before the first turn starts.
+   */
+  public turn = 0;
   private pendingResolve: ((value: string) => void) | null = null;
   private pendingUserMessages: string[] = [];
   private planApproved = false;
@@ -679,6 +1099,52 @@ export class CoderRunner extends EventEmitter {
   private recentTurnSignatures: string[] = [];
   /** Ring of loose (tool-name-only) signatures for the fuzzy guard. */
   private recentTurnNamesSignatures: string[] = [];
+
+  /**
+   * One-shot flag for the `create_goal hidden` log. Flipped true the first
+   * turn buildTools() removes the tool from the surface; reset to false
+   * any turn the goal isn't in_progress. Keeps the dashboard log readable
+   * (one line per transition) instead of spamming it every turn while a
+   * goal is active.
+   */
+  private goalToolHiddenLogged = false;
+
+  /**
+   * Per-arg call-frequency tracker (Fix F). Map key is
+   * `<toolName>#<sha1(JSON.stringify(args))>`, value is the list of
+   * turn-numbers at which that exact call was issued. Old entries fall
+   * out of the window automatically when we check.
+   */
+  private toolCallFreq: Map<string, number[]> = new Map();
+
+  /**
+   * Agent Loop v2 result-content dedup. Maps tool name → recent
+   * { contentHash, turn } entries within a rolling window. Catches the
+   * "snap-to-symbol" loop where the agent shifts `around_line` by a few
+   * each call but the resolver returns the SAME body. The arg-hash dup-call
+   * cap (Fix F) misses this because args differ; the rolling-reduction
+   * dedup-key misses it because it uses raw args, not the resolved slice.
+   * Hashing the raw `result.content` catches it post-resolution.
+   */
+  private recentResultHashes: Map<string, Array<{ hash: string; turn: number }>> = new Map();
+
+  /**
+   * PR-5 (Row 32) — pre-read enforcement. Tracks recent read-family tool
+   * calls keyed by (toolName, path, slice-fields) so the runner can REFUSE
+   * a duplicate before dispatching it. Distinct from `toolCallFreq` (which
+   * uses raw arg JSON and a higher threshold) and `recentResultHashes`
+   * (which catches duplicates AFTER the call returns identical content).
+   */
+  private recentReadKeys: Map<string, Array<{ turn: number }>> = new Map();
+
+  /**
+   * Sliding window of (toolName, hadAssistantText) per turn — used by
+   * the dominance guard (Fix G) to detect "agent stuck reading without
+   * reasoning" patterns. Capped to DOMINANCE_WINDOW entries; oldest
+   * shifted out at the edge.
+   */
+  private recentTurnDominance: Array<{ name: string; hadText: boolean }> = [];
+
   /**
    * Lightweight todo list maintained by the `todo_write` tool. Distinct from
    * the heavyweight `submit_tasks` flow — todos never pause the run; they
@@ -701,6 +1167,92 @@ export class CoderRunner extends EventEmitter {
    *  Prevents re-summarizing every turn — one pass replaces the old span,
    *  and subsequent growth is handled by deterministic compaction. */
   private summarizedOnce = false;
+
+  /** Agent Loop v2 stop-guard: ensures we nudge at most once per session
+   *  when the model tries to stop with `pending`/`in_progress` todos. */
+  private agentLoopV2NudgeUsed = false;
+
+  /**
+   * Per-recovery-path attempt counter (PR-2, R1). Each recovery kind has
+   * its own session-lifetime cap defined in RECOVERY_CAPS. When a kind
+   * exceeds its cap we abort with a structured error rather than letting
+   * the loop spin and burn tokens on a broken server.
+   */
+  private recoveryAttempts: Map<RecoveryKind, number> = new Map();
+
+  /**
+   * PR-4 (Row 3): record of the most recent recovery transition the runner
+   * took. Set whenever a recovery path is entered (compact-retry,
+   * transient-retry, fallback-swap, doom-loop, etc.). Read at exit time so
+   * the final `done` event and `RunResult` can attribute the stop to the
+   * recovery path that led there. null = clean run with no recoveries.
+   */
+  private lastTransition: TransitionKind | null = null;
+  private setTransition(kind: TransitionKind): void {
+    this.lastTransition = kind;
+  }
+
+  /**
+   * Compose the final {@link RunResult} and emit the matching `done` event
+   * in one shot. All terminal sites in `run()` go through this so the
+   * three-tuple (reason, error, transition) is consistent. Idempotent: if
+   * called twice in the same run() invocation, only the first take effects.
+   */
+  private finishWith(
+    totalUsage: ChatUsage,
+    reason: StopReason,
+    error?: Error,
+    transition?: TransitionKind | null,
+  ): RunResult {
+    const t = transition !== undefined ? transition : this.lastTransition;
+    this.emit('done', reason, error, t);
+    return { totalUsage, reason, transition: t };
+  }
+
+  /**
+   * Try to record a recovery attempt of the given kind. Returns true if
+   * the attempt is within budget (proceed); false if the cap is exceeded
+   * (abort). Emits `recovery_aborted` on cap exceeded for telemetry. Cap
+   * source is `RECOVERY_CAPS[kind]`; override via env (CODER_RECOVERY_*).
+   */
+  private tryRecord(kind: RecoveryKind, contextHint?: string): boolean {
+    const next = (this.recoveryAttempts.get(kind) ?? 0) + 1;
+    this.recoveryAttempts.set(kind, next);
+    const cap = recoveryCap(kind);
+    if (next > cap) {
+      console.warn(
+        `[coder] recovery cap exceeded for kind=${kind}: ${next}/${cap}` +
+          (contextHint ? ` (${contextHint})` : ''),
+      );
+      this.emit('recovery_aborted', {
+        kind,
+        attempts: next,
+        cap,
+        contextHint: contextHint ?? null,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Phase tracking (Camada 2 — Phase Profiles) was REMOVED in favor of
+   * single-model legacy behavior. The mid-turn provider swaps were too
+   * disruptive to cache stability and made model behavior unpredictable.
+   * Field preserved as `null` so existing telemetry stamping in index.ts
+   * keeps compiling without conditional churn.
+   */
+  public currentPhase: string | null = null;
+
+  /**
+   * Id of the most recent `coder_turn_telemetry` row inserted by the runner.
+   * Exposed (public) so the persistence layer in index.ts can stamp the
+   * tool_calls of this turn with `turn_telemetry_id`, giving dashboards a
+   * clean JOIN between per-call cost and per-turn token usage. Null when
+   * sessionStore is absent (subagents/tests) or the insert failed.
+   */
+  public lastTurnTelemetryId: number | null = null;
+
   /**
    * Currently active tool tiers. When null, no tier filtering is applied
    * (all registered tools visible to the provider — legacy behaviour used
@@ -730,12 +1282,24 @@ export class CoderRunner extends EventEmitter {
    * downstream observers can correlate lifecycle events.
    */
   public readonly runId: string = randomUUID();
+  /** PR-6: exposed so subagent factories can propagate the v2 flag onto
+   *  spawned subagents (pre-read cap, result-dup, exp+jitter, framing). */
+  public get agentLoopV2(): boolean { return this.opts.agentLoopV2 === true; }
 
   /** Public mirrors of opts.sessionId / opts.isSubagent so subagent factories can inherit them. */
   public readonly sessionId: number | undefined;
   public readonly isSubagent: boolean;
   /** Optional SessionStore for input-log mirroring; see RunnerOptions. */
   public readonly sessionStore: import('../sessions/store.js').SessionStore | undefined;
+  /**
+   * Resolved per-block tool-result cap for this run. Computed once in the
+   * constructor from `opts.unrestrictedToolOutput`, `opts.pushTimeCap`, and
+   * `opts.isSubagent`. All callsites that previously read
+   * `this.effectivePushTimeCap` should use this instead so the
+   * unrestricted ceiling stays consistent across `buildToolResultBlock`
+   * arguments and the side-file `toolOutputStore` gate.
+   */
+  public readonly effectivePushTimeCap: number;
 
   /**
    * Best-effort mirror of a runtime system-reminder injection into
@@ -772,8 +1336,12 @@ export class CoderRunner extends EventEmitter {
     historyChars: number;
     compactionTriggered: boolean;
     summarizerRan: boolean;
-  }): void {
-    if (!this.sessionStore) return;
+    /** Size of the system prompt actually shipped to the provider (chars). */
+    systemPromptChars?: number;
+    /** Size of the tools array actually shipped to the provider (JSON-stringified chars). */
+    toolsDefChars?: number;
+  }): number | null {
+    if (!this.sessionStore) return null;
     // Largest tool_result content size (post-truncation) — surfaces tools
     // that routinely produce big outputs and benefit from smart reducers.
     let largest = 0;
@@ -793,7 +1361,12 @@ export class CoderRunner extends EventEmitter {
     }
     for (const count of readFilePaths.values()) if (count > 1) paginate += count - 1;
 
-    this.sessionStore.recordTurnTelemetry({
+    const cost = estimateCost(
+      this.opts.provider.name,
+      this.opts.provider.model,
+      input.lastUsage,
+    );
+    const insertedId = this.sessionStore.recordTurnTelemetry({
       session_id: this.sessionId ?? null,
       run_id: this.runId,
       turn: input.turn,
@@ -812,7 +1385,11 @@ export class CoderRunner extends EventEmitter {
       compaction_triggered: input.compactionTriggered,
       summarizer_ran: input.summarizerRan,
       paginate_count: paginate,
+      system_prompt_chars: input.systemPromptChars ?? null,
+      tools_def_chars: input.toolsDefChars ?? null,
+      estimated_cost_usd: cost > 0 ? cost : null,
     });
+    return insertedId;
   }
 
   constructor(opts: RunnerOptions) {
@@ -821,7 +1398,21 @@ export class CoderRunner extends EventEmitter {
     this.sessionId = opts.sessionId;
     this.isSubagent = opts.isSubagent ?? false;
     this.sessionStore = opts.sessionStore;
-    this.messages = (opts.initialMessages ?? []).map(normalizeMessageForCache);
+    // Resolve the per-block tool-result cap once. Order of precedence:
+    //   1. unrestricted toggle on → high safety ceiling (per main/subagent)
+    //   2. explicit opts.pushTimeCap (set by subagent factories etc.)
+    //   3. default constant (PUSH_TIME_CAP / SUBAGENT_PUSH_TIME_CAP)
+    if (opts.unrestrictedToolOutput) {
+      this.effectivePushTimeCap = this.isSubagent
+        ? UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP
+        : UNRESTRICTED_PUSH_TIME_CAP;
+    } else {
+      this.effectivePushTimeCap =
+        opts.pushTimeCap ?? (this.isSubagent ? SUBAGENT_PUSH_TIME_CAP : PUSH_TIME_CAP);
+    }
+    this.messages = (opts.initialMessages ?? []).map((m) =>
+      normalizeMessageForCache(m, this.effectivePushTimeCap),
+    );
     this.maxTurns = opts.maxTurns ?? 50;
     // back-reference so native interaction tools can pause the loop
     this.opts.toolContext.runner = this;
@@ -866,6 +1457,123 @@ export class CoderRunner extends EventEmitter {
     // Defensive copy — the tool may mutate its input later.
     this.currentTodos = todos.map((t) => ({ ...t }));
     this.emit('todos_updated', { todos: this.currentTodos });
+  }
+
+  /**
+   * Build the auto-continue recap for Agent Loop v2 sessions. Returns null
+   * when there is nothing worth reminding about (no goal, no todos). The
+   * recap is pushed as a user message at the auto-continue boundary so the
+   * model re-anchors after the summarizer collapses old history.
+   */
+  private buildAutoContinueRecap(): string | null {
+    const ctx = this.opts.toolContext;
+    const goal = ctx.getGoalState ? ctx.getGoalState() : null;
+    const tasksState = ctx.getTasksState ? ctx.getTasksState() : null;
+    const block = buildActiveContextBlock({
+      todos: this.currentTodos,
+      goal: goal
+        ? {
+            text: goal.text,
+            status: goal.status,
+            budgetTokens: goal.budgetTokens ?? null,
+            completionNote: goal.completionNote ?? null,
+          }
+        : null,
+      tasksState: tasksState ?? null,
+    });
+    if (!block) return null;
+    return [
+      '[System reminder — auto-continued]',
+      'You auto-continued past the per-run turn budget. Re-anchor on the live state below before acting; if the goal is already complete, emit a final message and stop.',
+      '',
+      block,
+    ].join('\n');
+  }
+
+  /** True iff at least one todo in the live list is `pending` or `in_progress`. */
+  private hasUnfinishedTodos(): boolean {
+    for (const t of this.currentTodos) {
+      if (t.status === 'pending' || t.status === 'in_progress') return true;
+    }
+    return false;
+  }
+
+  /**
+   * Build the recap pushed back when the stop-guard fires. Lists every
+   * unfinished todo and tells the model what its options are. Mirrors the
+   * "all items completed or explicitly canceled/deferred before ending the
+   * turn" rule we surface in the system prompt.
+   */
+  private buildStopGuardRecap(): string {
+    const unfinished = this.currentTodos.filter(
+      (t) => t.status === 'pending' || t.status === 'in_progress',
+    );
+    const lines = unfinished.map((t) => {
+      const label = t.status === 'in_progress' ? t.activeForm : t.content;
+      return `  - [${t.status}] ${label}`;
+    });
+    return [
+      '[System reminder — agent loop]',
+      'You signaled completion, but the live todo list still has unfinished items:',
+      ...lines,
+      '',
+      'Before stopping, do ONE of the following:',
+      '  1. Finish the remaining items, then call todo_write to mark them completed and emit a final message.',
+      '  2. If an item is no longer applicable, call todo_write to remove it (do not silently leave it pending) and explain why in your final message.',
+      '  3. If you are blocked on a user decision, call ask_user — do not stop silently.',
+      '',
+      'This is your one and only nudge for this session — the next stop will go through.',
+    ].join('\n');
+  }
+
+  /**
+   * Build the messages array passed to provider.chat() for the current turn.
+   * When `agentLoopV2` is on, appends a live `<active-context>` text block to
+   * the trailing user message (or creates a synthetic one if the history
+   * doesn't end on a user message). The block is rebuilt every turn from
+   * live state and is NEVER persisted into `this.messages` — it lives only in
+   * the request payload, so the cached prefix stays byte-stable.
+   */
+  private assembleMessagesForChat(
+    compactionLimits: import('./compaction.js').CompactionLimits | undefined,
+  ): AgentMessage[] {
+    const compacted = compactHistoryForLLM(this.messages, compactionLimits);
+    if (!this.opts.agentLoopV2) return compacted;
+
+    const ctx = this.opts.toolContext;
+    const goal = ctx.getGoalState ? ctx.getGoalState() : null;
+    const tasksState = ctx.getTasksState ? ctx.getTasksState() : null;
+    const block = buildActiveContextBlock({
+      todos: this.currentTodos,
+      goal: goal
+        ? {
+            text: goal.text,
+            status: goal.status,
+            budgetTokens: goal.budgetTokens ?? null,
+            completionNote: goal.completionNote ?? null,
+          }
+        : null,
+      tasksState: tasksState ?? null,
+    });
+    if (!block) return compacted;
+
+    // Append as a TextBlock to the last user message — safer than adding a
+    // new message because Anthropic disallows two adjacent user messages.
+    // If the history ends on an assistant message (rare — only if a turn
+    // emitted text and no tool calls but somehow we still loop), append a
+    // brand-new user message instead.
+    const cloned = compacted.slice();
+    const lastIdx = cloned.length - 1;
+    if (lastIdx >= 0 && cloned[lastIdx].role === 'user') {
+      const last = cloned[lastIdx];
+      cloned[lastIdx] = {
+        role: 'user',
+        content: [...last.content, { type: 'text', text: block } as ContentBlock],
+      };
+    } else {
+      cloned.push({ role: 'user', content: [{ type: 'text', text: block } as ContentBlock] });
+    }
+    return cloned;
   }
 
   /**
@@ -1058,7 +1766,7 @@ export class CoderRunner extends EventEmitter {
    * total. The runner emits events along the way; consumers (CLI / SSE) attach
    * listeners before calling run().
    */
-  async run(): Promise<{ totalUsage: ChatUsage; reason: 'completed' | 'max_turns' | 'aborted' | 'error' | 'plan_required' }> {
+  async run(): Promise<RunResult> {
     const totalUsage: ChatUsage = {
       input_tokens: 0,
       output_tokens: 0,
@@ -1112,6 +1820,25 @@ export class CoderRunner extends EventEmitter {
           console.log(`[coder] tool-filter hook removed ${before - filtered.length} tool(s)`);
         }
       }
+      // Hide `create_goal` when an in-progress goal exists. Eliminates the
+      // loop seen in sessions 656/658 where the model kept calling
+      // create_goal instead of executing real work. Read fresh each turn
+      // — `update_goal` flipping status to 'complete' re-exposes the tool
+      // automatically on the next turn, preserving legitimate pivots.
+      const activeGoal = this.opts.toolContext.getGoalState?.();
+      if (activeGoal && activeGoal.status === 'in_progress') {
+        const before = filtered.length;
+        filtered = filterGoalToolsByState(filtered, activeGoal);
+        if (filtered.length < before && !this.goalToolHiddenLogged) {
+          this.goalToolHiddenLogged = true;
+          const preview = activeGoal.text.length > 80
+            ? `${activeGoal.text.slice(0, 80)}…`
+            : activeGoal.text;
+          console.log(`[coder] hiding create_goal — active goal: "${preview}"`);
+        }
+      } else {
+        this.goalToolHiddenLogged = false;
+      }
       // Stable alphabetical sort. The provider sees the tools array in
       // every request; any reordering between turns invalidates server-side
       // prompt caches (Anthropic ephemeral, OpenAI/ZAI auto-cache). Sorting
@@ -1144,31 +1871,60 @@ export class CoderRunner extends EventEmitter {
       );
     }
 
-    // Persist a snapshot of the tools array so the dashboard's "session
-    // metrics" view can show what was actually shipped to the provider.
-    // Critical for debugging "why are we paying X tokens on turn 1?" —
-    // without this the breakdown between system prompt and tools array is
-    // invisible.  Dedup by hash inside SessionStore — most sessions ship
-    // a byte-identical array on every turn (sort + tier-stable).
+    // Persist a manifest of the tools array (Camada 3 follow-up — was
+    // formerly the full JSON, ~5–20KB per tier change). The dashboard only
+    // needs `tool_count` + `chars` to render the first-turn breakdown; the
+    // per-turn evolution lives in `coder_turn_telemetry.tools_def_chars`
+    // (richer signal than the deduped session-input row anyway).
+    //
+    // The recorded `content` is a stable fingerprint (sha1 of the tools
+    // JSON) so SessionStore.recordSessionInput's content-hash dedup keeps
+    // working: same fingerprint = no new row, tier promotion = new row.
+    // Real chars/byte count travels via `meta.content_chars`.
     if (this.sessionStore && this.sessionId != null) {
       try {
         const toolsJson = JSON.stringify(tools);
+        const fingerprint = createHash('sha1').update(toolsJson).digest('hex');
         this.sessionStore.recordSessionInput({
           session_id: this.sessionId,
           kind: 'tools_snapshot',
           source_label: 'turn-start',
-          content: toolsJson,
+          content: fingerprint,
           meta: {
             tool_count: tools.length,
             tool_names: tools.map((t) => t.name),
             profile: this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : 'all',
+            content_chars: toolsJson.length,
+            // Mark the new schema so the dashboard can fall back to legacy
+            // (content = full JSON) for sessions recorded before this change.
+            schema: 'manifest-v1',
           },
         });
       } catch {
         /* best-effort */
       }
     }
-    let lastTiersKey = this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : '*';
+    /**
+     * Compute the cache-key that drives buildTools() re-runs. Originally
+     * just the active tier set — added goal-state because the tools array
+     * was being reused across turns and thus never re-applied the
+     * `filterGoalToolsByState` filter once a goal was set mid-session
+     * (sessions 656/658/664: agent called create_goal in turn 1 with no
+     * goal, the cached tools array kept create_goal visible for every
+     * subsequent turn, model looped on it).
+     *
+     * Goal contributes only its STATUS (`null`/`in_progress`/`complete`),
+     * not the goal text, so prefix caches stay byte-stable across turns
+     * within the same status. The status only flips a few times per
+     * session (when create_goal/update_goal fires), so cache thrash is
+     * bounded.
+     */
+    const buildToolsCacheKey = (): string => {
+      const tierKey = this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : '*';
+      const goalStatus = this.opts.toolContext.getGoalState?.()?.status ?? 'none';
+      return `${tierKey}|goal=${goalStatus}`;
+    };
+    let lastTiersKey = buildToolsCacheKey();
 
     let turn = 0;
     // In plan mode: allows ONE automatic nudge when the model writes intent text
@@ -1177,28 +1933,56 @@ export class CoderRunner extends EventEmitter {
     // Tracks the actual input_tokens count from the last API response so the
     // compaction trigger can use real token counts instead of char estimates.
     let lastKnownInputTokens: number | null = null;
+    // Number of messages in `this.messages` at the moment lastKnownInputTokens
+    // was reported. Lets `computeSnapshot` distinguish the confirmed prefix
+    // from the locally-estimated tail.
+    let lastUsageMessageCount = 0;
+    // Circuit breaker for repeated compaction failures (summariser + fallback).
+    // After this many consecutive failures, the loop bails with an error
+    // instead of looping forever on a broken context.
+    const MAX_CONSECUTIVE_COMPACT_FAILURES = 3;
+    let consecutiveCompactFailures = 0;
     // Derive compaction thresholds from the model's context window once per session.
     const compactionLimits = deriveCompactionLimits(this.opts.context_window);
+    // Token-mode limits (used when CODER_NEW_COMPACTION is on). Falls back to
+    // the legacy compactionLimits when no model id is available.
+    const newPath = isNewCompactionEnabled();
+    const modelId = this.opts.provider.model ?? '';
+    const tokenLimits = newPath && modelId ? deriveTokenLimits(modelId) : null;
+    if (tokenLimits) {
+      console.log(
+        `[coder] new compaction path: model=${modelId} window=${tokenLimits.rawWindow} ` +
+        `effective=${tokenLimits.effective} trigger=${tokenLimits.trigger} protect=${tokenLimits.protect}` +
+        (tokenLimits.isFallback ? ' (FALLBACK — model not in registry)' : ''),
+      );
+    }
+    /** Compute a fresh hybrid token snapshot for the current `this.messages`. */
+    const computeTokenSnapshot = (): TokenSnapshot => {
+      const usage = lastKnownInputTokens != null
+        ? { input_tokens: lastKnownInputTokens, messageCountAtTime: lastUsageMessageCount }
+        : null;
+      return computeSnapshot(this.messages, usage);
+    };
     // Outer loop: allows auto-continue after maxTurns by resetting `turn`.
     // eslint-disable-next-line no-constant-condition
     while (true) {
       while (turn < this.maxTurns) {
         this.flushPendingMessages();
         if (this.aborted) {
-          this.emit('done', 'aborted');
-          return { totalUsage, reason: 'aborted' };
+          return this.finishWith(totalUsage, 'aborted');
         }
 
         turn++;
+        this.turn = turn;
         this.emit('turn_start', turn);
 
         // Periodically remind subordinate agents to post a deliverable before stopping.
         if (this.opts.isCompanySubordinate && turn > 1 && turn % SUBORDINATE_REMINDER_INTERVAL === 0) {
-          this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }] });
+          this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }], isMeta: true });
           this.logSystemReminder('subordinate-deliverable', SUBORDINATE_REMINDER_MSG);
           if (this.opts.companyRoleOverride) {
             const text = `[System reminder — Role identity] ${this.opts.companyRoleOverride}`;
-            this.messages.push({ role: 'user', content: [{ type: 'text', text }] });
+            this.messages.push({ role: 'user', content: [{ type: 'text', text }], isMeta: true });
             this.logSystemReminder('role-identity', text);
           }
         }
@@ -1215,24 +1999,62 @@ export class CoderRunner extends EventEmitter {
         // deterministic compactMessages path below — the summarizer never
         // breaks a turn.
         if (isSummarizerEnabled() && !this.summarizedOnce) {
-          const total = totalChars(this.messages);
-          // Prefer real input_tokens from the last API response when the model's
-          // context_window is known — avoids premature compaction on large-context
-          // models (Claude 200K, DeepSeek 1M, Gemini 1M+) that were previously
-          // compacted at 60K chars (~7.5% of Claude's window).
-          const shouldCompact =
-            compactionLimits.triggerTokens !== null && lastKnownInputTokens !== null
-              ? lastKnownInputTokens >= compactionLimits.triggerTokens
-              : total > compactionLimits.minimum;
-          if (shouldCompact) {
+          // Token-mode (new): use the hybrid TokenSnapshot vs effective window.
+          // Char-mode (legacy): keep the original char-threshold path so we
+          // can A/B with CODER_NEW_COMPACTION=0.
+          let shouldCompactNow = false;
+          let triggerLog = '';
+          if (tokenLimits) {
+            const snap = computeTokenSnapshot();
+            shouldCompactNow = snap.total >= tokenLimits.trigger;
+            triggerLog = `tokens=${snap.total} (${snap.source}, conf=${snap.confirmed} est=${snap.pendingEstimate}) trigger=${tokenLimits.trigger}`;
+          } else {
+            const total = totalChars(this.messages);
+            shouldCompactNow =
+              compactionLimits.triggerTokens !== null && lastKnownInputTokens !== null
+                ? lastKnownInputTokens >= compactionLimits.triggerTokens
+                : total > compactionLimits.minimum;
+            triggerLog = `chars=${total} (legacy)`;
+          }
+          if (shouldCompactNow) {
             compactionTriggeredThisTurn = true;
-            const cutoff = snapCutoffToRoleBoundary(this.messages, computeCutoffIndex(this.messages, compactionLimits.protect));
+            const protectArg = tokenLimits ? tokenLimits.protect : compactionLimits.protect;
+            const rawCutoff = tokenLimits
+              ? computeCutoffIndexByTokens(this.messages, tokenLimits.protect)
+              : computeCutoffIndex(this.messages, compactionLimits.protect);
+            // PR-3 (R4): when v2 is on, recede the cutoff so at least N
+            // user-message turns remain raw past the boundary. Keeps recent
+            // user-intent verbatim — the summarizer paraphrases everything
+            // before. Pair-preserving snap runs after so atomic
+            // tool_use/tool_result groups still aren't split.
+            const recededCutoff = this.opts.agentLoopV2
+              ? recedeToPreserveLastNTurns(this.messages, rawCutoff, preserveLastNTurns())
+              : rawCutoff;
+            const cutoff = tokenLimits
+              ? snapCutoffPreservingPairs(this.messages, recededCutoff)
+              : snapCutoffToRoleBoundary(this.messages, recededCutoff);
             if (cutoff > 1) {
               const span = this.messages.slice(0, cutoff);
-              console.log(`[coder] running summarizer on ${cutoff} old messages (~${total} chars total)`);
-              const summary = await summarizeSpan(span, this.opts.provider);
+              console.log(`[coder] running summarizer on ${cutoff} old messages — ${triggerLog} protect=${protectArg}`);
+              const summaryRaw = isStructuredSummaryEnabled()
+                ? await summarizeSpanV2(span, this.opts.provider).catch(() => null)
+                : await summarizeSpan(span, this.opts.provider).catch(() => null);
+              const summary = this.opts.agentLoopV2 && summaryRaw && 'primary_request' in summaryRaw
+                ? overlayLiveState(
+                    summaryRaw,
+                    this.currentTodos,
+                    this.opts.toolContext.getGoalState
+                      ? (() => {
+                          const g = this.opts.toolContext.getGoalState!();
+                          return g ? { text: g.text, status: g.status } : null;
+                        })()
+                      : null,
+                  )
+                : summaryRaw;
               if (summary) {
-                const rendered = renderSummary(summary);
+                const rendered = 'primary_request' in summary
+                  ? renderSummaryV2(summary)
+                  : renderSummary(summary);
                 const syntheticAssistant: AgentMessage = {
                   role: 'assistant',
                   content: [{ type: 'text', text: rendered }],
@@ -1243,33 +2065,73 @@ export class CoderRunner extends EventEmitter {
                 // resume will rebuild from the untouched DB and re-apply the
                 // deterministic compaction path.
                 this.messages.splice(0, cutoff, syntheticAssistant);
+                // Run post-compact dedup pass — eliminate read tool_result
+                // duplicates whose content is now also implicit in the summary.
+                if (tokenLimits) {
+                  const cleaned = postCompactCleanup(this.messages);
+                  if (cleaned.elidedReads > 0) {
+                    this.messages.length = 0;
+                    this.messages.push(...cleaned.messages);
+                    console.log(`[coder] post-compact dedup elided ${cleaned.elidedReads} read(s) (~${cleaned.freedChars} chars freed)`);
+                  }
+                }
                 this.summarizedOnce = true;
                 summarizerRanThisTurn = true;
+                consecutiveCompactFailures = 0;
+                // Confirmed token count is no longer authoritative — we just
+                // rewrote the prefix. Force a re-measurement on next turn.
+                lastKnownInputTokens = null;
+                lastUsageMessageCount = 0;
                 console.log(`[coder] summarizer collapsed ${cutoff} messages into 1 synthetic summary`);
               } else {
                 // Mark as attempted so we don't retry every turn on a broken
                 // summarizer — deterministic compaction takes over.
                 this.summarizedOnce = true;
-                console.warn('[coder] summarizer returned null; using deterministic compaction');
+                consecutiveCompactFailures++;
+                console.warn(`[coder] summarizer returned null; using deterministic compaction (failures=${consecutiveCompactFailures})`);
+                if (consecutiveCompactFailures >= MAX_CONSECUTIVE_COMPACT_FAILURES) {
+                  console.error(`[coder] giving up after ${consecutiveCompactFailures} consecutive compaction failures`);
+                  // Mirror into the unified circuit-breaker telemetry pipeline
+                  // (PR-2, R1) without changing the existing abort semantics.
+                  this.emit('recovery_aborted', {
+                    kind: 'compact-failure',
+                    attempts: consecutiveCompactFailures,
+                    cap: MAX_CONSECUTIVE_COMPACT_FAILURES,
+                    contextHint: 'summarizer-null-pre-turn',
+                  });
+                  this.setTransition('compact-pre-turn');
+                  return this.finishWith(totalUsage, 'compact_failure');
+                }
               }
             }
           }
         }
 
-        // Rebuild tools iff tier set changed since last turn (cheap no-op
-        // otherwise). This keeps the prefix byte-stable across consecutive
-        // turns within the same tier, so server-side prefix cache hits.
-        const currentKey = this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : '*';
+        // Rebuild tools iff the cache key changed since last turn (tier
+        // set OR goal-status flip). Cheap no-op otherwise — keeps the
+        // prefix byte-stable across consecutive turns within the same
+        // (tier, goal-status), so server-side prefix cache hits.
+        const currentKey = buildToolsCacheKey();
         if (currentKey !== lastTiersKey) {
           tools = buildTools();
           lastTiersKey = currentKey;
         }
+
+        // PhaseRouter (Camada 2 — Phase Profiles) was REMOVED. Mid-turn
+        // model swaps proved too disruptive: cache invalidation, latency
+        // jitter, and confusing behavior between rounds. Sessions now run
+        // on a single (provider, model) for their entire lifetime — the
+        // legacy contract before Sprint 3.
 
         const assistantContent: ContentBlock[] = [];
         let pendingText = '';
         const pendingToolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
         const usageBox: { value: ChatUsage | null } = { value: null };
         let retriedThisTurn = false;
+        // PR-2 (R5): per-turn counter for exp+jitter transient retries
+        // (429 / 5xx / timeout). Resets each turn; provider swaps via
+        // fallback chain also reset it (new provider, fresh budget).
+        let transientRetryAttempts = 0;
         let pendingThinking = '';
         const pendingImages: Array<{ mediaType: string; base64: string }> = [];
         void assistantContent;
@@ -1304,9 +2166,10 @@ export class CoderRunner extends EventEmitter {
 
         providerAttempt: while (true) {
           try {
+            const messagesForChat = this.assembleMessagesForChat(compactionLimits);
             const stream = this.opts.provider.chat({
               system: this.opts.systemPrompt,
-              messages: compactHistoryForLLM(this.messages, compactionLimits),
+              messages: messagesForChat,
               tools,
               thinking: this.opts.thinking,
               sessionId: this.opts.sessionId,
@@ -1350,22 +2213,51 @@ export class CoderRunner extends EventEmitter {
             break;
           } catch (e) {
             const error = e instanceof Error ? e : new Error(String(e));
-            // Retry once on recoverable provider 400 errors (message format issues).
-            // GLM/ZAI returns code 1214 for illegal message sequences that may be
-            // fixable by the compaction safety nets on a second pass.
             const status = (e as { status?: number }).status;
             const code = (e as { error?: { code?: string } }).error?.code;
-            const is400 = status === 400 || code === '1214';
+            const nonRetryableReason = nonRetryableProviderErrorReason(error, e);
+            const is400 = !nonRetryableReason && (status === 400 || code === '1214');
+            const is401 = status === 401;
+            const is429 = status === 429;
+            const isTimeout = error.message?.includes('timeout') || status === 504 || status === 408;
+            const is5xx = status !== undefined && status >= 500 && status < 600;
+            const isTransient = is429 || is5xx || isTimeout;
+
+            if (nonRetryableReason) {
+              console.warn(
+                `[coder] provider returned non-retryable error at turn ${turn}: ${nonRetryableReason}`,
+              );
+            }
+
+            // ─── 400: format-error retry (existing semantics) ────────────
+            // GLM/ZAI returns code 1214 for illegal message sequences that
+            // may be fixable by the compaction safety nets on a second pass.
+            // Single retry per turn (cheap), session cap via circuit breaker.
             if (is400 && !retriedThisTurn) {
+              if (!this.tryRecord('provider-400-retry', `turn=${turn}`)) {
+                this.setTransition('provider-400-retry');
+                return this.finishWith(totalUsage, 'recovery_capped', new Error(
+                  `Aborted: too many 400/format-error retries this session (cap=${recoveryCap('provider-400-retry')}). Last: ${error.message}`,
+                ));
+              }
+              this.setTransition('provider-400-retry');
               retriedThisTurn = true;
               console.warn(`[coder] provider returned 400 at turn ${turn}, retrying once`);
               continue providerAttempt;
             }
 
-            // 401: OAuth token expired mid-session (e.g. Copilot 25-min TTL).
-            // Re-create the provider to force a credential refresh, then retry.
-            const is401 = status === 401;
+            // ─── 401: OAuth refresh ───────────────────────────────────────
+            // Re-create the provider to force a credential refresh, then
+            // retry. Cap at RECOVERY_401 across the session — refresh
+            // failing repeatedly means the credential itself is bad.
             if (is401 && !retriedThisTurn && this.opts.createProvider) {
+              if (!this.tryRecord('provider-401-refresh', `turn=${turn}`)) {
+                this.setTransition('provider-401-refresh');
+                return this.finishWith(totalUsage, 'recovery_capped', new Error(
+                  `Aborted: too many OAuth refresh attempts (cap=${recoveryCap('provider-401-refresh')}). Re-authenticate via the admin panel. Last: ${error.message}`,
+                ));
+              }
+              this.setTransition('provider-401-refresh');
               retriedThisTurn = true;
               try {
                 const newProvider = await this.opts.createProvider(
@@ -1382,14 +2274,42 @@ export class CoderRunner extends EventEmitter {
               }
             }
 
-            // Fallback: on persistent errors (400 after retry, 401 without refresh,
-            // 429, 5xx, timeout), try switching to the next provider in the fallback chain.
-            const is429 = status === 429;
-            const isTimeout = error.message?.includes('timeout') || status === 504 || status === 408;
-            const is5xx = status !== undefined && status >= 500 && status < 600;
-            const shouldFallback = (is400 && retriedThisTurn) || is401 || is429 || isTimeout || is5xx;
+            // ─── Transient (429/5xx/timeout): exp+jitter retry (R5) ────
+            // Bounded retries WITHIN the same provider before falling
+            // through to the fallback chain. Mirrors kimi-cli's tenacity
+            // setup (initial=300ms, max=5s, jitter=0.5, max attempts=3
+            // per turn). Each attempt also bumps the session cap so a
+            // server that's been 5xx-ing for 30 turns straight bails.
+            const transientCap = transientRetryMaxPerTurn();
+            if (isTransient && transientRetryAttempts < transientCap) {
+              if (!this.tryRecord('provider-transient-retry', `turn=${turn} status=${status ?? '?'}`)) {
+                this.setTransition('provider-transient-retry');
+                return this.finishWith(totalUsage, 'recovery_capped', new Error(
+                  `Aborted: too many transient errors this session (cap=${recoveryCap('provider-transient-retry')}). Last status=${status ?? '?'}: ${error.message}`,
+                ));
+              }
+              this.setTransition('provider-transient-retry');
+              transientRetryAttempts++;
+              const delay = backoffDelayMs(transientRetryAttempts);
+              console.warn(
+                `[coder] transient ${status ?? 'timeout'} at turn ${turn} attempt ${transientRetryAttempts}/${transientCap}; sleeping ${delay}ms`,
+              );
+              await new Promise((r) => setTimeout(r, delay));
+              continue providerAttempt;
+            }
 
+            // ─── Fallback chain (after retries exhausted) ────────────────
+            // Trigger on: 400 after retry, 401 without refresh, transient
+            // after R5 retries exhausted. Capped by RECOVERY_FALLBACK so a
+            // session can't hop providers indefinitely.
+            const shouldFallback = (is400 && retriedThisTurn) || is401 || isTransient;
             if (shouldFallback && this.opts.fallbackChain && this.opts.createProvider) {
+              if (!this.tryRecord('provider-fallback', `from=${this.opts.provider.name ?? 'unknown'}`)) {
+                this.setTransition('provider-fallback');
+                return this.finishWith(totalUsage, 'recovery_capped', new Error(
+                  `Aborted: provider fallback chain exhausted (cap=${recoveryCap('provider-fallback')}). Last: ${error.message}`,
+                ));
+              }
               const { nextFallback } = await import('./fallback.js');
               const next = nextFallback(this.opts.fallbackChain);
               if (next) {
@@ -1404,12 +2324,20 @@ export class CoderRunner extends EventEmitter {
                     error: error.message,
                   });
                   // Fire hook
-                  await this.opts.hookRegistry?.fireFallback({
-                    sessionId: 0, projectName: '', provider: next.provider, model: next.model, turn,
-                    from: oldProvider,
-                    to: next,
-                    triggerError: error.message,
-                  });
+                  // PR-6 R24: fallback is session-scoped — suppress for subagents.
+                  if (!this.isSubagent) {
+                    await this.opts.hookRegistry?.fireFallback({
+                      sessionId: 0, projectName: '', provider: next.provider, model: next.model, turn,
+                      from: oldProvider,
+                      to: next,
+                      triggerError: error.message,
+                    });
+                  }
+                  // Reset per-turn transient counter — new provider gets a
+                  // fresh budget. Session cap still in effect.
+                  transientRetryAttempts = 0;
+                  retriedThisTurn = false;
+                  this.setTransition('provider-fallback');
                   continue providerAttempt; // retry the turn with the new provider
                 } catch (fallbackErr) {
                   console.error(`[coder] Fallback provider creation failed: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
@@ -1417,15 +2345,23 @@ export class CoderRunner extends EventEmitter {
               }
             }
 
-            // Fire error hook before giving up
-            await this.opts.hookRegistry?.fireError({
-              sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
-              model: this.opts.provider.model ?? 'unknown', turn,
-              error, errorType: 'provider', willRetry: false, willFallback: false,
-            });
+            // Fire error hook before giving up.
+            // PR-6 (Row 24): session-scoped hooks (error/completion/fallback)
+            // are suppressed for subagents — the parent runner is the
+            // session-of-record. Tool-scoped hooks (fireToolCall) keep
+            // running so policy enforcement applies uniformly. Today the
+            // subagent factories don't pass hookRegistry so this guard is
+            // belt-and-suspenders, but it documents the contract for any
+            // future contributor who DOES wire it through.
+            if (!this.isSubagent) {
+              await this.opts.hookRegistry?.fireError({
+                sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
+                model: this.opts.provider.model ?? 'unknown', turn,
+                error, errorType: 'provider', willRetry: false, willFallback: false,
+              });
+            }
 
-            this.emit('done', 'error', error);
-            return { totalUsage, reason: 'error' };
+            return this.finishWith(totalUsage, 'error', error);
           }
         }
 
@@ -1476,7 +2412,14 @@ export class CoderRunner extends EventEmitter {
         this.emit('message_complete', assistantMessage, lastUsage);
         // Persist real input_tokens across turns so the next iteration's compaction
         // check can use actual token counts rather than character estimates.
-        if (lastUsage?.input_tokens) lastKnownInputTokens = lastUsage.input_tokens;
+        if (lastUsage?.input_tokens) {
+          lastKnownInputTokens = lastUsage.input_tokens;
+          // Capture the message count seen by the API so the hybrid token
+          // snapshot can distinguish the confirmed prefix from the locally-
+          // estimated tail in subsequent turns. Account for the assistant
+          // message we're about to push (it was sent but isn't yet appended).
+          lastUsageMessageCount = this.messages.length;
+        }
 
         // Emit context metrics so the dashboard can show a progress indicator.
         const historyChars = totalChars(this.messages);
@@ -1518,14 +2461,40 @@ export class CoderRunner extends EventEmitter {
             this.messages.push({
               role: 'user',
               content: [{ type: 'text', text: '[System] Continue your investigation and call submit_plan when you have a complete proposal ready, or submit_tasks to begin execution.' }],
+              isMeta: true,
             });
+            continue;
+          }
+
+          // Agent Loop v2 stop-guard: if the model is stopping but the live
+          // todo list still has unfinished items, push back ONCE with a
+          // recap and let it continue. This is the most reliable place to
+          // catch "agent forgot to mark items done before yielding". Hard
+          // cap = 1 nudge per session; second attempt to stop completes
+          // unconditionally so we never loop.
+          if (
+            this.opts.agentLoopV2 &&
+            !this.agentLoopV2NudgeUsed &&
+            this.hasUnfinishedTodos()
+          ) {
+            this.agentLoopV2NudgeUsed = true;
+            const recap = this.buildStopGuardRecap();
+            this.messages.push({ role: 'user', content: [{ type: 'text', text: recap }], isMeta: true });
+            this.logSystemReminder('agent-loop-v2-stop-guard', recap);
+            this.setTransition('stop-guard-nudge');
+            this.emit('stop_nudged', { turn, recap });
             continue;
           }
 
           this.recentTurnSignatures.length = 0;
           this.recentTurnNamesSignatures.length = 0;
+          this.recentTurnDominance.length = 0;
+          // A completed text turn is exactly the signal we want — clear
+          // the dup-call counter too so legitimate post-text resumption
+          // doesn't inherit stale counters from a prior dead-end probe.
+          this.toolCallFreq.clear();
           // Telemetry: text-only completion turn — no tools, no tool_results.
-          this.persistTurnTelemetry({
+          this.lastTurnTelemetryId = this.persistTurnTelemetry({
             turn,
             lastUsage,
             toolUseBlocks,
@@ -1533,47 +2502,66 @@ export class CoderRunner extends EventEmitter {
             historyChars,
             compactionTriggered: compactionTriggeredThisTurn,
             summarizerRan: summarizerRanThisTurn,
+            systemPromptChars: this.opts.systemPrompt?.length ?? 0,
+            toolsDefChars: JSON.stringify(tools).length,
           });
-          // Hook: completion
-          await this.opts.hookRegistry?.fireCompletion({
-            sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
-            model: this.opts.provider.model ?? 'unknown', turn,
-            reason: 'completed', totalUsage, turnCount: turn,
-          });
-          this.emit('done', 'completed');
-          return { totalUsage, reason: 'completed' };
+          // Hook: completion (session-scoped — suppress for subagents per PR-6 R24).
+          if (!this.isSubagent) {
+            await this.opts.hookRegistry?.fireCompletion({
+              sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
+              model: this.opts.provider.model ?? 'unknown', turn,
+              reason: 'completed', totalUsage, turnCount: turn,
+            });
+          }
+          return this.finishWith(totalUsage, 'completed');
         }
+
+        // Repeatable-tool exemption: if EVERY tool in this turn is a
+        // declared polling tool, skip all three doom-loop guards. Polling
+        // tools (wait_for_compile_clean, wait_agents, tail_*) intentionally
+        // run repeatedly with identical args; flagging that as a stuck
+        // loop would make basic await workflows unusable. We require ALL
+        // blocks to be repeatable to be conservative — a turn that mixes
+        // a poll with a regular tool still goes through the guards (the
+        // regular tool ought to make progress and reset the streak).
+        const turnAllRepeatable =
+          toolUseBlocks.length > 0 &&
+          toolUseBlocks.every((b) => {
+            const def = this.opts.registry.get(b.name);
+            return def?.repeatable === true || REPEATABLE_NAME_PATTERN.test(b.name);
+          });
 
         // Doom-loop guard: if the model just asked for the exact same set of
         // tool calls N turns in a row, something is stuck. Refuse to execute
         // and bail with an error so the host can surface it to the user.
-        if (DOOM_LOOP_THRESHOLD >= 2) {
+        const dlThresh = doomLoopThreshold();
+        if (dlThresh >= 2 && !turnAllRepeatable) {
           const sig = toolCallsSignature(
             toolUseBlocks.map((b) => ({ name: b.name, input: b.input })),
           );
           this.recentTurnSignatures.push(sig);
-          if (this.recentTurnSignatures.length > DOOM_LOOP_THRESHOLD) {
+          if (this.recentTurnSignatures.length > dlThresh) {
             this.recentTurnSignatures.shift();
           }
           if (
-            this.recentTurnSignatures.length === DOOM_LOOP_THRESHOLD &&
+            this.recentTurnSignatures.length === dlThresh &&
             this.recentTurnSignatures.every((s) => s === sig && s !== '')
           ) {
             const err = new Error(
-              `Doom loop detected: the same tool call${toolUseBlocks.length > 1 ? 's were' : ' was'} emitted ${DOOM_LOOP_THRESHOLD} turns in a row without progress. ` +
+              `Doom loop detected: the same tool call${toolUseBlocks.length > 1 ? 's were' : ' was'} emitted ${dlThresh} turns in a row without progress. ` +
               `Last signature: ${sig.slice(0, 200)}${sig.length > 200 ? '…' : ''}. ` +
               `Aborting to avoid cost runaway — fix the underlying issue (wrong args, missing file, bad permission) before retrying.`,
             );
             console.warn(`[coder] doom-loop aborted at turn ${turn}: ${sig.slice(0, 120)}`);
-            this.emit('done', 'error', err);
-            return { totalUsage, reason: 'error' };
+            this.setTransition('doom-loop-strict');
+            return this.finishWith(totalUsage, 'doom_loop', err);
           }
         }
 
         // Fuzzy doom-loop guard: catches "same tool names, tweaked args"
         // patterns the strict sig misses. Uses a higher threshold to keep
         // false-positive risk low on legitimate iterative workflows.
-        if (DOOM_LOOP_FUZZY_THRESHOLD >= 2) {
+        if (DOOM_LOOP_FUZZY_THRESHOLD >= 2 && !turnAllRepeatable) {
           const loose = toolNamesSignature(toolUseBlocks.map((b) => ({ name: b.name })));
           this.recentTurnNamesSignatures.push(loose);
           if (this.recentTurnNamesSignatures.length > DOOM_LOOP_FUZZY_THRESHOLD) {
@@ -1588,8 +2576,53 @@ export class CoderRunner extends EventEmitter {
               `Aborting to avoid cost runaway — the model is likely retrying with minor variations instead of adjusting strategy.`,
             );
             console.warn(`[coder] fuzzy doom-loop aborted at turn ${turn}: ${loose.slice(0, 120)}`);
-            this.emit('done', 'error', err);
-            return { totalUsage, reason: 'error' };
+            this.setTransition('doom-loop-fuzzy');
+            return this.finishWith(totalUsage, 'doom_loop', err);
+          }
+        }
+
+        // Dominance guard (Fix G — session 609 regression). Even when the
+        // strict/fuzzy guards don't fire, a session can sit in a single
+        // tool name for many turns without ever producing assistant text.
+        // Read 5 chunks rotating × 19 rounds = 95 turns, names sig stable
+        // = `mcp__read_file`. The fuzzy guard SHOULD have caught that, but
+        // some builds may have higher thresholds in env. This guard is the
+        // last-line backstop: in a window of N turns, if a single tool
+        // name dominates ≥80% AND zero turns produced text, abort.
+        if (DOMINANCE_WINDOW >= 4 && !turnAllRepeatable) {
+          const primaryName = toolUseBlocks[0]?.name ?? '';
+          const hadText = pendingText.trim().length > 0;
+          this.recentTurnDominance.push({ name: primaryName, hadText });
+          if (this.recentTurnDominance.length > DOMINANCE_WINDOW) {
+            this.recentTurnDominance.shift();
+          }
+          if (this.recentTurnDominance.length === DOMINANCE_WINDOW) {
+            const counts = new Map<string, number>();
+            let textTurns = 0;
+            for (const e of this.recentTurnDominance) {
+              counts.set(e.name, (counts.get(e.name) ?? 0) + 1);
+              if (e.hadText) textTurns += 1;
+            }
+            let topName = '';
+            let topCount = 0;
+            for (const [n, c] of counts) {
+              if (c > topCount) { topCount = c; topName = n; }
+            }
+            const ratio = topCount / DOMINANCE_WINDOW;
+            if (ratio >= DOMINANCE_RATIO && textTurns === 0 && topName) {
+              const err = new Error(
+                `Stuck-loop detected (dominance): \`${topName}\` ran ${topCount}/${DOMINANCE_WINDOW} turns ` +
+                `(${Math.round(ratio * 100)}%) with ZERO assistant text in between. ` +
+                `The model is cycling through tool calls without reasoning — likely re-reading the same ` +
+                `content variants. Aborting; the next user message can resume with a different prompt ` +
+                `(e.g. ask for a finding/summary, or restrict scope).`,
+              );
+              console.warn(
+                `[coder] dominance loop aborted at turn ${turn}: ${topName} ${topCount}/${DOMINANCE_WINDOW} no-text`,
+              );
+              this.setTransition('doom-loop-fuzzy');
+              return this.finishWith(totalUsage, 'doom_loop', err);
+            }
           }
         }
 
@@ -1605,6 +2638,120 @@ export class CoderRunner extends EventEmitter {
         for (const block of toolUseBlocks) {
           if (this.aborted) break;
           this.emit('tool_call_start', block.id, block.name, block.input);
+
+          // PR-5 (Row 32) — pre-read enforcement. Reject a read-family
+          // tool call if the same (path, slice) has been read in the last
+          // READ_DUP_WINDOW turns. Tighter than the generic dup-call cap
+          // (threshold=2 vs 5) and runs BEFORE dispatch, so we never spend
+          // the round-trip on a known-duplicate read. Result-dup cap (post)
+          // remains the catch-all for the snap-to-symbol case where args
+          // differ but the resolver returns identical content.
+          //
+          // Gated on agentLoopV2 — legacy sessions keep the old behaviour
+          // exactly. Read tools have semantically idempotent results so
+          // any repeat is wasteful; non-read tools (shell, edit, ...) are
+          // not subject to this guard because legitimate repeats are common.
+          if (this.opts.agentLoopV2 && REDUCIBLE_READ_TOOLS.has(block.name)) {
+            const inp = block.input as Record<string, unknown> | undefined;
+            const path = getStringField(inp, 'path', 'file_path');
+            if (path) {
+              const readKey = `${block.name}|${buildReadDedupKey(path, inp)}`;
+              const threshold = readDupThreshold();
+              const window = readDupWindow();
+              const minTurn = turn - window;
+              const prior = (this.recentReadKeys.get(readKey) ?? []).filter((e) => e.turn > minTurn);
+              prior.push({ turn });
+              this.recentReadKeys.set(readKey, prior);
+              if (threshold >= 1 && prior.length >= threshold) {
+                const refusal =
+                  `Refused: \`${block.name}\` was called for the same path/slice ${prior.length} ` +
+                  `times in the last ${window} turns. The content is already in your context — re-reading ` +
+                  `the SAME slice is forbidden by the runner. Either:\n` +
+                  `  (a) quote what you already read above and act on it (write code, give the answer);\n` +
+                  `  (b) ask for a DIFFERENT region — change start_line/end_line or pass another \`symbol\`;\n` +
+                  `  (c) use a DIFFERENT tool (mcp__find_references, mcp__search, mcp__get_file_skeleton if not yet seen);\n` +
+                  `  (d) make the edit you came here to make — re-reading after edit_file is unnecessary.`;
+                const synth = buildToolResultBlock(
+                  block.id,
+                  refusal,
+                  true,
+                  this.effectivePushTimeCap,
+                );
+                toolResultBlocks.push(synth);
+                this.setTransition('pre-read-blocked');
+                console.warn(
+                  `[coder] pre-read cap fired: ${block.name} ${prior.length}× for "${path}" — refused at turn ${turn}`,
+                );
+                this.emit('tool_call_result', block.id, block.name, {
+                  content: refusal,
+                  isError: true,
+                }, 0);
+                continue; // skip dispatch
+              }
+            }
+          }
+
+          // Fix F — per-arg call-frequency cap. Compute a stable hash of the
+          // (name, args) pair, prune entries that fell out of the rolling
+          // window, append current turn. If the count exceeds the threshold,
+          // refuse the call inline with a synthetic tool_result so the model
+          // gets a clear "stop, change strategy" signal without the runner
+          // having to abort the whole session. Catches the session 609
+          // pattern (5 read_file slices rotated 19× each) that the
+          // strict/fuzzy guards both miss.
+          //
+          // Repeatable polling tools (wait_for_compile_clean, wait_agents,
+          // tail_logs, etc.) are exempt — their entire use case is to be
+          // called repeatedly with identical args until external state
+          // settles. Detection: explicit `toolDef.repeatable === true`
+          // OR a name matching the polling convention (covers MCP external
+          // tools whose author followed `wait_for_*` etc. without the loader
+          // having auto-flagged them). REPEATABLE_NAME_PATTERN tolerates
+          // the `ext_<server>__` prefix injected by mcp-server-manager.
+          const repeatableToolDef = this.opts.registry.get(block.name);
+          const isRepeatable =
+            repeatableToolDef?.repeatable === true ||
+            REPEATABLE_NAME_PATTERN.test(block.name);
+          let argHash = '';
+          try {
+            argHash = createHash('sha1')
+              .update(`${block.name}|${JSON.stringify(block.input ?? {})}`)
+              .digest('hex');
+          } catch {
+            /* unhashable args (cyclic / native handle) — skip the cap */
+          }
+          if (argHash && DUP_CALL_THRESHOLD >= 2 && !isRepeatable) {
+            const prior = this.toolCallFreq.get(argHash) ?? [];
+            const minTurn = turn - DUP_CALL_WINDOW;
+            const filtered = prior.filter((t) => t > minTurn);
+            filtered.push(turn);
+            this.toolCallFreq.set(argHash, filtered);
+            if (filtered.length >= DUP_CALL_THRESHOLD) {
+              const refusal =
+                `Refused: \`${block.name}\` was called with these exact arguments ${filtered.length} ` +
+                `times in the last ${DUP_CALL_WINDOW} turns. This is a redundant call — you already ` +
+                `have the latest result earlier in this conversation. Change strategy: ` +
+                `(a) write a finding/text response, (b) try a different tool ` +
+                `(mcp__get_file_skeleton, mcp__find_references, mcp__search), or ` +
+                `(c) edit the code instead of re-reading. Repeating this call will not produce new info.`;
+              const synth = buildToolResultBlock(
+                block.id,
+                refusal,
+                true,
+                this.effectivePushTimeCap,
+              );
+              toolResultBlocks.push(synth);
+              console.warn(
+                `[coder] dup-call cap fired: ${block.name} ${filtered.length}× in window — refused at turn ${turn}`,
+              );
+              this.emit('tool_call_result', block.id, block.name, {
+                content: refusal,
+                isError: true,
+              }, 0);
+              continue; // skip the dispatch below
+            }
+          }
+
           // Hook: before tool call
           await this.opts.hookRegistry?.fireToolCall({
             sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
@@ -1706,7 +2853,7 @@ export class CoderRunner extends EventEmitter {
           // include the output_id in the truncation marker. This lets the
           // agent retrieve the elided portion via `get_tool_output(id)` on
           // demand — without making every large output permanently visible.
-          const cap = this.opts.pushTimeCap ?? PUSH_TIME_CAP;
+          const cap = this.effectivePushTimeCap;
           let persistedId: string | null = null;
           if (result.content.length > cap && this.opts.toolContext.toolOutputStore) {
             // Persist the RAW content so get_tool_output can return everything;
@@ -1717,9 +2864,60 @@ export class CoderRunner extends EventEmitter {
           // most useful slices for git_log/git_diff/grep/run_command before
           // the generic head-cut kicks in. Determinism is part of the
           // contract — same input → same output, so prefix cache stays stable.
-          const shapedContent = applySmartReducer(block.name, result.content, cap);
+          let shapedContent = applySmartReducer(block.name, result.content, cap);
+          let shapedIsError = result.isError;
+
+          // Agent Loop v2: post-result content dedup. Hash the RAW result and
+          // refuse on the second identical content for the same tool within
+          // RESULT_DUP_WINDOW turns. Catches arg-shift loops the strict and
+          // arg-hash guards miss (e.g. around_line=1640 vs 1690 both snap to
+          // lines 1673-1685 — same content, different arg hash).
+          //
+          // Repeatable polling tools are exempt (same rationale as the
+          // pre-call cap): identical content across calls is the steady-
+          // state signal ("compile still clean", "agents still running"),
+          // not a stuck-loop artifact. `isRepeatable` was computed before
+          // the dispatch above and is still in scope here.
+          if (
+            this.opts.agentLoopV2 &&
+            !result.isError &&
+            !isRepeatable &&
+            typeof result.content === 'string' &&
+            result.content.length >= RESULT_DUP_MIN_CHARS
+          ) {
+            const resultHash = createHash('sha1').update(result.content).digest('hex');
+            const prior = this.recentResultHashes.get(block.name) ?? [];
+            const minTurn = turn - RESULT_DUP_WINDOW;
+            const filtered = prior.filter((e) => e.turn > minTurn);
+            const matches = filtered.filter((e) => e.hash === resultHash).length;
+            filtered.push({ hash: resultHash, turn });
+            // Cap entries per tool to keep the map small.
+            while (filtered.length > RESULT_DUP_WINDOW * 2) filtered.shift();
+            this.recentResultHashes.set(block.name, filtered);
+            if (matches >= RESULT_DUP_THRESHOLD) {
+              const refusal =
+                `Refused: \`${block.name}\` returned the IDENTICAL content (${result.content.length} chars) ` +
+                `that you already received earlier in this conversation (seen ${matches} time${matches === 1 ? '' : 's'} ` +
+                `in the last ${RESULT_DUP_WINDOW} turns). The slice resolver mapped your args to the same body ` +
+                `as a previous call. Stop re-reading and change strategy: ` +
+                `(a) quote the content from the earlier read, ` +
+                `(b) request a DIFFERENT region (use start_line/end_line or a different symbol), ` +
+                `(c) try a different tool (mcp__get_file_skeleton, mcp__find_references, mcp__search), or ` +
+                `(d) make the edit you came here to make.`;
+              shapedContent = refusal;
+              shapedIsError = true;
+              console.warn(
+                `[coder] result-dup-cap fired: ${block.name} returned same hash ${matches}× — refused at turn ${turn}`,
+              );
+              this.emit('tool_call_result', block.id, block.name, {
+                content: refusal,
+                isError: true,
+              }, 0);
+            }
+          }
+
           toolResultBlocks.push(
-            buildToolResultBlock(block.id, shapedContent, result.isError, cap, persistedId ?? undefined),
+            buildToolResultBlock(block.id, shapedContent, shapedIsError, cap, persistedId ?? undefined),
           );
           if (result.extraUserBlocks && result.extraUserBlocks.length > 0) {
             extraUserBlocks.push(...result.extraUserBlocks);
@@ -1730,7 +2928,7 @@ export class CoderRunner extends EventEmitter {
         // Telemetry: tool-emitting turn. Capture AFTER tool execution so
         // largest_tool_result_chars and paginate_count reflect what actually
         // happened.
-        this.persistTurnTelemetry({
+        this.lastTurnTelemetryId = this.persistTurnTelemetry({
           turn,
           lastUsage,
           toolUseBlocks,
@@ -1738,6 +2936,8 @@ export class CoderRunner extends EventEmitter {
           historyChars,
           compactionTriggered: compactionTriggeredThisTurn,
           summarizerRan: summarizerRanThisTurn,
+          systemPromptChars: this.opts.systemPrompt?.length ?? 0,
+          toolsDefChars: JSON.stringify(tools).length,
         });
         if (extraUserBlocks.length > 0) {
           // Append as a separate user message — providers expect tool results
@@ -1755,55 +2955,92 @@ export class CoderRunner extends EventEmitter {
 
       // If aborted during the inner loop, don't auto-continue.
       if (this.aborted) {
-        this.emit('done', 'aborted');
-        return { totalUsage, reason: 'aborted' };
+        return this.finishWith(totalUsage, 'aborted');
       }
 
       // Auto-continue: instead of dying at maxTurns, reset the turn counter and
       // (only if context is full) compact history. Mirrors Claude Code's behaviour —
       // the agent only stops when there's no more work, not due to an artificial ceiling.
-      if (MAX_AUTO_CONTINUES > 0 && autoContinueCount < MAX_AUTO_CONTINUES) {
+      //
+      // New path: model-decision driven. We continue as long as we haven't
+      // exceeded a generous safety cap (MAX_AUTO_CONTINUES env, default 3 in
+      // legacy mode; bumped to 8 in token-mode where the model can self-bound).
+      // Hard floor of 0 disables auto-continue entirely.
+      const autoContinueCap = tokenLimits ? Math.max(MAX_AUTO_CONTINUES, 8) : MAX_AUTO_CONTINUES;
+      if (autoContinueCap > 0 && autoContinueCount < autoContinueCap) {
         autoContinueCount++;
-        this.emit('auto_continue', autoContinueCount, MAX_AUTO_CONTINUES);
+        this.emit('auto_continue', autoContinueCount, autoContinueCap);
 
         // Skip compaction when context is well below the trigger. Auto-continue
         // exists to extend beyond maxTurns; it is NOT a signal that we're out of
         // tokens. When there's no real pressure, just reset state and continue —
         // the dashboard then shows "Auto-continuing..." without a misleading
         // "Context compacted" message.
-        const needsCompaction =
-          compactionLimits.triggerTokens !== null && lastKnownInputTokens !== null
-            ? lastKnownInputTokens >= compactionLimits.triggerTokens
-            : totalChars(this.messages) > compactionLimits.minimum;
+        const needsCompaction = tokenLimits
+          ? computeTokenSnapshot().total >= tokenLimits.trigger
+          : (compactionLimits.triggerTokens !== null && lastKnownInputTokens !== null
+              ? lastKnownInputTokens >= compactionLimits.triggerTokens
+              : totalChars(this.messages) > compactionLimits.minimum);
 
         if (!needsCompaction) {
-          console.log(
-            `[coder] auto-continue ${autoContinueCount}/${MAX_AUTO_CONTINUES} — ` +
-            `context OK (${lastKnownInputTokens ?? '?'}/${compactionLimits.triggerTokens ?? '?'} tokens), skipping compaction`,
-          );
+          if (tokenLimits) {
+            const snap = computeTokenSnapshot();
+            console.log(
+              `[coder] auto-continue ${autoContinueCount}/${autoContinueCap} — ` +
+              `context OK (${snap.total}/${tokenLimits.trigger} tokens, ${snap.source}), skipping compaction`,
+            );
+          } else {
+            console.log(
+              `[coder] auto-continue ${autoContinueCount}/${autoContinueCap} — ` +
+              `context OK (${lastKnownInputTokens ?? '?'}/${compactionLimits.triggerTokens ?? '?'} tokens), skipping compaction`,
+            );
+          }
           this.summarizedOnce = false;
           lastKnownInputTokens = null;
+          lastUsageMessageCount = 0;
           turn = 0;
           if (this.opts.isCompanySubordinate) {
-            this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }] });
+            this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }], isMeta: true });
             this.logSystemReminder('subordinate-deliverable-autocontinue', SUBORDINATE_REMINDER_MSG);
             if (this.opts.companyRoleOverride) {
               const text = `[System reminder — Role identity] ${this.opts.companyRoleOverride}`;
-              this.messages.push({ role: 'user', content: [{ type: 'text', text }] });
+              this.messages.push({ role: 'user', content: [{ type: 'text', text }], isMeta: true });
               this.logSystemReminder('role-identity-autocontinue', text);
+            }
+          }
+          // Agent Loop v2 recap: also surface a goal/todos/active-task summary
+          // on auto-continue for ANY session, not just subordinates. The
+          // <active-context> per-turn injection covers the live snapshot, but
+          // an explicit reminder at the auto-continue boundary helps the model
+          // re-anchor after a 50-turn span.
+          if (this.opts.agentLoopV2) {
+            const recap = this.buildAutoContinueRecap();
+            if (recap) {
+              this.messages.push({ role: 'user', content: [{ type: 'text', text: recap }], isMeta: true });
+              this.logSystemReminder('agent-loop-v2-autocontinue', recap);
             }
           }
           continue;
         }
 
         console.log(
-          `[coder] auto-continue ${autoContinueCount}/${MAX_AUTO_CONTINUES} — compacting history before resuming`,
+          `[coder] auto-continue ${autoContinueCount}/${autoContinueCap} — compacting history before resuming`,
         );
 
         // Summarize the old span for richer context preservation, falling
         // back to deterministic compaction if the summarizer is unavailable.
         const histTotal = totalChars(this.messages);
-        const cutoff = snapCutoffToRoleBoundary(this.messages, computeCutoffIndex(this.messages, compactionLimits.protect));
+        const rawCutoff2 = tokenLimits
+          ? computeCutoffIndexByTokens(this.messages, tokenLimits.protect)
+          : computeCutoffIndex(this.messages, compactionLimits.protect);
+        // PR-3 (R4): preserve last N user turns raw — see the same call
+        // in the pre-turn compaction site above.
+        const recededCutoff2 = this.opts.agentLoopV2
+          ? recedeToPreserveLastNTurns(this.messages, rawCutoff2, preserveLastNTurns())
+          : rawCutoff2;
+        const cutoff = tokenLimits
+          ? snapCutoffPreservingPairs(this.messages, recededCutoff2)
+          : snapCutoffToRoleBoundary(this.messages, recededCutoff2);
         let strategy: 'summarizer' | 'deterministic' | 'none' = 'none';
         let prunedMessages = 0;
         let prunedChars = 0;
@@ -1811,17 +3048,43 @@ export class CoderRunner extends EventEmitter {
           const span = this.messages.slice(0, cutoff);
           let replaced = false;
           try {
-            const summary = await summarizeSpan(span, this.opts.provider);
+            const summaryRaw = isStructuredSummaryEnabled()
+              ? await summarizeSpanV2(span, this.opts.provider)
+              : await summarizeSpan(span, this.opts.provider);
+            const summary = this.opts.agentLoopV2 && summaryRaw && 'primary_request' in summaryRaw
+              ? overlayLiveState(
+                  summaryRaw,
+                  this.currentTodos,
+                  this.opts.toolContext.getGoalState
+                    ? (() => {
+                        const g = this.opts.toolContext.getGoalState!();
+                        return g ? { text: g.text, status: g.status } : null;
+                      })()
+                    : null,
+                )
+              : summaryRaw;
             if (summary) {
+              const rendered = 'primary_request' in summary
+                ? renderSummaryV2(summary)
+                : renderSummary(summary);
               const synthetic: AgentMessage = {
                 role: 'assistant',
-                content: [{ type: 'text', text: renderSummary(summary) }],
+                content: [{ type: 'text', text: rendered }],
               };
               this.messages.splice(0, cutoff, synthetic);
+              if (tokenLimits) {
+                const cleaned = postCompactCleanup(this.messages);
+                if (cleaned.elidedReads > 0) {
+                  this.messages.length = 0;
+                  this.messages.push(...cleaned.messages);
+                  console.log(`[coder] post-compact dedup elided ${cleaned.elidedReads} read(s) (~${cleaned.freedChars} chars freed)`);
+                }
+              }
               replaced = true;
               strategy = 'summarizer';
               prunedMessages = cutoff - 1; // cutoff original msgs replaced by 1 synthetic
               prunedChars = histTotal - totalChars(this.messages);
+              consecutiveCompactFailures = 0;
               console.log(
                 `[coder] summarizer collapsed ${cutoff} messages (~${histTotal} chars) into 1 synthetic summary`,
               );
@@ -1830,7 +3093,9 @@ export class CoderRunner extends EventEmitter {
             console.warn(`[coder] summarizer failed during auto-continue: ${e instanceof Error ? e.message : String(e)}`);
           }
           if (!replaced) {
-            const compacted = compactMessages(this.messages, compactionLimits);
+            const compacted = tokenLimits
+              ? compactMessages(this.messages, { protectTokens: tokenLimits.protect, skipMinimumGuard: true })
+              : compactMessages(this.messages, { minimum: compactionLimits.minimum, protect: compactionLimits.protect });
             if (compacted.applied) {
               // compactMessages returns a new array — swap in-place.
               this.messages.length = 0;
@@ -1852,18 +3117,34 @@ export class CoderRunner extends EventEmitter {
           total_chars_after: totalChars(this.messages),
           auto_continue: autoContinueCount,
         });
+        if (strategy === 'none') {
+          consecutiveCompactFailures++;
+          console.warn(`[coder] auto-continue compaction made no progress (failures=${consecutiveCompactFailures})`);
+          if (consecutiveCompactFailures >= MAX_CONSECUTIVE_COMPACT_FAILURES) {
+            console.error(`[coder] giving up after ${consecutiveCompactFailures} consecutive compaction failures`);
+            this.emit('recovery_aborted', {
+              kind: 'compact-failure',
+              attempts: consecutiveCompactFailures,
+              cap: MAX_CONSECUTIVE_COMPACT_FAILURES,
+              contextHint: 'auto-continue-no-progress',
+            });
+            this.setTransition('compact-auto-continue');
+            return this.finishWith(totalUsage, 'compact_failure');
+          }
+        }
         // Allow the summarizer to run again in the next continuation window.
         this.summarizedOnce = false;
         // Reset token baseline so the next window re-evaluates compaction from scratch.
         lastKnownInputTokens = null;
+        lastUsageMessageCount = 0;
         // After compaction, re-inject the deliverable reminder for subordinates so
         // the instruction survives context suppression regardless of what was pruned.
         if (this.opts.isCompanySubordinate) {
-          this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }] });
+          this.messages.push({ role: 'user', content: [{ type: 'text', text: SUBORDINATE_REMINDER_MSG }], isMeta: true });
           this.logSystemReminder('subordinate-deliverable-postcompact', SUBORDINATE_REMINDER_MSG);
           if (this.opts.companyRoleOverride) {
             const text = `[System reminder — Role identity] ${this.opts.companyRoleOverride}`;
-            this.messages.push({ role: 'user', content: [{ type: 'text', text }] });
+            this.messages.push({ role: 'user', content: [{ type: 'text', text }], isMeta: true });
             this.logSystemReminder('role-identity-postcompact', text);
           }
         }
@@ -1876,8 +3157,7 @@ export class CoderRunner extends EventEmitter {
       break;
     } // end outer while(true)
 
-    this.emit('done', 'max_turns');
-    return { totalUsage, reason: 'max_turns' };
+    return this.finishWith(totalUsage, 'max_turns');
   }
 
   private handleDelta(

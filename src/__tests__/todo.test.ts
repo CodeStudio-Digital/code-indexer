@@ -37,8 +37,8 @@ describe('todo_write', () => {
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('2 todos');
     expect(result.content).toContain('0 completed');
-    expect(result.content).toContain('[ ] Read code');
-    expect(result.content).toContain('[ ] Write tests');
+    expect(result.content).toMatch(/\[ \] \(id=[a-f0-9]{6,}\) Read code/);
+    expect(result.content).toMatch(/\[ \] \(id=[a-f0-9]{6,}\) Write tests/);
     expect(runner.setTodos).toHaveBeenCalledTimes(1);
   });
 
@@ -199,8 +199,8 @@ describe('todo_write', () => {
       },
       { ...ctx(), runner } as any,
     );
-    expect(result.content).toContain('[~] Running tests');
-    expect(result.content).not.toContain('[~] Run tests');
+    expect(result.content).toMatch(/\[~\] \(id=[a-f0-9]{6,}\) Running tests/);
+    expect(result.content).not.toMatch(/\[~\] \(id=[a-f0-9]{6,}\) Run tests$/m);
   });
 
   it('uses content for pending and completed items in output', async () => {
@@ -214,8 +214,8 @@ describe('todo_write', () => {
       },
       { ...ctx(), runner } as any,
     );
-    expect(result.content).toContain('[ ] Pending task');
-    expect(result.content).toContain('[x] Done task');
+    expect(result.content).toMatch(/\[ \] \(id=[a-f0-9]{6,}\) Pending task/);
+    expect(result.content).toMatch(/\[x\] \(id=[a-f0-9]{6,}\) Done task/);
   });
 
   it('returns error when runner does not support todo tracking', async () => {
