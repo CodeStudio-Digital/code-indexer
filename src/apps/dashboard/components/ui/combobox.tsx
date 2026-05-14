@@ -7,7 +7,7 @@ export interface ComboboxOption {
   value: string;
   label: string;
   /** Optional secondary text rendered right-aligned (e.g. model mode). */
-  hint?: string;
+  hint?: string|undefined|null;
   /** Optional inline description below label. */
   description?: string;
 }
