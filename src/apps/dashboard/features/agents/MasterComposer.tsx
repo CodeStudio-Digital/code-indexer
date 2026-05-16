@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Paperclip, Send, X } from 'lucide-react';
+import { Brain, Paperclip, Send, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { MarkdownToolbar } from '../chat/composer/MarkdownToolbar.js';
 import { useMarkdownShortcuts } from '../chat/composer/useMarkdownShortcuts.js';
@@ -7,14 +7,17 @@ import { fileToAttachment } from '../chat/utils.js';
 import type { AgentAttachment } from '../../hooks/agent-stream/types.js';
 
 interface MasterComposerProps {
-  onSend: (text: string, attachments: AgentAttachment[]) => void | Promise<void>;
+  onSend: (text: string, attachments: AgentAttachment[], opts?: { thinking?: boolean }) => void | Promise<void>;
   placeholder: string;
   disabled?: boolean;
+  /** When true, render the brain toggle. Computed by the parent from the master's provider capabilities. */
+  supportsThinking?: boolean;
 }
 
-export function MasterComposer({ onSend, placeholder, disabled }: MasterComposerProps) {
+export function MasterComposer({ onSend, placeholder, disabled, supportsThinking }: MasterComposerProps) {
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
+  const [thinking, setThinking] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { handleKeyDown: mdHandleKeyDown, applyAction } = useMarkdownShortcuts(textareaRef, input, setInput);
@@ -32,7 +35,7 @@ export function MasterComposer({ onSend, placeholder, disabled }: MasterComposer
     const atts = attachments;
     setInput('');
     setAttachments([]);
-    await onSend(text, atts);
+    await onSend(text, atts, { thinking });
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -97,6 +100,20 @@ export function MasterComposer({ onSend, placeholder, disabled }: MasterComposer
               </span>
             </label>
             <MarkdownToolbar onAction={applyAction} />
+            {supportsThinking && (
+              <button
+                type="button"
+                onClick={() => setThinking((v) => !v)}
+                title={thinking ? 'Thinking mode: ON' : 'Thinking mode: OFF'}
+                className={`ml-1 p-1.5 rounded-md transition-colors ${
+                  thinking
+                    ? 'text-purple-600 bg-purple-100 dark:bg-purple-900/30'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                }`}
+              >
+                <Brain className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         </div>
         <Button onClick={handleSend} disabled={disabled || !input.trim()} size="sm" className="h-9 shrink-0">

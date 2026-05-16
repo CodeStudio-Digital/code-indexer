@@ -28,6 +28,8 @@ interface StartBody {
   user_message: string;
   max_turns?: number;
   attachments?: AttachmentBody[];
+  /** Enable extended thinking (deep reasoning) for the master's first turn. */
+  thinking?: boolean;
 }
 
 const MAX_ATTACHMENTS = 4;
@@ -152,6 +154,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           maxTurns: maxTurnsRequested ?? 100,
           roleConfigs,
           attachments,
+          thinking: body.thinking,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -197,7 +200,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/resume', async (c) => {
     const id = parseIdParam(c);
-    const body = await parseJsonBody<{ message: string; attachments?: AttachmentBody[] }>(c);
+    const body = await parseJsonBody<{ message: string; attachments?: AttachmentBody[]; thinking?: boolean }>(c);
     const attachmentsCheck = validateAttachments(body.attachments);
     if (!attachmentsCheck.ok) {
       return c.json({ error: attachmentsCheck.error }, 400);
@@ -214,7 +217,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     > => {
       const existing = orchestratorRegistry.get(id);
       if (existing) {
-        if (body.message) existing.sendMessageToMaster(body.message, { attachments });
+        if (body.message) existing.sendMessageToMaster(body.message, { attachments, thinking: body.thinking });
         return { kind: 'attach', orchestrator: existing, since: parseLastEventId(c) };
       }
 
@@ -251,6 +254,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
             maxTurns: 100,
             roleConfigs,
             attachments,
+            thinking: body.thinking,
           });
         } else {
           // Cold-start path for a brand-new sub-session in a resumable
@@ -262,6 +266,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
             maxTurns: 100,
             roleConfigs,
             attachments,
+            thinking: body.thinking,
           });
         }
       } catch (err) {
@@ -401,7 +406,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ error: 'Session has ended. Please start a new session.' }, 410);
     }
 
-    const body = await parseJsonBody<{ message: string; interject?: boolean; attachments?: AttachmentBody[] }>(c);
+    const body = await parseJsonBody<{ message: string; interject?: boolean; attachments?: AttachmentBody[]; thinking?: boolean }>(c);
     if (!body.message) {
       return c.json({ error: 'message required' }, 400);
     }
@@ -413,6 +418,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const result = orchestrator.sendMessageToMaster(body.message, {
       interject: body.interject,
       attachments: attachmentsCheck.value,
+      thinking: body.thinking,
     });
     if (!result.ok && result.pending === 'interactive_wait') {
       return c.json(

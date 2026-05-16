@@ -161,6 +161,7 @@ export class CompanyOrchestrator {
       humanInLoop: undefined as unknown as HumanInTheLoop,
       wirer: this.wirer,
       idle: undefined as unknown as IdleController,
+      attention: this.attention,
       orchestratorRef: this,
     };
     const master = new MasterLifecycle(masterDeps);
@@ -265,6 +266,7 @@ export class CompanyOrchestrator {
     signal?: AbortSignal;
     roleConfigs?: RoleConfig[];
     attachments?: import('../index.js').CoderAttachment[];
+    thinking?: boolean;
   }): Promise<RunCoderHandle> {
     return this.master.start(opts);
   }
@@ -274,6 +276,7 @@ export class CompanyOrchestrator {
     maxTurns?: number;
     roleConfigs?: RoleConfig[];
     attachments?: import('../index.js').CoderAttachment[];
+    thinking?: boolean;
   }): Promise<RunCoderHandle> {
     return this.master.resumeExisting(opts);
   }
@@ -354,7 +357,7 @@ export class CompanyOrchestrator {
 
   sendMessageToMaster(
     message: string,
-    options: { interject?: boolean; attachments?: import('../index.js').CoderAttachment[] } = {},
+    options: { interject?: boolean; attachments?: import('../index.js').CoderAttachment[]; thinking?: boolean } = {},
   ): { ok: boolean; pending?: 'interactive_wait' } {
     // Lazy-start: a sub-session's master is dormant until the user sends
     // the first message. When `MasterLifecycle.start` has never been
@@ -378,6 +381,7 @@ export class CompanyOrchestrator {
         maxTurns: 100,
         roleConfigs,
         attachments: options.attachments,
+        thinking: options.thinking,
       }).catch((e) => {
         console.error(`[company s=${this.companySessionId}] lazy master start failed:`, e);
       });
@@ -451,22 +455,23 @@ export class CompanyOrchestrator {
     return this.subordinates.spawn(spec);
   }
 
-  async resumeSubordinate(agentRunId: number, message?: string): Promise<{
+  async resumeSubordinate(agentRunId: number, message?: string, thinking?: boolean): Promise<{
     agentRunId: number;
     coderSessionId: number;
     status: AgentRunStatus;
   }> {
     const agentRun = this.ctx.companyStore.getAgentRun(agentRunId);
     const roleOverride = agentRun ? this.master.getRoleDefaults(agentRun.role)?.systemPromptOverride : undefined;
-    return this.subordinates.resume(agentRunId, message, roleOverride);
+    return this.subordinates.resume(agentRunId, message, roleOverride, undefined, thinking);
   }
 
   async reactivateSubordinate(
     agentRunId: number,
     message: string,
     attachments?: import('../index.js').CoderAttachment[],
+    thinking?: boolean,
   ): Promise<boolean> {
-    return this.subordinates.reactivate(agentRunId, message, attachments);
+    return this.subordinates.reactivate(agentRunId, message, attachments, thinking);
   }
 
   abortSubordinate(agentRunId: number): boolean {

@@ -32,6 +32,24 @@ const ICONS: Record<AgentId, React.ComponentType<{ className?: string }>> = {
   admin: ShieldAlert,
 };
 
+// Positive framing per mode — what it PROMISES, not what it blocks.
+// Used as the option hint in the picker and (optionally) as the icon tooltip.
+const PROMISE: Record<AgentId, string> = {
+  explore: 'Answers, not edits',
+  plan: 'Proposes a plan, waits for OK',
+  build: 'Edits, verifies, reports',
+  admin: 'Commits, snapshots, ops — asks first',
+};
+
+// Tailwind text-color class per mode — applied to the leading icon so the
+// composer at a glance signals which mode is active.
+const MODE_TINT: Record<AgentId, string> = {
+  explore: 'text-sky-500',
+  plan: 'text-violet-500',
+  build: 'text-emerald-500',
+  admin: 'text-rose-500',
+};
+
 interface AgentPickerProps {
   value: AgentId;
   onChange: (id: AgentId) => void;
@@ -107,7 +125,9 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
     return source.map((a) => ({
       value: a.id,
       label: capitalise(a.id),
-      hint: a.description.split('.')[0],
+      // Promise-first hint: what the mode delivers, not what tier it sits in.
+      // Falls back to the legacy first-sentence if the id is unknown.
+      hint: PROMISE[a.id] ?? a.description.split('.')[0],
     }));
   }, [agents]);
 
@@ -116,7 +136,10 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
 
   return (
     <div className="flex items-center gap-1.5">
-      <div className="flex items-center gap-1 text-xs text-muted-foreground">
+      <div
+        className={`flex items-center gap-1 text-xs ${MODE_TINT[value] ?? 'text-muted-foreground'}`}
+        title={PROMISE[value]}
+      >
         <SelectedIcon className="h-3.5 w-3.5" />
       </div>
       <div className="w-[108px]">

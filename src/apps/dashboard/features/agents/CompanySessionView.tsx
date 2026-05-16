@@ -16,6 +16,7 @@ import { useCompanyStream } from '../../hooks/useCompanyStream.js';
 import type { AgentAttachment } from '../../hooks/agent-stream/types.js';
 import type { MasterPrompt } from '../../../../core/coder/company/types.js';
 import { useProviders } from '../../hooks/useProviders.js';
+import { providerSupportsThinking } from '../chat/composer/provider-caps.js';
 import { AgentPane } from './AgentPane.js';
 import { BoardPanel } from './BoardPanel.js';
 import { KanbanTab } from './KanbanTab.js';
@@ -117,21 +118,24 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
   // stream only ever carries its own data. No client-side filtering.
   const subordinates = Array.from(stream.subordinateStates.values());
   const config = sessionData ? parseConfig(sessionData.session.config_json) : null;
+  const masterProvider = (config?.master_provider as string | undefined) ?? null;
+  const masterModel = (config?.master_model as string | undefined) ?? null;
+  const masterSupportsThinking = providerSupportsThinking(masterProvider, providerOptions, masterModel);
 
   // Session already has a run if status is not idle/draft — use sendMessage, not start
   const sessionAlreadyRan = sessionStatus === 'running' || sessionStatus === 'completed' || sessionStatus === 'paused' || sessionStatus === 'error';
 
-  async function handleSend(text: string, attachments: AgentAttachment[]) {
+  async function handleSend(text: string, attachments: AgentAttachment[], opts?: { thinking?: boolean }) {
     if (!stream.connected && (sessionAlreadyRan || stream.started)) {
       // Session ran before but is now disconnected — resume the master
       // from its existing coder session to keep full conversation history.
-      await stream.resume(text, attachments);
+      await stream.resume(text, attachments, opts);
       refetch();
     } else if (!stream.started && !sessionAlreadyRan) {
-      await stream.start(text, attachments);
+      await stream.start(text, attachments, opts);
       refetch();
     } else {
-      await stream.sendMessage(text, attachments);
+      await stream.sendMessage(text, attachments, opts);
     }
   }
 
@@ -617,6 +621,7 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
             <MasterComposer
               onSend={handleSend}
               placeholder={!stream.started && !sessionAlreadyRan ? t('agents:company.inputPlaceholder') : t('agents:company.inputPlaceholderMaster')}
+              supportsThinking={masterSupportsThinking}
             />
           </div>
         </div>

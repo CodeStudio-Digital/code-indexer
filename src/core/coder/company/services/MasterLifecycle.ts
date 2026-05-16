@@ -24,6 +24,7 @@ import { buildMasterCompanyBlock, type MasterPromptContext } from '../system-pro
 import type { AllowedModel, CompanyContext } from '../types.js';
 import type { SessionContext } from './SessionContext.js';
 import type { HumanInTheLoop } from './HumanInTheLoop.js';
+import type { MasterAttention } from './MasterAttention.js';
 import type {
   IAgentStatusUpdater,
   IBoardPoster,
@@ -80,6 +81,8 @@ export interface MasterLifecycleDeps {
   humanInLoop: HumanInTheLoop;
   wirer: IMetaBusWirer;
   idle: IIdleController;
+  /** Bus of subordinate-attention events (question/plan/tasks/finished). */
+  attention: MasterAttention;
   /** Facade handed to runCoder so tools can reach the orchestrator. */
   orchestratorRef: unknown;
 }
@@ -88,9 +91,21 @@ export class MasterLifecycle implements IMasterNotifier {
   private _handle: RunCoderHandle | null = null;
   private _agentRunId: number | null = null;
   private _ended = false;
+  /**
+   * Set as soon as `handle.done` settles (in `.then`/`.catch`), one microtask
+   * before `_ended` is set in `.finally`. Closes the race between the runner's
+   * `run()` returning and `attachCompletionHandler` marking the master as
+   * ended: while in that window `_handle?.runner` is still truthy and
+   * `_ended` is false, but the run loop will never consume `pushUserMessage`
+   * again. `notify` checks both flags to route subordinate notifications
+   * to `resurrect` instead of dropping them into a dead buffer.
+   */
+  private _runnerExited = false;
   private _endedWithError: string | null = null;
   private _companyContext: CompanyContext | null = null;
   private _promptBlock = '';
+  /** Unsubscribe from the permanent `MasterAttention` listener wired in `wireAllForRunner`. */
+  private _attentionOff: (() => void) | null = null;
 
   private _roleConfigs: RoleConfig[] = [];
   /**
@@ -230,12 +245,27 @@ export class MasterLifecycle implements IMasterNotifier {
   notify(message: string): void {
     const enriched = this.enrichWithBoard(message);
 
-    if (!this._ended && this._handle?.runner && !this.resumingPromise) {
-      this._handle.runner.pushUserMessage(enriched);
-      return;
-    }
     if (this.resumingPromise) {
       this.resumeQueue.push({ message: enriched });
+      return;
+    }
+    // Route to resurrect not just on `_ended` but also when the run loop
+    // already returned (`_runnerExited`) — otherwise pushUserMessage drops
+    // the notification into a buffer that will never be flushed.
+    if (!this._ended && !this._runnerExited && this._handle?.runner) {
+      const runner = this._handle.runner;
+      // Defensive interrupt: if the master is blocked inside a
+      // `waitForUserInput` (ask_user, submit_plan), pushUserMessage queues
+      // the notification but the wait never wakes on its own. Breaking the
+      // wait lets the blocked tool return and the next turn consume the
+      // queued message. Mirrors what HumanInTheLoop already does explicitly
+      // for plan/question/tasks — centralized here so completion and
+      // failure paths (which historically forgot to call interruptWait)
+      // benefit automatically.
+      if (runner.isWaitingForInput()) {
+        runner.interruptWait({ kind: 'subordinate_event' });
+      }
+      runner.pushUserMessage(enriched);
       return;
     }
     this.deps.idle.onMasterResurrected();
@@ -273,6 +303,8 @@ export class MasterLifecycle implements IMasterNotifier {
     signal?: AbortSignal;
     roleConfigs?: RoleConfig[];
     attachments?: CoderAttachment[];
+    /** Enable extended thinking on the master's first turn (and subsequent turns until toggled off). */
+    thinking?: boolean;
   }): Promise<RunCoderHandle> {
     if (this._handle) throw new Error('Master already started');
 
@@ -407,6 +439,7 @@ export class MasterLifecycle implements IMasterNotifier {
       profile: 'full',
       companyContext,
       companyPromptBlock: promptBlock,
+      thinking: opts.thinking,
       // Wire HumanInTheLoop BEFORE the runner takes turn 1, so a master
       // that calls `ask_user` immediately is still captured. Without
       // this, the prompt is created in the runner but the
@@ -416,6 +449,7 @@ export class MasterLifecycle implements IMasterNotifier {
     } as RunCoderOptions & { companyPromptBlock: string });
 
     this._handle = handle;
+    this._runnerExited = false;
     this.attachCompletionHandler(handle, masterRun.id);
 
     store.close();
@@ -429,6 +463,8 @@ export class MasterLifecycle implements IMasterNotifier {
     maxTurns?: number;
     roleConfigs?: RoleConfig[];
     attachments?: CoderAttachment[];
+    /** Enable extended thinking on the resumed master's next turn. */
+    thinking?: boolean;
   }): Promise<RunCoderHandle> {
     if (this._handle) throw new Error('Master already started');
 
@@ -538,10 +574,12 @@ export class MasterLifecycle implements IMasterNotifier {
       profile: 'full',
       companyContext,
       companyPromptBlock: promptBlock,
+      thinking: opts.thinking,
       onRunnerReady: (runner) => this.wireAllForRunner(runner, masterRun.id),
     } as RunCoderOptions & { companyPromptBlock: string });
 
     this._handle = handle;
+    this._runnerExited = false;
     this.attachCompletionHandler(handle, masterRun.id);
 
     return handle;
@@ -549,7 +587,7 @@ export class MasterLifecycle implements IMasterNotifier {
 
   // ─── Resurrection (subordinate finished after master exited) ───
 
-  private async resurrect(message: string, attachments?: CoderAttachment[]): Promise<void> {
+  private async resurrect(message: string, attachments?: CoderAttachment[], thinking?: boolean): Promise<void> {
     if (!this._handle || !this._companyContext || !this._agentRunId) return;
     if (this.deps.ctx.isAborted || this.deps.ctx.isBusEnded) return;
 
@@ -579,10 +617,12 @@ export class MasterLifecycle implements IMasterNotifier {
         profile: 'full',
         companyContext: this._companyContext!,
         companyPromptBlock: this._promptBlock,
+        thinking,
         onRunnerReady: (runner) => this.wireAllForRunner(runner, this._agentRunId!),
       } as RunCoderOptions & { companyPromptBlock: string });
 
       this._ended = false;
+      this._runnerExited = false;
       this._endedWithError = null;
       this._handle = { ...this._handle!, runner: handle.runner, done: handle.done };
 
@@ -630,7 +670,7 @@ export class MasterLifecycle implements IMasterNotifier {
    */
   sendUserMessage(
     message: string,
-    options: { interject?: boolean; attachments?: CoderAttachment[] } = {},
+    options: { interject?: boolean; attachments?: CoderAttachment[]; thinking?: boolean } = {},
   ): { ok: boolean; pending?: 'interactive_wait' } {
     const attachments = options.attachments;
     this._lastUserAttachments = attachments ?? [];
@@ -648,6 +688,9 @@ export class MasterLifecycle implements IMasterNotifier {
         }
         runner.interruptWait();
       }
+      // Apply thinking BEFORE pushing the message so the next turn (which
+      // consumes this message) reads the updated flag from `this.opts.thinking`.
+      if (options.thinking !== undefined) runner.setThinking(options.thinking);
       if (attachments && attachments.length > 0) {
         runner.pushUserContent(attachmentsToBlocks(message, attachments));
       } else {
@@ -661,7 +704,7 @@ export class MasterLifecycle implements IMasterNotifier {
         'running',
       );
     } catch { /* ignore */ }
-    void this.resurrect(message, attachments);
+    void this.resurrect(message, attachments, options.thinking);
     return { ok: true };
   }
 
@@ -694,11 +737,38 @@ export class MasterLifecycle implements IMasterNotifier {
     this.deps.wirer.wire(synthetic, 'master', runId);
     this.deps.humanInLoop.wireMasterPlan(synthetic);
     this.deps.humanInLoop.wireMasterQuestion(synthetic);
+
+    // Permanent attention listener: every subordinate transition
+    // (question/plan/tasks/finished) interrupts a pending waitForUserInput
+    // on the master so the message enqueued by `master.notify` actually gets
+    // consumed in the next turn. Without this, a sub that finishes while
+    // the master is blocked in `ask_user`/`submit_plan` would sit unread
+    // until the human responded — sometimes never. Mirrors the per-tool
+    // unsubscribe pattern in `wait_for_subordinates` but persists for the
+    // master's entire lifetime; cleaned up in `attachCompletionHandler.finally`.
+    if (this._attentionOff) {
+      try { this._attentionOff(); } catch { /* best-effort */ }
+    }
+    this._attentionOff = this.deps.attention.on((ev) => {
+      if (ev.kind === 'inbox_answered') return;
+      if (this._ended || this._runnerExited) return;
+      if (runner.isWaitingForInput()) {
+        runner.interruptWait({
+          kind: ev.kind === 'finished' ? 'subordinate_event' : ev.kind,
+          agentRunId: ev.agentRunId,
+          role: ev.role,
+        });
+      }
+    });
   }
 
   private attachCompletionHandler(handle: RunCoderHandle, runId: number): void {
     handle.done
       .then(({ reason, error }) => {
+        // Set BEFORE any further work so a subordinate notify() arriving in
+        // this microtask routes to resurrect instead of pushing into a dead
+        // buffer (see _runnerExited docs above).
+        this._runnerExited = true;
         const detail = error ? ` — ${error}` : '';
         try {
           this.deps.ctx.companyStore.updateAgentRunStatus(
@@ -713,6 +783,7 @@ export class MasterLifecycle implements IMasterNotifier {
         this.deps.board.post('system', null, 'message', `Master finished: ${reason}${detail}`);
       })
       .catch((err) => {
+        this._runnerExited = true;
         try {
           this.deps.ctx.companyStore.updateAgentRunStatus(runId, 'error');
         } catch { /* ignore */ }
@@ -722,6 +793,13 @@ export class MasterLifecycle implements IMasterNotifier {
       })
       .finally(() => {
         this._ended = true;
+        // Tear down the permanent attention listener so a stale `interruptWait`
+        // doesn't fire against a dead runner during the brief window before
+        // resurrect rewires a fresh one.
+        if (this._attentionOff) {
+          try { this._attentionOff(); } catch { /* best-effort */ }
+          this._attentionOff = null;
+        }
         // If the master ended while a master_prompt was still pending
         // (errored / aborted while inside ask_user or submit_plan), mark
         // those prompts as cancelled so the dashboard transitions them

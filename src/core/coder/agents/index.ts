@@ -41,6 +41,18 @@ export interface AgentDefinition {
    * (planning brainstorm). Overridden by per-session or per-role values.
    */
   defaultTemperature?: number;
+  /**
+   * When true, the runner pauses for an explicit user confirmation before
+   * invoking any tool classified as irreversible — internal mutations
+   * (git_commit, snapshot mutations, index_project) AND external MCP tools
+   * whose name matches the destructive-verb heuristic (delete/create/
+   * publish/apply/commit/push/update/replace/drop/destroy/remove).
+   *
+   * False by default. Only `admin` opts in — `build` still runs through
+   * planMode + tier filtering as its safety net, while `admin` is the
+   * mode the user explicitly enters for irreversible work.
+   */
+  confirmBeforeIrreversible?: boolean;
 }
 
 export const AGENTS: Record<AgentId, AgentDefinition> = {
@@ -76,6 +88,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     profile: 'full',
     planMode: false,
     defaultTemperature: 0.1,
+    confirmBeforeIrreversible: true,
   },
 };
 

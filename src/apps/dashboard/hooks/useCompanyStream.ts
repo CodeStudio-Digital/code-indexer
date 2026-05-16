@@ -590,7 +590,7 @@ export function useCompanyStream(companySessionId: number | null) {
 
   // ─── Public actions ──────────────────────────────────────────
 
-  const start = useCallback(async (userMessage: string, attachments?: AgentAttachment[]) => {
+  const start = useCallback(async (userMessage: string, attachments?: AgentAttachment[], opts?: { thinking?: boolean }) => {
     if (!companySessionId) return;
     lastSeenSeqRef.current = -1;
     setState({
@@ -602,11 +602,15 @@ export function useCompanyStream(companySessionId: number | null) {
     await openStream({
       url: `/api/company/sessions/${companySessionId}/start`,
       method: 'POST',
-      body: { user_message: userMessage, attachments: attachments?.length ? attachments : undefined },
+      body: {
+        user_message: userMessage,
+        attachments: attachments?.length ? attachments : undefined,
+        thinking: opts?.thinking || undefined,
+      },
     });
   }, [companySessionId]);
 
-  const resume = useCallback(async (message: string, attachments?: AgentAttachment[]) => {
+  const resume = useCallback(async (message: string, attachments?: AgentAttachment[], opts?: { thinking?: boolean }) => {
     if (!companySessionId) return;
     // Don't clear boardMessages or agent states — preserve existing context
     setState((prev) => ({
@@ -619,7 +623,11 @@ export function useCompanyStream(companySessionId: number | null) {
     await openStream({
       url: `/api/company/sessions/${companySessionId}/resume`,
       method: 'POST',
-      body: { message, attachments: attachments?.length ? attachments : undefined },
+      body: {
+        message,
+        attachments: attachments?.length ? attachments : undefined,
+        thinking: opts?.thinking || undefined,
+      },
     });
   }, [companySessionId]);
 
@@ -692,13 +700,17 @@ export function useCompanyStream(companySessionId: number | null) {
     }
   }, [companySessionId]);
 
-  const sendMessage = useCallback(async (message: string, attachments?: AgentAttachment[]) => {
+  const sendMessage = useCallback(async (message: string, attachments?: AgentAttachment[], opts?: { thinking?: boolean }) => {
     if (!companySessionId) return;
     try {
       const res = await fetch(`/api/company/sessions/${companySessionId}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, attachments: attachments?.length ? attachments : undefined }),
+        body: JSON.stringify({
+          message,
+          attachments: attachments?.length ? attachments : undefined,
+          thinking: opts?.thinking || undefined,
+        }),
       });
       if (!res.ok) {
         const body = await res.text().catch(() => '');

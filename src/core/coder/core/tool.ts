@@ -141,6 +141,15 @@ export interface ToolContext {
     feedback?: string,
   ) => void;
   /**
+   * Persist a new built-in agent for the current session — used by mode
+   * transitions (e.g. plan→build after a plan is approved). When wired by
+   * runCoder() it delegates to `SessionStore.setSessionAgent` so the NEXT
+   * runner creation picks up the new agent's defaults (planMode, profile,
+   * etc.) automatically. The in-memory runner's `opts.agentId` stays put;
+   * the transition takes full effect on the next message turn.
+   */
+  setSessionAgent?: (agent: import('../agents/index.js').AgentId) => void;
+  /**
    * Optional persistence sinks for the submit_tasks / execute_task /
    * task_complete tools. Wired by runCoder() so the dashboard's task list
    * UI can read/update state across SSE reconnects and resume after restart.

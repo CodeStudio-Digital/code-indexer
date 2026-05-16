@@ -61,6 +61,10 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
         type: 'boolean',
         description: 'When true, includes the images the user attached to their most recent message (e.g. design inspiration, screenshots) so the subordinate sees them natively. Set this whenever the user shared a visual that informs the task.',
       },
+      thinking: {
+        type: 'boolean',
+        description: 'When true, the subordinate runs with extended thinking (deep reasoning) on providers that support it. Costs extra tokens — use only for genuinely hard tasks (complex debugging, critical design, deep analysis). Default: false.',
+      },
     },
     required: ['role', 'task'],
   };
@@ -123,6 +127,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           roleOverride: defaults?.systemPromptOverride,
           temperature: defaults?.temperature,
           attachments: attachments && attachments.length > 0 ? attachments : undefined,
+          thinking: args.thinking as boolean | undefined,
         });
 
         // Auto-assign agent to Kanban card and move to in_progress
@@ -466,6 +471,10 @@ function forwardToAgent(orchestrator: CompanyOrchestrator): CoderTool {
         type: 'boolean',
         description: 'When true, includes the images the user attached to their most recent message so the subordinate sees them natively. Set this whenever the visual context matters for what you are forwarding.',
       },
+      thinking: {
+        type: 'boolean',
+        description: 'When true, the subordinate runs the next turn with extended thinking (deep reasoning) on providers that support it. Costs extra tokens — use only for hard follow-ups (debugging, design pivots, critical reviews). Default: false.',
+      },
     },
     required: ['message'],
   };
@@ -484,6 +493,7 @@ function forwardToAgent(orchestrator: CompanyOrchestrator): CoderTool {
       const attachments = forwardAtts
         ? [...orchestrator.getMasterLastUserAttachments()]
         : [];
+      const thinking = args.thinking as boolean | undefined;
 
       const sub = orchestrator.getSubordinate(agentRunId);
       const dbStatus = orchestrator.getSubordinateStatus(agentRunId);
@@ -501,6 +511,7 @@ function forwardToAgent(orchestrator: CompanyOrchestrator): CoderTool {
 
       // If the agent is actually running its event loop, push directly.
       if (isRunning && sub) {
+        if (thinking !== undefined) sub.runner.setThinking(thinking);
         if (attachments.length > 0) {
           sub.runner.pushUserContent(attachmentsToBlocks(prefixed, attachments));
         } else {
@@ -515,6 +526,7 @@ function forwardToAgent(orchestrator: CompanyOrchestrator): CoderTool {
         agentRunId,
         prefixed,
         attachments.length > 0 ? attachments : undefined,
+        thinking,
       );
       if (reactivated) {
         return ok(`Reactivated ${roleName} (agent_run_id=${agentRunId}) with new task. Agent is running again with full context preserved.`);
@@ -605,6 +617,10 @@ function resumeSubordinate(orchestrator: CompanyOrchestrator): CoderTool {
     properties: {
       agent_run_id: { type: 'number', description: 'ID of the failed/aborted subordinate agent to resume' },
       message: { type: 'string', description: 'Optional message to send when resuming (default: "Continue your task")' },
+      thinking: {
+        type: 'boolean',
+        description: 'When true, the resumed subordinate runs with extended thinking (deep reasoning) on providers that support it. Costs extra tokens — use only when the retry needs deeper analysis than the first attempt. Default: false.',
+      },
     },
     required: ['agent_run_id'],
   };
@@ -619,6 +635,7 @@ function resumeSubordinate(orchestrator: CompanyOrchestrator): CoderTool {
         const result = await orchestrator.resumeSubordinate(
           args.agent_run_id as number,
           args.message as string | undefined,
+          args.thinking as boolean | undefined,
         );
         return ok(JSON.stringify(result, null, 2));
       } catch (e) {

@@ -107,6 +107,30 @@ export function mountCoderInteractionRoutes(
       approved ? 'approved' : 'rejected',
       body.feedback,
     );
+    // Iteration 2: auto plan→build after approval. Mirrors the in-runner
+    // path (plan.ts) for the case where no live runner consumed the
+    // approval — the next /continue or POST /messages picks up the new
+    // agent's defaults via the AGENTS lookup in runCoder.
+    if (approved) {
+      const session = sessionStore.getSession(id);
+      if (session?.agent === 'plan') {
+        try {
+          sessionStore.setSessionAgent(id, 'build');
+          const reminder: AgentMessage = {
+            role: 'user',
+            content: [{
+              type: 'text',
+              text: '<system-reminder>Mode transition: Plan → Build. The plan was approved. Now execute it per build-mode instructions: read with prepare_edit / get_symbol_body before editing, apply changes, run verify after each batch. No further plan submission needed.</system-reminder>',
+            }],
+          };
+          sessionStore.appendMessage(id, reminder);
+        } catch (e) {
+          console.warn(
+            `[coder] mode transition (offline path) failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
+    }
     return c.json({ ok: true, resumed: true });
   });
 

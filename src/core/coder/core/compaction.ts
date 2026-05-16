@@ -780,3 +780,362 @@ export function postCompactCleanup(messages: AgentMessage[]): PostCompactResult 
 
     return { messages: out, elidedReads: elided, freedChars: freed };
 }
+
+// ─── Smarter pre-read enforcement helpers ──────────────────────────────────
+//
+// These helpers back the contexto-aware / mutação-aware variant of the
+// pre-read guard in runner.ts. They are kept pure and side-effect free so
+// the guard can call them without owning compaction state.
+
+/**
+ * Filesystem mutators recognised by the pre-read guard. Distinct from the
+ * `mutates: true` flag on CoderTool because the guard only cares about tools
+ * that change *file content on a known path* — `apply_patch` changes many,
+ * `edit_file`/`write_file`/`create_file`/`multi_edit` change one, and other
+ * mutators (git, shell, etc.) are out of scope here.
+ */
+export const MUTATING_FS_TOOLS = new Set<string>([
+    'write_file',
+    'create_file',
+    'edit_file',
+    'multi_edit',
+    'apply_patch',
+]);
+
+export function isMutatingFsTool(name: string): boolean {
+    return MUTATING_FS_TOOLS.has(name);
+}
+
+/**
+ * Markers that postCompactCleanup / push-time truncation / staleness checks
+ * stamp on `tool_result.content`. Anything matching these means the original
+ * payload is NO LONGER in context — the model cannot quote it. Used to decide
+ * whether a pre-read refusal is honest or based on phantom state.
+ */
+const ELIDED_CONTENT_PREFIXES = [
+    '[duplicate-read elided]',
+    '[compacted:',
+    '[stale:',
+] as const;
+
+export function isElidedReadContent(content: string): boolean {
+    return ELIDED_CONTENT_PREFIXES.some((p) => content.startsWith(p));
+}
+
+/**
+ * Locate the tool_result that matches a tool_use id. Returns the block plus
+ * its enclosing message index so callers can reason about position. null if
+ * not found in the visible history (caller should treat as elided).
+ */
+export function findToolResultByUseId(
+    useId: string,
+    messages: AgentMessage[],
+): { content: string; isElided: boolean; msgIdx: number } | null {
+    for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        if (m.role !== 'tool') continue;
+        for (const b of m.content) {
+            if (b.type !== 'tool_result') continue;
+            const tid = (b as { tool_use_id?: string }).tool_use_id;
+            if (tid !== useId) continue;
+            const content = typeof b.content === 'string' ? b.content : '';
+            return { content, isElided: isElidedReadContent(content), msgIdx: i };
+        }
+    }
+    return null;
+}
+
+/**
+ * Returns true iff every prior read in this list now points to an elided/
+ * compacted/stale tool_result (or the tool_result is missing entirely). When
+ * true, the model has lost the content — a fresh read is legitimate, not a
+ * doom loop.
+ *
+ * Conservative on ambiguity: if ANY prior is still readable, returns false
+ * (the model has at least one usable copy in context — refuse).
+ */
+export function allPriorReadsElided(
+    prior: Array<{ useId: string }>,
+    messages: AgentMessage[],
+): boolean {
+    if (prior.length === 0) return false;
+    for (const p of prior) {
+        const r = findToolResultByUseId(p.useId, messages);
+        // Missing tool_result is treated as elided (the pair was dropped by
+        // pair-preserving cutoff). Readable & non-elided → still in context.
+        if (r && !r.isElided) return false;
+    }
+    return true;
+}
+
+/**
+ * Latest turn (within the window) at which `path` was mutated, or null. The
+ * caller filters out turns older than the prior read it's evaluating.
+ *
+ * Pure lookup — does not modify the input map.
+ */
+export function lastMutationTurn(
+    path: string,
+    recentWrites: Map<string, number>,
+    sinceTurnExclusive: number,
+): number | null {
+    const t = recentWrites.get(path);
+    if (t == null) return null;
+    return t > sinceTurnExclusive ? t : null;
+}
+
+/**
+ * Best-effort line preview: first `head` and last `tail` lines of a possibly
+ * numbered/headered read result. Strips the read_file rich header if present
+ * so the preview is just the body. Deterministic.
+ */
+export function extractReadPreview(
+    content: string,
+    head = 3,
+    tail = 3,
+): { headLines: string[]; tailLines: string[]; totalLines: number } {
+    // Strip read_file header pattern: "<path> | <N> lines | <ext>\n[lines A-B]...\n"
+    let body = content;
+    const headerMatch = body.match(/^[^\n]+\|\s*\d+\s+lines\s*\|[^\n]*\n\[lines\s+\d+-\d+\][^\n]*\n/);
+    if (headerMatch) body = body.slice(headerMatch[0].length);
+    // Drop trailing pagination footer.
+    body = body.replace(/\n\.\.\.\s*\[[^\]]*more lines[^\]]*\][\s\S]*$/, '');
+    const lines = body.split('\n');
+    return {
+        headLines: lines.slice(0, head),
+        tailLines: lines.length > head + tail ? lines.slice(-tail) : [],
+        totalLines: lines.length,
+    };
+}
+
+/**
+ * Minimal unified-diff between two strings, line-based, with `contextLines`
+ * of unchanged context around each hunk. No external deps — uses a simple
+ * LCS via DP. Caller is expected to keep inputs under a few thousand lines
+ * (the read tool already enforces caps).
+ *
+ * Determinism: identical (before, after, contextLines) → identical output,
+ * so safe to embed in tool_result content without busting prompt cache.
+ */
+export function buildSimpleLineDiff(
+    before: string,
+    after: string,
+    contextLines = 3,
+): string {
+    const a = before.split('\n');
+    const b = after.split('\n');
+    // LCS table (rows = a, cols = b).
+    const m = a.length;
+    const n = b.length;
+    // Guard against pathological inputs.
+    if (m * n > 4_000_000) {
+        return `[diff suppressed: ${m}×${n} too large to compute inline; full content follows]`;
+    }
+    const dp: Int32Array[] = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+    for (let i = m - 1; i >= 0; i--) {
+        for (let j = n - 1; j >= 0; j--) {
+            dp[i][j] = a[i] === b[j]
+                ? dp[i + 1][j + 1] + 1
+                : Math.max(dp[i + 1][j], dp[i][j + 1]);
+        }
+    }
+    // Walk back to produce an edit script.
+    type Op = { kind: ' ' | '-' | '+'; aIdx?: number; bIdx?: number };
+    const ops: Op[] = [];
+    let i = 0;
+    let j = 0;
+    while (i < m && j < n) {
+        if (a[i] === b[j]) {
+            ops.push({ kind: ' ', aIdx: i, bIdx: j });
+            i++; j++;
+        } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+            ops.push({ kind: '-', aIdx: i });
+            i++;
+        } else {
+            ops.push({ kind: '+', bIdx: j });
+            j++;
+        }
+    }
+    while (i < m) ops.push({ kind: '-', aIdx: i++ });
+    while (j < n) ops.push({ kind: '+', bIdx: j++ });
+
+    if (!ops.some((o) => o.kind !== ' ')) return '(no changes)';
+
+    // Group ops into hunks with `contextLines` of surrounding context.
+    interface Hunk { aStart: number; aLen: number; bStart: number; bLen: number; lines: string[]; }
+    const hunks: Hunk[] = [];
+    let cur: Hunk | null = null;
+    let runOfContext = 0;
+    for (let k = 0; k < ops.length; k++) {
+        const op = ops[k];
+        if (op.kind === ' ') {
+            if (cur) {
+                cur.lines.push(' ' + a[op.aIdx!]);
+                cur.aLen++; cur.bLen++;
+                runOfContext++;
+                if (runOfContext > contextLines * 2) {
+                    // Trim trailing context, close hunk.
+                    const trim = runOfContext - contextLines;
+                    cur.lines.splice(cur.lines.length - trim, trim);
+                    cur.aLen -= trim; cur.bLen -= trim;
+                    hunks.push(cur);
+                    cur = null;
+                    runOfContext = 0;
+                }
+            }
+        } else {
+            if (!cur) {
+                // Open a new hunk with up to contextLines of preceding context.
+                const ctxStart = Math.max(0, k - contextLines);
+                cur = { aStart: 0, bStart: 0, aLen: 0, bLen: 0, lines: [] };
+                // Find absolute a/b indices at ctxStart.
+                let aAt = 0, bAt = 0;
+                for (let p = 0; p < ctxStart; p++) {
+                    if (ops[p].kind !== '+') aAt++;
+                    if (ops[p].kind !== '-') bAt++;
+                }
+                cur.aStart = aAt + 1; // 1-indexed
+                cur.bStart = bAt + 1;
+                for (let p = ctxStart; p < k; p++) {
+                    const o = ops[p];
+                    if (o.kind === ' ') {
+                        cur.lines.push(' ' + a[o.aIdx!]);
+                        cur.aLen++; cur.bLen++;
+                    }
+                }
+            }
+            if (op.kind === '-') {
+                cur.lines.push('-' + a[op.aIdx!]);
+                cur.aLen++;
+            } else {
+                cur.lines.push('+' + b[op.bIdx!]);
+                cur.bLen++;
+            }
+            runOfContext = 0;
+        }
+    }
+    if (cur) hunks.push(cur);
+
+    if (hunks.length === 0) return '(no changes)';
+
+    const out: string[] = [];
+    for (const h of hunks) {
+        out.push(`@@ -${h.aStart},${h.aLen} +${h.bStart},${h.bLen} @@`);
+        out.push(...h.lines);
+    }
+    return out.join('\n');
+}
+
+export interface RichRefusalArgs {
+    toolName: string;
+    path: string;
+    prior: Array<{ turn: number; useId: string; mtimeMs?: number }>;
+    windowTurns: number;
+    currentMtimeMs?: number;
+    /** Preview of the FIRST prior read, if its tool_result is still in context. */
+    contextPreview?: { headLines: string[]; tailLines: string[]; totalLines: number };
+    /** Symbols glimpsed earlier (from a skeleton in the same window), if any. */
+    knownSymbols?: Array<{ name: string; line: number; kind: string }>;
+}
+
+/**
+ * Build the rich refusal payload returned in place of the legacy refusal
+ * string. Deterministic over the input args (no Date.now / randomness)
+ * because it becomes part of the tool_result that feeds back into the
+ * provider prompt — non-determinism would break prefix caching.
+ *
+ * Layout: header + previous reads + current file state + optional preview
+ * + optional symbol summary + concrete next-step suggestions.
+ */
+export function buildRichRefusal(args: RichRefusalArgs): string {
+    const { toolName, path, prior, windowTurns, currentMtimeMs, contextPreview, knownSymbols } = args;
+    const lines: string[] = [];
+    lines.push(
+        `Refused: \`${toolName}\` was called for the same path/slice ${prior.length} time` +
+        `${prior.length === 1 ? '' : 's'} in the last ${windowTurns} turns on \`${path}\`. ` +
+        `The content is still in your context above — re-reading the SAME slice is forbidden by the runner.`,
+    );
+    lines.push('');
+    lines.push('Previous reads:');
+    for (const p of prior) {
+        const mt = p.mtimeMs != null ? `, mtime ${p.mtimeMs}` : '';
+        lines.push(`  - turn ${p.turn} (tool_use ${p.useId}${mt})`);
+    }
+
+    lines.push('');
+    if (currentMtimeMs != null && prior.some((p) => p.mtimeMs != null)) {
+        const firstWithMtime = prior.find((p) => p.mtimeMs != null);
+        const sameMtime = firstWithMtime && firstWithMtime.mtimeMs === currentMtimeMs;
+        lines.push(
+            `File state now: mtime=${currentMtimeMs}` +
+            (sameMtime ? ' (unchanged since first read above)' : ' (changed since at least one prior read)'),
+        );
+    } else if (currentMtimeMs != null) {
+        lines.push(`File state now: mtime=${currentMtimeMs}`);
+    }
+
+    if (knownSymbols && knownSymbols.length > 0) {
+        const top = knownSymbols.slice(0, 6).map((s) => `${s.name} (L${s.line}, ${s.kind})`).join(', ');
+        lines.push(`Symbols seen earlier in this window: ${top}`);
+    }
+
+    if (contextPreview && (contextPreview.headLines.length > 0 || contextPreview.tailLines.length > 0)) {
+        lines.push('');
+        lines.push(`Preview of the first prior read (head + tail of ${contextPreview.totalLines} lines):`);
+        for (const l of contextPreview.headLines) lines.push(`  ${l}`);
+        if (contextPreview.tailLines.length > 0) {
+            lines.push('  ...');
+            for (const l of contextPreview.tailLines) lines.push(`  ${l}`);
+        }
+    }
+
+    lines.push('');
+    lines.push('What to do next:');
+    lines.push('  (a) quote the snippet you already have above and act on it (write code, give the answer);');
+    lines.push('  (b) read a DIFFERENT region — change start_line/end_line or pass another `symbol`;');
+    lines.push('  (c) use mcp__find_references or mcp__search for cross-file context, or mcp__get_file_skeleton for an outline;');
+    lines.push('  (d) make the edit you came here to make — re-reading after edit_file is unnecessary.');
+
+    return lines.join('\n');
+}
+
+/**
+ * Opt-in auto-downgrade response: instead of refusing outright, return a
+ * skeleton-flavoured pointer to the prior read. Marked clearly so the model
+ * understands this is NOT a fresh fetch. Deterministic over inputs.
+ */
+export function buildAutoDowngradeResponse(
+    toolName: string,
+    path: string,
+    prior: Array<{ turn: number; useId: string }>,
+    windowTurns: number,
+    messages: AgentMessage[],
+): string {
+    const lines: string[] = [];
+    lines.push(
+        `[auto-downgraded from ${toolName}] You already read \`${path}\` in the last ${windowTurns} turns ` +
+        `(${prior.length}× — see turn${prior.length === 1 ? '' : 's'} ${prior.map((p) => p.turn).join(', ')}). ` +
+        `The runner is returning a pointer instead of re-fetching the content.`,
+    );
+    // Try to surface the most useful prior read still in context.
+    for (const p of prior) {
+        const r = findToolResultByUseId(p.useId, messages);
+        if (r && !r.isElided) {
+            const preview = extractReadPreview(r.content, 4, 2);
+            lines.push('');
+            lines.push(`Prior read at turn ${p.turn} (tool_use ${p.useId}) — ${preview.totalLines} lines:`);
+            for (const l of preview.headLines) lines.push(`  ${l}`);
+            if (preview.tailLines.length > 0) {
+                lines.push('  ...');
+                for (const l of preview.tailLines) lines.push(`  ${l}`);
+            }
+            break;
+        }
+    }
+    lines.push('');
+    lines.push(
+        'If you need a region you have not read yet, change `start_line`/`end_line` or pass another `symbol`. ' +
+        'If you need an outline, call `mcp__get_file_skeleton`. If you only need callers, call `mcp__find_references`.',
+    );
+    return lines.join('\n');
+}

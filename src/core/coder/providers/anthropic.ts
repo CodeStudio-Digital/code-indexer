@@ -141,9 +141,19 @@ export class AnthropicChatProvider implements ChatProvider {
       ? undefined
       : (req.inference?.temperature ?? this.defaultTemperature);
 
+    // Anthropic API requires max_tokens > budget_tokens. The default
+    // max_tokens (8192) is smaller than a typical thinking budget (32000),
+    // so auto-bump max_tokens to leave ~4k of headroom for the actual output.
+    const baseMaxTokens = resolvedModel?.maxTokens ?? this.defaultMaxTokens ?? 8192;
+    const budgetTokens =
+      thinking && typeof (thinking as { budget_tokens?: number }).budget_tokens === 'number'
+        ? (thinking as { budget_tokens: number }).budget_tokens
+        : 0;
+    const max_tokens = thinking ? Math.max(baseMaxTokens, budgetTokens + 4096) : baseMaxTokens;
+
     const params = {
       model: resolvedModel?.apiModel ?? this.model,
-      max_tokens: resolvedModel?.maxTokens ?? this.defaultMaxTokens ?? 8192,
+      max_tokens,
       system: systemBlocks.length > 0 ? systemBlocks : undefined,
       messages,
       tools: tools.length > 0 ? tools : undefined,

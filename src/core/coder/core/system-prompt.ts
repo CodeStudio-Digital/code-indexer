@@ -16,6 +16,7 @@
  */
 import { loadPrompt, interpolate } from '../prompts/loader.js';
 import { runSystemPromptHook } from './hooks.js';
+import type { AgentId } from '../agents/index.js';
 
 /**
  * Cache-stratification marker. Everything BEFORE this line is intended to be
@@ -108,6 +109,16 @@ export interface PromptContext {
    * prompt on resume; index.ts sets this for newly-created sessions.
    */
   agentLoopV2?: boolean;
+  /**
+   * Built-in agent identity — `explore` / `plan` / `build` / `admin`. When
+   * set (and not 'plan'), the matching `prompts/{agentId}.txt` is loaded and
+   * appended below the optional plan section to give the mode a concrete
+   * behavioural identity (what it should and shouldn't do, tool discipline,
+   * output shape). 'plan' is handled via planSection / plan.txt already, so
+   * we skip the redundant load for it. Fixed at session creation → lives
+   * above the dynamic boundary so it stays cache-stable.
+   */
+  agentId?: AgentId;
 }
 
 /**
@@ -213,6 +224,15 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // Plan section — optional, only when planMode is true. Loaded from plan.txt.
   const planSection = ctx.planMode ? `\n\n${loadPrompt('plan')}` : '';
 
+  // Mode identity section — concrete behavioural prompt for the active built-in
+  // agent (`explore` / `build` / `admin`). 'plan' is already covered by
+  // planSection via plan.txt, so we don't double-load it. Fixed at session
+  // creation → cache-stable; sits above the dynamic boundary.
+  const agentSection =
+    ctx.agentId && ctx.agentId !== 'plan'
+      ? `\n\n${loadPrompt(ctx.agentId)}`
+      : '';
+
   // Interactive-tools footer — small enough to keep inline, and the two lines
   // that mention submit_plan/submit_tasks depend on planMode so they'd need
   // a second placeholder dance in the txt file for no real benefit.
@@ -290,7 +310,7 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   // sessions because of trailing-newline rules.
   const boundary = `\n\n${SYSTEM_PROMPT_DYNAMIC_BOUNDARY}`;
 
-  return `${preamble}${base}${planSection}${interactionSection}${agentLoopBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+  return `${preamble}${base}${planSection}${agentSection}${interactionSection}${agentLoopBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
 }
 
 /**

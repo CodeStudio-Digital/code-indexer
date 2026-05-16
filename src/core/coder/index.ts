@@ -671,6 +671,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         console.warn(`[coder] resolvePlan failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
+    setSessionAgent: (agent) => {
+      try {
+        store.setSessionAgent(session.id, agent);
+      } catch (e) {
+        console.warn(`[coder] setSessionAgent failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
     // Tasks persistence — see migration 008 + SessionStore.recordTasks/etc.
     recordTasks: (toolUseId, state) => {
       try {
@@ -891,6 +898,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     isIndexed,
     repoMap,
     agentLoopV2: agentLoopV2EnvFlag,
+    agentId: effectiveAgentId ?? undefined,
   });
 
   // Append company prompt block (master orchestration or subordinate instructions)

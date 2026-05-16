@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } 
 import { useTranslation } from 'react-i18next';
 import { Brain, FileText, Paperclip, Sparkles, X } from 'lucide-react';
 import { Textarea } from '../../../components/ui/textarea.js';
+import { useConfirm } from '../../../components/ui/dialog-provider.js';
 import type { AgentAttachment, EnrichedProviderModel, ProviderOption } from '../types.js';
 import { fileToAttachment } from '../utils.js';
 import { ComposerToolbar } from './ComposerToolbar.js';
@@ -17,6 +18,16 @@ interface SlashCommand {
 }
 
 type AgentId = 'explore' | 'plan' | 'build' | 'admin';
+
+// Visual cue: tints the composer's left border by the active mode so the
+// user sees-at-a-glance which agent is loaded. The functional gates
+// (confirm-before-irreversible, tier filtering) live in the runner.
+const BORDER_TINT: Record<AgentId, string> = {
+  explore: 'border-l-sky-500',
+  plan: 'border-l-violet-500',
+  build: 'border-l-emerald-500',
+  admin: 'border-l-rose-500',
+};
 
 export interface ComposerHandle {
   setInput: (v: string) => void;
@@ -87,6 +98,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
     const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const { handleKeyDown: mdKeyDown, applyAction } = useMarkdownShortcuts(textareaRef, input, setInput);
+    const confirm = useConfirm();
 
     // Debounced value for AgentPicker auto-suggest (avoids re-rendering toolbar on every keystroke)
     const [debouncedInput, setDebouncedInput] = useState('');
@@ -157,8 +169,24 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
 
     const hasInput = input.trim().length > 0;
 
-    const handleSend = useCallback(() => {
+    const handleSend = useCallback(async () => {
       if (!input.trim()) return;
+
+      // Admin send-gate (friction-only). Real safety is the runner's
+      // confirmBeforeIrreversible — this is just a heads-up on first send.
+      // Suppressed after the user dismisses it once per browser session.
+      if (props.agent === 'admin' && sessionStorage.getItem('admin-mode-ack') !== 'yes') {
+        const ok = await confirm({
+          title: 'Send to Admin mode?',
+          description: 'Mutating tools (git_commit, snapshot mutations, indexing) are unlocked. The runner will still ask before each destructive call.',
+          confirmLabel: 'Send',
+          cancelLabel: 'Cancel',
+          variant: 'warning',
+        });
+        if (!ok) return;
+        sessionStorage.setItem('admin-mode-ack', 'yes');
+      }
+
       const text = input;
       const picks = props.filePicks ?? [];
       const skillIds = props.skillPicks ?? [];
@@ -201,7 +229,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onSend(finalText, atts, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, attachments, slashCommands, props.onSend, props.onInvokeSkill, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline]);
+    }, [input, attachments, slashCommands, props.agent, props.onSend, props.onInvokeSkill, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline, confirm]);
 
     const filePicks = props.filePicks ?? [];
     const PICKS_VISIBLE = 3;
@@ -325,7 +353,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
           </div>
         )}
 
-        <div className="relative rounded-xl border bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1 focus-within:ring-offset-background transition">
+        <div className={`relative rounded-xl border border-l-2 ${BORDER_TINT[props.agent] ?? ''} bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1 focus-within:ring-offset-background transition`}>
           {/* Slash command autocomplete dropdown */}
           {showSlash && filteredSlash.length > 0 && (
             <div className="absolute bottom-full left-0 right-0 mb-1 z-50 rounded-lg border bg-popover text-popover-foreground shadow-md max-h-48 overflow-auto">

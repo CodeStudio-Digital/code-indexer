@@ -83,6 +83,13 @@ export interface SpawnSubordinateSpec {
    * so the subordinate sees them natively.
    */
   attachments?: CoderAttachment[];
+  /**
+   * When true, the subordinate's first turn runs with extended thinking
+   * (deep reasoning) on providers that support it. Threaded through to
+   * `runCoder({ thinking })` and consumed by the provider adapter. The
+   * master decides per spawn — not inherited from the master's own flag.
+   */
+  thinking?: boolean;
 }
 
 /**
@@ -495,6 +502,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       companyPromptBlock: subordinateBlock,
       companyRoleOverride: spec.roleOverride,
       roleTemperature: spec.temperature,
+      thinking: spec.thinking,
       // Wire HumanInTheLoop + meta-bus listeners BEFORE the runner takes
       // turn 1, so a sub that calls `submit_plan_to_master` or
       // `ask_master` immediately on turn 1 doesn't slip through (same
@@ -532,7 +540,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
 
   // ─── Resume ─────────────────────────────────────────────────────
 
-  async resume(agentRunId: number, message?: string, roleOverride?: string, attachments?: CoderAttachment[]): Promise<{
+  async resume(agentRunId: number, message?: string, roleOverride?: string, attachments?: CoderAttachment[], thinking?: boolean): Promise<{
     agentRunId: number;
     coderSessionId: number;
     status: AgentRunStatus;
@@ -625,6 +633,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
         companyContext,
         companyPromptBlock: subordinateBlock,
         companyRoleOverride: roleOverride,
+        thinking,
         onRunnerReady: (runner) => this.wireInterceptionsForRunner(runner, agentRun.id, agentRun.role),
       } as RunCoderOptions & { companyPromptBlock: string });
     } catch (e) {
@@ -668,7 +677,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
    * Reactivate a waiting/completed/errored/aborted subordinate. Returns
    * false if the agent run doesn't exist or isn't in a resumable state.
    */
-  async reactivate(agentRunId: number, message: string, attachments?: CoderAttachment[]): Promise<boolean> {
+  async reactivate(agentRunId: number, message: string, attachments?: CoderAttachment[], thinking?: boolean): Promise<boolean> {
     const agentRun = this.deps.ctx.companyStore.getAgentRun(agentRunId);
     if (!agentRun) return false;
     const resumableStatuses = ['error', 'aborted', 'waiting', 'completed', 'interrupted'];
@@ -677,7 +686,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       return false;
     }
     try {
-      await this.resume(agentRunId, message, undefined, attachments);
+      await this.resume(agentRunId, message, undefined, attachments, thinking);
       return true;
     } catch (e) {
       console.warn(`[company] Failed to reactivate ${agentRun.role}: ${e instanceof Error ? e.message : String(e)}`);

@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import { SUPPORTED_CODER_PROVIDERS } from '../../../../../core/coder/index.js';
+import { getDefinition } from '../../../../../core/providers/registry.js';
 import type { ServerDeps } from '../../deps.js';
 
 export function mountCoderProvidersRoutes(app: Hono, deps: ServerDeps): void {
@@ -19,6 +20,11 @@ export function mountCoderProvidersRoutes(app: Hono, deps: ServerDeps): void {
       kind: p.kind,
       is_default: p.is_default,
       has_key: !!p.api_key,
+      // Capabilities come from the static provider definition (registry),
+      // not the DB — the dashboard uses them to gate UI affordances like the
+      // thinking toggle. Forwarded verbatim so adding a new capability there
+      // automatically surfaces to the UI.
+      capabilities: getDefinition(p.kind)?.capabilities,
       models: providerStore.listModels(p.id, true).map((m) => ({
         id: m.model_id,
         name: m.name,

@@ -48,7 +48,9 @@ export function useProviders(): UseProvidersResult {
       ? enrichedProviders.map((p) => ({
           id: p.id,
           label: p.name || p.id,
+          kind: p.kind,
           models: p.models,
+          capabilities: p.capabilities,
         }))
       : PROVIDERS.map((p) => ({
           id: p.id,

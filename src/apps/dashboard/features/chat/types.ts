@@ -126,6 +126,11 @@ export interface EnrichedProviderModel {
   default_max_tokens?: number | null;
 }
 
+export interface ProviderCapabilities {
+  supportsThinking?: boolean;
+  supportsVision?: boolean;
+}
+
 export interface EnrichedProvider {
   id: string;
   name: string;
@@ -133,6 +138,7 @@ export interface EnrichedProvider {
   is_default?: boolean;
   has_key?: boolean;
   models: EnrichedProviderModel[];
+  capabilities?: ProviderCapabilities;
 }
 
 export interface ProviderOption {
@@ -143,6 +149,7 @@ export interface ProviderOption {
    *  (e.g. ChatGPT Codex has id `openai-chatgpt` but kind `chatgpt`). */
   kind?: string;
   models: EnrichedProviderModel[];
+  capabilities?: ProviderCapabilities;
 }
 
 export interface PersistedTasksState {

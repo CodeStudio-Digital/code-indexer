@@ -25,5 +25,9 @@ export const anthropic = defineProvider({
       apiKey: creds.apiKey,
       baseURL: creds.baseURL,
       model: model ?? 'claude-sonnet-4-6',
+      // Extended thinking config consumed when `req.thinking === true`. The
+      // adapter auto-bumps `max_tokens` to ensure `max_tokens > budget_tokens`
+      // (API requirement) so callers don't need to also set max_tokens here.
+      defaultThinking: { type: 'enabled', budget_tokens: 32000 },
     }),
 });

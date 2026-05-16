@@ -203,6 +203,60 @@ export type PolicyDecision =
     };
 
 /**
+ * Internal tools that ALWAYS require user confirmation when the active
+ * agent opted into `confirmBeforeIrreversible`. Explicit, auditable set
+ * — easier to reason about than relying purely on the regex heuristic.
+ *
+ * External MCP tools (whose names we cannot enumerate ahead of time)
+ * fall through to the destructive-verb heuristic in `isIrreversibleTool`.
+ */
+const INTERNAL_IRREVERSIBLE: ReadonlySet<string> = new Set([
+  // Native git mutations
+  'git_add',
+  'git_commit',
+  'git_branch',
+  // Worktree lifecycle
+  'enter_worktree',
+  'exit_worktree',
+  // MCP project / snapshot / index mutations
+  'mcp__index_project',
+  'mcp__delete_project',
+  'mcp__add_snapshot',
+  'mcp__update_snapshot',
+  'mcp__delete_snapshot',
+]);
+
+/**
+ * Conservative regex over tool names. Catches the common destructive-verb
+ * prefixes that external MCP servers use (cloudflare `r2_bucket_delete`,
+ * `kv_namespace_create`, `hyperdrive_config_edit`, etc.) without us having
+ * to maintain a registry of every external MCP tool.
+ *
+ * Trade-off: an external read-only tool that happens to use a verb like
+ * `set_` will be flagged as irreversible and prompt the user. That is an
+ * acceptable false-positive cost — the user confirms and proceeds. The
+ * upside is zero-maintenance coverage of any MCP server registered in
+ * the future.
+ */
+const IRREVERSIBLE_VERB_REGEX = /(?:^|_)(delete|destroy|drop|remove|create|publish|apply|commit|push|update|replace|set)(?:_|$)/i;
+
+/**
+ * Whether a tool name should trip the `confirmBeforeIrreversible` gate.
+ *
+ * Priority:
+ *   1. Internal set — fastest path, explicit allow/deny audit.
+ *   2. Heuristic over name — covers external MCP mutations.
+ *
+ * Returns `false` for clearly read-only tools whose name doesn't match
+ * the destructive-verb pattern, including ALL `mcp__list_*`, `mcp__get_*`,
+ * `mcp__search_*`, `mcp__find_*` families.
+ */
+export function isIrreversibleTool(name: string): boolean {
+  if (INTERNAL_IRREVERSIBLE.has(name)) return true;
+  return IRREVERSIBLE_VERB_REGEX.test(name);
+}
+
+/**
  * Predicate exposed for callers (the runner) that already know the
  * candidate paths. Returns the violators when the policy has a scope and
  * any path is outside it. Keeping the predicate here lets the runner do

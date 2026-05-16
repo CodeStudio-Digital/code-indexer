@@ -18,6 +18,7 @@ import { TooltipProvider } from '../../components/ui/tooltip.js';
 import { ChatHeader } from './ChatHeader.js';
 import { SessionStateSidebar } from './SessionStateSidebar.js';
 import { Composer, type ComposerHandle } from './composer/Composer.js';
+import { providerSupportsThinking } from './composer/provider-caps.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { MessageList } from './messages/MessageList.js';
@@ -607,13 +608,36 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const handlers: PromptHandlers = useMemo(
     () => ({
       onAnswer: (answer) => answerQuestion(answer),
-      onPlanResponse: (approved, feedback) => respondToPlan(approved, feedback),
+      onPlanResponse: async (approved, feedback) => {
+        await respondToPlan(approved, feedback);
+        // Iteration 2: after an approved plan, the backend may auto-transition
+        // the session agent from 'plan' to 'build'. Refetch the session
+        // metadata so the AgentPicker reflects the new mode without
+        // requiring a manual reload.
+        if (approved && selectedId) {
+          try {
+            const r = await fetch(`/api/coder/sessions/${selectedId}`);
+            if (r.ok) {
+              const s = (await r.json()) as { agent?: string };
+              if (
+                s.agent
+                && s.agent !== agent
+                && (s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin')
+              ) {
+                setAgent(s.agent);
+              }
+            }
+          } catch {
+            /* non-fatal: AgentPicker just keeps the stale value */
+          }
+        }
+      },
       onTasksResponse: (verdict) => respondToTasks(verdict),
       onFork: handleFork,
     }),
     // handleFork depends on selectedId — re-create when session changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [answerQuestion, respondToPlan, respondToTasks, selectedId],
+    [answerQuestion, respondToPlan, respondToTasks, selectedId, agent],
   );
 
   return (
@@ -855,18 +879,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 sessionId={selectedId}
                 thinking={thinking}
                 setThinking={setThinking}
-                supportsThinking={
-                  // Match by provider `kind` first — the chatgpt provider's
-                  // DB id is `openai-chatgpt`, not `chatgpt`, so an id-only
-                  // check would miss it. Other providers below still match
-                  // by id because their id and kind happen to coincide.
-                  providerOptions.find((p) => p.id === provider)?.kind === 'chatgpt' ||
-                  provider === 'google-oauth' ||
-                  provider === 'gemini' ||
-                  provider === 'kimi-code' ||
-                  provider === 'moonshot' ||
-                  (provider === 'zai' && /^glm-5(\.|-)/.test((model ?? '').split('::')[0]))
-                }
+                supportsThinking={providerSupportsThinking(provider, providerOptions, model)}
                 fallbackProvider={fallbackProvider}
                 fallbackModel={fallbackModel}
                 onFallbackChange={handleFallbackChange}

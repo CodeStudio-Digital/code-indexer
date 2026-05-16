@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID, createHash } from 'node:crypto';
 import { resolve as pathResolve, relative as pathRelative, isAbsolute } from 'node:path';
+import { statSync as fsStatSync } from 'node:fs';
 import type { ChatProvider } from '../providers/adapter.js';
 import type { ToolRegistry } from './registry.js';
 import type { AgentMessage, ChatDelta, ChatUsage, ContentBlock, ToolUseBlock, PlanBlock, QuestionBlock, ToolResultBlock } from './messages.js';
@@ -24,8 +25,17 @@ import {
   REDUCIBLE_READ_TOOLS,
   buildReadDedupKey,
   getStringField,
+  isMutatingFsTool,
+  allPriorReadsElided,
+  lastMutationTurn,
+  findToolResultByUseId,
+  extractReadPreview,
+  buildSimpleLineDiff,
+  buildRichRefusal,
+  buildAutoDowngradeResponse,
 } from "./compaction.js";
-import { evaluateToolInvocation, findScopeViolations, type PolicyContext } from './policy.js';
+import { evaluateToolInvocation, findScopeViolations, isIrreversibleTool, type PolicyContext } from './policy.js';
+import { AGENTS } from '../agents/index.js';
 import { isSummarizerEnabled, summarizeSpan, summarizeSpanV2, renderSummary, renderSummaryV2, isStructuredSummaryEnabled, overlayLiveState } from './summarizer.js';
 import { computeSnapshot, type TokenSnapshot } from './token-accounting.js';
 import { filterByTiers, profileToTiers, type ToolTier, type CoderProfile } from '../tools/tiers.js';
@@ -56,6 +66,9 @@ export type TransitionKind =
   | 'dup-call-cap'
   | 'result-dup-cap'
   | 'pre-read-blocked'
+  | 'pre-read-allowed-elided'
+  | 'pre-read-allowed-mutation'
+  | 'pre-read-auto-downgraded'
   | 'stop-guard-nudge';
 
 /**
@@ -345,6 +358,16 @@ function readDupWindow(): number {
     if (Number.isFinite(n) && n >= 0) return n;
   }
   return 20;
+}
+
+/**
+ * Auto-downgrade toggle. When enabled, the pre-read guard returns a
+ * skeleton-style summary instead of a hard refusal. Default off — refusal
+ * with rich payload is more pedagogical and avoids masking the "model is
+ * stuck re-reading" signal. Set CODER_READ_AUTO_DOWNGRADE=1 to opt in.
+ */
+function readAutoDowngradeEnabled(): boolean {
+  return process.env.CODER_READ_AUTO_DOWNGRADE === '1';
 }
 
 /**
@@ -1116,6 +1139,14 @@ export class CoderRunner extends EventEmitter {
    * out of the window automatically when we check.
    */
   private toolCallFreq: Map<string, number[]> = new Map();
+  /**
+   * Set of (toolName|argsJson) hashes that asked for user confirmation and
+   * are awaiting a retry. Populated when an `admin`-mode call hits the
+   * irreversible-tool gate; consumed on the LLM's next attempt with the
+   * same args (interpreted as "user said yes, retrying"). Cleared on
+   * consumption so a third attempt would re-prompt. See dispatch path.
+   */
+  private pendingConfirms: Set<string> = new Set();
 
   /**
    * Agent Loop v2 result-content dedup. Maps tool name → recent
@@ -1134,8 +1165,39 @@ export class CoderRunner extends EventEmitter {
    * a duplicate before dispatching it. Distinct from `toolCallFreq` (which
    * uses raw arg JSON and a higher threshold) and `recentResultHashes`
    * (which catches duplicates AFTER the call returns identical content).
+   *
+   * Each entry carries the `useId` of the corresponding tool_use block so
+   * the smarter guard can check whether the matching tool_result is still
+   * visible in `this.messages` (or has been elided by postCompactCleanup —
+   * in which case re-reading is legitimate, not a loop). `mtimeMs` and
+   * `contentHash` are populated AFTER dispatch and used to detect staleness
+   * and to short-circuit the diff path when the file has not changed.
    */
-  private recentReadKeys: Map<string, Array<{ turn: number }>> = new Map();
+  private recentReadKeys: Map<string, Array<{
+    turn: number;
+    useId: string;
+    mtimeMs?: number;
+    contentHash?: string;
+  }>> = new Map();
+
+  /**
+   * Per-path mutation tracker. Updated after a successful dispatch of any
+   * `isMutatingFsTool` (write_file, edit_file, multi_edit, create_file,
+   * apply_patch). The pre-read guard reads it to decide whether a re-read
+   * is actually fetching new state (file changed since prior read) — in
+   * which case the call is allowed and the result is post-processed into
+   * a unified diff against the prior content.
+   */
+  private recentWrites: Map<string, number> = new Map();
+
+  /**
+   * Set by the pre-read guard when it decides to ALLOW a re-read after a
+   * mutation: keyed by the new tool_use id (block.id), points to the prior
+   * read's useId/turn so the post-dispatch hook can replace the new
+   * tool_result content with a unified diff. Cleared per turn boundary
+   * (entries naturally expire as the keys go out of scope).
+   */
+  private pendingDiffRereads: Map<string, { priorUseId: string; priorTurn: number; path: string }> = new Map();
 
   /**
    * Sliding window of (toolName, hadAssistantText) per turn — used by
@@ -1627,6 +1689,39 @@ export class CoderRunner extends EventEmitter {
     return Boolean(this.opts.planMode);
   }
 
+  /**
+   * Active agent identity at run start, if any. Read-only — the in-memory
+   * agent never changes mid-run; mode transitions persist to the DB and
+   * take effect on the NEXT runner creation. Tools use this to decide
+   * whether a transition (e.g. plan→build after approval) should fire.
+   */
+  get agentId(): import('../agents/index.js').AgentId | null | undefined {
+    return this.opts.agentId;
+  }
+
+  /**
+   * Append a `<system-reminder>` wrapped user message to the conversation.
+   * Used by tools that need to nudge the model out-of-band (e.g. mode
+   * transition after plan approval). Mirrors to the SessionStore when
+   * available so the reminder survives compaction and run resume.
+   */
+  appendSystemReminder(text: string): void {
+    const msg: AgentMessage = {
+      role: 'user',
+      content: [{ type: 'text', text: `<system-reminder>${text}</system-reminder>` }],
+    };
+    this.messages.push(msg);
+    if (this.opts.sessionStore && this.opts.sessionId !== undefined) {
+      try {
+        this.opts.sessionStore.appendMessage(this.opts.sessionId, msg);
+      } catch (e) {
+        console.warn(
+          `[coder] appendSystemReminder mirror failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+  }
+
   /** Replace the active provider mid-session. Takes effect on the next turn. */
   swapProvider(newProvider: ChatProvider): void {
     this.opts.provider = newProvider;
@@ -1665,7 +1760,7 @@ export class CoderRunner extends EventEmitter {
    * call) instead of relying on a notification user-message arriving in
    * time.
    */
-  interruptWait(info?: { kind?: 'plan' | 'question' | 'tasks'; agentRunId?: number; role?: string }): boolean {
+  interruptWait(info?: { kind?: 'plan' | 'question' | 'tasks' | 'subordinate_event'; agentRunId?: number; role?: string }): boolean {
     if (!this.pendingResolve) return false;
     const r = this.pendingResolve;
     this.pendingResolve = null;
@@ -1759,6 +1854,17 @@ export class CoderRunner extends EventEmitter {
   /** Append a user message with arbitrary content blocks (text + image + document). */
   pushUserContent(blocks: ContentBlock[]): void {
     this.messages.push({ role: 'user', content: blocks });
+  }
+
+  /**
+   * Toggle extended-thinking (deep reasoning) for subsequent turns. The next
+   * `ChatRequest` reads `this.opts.thinking` so the change takes effect on the
+   * next turn without rebuilding the runner. Called by `sendMessageToMaster`
+   * and `forward_to_agent` when the user/master wants to flip thinking on/off
+   * for a live runner that's already past construction.
+   */
+  setThinking(value: boolean | undefined): void {
+    this.opts = { ...this.opts, thinking: value };
   }
 
   /**
@@ -2639,18 +2745,37 @@ export class CoderRunner extends EventEmitter {
           if (this.aborted) break;
           this.emit('tool_call_start', block.id, block.name, block.input);
 
-          // PR-5 (Row 32) — pre-read enforcement. Reject a read-family
-          // tool call if the same (path, slice) has been read in the last
-          // READ_DUP_WINDOW turns. Tighter than the generic dup-call cap
-          // (threshold=2 vs 5) and runs BEFORE dispatch, so we never spend
-          // the round-trip on a known-duplicate read. Result-dup cap (post)
-          // remains the catch-all for the snap-to-symbol case where args
-          // differ but the resolver returns identical content.
+          // PR-5 (Row 32) — pre-read enforcement, smarter variant.
+          // When the same (path, slice) read has been issued recently, the
+          // legacy guard refused outright. The smarter variant evaluates
+          // four cases in this order before deciding:
           //
-          // Gated on agentLoopV2 — legacy sessions keep the old behaviour
-          // exactly. Read tools have semantically idempotent results so
-          // any repeat is wasteful; non-read tools (shell, edit, ...) are
-          // not subject to this guard because legitimate repeats are common.
+          //   1. MUTATION: if the path was written to since the prior read
+          //      (edit_file / write_file / apply_patch / ...), the call is
+          //      ALLOWED. The post-dispatch hook will replace the new
+          //      tool_result with a unified diff vs. the prior content so
+          //      the model gets the smallest possible payload that conveys
+          //      "what changed". Resolves the codex-vs-doom-loop tension
+          //      documented in docs/agent-research/COMPARISON.md.
+          //
+          //   2. ELIDE: if every prior tool_result for this slice is now
+          //      a `[duplicate-read elided]` / `[compacted:` / `[stale:`
+          //      placeholder, the content has LEFT the context window. The
+          //      call is ALLOWED — refusing would be a lie ("already in
+          //      your context") that blocks legitimate work.
+          //
+          //   3. AUTO-DOWNGRADE (opt-in, CODER_READ_AUTO_DOWNGRADE=1): the
+          //      runner returns a skeleton-style summary instead of a hard
+          //      refusal, marked `[auto-downgraded]`. Default off because
+          //      hard refusal is pedagogically clearer.
+          //
+          //   4. RICH REFUSE: the default fall-through. The refusal now
+          //      includes a pointer to the prior turn(s), the current mtime
+          //      (so the model can tell whether the file moved), and a
+          //      head+tail preview of what was read.
+          //
+          // All four paths emit a TransitionKind so telemetry distinguishes
+          // them. Gated on agentLoopV2 — legacy sessions are untouched.
           if (this.opts.agentLoopV2 && REDUCIBLE_READ_TOOLS.has(block.name)) {
             const inp = block.input as Record<string, unknown> | undefined;
             const path = getStringField(inp, 'path', 'file_path');
@@ -2660,33 +2785,102 @@ export class CoderRunner extends EventEmitter {
               const window = readDupWindow();
               const minTurn = turn - window;
               const prior = (this.recentReadKeys.get(readKey) ?? []).filter((e) => e.turn > minTurn);
-              prior.push({ turn });
+              // Append the current call BEFORE the decision so the threshold
+              // arithmetic matches the legacy behaviour (and the test for
+              // window expiry still holds).
+              prior.push({ turn, useId: block.id });
               this.recentReadKeys.set(readKey, prior);
               if (threshold >= 1 && prior.length >= threshold) {
-                const refusal =
-                  `Refused: \`${block.name}\` was called for the same path/slice ${prior.length} ` +
-                  `times in the last ${window} turns. The content is already in your context — re-reading ` +
-                  `the SAME slice is forbidden by the runner. Either:\n` +
-                  `  (a) quote what you already read above and act on it (write code, give the answer);\n` +
-                  `  (b) ask for a DIFFERENT region — change start_line/end_line or pass another \`symbol\`;\n` +
-                  `  (c) use a DIFFERENT tool (mcp__find_references, mcp__search, mcp__get_file_skeleton if not yet seen);\n` +
-                  `  (d) make the edit you came here to make — re-reading after edit_file is unnecessary.`;
-                const synth = buildToolResultBlock(
-                  block.id,
-                  refusal,
-                  true,
-                  this.effectivePushTimeCap,
+                const oldestPrior = prior[0];
+                // Layer 1: mutation since oldest prior read → ALLOW + diff.
+                const mutationTurn = lastMutationTurn(
+                  path,
+                  this.recentWrites,
+                  oldestPrior.turn,
                 );
-                toolResultBlocks.push(synth);
-                this.setTransition('pre-read-blocked');
-                console.warn(
-                  `[coder] pre-read cap fired: ${block.name} ${prior.length}× for "${path}" — refused at turn ${turn}`,
-                );
-                this.emit('tool_call_result', block.id, block.name, {
-                  content: refusal,
-                  isError: true,
-                }, 0);
-                continue; // skip dispatch
+                if (mutationTurn != null) {
+                  this.pendingDiffRereads.set(block.id, {
+                    priorUseId: oldestPrior.useId,
+                    priorTurn: oldestPrior.turn,
+                    path,
+                  });
+                  this.setTransition('pre-read-allowed-mutation');
+                  console.warn(
+                    `[coder] pre-read allowed (mutation at turn ${mutationTurn}): ${block.name} for "${path}" — diff post-process queued`,
+                  );
+                  // Fall through to normal dispatch.
+                } else if (allPriorReadsElided(prior.slice(0, -1), this.messages)) {
+                  // Layer 2: prior result(s) elided/compacted → ALLOW fresh read.
+                  this.setTransition('pre-read-allowed-elided');
+                  console.warn(
+                    `[coder] pre-read allowed (prior result elided): ${block.name} for "${path}" — re-fetching dropped content`,
+                  );
+                  // Fall through to normal dispatch.
+                } else if (readAutoDowngradeEnabled()) {
+                  // Layer 3: opt-in auto-downgrade — return a skeleton-like
+                  // pointer instead of a hard refusal. Deterministic content.
+                  const downgrade = buildAutoDowngradeResponse(
+                    block.name,
+                    path,
+                    prior,
+                    window,
+                    this.messages,
+                  );
+                  const synth = buildToolResultBlock(
+                    block.id,
+                    downgrade,
+                    /* is_error */ false,
+                    this.effectivePushTimeCap,
+                  );
+                  toolResultBlocks.push(synth);
+                  this.setTransition('pre-read-auto-downgraded');
+                  console.warn(
+                    `[coder] pre-read auto-downgraded: ${block.name} ${prior.length}× for "${path}" at turn ${turn}`,
+                  );
+                  this.emit('tool_call_result', block.id, block.name, {
+                    content: downgrade,
+                    isError: false,
+                  }, 0);
+                  continue; // skip dispatch
+                } else {
+                  // Layer 4: rich refusal — pointer + mtime + preview.
+                  const firstPrior = prior.find((p) => p !== prior[prior.length - 1]) ?? prior[0];
+                  const priorResult = findToolResultByUseId(firstPrior.useId, this.messages);
+                  const preview = priorResult && !priorResult.isElided
+                    ? extractReadPreview(priorResult.content)
+                    : undefined;
+                  let currentMtimeMs: number | undefined;
+                  try {
+                    const abs = pathResolve(this.opts.toolContext.cwd, path);
+                    currentMtimeMs = fsStatSync(abs).mtimeMs;
+                  } catch {
+                    /* path may not exist anymore — leave undefined */
+                  }
+                  const refusal = buildRichRefusal({
+                    toolName: block.name,
+                    path,
+                    prior: prior.slice(0, -1), // exclude current call
+                    windowTurns: window,
+                    currentMtimeMs,
+                    contextPreview: preview,
+                  });
+                  const synth = buildToolResultBlock(
+                    block.id,
+                    refusal,
+                    true,
+                    this.effectivePushTimeCap,
+                  );
+                  toolResultBlocks.push(synth);
+                  this.setTransition('pre-read-blocked');
+                  console.warn(
+                    `[coder] pre-read cap fired: ${block.name} ${prior.length}× for "${path}" — refused at turn ${turn}`,
+                  );
+                  this.emit('tool_call_result', block.id, block.name, {
+                    content: refusal,
+                    isError: true,
+                  }, 0);
+                  continue; // skip dispatch
+                }
               }
             }
           }
@@ -2782,7 +2976,56 @@ export class CoderRunner extends EventEmitter {
             };
             const decision = evaluateToolInvocation(toolDef, block.input, policyCtx);
 
-            if (decision.allowed) {
+            // Confirm-before-irreversible gate (Camada B). Active when the
+            // session's agent opted in (only `admin` today). The first time
+            // the LLM tries an irreversible call we refuse and instruct it
+            // to call `ask_user`; on the next attempt with the same args
+            // we interpret it as "user approved, retry" and let it through.
+            //
+            // We DELIBERATELY do not gate on policy.allowed first: a tool
+            // can be policy-allowed (admin mode, no plan gate) and still
+            // need user confirmation. The two gates are independent.
+            const agentDef = this.opts.agentId ? AGENTS[this.opts.agentId] : null;
+            const needsConfirmGate =
+              decision.allowed
+              && agentDef?.confirmBeforeIrreversible === true
+              && isIrreversibleTool(block.name);
+            let confirmHash = '';
+            if (needsConfirmGate) {
+              try {
+                confirmHash = createHash('sha1')
+                  .update(`${block.name}|${JSON.stringify(block.input ?? {})}`)
+                  .digest('hex');
+              } catch {
+                /* unhashable args → fall back to name-only key */
+                confirmHash = `name:${block.name}`;
+              }
+            }
+            if (needsConfirmGate && !this.pendingConfirms.has(confirmHash)) {
+              this.pendingConfirms.add(confirmHash);
+              const previewArgs = JSON.stringify(block.input ?? {});
+              const preview = previewArgs.length > 200
+                ? previewArgs.slice(0, 200) + '...'
+                : previewArgs;
+              const message =
+                `Refused: \`${block.name}\` is an irreversible operation and admin mode requires explicit user confirmation before running it.\n\n` +
+                `Args preview: \`${preview}\`\n\n` +
+                `What to do:\n` +
+                `1. Call \`ask_user\` with options=["Yes","No"] and a one-line summary of what this will do.\n` +
+                `2. If the user answers Yes, retry the EXACT same \`${block.name}\` call with the same arguments — the runner will let it through on the second attempt.\n` +
+                `3. If the user answers No, abort and report.`;
+              this.emit('blocked', {
+                runId: this.runId,
+                turn,
+                tool: block.name,
+                reason: 'admin_required',
+                detail: 'irreversible operation — awaiting user confirmation via ask_user',
+              });
+              result = { content: message, isError: true };
+            } else if (decision.allowed) {
+              // Either the gate is off, or this is the retry — drop the
+              // pending-confirm marker so a third attempt would re-prompt.
+              if (confirmHash) this.pendingConfirms.delete(confirmHash);
               result = await this.opts.registry.invoke(block.name, block.input, this.opts.toolContext);
             } else if (
               decision.reason === 'plan_mode'
@@ -2913,6 +3156,72 @@ export class CoderRunner extends EventEmitter {
                 content: refusal,
                 isError: true,
               }, 0);
+            }
+          }
+
+          // Smarter pre-read enforcement — post-dispatch follow-up.
+          //
+          //   (a) Read-tools: stamp the most-recent recentReadKeys entry with
+          //       contentHash and current mtime so future guard decisions
+          //       can short-circuit on "file unchanged since prior read".
+          //   (b) pendingDiffRereads: if the guard ALLOWED this call via
+          //       the mutation branch, replace shapedContent with a unified
+          //       diff against the prior read (or annotate when the prior
+          //       result has been compacted out of context).
+          //   (c) Mutating tools: stamp recentWrites[path] = turn so the
+          //       guard can detect re-reads of paths the model just changed.
+          if (this.opts.agentLoopV2 && !result.isError && REDUCIBLE_READ_TOOLS.has(block.name)) {
+            const inp = block.input as Record<string, unknown> | undefined;
+            const path = getStringField(inp, 'path', 'file_path');
+            if (path) {
+              const readKey = `${block.name}|${buildReadDedupKey(path, inp)}`;
+              const list = this.recentReadKeys.get(readKey);
+              if (list && list.length > 0) {
+                const tail = list[list.length - 1];
+                if (tail.useId === block.id) {
+                  if (typeof result.content === 'string') {
+                    tail.contentHash = createHash('sha1').update(result.content).digest('hex');
+                  }
+                  try {
+                    tail.mtimeMs = fsStatSync(pathResolve(this.opts.toolContext.cwd, path)).mtimeMs;
+                  } catch { /* file may not exist */ }
+                }
+              }
+            }
+            const pending = this.pendingDiffRereads.get(block.id);
+            if (pending && typeof result.content === 'string') {
+              this.pendingDiffRereads.delete(block.id);
+              const priorResult = findToolResultByUseId(pending.priorUseId, this.messages);
+              if (priorResult && !priorResult.isElided) {
+                const diff = buildSimpleLineDiff(priorResult.content, result.content, 3);
+                shapedContent =
+                  `[reread-after-edit] \`${pending.path}\` was mutated since your prior read at turn ${pending.priorTurn}. ` +
+                  `Returning unified diff against that read (pass force=true to bypass diff and get full content).\n\n` +
+                  diff;
+              } else {
+                shapedContent =
+                  `[reread-after-edit] \`${pending.path}\` was mutated since your prior read at turn ${pending.priorTurn}, ` +
+                  `but that prior read has been compacted from your context. Returning full current content below.\n\n` +
+                  shapedContent;
+              }
+            }
+          }
+          // Mutation tracker — update AFTER successful dispatch only.
+          if (this.opts.agentLoopV2 && !result.isError && isMutatingFsTool(block.name)) {
+            const inp = block.input as Record<string, unknown> | undefined;
+            if (block.name === 'apply_patch') {
+              // apply_patch touches many paths — scan the patch text for the
+              // header lines that name the files. The patch already applied
+              // successfully, so the names there reflect actual writes.
+              const raw =
+                typeof inp?.['patch'] === 'string' ? (inp['patch'] as string) :
+                typeof inp?.['_raw'] === 'string' ? (inp['_raw'] as string) : '';
+              for (const m of raw.matchAll(/\*\*\* (?:Update|Add|Delete) File:\s*(.+)$/gm)) {
+                this.recentWrites.set(m[1].trim(), turn);
+              }
+            } else {
+              const path = getStringField(inp, 'path', 'file_path');
+              if (path) this.recentWrites.set(path, turn);
             }
           }
 

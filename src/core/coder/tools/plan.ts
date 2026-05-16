@@ -128,6 +128,18 @@ export const submitPlan: CoderTool = {
       // A new approval clears prior rejections — the model has moved on, and
       // any future plan with the same text would be a legitimately new ask.
       rejected.clear();
+      // Iteration 2: auto plan→build after approval. When the runner was
+      // started in `plan` agent, the user has now signaled "ok, execute" —
+      // flip the persisted agent to `build` so the NEXT runner creation
+      // picks up build's defaults (planMode=false, build.txt prompt),
+      // and inject a <system-reminder> so the model in this live run
+      // immediately switches gears without waiting for a fresh turn.
+      if (runner.agentId === 'plan') {
+        ctx.setSessionAgent?.('build');
+        runner.appendSystemReminder(
+          'Mode transition: Plan → Build. The plan was approved. Now execute it per build-mode instructions: read with prepare_edit / get_symbol_body before editing, apply changes, run the project verify (npm test / pnpm typecheck / appropriate) after each batch, and report concrete diffs. No further plan submission needed — proceed directly to edits.',
+        );
+      }
       return ok(formatPlanResult(true, parsed.feedback));
     }
     rejected.add(hash);
