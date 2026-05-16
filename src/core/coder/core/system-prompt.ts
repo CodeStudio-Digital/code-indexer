@@ -97,8 +97,9 @@ export interface PromptContext {
   /**
    * Optional repo map (top-level symbols of recently-modified files).
    * Appended at the END of the system prompt so it doesn't invalidate the
-   * cached preamble/body prefix when files are edited. Gated by index.ts
-   * via the CODER_REPOMAP_TOKENS env var (off when 0, which is the default).
+   * cached preamble/body prefix when files are edited. Budget resolved by
+   * `resolveRepoMapBudget` in index.ts — auto-sized by indexed file count
+   * (off for <50-file projects). Honors `CODER_REPOMAP_TOKENS` override.
    */
   repoMap?: string;
   /**
@@ -296,8 +297,8 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   const extraBlock = extra ? `\n\n# Project-specific instructions\n${extra}` : '';
 
   // Repo map varies as files are edited — the most volatile dynamic section.
-  // When CODER_REPOMAP_TOKENS=0 (default) ctx.repoMap is empty/undefined and
-  // this collapses to nothing.
+  // When the project is below the auto-sizing threshold (or CODER_REPOMAP_TOKENS=0)
+  // ctx.repoMap is empty/undefined and this collapses to nothing.
   const repoMapBlock = ctx.repoMap && ctx.repoMap.length > 0 ? `\n\n${ctx.repoMap}` : '';
 
   const dynamicSuffix = `${customTiersText}${extraBlock}${repoMapBlock}`;

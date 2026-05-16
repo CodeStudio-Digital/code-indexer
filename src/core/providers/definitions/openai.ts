@@ -15,7 +15,16 @@ export const openai = defineProvider({
   },
   capabilities: { supportsVision: true },
   createIndexer: (creds, model) =>
-    new OpenAIProvider(creds.apiKey, model, creds.baseURL, creds.extraHeaders),
+    new OpenAIProvider(
+      creds.apiKey,
+      model,
+      creds.baseURL,
+      creds.extraHeaders,
+      // Cheap default for summary-only analysis. Override via
+      // `extra.summary_model` on the provider row when picking a different
+      // cheap variant (e.g. "o4-mini" once it lands).
+      typeof creds.extra?.summary_model === 'string' ? creds.extra.summary_model : 'gpt-4o-mini',
+    ),
   createCoder: (creds, model) =>
     new OpenAIChatProvider({
       name: 'openai',

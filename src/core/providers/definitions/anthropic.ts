@@ -19,7 +19,15 @@ export const anthropic = defineProvider({
   },
   capabilities: { supportsThinking: true, supportsVision: true },
   createIndexer: (creds, model) =>
-    new AnthropicProvider(creds.apiKey, model, creds.baseURL),
+    new AnthropicProvider(creds.apiKey, model, creds.baseURL, {
+      // Cheap default for summary-only analysis. Override via
+      // `extra.summary_model` on the provider row when picking a different
+      // cheap variant (e.g. a future haiku release).
+      summaryModel:
+        typeof creds.extra?.summary_model === 'string'
+          ? creds.extra.summary_model
+          : 'claude-haiku-4-5-20251001',
+    }),
   createCoder: (creds, model) =>
     new AnthropicChatProvider({
       apiKey: creds.apiKey,

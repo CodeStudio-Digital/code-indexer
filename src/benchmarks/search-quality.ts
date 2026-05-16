@@ -9,15 +9,22 @@
  * Usage:
  *   tsx src/benchmarks/search-quality.ts --project <name> [--file queries.jsonl]
  *   tsx src/benchmarks/search-quality.ts --project CodeStudio/MCP-CodeBase --modes fts,hybrid,expanded
+ *   tsx src/benchmarks/search-quality.ts --project foo --min-recall 0.7   # CI gate
  *
  * Input format (JSONL, one query per line):
  *   {"query": "how does the indexer handle incremental reindex",
  *    "relevant_files": ["src/core/indexer/indexer.ts"],
  *    "relevant_symbols": ["processEmbeddings"]}
  *
- * If --file is omitted, a minimal synthetic set is used so the script is
- * runnable out of the box on any project — the numbers won't be scientific
- * but they are reproducible and let you spot regressions.
+ * If --file is omitted, the script auto-loads `evals/queries.jsonl` from the
+ * current working directory when it exists. Otherwise a minimal synthetic
+ * set is used so the script is runnable out of the box on any project — the
+ * numbers won't be scientific but they are reproducible and let you spot
+ * regressions.
+ *
+ * When --min-recall is set, the process exits with code 1 if the best
+ * recall@10 across the selected modes drops below the threshold. Use this
+ * in CI to gate retrieval regressions.
  */
 import { parseArgs } from 'node:util';
 import { readFileSync, existsSync } from 'node:fs';
@@ -69,12 +76,29 @@ const BUILTIN_QUERIES: EvalQuery[] = [
   },
 ];
 
-function loadQueries(path?: string): EvalQuery[] {
-  if (!path) return BUILTIN_QUERIES;
-  if (!existsSync(path)) {
-    console.error(`[bench] query file not found: ${path}, falling back to builtin set`);
-    return BUILTIN_QUERIES;
+/**
+ * Default JSONL gold set checked into the repo. Picked up when --file is
+ * omitted and the file exists at CWD — keeps `npm run eval` zero-config.
+ */
+const DEFAULT_QUERIES_PATH = 'evals/queries.jsonl';
+
+function loadQueries(path?: string): { queries: EvalQuery[]; source: string } {
+  // Explicit path always wins.
+  if (path) {
+    if (!existsSync(path)) {
+      console.error(`[bench] query file not found: ${path}, falling back to builtin set`);
+      return { queries: BUILTIN_QUERIES, source: 'builtin (file not found)' };
+    }
+    return { queries: parseJsonl(path), source: path };
   }
+  // No --file: try the checked-in default at CWD.
+  if (existsSync(DEFAULT_QUERIES_PATH)) {
+    return { queries: parseJsonl(DEFAULT_QUERIES_PATH), source: DEFAULT_QUERIES_PATH };
+  }
+  return { queries: BUILTIN_QUERIES, source: 'builtin' };
+}
+
+function parseJsonl(path: string): EvalQuery[] {
   const text = readFileSync(path, 'utf-8');
   const out: EvalQuery[] = [];
   for (const line of text.split(/\r?\n/)) {
@@ -194,12 +218,13 @@ async function main(): Promise<void> {
       file: { type: 'string' },
       modes: { type: 'string' },
       'no-hyde': { type: 'boolean' },
+      'min-recall': { type: 'string' },
     },
   });
 
   if (!values.project) {
     console.error(
-      'Usage: tsx src/benchmarks/search-quality.ts --project <name> [--file queries.jsonl] [--modes fts,vector,hybrid,expanded] [--no-hyde]'
+      'Usage: tsx src/benchmarks/search-quality.ts --project <name> [--file queries.jsonl] [--modes fts,vector,hybrid,expanded] [--no-hyde] [--min-recall 0.7]'
     );
     process.exit(1);
   }
@@ -209,6 +234,13 @@ async function main(): Promise<void> {
     'hybrid',
     'expanded',
   ];
+
+  const minRecallRaw = values['min-recall'];
+  const minRecall = minRecallRaw !== undefined ? Number(minRecallRaw) : NaN;
+  if (minRecallRaw !== undefined && (!Number.isFinite(minRecall) || minRecall < 0 || minRecall > 1)) {
+    console.error(`[bench] --min-recall must be a number in [0, 1], got: ${minRecallRaw}`);
+    process.exit(1);
+  }
 
   const config = loadConfig();
   const db = new CodeIndexDB(config.dbPath);
@@ -222,8 +254,8 @@ async function main(): Promise<void> {
   const hyde = values['no-hyde'] ? null : new HyDEService(providerStore);
   const search = new HybridSearch(db, searchable, embeddingService, hyde);
 
-  const queries = loadQueries(values.file);
-  console.log(`\n[bench] project=${project.name} queries=${queries.length} hyde=${hyde ? 'real' : 'off'}`);
+  const { queries, source } = loadQueries(values.file);
+  console.log(`\n[bench] project=${project.name} queries=${queries.length} source=${source} hyde=${hyde ? 'real' : 'off'}`);
   console.log(`[bench] modes: ${modes.join(', ')}\n`);
 
   const results: ModeResult[] = [];
@@ -256,6 +288,23 @@ async function main(): Promise<void> {
   }
 
   db.close();
+
+  // CI gate: if --min-recall set, fail when the BEST recall@10 across the
+  // run modes is under the threshold. "Best" because users typically only
+  // care that at least one configured mode hits the bar — not that every
+  // mode does (e.g. fts alone is expected to lose to hybrid).
+  if (Number.isFinite(minRecall)) {
+    const bestRecall = results.length > 0
+      ? Math.max(...results.map((r) => r.recall_at_10))
+      : 0;
+    if (bestRecall < minRecall) {
+      console.error(
+        `\n[bench] FAIL: best recall@10 ${bestRecall.toFixed(3)} < threshold ${minRecall.toFixed(3)}`
+      );
+      process.exit(1);
+    }
+    console.log(`\n[bench] PASS: best recall@10 ${bestRecall.toFixed(3)} >= threshold ${minRecall.toFixed(3)}`);
+  }
 }
 
 void main().catch((e) => {

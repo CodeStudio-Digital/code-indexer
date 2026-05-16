@@ -23,7 +23,9 @@
     "start:api": "node --max-old-space-size=8192 dist/apps/http-api/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "eval": "tsx src/benchmarks/search-quality.ts --project mcp-code-indexer",
+    "eval:strict": "tsx src/benchmarks/search-quality.ts --project mcp-code-indexer --min-recall 0.7"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

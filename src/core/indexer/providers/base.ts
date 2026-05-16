@@ -3,6 +3,18 @@ import type { AnalysisResult, LLMFileAnalysis, LLMSymbol, SymbolKind } from '../
 export interface LLMProvider {
   readonly name: string;
   readonly model: string;
+  /**
+   * Optional cheap model identifier for summary-only analysis. When set,
+   * `analyzeSummary` should call this model instead of `model` — summary
+   * work is small enough that the cheap variant produces equivalent JSON
+   * at a fraction of the cost. Falls through to `model` when undefined.
+   *
+   * Implementations default to a sensible cheap variant of the same family
+   * (e.g. `claude-haiku-4-5` for Anthropic, `gpt-4o-mini` for OpenAI) so
+   * users who pick an expensive primary model still get cheap summaries
+   * by default. Override via constructor option.
+   */
+  readonly summaryModel?: string;
   analyzeFile(filePath: string, content: string): Promise<AnalysisResult>;
   /**
    * Summary-only analysis — used when tree-sitter handles structural extraction.

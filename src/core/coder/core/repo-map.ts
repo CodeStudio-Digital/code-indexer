@@ -5,11 +5,12 @@
  *
  * Inspired by Aider's repo-map. Two design decisions:
  *
- * 1. Off by default. Gated on `CODER_REPOMAP_TOKENS > 0` (chars budget). The
- *    map is only worth its tokens when the project is large enough that
- *    grep-and-discover would otherwise burn 2+ exploration turns. We will
- *    flip this on once the B1 telemetry shows enough sessions exhausting
- *    those turns.
+ * 1. Auto-sized by default. Use `resolveRepoMapBudget` to pick a char budget
+ *    from the indexed file count — tiny projects get nothing (grep is
+ *    faster), medium projects pay ~400 tokens, large projects up to ~1100.
+ *    The map is only worth its tokens when grep-and-discover would
+ *    otherwise burn 2+ exploration turns. Honor `CODER_REPOMAP_TOKENS`
+ *    explicit override (including "0" to disable).
  *
  * 2. Goes at the END of the system prompt, never the beginning. The map
  *    changes on every edit (file mtimes flip), so putting it at the start
@@ -37,8 +38,9 @@ const PUBLIC_KINDS = new Set(['function', 'class', 'interface', 'type', 'enum', 
  * of the system prompt (see file header) so its mutation only invalidates
  * the trailing cache segment.
  *
- * Pass `budgetChars: 0` (the default when CODER_REPOMAP_TOKENS=0) to
- * short-circuit and return an empty string.
+ * Pass `budgetChars: 0` (returned by resolveRepoMapBudget for small
+ * projects or when CODER_REPOMAP_TOKENS=0) to short-circuit and return
+ * an empty string.
  */
 export function buildRepoMap(
   db: CodeIndexDB,
@@ -91,4 +93,37 @@ export function buildRepoMap(
     ? `\n[repo-map: ${lines.length} files shown; ${elidedFiles} elided due to ${budgetChars}-char budget]`
     : '';
   return `# Repo map (top-level symbols, recent files first)\n${lines.join('\n')}${trailer}\n`;
+}
+
+/**
+ * Pick a char budget for the repo map based on indexed file count.
+ *
+ * Priority:
+ *   1. `CODER_REPOMAP_TOKENS` env override — any value (including "0" to
+ *      disable) wins. Lets ops force a specific budget per deployment.
+ *   2. Auto-sizing by indexed file count:
+ *        <50    → 0     (grep is faster than the map's overhead)
+ *        50–499 → 1500  (~375 tokens; pays for itself in 1 saved grep)
+ *        500–1999 → 3000 (~750 tokens; covers medium repos comfortably)
+ *        ≥2000  → 4500  (~1125 tokens; large repos benefit from headroom)
+ *
+ * Returns 0 when the project hasn't been indexed — without symbols there
+ * is nothing useful to print.
+ */
+export function resolveRepoMapBudget(
+  db: CodeIndexDB,
+  projectId: number,
+  isIndexed: boolean,
+): number {
+  if (!isIndexed) return 0;
+  const override = process.env.CODER_REPOMAP_TOKENS;
+  if (override !== undefined && override !== '') {
+    const parsed = Number(override);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+  }
+  const fileCount = db.listFiles(projectId).length;
+  if (fileCount < 50) return 0;
+  if (fileCount < 500) return 1500;
+  if (fileCount < 2000) return 3000;
+  return 4500;
 }

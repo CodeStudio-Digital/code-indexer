@@ -1,0 +1,25 @@
+{"query": "hybrid search RRF merge", "relevant_files": ["src/core/search/hybrid.ts"]}
+{"query": "how does contextual retrieval prepend context before embedding", "relevant_files": ["src/core/indexer/indexer.ts"]}
+{"query": "context bundle token budget and dedup", "relevant_files": ["src/core/search/context-bundle.ts"]}
+{"query": "tree-sitter symbol extractor", "relevant_files": ["src/core/indexer/tree-sitter/extractor.ts"]}
+{"query": "vector store abstraction", "relevant_files": ["src/store/vectors.ts"]}
+{"query": "cloudflare BGE embeddings service", "relevant_files": ["src/core/search/embeddings.ts"]}
+{"query": "cross encoder reranker", "relevant_files": ["src/core/search/reranker.ts"]}
+{"query": "query planner routes identifier to FTS", "relevant_files": ["src/core/search/planner.ts"]}
+{"query": "HyDE hypothetical document expansion", "relevant_files": ["src/core/search/hyde.ts"]}
+{"query": "file tier mapper core support on_demand", "relevant_files": ["src/core/indexer/mapper.ts"]}
+{"query": "incremental indexing skip unchanged embeddings", "relevant_files": ["src/core/indexer/incremental.ts"]}
+{"query": "repo map for agent system prompt", "relevant_files": ["src/core/coder/core/repo-map.ts"]}
+{"query": "system prompt dynamic boundary cache stratification", "relevant_files": ["src/core/coder/core/system-prompt.ts"]}
+{"query": "tool tiers bootstrap navigate full", "relevant_files": ["src/core/coder/tools/tiers.ts"]}
+{"query": "spawn subagent explore allowlist", "relevant_files": ["src/core/coder/tools/subagent.ts", "src/core/coder/tools/implement-subagent.ts"]}
+{"query": "agent modes explore plan build admin", "relevant_files": ["src/core/coder/agents/index.ts"]}
+{"query": "MCP server stdio entry point", "relevant_files": ["src/apps/mcp-server/index.ts"]}
+{"query": "snapshots full text search service", "relevant_files": ["src/core/services/snapshots.ts"]}
+{"query": "history compaction tool result pruning", "relevant_files": ["src/core/coder/core/compaction.ts"]}
+{"query": "migration 071 file index tier", "relevant_files": ["src/store/migrations/071_file_index_tier.ts"]}
+{"query": "migration 070 index hygiene vector dedup", "relevant_files": ["src/store/migrations/070_index_hygiene.ts"]}
+{"query": "provider factory and registry", "relevant_files": ["src/core/providers/factory.ts", "src/core/providers/registry.ts"]}
+{"query": "cost tracker records embedding usage", "relevant_files": ["src/core/indexer/indexer.ts"]}
+{"query": "search context bundling helper for coder bootstrap", "relevant_files": ["src/core/bootstrap/search-bundle.ts"]}
+{"query": "HTTP API dashboard hono server", "relevant_files": ["src/apps/http-api/server.ts"]}

@@ -8,7 +8,7 @@ import type { ChatProvider, CoderProviderName } from './providers/adapter.js';
 import { ToolRegistry } from './core/registry.js';
 import { CoderRunner } from './core/runner.js';
 import { buildSystemPrompt } from './core/system-prompt.js';
-import { buildRepoMap } from './core/repo-map.js';
+import { buildRepoMap, resolveRepoMapBudget } from './core/repo-map.js';
 import { fsTools } from './tools/fs.js';
 import { applyPatchTool } from './tools/apply-patch.js';
 import { shellTools } from './tools/shell.js';
@@ -864,11 +864,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   }
 
-  // Optional repo map (B6). Off by default — set CODER_REPOMAP_TOKENS to a
-  // char budget (e.g. 4000 ≈ 1000 tokens) to enable. Skipped when the
-  // project has never been indexed (no symbols to map).
-  const repoMapBudget = Number(process.env.CODER_REPOMAP_TOKENS ?? 0);
-  const repoMap = repoMapBudget > 0 && isIndexed
+  // Optional repo map (B6). Auto-sized by indexed file count: 0 (<50 files),
+  // 1500 chars (50-499), 3000 (500-1999), 4500 (≥2000). Set CODER_REPOMAP_TOKENS
+  // to a positive integer to override the auto budget, or "0" to disable.
+  // Skipped when the project has never been indexed (no symbols to map).
+  const repoMapBudget = resolveRepoMapBudget(db, project.id, isIndexed);
+  const repoMap = repoMapBudget > 0
     ? buildRepoMap(db, project.id, repoMapBudget)
     : '';
 

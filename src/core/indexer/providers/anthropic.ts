@@ -14,6 +14,14 @@ type AnthropicTextResponse = {
 export class AnthropicProvider implements LLMProvider {
   readonly name: string;
   readonly model: string;
+  /**
+   * Cheap model used for summary-only analysis. Defaults to claude-haiku-4-5.
+   * Lets callers pick an expensive `model` (e.g. claude-opus-4-7) for full
+   * structural analysis while keeping summaries on haiku. Override via
+   * `opts.summaryModel`. Anthropic's API is single-vendor, so a default is
+   * always safe — unlike OpenAI-compat wrappers that proxy to other vendors.
+   */
+  readonly summaryModel: string;
   private client: Anthropic;
   private defaultMetadata?: Anthropic.Metadata;
   private defaultBetas?: string[];
@@ -37,10 +45,12 @@ export class AnthropicProvider implements LLMProvider {
       fetch?: typeof fetch;
       useBetaMessages?: boolean;
       name?: string;
+      summaryModel?: string;
     },
   ) {
     this.name = opts?.name ?? 'anthropic';
     this.model = model ?? 'claude-haiku-4-5-20251001';
+    this.summaryModel = opts?.summaryModel ?? 'claude-haiku-4-5-20251001';
     this.defaultMetadata = opts?.defaultMetadata;
     this.defaultBetas = opts?.defaultBetas;
     this.defaultTemperature = opts?.defaultTemperature;
@@ -102,7 +112,7 @@ export class AnthropicProvider implements LLMProvider {
     symbols: Array<{ name: string; kind: string; signature: string; line?: number | null; end_line?: number }>
   ): Promise<AnalysisResult> {
     const params = {
-      model: this.model,
+      model: this.summaryModel,
       max_tokens: 1024,
       system: this.buildSystem(SUMMARY_ONLY_SYSTEM_PROMPT),
       messages: [{ role: 'user', content: buildSummaryUserPrompt(filePath, content, symbols) }],
