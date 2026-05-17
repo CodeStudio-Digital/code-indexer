@@ -6,7 +6,7 @@
  * `wait_exponential_jitter(initial=0.3, max=5, jitter=0.5)`.
  */
 import { describe, it, expect } from 'vitest';
-import { backoffDelayMs } from '../core/coder/core/runner.js';
+import { backoffDelayMs } from '@mcp/code-agent/core/runner.js';
 
 describe('backoffDelayMs', () => {
   it('returns ~initial on attempt 1 with no jitter', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bumpSemver, formatSemver, parseSemver, resolveBumpKind } from '../core/design-system/semver-bump.js';
+import { bumpSemver, formatSemver, parseSemver, resolveBumpKind } from '@mcp/design-system/semver-bump.js';
 
 describe('semver-bump (design-system)', () => {
   describe('parseSemver', () => {

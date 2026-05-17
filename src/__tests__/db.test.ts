@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { computeStableId } from '../store/migrations/002_symbol_stable_id.js';
-import type { LLMSymbol } from '../types.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { computeStableId } from '@mcp/store/migrations/002_symbol_stable_id.js';
+import type { LLMSymbol } from '@mcp/shared/types.js';
 
 function mkSym(overrides: Partial<LLMSymbol> = {}): LLMSymbol {
   return {

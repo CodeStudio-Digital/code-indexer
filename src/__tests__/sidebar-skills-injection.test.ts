@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '../store/db.js';
-import { SkillStore } from '../store/skill-store.js';
-import { SessionStore } from '../core/coder/sessions/store.js';
-import { enrichContentWithActiveSkills } from '../apps/http-api/server/routes/coder/active-skills.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { SkillStore } from '@mcp/store/skill-store.js';
+import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import { enrichContentWithActiveSkills } from '@apps/http-api/server/routes/coder/active-skills.js';
 
 describe('enrichContentWithActiveSkills — manual skill picks from sidebar', () => {
   let dir: string;

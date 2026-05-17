@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TsLanguageService } from '../core/coder/lsp/ts-service.js';
+import { TsLanguageService } from '@mcp/code-agent/lsp/ts-service.js';
 
 /**
  * Integration test for the in-process TypeScript language service.

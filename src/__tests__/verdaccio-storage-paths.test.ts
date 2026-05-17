@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { join, resolve, sep } from 'node:path';
-import { resolveStorageBindPath } from '../core/verdaccio/storage-paths.js';
+import { resolveStorageBindPath } from '@mcp/services/verdaccio/storage-paths.js';
 
 describe('resolveStorageBindPath', () => {
   it('defaults to <cwd>/data/packages alongside virtual-projects + design-system-uploads', () => {

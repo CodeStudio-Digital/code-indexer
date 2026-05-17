@@ -13,11 +13,11 @@
  * a typed runner-side mechanism that any polling tool can opt into.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { CoderRunner } from '../core/coder/core/runner.js';
-import { ToolRegistry } from '../core/coder/core/registry.js';
-import type { CoderTool } from '../core/coder/core/tool.js';
-import type { ChatProvider, ChatRequest } from '../core/coder/providers/adapter.js';
-import type { ChatDelta } from '../core/coder/core/messages.js';
+import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import type { CoderTool } from '@mcp/code-agent/core/tool.js';
+import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 
 /**
  * Provider that emits the same (toolName, toolInput) every turn for

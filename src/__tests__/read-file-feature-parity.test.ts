@@ -2,10 +2,10 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { fileTools } from '../apps/mcp-server/tools/file.js';
-import { fsTools } from '../core/coder/tools/fs.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { fileTools } from '@apps/mcp-server/tools/file.js';
+import { fsTools } from '@mcp/code-agent/tools/fs.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 /**
  * Feature parity between native read_file (src/core/coder/tools/fs.ts) and

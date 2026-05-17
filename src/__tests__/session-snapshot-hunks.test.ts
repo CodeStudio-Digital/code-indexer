@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyHunkRevert, computeHunks } from '../core/services/snapshot-hunks.js';
+import { applyHunkRevert, computeHunks } from '@mcp/services/services/snapshot-hunks.js';
 
 describe('snapshot-hunks — computeHunks', () => {
   it('returns no hunks when before == after', () => {

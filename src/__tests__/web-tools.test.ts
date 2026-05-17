@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { webFetch, webSearch } from '../core/coder/tools/web.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+import { webFetch, webSearch } from '@mcp/code-agent/tools/web.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 

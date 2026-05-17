@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { parseTestPlanSections } from '../core/qa/parsers/parse-test-plan.js';
-import { matchPlanToResults } from '../core/qa/parsers/match-plan-to-results.js';
+import { parseTestPlanSections } from '@mcp/services/qa/parsers/parse-test-plan.js';
+import { matchPlanToResults } from '@mcp/services/qa/parsers/match-plan-to-results.js';
 import {
   formatRunStatus,
   formatTestStatus,
   summariseRun,
   formatDurationMs,
-} from '../core/qa/parsers/run-status-format.js';
-import type { QaTestResult } from '../core/qa/types.js';
+} from '@mcp/services/qa/parsers/run-status-format.js';
+import type { QaTestResult } from '@mcp/services/qa/types.js';
 
 // ─── parseTestPlanSections ───────────────────────────────────────
 

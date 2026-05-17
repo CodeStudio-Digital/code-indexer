@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { SnapshotService } from '../core/services/snapshots.js';
-import { HybridSearch } from '../core/search/hybrid.js';
-import { NullEmbeddingService } from '../core/search/embeddings.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { SnapshotService } from '@mcp/services/services/snapshots.js';
+import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
+import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 
 describe('get_project_context (semantic mode)', () => {
   let dir: string;

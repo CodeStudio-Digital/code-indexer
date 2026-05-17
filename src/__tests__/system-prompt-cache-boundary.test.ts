@@ -18,7 +18,7 @@ import {
   buildSystemPrompt,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
   type PromptContext,
-} from '../core/coder/core/system-prompt.js';
+} from '@mcp/code-agent/core/system-prompt.js';
 
 const baseCtx: PromptContext = {
   projectName: 'whatsapp-pro-api',

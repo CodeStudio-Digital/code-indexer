@@ -8,7 +8,7 @@ import {
   resolveRunReportDir,
   resolveRetainRuns,
   resolveDefaultMaxBytes,
-} from '../core/qa/report-persistence.js';
+} from '@mcp/services/qa/report-persistence.js';
 
 /**
  * Unit tests for the host-side artifact persistence helper. Uses a fake

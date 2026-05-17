@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { buildCodeExecTool, _exposedToolNames } from '../core/coder/tools/code-exec.js';
-import { ToolRegistry } from '../core/coder/core/registry.js';
-import type { CoderTool, ToolContext } from '../core/coder/core/tool.js';
+import { buildCodeExecTool, _exposedToolNames } from '@mcp/code-agent/tools/code-exec.js';
+import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const ctx: ToolContext = { cwd: '/tmp', projectName: 'test' };
 

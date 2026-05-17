@@ -11,11 +11,11 @@
     "mcp-code-indexer-server": "./dist/apps/mcp-server/index.js"
   },
   "scripts": {
-    "build": "tsc && node scripts/copy-prompts.mjs",
-    "build:dashboard": "vite build src/apps/dashboard",
-    "build:all": "tsc && node scripts/copy-prompts.mjs && vite build src/apps/dashboard",
-    "dev:server": "tsx watch src/apps/http-api/server.ts",
-    "dev:dashboard": "vite dev src/apps/dashboard",
+    "build": "tsc && tsc-alias && node scripts/copy-prompts.mjs",
+    "build:dashboard": "vite build apps/dashboard",
+    "build:all": "tsc && tsc-alias && node scripts/copy-prompts.mjs && vite build apps/dashboard",
+    "dev:server": "tsx watch apps/http-api/server.ts",
+    "dev:dashboard": "vite dev apps/dashboard",
     "better-sqlite3": "npm rebuild better-sqlite3",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:dashboard\"",
     "start": "node --max-old-space-size=8192 dist/apps/cli/index.js",
@@ -24,6 +24,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "postinstall": "pnpm rebuild better-sqlite3",
     "eval": "tsx src/benchmarks/search-quality.ts --project mcp-code-indexer",
     "eval:strict": "tsx src/benchmarks/search-quality.ts --project mcp-code-indexer --min-recall 0.7"
   },
@@ -99,6 +100,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tailwindcss": "^4.0.14",
+    "tsc-alias": "^1.8.17",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vite": "^6.2.4",

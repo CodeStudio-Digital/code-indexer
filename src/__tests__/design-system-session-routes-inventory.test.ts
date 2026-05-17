@@ -7,7 +7,7 @@ import { Hono } from 'hono';
 import {
   DS_SOURCE_DIRNAME,
   mountDesignSystemSessionRoutes,
-} from '../apps/http-api/server/routes/design-system/sessions.js';
+} from '@apps/http-api/server/routes/design-system/sessions.js';
 
 describe('design-system session routes source inventory', () => {
   let dir: string;

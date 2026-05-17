@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { hasQaPlaywrightSkill } from '../core/coder/company/services/SandboxService.js';
+import { hasQaPlaywrightSkill } from '@mcp/company/services/SandboxService.js';
 import {
   resolveIncludeE2e,
   getScaffolder,
-} from '../core/sandbox/scaffolders/registry.js';
+} from '@mcp/services/sandbox/scaffolders/registry.js';
 
 // ─── hasQaPlaywrightSkill ────────────────────────────────────────
 

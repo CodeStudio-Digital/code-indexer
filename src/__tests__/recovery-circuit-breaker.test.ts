@@ -10,10 +10,10 @@
  *     per-kind cap is exceeded (R1).
  */
 import { describe, it, expect } from 'vitest';
-import { CoderRunner } from '../core/coder/core/runner.js';
-import { ToolRegistry } from '../core/coder/core/registry.js';
-import type { ChatProvider, ChatRequest } from '../core/coder/providers/adapter.js';
-import type { ChatDelta } from '../core/coder/core/messages.js';
+import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 
 /**
  * Throws a `status: 429` (or any configurable status) for the first N calls

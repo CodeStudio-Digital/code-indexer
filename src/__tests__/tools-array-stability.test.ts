@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { ToolRegistry } from '../core/coder/core/registry.js';
-import { terseDescription, maybeTerse } from '../core/coder/tools/descriptions.js';
-import type { CoderTool } from '../core/coder/core/tool.js';
+import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import { terseDescription, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
+import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 
 /**
  * The runner's `buildTools` closure (runner.ts) ships an alphabetically

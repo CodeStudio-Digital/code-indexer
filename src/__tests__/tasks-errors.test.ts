@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { executeTask } from '../core/coder/tools/tasks.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
-import type { TasksState, CoderTask } from '../core/coder/sessions/types.js';
+import { executeTask } from '@mcp/code-agent/tools/tasks.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { TasksState, CoderTask } from '@mcp/code-agent/sessions/types.js';
 
 function task(partial: Partial<CoderTask> & { id: string; title: string }): CoderTask {
   return {

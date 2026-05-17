@@ -7,7 +7,7 @@ import {
   extractPackedTarballName,
   hashTarball,
   shortenError,
-} from '../core/coder/tools/company/design-system/ds-publish-version.js';
+} from '@mcp/company/tools/design-system/ds-publish-version.js';
 
 describe('extractPackedTarballName', () => {
   it('reads the filename from npm pack --silent output (single line)', () => {

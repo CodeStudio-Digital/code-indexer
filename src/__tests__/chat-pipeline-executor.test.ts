@@ -14,15 +14,15 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { CodeIndexDB } from '../store/db.js';
-import { CompanyStore } from '../store/company-store.js';
-import { SessionStore } from '../core/coder/sessions/store.js';
-import { ChatPipelineExecutor } from '../core/coder/pipelines/ChatPipelineExecutor.js';
-import { createChatPipelineBus, type ChatPipelineEvent } from '../core/coder/pipelines/lib/eventBus.js';
-import type { ChatProvider, ChatRequest } from '../core/coder/providers/adapter.js';
-import type { ChatDelta } from '../core/coder/core/messages.js';
-import type { CoderTool } from '../core/coder/core/tool.js';
-import type { PipelineGraph } from '../core/coder/company/types.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { CompanyStore } from '@mcp/store/company-store.js';
+import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import { ChatPipelineExecutor } from '@mcp/code-agent/pipelines/ChatPipelineExecutor.js';
+import { createChatPipelineBus, type ChatPipelineEvent } from '@mcp/code-agent/pipelines/lib/eventBus.js';
+import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
+import type { CoderTool } from '@mcp/code-agent/core/tool.js';
+import type { PipelineGraph } from '@mcp/company/types.js';
 
 // ─── Stub provider ──────────────────────────────────────────────
 

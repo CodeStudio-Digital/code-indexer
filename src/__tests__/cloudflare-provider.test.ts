@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const openAIChatCalls: Array<Record<string, unknown>> = [];
 const openAIIndexerCalls: Array<{ apiKey?: string; model?: string; baseURL?: string }> = [];
 
-vi.mock('../core/coder/providers/openai.js', () => ({
+vi.mock('@mcp/code-agent/providers/openai.js', () => ({
   OpenAIChatProvider: vi.fn().mockImplementation(function (
     this: Record<string, unknown>,
     opts: Record<string, unknown>,
@@ -21,7 +21,7 @@ vi.mock('../core/coder/providers/openai.js', () => ({
   }),
 }));
 
-vi.mock('../core/indexer/providers/openai.js', () => ({
+vi.mock('@mcp/indexer/indexer/providers/openai.js', () => ({
   OpenAIProvider: vi.fn().mockImplementation(function (
     this: Record<string, unknown>,
     apiKey?: string,
@@ -33,8 +33,8 @@ vi.mock('../core/indexer/providers/openai.js', () => ({
   }),
 }));
 
-import type { ResolvedCreds } from '../core/providers/types.js';
-import { cloudflare } from '../core/providers/definitions/cloudflare.js';
+import type { ResolvedCreds } from '@mcp/services/providers/types.js';
+import { cloudflare } from '@mcp/services/providers/definitions/cloudflare.js';
 
 beforeEach(() => {
   openAIChatCalls.length = 0;
@@ -54,7 +54,7 @@ describe('cloudflare provider definition', () => {
 
   it('is registered in the central registry', async () => {
     const { getDefinition, listCoderKinds, listIndexerKinds } = await import(
-      '../core/providers/registry.js'
+      '@mcp/services/providers/registry.js'
     );
     expect(getDefinition('cloudflare')).toBeDefined();
     expect(listCoderKinds()).toContain('cloudflare');
@@ -155,7 +155,7 @@ describe('discoverCloudflare', () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
       const { discoverCloudflare } = await import(
-        '../apps/http-api/admin/model-discovery/cloudflare.js'
+        '@apps/http-api/admin/model-discovery/cloudflare.js'
       );
       const models = await discoverCloudflare(baseCfg);
       expect(calls[0].url).toBe(
@@ -177,7 +177,7 @@ describe('discoverCloudflare', () => {
 
   it('throws when account_id is missing on the cfg', async () => {
     const { discoverCloudflare } = await import(
-      '../apps/http-api/admin/model-discovery/cloudflare.js'
+      '@apps/http-api/admin/model-discovery/cloudflare.js'
     );
     const cfg = { ...baseCfg, extra: {} };
     await expect(discoverCloudflare(cfg)).rejects.toThrow(/account[_ ]id/i);
@@ -186,7 +186,7 @@ describe('discoverCloudflare', () => {
 
 describe('cloudflare provider — resolver wiring', () => {
   it('forwards cfg.extra through resolveCreds for api-key shapes', async () => {
-    const { resolveCreds } = await import('../core/providers/shared/resolver.js');
+    const { resolveCreds } = await import('@mcp/services/providers/shared/resolver.js');
     const cfg = {
       id: 'cf-instance',
       name: 'CF',

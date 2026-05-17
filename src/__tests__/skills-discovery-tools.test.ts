@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { buildSkillDiscoveryTools } from '../core/coder/skills/skill-tool-builder.js';
-import type { ResolvedSkill, SkillSource, SkillTemplateContext } from '../core/coder/skills/types.js';
-import type { InstalledNamespaceSummary } from '../core/coder/skills/agent-skills-installer.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+import { buildSkillDiscoveryTools } from '@mcp/code-agent/skills/skill-tool-builder.js';
+import type { ResolvedSkill, SkillSource, SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
+import type { InstalledNamespaceSummary } from '@mcp/code-agent/skills/agent-skills-installer.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const toolCtx: ToolContext = {
   cwd: '/test',

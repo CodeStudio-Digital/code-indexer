@@ -19,7 +19,7 @@ const openAICalls: Array<Record<string, unknown>> = [];
 const geminiCalls: Array<Record<string, unknown>> = [];
 const zaiIndexerCalls: Array<Record<string, unknown>> = [];
 
-vi.mock('../core/coder/providers/openai.js', () => ({
+vi.mock('@mcp/code-agent/providers/openai.js', () => ({
   OpenAIChatProvider: vi.fn().mockImplementation(function (
     this: Record<string, unknown>,
     opts: Record<string, unknown>,
@@ -29,7 +29,7 @@ vi.mock('../core/coder/providers/openai.js', () => ({
   }),
 }));
 
-vi.mock('../core/coder/providers/gemini.js', () => ({
+vi.mock('@mcp/code-agent/providers/gemini.js', () => ({
   GeminiChatProvider: vi.fn().mockImplementation(function (
     this: Record<string, unknown>,
     opts: Record<string, unknown>,
@@ -39,7 +39,7 @@ vi.mock('../core/coder/providers/gemini.js', () => ({
   }),
 }));
 
-vi.mock('../core/indexer/providers/zai.js', () => ({
+vi.mock('@mcp/indexer/indexer/providers/zai.js', () => ({
   ZAIProvider: vi.fn().mockImplementation(function (
     this: Record<string, unknown>,
     apiKey?: string,
@@ -52,39 +52,39 @@ vi.mock('../core/indexer/providers/zai.js', () => ({
 }));
 
 // Mock OAuth refresh endpoints so tests never hit the network.
-vi.mock('../core/services/oauth/copilot.js', () => ({
+vi.mock('@mcp/services/services/oauth/copilot.js', () => ({
   refreshIfExpired: vi.fn().mockResolvedValue('fresh-copilot-token'),
   copilotHeaders: () => ({ 'Editor-Version': 'vscode/1.0' }),
   getStoredCopilotOpts: () => ({ edition: 'individual' }),
 }));
-vi.mock('../core/services/oauth/openai.js', () => ({
+vi.mock('@mcp/services/services/oauth/openai.js', () => ({
   refreshIfExpired: vi.fn().mockResolvedValue('fresh-chatgpt-token'),
   CHATGPT_CODEX_BASE_URL: 'https://chatgpt.com/backend-api/codex',
 }));
-vi.mock('../core/services/oauth/google.js', () => ({
+vi.mock('@mcp/services/services/oauth/google.js', () => ({
   refreshIfExpired: vi.fn().mockResolvedValue('fresh-google-token'),
 }));
-vi.mock('../core/services/oauth/kimi-code.js', async () => {
-  const actual = await vi.importActual<typeof import('../core/services/oauth/kimi-code.js')>(
-    '../core/services/oauth/kimi-code.js',
+vi.mock('@mcp/services/services/oauth/kimi-code.js', async () => {
+  const actual = await vi.importActual<typeof import('@mcp/services/services/oauth/kimi-code.js')>(
+    '@mcp/services/services/oauth/kimi-code.js',
   );
   return {
     ...actual,
     refreshIfExpired: vi.fn().mockResolvedValue('fresh-kimi-token'),
   };
 });
-vi.mock('../core/coder/providers/chatgpt.js', async () => {
-  const actual = await vi.importActual<typeof import('../core/coder/providers/chatgpt.js')>(
-    '../core/coder/providers/chatgpt.js',
+vi.mock('@mcp/code-agent/providers/chatgpt.js', async () => {
+  const actual = await vi.importActual<typeof import('@mcp/code-agent/providers/chatgpt.js')>(
+    '@mcp/code-agent/providers/chatgpt.js',
   );
   return { ...actual, extractAccountIdFromIdToken: () => 'acct-123' };
 });
 
-import type { ProviderConfig, ProviderStore } from '../store/provider-store.js';
-import type { ResolvedCreds } from '../core/providers/types.js';
-import { parseModelWithMode } from '../core/providers/shared/model-mode.js';
-import { zai } from '../core/providers/definitions/zai.js';
-import { googleOAuth } from '../core/providers/definitions/google-oauth.js';
+import type { ProviderConfig, ProviderStore } from '@mcp/store/provider-store.js';
+import type { ResolvedCreds } from '@mcp/services/providers/types.js';
+import { parseModelWithMode } from '@mcp/services/providers/shared/model-mode.js';
+import { zai } from '@mcp/services/providers/definitions/zai.js';
+import { googleOAuth } from '@mcp/services/providers/definitions/google-oauth.js';
 
 beforeEach(() => {
   openAICalls.length = 0;
@@ -218,7 +218,7 @@ describe('lookupProvider — ZAI masquerade rewrite', () => {
       listProviders: () => [],
     } as unknown as ProviderStore;
 
-    const { lookupProvider } = await import('../core/providers/factory.js');
+    const { lookupProvider } = await import('@mcp/services/providers/factory.js');
     await withMockedStore(store, async () => {
       const { def } = await lookupProvider('zai');
       // Must dispatch to the zai shape so the coder URL heuristic runs.
@@ -248,7 +248,7 @@ describe('lookupProvider — ZAI masquerade rewrite', () => {
       listProviders: () => [],
     } as unknown as ProviderStore;
 
-    const { lookupProvider } = await import('../core/providers/factory.js');
+    const { lookupProvider } = await import('@mcp/services/providers/factory.js');
     await withMockedStore(store, async () => {
       const { def } = await lookupProvider('my-zai');
       expect(def.kind).toBe('zai');
@@ -277,7 +277,7 @@ describe('lookupProvider — ZAI masquerade rewrite', () => {
       listProviders: () => [],
     } as unknown as ProviderStore;
 
-    const { lookupProvider } = await import('../core/providers/factory.js');
+    const { lookupProvider } = await import('@mcp/services/providers/factory.js');
     await withMockedStore(store, async () => {
       const { def } = await lookupProvider('openai');
       expect(def.kind).toBe('openai');
@@ -340,7 +340,7 @@ async function withMockedStore(
   store: Pick<ProviderStore, 'getOAuth' | 'upsertProvider'>,
   fn: () => Promise<void>,
 ): Promise<void> {
-  const shared = await import('../core/providers/shared/store.js');
+  const shared = await import('@mcp/services/providers/shared/store.js');
   shared.__setStoreForTests(store as unknown as ProviderStore);
   try {
     await fn();
@@ -370,7 +370,7 @@ const baseCfg: ProviderConfig = {
 describe('resolveCopilotCreds — api_key mirror writeback', () => {
   it('writes the fresh token back to providers.api_key when it changed', async () => {
     const { store, upsertCalls } = fakeStore();
-    const { resolveCopilotCreds } = await import('../core/providers/shared/oauth.js');
+    const { resolveCopilotCreds } = await import('@mcp/services/providers/shared/oauth.js');
     await withMockedStore(store, async () => {
       const creds = await resolveCopilotCreds({ ...baseCfg, api_key: 'stale-token' });
       expect(creds.apiKey).toBe('fresh-copilot-token');
@@ -381,7 +381,7 @@ describe('resolveCopilotCreds — api_key mirror writeback', () => {
 
   it('does not write back when the refresh returned the same token', async () => {
     const { store, upsertCalls } = fakeStore();
-    const { resolveCopilotCreds } = await import('../core/providers/shared/oauth.js');
+    const { resolveCopilotCreds } = await import('@mcp/services/providers/shared/oauth.js');
     await withMockedStore(store, async () => {
       const creds = await resolveCopilotCreds({ ...baseCfg, api_key: 'fresh-copilot-token' });
       expect(creds.apiKey).toBe('fresh-copilot-token');
@@ -393,7 +393,7 @@ describe('resolveCopilotCreds — api_key mirror writeback', () => {
 describe('resolveChatGPTCreds — api_key mirror writeback', () => {
   it('writes the fresh token back to providers.api_key when it changed', async () => {
     const { store, upsertCalls } = fakeStore();
-    const { resolveChatGPTCreds } = await import('../core/providers/shared/oauth.js');
+    const { resolveChatGPTCreds } = await import('@mcp/services/providers/shared/oauth.js');
     await withMockedStore(store, async () => {
       const cfg: ProviderConfig = { ...baseCfg, kind: 'chatgpt', api_key: 'stale-token' };
       const creds = await resolveChatGPTCreds(cfg);
@@ -405,7 +405,7 @@ describe('resolveChatGPTCreds — api_key mirror writeback', () => {
 
   it('also surfaces the extracted accountId', async () => {
     const { store } = fakeStore();
-    const { resolveChatGPTCreds } = await import('../core/providers/shared/oauth.js');
+    const { resolveChatGPTCreds } = await import('@mcp/services/providers/shared/oauth.js');
     await withMockedStore(store, async () => {
       const cfg: ProviderConfig = { ...baseCfg, kind: 'chatgpt', api_key: 'stale-token' };
       const creds = await resolveChatGPTCreds(cfg);
@@ -417,7 +417,7 @@ describe('resolveChatGPTCreds — api_key mirror writeback', () => {
 describe('resolveGoogleOAuthCreds — api_key mirror writeback', () => {
   it('writes the fresh token back to providers.api_key when it changed', async () => {
     const { store, upsertCalls } = fakeStore();
-    const { resolveGoogleOAuthCreds } = await import('../core/providers/shared/oauth.js');
+    const { resolveGoogleOAuthCreds } = await import('@mcp/services/providers/shared/oauth.js');
     await withMockedStore(store, async () => {
       const cfg: ProviderConfig = { ...baseCfg, kind: 'google-oauth', api_key: 'stale-token' };
       const creds = await resolveGoogleOAuthCreds(cfg);
@@ -429,7 +429,7 @@ describe('resolveGoogleOAuthCreds — api_key mirror writeback', () => {
 
   it('exposes refreshToken and projectId from oauth_tokens row', async () => {
     const { store } = fakeStore();
-    const { resolveGoogleOAuthCreds } = await import('../core/providers/shared/oauth.js');
+    const { resolveGoogleOAuthCreds } = await import('@mcp/services/providers/shared/oauth.js');
     await withMockedStore(store, async () => {
       const cfg: ProviderConfig = { ...baseCfg, kind: 'google-oauth', api_key: 'stale-token' };
       const creds = await resolveGoogleOAuthCreds(cfg);
@@ -442,7 +442,7 @@ describe('resolveGoogleOAuthCreds — api_key mirror writeback', () => {
 describe('resolveKimiCodeCreds — api_key mirror writeback', () => {
   it('writes the fresh token back to providers.api_key when it changed', async () => {
     const { store, upsertCalls } = fakeStore();
-    const { resolveKimiCodeCreds } = await import('../core/providers/shared/oauth.js');
+    const { resolveKimiCodeCreds } = await import('@mcp/services/providers/shared/oauth.js');
     await withMockedStore(store, async () => {
       const cfg: ProviderConfig = {
         ...baseCfg,

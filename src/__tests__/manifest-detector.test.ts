@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { detectManifest } from '../core/sandbox/manifest-detector/detect.js';
+import { detectManifest } from '@mcp/services/sandbox/manifest-detector/detect.js';
 
 describe('detectManifest', () => {
   let root: string;

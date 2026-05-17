@@ -16,7 +16,7 @@ const indexerCalls: Array<{
   defaultHeaders?: Record<string, string>;
 }> = [];
 
-vi.mock('../core/coder/providers/kimi-code.js', () => ({
+vi.mock('@mcp/code-agent/providers/kimi-code.js', () => ({
   KimiCodeChatProvider: vi.fn().mockImplementation(function (
     this: Record<string, unknown>,
     opts: Record<string, unknown>,
@@ -26,7 +26,7 @@ vi.mock('../core/coder/providers/kimi-code.js', () => ({
   }),
 }));
 
-vi.mock('../core/indexer/providers/kimi-code.js', () => ({
+vi.mock('@mcp/indexer/indexer/providers/kimi-code.js', () => ({
   KimiCodeProvider: vi.fn().mockImplementation(function (
     this: Record<string, unknown>,
     apiKey?: string,
@@ -39,8 +39,8 @@ vi.mock('../core/indexer/providers/kimi-code.js', () => ({
   }),
 }));
 
-import { moonshot } from '../core/providers/definitions/moonshot.js';
-import type { ResolvedCreds } from '../core/providers/types.js';
+import { moonshot } from '@mcp/services/providers/definitions/moonshot.js';
+import type { ResolvedCreds } from '@mcp/services/providers/types.js';
 
 beforeEach(() => {
   chatCalls.length = 0;
@@ -58,7 +58,7 @@ describe('moonshot provider definition', () => {
 
   it('is registered alongside kimi-code without colliding', async () => {
     const { getDefinition, listCoderKinds, listIndexerKinds } = await import(
-      '../core/providers/registry.js'
+      '@mcp/services/providers/registry.js'
     );
     expect(getDefinition('moonshot')).toBeDefined();
     expect(getDefinition('kimi-code')).toBeDefined();
@@ -152,7 +152,7 @@ describe('discoverMoonshot', () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
       const { discoverMoonshot } = await import(
-        '../apps/http-api/admin/model-discovery/moonshot.js'
+        '@apps/http-api/admin/model-discovery/moonshot.js'
       );
       const models = await discoverMoonshot(baseCfg);
       expect(calls[0].url).toBe('https://api.moonshot.ai/v1/models');
@@ -180,7 +180,7 @@ describe('discoverMoonshot', () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
       const { discoverMoonshot } = await import(
-        '../apps/http-api/admin/model-discovery/moonshot.js'
+        '@apps/http-api/admin/model-discovery/moonshot.js'
       );
       await discoverMoonshot({ ...baseCfg, base_url: 'https://api.moonshot.cn/v1/' });
       expect(calls[0].url).toBe('https://api.moonshot.cn/v1/models');
@@ -195,7 +195,7 @@ describe('discoverMoonshot', () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
       const { discoverMoonshot } = await import(
-        '../apps/http-api/admin/model-discovery/moonshot.js'
+        '@apps/http-api/admin/model-discovery/moonshot.js'
       );
       await expect(discoverMoonshot(baseCfg)).rejects.toThrow(/HTTP 403/);
     } finally {

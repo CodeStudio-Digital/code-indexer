@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { validateArgv, ALLOWED_PROGRAMS } from '../core/sandbox/command-synth/allowlist.js';
-import { fallbackCommand } from '../core/sandbox/command-synth/fallback-rules.js';
-import type { ManifestInfo } from '../core/sandbox/manifest-detector/types.js';
-import { extractFirstJson } from '../core/ai-general/extract-json.js';
+import { validateArgv, ALLOWED_PROGRAMS } from '@mcp/services/sandbox/command-synth/allowlist.js';
+import { fallbackCommand } from '@mcp/services/sandbox/command-synth/fallback-rules.js';
+import type { ManifestInfo } from '@mcp/services/sandbox/manifest-detector/types.js';
+import { extractFirstJson } from '@mcp/services/ai-general/extract-json.js';
 
 describe('validateArgv', () => {
   it('accepts npm run dev with a PORT env', () => {
@@ -248,14 +248,14 @@ describe('synthesizeStartCommand', () => {
   };
 
   it('uses fallback when useAi is false', async () => {
-    const { synthesizeStartCommand } = await import('../core/sandbox/command-synth/synthesize.js');
+    const { synthesizeStartCommand } = await import('@mcp/services/sandbox/command-synth/synthesize.js');
     const r = await synthesizeStartCommand(NODE_MANIFEST, 34100, { useAi: false });
     expect(r.source).toBe('fallback');
     expect(r.command.program).toBe('npm');
   });
 
   it('falls back when AI is not configured', async () => {
-    vi.doMock('../core/ai-general/generalClient.js', () => ({
+    vi.doMock('@mcp/services/ai-general/generalClient.js', () => ({
       GeneralAiNotConfiguredError: class GeneralAiNotConfiguredError extends Error {
         constructor() {
           super('not configured');
@@ -263,17 +263,17 @@ describe('synthesizeStartCommand', () => {
         }
       },
       runGeneralAi: vi.fn(async () => {
-        const { GeneralAiNotConfiguredError } = await import('../core/ai-general/generalClient.js');
+        const { GeneralAiNotConfiguredError } = await import('@mcp/services/ai-general/generalClient.js');
         throw new GeneralAiNotConfiguredError();
       }),
     }));
-    const { synthesizeStartCommand } = await import('../core/sandbox/command-synth/synthesize.js');
+    const { synthesizeStartCommand } = await import('@mcp/services/sandbox/command-synth/synthesize.js');
     const r = await synthesizeStartCommand(NODE_MANIFEST, 34100, { useAi: true });
     expect(r.source).toBe('fallback');
   });
 
   it('uses AI output when valid', async () => {
-    vi.doMock('../core/ai-general/generalClient.js', () => ({
+    vi.doMock('@mcp/services/ai-general/generalClient.js', () => ({
       GeneralAiNotConfiguredError: class extends Error {},
       runGeneralAi: vi.fn(
         async () =>
@@ -281,7 +281,7 @@ describe('synthesizeStartCommand', () => {
           '"env":{},"readyProbe":{"kind":"http","path":"/"},"rationale":"direct vite"}',
       ),
     }));
-    const { synthesizeStartCommand } = await import('../core/sandbox/command-synth/synthesize.js');
+    const { synthesizeStartCommand } = await import('@mcp/services/sandbox/command-synth/synthesize.js');
     const r = await synthesizeStartCommand(NODE_MANIFEST, 34100, { useAi: true });
     expect(r.source).toBe('ai');
     expect(r.command.program).toBe('npx');
@@ -290,7 +290,7 @@ describe('synthesizeStartCommand', () => {
   });
 
   it('falls back when AI picks a banned program', async () => {
-    vi.doMock('../core/ai-general/generalClient.js', () => ({
+    vi.doMock('@mcp/services/ai-general/generalClient.js', () => ({
       GeneralAiNotConfiguredError: class extends Error {},
       runGeneralAi: vi.fn(
         async () =>
@@ -298,7 +298,7 @@ describe('synthesizeStartCommand', () => {
           '"readyProbe":{"kind":"http","path":"/"},"rationale":"shell"}',
       ),
     }));
-    const { synthesizeStartCommand } = await import('../core/sandbox/command-synth/synthesize.js');
+    const { synthesizeStartCommand } = await import('@mcp/services/sandbox/command-synth/synthesize.js');
     const r = await synthesizeStartCommand(NODE_MANIFEST, 34100, { useAi: true });
     expect(r.source).toBe('fallback-after-ai-failure');
     expect(r.aiFailureReason).toMatch(/allowlist/);
@@ -306,21 +306,21 @@ describe('synthesizeStartCommand', () => {
   });
 
   it('falls back when AI returns non-JSON', async () => {
-    vi.doMock('../core/ai-general/generalClient.js', () => ({
+    vi.doMock('@mcp/services/ai-general/generalClient.js', () => ({
       GeneralAiNotConfiguredError: class extends Error {},
       runGeneralAi: vi.fn(async () => 'I would run `npm run dev`.'),
     }));
-    const { synthesizeStartCommand } = await import('../core/sandbox/command-synth/synthesize.js');
+    const { synthesizeStartCommand } = await import('@mcp/services/sandbox/command-synth/synthesize.js');
     const r = await synthesizeStartCommand(NODE_MANIFEST, 34100, { useAi: true });
     expect(r.source).toBe('fallback-after-ai-failure');
   });
 
   it('falls back when AI returns JSON with wrong shape', async () => {
-    vi.doMock('../core/ai-general/generalClient.js', () => ({
+    vi.doMock('@mcp/services/ai-general/generalClient.js', () => ({
       GeneralAiNotConfiguredError: class extends Error {},
       runGeneralAi: vi.fn(async () => '{"program":"npm"}'),
     }));
-    const { synthesizeStartCommand } = await import('../core/sandbox/command-synth/synthesize.js');
+    const { synthesizeStartCommand } = await import('@mcp/services/sandbox/command-synth/synthesize.js');
     const r = await synthesizeStartCommand(NODE_MANIFEST, 34100, { useAi: true });
     expect(r.source).toBe('fallback-after-ai-failure');
   });

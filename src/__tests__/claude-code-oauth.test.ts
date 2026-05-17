@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ProviderStore, OAuthTokenRow } from '../store/provider-store.js';
+import type { ProviderStore, OAuthTokenRow } from '@mcp/store/provider-store.js';
 import {
   __setClaudeCodeFetchForTests,
   buildClaudeCodeAuthUrl,
@@ -9,7 +9,7 @@ import {
   claudeCodeAuthHeaders,
   createClaudeCodeFetchWithRetry,
   parseClaudeCodeRateLimitHeaders,
-} from '../core/services/oauth/claude-code.js';
+} from '@mcp/services/services/oauth/claude-code.js';
 
 afterEach(() => {
   __setClaudeCodeFetchForTests(null);

@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { ProviderStore, type ProviderKind } from '../store/provider-store.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { ProviderStore, type ProviderKind } from '@mcp/store/provider-store.js';
 
 function providerInput(id: string, kind: ProviderKind = 'openai') {
   return {

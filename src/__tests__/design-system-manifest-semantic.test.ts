@@ -6,7 +6,7 @@ import {
   validateDesignSystemManifestFile,
   validateManifestSemantic,
   type DesignSystemManifestV2,
-} from '../core/design-system/manifest-schema.js';
+} from '@mcp/design-system/manifest-schema.js';
 
 describe('manifest semantic validation', () => {
   let dir: string;

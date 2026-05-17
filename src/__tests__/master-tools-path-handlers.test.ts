@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildMasterTools } from '../core/coder/tools/company/master-tools.js';
-import type { CoderTool, ToolContext } from '../core/coder/core/tool.js';
-import type { CompanyOrchestrator } from '../core/coder/company/orchestrator.js';
+import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
+import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 
 const ctx: ToolContext = { cwd: '/tmp', projectName: 'test' };
 

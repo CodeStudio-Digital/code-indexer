@@ -5,8 +5,8 @@ import {
   generateTodoId,
   _resetWriteBurstForKey,
   type TodoItem,
-} from '../core/coder/tools/todo.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+} from '@mcp/code-agent/tools/todo.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const ctx = (): ToolContext => ({ cwd: '/fake', projectName: 'test' });
 

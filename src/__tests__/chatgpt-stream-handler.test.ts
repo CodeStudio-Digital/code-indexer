@@ -9,9 +9,9 @@
  * async iterable of SSE events, then run `chat()` and collect the deltas.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { ChatGPTCodexProvider } from '../core/coder/providers/chatgpt.js';
-import type { ChatRequest } from '../core/coder/providers/adapter.js';
-import type { ChatDelta } from '../core/coder/core/messages.js';
+import { ChatGPTCodexProvider } from '@mcp/code-agent/providers/chatgpt.js';
+import type { ChatRequest } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 
 async function* events(...evts: Record<string, unknown>[]): AsyncIterable<Record<string, unknown>> {
   for (const e of evts) yield e;

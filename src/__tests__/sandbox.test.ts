@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { PortAllocator } from '../core/sandbox/port-allocator.js';
-import { SandboxFilesystemAdapter } from '../core/sandbox/adapters/sandbox-filesystem-adapter.js';
-import { SandboxShellAdapter } from '../core/sandbox/adapters/sandbox-shell-adapter.js';
+import { PortAllocator } from '@mcp/services/sandbox/port-allocator.js';
+import { SandboxFilesystemAdapter } from '@mcp/services/sandbox/adapters/sandbox-filesystem-adapter.js';
+import { SandboxShellAdapter } from '@mcp/services/sandbox/adapters/sandbox-shell-adapter.js';
 import {
   SandboxManager,
   sessionNetworkName,
   setCompanySandboxServicesStore,
   setCompanySandboxStore,
-} from '../core/sandbox/sandbox-manager.js';
-import { setDriverForTests } from '../core/sandbox/drivers/driver-factory.js';
+} from '@mcp/services/sandbox/sandbox-manager.js';
+import { setDriverForTests } from '@mcp/services/sandbox/drivers/driver-factory.js';
 import type {
   ISandboxDriver,
   SandboxCreateSpec,
@@ -17,8 +17,8 @@ import type {
   SandboxInspectResult,
   SandboxReaddirEntry,
   SandboxStatsSample,
-} from '../core/sandbox/ports/sandbox-driver.js';
-import type { Sandbox } from '../core/sandbox/types.js';
+} from '@mcp/services/sandbox/ports/sandbox-driver.js';
+import type { Sandbox } from '@mcp/services/sandbox/types.js';
 
 /**
  * A minimal in-memory driver mock — zero dependency on Docker/Podman.

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { NodeOnlyScaffolder } from '../core/sandbox/scaffolders/node-only-scaffolder.js';
-import { getScaffolder } from '../core/sandbox/scaffolders/registry.js';
-import type { ISandboxDriver } from '../core/sandbox/ports/sandbox-driver.js';
-import type { SandboxEvent } from '../core/sandbox/types.js';
+import { NodeOnlyScaffolder } from '@mcp/services/sandbox/scaffolders/node-only-scaffolder.js';
+import { getScaffolder } from '@mcp/services/sandbox/scaffolders/registry.js';
+import type { ISandboxDriver } from '@mcp/services/sandbox/ports/sandbox-driver.js';
+import type { SandboxEvent } from '@mcp/services/sandbox/types.js';
 
 function buildCtx() {
   const events: SandboxEvent[] = [];

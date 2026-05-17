@@ -11,11 +11,11 @@
  * (persistence + don't re-read) appended when the parent runs with v2.
  */
 import { describe, it, expect } from 'vitest';
-import { CoderRunner } from '../core/coder/core/runner.js';
-import { ToolRegistry } from '../core/coder/core/registry.js';
-import type { ChatProvider, ChatRequest } from '../core/coder/providers/adapter.js';
-import type { ChatDelta } from '../core/coder/core/messages.js';
-import { buildSubagentLoopFraming } from '../core/coder/core/system-prompt.js';
+import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
+import { buildSubagentLoopFraming } from '@mcp/code-agent/core/system-prompt.js';
 
 class TextOnlyProvider implements ChatProvider {
   readonly name = 'stub';
@@ -65,7 +65,7 @@ function makeRunner(provider: ChatProvider, isSubagent: boolean, hookRegistry: F
     isSubagent,
     // The runner type accepts a registry-like object via duck typing; we
     // cast through unknown to satisfy the more specific type.
-    hookRegistry: hookRegistry as unknown as Parameters<typeof CoderRunner.prototype.constructor>[0]['hookRegistry'],
+    hookRegistry: hookRegistry as unknown as ConstructorParameters<typeof CoderRunner>[0]['hookRegistry'],
   });
 }
 
@@ -112,7 +112,7 @@ describe('PR-6 R23 — buildSubagentLoopFraming exports a discipline block', () 
 
 describe('PR-6 R23 — agentLoopV2 propagation type contract', () => {
   it('SubagentParent accepts agentLoopV2 (compile-time check)', async () => {
-    const { runSubagent } = await import('../core/coder/tools/implement-subagent.js');
+    const { runSubagent } = await import('@mcp/code-agent/tools/implement-subagent.js');
     // Type-check only — we never invoke this.
     void (async () => {
       void runSubagent;

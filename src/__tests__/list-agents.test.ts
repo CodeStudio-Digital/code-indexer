@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { listAgents } from '../core/coder/tools/list-agents.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
-import type { CompanyContext } from '../core/coder/company/types.js';
+import { listAgents } from '@mcp/code-agent/tools/list-agents.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { CompanyContext } from '@mcp/company/types.js';
 
 function ctxStandalone(): ToolContext {
   return { cwd: '/tmp', projectName: 'test' };

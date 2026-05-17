@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { isAllowedArtifactPath as isAllowedTracePath } from '../apps/http-api/server/routes/company/qa/artifacts.js';
+import { isAllowedArtifactPath as isAllowedTracePath } from '@apps/http-api/server/routes/company/qa/artifacts.js';
 import {
   buildLocalTraceUrl,
   buildViewerUrl,
-} from '../apps/dashboard/features/agents/tests/shared/TraceLinkButton.js';
+} from '@apps/dashboard/features/agents/tests/shared/TraceLinkButton.js';
 
 describe('isAllowedTracePath', () => {
   it('accepts paths under tests/e2e/', () => {

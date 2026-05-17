@@ -16,10 +16,10 @@ import {
   parseApplyPatch,
   applyParsedPatch,
   applyPatchTool,
-} from '../core/coder/tools/apply-patch.js';
-import { ChatGPTCodexProvider } from '../core/coder/providers/chatgpt.js';
-import type { ChatRequest } from '../core/coder/providers/adapter.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+} from '@mcp/code-agent/tools/apply-patch.js';
+import { ChatGPTCodexProvider } from '@mcp/code-agent/providers/chatgpt.js';
+import type { ChatRequest } from '@mcp/code-agent/providers/adapter.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 async function* events(...evts: Record<string, unknown>[]): AsyncIterable<Record<string, unknown>> {
   for (const e of evts) yield e;

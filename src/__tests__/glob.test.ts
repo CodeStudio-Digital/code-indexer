@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { globTool } from '../core/coder/tools/glob.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+import { globTool } from '@mcp/code-agent/tools/glob.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 describe('glob tool', () => {
   let root: string;

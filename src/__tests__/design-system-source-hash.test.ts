@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { computeSourceHash } from '../core/design-system/source-hash.js';
+import { computeSourceHash } from '@mcp/design-system/source-hash.js';
 
 describe('computeSourceHash (design-system)', () => {
   let dir: string;

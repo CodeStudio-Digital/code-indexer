@@ -13,9 +13,9 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { CodeIndexDB } from '../store/db.js';
-import { CompanyStore } from '../store/company-store.js';
-import { CompanyDriveStore } from '../core/coder/company/services/CompanyDriveStore.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { CompanyStore } from '@mcp/store/company-store.js';
+import { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
 
 let dir: string;
 let cdb: CodeIndexDB;

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import {
   buildSourceInventory,
   writeSourceInventory,
-} from '../core/design-system/source-inventory.js';
+} from '@mcp/design-system/source-inventory.js';
 
 describe('design-system source inventory', () => {
   let dir: string;

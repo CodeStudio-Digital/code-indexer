@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '../store/db.js';
-import { QaTestRunStore } from '../core/qa/store/qa-test-run-store.js';
-import { QaTestResultStore } from '../core/qa/store/qa-test-result-store.js';
-import { runWatchdogTick, startQaWatchdog, QA_WATCHDOG_ERROR_MESSAGE } from '../core/qa/watchdog.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { QaTestRunStore } from '@mcp/services/qa/store/qa-test-run-store.js';
+import { QaTestResultStore } from '@mcp/services/qa/store/qa-test-result-store.js';
+import { runWatchdogTick, startQaWatchdog, QA_WATCHDOG_ERROR_MESSAGE } from '@mcp/services/qa/watchdog.js';
 
 let tmp: string;
 let db: CodeIndexDB;

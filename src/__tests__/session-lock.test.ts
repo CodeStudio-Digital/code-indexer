@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   withSessionLock,
   _resetSessionLocksForTests,
-} from '../apps/http-api/server/routes/coder/sessionLock.js';
+} from '@apps/http-api/server/routes/coder/sessionLock.js';
 
 describe('withSessionLock', () => {
   beforeEach(() => {

@@ -6,7 +6,7 @@ import {
   inferProfileFromMessage,
   TIER_COUNTS,
   type ToolTier,
-} from '../core/coder/tools/tiers.js';
+} from '@mcp/code-agent/tools/tiers.js';
 
 describe('tool tiers', () => {
   it('bootstrap tier contains exactly the expected tools', () => {

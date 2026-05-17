@@ -3,8 +3,8 @@ import {
   validatePipelineGraph,
   resolveStartNode,
   renderNodeTask,
-} from '../core/coder/company/services/PipelineService.js';
-import type { PipelineGraph } from '../core/coder/company/types.js';
+} from '@mcp/company/services/PipelineService.js';
+import type { PipelineGraph } from '@mcp/company/types.js';
 
 const baseNode = (id: string, role = 'backend') => ({
   id,

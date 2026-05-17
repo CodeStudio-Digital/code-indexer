@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveSpawnProjectBinding } from '../core/coder/company/services/SubordinateLifecycle.js';
+import { resolveSpawnProjectBinding } from '@mcp/company/services/SubordinateLifecycle.js';
 
 describe('resolveSpawnProjectBinding', () => {
   describe('no binding (legacy free-form role)', () => {

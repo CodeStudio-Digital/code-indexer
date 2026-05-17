@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { resolve as resolvePath, join, sep } from 'node:path';
-import { resolveHostPath } from '../core/coder/tools/company/design-system/ds-publish-version.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
-import type { CompanyContext, SandboxBinding } from '../core/coder/company/types.js';
-import type { ISandboxDriver } from '../core/sandbox/ports/sandbox-driver.js';
+import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { CompanyContext, SandboxBinding } from '@mcp/company/types.js';
+import type { ISandboxDriver } from '@mcp/services/sandbox/ports/sandbox-driver.js';
 
 const FAKE_DRIVER = {} as unknown as ISandboxDriver;
 

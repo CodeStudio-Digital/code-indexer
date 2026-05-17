@@ -2,15 +2,15 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { SessionStore } from '../core/coder/sessions/store.js';
-import { SessionFileSnapshotStore } from '../store/session-file-snapshot-store.js';
-import { SessionSnapshotService } from '../core/services/session-snapshots.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
+import { SessionSnapshotService } from '@mcp/services/services/session-snapshots.js';
 import {
   SnapshotRecorder,
   SnapshotRecordingFilesystemPort,
-} from '../core/coder/ports/snapshot-recording-filesystem-port.js';
-import { LocalFilesystemAdapter } from '../core/coder/ports/filesystem-port.js';
+} from '@mcp/code-agent/ports/snapshot-recording-filesystem-port.js';
+import { LocalFilesystemAdapter } from '@mcp/code-agent/ports/filesystem-port.js';
 
 function setup() {
   const workDir = mkdtempSync(join(tmpdir(), 'sfs-recorder-'));

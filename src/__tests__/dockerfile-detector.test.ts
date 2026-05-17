@@ -2,7 +2,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { detectDockerfile } from '../core/sandbox/dockerfile-detector.js';
+import { detectDockerfile } from '@mcp/services/sandbox/dockerfile-detector.js';
 
 let tmpRoot: string | null = null;
 

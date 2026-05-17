@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { SessionStore } from '../core/coder/sessions/store.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 
 /**
  * Per-turn telemetry — migration 069.

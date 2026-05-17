@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   pickNextEdge,
   resolveBranchVerdictPure,
-} from '../core/coder/pipelines/core/PipelineKernel.js';
-import { validatePipelineGraph } from '../core/coder/company/services/PipelineService.js';
-import type { PipelineEdge, PipelineGraph } from '../core/coder/company/types.js';
+} from '@mcp/code-agent/pipelines/core/PipelineKernel.js';
+import { validatePipelineGraph } from '@mcp/company/services/PipelineService.js';
+import type { PipelineEdge, PipelineGraph } from '@mcp/company/types.js';
 
 describe('pickNextEdge: review verdict', () => {
   it("routes 'review' to the matching pass-fail edge", () => {

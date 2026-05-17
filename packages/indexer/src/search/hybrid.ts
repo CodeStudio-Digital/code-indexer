@@ -1,0 +1,513 @@
+import type { CodeIndexDB } from '@mcp/store/db.js';
+import type { VectorStore } from '@mcp/store/vectors.js';
+import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import type { HyDEService } from '@mcp/indexer/search/hyde.js';
+import type { RerankerService } from '@mcp/indexer/search/reranker.js';
+import { planQuery } from '@mcp/indexer/search/planner.js';
+import { NullReranker } from '@mcp/indexer/search/reranker.js';
+import type { HybridSearchResult, SearchMode, SearchType, DBFile, DBSymbol, ContextSnapshot } from '@mcp/shared/types.js';
+
+/** Diagnostic info returned alongside search results. */
+export interface SearchDiagnostics {
+  vectorAvailable: boolean;
+  embeddingAvailable: boolean;
+  queryVariants?: string[];
+  vectorRawMatches?: number;
+  vectorRehydrated?: number;
+  vectorError?: string;
+  ftsCount?: number;
+  /** Set when the planner chose a backend on the caller's behalf. */
+  plannerMode?: 'fts' | 'vector' | 'hybrid';
+  plannerReason?: string;
+}
+
+const RRF_K = 60;
+
+/**
+ * Build 2-3 query variants for pseudo-HyDE expansion. The template phrases
+ * nudge the embedding model toward code-space rather than question-space,
+ * which measurably improves recall for NL questions on code corpora.
+ */
+function buildQueryVariants(query: string): string[] {
+  const trimmed = query.trim();
+  const variants = new Set<string>();
+  variants.add(trimmed);
+
+  // Strip common interrogative prefixes to get the topic.
+  const topic = trimmed
+    .replace(/^(how\s+(?:does|do|is|are|can|to)|what\s+(?:is|does|are)|where\s+(?:is|does|are)|why\s+(?:is|does|are))\s+/i, '')
+    .replace(/\?+\s*$/, '')
+    .trim();
+
+  if (topic && topic !== trimmed) {
+    variants.add(`implementation of ${topic}`);
+    variants.add(`function class ${topic}`);
+  } else {
+    variants.add(`${trimmed} implementation`);
+  }
+
+  return Array.from(variants).slice(0, 3);
+}
+
+export class HybridSearch {
+  private reranker: RerankerService;
+
+  /** LRU query cache: key = `${projectId}:${query}:${mode}:${type}` → results */
+  private queryCache = new Map<string, { results: HybridSearchResult[]; ts: number }>();
+  private readonly queryCacheMax = 128;
+  private readonly queryCacheTtlMs = 5 * 60 * 1000; // 5 min
+
+  constructor(
+    private db: CodeIndexDB,
+    private vectorStore: VectorStore | null,
+    private embeddingService: EmbeddingService,
+    private hydeService: HyDEService | null = null,
+    reranker?: RerankerService | null,
+  ) {
+    this.reranker = reranker ?? new NullReranker();
+  }
+
+  /** Invalidate query cache (call after indexing). */
+  invalidateCache(): void {
+    this.queryCache.clear();
+  }
+
+  async search(
+    projectId: number,
+    projectName: string,
+    query: string,
+    options?: { mode?: SearchMode; type?: SearchType; limit?: number }
+  ): Promise<HybridSearchResult[]> {
+    const { results } = await this.searchWithDiag(projectId, projectName, query, options);
+    return results;
+  }
+
+  /** Search with diagnostic info — used by the API to surface feedback. */
+  async searchWithDiag(
+    projectId: number,
+    projectName: string,
+    query: string,
+    options?: { mode?: SearchMode; type?: SearchType; limit?: number }
+  ): Promise<{ results: HybridSearchResult[]; diagnostics: SearchDiagnostics }> {
+    const requestedMode = options?.mode ?? 'auto';
+    const type = options?.type ?? 'all';
+    const limit = options?.limit ?? 20;
+    const overFetch = limit * 3;
+
+    // Resolve `auto` via the planner so callers don't pay hybrid cost
+    // for queries that FTS handles in a tenth of the time. The chosen
+    // mode is surfaced via diagnostics.
+    let mode: 'fts' | 'vector' | 'hybrid';
+    let plannerReason: string | undefined;
+    if (requestedMode === 'auto') {
+      const plan = planQuery(query);
+      mode = plan.mode;
+      plannerReason = plan.reason;
+    } else {
+      mode = requestedMode;
+    }
+
+    // Check cache (key includes resolved mode so `auto` and `hybrid`
+    // share a result row when the planner picks `hybrid`).
+    const cacheKey = `${projectId}:${query}:${mode}:${type}:${limit}`;
+    const cached = this.queryCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < this.queryCacheTtlMs) {
+      return { results: cached.results, diagnostics: { vectorAvailable: !!this.vectorStore, embeddingAvailable: !(this.embeddingService instanceof NullEmbeddingService) } };
+    }
+
+    const diag: SearchDiagnostics = {
+      vectorAvailable: !!this.vectorStore,
+      embeddingAvailable: !(this.embeddingService instanceof NullEmbeddingService),
+      ...(plannerReason ? { plannerMode: mode, plannerReason } : {}),
+    };
+
+    const cacheAndReturn = (r: { results: HybridSearchResult[]; diagnostics: SearchDiagnostics }) => {
+      // Evict oldest if full
+      if (this.queryCache.size >= this.queryCacheMax) {
+        const oldest = [...this.queryCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+        if (oldest) this.queryCache.delete(oldest[0]);
+      }
+      this.queryCache.set(cacheKey, { results: r.results, ts: Date.now() });
+      return r;
+    };
+
+    if (mode === 'fts') {
+      const results = await this.ftsSearch(projectId, query, type, limit);
+      diag.ftsCount = results.length;
+      return cacheAndReturn({ results, diagnostics: diag });
+    }
+
+    if (mode === 'vector') {
+      const results = await this.vectorSearchExpanded(projectId, projectName, query, type, limit, diag);
+      return cacheAndReturn({ results, diagnostics: diag });
+    }
+
+    // Hybrid: merge FTS + Vector using RRF
+    const hybridDiag: SearchDiagnostics = { ...diag };
+    const [ftsResults, vectorResults] = await Promise.allSettled([
+      this.ftsSearch(projectId, query, type, overFetch),
+      this.vectorSearchExpanded(projectId, projectName, query, type, overFetch, hybridDiag),
+    ]);
+
+    const fts = ftsResults.status === 'fulfilled' ? ftsResults.value : [];
+    const vec = vectorResults.status === 'fulfilled' ? vectorResults.value : [];
+    hybridDiag.ftsCount = fts.length;
+
+    const merged = this.rrfMerge(fts, vec, limit * 2); // Over-fetch for re-ranking
+
+    // Re-rank if a cross-encoder is configured
+    if (merged.length > 0 && !(this.reranker instanceof NullReranker)) {
+      const reranked = await this.reranker.rerank(
+        query,
+        merged.map(r => {
+          const d = r.data as unknown as Record<string, unknown>;
+          const text = r.type === 'file'
+            ? `${d.path ?? ''}\n${d.summary ?? ''}\n${Array.isArray(d.concepts) ? d.concepts.join(', ') : ''}`
+            : `${d.name ?? ''} (${d.kind ?? ''})\n${d.signature ?? ''}\n${d.comment ?? ''}`;
+          return { id: `${r.type}:${r.id}`, text, originalScore: r.score };
+        }),
+        limit,
+      );
+
+      // Map reranked results back
+      const idToScore = new Map(reranked.map(r => [r.id, r.score]));
+      const rerankedResults = merged
+        .filter(r => idToScore.has(`${r.type}:${r.id}`))
+        .map(r => ({ ...r, score: idToScore.get(`${r.type}:${r.id}`)! }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+
+      return cacheAndReturn({ results: rerankedResults, diagnostics: hybridDiag });
+    }
+
+    return cacheAndReturn({ results: merged.slice(0, limit), diagnostics: hybridDiag });
+  }
+
+  private async ftsSearch(projectId: number, query: string, type: SearchType, limit: number): Promise<HybridSearchResult[]> {
+    const results: HybridSearchResult[] = [];
+
+    // Escape FTS5 special chars
+    const ftsQuery = this.sanitizeFtsQuery(query);
+
+    if (type === 'files' || type === 'all') {
+      const files = this.db.searchFiles(projectId, ftsQuery, limit);
+      for (let i = 0; i < files.length; i++) {
+        results.push({
+          id: files[i].id,
+          type: 'file',
+          score: 0,
+          fts_rank: i + 1,
+          vector_score: null,
+          data: files[i],
+        });
+      }
+    }
+
+    if (type === 'symbols' || type === 'all') {
+      const symbols = this.db.searchSymbols(projectId, ftsQuery, limit);
+      for (let i = 0; i < symbols.length; i++) {
+        results.push({
+          id: symbols[i].id,
+          type: 'symbol',
+          score: 0,
+          fts_rank: i + 1,
+          vector_score: null,
+          data: symbols[i],
+        });
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Vector search with multi-query expansion and diagnostics.
+   *
+   * NL queries like "how create tools" don't match code embeddings well.
+   * We expand the query into 2-3 variants (e.g. "implementation of create tools",
+   * "function class create tools") and RRF-merge the per-variant results.
+   * If a HyDE service is available, we also include a synthetic code snippet.
+   */
+  private async vectorSearchExpanded(
+    _projectId: number,
+    projectName: string,
+    query: string,
+    type: SearchType,
+    limit: number,
+    diag: SearchDiagnostics,
+  ): Promise<HybridSearchResult[]> {
+    if (!this.vectorStore || this.embeddingService instanceof NullEmbeddingService) {
+      diag.vectorError = !this.vectorStore
+        ? 'No vector store configured'
+        : 'No embedding service configured';
+      return [];
+    }
+
+    try {
+      // Build query variants for better NL→code recall
+      let variants: string[];
+      if (this.hydeService) {
+        const hypothetical = await this.hydeService.generate(query);
+        variants =
+          hypothetical && hypothetical !== query
+            ? [query, hypothetical]
+            : buildQueryVariants(query);
+      } else {
+        variants = buildQueryVariants(query);
+      }
+      diag.queryVariants = variants;
+
+      const filter: Record<string, string> = { project_name: projectName };
+      if (type === 'files') filter.type = 'file';
+      else if (type === 'symbols') filter.type = 'symbol';
+
+      const perVariant = Math.max(limit, 10);
+      let totalRawMatches = 0;
+
+      // Run each variant in parallel
+      const runs = await Promise.all(
+        variants.map(async (v) => {
+          const { vector } = await this.embeddingService.embedQuery(v);
+          if (vector.length === 0) return [];
+          const matches = await this.vectorStore!.search(vector, { topK: perVariant, filter });
+          totalRawMatches += matches.length;
+          return this.rehydrateVectorMatches(matches);
+        }),
+      );
+
+      diag.vectorRawMatches = totalRawMatches;
+
+      // RRF merge across variants
+      const scoreMap = new Map<string, HybridSearchResult>();
+      for (const runResults of runs) {
+        for (let rank = 0; rank < runResults.length; rank++) {
+          const r = runResults[rank];
+          const key = `${r.type}:${r.id}`;
+          const delta = 1 / (RRF_K + rank + 1);
+          const existing = scoreMap.get(key);
+          if (existing) {
+            existing.score += delta;
+            // Keep the best vector_score
+            if (r.vector_score && (!existing.vector_score || r.vector_score > existing.vector_score)) {
+              existing.vector_score = r.vector_score;
+            }
+          } else {
+            scoreMap.set(key, { ...r, score: delta });
+          }
+        }
+      }
+
+      const results = Array.from(scoreMap.values())
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+
+      diag.vectorRehydrated = results.length;
+      return results;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[hybrid-search] Vector search failed:', msg);
+      diag.vectorError = msg;
+      return [];
+    }
+  }
+
+  /** Rehydrate vector matches from SQLite — shared by vectorSearchExpanded and snapshot search. */
+  private rehydrateVectorMatches(
+    matches: Array<{ score: number; metadata: Record<string, string> }>,
+  ): HybridSearchResult[] {
+    const results: HybridSearchResult[] = [];
+    for (const match of matches) {
+      const isFile = match.metadata.type === 'file';
+      const refId = match.metadata.ref_id ? parseInt(match.metadata.ref_id, 10) : 0;
+      if (!refId) continue;
+
+      const data: DBFile | DBSymbol | undefined = isFile
+        ? this.db.getFileById(refId)
+        : this.db.getSymbolById(refId);
+      if (!data) continue;
+
+      results.push({
+        id: data.id,
+        type: isFile ? 'file' : 'symbol',
+        score: match.score,
+        fts_rank: null,
+        vector_score: match.score,
+        data,
+      });
+    }
+    return results;
+  }
+
+  private rrfMerge(
+    ftsResults: HybridSearchResult[],
+    vectorResults: HybridSearchResult[],
+    limit: number
+  ): HybridSearchResult[] {
+    const scoreMap = new Map<string, HybridSearchResult>();
+
+    // Score FTS results
+    for (let rank = 0; rank < ftsResults.length; rank++) {
+      const r = ftsResults[rank];
+      const key = `${r.type}:${r.id}`;
+      const score = 1 / (RRF_K + rank + 1);
+
+      if (scoreMap.has(key)) {
+        const existing = scoreMap.get(key)!;
+        existing.score += score;
+        existing.fts_rank = rank + 1;
+      } else {
+        scoreMap.set(key, { ...r, score, fts_rank: rank + 1 });
+      }
+    }
+
+    // Score Vector results
+    for (let rank = 0; rank < vectorResults.length; rank++) {
+      const r = vectorResults[rank];
+      const key = `${r.type}:${r.id}`;
+      const score = 1 / (RRF_K + rank + 1);
+
+      if (scoreMap.has(key)) {
+        const existing = scoreMap.get(key)!;
+        existing.score += score;
+        existing.vector_score = r.vector_score;
+      } else {
+        scoreMap.set(key, { ...r, score, vector_score: r.vector_score });
+      }
+    }
+
+    return Array.from(scoreMap.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
+  /**
+   * Query expansion for NL questions. Two modes:
+   *
+   *   1. **Real HyDE (when hydeService is provided)** — calls an LLM to draft
+   *      a short hypothetical code snippet / docstring that would answer the
+   *      query, then uses BOTH the raw query and the synthetic snippet as
+   *      variants. Adds ~200-400ms of latency but dramatically improves
+   *      recall for questions the codebase never phrases the same way.
+   *
+   *   2. **Template-based (fallback)** — rewrites `how does X work?` into
+   *      `implementation of X` and `function class X`. Deterministic and
+   *      free. Ships when no HyDE service is wired in the tool context.
+   *
+   * In both cases we run the hybrid search once per variant and RRF-merge
+   * the results. Scores are normalized to each variant's rank so the raw
+   * query doesn't dominate a strong HyDE match.
+   */
+  async searchExpanded(
+    projectId: number,
+    projectName: string,
+    query: string,
+    options?: { type?: SearchType; limit?: number }
+  ): Promise<HybridSearchResult[]> {
+    const type = options?.type ?? 'all';
+    const limit = options?.limit ?? 20;
+
+    // Real HyDE takes precedence when available; we still include the raw
+    // query so exact-token matches aren't lost.
+    let variants: string[];
+    if (this.hydeService) {
+      const hypothetical = await this.hydeService.generate(query);
+      variants =
+        hypothetical && hypothetical !== query
+          ? [query, hypothetical]
+          : buildQueryVariants(query);
+    } else {
+      variants = buildQueryVariants(query);
+    }
+
+    const perVariant = Math.max(limit, 10);
+    const runs = await Promise.all(
+      variants.map((v) => this.search(projectId, projectName, v, { mode: 'hybrid', type, limit: perVariant }))
+    );
+
+    // RRF merge across variants using the same K as rrfMerge.
+    const scoreMap = new Map<string, HybridSearchResult>();
+    for (const runResults of runs) {
+      for (let rank = 0; rank < runResults.length; rank++) {
+        const r = runResults[rank];
+        const key = `${r.type}:${r.id}`;
+        const delta = 1 / (RRF_K + rank + 1);
+        const existing = scoreMap.get(key);
+        if (existing) existing.score += delta;
+        else scoreMap.set(key, { ...r, score: delta });
+      }
+    }
+
+    return Array.from(scoreMap.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
+  /**
+   * Hybrid snapshot search: FTS5 + vector RRF merge. Falls back cleanly to
+   * FTS-only if embeddings aren't configured or vector search fails. Returns
+   * deduplicated snapshots ordered by combined score.
+   */
+  async searchSnapshotsHybrid(
+    projectId: number,
+    projectName: string,
+    query: string,
+    limit: number
+  ): Promise<ContextSnapshot[]> {
+    const ftsSnaps = this.db.searchSnapshots(projectId, query);
+
+    // Vector side: only runs if embeddings + vector store are available.
+    let vectorSnaps: ContextSnapshot[] = [];
+    if (this.vectorStore && !(this.embeddingService instanceof NullEmbeddingService)) {
+      try {
+        const { vector } = await this.embeddingService.embedQuery(query);
+        if (vector.length > 0) {
+          const matches = await this.vectorStore.search(vector, {
+            topK: limit * 2,
+            filter: { project_name: projectName, type: 'snapshot' },
+          });
+          for (const m of matches) {
+            const refId = m.metadata.ref_id ? parseInt(m.metadata.ref_id, 10) : 0;
+            if (!refId) continue;
+            const snap = this.db.getSnapshotById(refId);
+            if (snap && snap.project_id === projectId) vectorSnaps.push(snap);
+          }
+        }
+      } catch (err) {
+        console.error('[snapshot-search] vector side failed:', (err as Error).message);
+      }
+    }
+
+    if (vectorSnaps.length === 0) return ftsSnaps.slice(0, limit);
+
+    // RRF merge — rank is position within each list.
+    const scoreMap = new Map<number, { snap: ContextSnapshot; score: number }>();
+    for (let rank = 0; rank < ftsSnaps.length; rank++) {
+      const s = ftsSnaps[rank];
+      const score = 1 / (RRF_K + rank + 1);
+      scoreMap.set(s.id, { snap: s, score });
+    }
+    for (let rank = 0; rank < vectorSnaps.length; rank++) {
+      const s = vectorSnaps[rank];
+      const score = 1 / (RRF_K + rank + 1);
+      const existing = scoreMap.get(s.id);
+      if (existing) existing.score += score;
+      else scoreMap.set(s.id, { snap: s, score });
+    }
+
+    return Array.from(scoreMap.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((e) => e.snap);
+  }
+
+  private sanitizeFtsQuery(query: string): string {
+    // Remove FTS5 special characters and wrap terms in quotes for phrase matching
+    return query
+      .replace(/[-*"(){}[\]^~\\:]/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .join(' OR ');
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BOOTSTRAP_TOOLS, getToolTier } from '../core/coder/tools/tiers.js';
+import { BOOTSTRAP_TOOLS, getToolTier } from '@mcp/code-agent/tools/tiers.js';
 
 describe('tier registration — design-system tools', () => {
   const DS_TOOLS = [

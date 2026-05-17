@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { isMasterAllowed } from '../core/coder/tools/company/master-filter.js';
-import type { CoderTool } from '../core/coder/core/tool.js';
+import { isMasterAllowed } from '@mcp/company/tools/master-filter.js';
+import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 
 function fakeNative(name: string): CoderTool {
   return {

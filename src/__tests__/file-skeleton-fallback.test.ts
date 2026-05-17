@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { fileTools } from '../apps/mcp-server/tools/file.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { fileTools } from '@apps/mcp-server/tools/file.js';
 
 const get_file_skeleton = fileTools.find((t) => t.name === 'get_file_skeleton')!;
 const get_file_structure = fileTools.find((t) => t.name === 'get_file_structure')!;

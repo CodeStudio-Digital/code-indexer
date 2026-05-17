@@ -7,8 +7,8 @@ import {
   frontmatterToBuiltinUpsert,
   ensureBuiltinSkills,
   type EnsureBuiltinSkillsResult,
-} from '../core/bootstrap/ensure-builtin-skills.js';
-import type { SkillDefinition, UpsertSkillInput } from '../store/skill-store.js';
+} from '@mcp/indexer/bootstrap/ensure-builtin-skills.js';
+import type { SkillDefinition, UpsertSkillInput } from '@mcp/store/skill-store.js';
 
 // ─── Test fixtures ───────────────────────────────────────────────
 

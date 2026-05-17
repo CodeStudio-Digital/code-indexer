@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   formatManifestValidation,
   validateDesignSystemManifestData,
-} from '../core/design-system/manifest-schema.js';
+} from '@mcp/design-system/manifest-schema.js';
 
 function validManifest(): Record<string, unknown> {
   return {

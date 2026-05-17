@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { buildRepoMap, resolveRepoMapBudget } from '../core/coder/core/repo-map.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
 
 /**
  * Repo-map: optional system-prompt addendum that lists top-level public

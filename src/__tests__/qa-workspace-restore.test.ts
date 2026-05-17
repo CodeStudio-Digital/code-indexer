@@ -3,7 +3,7 @@ import {
   restoreQaWorkspace,
   renderRunConfigFile,
   emptyReport,
-} from '../core/qa/workspace-restore.js';
+} from '@mcp/services/qa/workspace-restore.js';
 
 /**
  * In-memory fake of `SandboxManager` (only the two methods our helper

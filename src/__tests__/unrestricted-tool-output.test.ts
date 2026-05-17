@@ -17,9 +17,9 @@ import Database from 'better-sqlite3';
 import {
   buildToolResultBlock,
   normalizeMessageForCache,
-} from '../core/coder/core/runner.js';
-import { sessionUnrestrictedToolOutput078 } from '../store/migrations/078_session_unrestricted_tool_output.js';
-import type { AgentMessage } from '../core/coder/core/messages.js';
+} from '@mcp/code-agent/core/runner.js';
+import { sessionUnrestrictedToolOutput078 } from '@mcp/store/migrations/078_session_unrestricted_tool_output.js';
+import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 
 /**
  * Set up a mini in-memory SQLite with just the columns migration 078 needs to

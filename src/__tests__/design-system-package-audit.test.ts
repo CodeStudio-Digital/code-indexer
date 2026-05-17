@@ -5,10 +5,10 @@ import { dirname, join } from 'node:path';
 import {
   auditDesignSystemPackage,
   formatPackageAudit,
-} from '../core/design-system/package-audit.js';
-import { dsAuditPackage } from '../core/coder/tools/company/design-system/ds-audit-package.js';
-import { dsValidateManifest } from '../core/coder/tools/company/design-system/ds-validate-manifest.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+} from '@mcp/design-system/package-audit.js';
+import { dsAuditPackage } from '@mcp/company/tools/design-system/ds-audit-package.js';
+import { dsValidateManifest } from '@mcp/company/tools/design-system/ds-validate-manifest.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 describe('design-system package audit and tools', () => {
   let dir: string;

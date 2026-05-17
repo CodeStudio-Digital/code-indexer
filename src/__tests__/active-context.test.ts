@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildActiveContextBlock } from '../core/coder/core/active-context.js';
+import { buildActiveContextBlock } from '@mcp/code-agent/core/active-context.js';
 
 describe('buildActiveContextBlock', () => {
   it('returns null when nothing is set', () => {

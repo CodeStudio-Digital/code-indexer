@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { buildDesignSystemMasterMessage } from '../apps/http-api/server/routes/design-system/round.js';
+import { buildDesignSystemMasterMessage } from '@apps/http-api/server/routes/design-system/round.js';
 import type {
   DesignSystemSession,
   DesignSystemVersion,
-} from '../store/design-system-store.js';
+} from '@mcp/store/design-system-store.js';
 
 const baseSession: DesignSystemSession = {
   id: 1,

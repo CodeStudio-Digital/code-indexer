@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { CoderRunner, compactHistoryForLLM, buildToolResultBlock, normalizeMessageForCache } from '../core/coder/core/runner.js';
-import type { AgentMessage } from '../core/coder/core/messages.js';
-import { ToolRegistry } from '../core/coder/core/registry.js';
-import { planTools } from '../core/coder/tools/plan.js';
-import { interactionTools } from '../core/coder/tools/interaction.js';
-import type { ChatProvider, ChatRequest } from '../core/coder/providers/adapter.js';
-import type { ChatDelta } from '../core/coder/core/messages.js';
+import { CoderRunner, compactHistoryForLLM, buildToolResultBlock, normalizeMessageForCache } from '@mcp/code-agent/core/runner.js';
+import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import { planTools } from '@mcp/code-agent/tools/plan.js';
+import { interactionTools } from '@mcp/code-agent/tools/interaction.js';
+import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 
 class StubProvider implements ChatProvider {
   readonly name = 'stub';

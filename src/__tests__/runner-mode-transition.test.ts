@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { CoderRunner } from '../core/coder/core/runner.js';
-import { ToolRegistry } from '../core/coder/core/registry.js';
-import { submitPlan } from '../core/coder/tools/plan.js';
-import type { ChatProvider, ChatRequest } from '../core/coder/providers/adapter.js';
-import type { ChatDelta } from '../core/coder/core/messages.js';
-import type { AgentId } from '../core/coder/agents/index.js';
+import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import { submitPlan } from '@mcp/code-agent/tools/plan.js';
+import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
+import type { AgentId } from '@mcp/code-agent/agents/index.js';
 
 /**
  * Provider that emits a single `submit_plan` tool_use on its first turn, then

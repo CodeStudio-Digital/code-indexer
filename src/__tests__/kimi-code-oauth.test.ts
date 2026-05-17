@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { ProviderStore } from '../store/provider-store.js';
-import { kimiCodeOAuthRouter } from '../apps/http-api/admin/oauth-kimi-code.routes.js';
-import { discoverKimiCode } from '../apps/http-api/admin/model-discovery/kimi-code.js';
-import { __setStoreForTests } from '../core/providers/shared/store.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { ProviderStore } from '@mcp/store/provider-store.js';
+import { kimiCodeOAuthRouter } from '@apps/http-api/admin/oauth-kimi-code.routes.js';
+import { discoverKimiCode } from '@apps/http-api/admin/model-discovery/kimi-code.js';
+import { __setStoreForTests } from '@mcp/services/providers/shared/store.js';
 import {
   __setKimiCodeFetchForTests,
   __setRefreshTombstoneCooldownForTests,
@@ -18,7 +18,7 @@ import {
   refreshIfExpired,
   startDeviceFlow,
   pollDeviceFlow,
-} from '../core/services/oauth/kimi-code.js';
+} from '@mcp/services/services/oauth/kimi-code.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

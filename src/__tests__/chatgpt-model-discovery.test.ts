@@ -17,9 +17,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-vi.mock('../core/providers/shared/oauth.js', async () => {
-  const actual = await vi.importActual<typeof import('../core/providers/shared/oauth.js')>(
-    '../core/providers/shared/oauth.js',
+vi.mock('@mcp/services/providers/shared/oauth.js', async () => {
+  const actual = await vi.importActual<typeof import('@mcp/services/providers/shared/oauth.js')>(
+    '@mcp/services/providers/shared/oauth.js',
   );
   return {
     ...actual,
@@ -31,10 +31,10 @@ vi.mock('../core/providers/shared/oauth.js', async () => {
   };
 });
 
-import { CodeIndexDB } from '../store/db.js';
-import { ProviderStore } from '../store/provider-store.js';
-import { discoverChatgpt } from '../apps/http-api/admin/model-discovery/chatgpt.js';
-import { CHATGPT_SEED_MODELS } from '../core/services/oauth/openai.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { ProviderStore } from '@mcp/store/provider-store.js';
+import { discoverChatgpt } from '@apps/http-api/admin/model-discovery/chatgpt.js';
+import { CHATGPT_SEED_MODELS } from '@mcp/services/services/oauth/openai.js';
 
 const PROVIDER_ID = 'chatgpt';
 

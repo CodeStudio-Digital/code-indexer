@@ -9,9 +9,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '../store/db.js';
-import { CompanyStore } from '../store/company-store.js';
-import { formatInboxPrompt } from '../core/coder/company/services/InboxQueue.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { CompanyStore } from '@mcp/store/company-store.js';
+import { formatInboxPrompt } from '@mcp/company/services/InboxQueue.js';
 
 let dir: string;
 let cdb: CodeIndexDB;

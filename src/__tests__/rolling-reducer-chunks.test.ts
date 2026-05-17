@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { applyRollingReduction } from '../core/coder/core/compaction.js';
-import type { AgentMessage } from '../core/coder/core/messages.js';
+import { applyRollingReduction } from '@mcp/code-agent/core/compaction.js';
+import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 
 /**
  * Regression test for session 609: the rolling reducer was deduplicating

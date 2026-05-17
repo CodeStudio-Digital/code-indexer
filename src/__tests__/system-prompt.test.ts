@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSystemPrompt, type ProviderFamily } from '../core/coder/core/system-prompt.js';
+import { buildSystemPrompt, type ProviderFamily } from '@mcp/code-agent/core/system-prompt.js';
 
 const base = {
   projectName: 'acme/app',

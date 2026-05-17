@@ -2,17 +2,17 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '../store/db.js';
-import { CompanySessionEnvStore } from '../store/company-session-env-store.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 import {
   SandboxManager,
   setSandboxManagerForTests,
-} from '../core/sandbox/sandbox-manager.js';
+} from '@mcp/services/sandbox/sandbox-manager.js';
 import {
   setCompanySessionEnvStore,
   setQaPreviewConfig,
-} from '../core/sandbox/sandbox-manager.js';
-import { mintPreviewToken, parseTokenExpiry } from '../apps/http-api/server/routes/preview-auth.js';
+} from '@mcp/services/sandbox/sandbox-manager.js';
+import { mintPreviewToken, parseTokenExpiry } from '@apps/http-api/server/routes/preview-auth.js';
 
 /**
  * Verifies the QA preview-routing extension to `syncManagedEnvs`:

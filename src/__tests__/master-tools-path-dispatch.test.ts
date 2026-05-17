@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveAgentRunId, parseAgentPath, parseAgentPathTarget } from '../core/coder/tools/company/path-resolution.js';
+import { resolveAgentRunId, parseAgentPath, parseAgentPathTarget } from '@mcp/company/tools/path-resolution.js';
 
 describe('parseAgentPath', () => {
   it('extracts the trailing id from a well-formed path', () => {

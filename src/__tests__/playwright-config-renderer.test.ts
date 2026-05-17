@@ -3,7 +3,7 @@ import {
   renderPlaywrightConfig,
   QA_GLOBAL_SETUP_TEMPLATE,
   validatePlaywrightConfig,
-} from '../core/sandbox/scaffolders/playwright-bootstrap.js';
+} from '@mcp/services/sandbox/scaffolders/playwright-bootstrap.js';
 
 describe('renderPlaywrightConfig', () => {
   it('emits a valid TypeScript module pointing at the dev server', () => {

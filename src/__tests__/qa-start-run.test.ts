@@ -6,7 +6,7 @@ import {
   renderRunConfigFile,
   formatStartRunReply,
   type WorkspaceRestoreReport,
-} from '../core/coder/tools/company/qa/qa-start-run.js';
+} from '@mcp/company/tools/qa/qa-start-run.js';
 
 describe('resolveEndpointBase', () => {
   it('uses MCP_PUBLIC_URL when set', () => {

@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   LocalProcessManager,
-} from '../core/sandbox/local-process/LocalProcessManager.js';
-import { PortAllocator } from '../core/sandbox/port-allocator.js';
-import { httpReadinessProbe } from '../core/sandbox/local-process/readiness-probe.js';
-import type { SandboxEvent } from '../core/sandbox/types.js';
+} from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
+import { PortAllocator } from '@mcp/services/sandbox/port-allocator.js';
+import { httpReadinessProbe } from '@mcp/services/sandbox/local-process/readiness-probe.js';
+import type { SandboxEvent } from '@mcp/services/sandbox/types.js';
 
 describe('httpReadinessProbe', () => {
   it('returns ok:true once a server starts answering', async () => {

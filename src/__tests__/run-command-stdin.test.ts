@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { shellTools } from '../core/coder/tools/shell.js';
-import { LocalShellAdapter } from '../core/coder/ports/shell-port.js';
+import { shellTools } from '@mcp/code-agent/tools/shell.js';
+import { LocalShellAdapter } from '@mcp/code-agent/ports/shell-port.js';
 import type {
   IShellPort,
   ShellExecOptions,
   ShellExecResult,
   ShellRunOptions,
-} from '../core/coder/ports/shell-port.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+} from '@mcp/code-agent/ports/shell-port.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const runCommand = shellTools.find((t) => t.name === 'run_command')!;
 

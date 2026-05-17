@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { compareSemver } from '../core/bootstrap/semver-compare.js';
+import { compareSemver } from '@mcp/indexer/bootstrap/semver-compare.js';
 
 describe('compareSemver', () => {
   it('returns 0 for equal versions', () => {

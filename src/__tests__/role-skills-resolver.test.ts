@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveRoleSkills } from '../core/coder/company/types.js';
+import { resolveRoleSkills } from '@mcp/company/types.js';
 
 describe('resolveRoleSkills', () => {
   it('flattens a legacy string[] verbatim', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isIrreversibleTool } from '../core/coder/core/policy.js';
+import { isIrreversibleTool } from '@mcp/code-agent/core/policy.js';
 
 describe('isIrreversibleTool — internal set', () => {
   it('flags every native git mutation', () => {

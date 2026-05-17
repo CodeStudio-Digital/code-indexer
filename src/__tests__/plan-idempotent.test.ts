@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { submitPlan } from '../core/coder/tools/plan.js';
-import { tasksTools } from '../core/coder/tools/tasks.js';
-import { askUser, formatInterruptedResult } from '../core/coder/tools/interaction.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+import { submitPlan } from '@mcp/code-agent/tools/plan.js';
+import { tasksTools } from '@mcp/code-agent/tools/tasks.js';
+import { askUser, formatInterruptedResult } from '@mcp/code-agent/tools/interaction.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const submitTasks = tasksTools.find((t) => t.name === 'submit_tasks')!;
 

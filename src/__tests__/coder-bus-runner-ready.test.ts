@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createBus, setBusRunner, markEnded } from '../apps/http-api/coder-bus.js';
-import type { CoderRunner } from '../core/coder/core/runner.js';
+import { createBus, setBusRunner, markEnded } from '@apps/http-api/coder-bus.js';
+import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 
 /**
  * Minimal stand-in for CoderRunner — the bus only needs an object reference,

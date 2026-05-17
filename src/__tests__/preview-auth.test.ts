@@ -4,7 +4,7 @@ import {
   verifyPreviewToken,
   formatSetCookie,
   PREVIEW_COOKIE,
-} from '../apps/http-api/server/routes/preview-auth.js';
+} from '@apps/http-api/server/routes/preview-auth.js';
 
 describe('preview-auth HMAC cookie', () => {
   beforeEach(() => {

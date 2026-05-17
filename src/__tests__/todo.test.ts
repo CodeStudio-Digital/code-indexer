@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { todoWrite, type TodoItem } from '../core/coder/tools/todo.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+import { todoWrite, type TodoItem } from '@mcp/code-agent/tools/todo.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 

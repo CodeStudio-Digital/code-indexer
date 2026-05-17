@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { pickNextEdge } from '../core/coder/company/services/PipelineExecutor.js';
-import { validatePipelineGraph } from '../core/coder/company/services/PipelineService.js';
-import type { PipelineEdge, PipelineGraph } from '../core/coder/company/types.js';
+import { pickNextEdge } from '@mcp/company/services/PipelineExecutor.js';
+import { validatePipelineGraph } from '@mcp/company/services/PipelineService.js';
+import type { PipelineEdge, PipelineGraph } from '@mcp/company/types.js';
 
 describe('pickNextEdge', () => {
   it('linear: returns the unique linear edge', () => {

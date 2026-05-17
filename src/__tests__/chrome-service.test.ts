@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '../store/db.js';
-import { ChromeServiceStore } from '../store/chrome-service-store.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { ChromeServiceStore } from '@mcp/store/chrome-service-store.js';
 import {
   buildHostFacingWsEndpoint,
   buildHostFacingHealthUrl,
@@ -11,12 +11,12 @@ import {
   classifyChromeServiceError,
   DEFAULT_CHROME_SERVICE_IMAGE,
   DEFAULT_CHROME_SERVICE_PORT,
-} from '../core/chrome-service/host-alias.js';
+} from '@mcp/services/chrome-service/host-alias.js';
 import {
   fetchSidecarVersion,
   formatBrowserEndpointReply,
-} from '../core/coder/tools/company/qa/qa-get-browser-endpoint.js';
-import type { ChromeServiceState } from '../core/chrome-service/chrome-service.js';
+} from '@mcp/company/tools/qa/qa-get-browser-endpoint.js';
+import type { ChromeServiceState } from '@mcp/services/chrome-service/chrome-service.js';
 
 // ─── ChromeServiceStore (integration) ───────────────────────────
 

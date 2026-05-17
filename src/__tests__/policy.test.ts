@@ -4,8 +4,8 @@ import {
   resolveToolMetadata,
   findScopeViolations,
   type PolicyContext,
-} from '../core/coder/core/policy.js';
-import type { CoderTool } from '../core/coder/core/tool.js';
+} from '@mcp/code-agent/core/policy.js';
+import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 
 /**
  * Minimal tool factory — only the fields the policy module reads. Handlers

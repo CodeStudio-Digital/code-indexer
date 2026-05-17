@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fsTools } from '../core/coder/tools/fs.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+import { fsTools } from '@mcp/code-agent/tools/fs.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 /**
  * multi_edit integration: verifies atomic behaviour and sequential application.

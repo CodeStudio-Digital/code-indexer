@@ -3,8 +3,8 @@ import {
   buildLazySkillsSection,
   buildCompactSkillsSection,
   buildSkillsPromptSection,
-} from '../core/coder/skills/prompt-injector.js';
-import type { ResolvedSkill, SkillSource } from '../core/coder/skills/types.js';
+} from '@mcp/code-agent/skills/prompt-injector.js';
+import type { ResolvedSkill, SkillSource } from '@mcp/code-agent/skills/types.js';
 
 /**
  * Skills section sizing — guards the cost reduction of the lazy default.

@@ -1,0 +1,8 @@
+{
+  "src/core/coder/": "@mcp/code-agent/",
+  "src/core/indexer/": "@mcp/indexer/indexer/",
+  "src/core/search/": "@mcp/indexer/search/",
+  "src/core/workers/": "@mcp/indexer/workers/",
+  "src/core/bootstrap/": "@mcp/indexer/bootstrap/",
+  "src/core/design-system/": "@mcp/design-system/"
+}

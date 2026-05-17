@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildSpawnAgentTool } from '../core/coder/tools/spawn-agent.js';
-import { ToolRegistry } from '../core/coder/core/registry.js';
-import type { CoderTool, ToolContext } from '../core/coder/core/tool.js';
+import { buildSpawnAgentTool } from '@mcp/code-agent/tools/spawn-agent.js';
+import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const ctx: ToolContext = { cwd: '/tmp', projectName: 'test' };
 

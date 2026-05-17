@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveTemperature,
   DEFAULT_TEMPERATURE,
-} from '../core/coder/inference/temperature.js';
-import { AGENTS } from '../core/coder/agents/index.js';
+} from '@mcp/code-agent/inference/temperature.js';
+import { AGENTS } from '@mcp/code-agent/agents/index.js';
 
 describe('resolveTemperature', () => {
   describe('precedence', () => {

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { tasksTools, _resetSubmitBurstForKey } from '../core/coder/tools/tasks.js';
-import type { CoderTool, ToolContext } from '../core/coder/core/tool.js';
-import type { CoderTask, TasksState } from '../core/coder/sessions/types.js';
+import { tasksTools, _resetSubmitBurstForKey } from '@mcp/code-agent/tools/tasks.js';
+import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
 
 const updateTask = tasksTools.find((t) => t.name === 'update_task') as CoderTool;
 const submitTasks = tasksTools.find((t) => t.name === 'submit_tasks') as CoderTool;

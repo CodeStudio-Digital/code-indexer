@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { waitAgents } from '../core/coder/tools/wait-agents.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
-import type { CompanyContext } from '../core/coder/company/types.js';
+import { waitAgents } from '@mcp/code-agent/tools/wait-agents.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { CompanyContext } from '@mcp/company/types.js';
 
 type AttentionEvent =
   | { kind: 'question' | 'plan' | 'tasks' | 'finished' | 'inbox_answered'; agentRunId: number; role: string };

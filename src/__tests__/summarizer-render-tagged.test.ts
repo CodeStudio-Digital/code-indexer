@@ -8,7 +8,7 @@ import {
   renderSummaryV2,
   overlayLiveState,
   type CompactionSummaryV2,
-} from '../core/coder/core/summarizer.js';
+} from '@mcp/code-agent/core/summarizer.js';
 
 const sampleSummary: CompactionSummaryV2 = {
   primary_request: 'Fix the login bug in the new flow',

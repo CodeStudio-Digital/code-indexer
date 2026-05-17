@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { matchSkills, scoreSkill } from '../core/coder/skills/skill-matcher.js';
-import type { ResolvedSkill } from '../core/coder/skills/types.js';
+import { matchSkills, scoreSkill } from '@mcp/code-agent/skills/skill-matcher.js';
+import type { ResolvedSkill } from '@mcp/code-agent/skills/types.js';
 
 function skill(partial: Partial<ResolvedSkill> & { id: string }): ResolvedSkill {
   const { id, ...rest } = partial;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { inferProfileFromHistory } from '../core/coder/tools/tiers.js';
+import { inferProfileFromHistory } from '@mcp/code-agent/tools/tiers.js';
 
 /**
  * On session resume the runner used to default to `profile: 'full'` — paying

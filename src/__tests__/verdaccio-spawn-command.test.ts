@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildVerdaccioSpawnCommand } from '../core/verdaccio/verdaccio-service.js';
+import { buildVerdaccioSpawnCommand } from '@mcp/services/verdaccio/verdaccio-service.js';
 
 describe('buildVerdaccioSpawnCommand', () => {
   it('interpolates the internal port into --listen', () => {

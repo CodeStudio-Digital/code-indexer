@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { sendMessage } from '../core/coder/tools/send-message.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
-import type { CompanyContext } from '../core/coder/company/types.js';
+import { sendMessage } from '@mcp/code-agent/tools/send-message.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { CompanyContext } from '@mcp/company/types.js';
 
 interface FakeSubHandle {
   role: string;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { overlayLiveState, renderSummaryV2, type CompactionSummaryV2 } from '../core/coder/core/summarizer.js';
+import { overlayLiveState, renderSummaryV2, type CompactionSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
 
 const baseSummary: CompactionSummaryV2 = {
   primary_request: 'fix login',

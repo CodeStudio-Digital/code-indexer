@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '../store/db.js';
-import { SkillStore } from '../store/skill-store.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { SkillStore } from '@mcp/store/skill-store.js';
 
 describe('SkillStore — usage telemetry (migration 056)', () => {
   let dir: string;

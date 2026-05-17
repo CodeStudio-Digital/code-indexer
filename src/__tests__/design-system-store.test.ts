@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '../store/db.js';
-import { DesignSystemStore } from '../store/design-system-store.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { DesignSystemStore } from '@mcp/store/design-system-store.js';
 
 /**
  * Integration tests for the DesignSystemStore. We use a real

@@ -3,7 +3,7 @@ import AdmZip from 'adm-zip';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { extractZipToDir, isUnsafePath } from '../core/design-system/extract-zip.js';
+import { extractZipToDir, isUnsafePath } from '@mcp/design-system/extract-zip.js';
 
 describe('isUnsafePath', () => {
   it('rejects empty / dot / dotdot', () => {

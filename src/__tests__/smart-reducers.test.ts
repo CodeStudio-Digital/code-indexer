@@ -5,7 +5,7 @@ import {
   reduceGitDiff,
   reduceGrep,
   reduceRunCommand,
-} from '../core/coder/core/smart-reducers.js';
+} from '@mcp/code-agent/core/smart-reducers.js';
 
 /**
  * Smart reducers shape tool_result content for high-volume tools BEFORE the

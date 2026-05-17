@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { buildMcpResourceTools } from '../core/coder/tools/mcp-resources.js';
-import type { McpToolBridge } from '../core/coder/tools/mcp-bridge.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+import { buildMcpResourceTools } from '@mcp/code-agent/tools/mcp-resources.js';
+import type { McpToolBridge } from '@mcp/code-agent/tools/mcp-bridge.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const ctx: ToolContext = { cwd: '/tmp', projectName: 'test' };
 

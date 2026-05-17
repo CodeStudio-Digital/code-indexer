@@ -18,7 +18,7 @@
  * test it in isolation without spinning up a full CoderRunner.
  */
 import { describe, it, expect } from 'vitest';
-import { filterGoalToolsByState } from '../core/coder/core/runner.js';
+import { filterGoalToolsByState } from '@mcp/code-agent/core/runner.js';
 
 interface MockTool {
   name: string;

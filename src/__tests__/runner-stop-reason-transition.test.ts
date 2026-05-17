@@ -7,10 +7,10 @@ import {
   CoderRunner,
   type StopReason,
   type TransitionKind,
-} from '../core/coder/core/runner.js';
-import { ToolRegistry } from '../core/coder/core/registry.js';
-import type { ChatProvider, ChatRequest } from '../core/coder/providers/adapter.js';
-import type { ChatDelta, AgentMessage } from '../core/coder/core/messages.js';
+} from '@mcp/code-agent/core/runner.js';
+import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatDelta, AgentMessage } from '@mcp/code-agent/core/messages.js';
 
 class TextOnlyProvider implements ChatProvider {
   readonly name = 'stub';

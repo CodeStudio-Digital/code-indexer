@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { ToolContext } from '../core/coder/core/tool.js';
-import { docsTools } from '../core/coder/tools/company/docs-tools.js';
-import type { ISandboxDriver } from '../core/sandbox/ports/sandbox-driver.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import { docsTools } from '@mcp/company/tools/docs-tools.js';
+import type { ISandboxDriver } from '@mcp/services/sandbox/ports/sandbox-driver.js';
 
 function collectArraySchemasMissingItems(schema: unknown, path = '$'): string[] {
   if (!schema || typeof schema !== 'object') return [];

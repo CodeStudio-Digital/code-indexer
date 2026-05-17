@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@mcp/shared": ["packages/shared/src/index.ts"],
+      "@mcp/shared/*": ["packages/shared/src/*"],
+      "@mcp/store": ["packages/store/src/index.ts"],
+      "@mcp/store/*": ["packages/store/src/*"],
+      "@mcp/services": ["packages/services/src/index.ts"],
+      "@mcp/services/*": ["packages/services/src/*"],
+      "@mcp/indexer": ["packages/indexer/src/index.ts"],
+      "@mcp/indexer/*": ["packages/indexer/src/*"],
+      "@mcp/design-system": ["packages/design-system/src/index.ts"],
+      "@mcp/design-system/*": ["packages/design-system/src/*"],
+      "@mcp/code-agent": ["packages/code-agent/src/index.ts"],
+      "@mcp/code-agent/*": ["packages/code-agent/src/*"],
+      "@mcp/company": ["packages/company/src/index.ts"],
+      "@mcp/company/*": ["packages/company/src/*"],
+      "@apps/*": ["apps/*"]
+    }
+  }
+}

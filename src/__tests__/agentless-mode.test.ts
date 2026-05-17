@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { buildSystemPrompt } from '../core/coder/core/system-prompt.js';
+import { buildSystemPrompt } from '@mcp/code-agent/core/system-prompt.js';
 
 /**
  * B7 — Agentless-style pipeline mode. Pure prompt-engineering hint, gated by

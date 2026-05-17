@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildWellKnownCandidates,
   FetchDiscoveryClient,
-} from '../core/mcp-client/auth/http/fetch-discovery-client.js';
+} from '@mcp/services/mcp-client/auth/http/fetch-discovery-client.js';
 
 describe('buildWellKnownCandidates', () => {
   it('emits path-aware then origin-rooted for URLs with a path', () => {

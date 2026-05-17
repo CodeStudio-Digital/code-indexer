@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AGENTS, isAgentId, getAgent, agentsSummary } from '../core/coder/agents/index.js';
+import { AGENTS, isAgentId, getAgent, agentsSummary } from '@mcp/code-agent/agents/index.js';
 
 describe('agent presets', () => {
   it('exposes exactly the four built-in agents', () => {

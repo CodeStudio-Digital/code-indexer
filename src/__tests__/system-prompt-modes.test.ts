@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildSystemPrompt } from '../core/coder/core/system-prompt.js';
-import type { AgentId } from '../core/coder/agents/index.js';
+import { buildSystemPrompt } from '@mcp/code-agent/core/system-prompt.js';
+import type { AgentId } from '@mcp/code-agent/agents/index.js';
 
 const base = {
   projectName: 'acme/app',

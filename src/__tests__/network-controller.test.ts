@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { NetworkController } from '../core/sandbox/network-controller.js';
+import { NetworkController } from '@mcp/services/sandbox/network-controller.js';
 import type {
   IShellPort,
   ShellExecOptions,
   ShellExecResult,
   ShellRunOptions,
-} from '../core/coder/ports/shell-port.js';
+} from '@mcp/code-agent/ports/shell-port.js';
 
 /**
  * In-memory shell port that plays back scripted responses keyed on the

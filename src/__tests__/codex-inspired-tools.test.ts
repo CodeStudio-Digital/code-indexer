@@ -3,10 +3,10 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { askUser } from '../core/coder/tools/interaction.js';
-import { viewImage } from '../core/coder/tools/view-image.js';
-import { goalTools, _resetGoalForKey, _resetCreateBurstForKey } from '../core/coder/tools/goal.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+import { askUser } from '@mcp/code-agent/tools/interaction.js';
+import { viewImage } from '@mcp/code-agent/tools/view-image.js';
+import { goalTools, _resetGoalForKey, _resetCreateBurstForKey } from '@mcp/code-agent/tools/goal.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const createGoal = goalTools.find((t) => t.name === 'create_goal')!;
 const getGoal = goalTools.find((t) => t.name === 'get_goal')!;

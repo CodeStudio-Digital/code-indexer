@@ -28,14 +28,14 @@
  */
 import { parseArgs } from 'node:util';
 import { readFileSync, existsSync } from 'node:fs';
-import { loadConfig } from '../utils/config.js';
-import { CodeIndexDB } from '../store/db.js';
-import { ProviderStore } from '../store/provider-store.js';
-import { createEmbeddingService } from '../core/search/embeddings.js';
-import { createVectorStore, NullVectorStore } from '../store/vectors.js';
-import { HybridSearch } from '../core/search/hybrid.js';
-import { HyDEService } from '../core/search/hyde.js';
-import type { HybridSearchResult, SearchMode } from '../types.js';
+import { loadConfig } from '@mcp/shared/utils/config.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { ProviderStore } from '@mcp/store/provider-store.js';
+import { createEmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import { createVectorStore, NullVectorStore } from '@mcp/store/vectors.js';
+import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
+import { HyDEService } from '@mcp/indexer/search/hyde.js';
+import type { HybridSearchResult, SearchMode } from '@mcp/shared/types.js';
 
 interface EvalQuery {
   query: string;

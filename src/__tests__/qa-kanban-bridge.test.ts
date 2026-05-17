@@ -6,8 +6,8 @@ import {
   renderBugDescription,
   renderRecurrenceComment,
   type KanbanBridgeDeps,
-} from '../core/qa/kanban-bridge.js';
-import type { QaRun, QaTestResult } from '../core/qa/types.js';
+} from '@mcp/services/qa/kanban-bridge.js';
+import type { QaRun, QaTestResult } from '@mcp/services/qa/types.js';
 
 /**
  * Unit tests for the QA-Kanban bridge. Uses in-memory fakes so the

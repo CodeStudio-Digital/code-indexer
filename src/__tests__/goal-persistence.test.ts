@@ -2,10 +2,10 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CodeIndexDB } from '../store/db.js';
-import { SessionStore } from '../core/coder/sessions/store.js';
-import { goalTools } from '../core/coder/tools/goal.js';
-import type { ToolContext } from '../core/coder/core/tool.js';
+import { CodeIndexDB } from '@mcp/store/db.js';
+import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import { goalTools } from '@mcp/code-agent/tools/goal.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const createGoal = goalTools.find((t) => t.name === 'create_goal')!;
 const getGoal = goalTools.find((t) => t.name === 'get_goal')!;

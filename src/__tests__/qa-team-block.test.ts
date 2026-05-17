@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildQaTeamBlock } from '../core/coder/company/system-prompts.js';
+import { buildQaTeamBlock } from '@mcp/company/system-prompts.js';
 
 const baseRole = {
   role: 'frontend',

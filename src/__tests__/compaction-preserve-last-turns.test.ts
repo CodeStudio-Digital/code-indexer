@@ -7,8 +7,8 @@ import { describe, it, expect } from 'vitest';
 import {
   recedeToPreserveLastNTurns,
   snapCutoffPreservingPairs,
-} from '../core/coder/core/compaction.js';
-import type { AgentMessage } from '../core/coder/core/messages.js';
+} from '@mcp/code-agent/core/compaction.js';
+import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 
 function user(text: string): AgentMessage {
   return { role: 'user', content: [{ type: 'text', text }] };

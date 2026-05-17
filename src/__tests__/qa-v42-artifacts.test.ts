@@ -2,26 +2,26 @@ import { describe, it, expect } from 'vitest';
 import {
   mimeForExtension,
   extensionOf,
-} from '../core/qa/parsers/mime-for-extension.js';
+} from '@mcp/services/qa/parsers/mime-for-extension.js';
 import {
   rewriteUrl,
   rewritePlaywrightReportHtml,
   resolveRelative,
-} from '../core/qa/parsers/rewrite-playwright-report.js';
+} from '@mcp/services/qa/parsers/rewrite-playwright-report.js';
 import {
   isAllowedArtifactPath,
   isValidServiceId,
-} from '../apps/http-api/server/routes/company/qa/artifacts.js';
-import { enrichResultsWithUrls } from '../apps/http-api/server/routes/company/qa/runs.js';
+} from '@apps/http-api/server/routes/company/qa/artifacts.js';
+import { enrichResultsWithUrls } from '@apps/http-api/server/routes/company/qa/runs.js';
 import {
   buildArtifactUrl,
   buildPlaywrightReportUrl,
-} from '../apps/dashboard/features/agents/tests/api/qa-api.js';
+} from '@apps/dashboard/features/agents/tests/api/qa-api.js';
 import {
   buildLocalTraceUrl,
   buildViewerUrl,
-} from '../apps/dashboard/features/agents/tests/shared/TraceLinkButton.js';
-import type { QaTestResult } from '../core/qa/types.js';
+} from '@apps/dashboard/features/agents/tests/shared/TraceLinkButton.js';
+import type { QaTestResult } from '@mcp/services/qa/types.js';
 
 // ─── mimeForExtension ────────────────────────────────────────────
 

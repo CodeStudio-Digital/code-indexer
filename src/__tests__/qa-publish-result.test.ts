@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { coercePayload } from '../core/coder/tools/company/qa/qa-publish-result.js';
+import { coercePayload } from '@mcp/company/tools/qa/qa-publish-result.js';
 
 describe('coercePayload (qa_publish_result)', () => {
   it('coerces a minimal valid payload', () => {

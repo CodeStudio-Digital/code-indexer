@@ -4,7 +4,7 @@ import {
   resolveQaApiBase,
   buildQaPreviewBaseUrl,
   envSafeServiceKey,
-} from '../core/qa/url-resolver.js';
+} from '@mcp/services/qa/url-resolver.js';
 
 // ─── resolveQaApiHostAlias ────────────────────────────────────────
 
