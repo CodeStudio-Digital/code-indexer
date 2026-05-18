@@ -204,9 +204,17 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   app.delete('/api/company/sessions/:id/kanban/checklist/:itemId', (c) => {
     const sessionId = sessionRoot(c);
     const itemId = parseIdParam(c, 'itemId');
+    // Resolve card_id BEFORE deletion so we can include it in the event.
+    const item = companyStore.getChecklistItem(itemId);
     const ok = companyStore.removeChecklistItem(itemId);
     if (!ok) return notFound(c, 'Item not found');
 
+    if (item) {
+      publishKanbanEvent(sessionId, 'kanban_checklist_removed', {
+        cardId: item.card_id,
+        itemId,
+      });
+    }
     return c.json({ ok: true });
   });
 

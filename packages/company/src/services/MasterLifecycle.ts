@@ -32,6 +32,27 @@ import type {
   IMasterNotifier,
   IMetaBusWirer,
 } from '@mcp/company/services/ports.js';
+import type { CompanyEventBus } from '@mcp/company/services/CompanyEventBus.js';
+import { parseMasterConfigFromDb } from '@mcp/company/services/master/config-loader.js';
+import { enrichMessageWithBoard } from '@mcp/company/services/master/board-enrichment.js';
+import {
+  attachMasterCompletionHandler,
+  wireMasterRunnerListeners,
+  type MasterRunnerStateMutators,
+} from '@mcp/company/services/master/runner-wiring.js';
+import {
+  startMaster,
+  type MasterStartOpts,
+  type MasterStartStateMutators,
+} from '@mcp/company/services/master/start.js';
+import {
+  resumeMaster,
+  type MasterResumeOpts,
+} from '@mcp/company/services/master/resume.js';
+import {
+  resurrectMaster,
+  type MasterResurrectStateMutators,
+} from '@mcp/company/services/master/resurrect.js';
 
 import { resolveRoleSkills, type RoleSkills } from '@mcp/company/types.js';
 
@@ -80,7 +101,20 @@ export interface MasterLifecycleDeps {
   status: IAgentStatusUpdater;
   humanInLoop: HumanInTheLoop;
   wirer: IMetaBusWirer;
-  idle: IIdleController;
+  /**
+   * Direct `IdleController` is still accepted for back-compat with
+   * callers that haven't migrated to the bus yet. When `eventBus` is
+   * provided, MasterLifecycle prefers the bus and the `idle` ref becomes
+   * a no-op; passing both is allowed but only the bus path actually fires.
+   */
+  idle?: IIdleController;
+  /**
+   * Phase 8 part 3: internal pub/sub used to notify `IdleController`
+   * about master lifecycle transitions without holding a direct ref.
+   * Optional only because some narrow test fixtures construct the
+   * service without a full orchestrator harness.
+   */
+  eventBus?: CompanyEventBus;
   /** Bus of subordinate-attention events (question/plan/tasks/finished). */
   attention: MasterAttention;
   /** Facade handed to runCoder so tools can reach the orchestrator. */
@@ -203,35 +237,13 @@ export class MasterLifecycle implements IMasterNotifier {
   private loadConfigFromDb(): void {
     const ctx = this.deps.ctx;
     const row = ctx.companyStore.getCompanySession(ctx.companySessionId);
-    if (!row?.config_json) return;
-    try {
-      const cfg = JSON.parse(row.config_json) as {
-        role_assignments?: RoleConfig[];
-        allowed_models?: AllowedModel[];
-      };
-      if (Array.isArray(cfg.allowed_models)) {
-        this._allowedModels = cfg.allowed_models.filter(
-          (m) => typeof m.provider === 'string' && typeof m.model === 'string',
-        );
-      }
-      // Merge DB-persisted role_assignments with whatever opts provided.
-      // opts.roleConfigs (set before this call) wins for roles present in
-      // both, but DB-only roles are kept — covers the case where a template
-      // was configured but stream.ts was given a subset.
-      if (Array.isArray(cfg.role_assignments) && cfg.role_assignments.length > 0) {
-        const seen = new Set(this._roleConfigs.map((r) => r.role));
-        for (const r of cfg.role_assignments) {
-          if (r && typeof r.role === 'string' && !seen.has(r.role)) {
-            this._roleConfigs.push(r);
-            seen.add(r.role);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn(
-        `[master] config_json parse failed for session=${ctx.companySessionId}: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    const parsed = parseMasterConfigFromDb(
+      row?.config_json ?? null,
+      this._roleConfigs,
+      ctx.companySessionId,
+    );
+    if (parsed.allowedModels.length > 0) this._allowedModels = parsed.allowedModels;
+    this._roleConfigs = parsed.roleConfigs;
   }
 
   // ─── Notifications ──────────────────────────────────────────────
@@ -268,379 +280,108 @@ export class MasterLifecycle implements IMasterNotifier {
       runner.pushUserMessage(enriched);
       return;
     }
-    this.deps.idle.onMasterResurrected();
+    this.notifyIdleResurrected();
     void this.resurrect(enriched);
   }
 
+  /** Phase 8 part 3: prefer the bus; fall back to direct ref for tests. */
+  private notifyIdleResurrected(): void {
+    if (this.deps.eventBus) this.deps.eventBus.emit({ type: 'master.resurrected' });
+    else this.deps.idle?.onMasterResurrected();
+  }
+  private notifyIdleEnded(): void {
+    if (this.deps.eventBus) this.deps.eventBus.emit({ type: 'master.ended' });
+    else this.deps.idle?.onMasterEnded();
+  }
+  private notifyIdleUserMessage(): void {
+    if (this.deps.eventBus) this.deps.eventBus.emit({ type: 'user.message_received' });
+    else this.deps.idle?.onUserMessageReceived();
+  }
+
   private enrichWithBoard(message: string): string {
-    try {
-      const recent = this.deps.ctx.companyStore.readBoard(this.deps.ctx.companySessionId, {
-        sinceId: this.deps.board.lastMasterSeenId,
-        limit: 30,
-      });
-      if (recent.length === 0) return message;
-      const summary = recent
-        .map((e) => `  [@${e.author_role}] (${e.kind}) ${e.content.length > 600 ? e.content.slice(0, 600) + '...' : e.content}`)
-        .join('\n');
-      const enriched =
-        message +
-        `\n\n--- Board updates since your last activity (since_id=${this.deps.board.lastMasterSeenId}) ---\n` +
-        summary;
-      this.deps.board.advanceMasterWatermark(recent[recent.length - 1].id);
-      return enriched;
-    } catch {
-      return message;
-    }
+    return enrichMessageWithBoard({ ctx: this.deps.ctx, board: this.deps.board }, message);
   }
 
   // ─── Start (fresh) ──────────────────────────────────────────────
 
-  async start(opts: {
-    userMessage: string;
-    provider: string;
-    model: string;
-    maxTurns?: number;
-    signal?: AbortSignal;
-    roleConfigs?: RoleConfig[];
-    attachments?: CoderAttachment[];
-    /** Enable extended thinking on the master's first turn (and subsequent turns until toggled off). */
-    thinking?: boolean;
-  }): Promise<RunCoderHandle> {
-    if (this._handle) throw new Error('Master already started');
-
-    const ctx = this.deps.ctx;
-    const primaryProjectId = ctx.projects[0]?.project_id;
-    if (!primaryProjectId) throw new Error('Company session has no linked projects');
-
-    const config = loadConfig();
-    const store = new SessionStore(config.dbPath);
-
-    const masterSession = store.createSession({
-      project_id: primaryProjectId,
-      title: `[Company Master] ${ctx.companySessionId}`,
-      provider: opts.provider,
-      model: opts.model,
+  async start(opts: MasterStartOpts): Promise<RunCoderHandle> {
+    return startMaster(opts, {
+      ctx: this.deps.ctx,
+      board: this.deps.board,
+      orchestratorRef: this.deps.orchestratorRef,
+      state: this.buildStartStateMutators(),
+      wireRunner: (runner, runId) => this.wireAllForRunner(runner, runId),
+      attachCompletion: (handle, runId) => this.attachCompletionHandler(handle, runId),
     });
+  }
 
-    const masterRun = ctx.companyStore.createAgentRun({
-      company_session_id: ctx.companySessionId,
-      role: 'master',
-      coder_session_id: masterSession.id,
-      project_ids: ctx.projects.map((p) => p.project_id),
-      provider: opts.provider,
-      model: opts.model,
-    });
-    this._agentRunId = masterRun.id;
-    this._roleConfigs = (opts.roleConfigs ?? []) as RoleConfig[];
-    // Populate `_allowedModels` from the persisted session config. Must
-    // happen before any `spawn_subordinate_agent` call, so we do it
-    // here (start + resume) alongside role configs.
-    this.loadConfigFromDb();
-
-    const orchestrator = this.deps.orchestratorRef as unknown as {
-      provisionSandboxIfNeeded?: (signal?: AbortSignal) => Promise<import('@mcp/company/types.js').SandboxBinding | null>;
-      getSandboxStackForService?: (serviceId?: string | null) => string | null;
+  /** Build the state-mutator surface shared by start + resume. */
+  private buildStartStateMutators(): MasterStartStateMutators {
+    const self = this;
+    return {
+      get hasHandle() { return !!self._handle; },
+      get roleConfigs() { return self._roleConfigs; },
+      get allowedModels() { return self._allowedModels; },
+      setAgentRunId: (id) => { self._agentRunId = id; },
+      setRoleConfigs: (configs) => { self._roleConfigs = configs; },
+      loadConfigFromDb: () => self.loadConfigFromDb(),
+      setCompanyContext: (ctx) => { self._companyContext = ctx; },
+      setPromptBlock: (block) => { self._promptBlock = block; },
+      setLastUserAttachments: (atts) => { self._lastUserAttachments = atts; },
+      setHandle: (handle) => { self._handle = handle; },
+      setRunnerExited: (v) => { self._runnerExited = v; },
     };
-    const configuredStack = orchestrator.getSandboxStackForService?.() ?? null;
-
-    ctx.companyStore.setMasterSessionId(ctx.companySessionId, masterSession.id);
-    ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'running');
-
-    const masterRoleConfig = this._roleConfigs.find((r) => r.role === 'master');
-    const masterResolvedSkills = resolveRoleSkills(masterRoleConfig?.skills, {
-      stack: configuredStack ?? undefined,
-    });
-    if (masterResolvedSkills.length > 0) {
-      try {
-        const skillStore = new SkillStore(config.dbPath);
-        const allSkills = skillStore.resolveActiveSkills(masterSession.id, primaryProjectId);
-        for (const skill of allSkills) {
-          skillStore.setSessionSkillEnabled(masterSession.id, skill.id, masterResolvedSkills.includes(skill.id));
-        }
-        skillStore.close();
-      } catch (e) {
-        console.warn(`[company] Failed to configure skills for master: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-
-    // Builder mode: provision the sandbox BEFORE runCoder so the binding
-    // can be woven into the master's CompanyContext. For non-builder
-    // sessions this call is a no-op that returns null (the SandboxService
-    // inspects `config_json.builder` and bails out cleanly).
-    // SandboxService.provisionIfNeeded never throws — it returns null when
-    // the container can't be started, so the master always starts.
-    const sandboxBinding = orchestrator.provisionSandboxIfNeeded
-      ? await orchestrator.provisionSandboxIfNeeded(opts.signal)
-      : null;
-
-    // Read the configured stack from the session config (DB-backed, works
-    // even when the primary container is not running). Non-null means the
-    // session is in builder mode regardless of container status.
-
-    const companyContext: CompanyContext = {
-      orchestrator: this.deps.orchestratorRef as never,
-      companySessionId: ctx.companySessionId,
-      agentRole: 'master',
-      agentRunId: masterRun.id,
-      allowedProjectIds: ctx.projects.map((p) => p.project_id),
-      isMaster: true,
-      sandbox: sandboxBinding ?? undefined,
-      builderStack: configuredStack ?? undefined,
-    };
-
-    const projectInfos = ctx.projects.map((p) => {
-      const proj = ctx.db.getProject(p.project_id);
-      return {
-        id: p.project_id,
-        name: proj?.name ?? `project-${p.project_id}`,
-        rootPath: proj?.root_path ?? '',
-        label: p.label ?? undefined,
-      };
-    });
-
-    const promptBlock = buildMasterCompanyBlock({
-      roster: buildPromptRoster(this._roleConfigs, configuredStack),
-      projects: projectInfos,
-      // Builder-mode awareness: tell the master it's in a builder session
-      // and which files are MCP-managed. When the primary container is
-      // down (sandboxBinding null) we still pass the stack so the master
-      // knows it's a builder session — workdir/previewUrl are omitted and
-      // buildBuilderInstructions renders a degraded but useful block.
-      builder: configuredStack
-        ? {
-            workdir: sandboxBinding?.workdir,
-            stack: orchestrator.getSandboxStackForService?.() ?? configuredStack,
-            previewUrl: sandboxBinding?.previewUrl,
-          }
-        : undefined,
-      // Curated pool — when non-empty, the master prompt gains a strict
-      // "ALLOWED SUBORDINATE MODELS" section + tool rejection guidance.
-      allowedModels: this._allowedModels.length > 0 ? this._allowedModels : undefined,
-    });
-
-    this._companyContext = companyContext;
-    this._promptBlock = promptBlock;
-
-    this._lastUserAttachments = opts.attachments ?? [];
-    const startBoardMsg = opts.attachments && opts.attachments.length > 0
-      ? `${opts.userMessage}\n\n_[${opts.attachments.length} ${opts.attachments.length === 1 ? 'attachment' : 'attachments'}]_`
-      : opts.userMessage;
-    this.deps.board.post('human', null, 'message', startBoardMsg);
-    this.deps.board.post('system', null, 'message',
-      `Master agent started (${opts.provider}/${opts.model}). Analyzing task...`);
-
-    const handle = await runCoder({
-      session: { id: masterSession.id },
-      userMessage: opts.userMessage,
-      attachments: opts.attachments,
-      maxTurns: opts.maxTurns ?? 100,
-      signal: opts.signal,
-      planMode: false,
-      profile: 'full',
-      companyContext,
-      companyPromptBlock: promptBlock,
-      thinking: opts.thinking,
-      // Wire HumanInTheLoop BEFORE the runner takes turn 1, so a master
-      // that calls `ask_user` immediately is still captured. Without
-      // this, the prompt is created in the runner but the
-      // `question_posted` listener doesn't exist yet → the question is
-      // silently lost and the master blocks forever.
-      onRunnerReady: (runner) => this.wireAllForRunner(runner, masterRun.id),
-    } as RunCoderOptions & { companyPromptBlock: string });
-
-    this._handle = handle;
-    this._runnerExited = false;
-    this.attachCompletionHandler(handle, masterRun.id);
-
-    store.close();
-    return handle;
   }
 
   // ─── Resume existing (cold-start) ───────────────────────────────
 
-  async resumeExisting(opts: {
-    userMessage: string;
-    maxTurns?: number;
-    roleConfigs?: RoleConfig[];
-    attachments?: CoderAttachment[];
-    /** Enable extended thinking on the resumed master's next turn. */
-    thinking?: boolean;
-  }): Promise<RunCoderHandle> {
-    if (this._handle) throw new Error('Master already started');
-
-    const ctx = this.deps.ctx;
-    const agentRuns = ctx.companyStore.listAgentRuns(ctx.companySessionId);
-    const masterRun = agentRuns.filter((r) => r.role === 'master').pop();
-    if (!masterRun) throw new Error('No master agent_run found — use start instead');
-
-    this._agentRunId = masterRun.id;
-    this._roleConfigs = (opts.roleConfigs ?? []) as RoleConfig[];
-    // Populate `_allowedModels` from the persisted session config. Must
-    // happen before any `spawn_subordinate_agent` call, so we do it
-    // here (start + resume) alongside role configs.
-    this.loadConfigFromDb();
-
-    const orchestratorResume = this.deps.orchestratorRef as unknown as {
-      provisionSandboxIfNeeded?: () => Promise<import('@mcp/company/types.js').SandboxBinding | null>;
-      getSandboxStackForService?: (serviceId?: string | null) => string | null;
-    };
-    const configuredStackResume = orchestratorResume.getSandboxStackForService?.() ?? null;
-
-    ctx.companyStore.updateAgentRunStatus(masterRun.id, 'running');
-    ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'running');
-
-    const masterRoleConfigResume = this._roleConfigs.find((r) => r.role === 'master');
-    const masterResolvedSkillsResume = resolveRoleSkills(masterRoleConfigResume?.skills, {
-      stack: configuredStackResume ?? undefined,
+  async resumeExisting(opts: MasterResumeOpts): Promise<RunCoderHandle> {
+    return resumeMaster(opts, {
+      ctx: this.deps.ctx,
+      board: this.deps.board,
+      orchestratorRef: this.deps.orchestratorRef,
+      state: this.buildStartStateMutators(),
+      wireRunner: (runner, runId) => this.wireAllForRunner(runner, runId),
+      attachCompletion: (handle, runId) => this.attachCompletionHandler(handle, runId),
     });
-    if (masterResolvedSkillsResume.length > 0) {
-      const resumeConfig = loadConfig();
-      const primaryProjectIdResume = ctx.projects[0]?.project_id;
-      if (primaryProjectIdResume) {
-        try {
-          const skillStore = new SkillStore(resumeConfig.dbPath);
-          const allSkills = skillStore.resolveActiveSkills(masterRun.coder_session_id, primaryProjectIdResume);
-          for (const skill of allSkills) {
-            skillStore.setSessionSkillEnabled(masterRun.coder_session_id, skill.id, masterResolvedSkillsResume.includes(skill.id));
-          }
-          skillStore.close();
-        } catch (e) {
-          console.warn(`[company] Failed to configure skills for master (resume): ${e instanceof Error ? e.message : String(e)}`);
-        }
-      }
-    }
-
-    // Same builder-provisioning hook as `start()` — resumes that were
-    // kicked off in builder mode get their sandbox re-provisioned here
-    // (the manager's in-memory state is lost on API restart, so the
-    // container is rebuilt fresh; persisting workdir contents across
-    // restarts is a Phase 5 item).
-    // SandboxService.provisionIfNeeded never throws — returns null when
-    // the container can't start, so the master always resumes.
-    const sandboxBindingResume = orchestratorResume.provisionSandboxIfNeeded
-      ? await orchestratorResume.provisionSandboxIfNeeded()
-      : null;
-
-    // DB-backed stack config — non-null means builder mode regardless of
-    // whether the container is currently running.
-
-    const companyContext: CompanyContext = {
-      orchestrator: this.deps.orchestratorRef as never,
-      companySessionId: ctx.companySessionId,
-      agentRole: 'master',
-      agentRunId: masterRun.id,
-      allowedProjectIds: ctx.projects.map((p) => p.project_id),
-      isMaster: true,
-      sandbox: sandboxBindingResume ?? undefined,
-      builderStack: configuredStackResume ?? undefined,
-    };
-
-    const projectInfos = ctx.projects.map((p) => {
-      const proj = ctx.db.getProject(p.project_id);
-      return {
-        id: p.project_id,
-        name: proj?.name ?? `project-${p.project_id}`,
-        rootPath: proj?.root_path ?? '',
-        label: p.label ?? undefined,
-      };
-    });
-
-    const promptBlock = buildMasterCompanyBlock({
-      roster: buildPromptRoster(this._roleConfigs, configuredStackResume),
-      projects: projectInfos,
-      builder: configuredStackResume
-        ? {
-            workdir: sandboxBindingResume?.workdir,
-            stack: orchestratorResume.getSandboxStackForService?.() ?? configuredStackResume,
-            previewUrl: sandboxBindingResume?.previewUrl,
-          }
-        : undefined,
-      allowedModels: this._allowedModels.length > 0 ? this._allowedModels : undefined,
-    });
-
-    this._companyContext = companyContext;
-    this._promptBlock = promptBlock;
-
-    this._lastUserAttachments = opts.attachments ?? [];
-    this.deps.board.post('system', null, 'message',
-      `Master resumed from existing session (${masterRun.provider}/${masterRun.model}).`);
-
-    const handle = await runCoder({
-      session: { id: masterRun.coder_session_id },
-      userMessage: opts.userMessage,
-      attachments: opts.attachments,
-      maxTurns: opts.maxTurns ?? 100,
-      planMode: false,
-      profile: 'full',
-      companyContext,
-      companyPromptBlock: promptBlock,
-      thinking: opts.thinking,
-      onRunnerReady: (runner) => this.wireAllForRunner(runner, masterRun.id),
-    } as RunCoderOptions & { companyPromptBlock: string });
-
-    this._handle = handle;
-    this._runnerExited = false;
-    this.attachCompletionHandler(handle, masterRun.id);
-
-    return handle;
   }
 
   // ─── Resurrection (subordinate finished after master exited) ───
 
-  private async resurrect(message: string, attachments?: CoderAttachment[], thinking?: boolean): Promise<void> {
-    if (!this._handle || !this._companyContext || !this._agentRunId) return;
-    if (this.deps.ctx.isAborted || this.deps.ctx.isBusEnded) return;
+  private async resurrect(
+    message: string,
+    attachments?: CoderAttachment[],
+    thinking?: boolean,
+  ): Promise<void> {
+    return resurrectMaster(message, attachments, thinking, {
+      ctx: this.deps.ctx,
+      status: this.deps.status,
+      board: this.deps.board,
+      state: this.buildResurrectStateMutators(),
+      wireRunner: (runner, runId) => this.wireAllForRunner(runner, runId),
+      attachCompletion: (handle, runId) => this.attachCompletionHandler(handle, runId),
+    });
+  }
 
-    if (this.resumingPromise) {
-      this.resumeQueue.push({ message, attachments });
-      return this.resumingPromise;
-    }
-
-    const doResume = async () => {
-      this.deps.status.setStatus(this._agentRunId!, 'running');
-
-      this.deps.board.post('system', null, 'message',
-        'Master reactivated — subordinate reported completion.');
-
-      const masterSessionId = this._handle!.session?.id;
-      if (!masterSessionId) {
-        console.warn('[company] resurrect: no master session id');
-        return;
-      }
-
-      const handle = await runCoder({
-        session: { id: masterSessionId },
-        userMessage: message,
-        attachments,
-        maxTurns: 40,
-        planMode: false,
-        profile: 'full',
-        companyContext: this._companyContext!,
-        companyPromptBlock: this._promptBlock,
-        thinking,
-        onRunnerReady: (runner) => this.wireAllForRunner(runner, this._agentRunId!),
-      } as RunCoderOptions & { companyPromptBlock: string });
-
-      this._ended = false;
-      this._runnerExited = false;
-      this._endedWithError = null;
-      this._handle = { ...this._handle!, runner: handle.runner, done: handle.done };
-
-      // Flush queued messages that arrived during spin-up.
-      const queued = this.resumeQueue.splice(0, this.resumeQueue.length);
-      for (const item of queued) {
-        if (item.attachments?.length) {
-          handle.runner.pushUserContent(attachmentsToBlocks(item.message, item.attachments));
-        } else {
-          handle.runner.pushUserMessage(item.message);
-        }
-      }
-
-      this.attachCompletionHandler(handle, this._agentRunId!);
+  /** Build the state-mutator surface used by the resurrect helper. */
+  private buildResurrectStateMutators(): MasterResurrectStateMutators {
+    const self = this;
+    return {
+      get handle() { return self._handle; },
+      get companyContext() { return self._companyContext; },
+      get promptBlock() { return self._promptBlock; },
+      get agentRunId() { return self._agentRunId; },
+      get resumingPromise() { return self.resumingPromise; },
+      setResumingPromise: (p) => { self.resumingPromise = p; },
+      get resumeQueue() { return self.resumeQueue; },
+      drainResumeQueue: () => self.resumeQueue.splice(0, self.resumeQueue.length),
+      refreshHandle: (runner, done) => {
+        if (self._handle) self._handle = { ...self._handle, runner, done };
+      },
+      setEnded: (v) => { self._ended = v; },
+      setRunnerExited: (v) => { self._runnerExited = v; },
+      setEndedWithError: (v) => { self._endedWithError = v; },
     };
-
-    this.resumingPromise = doResume().finally(() => { this.resumingPromise = null; });
-    return this.resumingPromise;
   }
 
   // ─── Live operations ────────────────────────────────────────────
@@ -678,7 +419,7 @@ export class MasterLifecycle implements IMasterNotifier {
       ? `${message}\n\n_[${attachments.length} ${attachments.length === 1 ? 'attachment' : 'attachments'}]_`
       : message;
     this.deps.board.post('human', null, 'message', boardMessage);
-    this.deps.idle.onUserMessageReceived();
+    this.notifyIdleUserMessage();
 
     if (!this._ended && this._handle?.runner) {
       const runner = this._handle.runner;
@@ -732,82 +473,41 @@ export class MasterLifecycle implements IMasterNotifier {
    * resolve). Accepts `runner` directly because at call time we don't
    * have a full `RunCoderHandle` yet.
    */
-  private wireAllForRunner(runner: CoderRunner, runId: number): void {
-    const synthetic = { runner } as unknown as RunCoderHandle;
-    this.deps.wirer.wire(synthetic, 'master', runId);
-    this.deps.humanInLoop.wireMasterPlan(synthetic);
-    this.deps.humanInLoop.wireMasterQuestion(synthetic);
+  /**
+   * Narrow state-mutator interface the wiring helpers use to read/write
+   * the master's private flags without becoming class methods. Returns
+   * a fresh object per call — getters read live state from `this` via
+   * a captured arrow closure.
+   */
+  private buildRunnerStateMutators(): MasterRunnerStateMutators {
+    const self = this;
+    return {
+      get attentionOff() { return self._attentionOff; },
+      setAttentionOff: (off) => { self._attentionOff = off; },
+      setRunnerExited: (v) => { self._runnerExited = v; },
+      setEnded: (v) => { self._ended = v; },
+      setEndedWithError: (v) => { self._endedWithError = v; },
+      get isEnded() { return self._ended; },
+      get isRunnerExited() { return self._runnerExited; },
+      notifyIdleEnded: () => self.notifyIdleEnded(),
+    };
+  }
 
-    // Permanent attention listener: every subordinate transition
-    // (question/plan/tasks/finished) interrupts a pending waitForUserInput
-    // on the master so the message enqueued by `master.notify` actually gets
-    // consumed in the next turn. Without this, a sub that finishes while
-    // the master is blocked in `ask_user`/`submit_plan` would sit unread
-    // until the human responded — sometimes never. Mirrors the per-tool
-    // unsubscribe pattern in `wait_for_subordinates` but persists for the
-    // master's entire lifetime; cleaned up in `attachCompletionHandler.finally`.
-    if (this._attentionOff) {
-      try { this._attentionOff(); } catch { /* best-effort */ }
-    }
-    this._attentionOff = this.deps.attention.on((ev) => {
-      if (ev.kind === 'inbox_answered') return;
-      if (this._ended || this._runnerExited) return;
-      if (runner.isWaitingForInput()) {
-        runner.interruptWait({
-          kind: ev.kind === 'finished' ? 'subordinate_event' : ev.kind,
-          agentRunId: ev.agentRunId,
-          role: ev.role,
-        });
-      }
+  private wireAllForRunner(runner: CoderRunner, runId: number): void {
+    wireMasterRunnerListeners(runner, runId, {
+      wirer: this.deps.wirer,
+      humanInLoop: this.deps.humanInLoop,
+      attention: this.deps.attention,
+      state: this.buildRunnerStateMutators(),
     });
   }
 
   private attachCompletionHandler(handle: RunCoderHandle, runId: number): void {
-    handle.done
-      .then(({ reason, error }) => {
-        // Set BEFORE any further work so a subordinate notify() arriving in
-        // this microtask routes to resurrect instead of pushing into a dead
-        // buffer (see _runnerExited docs above).
-        this._runnerExited = true;
-        const detail = error ? ` — ${error}` : '';
-        try {
-          this.deps.ctx.companyStore.updateAgentRunStatus(
-            runId,
-            reason === 'completed' ? 'completed' : 'error',
-            reason !== 'completed' ? `${reason}${detail}` : undefined,
-          );
-        } catch { /* ignore */ }
-        if (reason !== 'completed') {
-          this._endedWithError = `${reason}${detail}`;
-        }
-        this.deps.board.post('system', null, 'message', `Master finished: ${reason}${detail}`);
-      })
-      .catch((err) => {
-        this._runnerExited = true;
-        try {
-          this.deps.ctx.companyStore.updateAgentRunStatus(runId, 'error');
-        } catch { /* ignore */ }
-        this._endedWithError = err?.message ?? String(err);
-        this.deps.board.post('system', null, 'message',
-          `Master error: ${err?.message ?? String(err)}`);
-      })
-      .finally(() => {
-        this._ended = true;
-        // Tear down the permanent attention listener so a stale `interruptWait`
-        // doesn't fire against a dead runner during the brief window before
-        // resurrect rewires a fresh one.
-        if (this._attentionOff) {
-          try { this._attentionOff(); } catch { /* best-effort */ }
-          this._attentionOff = null;
-        }
-        // If the master ended while a master_prompt was still pending
-        // (errored / aborted while inside ask_user or submit_plan), mark
-        // those prompts as cancelled so the dashboard transitions them
-        // out of "pending" instead of leaving them dangling forever.
-        try {
-          this.deps.humanInLoop.cancelPendingMasterPrompts();
-        } catch { /* best-effort */ }
-        this.deps.idle.onMasterEnded();
-      });
+    attachMasterCompletionHandler(handle, runId, {
+      ctx: this.deps.ctx,
+      board: this.deps.board,
+      humanInLoop: this.deps.humanInLoop,
+      state: this.buildRunnerStateMutators(),
+    });
   }
 }

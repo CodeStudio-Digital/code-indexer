@@ -102,7 +102,11 @@ const envSet: CoderTool = {
     'every live container of the session as `/app/.env` (running dev-servers pick it up on their ' +
     'next file-watch tick; some frameworks require a restart to re-read env). Use `is_secret: true` ' +
     'for API keys / tokens — that masks the value in the dashboard Env tab (agents still see ' +
-    'plaintext). Key MUST match /^[A-Za-z_][A-Za-z0-9_]*$/.',
+    'plaintext). Key MUST match /^[A-Za-z_][A-Za-z0-9_]*$/. ' +
+    'WRITE PROTECTION: agents cannot silently overwrite keys whose `source === "user"` ' +
+    '(values the operator typed by hand). Pass `force: true` to override — only do so when ' +
+    'the user has explicitly asked you to update that value, otherwise prefer a different ' +
+    'key name or surface the conflict via a board message.',
   source: 'native',
   parameters: {
     type: 'object',
@@ -112,6 +116,12 @@ const envSet: CoderTool = {
       is_secret: {
         type: 'boolean',
         description: 'Mark as secret so the dashboard masks the value.',
+      },
+      force: {
+        type: 'boolean',
+        description:
+          'Bypass the operator-owned write protection. Only use when the user explicitly ' +
+          'asked you to update a value they previously typed.',
       },
     },
     required: ['key', 'value'],
@@ -125,6 +135,15 @@ const envSet: CoderTool = {
     const key = String(args.key ?? '').trim();
     if (!KEY_RE.test(key)) return err(`env_set: invalid key '${key}'`);
     const value = String(args.value ?? '');
+    const force = !!args.force;
+    const existing = s.get(sessionId, key);
+    if (existing && existing.source === 'user' && !force) {
+      return err(
+        `env_set refused: '${key}' was set by the operator (source=user). ` +
+          `Ask the user before changing it, or call env_set again with force:true ` +
+          `when the user explicitly asked for this change.`,
+      );
+    }
     s.upsert(sessionId, key, value, !!args.is_secret, { source: 'agent' });
     await getSandboxManager()
       .syncEnvsToAllContainers(String(sessionId))

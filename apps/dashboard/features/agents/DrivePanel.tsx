@@ -3,12 +3,14 @@
  *
  * Lists every file the agents have written (or that the human has
  * uploaded), opens any file inline, and lets the operator attach new
- * documents or remove stale ones. Polls every 5s so files written by a
- * running session show up without manual refresh.
+ * documents or remove stale ones.
  *
- * The drive's scope is a function of the session's template (or the
- * session itself if template-less); the backend resolves it. The panel
- * just renders whatever the API returns.
+ * Phase 2: the file list lives in the `driveSlice` and is kept fresh by
+ * SSE `drive.file_added | updated | deleted` events. The legacy 5 s poll
+ * stays only as a fallback for when the SSE stream is disconnected (the
+ * orchestrator is dormant or the user just opened the tab). Operator
+ * mutations always refetch right after the request so the UI never lags
+ * behind a manual action regardless of connection state.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FolderOpen, RefreshCw, Trash2, Upload, FileText, Eye, X } from 'lucide-react';
@@ -16,19 +18,15 @@ import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
-import { useApi, apiPost, apiDelete } from '../../hooks/useApi.js';
+import { apiPost, apiDelete } from '../../hooks/useApi.js';
+import {
+  selectDrive,
+  selectStream,
+  useCompanyStore,
+} from '../../state/company/index.js';
+import type { DriveFileMeta } from '../../state/company/driveSlice.js';
 
-interface DriveFile {
-  id: number;
-  scopeKey: string;
-  path: string;
-  sizeBytes: number;
-  mime: string;
-  ownerRole: string | null;
-  ownerAgentRunId: number | null;
-  createdAt: string;
-  updatedAt: string;
-}
+type DriveFile = DriveFileMeta;
 
 interface DriveListResponse {
   scope: string;
@@ -53,7 +51,13 @@ function formatBytes(n: number): string {
 
 export function DrivePanel({ companySessionId }: DrivePanelProps) {
   const url = `/company/sessions/${companySessionId}/drive`;
-  const list = useApi<DriveListResponse>(url);
+
+  // ─── Slice subscription ──────────────────────────────────────
+  const slot = useCompanyStore((s) => selectDrive(s, companySessionId));
+  const driveHydrate = useCompanyStore((s) => s.driveHydrate);
+  const driveSetLoading = useCompanyStore((s) => s.driveSetLoading);
+  const driveSetError = useCompanyStore((s) => s.driveSetError);
+  const connected = useCompanyStore((s) => selectStream(s, companySessionId).connected);
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [viewer, setViewer] = useState<DriveReadResponse | null>(null);
@@ -73,12 +77,40 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
     skipped: { path: string; reason: string }[];
   } | null>(null);
 
-  // 5s polling — same pattern as InboxPanel.
+  // Fetch+hydrate from REST. Called on mount and as the manual refresh
+  // action; mutations don't need to call this because the backend SSE
+  // event (`drive.file_added | updated | deleted`) keeps the slice up
+  // to date. The poll fallback below uses this same loader.
+  const refresh = useCallback(async () => {
+    driveSetLoading(companySessionId, true);
+    driveSetError(companySessionId, null);
+    try {
+      const res = await fetch(`/api${url}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = (await res.json()) as DriveListResponse;
+      driveHydrate(companySessionId, body.scope, body.files);
+    } catch (e) {
+      driveSetError(companySessionId, e instanceof Error ? e.message : String(e));
+    } finally {
+      driveSetLoading(companySessionId, false);
+    }
+  }, [companySessionId, url, driveHydrate, driveSetLoading, driveSetError]);
+
+  // Initial load.
   useEffect(() => {
-    const t = setInterval(() => list.refetch(), 5000);
+    void refresh();
+  }, [refresh]);
+
+  // Poll fallback — only fires while the SSE stream is disconnected. As
+  // soon as the stream reconnects, the slice resumes receiving live
+  // events and the interval clears itself.
+  useEffect(() => {
+    if (connected) return;
+    const t = setInterval(() => {
+      void refresh();
+    }, 5000);
     return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [connected, refresh]);
 
   const openFile = useCallback(
     async (path: string) => {
@@ -115,14 +147,17 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
         setShowUpload(false);
         setUploadPath('');
         setUploadContent('');
-        list.refetch();
+        // SSE `drive.file_added | updated` updates the slice when
+        // connected; refresh keeps the UI tight even when the orchestrator
+        // is dormant (no publisher to fire the event).
+        void refresh();
       } catch (e) {
         setUploadError(e instanceof Error ? e.message : String(e));
       } finally {
         setUploadBusy(false);
       }
     },
-    [url, uploadPath, uploadContent, list],
+    [url, uploadPath, uploadContent, refresh],
   );
 
   const handleFilePick = useCallback(
@@ -202,9 +237,9 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
       }
 
       setFolderProgress({ done: total, total, current: '', skipped });
-      list.refetch();
+      void refresh();
     },
-    [url, list],
+    [url, refresh],
   );
 
   const handleDelete = useCallback(
@@ -216,16 +251,16 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
           setSelectedPath(null);
           setViewer(null);
         }
-        list.refetch();
+        void refresh();
       } catch (e) {
         alert(`Delete failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
-    [url, list, selectedPath],
+    [url, refresh, selectedPath],
   );
 
-  const files = list.data?.files ?? [];
-  const scope = list.data?.scope ?? '';
+  const files = useMemo(() => Array.from(slot.files.values()), [slot.files]);
+  const scope = slot.scope ?? '';
 
   const sortedFiles = useMemo(
     () => [...files].sort((a, b) => a.path.localeCompare(b.path)),
@@ -250,7 +285,7 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => list.refetch()}
+            onClick={() => void refresh()}
             title="Refresh"
             className="h-7 w-7 p-0"
           >
@@ -384,10 +419,10 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
       <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-[minmax(260px,_1fr)_2fr]">
         {/* List */}
         <div className="overflow-auto border-r">
-          {list.loading ? (
+          {slot.loading && !slot.initialized ? (
             <div className="p-3 text-xs text-muted-foreground">Loading…</div>
-          ) : list.error ? (
-            <div className="p-3 text-xs text-destructive">{list.error}</div>
+          ) : slot.error ? (
+            <div className="p-3 text-xs text-destructive">{slot.error}</div>
           ) : sortedFiles.length === 0 ? (
             <div className="p-3 text-xs text-muted-foreground">
               The drive is empty. Use <strong>Attach</strong> to upload a document, or let the

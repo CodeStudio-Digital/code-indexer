@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Plus, Users, FileText, Trash2, Edit2, ChevronRight, ChevronLeft, PanelLeft, PanelLeftClose, Copy } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
@@ -16,6 +17,7 @@ import {
 import { TemplateBuilderModal } from './TemplateBuilderModal.js';
 import { TemplateListPanel } from './TemplateListPanel.js';
 import { NewCompanyDialog } from './NewCompanyDialog.js';
+import { buildAgentsDefaultUrl } from './routing.js';
 // BuilderView is a smart wrapper: when the session was created with a
 // `builder.stack`, it renders the split chat+preview layout; otherwise
 // it delegates transparently to CompanySessionView. Routing through it
@@ -34,15 +36,24 @@ type SidebarView = 'sessions' | 'templates';
 
 export function AgentsTab() {
   const { t } = useTranslation('agents');
+  const navigate = useNavigate();
+  const routeParams = useParams<{ rootId?: string }>();
   const { data: sessions, refetch: refetchSessions } = useApi<CompanySession[]>('/company/sessions');
-  const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
+  // Selected session is URL-driven: the `:rootId` segment of
+  // `/company/sessions/:rootId/...`. At `/agents` it's null.
+  const selectedSessionId = routeParams.rootId != null ? Number(routeParams.rootId) : null;
   const [showNewTemplate, setShowNewTemplate] = useState(false);
   const [showNewCompany, setShowNewCompany] = useState(false);
   const [sidebarView, setSidebarView] = useState<SidebarView>('sessions');
-  const [agentsSidebarOpen, setAgentsSidebarOpen] = useState(true);
+  const [agentsSidebarOpen, setAgentsSidebarOpen] = useState(selectedSessionId == null);
   const [deleteTarget, setDeleteTarget] = useState<CompanySession | null>(null);
 
   const selectedSession = sessions?.find((s) => s.id === selectedSessionId);
+
+  function selectSession(id: number) {
+    navigate(buildAgentsDefaultUrl(id));
+    setAgentsSidebarOpen(false);
+  }
 
   async function handleDelete(e: React.MouseEvent, id: number) {
     e.stopPropagation();
@@ -56,8 +67,7 @@ export function AgentsTab() {
     if (!res.ok) return;
     const data = await res.json() as { session: CompanySession };
     refetchSessions();
-    setSelectedSessionId(data.session.id);
-    setAgentsSidebarOpen(false);
+    selectSession(data.session.id);
   }
 
   return (
@@ -120,8 +130,10 @@ export function AgentsTab() {
                   key={s.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => { setSelectedSessionId(s.id); setAgentsSidebarOpen(false); }}
-                  onKeyDown={(e) => e.key === 'Enter' && (setSelectedSessionId(s.id), setAgentsSidebarOpen(false))}
+                  onClick={() => selectSession(s.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') selectSession(s.id);
+                  }}
                   className={cn(
                     'w-full text-left px-3 py-2.5 border-b text-xs hover:bg-muted/50 transition-colors group cursor-pointer',
                     selectedSessionId === s.id && 'bg-muted',
@@ -246,7 +258,7 @@ export function AgentsTab() {
           onClose={() => setShowNewCompany(false)}
           onCreated={(id) => {
             refetchSessions();
-            setSelectedSessionId(id);
+            selectSession(id);
           }}
         />
       )}
@@ -255,7 +267,7 @@ export function AgentsTab() {
           session={deleteTarget}
           onClose={() => setDeleteTarget(null)}
           onDeleted={() => {
-            if (selectedSessionId === deleteTarget.id) setSelectedSessionId(null);
+            if (selectedSessionId === deleteTarget.id) navigate('/agents');
             setDeleteTarget(null);
             refetchSessions();
           }}

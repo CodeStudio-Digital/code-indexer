@@ -25,12 +25,22 @@ import type {
   IMetaBusPublisher,
   ISubordinateQuery,
 } from '@mcp/company/services/ports.js';
+import type { CompanyEventBus } from '@mcp/company/services/CompanyEventBus.js';
 
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface IdleControllerDeps {
   ctx: SessionContext;
   bus: IMetaBusPublisher;
+  /**
+   * Internal event bus used to learn about master/subordinate transitions
+   * without holding direct refs. When present, `IdleController` subscribes
+   * in its constructor; the legacy `onMasterEnded`/`onSubordinatesChanged`
+   * methods remain for back-compat with code that still calls them
+   * imperatively, but Phase 8 part 3 wires all four signals through the
+   * bus.
+   */
+  eventBus?: CompanyEventBus;
   subordinates: ISubordinateQuery;
   /** Called when auto-continue should resurrect the master with a default prompt. */
   onAutoContinue: () => void;
@@ -41,10 +51,28 @@ export interface IdleControllerDeps {
 export class IdleController implements IIdleController {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly timeoutMs: number;
+  private readonly busUnsubscribers: Array<() => void> = [];
 
   constructor(private readonly deps: IdleControllerDeps) {
     const env = Number(process.env.CODER_COMPANY_IDLE_TIMEOUT_MS);
     this.timeoutMs = Number.isFinite(env) && env > 0 ? env : DEFAULT_IDLE_TIMEOUT_MS;
+    if (deps.eventBus) {
+      this.busUnsubscribers.push(
+        deps.eventBus.on('master.ended', () => this.checkIdle()),
+        deps.eventBus.on('subordinates.changed', () => this.checkIdle()),
+        deps.eventBus.on('master.resurrected', () => this.clear()),
+        deps.eventBus.on('user.message_received', () => this.clear()),
+      );
+    }
+  }
+
+  /** Tear down bus subscriptions. Called by the orchestrator on shutdown. */
+  dispose(): void {
+    for (const off of this.busUnsubscribers) {
+      try { off(); } catch { /* best-effort */ }
+    }
+    this.busUnsubscribers.length = 0;
+    this.clear();
   }
 
   onMasterEnded(): void {

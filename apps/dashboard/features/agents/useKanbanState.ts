@@ -1,17 +1,41 @@
 /**
- * Kanban state hook — fetches initial state from API, merges SSE events,
- * exposes optimistic mutation methods.
+ * Kanban state hook — reads cards from the company store (single source
+ * of truth) and exposes REST mutation helpers.
+ *
+ * Phase 2: SSE is authoritative. Every mutation has a matching backend
+ * `kanban_*` broadcast that `kanbanSlice.kanbanApplyEvent` reduces, so
+ * the hook no longer refetches after a successful mutation. `refreshCard`
+ * stays in the return surface as an escape hatch — `moveCard` uses it to
+ * revert when the server rejects with 409 (blocked by deps), and the
+ * consumer can call it explicitly if it suspects drift.
  */
-import { useCallback, useEffect, useState } from 'react';
-import type { KanbanCardFull, KanbanColumn, KanbanTag } from '@mcp/company/types.js';
+import { useCallback, useEffect, useMemo } from 'react';
+import type {
+  KanbanCardFull,
+  KanbanColumn,
+  KanbanTag,
+} from '@mcp/company-contracts';
+import {
+  useCompanyStore,
+  selectKanban,
+} from '../../state/company/index.js';
 
 export interface UseKanbanStateResult {
   cards: KanbanCardFull[];
   loading: boolean;
   error: string | null;
-  createCard: (input: { title: string; description?: string; column?: KanbanColumn; tag?: KanbanTag; checklist?: string[] }) => Promise<KanbanCardFull | null>;
+  createCard: (input: {
+    title: string;
+    description?: string;
+    column?: KanbanColumn;
+    tag?: KanbanTag;
+    checklist?: string[];
+  }) => Promise<KanbanCardFull | null>;
   moveCard: (cardId: number, column: KanbanColumn, position?: number) => Promise<boolean>;
-  updateCard: (cardId: number, patch: { title?: string; description?: string; tag?: KanbanTag | null }) => Promise<boolean>;
+  updateCard: (
+    cardId: number,
+    patch: { title?: string; description?: string; tag?: KanbanTag | null },
+  ) => Promise<boolean>;
   deleteCard: (cardId: number) => Promise<boolean>;
   addComment: (cardId: number, content: string) => Promise<boolean>;
   addChecklistItem: (cardId: number, text: string) => Promise<boolean>;
@@ -21,215 +45,264 @@ export interface UseKanbanStateResult {
   refreshCard: (cardId: number) => Promise<void>;
 }
 
-export function useKanbanState(
-  companySessionId: number | null,
-  /** SSE-driven kanban cards from useCompanyStream */
-  streamCards: Map<number, KanbanCardFull>,
-): UseKanbanStateResult {
-  const [localCards, setLocalCards] = useState<Map<number, KanbanCardFull>>(new Map());
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [initialized, setInitialized] = useState(false);
+export function useKanbanState(companySessionId: number | null): UseKanbanStateResult {
+  const slot = useCompanyStore((s) => selectKanban(s, companySessionId));
+  const kanbanHydrate = useCompanyStore((s) => s.kanbanHydrate);
+  const kanbanUpsertCard = useCompanyStore((s) => s.kanbanUpsertCard);
+  const kanbanRemoveCard = useCompanyStore((s) => s.kanbanRemoveCard);
+  const kanbanSetLoading = useCompanyStore((s) => s.kanbanSetLoading);
+  const kanbanSetError = useCompanyStore((s) => s.kanbanSetError);
 
-  // Fetch initial state from API
+  // ─── Initial REST load ───────────────────────────────────────
   useEffect(() => {
-    if (!companySessionId) return;
+    if (companySessionId == null) return;
     let cancelled = false;
 
-    async function load() {
-      setLoading(true);
+    async function load(): Promise<void> {
+      kanbanSetLoading(companySessionId!, true);
       try {
         const res = await fetch(`/api/company/sessions/${companySessionId}/kanban`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json() as KanbanCardFull[];
-        if (!cancelled) {
-          const m = new Map<number, KanbanCardFull>();
-          for (const c of data) m.set(c.id, c);
-          setLocalCards(m);
-          setInitialized(true);
-        }
+        const data = (await res.json()) as KanbanCardFull[];
+        if (cancelled) return;
+        kanbanHydrate(companySessionId!, data);
       } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+        if (!cancelled) kanbanSetError(companySessionId!, (e as Error).message);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) kanbanSetLoading(companySessionId!, false);
       }
     }
 
-    load();
-    return () => { cancelled = true; };
-  }, [companySessionId]);
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [companySessionId, kanbanHydrate, kanbanSetLoading, kanbanSetError]);
 
-  // Merge SSE stream cards into local state
-  useEffect(() => {
-    if (!initialized) return;
-    setLocalCards((prev) => {
-      const merged = new Map(prev);
-      for (const [id, card] of streamCards) {
-        merged.set(id, card);
+  // ─── Derived cards array (stable per render) ─────────────────
+  const cards = useMemo(() => Array.from(slot.cards.values()), [slot.cards]);
+
+  const base = companySessionId != null ? `/api/company/sessions/${companySessionId}/kanban` : null;
+
+  // ─── Mutations ───────────────────────────────────────────────
+
+  const refreshCard = useCallback(
+    async (cardId: number): Promise<void> => {
+      if (companySessionId == null || base == null) return;
+      try {
+        const res = await fetch(`${base}/${cardId}`);
+        if (res.ok) {
+          const card = (await res.json()) as KanbanCardFull;
+          kanbanUpsertCard(companySessionId, card);
+        }
+      } catch {
+        /* ignore */
       }
-      // Remove cards that were deleted via SSE (present in local but not in stream AND were in stream before)
-      // This is handled by the delete event in useCompanyStream already
-      return merged;
-    });
-  }, [streamCards, initialized]);
+    },
+    [companySessionId, base, kanbanUpsertCard],
+  );
 
-  // Build sorted array from the map
-  const cards = Array.from(localCards.values());
+  const createCard = useCallback(
+    async (input: {
+      title: string;
+      description?: string;
+      column?: KanbanColumn;
+      tag?: KanbanTag;
+      checklist?: string[];
+    }) => {
+      if (companySessionId == null || base == null) return null;
+      try {
+        const res = await fetch(base, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        });
+        if (!res.ok) {
+          kanbanSetError(companySessionId, `Create failed: ${res.status}`);
+          return null;
+        }
+        const card = (await res.json()) as KanbanCardFull;
+        kanbanUpsertCard(companySessionId, card);
+        return card;
+      } catch (e) {
+        kanbanSetError(companySessionId, (e as Error).message);
+        return null;
+      }
+    },
+    [companySessionId, base, kanbanUpsertCard, kanbanSetError],
+  );
 
-  const base = `/api/company/sessions/${companySessionId}/kanban`;
-
-  const createCard = useCallback(async (input: { title: string; description?: string; column?: KanbanColumn; tag?: KanbanTag; checklist?: string[] }) => {
-    if (!companySessionId) return null;
-    try {
-      const res = await fetch(base, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(input),
-      });
-      if (!res.ok) { setError(`Create failed: ${res.status}`); return null; }
-      const card = await res.json() as KanbanCardFull;
-      setLocalCards((prev) => new Map(prev).set(card.id, card));
-      return card;
-    } catch (e) { setError((e as Error).message); return null; }
-  }, [companySessionId]);
-
-  const moveCard = useCallback(async (cardId: number, column: KanbanColumn, position?: number) => {
-    if (!companySessionId) return false;
-    // Optimistic update
-    setLocalCards((prev) => {
-      const m = new Map(prev);
-      const card = m.get(cardId);
-      if (card) m.set(cardId, { ...card, column, position: position ?? card.position });
-      return m;
-    });
-    try {
-      const res = await fetch(`${base}/${cardId}/move`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ column, position }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: 'Move failed' }));
-        setError(body.error ?? `Move failed: ${res.status}`);
-        // Revert
-        await refreshCard(cardId);
+  const moveCard = useCallback(
+    async (cardId: number, column: KanbanColumn, position?: number): Promise<boolean> => {
+      if (companySessionId == null || base == null) return false;
+      try {
+        const res = await fetch(`${base}/${cardId}/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ column, position }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({ error: 'Move failed' }));
+          kanbanSetError(companySessionId, body.error ?? `Move failed: ${res.status}`);
+          await refreshCard(cardId);
+          return false;
+        }
+        // Backend broadcasts a kanban_card_moved SSE that updates the
+        // slice; no need to refetch on success.
+        return true;
+      } catch (e) {
+        kanbanSetError(companySessionId, (e as Error).message);
         return false;
       }
-      return true;
-    } catch (e) { setError((e as Error).message); return false; }
-  }, [companySessionId]);
+    },
+    [companySessionId, base, refreshCard, kanbanSetError],
+  );
 
-  const updateCard = useCallback(async (cardId: number, patch: { title?: string; description?: string; tag?: KanbanTag | null }) => {
-    if (!companySessionId) return false;
-    try {
-      const res = await fetch(`${base}/${cardId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
-      if (!res.ok) { setError(`Update failed: ${res.status}`); return false; }
-      await refreshCard(cardId);
-      return true;
-    } catch (e) { setError((e as Error).message); return false; }
-  }, [companySessionId]);
-
-  const deleteCard = useCallback(async (cardId: number) => {
-    if (!companySessionId) return false;
-    try {
-      const res = await fetch(`${base}/${cardId}`, { method: 'DELETE' });
-      if (!res.ok) { setError(`Delete failed: ${res.status}`); return false; }
-      setLocalCards((prev) => {
-        const m = new Map(prev);
-        m.delete(cardId);
-        return m;
-      });
-      return true;
-    } catch (e) { setError((e as Error).message); return false; }
-  }, [companySessionId]);
-
-  const addComment = useCallback(async (cardId: number, content: string) => {
-    if (!companySessionId) return false;
-    try {
-      const res = await fetch(`${base}/${cardId}/comments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
-      });
-      if (!res.ok) return false;
-      await refreshCard(cardId);
-      return true;
-    } catch { return false; }
-  }, [companySessionId]);
-
-  const addChecklistItem = useCallback(async (cardId: number, text: string) => {
-    if (!companySessionId) return false;
-    try {
-      const res = await fetch(`${base}/${cardId}/checklist`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      if (!res.ok) return false;
-      await refreshCard(cardId);
-      return true;
-    } catch { return false; }
-  }, [companySessionId]);
-
-  const updateChecklistItem = useCallback(async (itemId: number, patch: { text?: string; checked?: boolean }) => {
-    if (!companySessionId) return false;
-    try {
-      const res = await fetch(`/api/company/sessions/${companySessionId}/kanban/checklist/${itemId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
-      return res.ok;
-    } catch { return false; }
-  }, [companySessionId]);
-
-  const addDependency = useCallback(async (cardId: number, dependsOnCardId: number) => {
-    if (!companySessionId) return false;
-    try {
-      const res = await fetch(`${base}/${cardId}/dependencies`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ depends_on_card_id: dependsOnCardId }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: 'Failed' }));
-        setError(body.error);
+  const updateCard = useCallback(
+    async (
+      cardId: number,
+      patch: { title?: string; description?: string; tag?: KanbanTag | null },
+    ): Promise<boolean> => {
+      if (companySessionId == null || base == null) return false;
+      try {
+        const res = await fetch(`${base}/${cardId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        if (!res.ok) {
+          kanbanSetError(companySessionId, `Update failed: ${res.status}`);
+          return false;
+        }
+        // SSE `kanban_card_updated` updates the slice — no refetch.
+        return true;
+      } catch (e) {
+        kanbanSetError(companySessionId, (e as Error).message);
         return false;
       }
-      await refreshCard(cardId);
-      return true;
-    } catch (e) { setError((e as Error).message); return false; }
-  }, [companySessionId]);
+    },
+    [companySessionId, base, kanbanSetError],
+  );
 
-  const removeDependency = useCallback(async (cardId: number, dependsOnCardId: number) => {
-    if (!companySessionId) return false;
-    try {
-      const res = await fetch(`${base}/${cardId}/dependencies/${dependsOnCardId}`, { method: 'DELETE' });
-      if (!res.ok) return false;
-      await refreshCard(cardId);
-      return true;
-    } catch { return false; }
-  }, [companySessionId]);
-
-  const refreshCard = useCallback(async (cardId: number) => {
-    if (!companySessionId) return;
-    try {
-      const res = await fetch(`${base}/${cardId}`);
-      if (res.ok) {
-        const card = await res.json() as KanbanCardFull;
-        setLocalCards((prev) => new Map(prev).set(card.id, card));
+  const deleteCard = useCallback(
+    async (cardId: number): Promise<boolean> => {
+      if (companySessionId == null || base == null) return false;
+      try {
+        const res = await fetch(`${base}/${cardId}`, { method: 'DELETE' });
+        if (!res.ok) {
+          kanbanSetError(companySessionId, `Delete failed: ${res.status}`);
+          return false;
+        }
+        kanbanRemoveCard(companySessionId, cardId);
+        return true;
+      } catch (e) {
+        kanbanSetError(companySessionId, (e as Error).message);
+        return false;
       }
-    } catch { /* ignore */ }
-  }, [companySessionId]);
+    },
+    [companySessionId, base, kanbanRemoveCard, kanbanSetError],
+  );
+
+  const addComment = useCallback(
+    async (cardId: number, content: string): Promise<boolean> => {
+      if (companySessionId == null || base == null) return false;
+      try {
+        const res = await fetch(`${base}/${cardId}/comments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content }),
+        });
+        // SSE `kanban_comment_added` updates the slice — no refetch.
+        return res.ok;
+      } catch {
+        return false;
+      }
+    },
+    [companySessionId, base],
+  );
+
+  const addChecklistItem = useCallback(
+    async (cardId: number, text: string): Promise<boolean> => {
+      if (companySessionId == null || base == null) return false;
+      try {
+        const res = await fetch(`${base}/${cardId}/checklist`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        // SSE `kanban_checklist_updated` updates the slice — no refetch.
+        return res.ok;
+      } catch {
+        return false;
+      }
+    },
+    [companySessionId, base],
+  );
+
+  const updateChecklistItem = useCallback(
+    async (itemId: number, patch: { text?: string; checked?: boolean }): Promise<boolean> => {
+      if (companySessionId == null) return false;
+      try {
+        const res = await fetch(
+          `/api/company/sessions/${companySessionId}/kanban/checklist/${itemId}`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(patch),
+          },
+        );
+        return res.ok;
+      } catch {
+        return false;
+      }
+    },
+    [companySessionId],
+  );
+
+  const addDependency = useCallback(
+    async (cardId: number, dependsOnCardId: number): Promise<boolean> => {
+      if (companySessionId == null || base == null) return false;
+      try {
+        const res = await fetch(`${base}/${cardId}/dependencies`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ depends_on_card_id: dependsOnCardId }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({ error: 'Failed' }));
+          kanbanSetError(companySessionId, body.error);
+          return false;
+        }
+        // SSE `kanban_dependency_added` updates the slice — no refetch.
+        return true;
+      } catch (e) {
+        kanbanSetError(companySessionId, (e as Error).message);
+        return false;
+      }
+    },
+    [companySessionId, base, kanbanSetError],
+  );
+
+  const removeDependency = useCallback(
+    async (cardId: number, dependsOnCardId: number): Promise<boolean> => {
+      if (companySessionId == null || base == null) return false;
+      try {
+        const res = await fetch(`${base}/${cardId}/dependencies/${dependsOnCardId}`, {
+          method: 'DELETE',
+        });
+        // SSE `kanban_dependency_removed` updates the slice — no refetch.
+        return res.ok;
+      } catch {
+        return false;
+      }
+    },
+    [companySessionId, base, refreshCard],
+  );
 
   return {
     cards,
-    loading,
-    error,
+    loading: slot.loading,
+    error: slot.error,
     createCard,
     moveCard,
     updateCard,

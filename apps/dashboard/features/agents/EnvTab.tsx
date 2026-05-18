@@ -2,22 +2,46 @@
  * EnvTab — session-scoped environment variables shared by every
  * microservice container. Two-column layout:
  *
- *   - Top: list of current envs with inline edit + delete actions.
- *     Secret values render as •••• with a toggle to reveal.
+ *   - Top: list of current envs grouped by provenance (`auto` from
+ *     sandbox/database, `imported` from a `.env` file, `agent` set
+ *     by an LLM tool, `user` typed by the operator).
  *   - Bottom: small form to add a new key.
  *
  * All writes go through `PUT/DELETE /api/company/sessions/:id/envs/:key`
  * which immediately syncs `/app/.env` across every running container.
+ *
+ * Phase 5 stops grouping by hardcoded `PREVIEW_URL_*` / `SERVICE_URL_*`
+ * prefix and uses the persisted `source` column instead — DB-managed
+ * envs now also surface as `auto`, and the agent's tool writes show
+ * up as `agent` so the operator can spot config the LLM injected
+ * without grepping the log.
  */
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
-import { EnvRowEditor, type EnvRow } from './EnvRowEditor.js';
+import { EnvRowEditor, type EnvRow, type EnvSource } from './EnvRowEditor.js';
 
-function isManagedKey(key: string): boolean {
-  return key.startsWith('PREVIEW_URL_') || key.startsWith('SERVICE_URL_');
+/** Render order — operator-relevant groups first, system noise last. */
+const SOURCE_ORDER: readonly EnvSource[] = ['user', 'agent', 'imported', 'auto'];
+
+const SOURCE_LABELS: Record<EnvSource, string> = {
+  user: 'User-defined',
+  agent: 'Set by agent',
+  imported: 'Imported from .env',
+  auto: 'Auto-managed (sandbox + database)',
+};
+
+const SOURCE_HINTS: Partial<Record<EnvSource, string>> = {
+  auto: 'managed by the sandbox or a database connection — edits may be overwritten',
+  agent: 'set by an agent tool — review before relying on the value',
+  imported: 'seeded from a .env file on first provision',
+};
+
+function bucketEnv(row: EnvRow): EnvSource {
+  // Legacy rows can land without a source field — treat them as user-typed.
+  return (row.source ?? 'user') as EnvSource;
 }
 
 interface EnvTabProps {
@@ -96,52 +120,12 @@ export default function EnvTab({ companySessionId }: EnvTabProps) {
           {t('env.noEnvVars')}
         </div>
       ) : (
-        <div className="space-y-3">
-          {envs.some((r) => isManagedKey(r.key)) && (
-            <div className="border rounded">
-              <div className="px-3 py-1.5 bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground font-medium border-b">
-                {t('env.autoServiceUrls')}
-                <span className="normal-case lowercase font-normal ml-2">
-                  {t('env.autoServiceUrlsHint')}
-                </span>
-              </div>
-              <div className="divide-y">
-                {envs
-                  .filter((r) => isManagedKey(r.key))
-                  .map((row) => (
-                    <EnvRowEditor
-                      key={row.key}
-                      row={row}
-                      managed
-                      onSaved={reload}
-                      onDelete={() => deleteEnv(row.key)}
-                      sessionId={companySessionId}
-                    />
-                  ))}
-              </div>
-            </div>
-          )}
-          {envs.some((r) => !isManagedKey(r.key)) && (
-            <div className="border rounded">
-              <div className="px-3 py-1.5 bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground font-medium border-b">
-                {t('env.userDefined')}
-              </div>
-              <div className="divide-y">
-                {envs
-                  .filter((r) => !isManagedKey(r.key))
-                  .map((row) => (
-                    <EnvRowEditor
-                      key={row.key}
-                      row={row}
-                      onSaved={reload}
-                      onDelete={() => deleteEnv(row.key)}
-                      sessionId={companySessionId}
-                    />
-                  ))}
-              </div>
-            </div>
-          )}
-        </div>
+        <EnvGroupedList
+          envs={envs}
+          sessionId={companySessionId}
+          onDelete={deleteEnv}
+          onReload={reload}
+        />
       )}
 
       <AddEnvForm
@@ -150,6 +134,63 @@ export default function EnvTab({ companySessionId }: EnvTabProps) {
         onError={setError}
       />
       {error && <div className="mt-2 text-xs text-red-500">{error}</div>}
+    </div>
+  );
+}
+
+function EnvGroupedList({
+  envs,
+  sessionId,
+  onDelete,
+  onReload,
+}: {
+  envs: EnvRow[];
+  sessionId: number;
+  onDelete: (key: string) => Promise<void>;
+  onReload: () => Promise<void>;
+}) {
+  const groups = useMemo(() => {
+    const byBucket = new Map<EnvSource, EnvRow[]>();
+    for (const row of envs) {
+      const bucket = bucketEnv(row);
+      const list = byBucket.get(bucket) ?? [];
+      list.push(row);
+      byBucket.set(bucket, list);
+    }
+    return SOURCE_ORDER
+      .map((src) => ({ source: src, rows: byBucket.get(src) ?? [] }))
+      .filter((g) => g.rows.length > 0);
+  }, [envs]);
+
+  return (
+    <div className="space-y-3">
+      {groups.map(({ source, rows }) => (
+        <div key={source} className="border rounded">
+          <div className="px-3 py-1.5 bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground font-medium border-b flex items-center gap-2">
+            <span>{SOURCE_LABELS[source]}</span>
+            {SOURCE_HINTS[source] && (
+              <span className="normal-case lowercase font-normal text-muted-foreground/80">
+                {SOURCE_HINTS[source]}
+              </span>
+            )}
+            <span className="ml-auto normal-case font-normal text-muted-foreground/70">
+              {rows.length}
+            </span>
+          </div>
+          <div className="divide-y">
+            {rows.map((row) => (
+              <EnvRowEditor
+                key={row.key}
+                row={row}
+                managed={source === 'auto'}
+                onSaved={onReload}
+                onDelete={() => onDelete(row.key)}
+                sessionId={sessionId}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

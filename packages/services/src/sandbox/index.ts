@@ -63,3 +63,10 @@ export {
   saveArchive,
   deleteArchive,
 } from './archive.js';
+
+export {
+  PREVIEW_STRATEGIES,
+  inferPreviewStrategy,
+  isPreviewStrategy,
+} from './preview-strategy.js';
+export type { PreviewStrategy, InferPreviewStrategyInput } from './preview-strategy.js';

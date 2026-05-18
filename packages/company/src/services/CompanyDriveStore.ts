@@ -27,6 +27,7 @@ import { ensureDataDir } from '@mcp/shared/utils/config.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
+import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 
 type DB = ReturnType<SessionContext['db']['raw']>;
 
@@ -36,6 +37,16 @@ export interface CompanyDriveStoreDeps {
   companySessionId: number;
   /** Override on-disk root (defaults to <dataDir>/company-drives). */
   rootDir?: string;
+  /**
+   * Optional SSE publisher. When provided, every successful mutation
+   * (write / append / delete) emits `drive.file_added`,
+   * `drive.file_updated`, or `drive.file_deleted` so the dashboard can
+   * keep its view up-to-date without polling.
+   *
+   * Routes that instantiate the drive without an active orchestrator
+   * (session is dormant, no SSE consumers) omit the publisher.
+   */
+  publisher?: IMetaBusPublisher;
 }
 
 export interface DriveFileMeta {
@@ -126,25 +137,42 @@ export class CompanyDriveStore {
   private readonly companyStore: CompanyStore;
   private readonly companySessionId: number;
   private readonly rootDir: string;
+  private readonly publisher: IMetaBusPublisher | null;
 
   constructor(deps: CompanyDriveStoreDeps) {
     this.db = deps.db.raw();
     this.companyStore = deps.companyStore;
     this.companySessionId = deps.companySessionId;
     this.rootDir = deps.rootDir ?? join(ensureDataDir(), 'company-drives');
+    this.publisher = deps.publisher ?? null;
     if (!existsSync(this.rootDir)) {
       mkdirSync(this.rootDir, { recursive: true });
     }
   }
 
   /** Build a drive store from a `SessionContext` (used by the orchestrator). */
-  static fromSessionContext(ctx: SessionContext, opts: { rootDir?: string } = {}): CompanyDriveStore {
+  static fromSessionContext(
+    ctx: SessionContext,
+    opts: { rootDir?: string; publisher?: IMetaBusPublisher } = {},
+  ): CompanyDriveStore {
     return new CompanyDriveStore({
       db: ctx.db,
       companyStore: ctx.companyStore,
       companySessionId: ctx.companySessionId,
       rootDir: opts.rootDir,
+      publisher: opts.publisher,
     });
+  }
+
+  private emit(event: 'drive.file_added' | 'drive.file_updated' | 'drive.file_deleted', data: unknown): void {
+    if (!this.publisher) return;
+    try {
+      this.publisher.publish(event, data);
+    } catch (e) {
+      // Publishing failures must never break a successful mutation —
+      // the row is already committed by the time we get here.
+      console.error('[CompanyDriveStore] publish failed:', e);
+    }
   }
 
   /**
@@ -202,7 +230,9 @@ export class CompanyDriveStore {
            WHERE id = ?`,
         )
         .run(buf.byteLength, owner.role ?? null, owner.agentRunId ?? null, existing.id);
-      return rowToMeta(this.getRow(scopeKey, path)!);
+      const meta = rowToMeta(this.getRow(scopeKey, path)!);
+      this.emit('drive.file_updated', { meta });
+      return meta;
     }
 
     const info = this.db
@@ -214,7 +244,9 @@ export class CompanyDriveStore {
       .run(scopeKey, path, storageFilename, buf.byteLength, owner.role ?? null, owner.agentRunId ?? null);
     const id = Number(info.lastInsertRowid);
     const row = this.db.prepare('SELECT * FROM company_drive_files WHERE id = ?').get(id) as DriveRow;
-    return rowToMeta(row);
+    const meta = rowToMeta(row);
+    this.emit('drive.file_added', { meta });
+    return meta;
   }
 
   append(scopeKey: string, path: string, content: string, owner: DriveOwnerRef = {}): DriveFileMeta {
@@ -243,7 +275,9 @@ export class CompanyDriveStore {
          WHERE id = ?`,
       )
       .run(newSize, owner.role ?? null, owner.agentRunId ?? null, existing.id);
-    return rowToMeta(this.getRow(scopeKey, path)!);
+    const meta = rowToMeta(this.getRow(scopeKey, path)!);
+    this.emit('drive.file_updated', { meta });
+    return meta;
   }
 
   read(scopeKey: string, path: string, opts: DriveReadOpts = {}): DriveFileWithContent {
@@ -295,7 +329,11 @@ export class CompanyDriveStore {
     const info = this.db
       .prepare('DELETE FROM company_drive_files WHERE id = ?')
       .run(row.id);
-    return info.changes > 0;
+    if (info.changes > 0) {
+      this.emit('drive.file_deleted', { scopeKey, path, id: row.id });
+      return true;
+    }
+    return false;
   }
 
   /** Sync metadata `size_bytes` with the on-disk file. Useful for tests. */

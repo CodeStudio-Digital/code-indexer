@@ -131,11 +131,24 @@ export function parseApplyPatch(input: string): ParsedPatch {
       }
       const hunks: PatchHunk[] = [];
       let cur: PatchHunk | null = null;
+      // Phase machine for multi-block hunks. A single `@@` block can contain
+      // multiple non-adjacent change groups separated by unchanged context
+      // (standard unified-diff format). We auto-split into separate PatchHunks
+      // so the applier's exact-substring search finds each contiguous segment.
+      //   before → leading context (no +/- seen yet)
+      //   change → inside a +/- group
+      //   after  → trailing context (after at least one +/-, before any next +/-)
+      // A +/- in phase `after` triggers a split: flush current hunk, start a
+      // new one whose contextBefore is the collected contextAfter (the anchor
+      // carries forward, matching how `git apply` handles such hunks).
+      type Phase = 'before' | 'change' | 'after';
+      let phase: Phase = 'before';
       const flushHunk = () => {
         if (cur && (cur.removed.length || cur.added.length || cur.contextBefore.length || cur.contextAfter.length)) {
           hunks.push(cur);
         }
         cur = null;
+        phase = 'before';
       };
       while (i < lines.length) {
         const nxt = lines[i];
@@ -151,26 +164,47 @@ export function parseApplyPatch(input: string): ParsedPatch {
         if (ntrim.startsWith('@@')) {
           flushHunk();
           cur = { contextBefore: [], removed: [], added: [], contextAfter: [] };
+          phase = 'before';
           i++;
           continue;
         }
         if (cur === null) {
           cur = { contextBefore: [], removed: [], added: [], contextAfter: [] };
+          phase = 'before';
         }
+        // `cur` is non-null here, but TS loses narrowing because `flushHunk`
+        // (a closure declared above) can reassign it. Hoist into a local.
+        const c: PatchHunk = cur;
         // Diff lines
-        if (nxt.startsWith('+')) {
-          cur.added.push(nxt.slice(1));
-        } else if (nxt.startsWith('-')) {
-          cur.removed.push(nxt.slice(1));
-        } else if (nxt.startsWith(' ') || nxt === '') {
-          // Context line. If we're still collecting the leading context
-          // (no removed/added yet), append to contextBefore. Otherwise
-          // it's trailing context.
-          const text = nxt.startsWith(' ') ? nxt.slice(1) : '';
-          if (cur.removed.length === 0 && cur.added.length === 0) {
-            cur.contextBefore.push(text);
+        if (nxt.startsWith('+') || nxt.startsWith('-')) {
+          if (phase === 'after') {
+            // Multi-block hunk: previous change group ended at contextAfter.
+            // Flush it and start a new hunk that re-uses contextAfter as its
+            // contextBefore — anchors the next search against the same lines
+            // that ended the previous one.
+            const carry = c.contextAfter;
+            hunks.push(c);
+            cur = { contextBefore: [...carry], removed: [], added: [], contextAfter: [] };
+            if (nxt.startsWith('+')) {
+              cur.added.push(nxt.slice(1));
+            } else {
+              cur.removed.push(nxt.slice(1));
+            }
           } else {
-            cur.contextAfter.push(text);
+            if (nxt.startsWith('+')) {
+              c.added.push(nxt.slice(1));
+            } else {
+              c.removed.push(nxt.slice(1));
+            }
+          }
+          phase = 'change';
+        } else if (nxt.startsWith(' ') || nxt === '') {
+          const text = nxt.startsWith(' ') ? nxt.slice(1) : '';
+          if (phase === 'before') {
+            c.contextBefore.push(text);
+          } else {
+            c.contextAfter.push(text);
+            phase = 'after';
           }
         } else {
           throw new Error(`apply_patch: unexpected line in Update File block (line ${i + 1}): ${nxt}`);
@@ -239,13 +273,16 @@ function formatHunkError(
   // always sits in the first line or two of context.
   const previewRaw = search.slice(0, 80).replace(/\n/g, '⏎');
   const suffix = search.length > 80 ? '…' : '';
-  const bomFlag = norm.bom ? ', BOM' : ', no BOM';
-  const eolLabel = norm.eol === '\r\n' ? 'CRLF' : 'LF';
+  // Make explicit that CRLF/BOM are handled before matching — the file's
+  // line endings and BOM status are descriptive, not the failure cause.
+  // Users frequently mis-read "no BOM" as a diagnostic claim.
+  const bomFlag = norm.bom ? 'BOM stripped for matching' : 'no BOM detected';
+  const eolLabel = norm.eol === '\r\n' ? 'CRLF normalized for matching' : 'LF';
   return (
     `apply_patch: hunk for '${path}' did not match source.\n` +
     `  Searched for ${search.length} chars (before=${hunk.contextBefore.length} ` +
     `removed=${hunk.removed.length} after=${hunk.contextAfter.length}).\n` +
-    `  File: ${fileLineCount} lines, ${eolLabel} endings${bomFlag}.\n` +
+    `  File: ${fileLineCount} lines (${eolLabel}, ${bomFlag}).\n` +
     `  Search starts with: "${previewRaw}${suffix}"`
   );
 }

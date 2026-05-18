@@ -53,6 +53,7 @@ import { PipelineService, type PipelineValidationResult } from '@mcp/company/ser
 import { PipelineExecutor } from '@mcp/company/services/PipelineExecutor.js';
 import { InboxQueue, type SendArgs as InboxSendArgs, type SendResult as InboxSendResult } from '@mcp/company/services/InboxQueue.js';
 import { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
+import { CompanyEventBus } from '@mcp/company/services/CompanyEventBus.js';
 import type {
   AgentInboxMessage,
   InboxStatus,
@@ -106,8 +107,17 @@ export class CompanyOrchestrator {
   private readonly attention: MasterAttention;
   /** Builder-mode sandbox bridge. Dormant when the session has no `builder` config. */
   readonly sandboxService: SandboxService;
-  // These four have a small construction cycle (Master ↔ HumanInTheLoop,
-  // Subordinates ↔ Idle); they're assigned inside the constructor body.
+  /**
+   * Phase 8 part 3: internal pub/sub that decouples Master/Subordinate
+   * lifecycle services from `IdleController`. Master and Subordinate
+   * publish lifecycle transitions; IdleController subscribes. Distinct
+   * from `MetaBusPublisher` — that one is the OUTBOUND SSE channel.
+   */
+  private readonly eventBus: CompanyEventBus;
+  // Master ↔ HumanInTheLoop still cross-reference (Master needs HitL
+  // for prompt registration; HitL needs Master for runner access). The
+  // Subordinate ↔ Idle cycle is gone — both flow through `eventBus`
+  // now, so each service is constructed exactly once with its final deps.
   private readonly humanInLoop!: HumanInTheLoop;
   private readonly idle!: IdleController;
   private readonly subordinates!: SubordinateLifecycle;
@@ -148,23 +158,26 @@ export class CompanyOrchestrator {
     this.board = new BoardBridge(this.ctx, this.publisher, this.kanban);
     this.status = new AgentStatusUpdater(this.ctx, this.publisher);
     this.attention = new MasterAttention();
-    this.driveStore = CompanyDriveStore.fromSessionContext(this.ctx);
+    this.driveStore = CompanyDriveStore.fromSessionContext(this.ctx, {
+      publisher: this.publisher,
+    });
+    this.eventBus = new CompanyEventBus();
 
-    // Construction has small cycles (Master ↔ HumanInTheLoop wire each
-    // other; Subordinates ↔ IdleController query each other). We resolve
-    // this by passing mutable `deps` objects that get filled in after all
-    // services exist, then wiring the final references.
-    const masterDeps: ConstructorParameters<typeof MasterLifecycle>[0] = {
+    // Master is built first because HumanInTheLoop needs a real ref to
+    // it (wires the runner's plan/question prompts). Master only needs
+    // the event bus to reach the IdleController, so the old mutable
+    // `humanInLoop: undefined as unknown as` placeholder is gone — Master
+    // is back-wired via `setHumanInLoop` once HitL exists.
+    const master = new MasterLifecycle({
       ctx: this.ctx,
       board: this.board,
       status: this.status,
       humanInLoop: undefined as unknown as HumanInTheLoop,
       wirer: this.wirer,
-      idle: undefined as unknown as IdleController,
+      eventBus: this.eventBus,
       attention: this.attention,
       orchestratorRef: this,
-    };
-    const master = new MasterLifecycle(masterDeps);
+    });
     (this as unknown as { master: MasterLifecycle }).master = master;
 
     const humanInLoop = new HumanInTheLoop(
@@ -176,9 +189,14 @@ export class CompanyOrchestrator {
       this.ctx,
     );
     (this as unknown as { humanInLoop: HumanInTheLoop }).humanInLoop = humanInLoop;
-    masterDeps.humanInLoop = humanInLoop;
+    // Master ↔ HumanInTheLoop is the one cycle the event bus can't
+    // eliminate (HitL wires runner-level listeners that need the actual
+    // RunCoderHandle). Back-fill via a private setter on Master rather
+    // than the old `undefined as unknown as` trick — visible, typed,
+    // and breakable from a test fixture.
+    (master as unknown as { deps: { humanInLoop: HumanInTheLoop } }).deps.humanInLoop = humanInLoop;
 
-    const subordinateDeps: ConstructorParameters<typeof SubordinateLifecycle>[0] = {
+    const subordinates = new SubordinateLifecycle({
       ctx: this.ctx,
       board: this.board,
       status: this.status,
@@ -186,16 +204,16 @@ export class CompanyOrchestrator {
       master,
       humanInLoop,
       wirer: this.wirer,
-      idle: undefined as unknown as IdleController,
+      eventBus: this.eventBus,
       orchestratorRef: this,
       attention: this.attention,
-    };
-    const subordinates = new SubordinateLifecycle(subordinateDeps);
+    });
     (this as unknown as { subordinates: SubordinateLifecycle }).subordinates = subordinates;
 
     const idle = new IdleController({
       ctx: this.ctx,
       bus: this.publisher,
+      eventBus: this.eventBus,
       subordinates,
       master: {
         get endedWithError() { return master.endedWithError; },
@@ -210,9 +228,6 @@ export class CompanyOrchestrator {
       },
     });
     (this as unknown as { idle: IdleController }).idle = idle;
-
-    masterDeps.idle = idle;
-    subordinateDeps.idle = idle;
 
     // Pipelines: thin CRUD + executor that drives subordinates through a
     // stored graph. Constructed last because the executor needs the

@@ -107,25 +107,10 @@ function mapBoardRow(row: BoardRow): BoardEntry {
   };
 }
 
-interface TemplateRow {
-  id: number;
-  name: string;
-  description: string;
-  roles_json: string;
-  created_at: string;
-  updated_at: string;
-}
-
-function mapTemplateRow(row: TemplateRow): CompanyTemplate {
-  return {
-    id: row.id,
-    name: row.name,
-    description: row.description,
-    roles: JSON.parse(row.roles_json),
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
-}
+// `TemplateRow` + `mapTemplateRow` moved to `company/templates.ts`
+// alongside the five template CRUD methods. The class methods below
+// delegate via 1-line wrappers.
+import * as templatesDomain from './company/templates.js';
 
 export class CompanyStore {
   private db: DB;
@@ -141,46 +126,30 @@ export class CompanyStore {
   }
 
   // ─── Templates ─────────────────────────────────────────────────
+  // Bodies moved to `company/templates.ts`; the class keeps the API
+  // surface as 1-line delegates.
 
   createTemplate(name: string, description: string, roles: CompanyRoleConfig[]): CompanyTemplate {
-    const stmt = this.db.prepare(`
-      INSERT INTO company_templates (name, description, roles_json)
-      VALUES (?, ?, ?)
-    `);
-    const r = stmt.run(name, description, JSON.stringify(roles));
-    return this.getTemplate(Number(r.lastInsertRowid))!;
+    return templatesDomain.createTemplate(this.db, name, description, roles);
   }
 
   getTemplate(id: number): CompanyTemplate | null {
-    const row = this.db
-      .prepare('SELECT * FROM company_templates WHERE id = ?')
-      .get(id) as TemplateRow | undefined;
-    return row ? mapTemplateRow(row) : null;
+    return templatesDomain.getTemplate(this.db, id);
   }
 
   listTemplates(): CompanyTemplate[] {
-    const rows = this.db
-      .prepare('SELECT * FROM company_templates ORDER BY updated_at DESC')
-      .all() as TemplateRow[];
-    return rows.map(mapTemplateRow);
+    return templatesDomain.listTemplates(this.db);
   }
 
-  updateTemplate(id: number, patch: { name?: string; description?: string; roles?: CompanyRoleConfig[] }): CompanyTemplate | null {
-    const sets: string[] = [];
-    const params: unknown[] = [];
-    if (patch.name !== undefined) { sets.push('name = ?'); params.push(patch.name); }
-    if (patch.description !== undefined) { sets.push('description = ?'); params.push(patch.description); }
-    if (patch.roles !== undefined) { sets.push('roles_json = ?'); params.push(JSON.stringify(patch.roles)); }
-    if (sets.length === 0) return this.getTemplate(id);
-    sets.push("updated_at = datetime('now')");
-    params.push(id);
-    this.db.prepare(`UPDATE company_templates SET ${sets.join(', ')} WHERE id = ?`).run(...params);
-    return this.getTemplate(id);
+  updateTemplate(
+    id: number,
+    patch: { name?: string; description?: string; roles?: CompanyRoleConfig[] },
+  ): CompanyTemplate | null {
+    return templatesDomain.updateTemplate(this.db, id, patch);
   }
 
   deleteTemplate(id: number): boolean {
-    const r = this.db.prepare('DELETE FROM company_templates WHERE id = ?').run(id);
-    return r.changes > 0;
+    return templatesDomain.deleteTemplate(this.db, id);
   }
 
   // ─── Company Sessions ──────────────────────────────────────────
@@ -918,6 +887,13 @@ export class CompanyStore {
   removeChecklistItem(itemId: number): boolean {
     const r = this.db.prepare('DELETE FROM kanban_checklist_items WHERE id = ?').run(itemId);
     return r.changes > 0;
+  }
+
+  getChecklistItem(itemId: number): KanbanChecklistItem | null {
+    const row = this.db.prepare('SELECT * FROM kanban_checklist_items WHERE id = ?').get(itemId) as
+      | { id: number; card_id: number; text: string; checked: number; position: number }
+      | undefined;
+    return row ? { ...row, checked: row.checked === 1 } : null;
   }
 
   // ─── Kanban Comments ──────────────────────────────────────────

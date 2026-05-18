@@ -1,650 +1,369 @@
 /**
- * Hook for consuming multiplexed SSE from a company session.
+ * Hook for consuming the multiplexed SSE stream of a company session.
  *
- * Does NOT auto-connect on mount — call `start(message)` to begin the run
- * and start streaming, or `reattach()` to reconnect to an active run.
+ * Phase 0: the hook owns SSE transport (ReconnectingSSEClient + the abort
+ * signal + the last-event-id ref) but delegates ALL state to the
+ * `company` zustand store. Each SSE event is forwarded to a slice action;
+ * the hook reads state back through selectors. This kills the duplicated
+ * kanban Map that used to live in this hook's local state.
  *
- * Internals use the shared ReconnectingSSEClient so transport concerns
- * (reconnect with Last-Event-ID, heartbeat handling, backoff) are
- * implemented once and reused across hooks.
+ * Phase 2 will move SSE ownership out of React entirely (single client
+ * per session managed by `state/company/sseConnection.ts`) and replace
+ * the `kanban_*` REST refetch fallbacks with pure SSE invalidation.
  */
-import { useCallback, useRef, useState } from 'react';
-import type { Usage, AgentAttachment } from './agent-stream/types.js';
-import type { KanbanCardFull, KanbanComment, KanbanChecklistItem, MasterPrompt } from '@mcp/company/types.js';
+import { useCallback, useRef } from 'react';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
 import type { SSEEvent } from '@mcp/shared/sse/SSEFramer.js';
+import type { MasterPrompt } from '@mcp/company-contracts';
 
-// ─── Types ─────────────────────────────────────────────────────
+import type { AgentAttachment } from './agent-stream/types.js';
+import { useCompanyStore, selectStream } from '../state/company/index.js';
+import type { DriveFileMeta } from '../state/company/driveSlice.js';
+import type {
+  AgentStreamState,
+  BoardMessage,
+} from '../state/company/types.js';
+import type { AgentEventEnvelope } from '../state/company/stream-handlers/agentEvent.js';
+import type {
+  AgentStatusPayload,
+  SessionIdlePayload,
+} from '../state/company/stream-handlers/agentStatusEvent.js';
 
-export interface BoardMessage {
-  id: number;
-  author_role: string;
-  agent_run_id: number | null;
-  kind: string;
-  content: string;
-  mentions: string[];
-  created_at: string;
-}
-
-export interface FallbackNotice {
-  at: number;
-  agent: string;
-  from?: { provider?: string; model?: string };
-  to?: { provider?: string; model?: string };
-  error?: string;
-}
-
-export interface AgentStreamState {
-  role: string;
-  agentRunId: number;
-  coderSessionId?: number;
-  textChunks: string[];
-  toolCalls: Array<{
-    id: string;
-    name: string;
-    status: 'running' | 'done' | 'error';
-    durationMs?: number;
-  }>;
-  status: 'idle' | 'running' | 'working' | 'waiting' | 'waiting_plan' | 'waiting_question' | 'waiting_tasks' | 'reviewing' | 'blocked' | 'completed' | 'error' | 'aborted' | 'interrupted';
-  statusMessage?: string;
-  usage?: Usage;
-  doneReason?: string;
-}
-
-export interface CompanyStreamState {
-  connected: boolean;
-  started: boolean;
-  masterState: AgentStreamState | null;
-  subordinateStates: Map<number, AgentStreamState>;
-  boardMessages: BoardMessage[];
-  kanbanCards: Map<number, KanbanCardFull>;
-  error: string | null;
-  userMessage: string | null;
-  /**
-   * All master↔human prompts (ask_user / submit_plan) for this session,
-   * keyed by their persistent DB id. Survives navigation/reload because
-   * it's rehydrated from the DB on reattach. Status (pending/answered/
-   * cancelled) is updated in place via SSE.
-   */
-  masterPrompts: Map<number, MasterPrompt>;
-  /** Master error details when session_idle reports `master_error`. */
-  masterErrorDetail: string | null;
-  /** Recent fallback activations (most recent first, max 5 kept). */
-  fallbackNotices: FallbackNotice[];
-}
-
-interface AgentEvent {
-  agent: string;
-  agentRunId: number;
-  event: string;
-  data: unknown;
-}
-
-// ─── Hook ──────────────────────────────────────────────────────
-
-const INITIAL_STATE: CompanyStreamState = {
-  connected: false,
-  started: false,
-  masterState: null,
-  subordinateStates: new Map(),
-  boardMessages: [],
-  kanbanCards: new Map(),
-  error: null,
-  userMessage: null,
-  masterPrompts: new Map(),
-  masterErrorDetail: null,
-  fallbackNotices: [],
-};
+// Re-export client state types so legacy consumers keep their imports.
+export type { AgentStreamState, BoardMessage, FallbackNotice } from '../state/company/types.js';
 
 export function useCompanyStream(companySessionId: number | null) {
-  const [state, setState] = useState<CompanyStreamState>(INITIAL_STATE);
+  // ─── Selectors ───────────────────────────────────────────────
+  const stream = useCompanyStore((s) => selectStream(s, companySessionId));
 
+  // ─── Action dispatchers (stable refs from zustand) ───────────
+  const streamReset = useCompanyStore((s) => s.streamReset);
+  const streamSetStarted = useCompanyStore((s) => s.streamSetStarted);
+  const streamSetConnected = useCompanyStore((s) => s.streamSetConnected);
+  const streamSetError = useCompanyStore((s) => s.streamSetError);
+  const streamSetUserMessage = useCompanyStore((s) => s.streamSetUserMessage);
+  const streamApplyAgentEvent = useCompanyStore((s) => s.streamApplyAgentEvent);
+  const streamApplyAgentStatus = useCompanyStore((s) => s.streamApplyAgentStatus);
+  const streamApplySubordinateWaiting = useCompanyStore((s) => s.streamApplySubordinateWaiting);
+  const streamApplyBoardEntry = useCompanyStore((s) => s.streamApplyBoardEntry);
+  const streamApplyMasterPrompt = useCompanyStore((s) => s.streamApplyMasterPrompt);
+  const streamApplySessionIdle = useCompanyStore((s) => s.streamApplySessionIdle);
+  const streamHydrateMasterPromptsAction = useCompanyStore((s) => s.streamHydrateMasterPrompts);
+  const streamHydrateFromInitialFetch = useCompanyStore((s) => s.streamHydrateFromInitialFetch);
+  const kanbanApplyEvent = useCompanyStore((s) => s.kanbanApplyEvent);
+  const kanbanHydrate = useCompanyStore((s) => s.kanbanHydrate);
+  const sandboxApplyFileChange = useCompanyStore((s) => s.sandboxApplyFileChange);
+  const driveApplyAdded = useCompanyStore((s) => s.driveApplyAdded);
+  const driveApplyUpdated = useCompanyStore((s) => s.driveApplyUpdated);
+  const driveApplyDeleted = useCompanyStore((s) => s.driveApplyDeleted);
+  const inboxBumpEventSeq = useCompanyStore((s) => s.inboxBumpEventSeq);
+
+  // ─── Transport refs ──────────────────────────────────────────
   const abortRef = useRef<AbortController | null>(null);
-  /** Last SSE event id seen — used for Last-Event-ID on reconnect/reattach. */
   const lastSeenSeqRef = useRef<number>(-1);
-  /** True once a terminal event arrived — suppresses auto-reconnect. */
   const receivedDoneRef = useRef<boolean>(false);
 
-  // ─── Event handlers ──────────────────────────────────────────
+  // ─── SSE event dispatch ──────────────────────────────────────
 
-  function handleSSEEvent(eventType: string, data: unknown) {
-    if (eventType === 'agent_event') {
-      handleAgentEvent(data as AgentEvent);
-    } else if (eventType === 'board_entry') {
-      const entry = data as BoardMessage;
-      setState((prev) => {
-        // Idempotent: dedup by entry.id so SSE replay doesn't duplicate.
-        if (prev.boardMessages.some((m) => m.id === entry.id)) return prev;
-        return { ...prev, boardMessages: [...prev.boardMessages, entry] };
-      });
-    } else if (eventType === 'subordinate_plan_posted') {
-      const sp = data as { agentRunId: number };
-      setState((prev) => {
-        const subs = new Map(prev.subordinateStates);
-        const existing = subs.get(sp.agentRunId);
-        if (existing) subs.set(sp.agentRunId, { ...existing, status: 'waiting_plan' });
-        return { ...prev, subordinateStates: subs };
-      });
-    } else if (eventType === 'subordinate_question_posted') {
-      const sq = data as { agentRunId: number };
-      setState((prev) => {
-        const subs = new Map(prev.subordinateStates);
-        const existing = subs.get(sq.agentRunId);
-        if (existing) subs.set(sq.agentRunId, { ...existing, status: 'waiting_question' });
-        return { ...prev, subordinateStates: subs };
-      });
-    } else if (eventType === 'subordinate_tasks_posted') {
-      const st = data as { agentRunId: number };
-      setState((prev) => {
-        const subs = new Map(prev.subordinateStates);
-        const existing = subs.get(st.agentRunId);
-        if (existing) subs.set(st.agentRunId, { ...existing, status: 'waiting_tasks' });
-        return { ...prev, subordinateStates: subs };
-      });
-    } else if (eventType === 'agent_status') {
-      const d = data as { agentRunId: number; role: string; status: string; message: string };
-      setState((prev) => {
-        const isMaster = d.role === 'master';
-        if (isMaster && prev.masterState) {
-          return { ...prev, masterState: { ...prev.masterState, status: d.status as AgentStreamState['status'], statusMessage: d.message } };
-        }
-        const subs = new Map(prev.subordinateStates);
-        const existing = subs.get(d.agentRunId);
-        if (existing) {
-          subs.set(d.agentRunId, { ...existing, status: d.status as AgentStreamState['status'], statusMessage: d.message });
-        }
-        return { ...prev, subordinateStates: subs };
-      });
-    } else if (
-      eventType === 'master_plan_posted' ||
-      eventType === 'master_question_posted' ||
-      eventType === 'master_plan_resolved' ||
-      eventType === 'master_question_resolved' ||
-      eventType === 'master_prompt_cancelled'
-    ) {
-      // All master_prompt events carry { prompt: MasterPrompt }. Upsert by
-      // id — idempotent across SSE replay so already-answered prompts
-      // never reopen, and rehydration on reattach merges cleanly.
-      const d = data as { prompt?: MasterPrompt };
-      if (d.prompt) {
-        const incoming = d.prompt;
-        setState((prev) => {
-          const next = new Map(prev.masterPrompts);
-          next.set(incoming.id, incoming);
-          return { ...prev, masterPrompts: next };
-        });
+  const handleSSEEvent = useCallback(
+    (eventType: string, data: unknown) => {
+      if (companySessionId == null) return;
+
+      if (eventType === 'agent_event') {
+        streamApplyAgentEvent(companySessionId, data as AgentEventEnvelope);
+        return;
       }
-    } else if (eventType.startsWith('kanban_')) {
-      handleKanbanEvent(eventType, data);
-    } else if (eventType === 'session_idle') {
-      // Session is waiting for user input — master finished but bus is alive.
-      const d = data as { reason?: string; errorDetail?: string };
-      setState((prev) => ({
-        ...prev,
-        masterState: prev.masterState
-          ? {
-              ...prev.masterState,
-              status: d.reason === 'master_error' ? 'error' : 'waiting',
-              statusMessage: d.errorDetail || (d.reason === 'master_error' ? 'Master failed' : 'Waiting for your input'),
-            }
-          : prev.masterState,
-        masterErrorDetail: d.reason === 'master_error' ? (d.errorDetail ?? 'unknown') : null,
-      }));
-    } else if (eventType === 'error') {
-      const d = data as { error?: string };
-      receivedDoneRef.current = true; // terminal — do not auto-reconnect
-      setState((prev) => ({
-        ...prev,
-        connected: false,
-        error: d.error ?? 'Unknown error from server',
-      }));
-    } else if (eventType === 'sandbox.file_changed') {
-      // Builder mode: an agent just wrote/edited a file in the sandbox.
-      // Broadcast a scoped window event so `BuilderView`'s PreviewPanel
-      // can force an iframe reload. Keeps this hook's state shape
-      // unchanged and avoids plumbing a new return value up to callers
-      // that don't care about the preview pane.
-      if (typeof window !== 'undefined' && companySessionId != null) {
-        window.dispatchEvent(
-          new CustomEvent(`sandbox:file-changed:${companySessionId}`, { detail: data }),
+      if (eventType === 'board_entry') {
+        streamApplyBoardEntry(companySessionId, data as BoardMessage);
+        return;
+      }
+      if (eventType === 'subordinate_plan_posted') {
+        streamApplySubordinateWaiting(
+          companySessionId,
+          (data as { agentRunId: number }).agentRunId,
+          'waiting_plan',
         );
+        return;
       }
-    } else if (eventType === 'done') {
-      receivedDoneRef.current = true;
-      setState((prev) => ({ ...prev, connected: false }));
-    }
-  }
-
-  function handleAgentEvent(ae: AgentEvent) {
-    // fallback_activated — surface as a notice for the UI to toast.
-    if (ae.event === 'fallback_activated') {
-      const d = ae.data as {
-        from?: { provider?: string; model?: string };
-        to?: { provider?: string; model?: string };
-        error?: string;
-      };
-      setState((prev) => ({
-        ...prev,
-        fallbackNotices: [
-          { at: Date.now(), agent: ae.agent, from: d.from, to: d.to, error: d.error },
-          ...prev.fallbackNotices,
-        ].slice(0, 5),
-      }));
-      return;
-    }
-
-    setState((prev) => {
-      const isMaster = ae.agent === 'master';
-
-      const getOrCreate = (): AgentStreamState => {
-        if (isMaster && prev.masterState) return prev.masterState;
-        if (!isMaster && prev.subordinateStates.has(ae.agentRunId)) {
-          return prev.subordinateStates.get(ae.agentRunId)!;
-        }
-        return {
-          role: ae.agent,
-          agentRunId: ae.agentRunId,
-          textChunks: [],
-          toolCalls: [],
-          status: 'running',
+      if (eventType === 'subordinate_question_posted') {
+        streamApplySubordinateWaiting(
+          companySessionId,
+          (data as { agentRunId: number }).agentRunId,
+          'waiting_question',
+        );
+        return;
+      }
+      if (eventType === 'subordinate_tasks_posted') {
+        streamApplySubordinateWaiting(
+          companySessionId,
+          (data as { agentRunId: number }).agentRunId,
+          'waiting_tasks',
+        );
+        return;
+      }
+      if (eventType === 'agent_status') {
+        streamApplyAgentStatus(companySessionId, data as AgentStatusPayload);
+        return;
+      }
+      if (
+        eventType === 'master_plan_posted' ||
+        eventType === 'master_question_posted' ||
+        eventType === 'master_plan_resolved' ||
+        eventType === 'master_question_resolved' ||
+        eventType === 'master_prompt_cancelled'
+      ) {
+        const d = data as { prompt?: MasterPrompt };
+        if (d.prompt) streamApplyMasterPrompt(companySessionId, d.prompt);
+        return;
+      }
+      if (eventType.startsWith('kanban_')) {
+        kanbanApplyEvent(companySessionId, eventType, data);
+        return;
+      }
+      if (eventType === 'session_idle') {
+        streamApplySessionIdle(companySessionId, data as SessionIdlePayload);
+        return;
+      }
+      if (eventType === 'error') {
+        receivedDoneRef.current = true;
+        streamSetConnected(companySessionId, false);
+        streamSetError(
+          companySessionId,
+          (data as { error?: string }).error ?? 'Unknown error from server',
+        );
+        return;
+      }
+      if (eventType === 'sandbox.file_changed') {
+        const payload = (data ?? {}) as {
+          path?: string;
+          serviceId?: string;
+          changeType?: string;
         };
-      };
-
-      let agentState = getOrCreate();
-
-      switch (ae.event) {
-        case 'text_delta': {
-          const d = ae.data as { text: string };
-          agentState = { ...agentState, textChunks: [...agentState.textChunks, d.text] };
-          break;
-        }
-        case 'tool_call_start': {
-          const d = ae.data as { id: string; name: string };
-          // Dedup on replay: don't add the same tool_call twice.
-          if (agentState.toolCalls.some((tc) => tc.id === d.id)) break;
-          agentState = {
-            ...agentState,
-            toolCalls: [...agentState.toolCalls, { id: d.id, name: d.name, status: 'running' }],
-          };
-          break;
-        }
-        case 'tool_call_result': {
-          const d = ae.data as { id: string; duration_ms?: number };
-          agentState = {
-            ...agentState,
-            toolCalls: agentState.toolCalls.map((tc) =>
-              tc.id === d.id ? { ...tc, status: 'done' as const, durationMs: d.duration_ms } : tc,
-            ),
-          };
-          break;
-        }
-        case 'message_complete': {
-          const d = ae.data as { usage?: Usage };
-          if (d.usage) agentState = { ...agentState, usage: d.usage };
-          agentState = { ...agentState, textChunks: [] };
-          break;
-        }
-        case 'done': {
-          const d = ae.data as { reason: string };
-          agentState = {
-            ...agentState,
-            status: d.reason === 'completed' ? 'completed' : 'error',
-            doneReason: d.reason,
-          };
-          break;
-        }
-        default:
-          break;
+        sandboxApplyFileChange(companySessionId, {
+          path: payload.path ?? '',
+          serviceId: payload.serviceId,
+          changeType: payload.changeType,
+        });
+        return;
       }
-
-      if (isMaster) {
-        return { ...prev, masterState: agentState };
+      if (eventType === 'drive.file_added' || eventType === 'drive.file_updated') {
+        const payload = data as { meta?: DriveFileMeta } | null;
+        if (payload?.meta) {
+          if (eventType === 'drive.file_added') {
+            driveApplyAdded(companySessionId, payload.meta);
+          } else {
+            driveApplyUpdated(companySessionId, payload.meta);
+          }
+        }
+        return;
       }
-      const subs = new Map(prev.subordinateStates);
-      subs.set(ae.agentRunId, agentState);
-      return { ...prev, subordinateStates: subs };
-    });
-  }
+      if (eventType === 'drive.file_deleted') {
+        const payload = (data ?? {}) as { path?: string };
+        if (payload.path) driveApplyDeleted(companySessionId, payload.path);
+        return;
+      }
+      if (
+        eventType === 'inbox_message_sent' ||
+        eventType === 'inbox_message_delivered' ||
+        eventType === 'inbox_message_answered' ||
+        eventType === 'inbox_message_cancelled' ||
+        eventType === 'inbox_message_expired'
+      ) {
+        // Payloads are thin (id + routing). Bump the seq counter and let
+        // the panel refetch through REST. Phase 4 will widen the payloads
+        // so the slice can update incrementally without round-trips.
+        inboxBumpEventSeq(companySessionId);
+        return;
+      }
+      if (eventType === 'done') {
+        receivedDoneRef.current = true;
+        streamSetConnected(companySessionId, false);
+      }
+    },
+    [
+      companySessionId,
+      streamApplyAgentEvent,
+      streamApplyAgentStatus,
+      streamApplySubordinateWaiting,
+      streamApplyBoardEntry,
+      streamApplyMasterPrompt,
+      streamApplySessionIdle,
+      streamSetConnected,
+      streamSetError,
+      kanbanApplyEvent,
+      sandboxApplyFileChange,
+      driveApplyAdded,
+      driveApplyUpdated,
+      driveApplyDeleted,
+      inboxBumpEventSeq,
+    ],
+  );
 
-  function handleKanbanEvent(eventType: string, data: unknown) {
-    setState((prev) => {
-      const cards = new Map(prev.kanbanCards);
-
-      switch (eventType) {
-        case 'kanban_card_created': {
-          const card = data as KanbanCardFull;
-          cards.set(card.id, card); // Map.set is idempotent (upsert)
-          break;
-        }
-        case 'kanban_card_moved': {
-          const d = data as { cardId: number; fromColumn: string; toColumn: string; position: number };
-          const existing = cards.get(d.cardId);
-          if (existing) {
-            cards.set(d.cardId, {
-              ...existing,
-              column: d.toColumn as KanbanCardFull['column'],
-              position: d.position,
-            });
-          }
-          break;
-        }
-        case 'kanban_card_updated': {
-          const d = data as { cardId: number; patch: Record<string, unknown> };
-          const existing = cards.get(d.cardId);
-          if (existing) {
-            cards.set(d.cardId, { ...existing, ...d.patch });
-          }
-          break;
-        }
-        case 'kanban_card_deleted': {
-          const d = data as { cardId: number };
-          cards.delete(d.cardId);
-          break;
-        }
-        case 'kanban_comment_added': {
-          const d = data as { cardId: number; comment: KanbanComment };
-          const existing = cards.get(d.cardId);
-          if (existing) {
-            // Dedup by comment.id so replay is safe.
-            if (existing.comments.some((c) => c.id === d.comment.id)) break;
-            cards.set(d.cardId, {
-              ...existing,
-              comments: [...existing.comments, d.comment],
-            });
-          }
-          break;
-        }
-        case 'kanban_checklist_updated': {
-          const d = data as { cardId: number; items: KanbanChecklistItem[] };
-          const existing = cards.get(d.cardId);
-          if (existing) {
-            const updated = [...existing.checklist];
-            for (const item of d.items) {
-              const idx = updated.findIndex((i) => i.id === item.id);
-              if (idx >= 0) updated[idx] = item;
-              else updated.push(item);
-            }
-            cards.set(d.cardId, { ...existing, checklist: updated });
-          }
-          break;
-        }
-        case 'kanban_dependency_added': {
-          const d = data as { cardId: number; dependsOnId: number };
-          const existing = cards.get(d.cardId);
-          if (existing) {
-            // Dedup: skip if the dependency edge already exists.
-            if (existing.dependencies.some((dep) => dep.depends_on_id === d.dependsOnId)) break;
-            const depCard = cards.get(d.dependsOnId);
-            const blockedBy = [...existing.blocked_by];
-            if (depCard && depCard.column !== 'done' && !blockedBy.includes(d.dependsOnId)) {
-              blockedBy.push(d.dependsOnId);
-            }
-            cards.set(d.cardId, {
-              ...existing,
-              dependencies: [...existing.dependencies, { id: 0, card_id: d.cardId, depends_on_id: d.dependsOnId, created_at: new Date().toISOString() }],
-              blocked_by: blockedBy,
-            });
-          }
-          break;
-        }
-        case 'kanban_dependency_removed': {
-          const d = data as { cardId: number; dependsOnId: number };
-          const existing = cards.get(d.cardId);
-          if (existing) {
-            cards.set(d.cardId, {
-              ...existing,
-              dependencies: existing.dependencies.filter((dep) => dep.depends_on_id !== d.dependsOnId),
-              blocked_by: existing.blocked_by.filter((id) => id !== d.dependsOnId),
-            });
-          }
-          break;
-        }
-        case 'kanban_agent_assigned': {
-          const d = data as { cardId: number; agentRunId: number; role: string };
-          const existing = cards.get(d.cardId);
-          if (existing) {
-            // Dedup: a (card_id, agent_run_id) pair with unassigned_at=null
-            // already exists means assignment already applied.
-            const alreadyAssigned = existing.agents.some(
-              (a) => a.agent_run_id === d.agentRunId && !a.unassigned_at,
-            );
-            if (alreadyAssigned) break;
-            cards.set(d.cardId, {
-              ...existing,
-              agents: [...existing.agents, {
-                id: 0,
-                card_id: d.cardId,
-                agent_run_id: d.agentRunId,
-                role: d.role,
-                assigned_at: new Date().toISOString(),
-                unassigned_at: null,
-              }],
-            });
-          }
-          break;
-        }
-        case 'kanban_agent_unassigned': {
-          const d = data as { cardId: number; agentRunId: number };
-          const existing = cards.get(d.cardId);
-          if (existing) {
-            cards.set(d.cardId, {
-              ...existing,
-              agents: existing.agents.map((a) =>
-                a.agent_run_id === d.agentRunId && !a.unassigned_at
-                  ? { ...a, unassigned_at: new Date().toISOString() }
-                  : a
-              ),
-            });
-          }
-          break;
+  const onSSEEvent = useCallback(
+    (ev: SSEEvent) => {
+      if (ev.id !== undefined && ev.id > lastSeenSeqRef.current) {
+        lastSeenSeqRef.current = ev.id;
+      }
+      let parsed: unknown = null;
+      if (ev.data) {
+        try {
+          parsed = JSON.parse(ev.data);
+        } catch {
+          parsed = null;
         }
       }
+      handleSSEEvent(ev.event, parsed);
+    },
+    [handleSSEEvent],
+  );
 
-      return { ...prev, kanbanCards: cards };
-    });
-  }
-
-  // ─── Transport bridge ────────────────────────────────────────
-
-  const onSSEEvent = useCallback((ev: SSEEvent) => {
-    if (ev.id !== undefined && ev.id > lastSeenSeqRef.current) {
-      lastSeenSeqRef.current = ev.id;
-    }
-    let parsed: unknown = null;
-    if (ev.data) {
-      try { parsed = JSON.parse(ev.data); } catch { parsed = null; }
-    }
-    handleSSEEvent(ev.event, parsed);
-  }, []);
-
-  // ─── Data loaders (fallback + reattach kanban sync) ──────────
+  // ─── Data loaders ────────────────────────────────────────────
 
   const loadKanbanFromDB = useCallback(async () => {
-    if (!companySessionId) return;
+    if (companySessionId == null) return;
     try {
       const res = await fetch(`/api/company/sessions/${companySessionId}/kanban?full=true`);
       if (!res.ok) return;
-      const cards = (await res.json()) as KanbanCardFull[];
-      if (!Array.isArray(cards)) return;
-      setState((prev) => ({
-        ...prev,
-        kanbanCards: new Map(cards.map((c) => [c.id, c])),
-      }));
+      const cards = await res.json();
+      if (Array.isArray(cards)) kanbanHydrate(companySessionId, cards);
     } catch {
-      /* best-effort — ignore */
+      /* best-effort */
     }
-  }, [companySessionId]);
+  }, [companySessionId, kanbanHydrate]);
 
-  /**
-   * Load final session state from DB when SSE stream is unavailable.
-   * Covers the case where the session completed while the user was on
-   * another page — load board + agent runs + kanban from persisted data.
-   */
   const loadFinalStateFromDB = useCallback(async () => {
-    if (!companySessionId) return;
+    if (companySessionId == null) return;
     try {
       const res = await fetch(`/api/company/sessions/${companySessionId}`);
       if (!res.ok) return;
-      const data = await res.json();
-      setState((prev) => {
-        // Build board messages from DB (dedup by id against any existing)
-        const dbBoard: BoardMessage[] = (data.recentBoard ?? []).map((b: { id: number; author_role: string; agent_run_id: number | null; kind: string; content: string; mentions_json: string; created_at: string }) => ({
-          id: b.id,
-          author_role: b.author_role,
-          agent_run_id: b.agent_run_id,
-          kind: b.kind,
-          content: b.content,
-          mentions: JSON.parse(b.mentions_json || '[]'),
-          created_at: b.created_at,
-        }));
-        // Build agent states from DB
-        const subs = new Map<number, AgentStreamState>();
-        let master: AgentStreamState | null = prev.masterState;
-        for (const run of data.agentRuns ?? []) {
-          const agentState: AgentStreamState = {
-            role: run.role,
-            agentRunId: run.id,
-            coderSessionId: run.coder_session_id,
-            textChunks: [],
-            toolCalls: [],
-            status: run.status as AgentStreamState['status'],
-            statusMessage: run.status_message,
-          };
-          if (run.role === 'master') {
-            master = agentState;
-          } else {
-            subs.set(run.id, agentState);
-          }
-        }
-        // Master prompts — rehydrate from DB so questions/plans persist
-        // across navigation/reload, with their resolution state intact.
-        const dbPrompts = (data.masterPrompts ?? []) as MasterPrompt[];
-        const mergedPrompts = new Map(prev.masterPrompts);
-        for (const p of dbPrompts) mergedPrompts.set(p.id, p);
-
-        return {
-          ...prev,
-          started: true,
-          boardMessages: dbBoard.length > 0 ? dbBoard : prev.boardMessages,
-          masterState: master,
-          subordinateStates: subs.size > 0 ? subs : prev.subordinateStates,
-          masterPrompts: mergedPrompts,
-        };
-      });
-    } catch { /* ignore fetch errors */ }
-    // Kanban is a separate endpoint — always fetch it too.
-    await loadKanbanFromDB();
-  }, [companySessionId, loadKanbanFromDB]);
-
-  // ─── Connect helpers ─────────────────────────────────────────
-
-  /**
-   * Open an SSE stream via ReconnectingSSEClient. Wrapped so each
-   * entry point (start, resume, reattach) shares the same transport
-   * logic: Last-Event-ID, auto-reconnect on drop, heartbeat handling.
-   */
-  async function openStream(opts: {
-    url: string;
-    method: 'GET' | 'POST';
-    body?: unknown;
-    /** Called on reconnect to refresh kanban state after missed window. */
-    onReconnect?: (attempt: number) => void | Promise<void>;
-    /** If provided and returns true, the error is swallowed silently. */
-    suppressError?: (err: Error) => boolean;
-  }): Promise<void> {
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    receivedDoneRef.current = false;
-
-    const client = new ReconnectingSSEClient({
-      url: opts.url,
-      method: opts.method,
-      body: opts.body,
-      onEvent: onSSEEvent,
-      getLastEventId: () => lastSeenSeqRef.current,
-      signal: ctrl.signal,
-      onReconnect: async (attempt) => {
-        // On every reconnect, ensure kanban is current — the replay from
-        // Last-Event-ID covers buffered events but not state that was
-        // stored to DB during our disconnect window.
-        await loadKanbanFromDB();
-        await opts.onReconnect?.(attempt);
-      },
-      isTerminal: (ev) => ev.event === 'done' || ev.event === 'error',
-    });
-
-    try {
-      await client.run();
-    } catch (e) {
-      if ((e as Error).name === 'AbortError') return;
-      if (opts.suppressError?.(e as Error)) return;
-      setState((prev) => ({
-        ...prev,
-        error: `Connection error: ${(e as Error).message}`,
+      const data = (await res.json()) as InitialFetchResponse;
+      const boardMessages: BoardMessage[] = (data.recentBoard ?? []).map((b) => ({
+        id: b.id,
+        author_role: b.author_role,
+        agent_run_id: b.agent_run_id,
+        kind: b.kind,
+        content: b.content,
+        mentions: JSON.parse(b.mentions_json || '[]'),
+        created_at: b.created_at,
       }));
-    } finally {
-      setState((prev) => ({ ...prev, connected: false }));
+      const subs = new Map<number, AgentStreamState>();
+      let master: AgentStreamState | null = null;
+      for (const run of data.agentRuns ?? []) {
+        const agentState: AgentStreamState = {
+          role: run.role,
+          agentRunId: run.id,
+          coderSessionId: run.coder_session_id,
+          textChunks: [],
+          toolCalls: [],
+          status: run.status,
+          statusMessage: run.status_message,
+        };
+        if (run.role === 'master') master = agentState;
+        else subs.set(run.id, agentState);
+      }
+      streamHydrateFromInitialFetch(companySessionId, {
+        boardMessages,
+        masterState: master,
+        subordinateStates: subs,
+        masterPrompts: data.masterPrompts ?? [],
+      });
+    } catch {
+      /* ignore */
     }
-  }
+    await loadKanbanFromDB();
+  }, [companySessionId, streamHydrateFromInitialFetch, loadKanbanFromDB]);
+
+  // ─── Stream open helper ──────────────────────────────────────
+
+  const openStream = useCallback(
+    async (opts: {
+      url: string;
+      method: 'GET' | 'POST';
+      body?: unknown;
+      onReconnect?: (attempt: number) => void | Promise<void>;
+      suppressError?: (err: Error) => boolean;
+    }): Promise<void> => {
+      if (companySessionId == null) return;
+      abortRef.current?.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      receivedDoneRef.current = false;
+
+      const client = new ReconnectingSSEClient({
+        url: opts.url,
+        method: opts.method,
+        body: opts.body,
+        onEvent: onSSEEvent,
+        getLastEventId: () => lastSeenSeqRef.current,
+        signal: ctrl.signal,
+        onReconnect: async (attempt) => {
+          await loadKanbanFromDB();
+          await opts.onReconnect?.(attempt);
+        },
+        isTerminal: (ev) => ev.event === 'done' || ev.event === 'error',
+      });
+
+      try {
+        await client.run();
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') return;
+        if (opts.suppressError?.(e as Error)) return;
+        streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
+      } finally {
+        streamSetConnected(companySessionId, false);
+      }
+    },
+    [companySessionId, onSSEEvent, loadKanbanFromDB, streamSetConnected, streamSetError],
+  );
 
   // ─── Public actions ──────────────────────────────────────────
 
-  const start = useCallback(async (userMessage: string, attachments?: AgentAttachment[], opts?: { thinking?: boolean }) => {
-    if (!companySessionId) return;
-    lastSeenSeqRef.current = -1;
-    setState({
-      ...INITIAL_STATE,
-      started: true,
-      connected: true,
-      userMessage,
-    });
-    await openStream({
-      url: `/api/company/sessions/${companySessionId}/start`,
-      method: 'POST',
-      body: {
-        user_message: userMessage,
-        attachments: attachments?.length ? attachments : undefined,
-        thinking: opts?.thinking || undefined,
-      },
-    });
-  }, [companySessionId]);
+  const start = useCallback(
+    async (userMessage: string, attachments?: AgentAttachment[], opts?: { thinking?: boolean }) => {
+      if (companySessionId == null) return;
+      lastSeenSeqRef.current = -1;
+      streamReset(companySessionId);
+      streamSetStarted(companySessionId, true);
+      streamSetConnected(companySessionId, true);
+      streamSetUserMessage(companySessionId, userMessage);
+      await openStream({
+        url: `/api/company/sessions/${companySessionId}/start`,
+        method: 'POST',
+        body: {
+          user_message: userMessage,
+          attachments: attachments?.length ? attachments : undefined,
+          thinking: opts?.thinking || undefined,
+        },
+      });
+    },
+    [companySessionId, openStream, streamReset, streamSetStarted, streamSetConnected, streamSetUserMessage],
+  );
 
-  const resume = useCallback(async (message: string, attachments?: AgentAttachment[], opts?: { thinking?: boolean }) => {
-    if (!companySessionId) return;
-    // Don't clear boardMessages or agent states — preserve existing context
-    setState((prev) => ({
-      ...prev,
-      started: true,
-      connected: true,
-      error: null,
-      masterErrorDetail: null,
-    }));
-    await openStream({
-      url: `/api/company/sessions/${companySessionId}/resume`,
-      method: 'POST',
-      body: {
-        message,
-        attachments: attachments?.length ? attachments : undefined,
-        thinking: opts?.thinking || undefined,
-      },
-    });
-  }, [companySessionId]);
+  const resume = useCallback(
+    async (message: string, attachments?: AgentAttachment[], opts?: { thinking?: boolean }) => {
+      if (companySessionId == null) return;
+      streamSetStarted(companySessionId, true);
+      streamSetConnected(companySessionId, true);
+      streamSetError(companySessionId, null);
+      await openStream({
+        url: `/api/company/sessions/${companySessionId}/resume`,
+        method: 'POST',
+        body: {
+          message,
+          attachments: attachments?.length ? attachments : undefined,
+          thinking: opts?.thinking || undefined,
+        },
+      });
+    },
+    [companySessionId, openStream, streamSetStarted, streamSetConnected, streamSetError],
+  );
 
-  /**
-   * Reattach to an active company session run. The ReconnectingSSEClient
-   * handles its own retries internally via backoff; if the initial connect
-   * fails (e.g., orchestrator GC'd), we fall back to loading final state
-   * from DB so the UI still shows the session context.
-   */
   const reattach = useCallback(async () => {
-    if (!companySessionId) return;
-    setState((prev) => ({ ...prev, started: true, connected: true, error: null }));
-
-    // Always refresh kanban on reattach — we may have missed events while
-    // disconnected (events survive in the ring buffer but only up to cap).
+    if (companySessionId == null) return;
+    streamSetStarted(companySessionId, true);
+    streamSetConnected(companySessionId, true);
+    streamSetError(companySessionId, null);
     await loadKanbanFromDB();
-
     try {
       await openStream({
         url: `/api/company/sessions/${companySessionId}/attach`,
@@ -652,163 +371,158 @@ export function useCompanyStream(companySessionId: number | null) {
         suppressError: (e) => e.message === 'HTTP 404',
       });
     } finally {
-      // Stream ended — either naturally (done) or after exhausting retries.
-      // Load final state from DB so the UI reflects completion/pause state.
       await loadFinalStateFromDB();
     }
-  }, [companySessionId, loadFinalStateFromDB, loadKanbanFromDB]);
+  }, [
+    companySessionId,
+    openStream,
+    streamSetStarted,
+    streamSetConnected,
+    streamSetError,
+    loadKanbanFromDB,
+    loadFinalStateFromDB,
+  ]);
 
   const abort = useCallback(async () => {
-    if (!companySessionId) return;
+    if (companySessionId == null) return;
     abortRef.current?.abort();
     try {
       await fetch(`/api/company/sessions/${companySessionId}/abort`, { method: 'POST' });
-    } catch { /* ignore */ }
-    setState((prev) => ({ ...prev, connected: false }));
-  }, [companySessionId]);
+    } catch {
+      /* ignore */
+    }
+    streamSetConnected(companySessionId, false);
+  }, [companySessionId, streamSetConnected]);
 
-  const respondToMasterPlan = useCallback(async (
-    promptId: number,
-    approved: boolean,
-    feedback?: string,
-  ) => {
-    if (!companySessionId) return;
-    try {
-      const res = await fetch(`/api/company/sessions/${companySessionId}/plan-response`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved, feedback, prompt_id: promptId }),
-      });
-      if (res.ok) {
-        const body = await res.json().catch(() => null) as { prompt?: MasterPrompt } | null;
-        if (body?.prompt) {
-          setState((prev) => {
-            const next = new Map(prev.masterPrompts);
-            next.set(body.prompt!.id, body.prompt!);
-            return { ...prev, masterPrompts: next };
-          });
+  const sendMessage = useCallback(
+    async (message: string, attachments?: AgentAttachment[], opts?: { thinking?: boolean }) => {
+      if (companySessionId == null) return;
+      try {
+        const res = await fetch(`/api/company/sessions/${companySessionId}/message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message,
+            attachments: attachments?.length ? attachments : undefined,
+            thinking: opts?.thinking || undefined,
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => '');
+          const errorMsg = res.status === 404
+            ? 'Session is no longer active. Start a new session or reload the page.'
+            : `Failed to send message (${res.status}): ${body}`;
+          streamSetError(companySessionId, errorMsg);
         }
-      } else if (res.status === 409) {
-        // Already resolved/cancelled — silent: the SSE event already
-        // updated our local state, no error to surface to the user.
-      } else {
-        const body = await res.text().catch(() => '');
-        setState((prev) => ({ ...prev, error: `Failed to respond to plan (${res.status}): ${body}` }));
+      } catch (e) {
+        console.error('Failed to send message to master:', e);
+        streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
       }
-    } catch (e) {
-      console.error('Failed to respond to master plan:', e);
-    }
-  }, [companySessionId]);
+    },
+    [companySessionId, streamSetError],
+  );
 
-  const sendMessage = useCallback(async (message: string, attachments?: AgentAttachment[], opts?: { thinking?: boolean }) => {
-    if (!companySessionId) return;
-    try {
-      const res = await fetch(`/api/company/sessions/${companySessionId}/message`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message,
-          attachments: attachments?.length ? attachments : undefined,
-          thinking: opts?.thinking || undefined,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        const errorMsg = res.status === 404
-          ? 'Session is no longer active. Start a new session or reload the page.'
-          : `Failed to send message (${res.status}): ${body}`;
-        setState((prev) => ({ ...prev, error: errorMsg }));
-      }
-    } catch (e) {
-      console.error('Failed to send message to master:', e);
-      setState((prev) => ({ ...prev, error: `Connection error: ${(e as Error).message}` }));
-    }
-  }, [companySessionId]);
-
-  const respondToMasterQuestion = useCallback(async (promptId: number, answer: string) => {
-    if (!companySessionId) return;
-    try {
-      const res = await fetch(`/api/company/sessions/${companySessionId}/answer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answer, prompt_id: promptId }),
-      });
-      if (res.ok) {
-        const body = await res.json().catch(() => null) as { prompt?: MasterPrompt } | null;
-        if (body?.prompt) {
-          setState((prev) => {
-            const next = new Map(prev.masterPrompts);
-            next.set(body.prompt!.id, body.prompt!);
-            return { ...prev, masterPrompts: next };
-          });
+  const respondToMasterPlan = useCallback(
+    async (promptId: number, approved: boolean, feedback?: string) => {
+      if (companySessionId == null) return;
+      try {
+        const res = await fetch(`/api/company/sessions/${companySessionId}/plan-response`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approved, feedback, prompt_id: promptId }),
+        });
+        if (res.ok) {
+          const body = (await res.json().catch(() => null)) as { prompt?: MasterPrompt } | null;
+          if (body?.prompt) streamApplyMasterPrompt(companySessionId, body.prompt);
+        } else if (res.status !== 409) {
+          const body = await res.text().catch(() => '');
+          streamSetError(companySessionId, `Failed to respond to plan (${res.status}): ${body}`);
         }
-      } else if (res.status === 409) {
-        // Already resolved (e.g. session ended, or answered in another tab) —
-        // the SSE event will reconcile state. No error to user.
-      } else {
-        const body = await res.text().catch(() => '');
-        const errorMsg = res.status === 404
-          ? 'Session is no longer active. Your answer could not be delivered.'
-          : `Failed to answer (${res.status}): ${body}`;
-        setState((prev) => ({ ...prev, error: errorMsg }));
+      } catch (e) {
+        console.error('Failed to respond to master plan:', e);
       }
-    } catch (e) {
-      console.error('Failed to answer master question:', e);
-      setState((prev) => ({ ...prev, error: `Connection error: ${(e as Error).message}` }));
-    }
-  }, [companySessionId]);
+    },
+    [companySessionId, streamApplyMasterPrompt, streamSetError],
+  );
 
-  const switchProvider = useCallback(async (
-    provider: string,
-    model?: string,
-    roleAssignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }>,
-  ) => {
-    if (!companySessionId) return;
-    try {
-      const res = await fetch(`/api/company/sessions/${companySessionId}/switch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, model, role_assignments: roleAssignments }),
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        setState((prev) => ({ ...prev, error: `Switch failed: ${body}` }));
+  const respondToMasterQuestion = useCallback(
+    async (promptId: number, answer: string) => {
+      if (companySessionId == null) return;
+      try {
+        const res = await fetch(`/api/company/sessions/${companySessionId}/answer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answer, prompt_id: promptId }),
+        });
+        if (res.ok) {
+          const body = (await res.json().catch(() => null)) as { prompt?: MasterPrompt } | null;
+          if (body?.prompt) streamApplyMasterPrompt(companySessionId, body.prompt);
+        } else if (res.status !== 409) {
+          const body = await res.text().catch(() => '');
+          const errorMsg = res.status === 404
+            ? 'Session is no longer active. Your answer could not be delivered.'
+            : `Failed to answer (${res.status}): ${body}`;
+          streamSetError(companySessionId, errorMsg);
+        }
+      } catch (e) {
+        console.error('Failed to answer master question:', e);
+        streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
       }
-    } catch (e) {
-      setState((prev) => ({ ...prev, error: `Switch error: ${(e as Error).message}` }));
-    }
-  }, [companySessionId]);
+    },
+    [companySessionId, streamApplyMasterPrompt, streamSetError],
+  );
 
-  /**
-   * Merge master prompts loaded from the session's initial `useApi` fetch
-   * into `state.masterPrompts`. Idempotent: existing entries with the
-   * same id keep their (possibly more up-to-date) state. Used by
-   * `CompanySessionView` so a tab that opens with the master already
-   * blocked on a pending `ask_user`/`submit_plan` shows the card
-   * immediately, without waiting for an SSE event that may already
-   * have fired before the client subscribed.
-   */
-  const hydrateMasterPrompts = useCallback((prompts: MasterPrompt[]) => {
-    if (!Array.isArray(prompts) || prompts.length === 0) return;
-    setState((prev) => {
-      const next = new Map(prev.masterPrompts);
-      for (const p of prompts) {
-        if (!next.has(p.id)) next.set(p.id, p);
+  const switchProvider = useCallback(
+    async (
+      provider: string,
+      model?: string,
+      roleAssignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }>,
+    ) => {
+      if (companySessionId == null) return;
+      try {
+        const res = await fetch(`/api/company/sessions/${companySessionId}/switch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, model, role_assignments: roleAssignments }),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => '');
+          streamSetError(companySessionId, `Switch failed: ${body}`);
+        }
+      } catch (e) {
+        streamSetError(companySessionId, `Switch error: ${(e as Error).message}`);
       }
-      if (next.size === prev.masterPrompts.size) return prev;
-      return { ...prev, masterPrompts: next };
-    });
-  }, []);
+    },
+    [companySessionId, streamSetError],
+  );
+
+  const hydrateMasterPrompts = useCallback(
+    (prompts: MasterPrompt[]) => {
+      if (companySessionId == null) return;
+      streamHydrateMasterPromptsAction(companySessionId, prompts);
+    },
+    [companySessionId, streamHydrateMasterPromptsAction],
+  );
 
   const reset = useCallback(() => {
+    if (companySessionId == null) return;
     abortRef.current?.abort();
     lastSeenSeqRef.current = -1;
     receivedDoneRef.current = false;
-    setState(INITIAL_STATE);
-  }, []);
+    streamReset(companySessionId);
+  }, [companySessionId, streamReset]);
 
   return {
-    ...state,
+    connected: stream.connected,
+    started: stream.started,
+    masterState: stream.masterState,
+    subordinateStates: stream.subordinateStates,
+    boardMessages: stream.boardMessages,
+    masterPrompts: stream.masterPrompts,
+    fallbackNotices: stream.fallbackNotices,
+    error: stream.error,
+    userMessage: stream.userMessage,
+    masterErrorDetail: stream.masterErrorDetail,
     start,
     resume,
     reattach,
@@ -820,4 +534,26 @@ export function useCompanyStream(companySessionId: number | null) {
     respondToMasterQuestion,
     hydrateMasterPrompts,
   };
+}
+
+// ─── Internal helpers ─────────────────────────────────────────
+
+interface InitialFetchResponse {
+  recentBoard?: Array<{
+    id: number;
+    author_role: string;
+    agent_run_id: number | null;
+    kind: string;
+    content: string;
+    mentions_json: string;
+    created_at: string;
+  }>;
+  agentRuns?: Array<{
+    id: number;
+    role: string;
+    coder_session_id: number;
+    status: AgentStreamState['status'];
+    status_message: string;
+  }>;
+  masterPrompts?: MasterPrompt[];
 }

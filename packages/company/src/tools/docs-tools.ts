@@ -5,20 +5,22 @@
  * project's `docs/` tree, maintaining a browsable `docs/index.json` the
  * dashboard's Docs tab renders.
  *
- * Storage is the sandbox filesystem itself (per service): there is no
- * separate DB table. This keeps docs versioned together with the code
- * and avoids dual-write consistency problems. The dashboard reads
- * through a read-only HTTP proxy backed by the same driver.
+ * Storage: the sandbox filesystem is the working copy; the company
+ * drive (`__docs__/<service>/<path>`) is the durable mirror. Sandbox
+ * lifecycle (destroy / restart / scaffolder rewipe) used to wipe docs
+ * with the container — the mirror means they survive. Reads fall back
+ * to the drive when the sandbox doesn't have the file, so an agent
+ * spawning into a freshly-recreated container still sees prior ADRs.
  *
  * `service` parameter: every tool accepts an optional serviceId. When
  * omitted, docs land in the primary sandbox. Specifying a serviceId
- * routes to that microservice's container (e.g. documentation living
- * alongside the `api` worker code, separate from the `frontend`).
+ * routes to that microservice's container.
  */
 
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { SandboxBinding } from '@mcp/company/types.js';
+import type { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { resolveDriver } from '@mcp/services/sandbox/drivers/driver-factory.js';
 
@@ -83,6 +85,94 @@ function resolveDocPath(binding: SandboxBinding, relPath: string): string | null
   return `${binding.workdir}/docs/${clean}`;
 }
 
+/**
+ * Build the drive-mirror path for a doc. We namespace by serviceId so
+ * docs/api/* and docs/frontend/* from different microservices don't
+ * collide in the operator's Drive tab — the prefix doubles as
+ * documentation of where the file came from.
+ */
+function driveMirrorPath(serviceId: string | undefined, relPath: string): string {
+  const svc = serviceId && serviceId !== 'main' ? serviceId : 'main';
+  return `__docs__/${svc}/${relPath}`;
+}
+
+/**
+ * Locate the company drive store via the orchestrator on `ctx`. Returns
+ * null when the context doesn't carry one — agent tools called from
+ * tests / non-orchestrated runners gracefully degrade to "sandbox only"
+ * behavior; the production builder path always has it wired.
+ */
+function resolveDriveStore(ctx: ToolContext): CompanyDriveStore | null {
+  const orch = ctx.companyContext?.orchestrator as { driveStore?: CompanyDriveStore } | undefined;
+  return orch?.driveStore ?? null;
+}
+
+/**
+ * Mirror a doc write into the drive — best-effort. Failures are logged
+ * but never bubble up: the sandbox write already succeeded and the
+ * drive mirror is a durability optimization, not a correctness gate.
+ */
+function mirrorWriteToDrive(
+  ctx: ToolContext,
+  binding: SandboxBinding,
+  relPath: string,
+  content: string,
+): void {
+  const drive = resolveDriveStore(ctx);
+  if (!drive) return;
+  try {
+    const scope = drive.resolveScopeKey();
+    drive.write(scope, driveMirrorPath(binding.serviceId, relPath), content, {
+      role: ctx.companyContext?.agentRole ?? null,
+      agentRunId: ctx.companyContext?.agentRunId ?? null,
+    });
+  } catch (e) {
+    console.warn(
+      `[docs-tools] drive mirror write failed for ${relPath}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+}
+
+/** Mirror a doc delete — same best-effort semantics as the write path. */
+function mirrorDeleteFromDrive(
+  ctx: ToolContext,
+  binding: SandboxBinding,
+  relPath: string,
+): void {
+  const drive = resolveDriveStore(ctx);
+  if (!drive) return;
+  try {
+    drive.delete(drive.resolveScopeKey(), driveMirrorPath(binding.serviceId, relPath));
+  } catch (e) {
+    console.warn(
+      `[docs-tools] drive mirror delete failed for ${relPath}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+}
+
+/**
+ * Try reading a doc from the drive mirror — used as fallback when the
+ * sandbox has been destroyed/restarted and the file is no longer on
+ * disk. Returns null when the drive has no copy either.
+ */
+function readFromDriveMirror(
+  ctx: ToolContext,
+  binding: SandboxBinding,
+  relPath: string,
+): string | null {
+  const drive = resolveDriveStore(ctx);
+  if (!drive) return null;
+  try {
+    const scope = drive.resolveScopeKey();
+    const result = drive.read(scope, driveMirrorPath(binding.serviceId, relPath), {
+      maxBytes: MAX_CONTENT_BYTES,
+    });
+    return result.content;
+  } catch {
+    return null;
+  }
+}
+
 const docsWrite: CoderTool = {
   name: 'docs_write',
   description:
@@ -127,6 +217,7 @@ const docsWrite: CoderTool = {
     await res.binding.driver.writeFile(res.binding.containerId, abs, content, {
       recursive: true,
     });
+    mirrorWriteToDrive(ctx, res.binding, path, content);
     return ok(`Wrote docs/${path} (${content.length} bytes)`);
   },
 };
@@ -150,12 +241,18 @@ const docsRead: CoderTool = {
   handler: async (args, ctx): Promise<ToolResult> => {
     const res = await resolveTargetBinding(ctx, args.service as string | undefined);
     if ('error' in res) return err(res.error);
-    const abs = resolveDocPath(res.binding, String(args.path ?? ''));
+    const relPath = String(args.path ?? '');
+    const abs = resolveDocPath(res.binding, relPath);
     if (!abs) return err(`docs_read: invalid path`);
     try {
       const text = await res.binding.driver.readFile(res.binding.containerId, abs);
       return ok(text);
     } catch (e) {
+      // Sandbox no longer has the file — common after restart / destroy.
+      // Fall back to the drive mirror so the agent can still see prior
+      // documentation it (or a peer) wrote before the restart.
+      const mirrored = readFromDriveMirror(ctx, res.binding, relPath);
+      if (mirrored !== null) return ok(mirrored);
       return err(`docs_read: ${e instanceof Error ? e.message : String(e)}`);
     }
   },
@@ -258,6 +355,7 @@ const docsIndexUpdate: CoderTool = {
     const body = JSON.stringify({ sections }, null, 2);
     const abs = `${res.binding.workdir}/docs/index.json`;
     await res.binding.driver.writeFile(res.binding.containerId, abs, body, { recursive: true });
+    mirrorWriteToDrive(ctx, res.binding, 'index.json', body);
     return ok(`Updated docs/index.json (${(sections as Entry[]).length} top-level sections)`);
   },
 };
@@ -281,7 +379,8 @@ const docsDelete: CoderTool = {
   handler: async (args, ctx): Promise<ToolResult> => {
     const res = await resolveTargetBinding(ctx, args.service as string | undefined);
     if ('error' in res) return err(res.error);
-    const abs = resolveDocPath(res.binding, String(args.path ?? ''));
+    const relPath = String(args.path ?? '');
+    const abs = resolveDocPath(res.binding, relPath);
     if (!abs) return err('docs_delete: invalid path');
     const probe = await res.binding.driver.exec(
       res.binding.containerId,
@@ -291,6 +390,7 @@ const docsDelete: CoderTool = {
     if (probe.exitCode !== 0) {
       return err(`docs_delete: ${probe.stderr || probe.stdout || 'unknown failure'}`);
     }
+    mirrorDeleteFromDrive(ctx, res.binding, relPath);
     return ok(`Deleted docs/${args.path}`);
   },
 };

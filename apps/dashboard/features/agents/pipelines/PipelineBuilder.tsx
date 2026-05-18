@@ -28,9 +28,7 @@ import {
   applyNodeChanges,
   SelectionMode,
   type Connection,
-  type Edge,
   type EdgeChange,
-  type Node,
   type NodeChange,
   type OnConnect,
 } from '@xyflow/react';
@@ -55,10 +53,19 @@ import type {
 } from '@mcp/company/types.js';
 import { NodeEditPanel } from './NodeEditPanel.js';
 import { EdgeEditPanel } from './EdgeEditPanel.js';
-import { PipelineNodeView, PIPELINE_NODE_TYPE, type PipelineNodeData } from './PipelineNodeView.js';
-import { PipelineEdgeView, PIPELINE_EDGE_TYPE, type PipelineEdgeData } from './PipelineEdgeView.js';
+import { PipelineNodeView, PIPELINE_NODE_TYPE } from './PipelineNodeView.js';
+import { PipelineEdgeView, PIPELINE_EDGE_TYPE } from './PipelineEdgeView.js';
 import { PipelineTemplatesPanel } from './PipelineTemplatesPanel.js';
 import type { PipelineTemplate } from './templates.js';
+import {
+  STARTER_GRAPH,
+  toFlowNode,
+  graphNodesToFlow,
+  graphEdgesToFlow,
+  nextNodeId,
+  type FlowEdge,
+  type FlowNode,
+} from './pipeline-builder/graph-helpers.js';
 
 interface PipelineBuilderProps {
   companySessionId: number;
@@ -68,34 +75,6 @@ interface PipelineBuilderProps {
   onClose: () => void;
   onSaved: (pipeline: Pipeline) => void;
 }
-
-type FlowNode = Node<PipelineNodeData>;
-type FlowEdge = Edge<PipelineEdgeData>;
-
-const STARTER_GRAPH: PipelineGraph = {
-  version: 1,
-  nodes: [
-    {
-      id: 'investigate',
-      label: 'Investigate',
-      role: 'investigator',
-      kind: 'agent',
-      taskTemplate: '{{initial_input}}',
-      branchMode: 'linear',
-      position: { x: 100, y: 120 },
-    },
-    {
-      id: 'implement',
-      label: 'Implement',
-      role: 'backend',
-      kind: 'agent',
-      taskTemplate: 'Implement based on:\n\n{{previous_output}}',
-      branchMode: 'linear',
-      position: { x: 480, y: 120 },
-    },
-  ],
-  edges: [{ kind: 'linear', id: 'e1', from: 'investigate', to: 'implement' }],
-};
 
 // `nodeTypes`/`edgeTypes` need stable references — recreating them on
 // every render makes React Flow warn and remount.
@@ -570,42 +549,6 @@ function PipelineBuilderInner({
       </div>
     </div>
   );
-}
-
-// ─── Helpers: PipelineGraph ↔ React Flow ──────────────────────
-
-function toFlowNode(n: PipelineNode): FlowNode {
-  return {
-    id: n.id,
-    type: PIPELINE_NODE_TYPE,
-    position: n.position ?? { x: 100, y: 100 },
-    data: { pipelineNode: n },
-  };
-}
-
-function graphNodesToFlow(nodes: PipelineNode[]): FlowNode[] {
-  return nodes.map((n) => toFlowNode(n));
-}
-
-function graphEdgesToFlow(edges: PipelineEdge[]): FlowEdge[] {
-  return edges.map((e) => ({
-    id: e.id,
-    source: e.from,
-    target: e.to,
-    sourceHandle: e.kind === 'pass-fail' ? e.on : undefined,
-    type: PIPELINE_EDGE_TYPE,
-    data: { pipelineEdge: e },
-  }));
-}
-
-function nextNodeId(existing: FlowNode[]): string {
-  let i = existing.length + 1;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const candidate = `node_${i}`;
-    if (!existing.some((n) => n.id === candidate)) return candidate;
-    i++;
-  }
 }
 
 // Re-export the canonical types so the panel components don't need

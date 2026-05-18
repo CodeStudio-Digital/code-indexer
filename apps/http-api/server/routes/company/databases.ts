@@ -123,7 +123,11 @@ export function mountCompanyDatabaseRoutes(app: Hono, deps: ServerDeps): void {
 
   /**
    * Apply env key writes for a DB row. Deletes stale keys (if renaming)
-   * and upserts the current ones with `is_secret` + `source: 'user'`.
+   * and upserts the current ones with `is_secret` + `source: 'auto'`
+   * — DB-managed envs are owned by their database row, not by the
+   * operator. The Env tab badges these as `auto` so the source is
+   * obvious, and the DELETE handler below removes them along with the
+   * database row by default.
    */
   function writeEnvs(
     sessionId: number,
@@ -142,7 +146,7 @@ export function mountCompanyDatabaseRoutes(app: Hono, deps: ServerDeps): void {
       const raw = values[field.name];
       if (typeof raw !== 'string') continue;
       companySessionEnvStore.upsert(sessionId, envKey, raw, field.secret, {
-        source: 'user',
+        source: 'auto',
       });
     }
   }
@@ -358,7 +362,15 @@ export function mountCompanyDatabaseRoutes(app: Hono, deps: ServerDeps): void {
     if (!session) return notFound(c);
     const current = companySessionDatabaseStore.get(dbId);
     if (!current || current.session_id !== id) return notFound(c);
-    const alsoDeleteEnvs = c.req.query('also_delete_envs') === '1';
+    // Phase 5: also-delete-envs is now the DEFAULT. DB-managed envs are
+    // tagged `source: 'auto'` and owned by the database row — leaving
+    // them behind after a delete creates orphan envs that the operator
+    // has to clean up manually (the root cause of "PREVIEW_URL_api
+    // still there after I removed the api service"). Pass
+    // `?keep_envs=1` to opt out (e.g., when migrating a DB connection
+    // to a different provider without losing the value temporarily).
+    const keepEnvs = c.req.query('keep_envs') === '1';
+    const alsoDeleteEnvs = !keepEnvs;
     try {
       await mutateAndSync(id, () => {
         if (alsoDeleteEnvs) deleteOwnedEnvs(id, current.env_keys);

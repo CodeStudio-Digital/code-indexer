@@ -30,6 +30,7 @@ export default defineConfig({
       ...pkgAliases('@mcp/design-system', 'design-system'),
       ...pkgAliases('@mcp/code-agent', 'code-agent'),
       ...pkgAliases('@mcp/company', 'company'),
+      ...pkgAliases('@mcp/company-contracts', 'company-contracts'),
       { find: /^@apps\/(.*)$/, replacement: resolve(repoRoot, 'apps/$1') },
     ],
   },

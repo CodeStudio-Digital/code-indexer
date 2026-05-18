@@ -13,6 +13,13 @@ import { mountCompanyPipelineRoutes } from './pipelines.js';
 import { mountCompanyInboxRoutes } from './inbox.js';
 import { mountCompanyDriveRoutes } from './drive.js';
 import { mountCompanySnapshotRoutes } from './snapshot.js';
+import { mountCompanyDocsRoutes } from './docs.js';
+import { mountCompanyEnvsRoutes } from './envs.js';
+import { mountCompanyOpenApiRoutes } from './openapi.js';
+import { mountCompanySessionDeleteRoutes } from './session-delete.js';
+import { mountCompanyServiceLifecycleRoutes } from './service-lifecycle.js';
+import { mountCompanySandboxRoutes } from './sandbox.js';
+import { mountCompanyServicesRoutes } from './services.js';
 import { mountQaRoutes } from './qa/index.js';
 
 export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
@@ -29,5 +36,14 @@ export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyInboxRoutes(app, deps);
   mountCompanyDriveRoutes(app, deps);
   mountCompanySnapshotRoutes(app, deps);
+  // Phase 8: route groups split out of the legacy sessions.ts mega-file.
+  mountCompanyDocsRoutes(app, deps);
+  mountCompanyEnvsRoutes(app, deps);
+  mountCompanyOpenApiRoutes(app, deps);
+  mountCompanySessionDeleteRoutes(app, deps);
+  mountCompanyServiceLifecycleRoutes(app, deps);
+  // Phase 8 part 2 (continuation): sandbox + services CRUD finally out of sessions.ts.
+  mountCompanySandboxRoutes(app, deps);
+  mountCompanyServicesRoutes(app, deps);
   mountQaRoutes(app, deps);
 }

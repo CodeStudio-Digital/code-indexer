@@ -544,6 +544,16 @@ export function attachPreviewUpgrade(server: HttpServer): void {
       : mgr.get(sessionId);
     let targetPort: number | null = null;
     if (targetSandbox && targetSandbox.status === 'ready') {
+      if (targetSandbox.runtimePaused) {
+        // HMR upgrade against a runtime-paused service would either
+        // refuse connect (port still open at the kernel level, app
+        // process frozen) or stall mid-handshake — both produce the
+        // mysterious "preview works but HMR doesn't" symptom. Refuse
+        // the upgrade cleanly so the browser surfaces the error to
+        // the dev console.
+        writeErrorAndClose(clientSocket, 409, 'service is runtime-paused');
+        return;
+      }
       targetPort = targetSandbox.hostPort;
       mgr.touch(sessionId);
     } else if (!svcMatch) {

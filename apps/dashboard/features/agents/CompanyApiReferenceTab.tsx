@@ -1,13 +1,23 @@
 /**
- * Tab wrapper that wires the existing builder-mode ApiReferenceTab into the
- * company/agents view. Builder sessions already get the API Reference via
- * the right-hand preview pane; for non-builder agent sessions this tab is
- * the only entry point. Keeping a single underlying renderer means any
+ * Tab wrapper that wires the existing builder-mode ApiReferenceTab into
+ * the company/agents view. Keeping a single underlying renderer means
  * Scalar-side improvements land in both places at once.
+ *
+ * Phase 2: openapi invalidation reads from `sandboxSlice.lastFileChange`
+ * instead of the legacy `window.dispatchEvent('sandbox:file-changed:N')`
+ * bridge. The slice is updated by `useCompanyStream` when an SSE
+ * `sandbox.file_changed` arrives, so the tab refetches the spec as soon
+ * as the agent writes a new `openapi.{yaml,json}` — no polling, no DOM
+ * custom events.
+ *
+ * The services-list poll (4 s) stays for now: there's no SSE channel
+ * for service lifecycle yet. Phase 4 will add events for service
+ * provisioning/teardown and this poll can be retired.
  */
-import { useEffect, useState } from 'react';
-import { ApiReferenceTab, type ServiceOption } from '../builder/preview/api-reference/ApiReferenceTab.js';
+import { ApiReferenceTab } from '../builder/preview/api-reference/ApiReferenceTab.js';
 import { useSandboxStatus } from '../builder/useSandboxStatus.js';
+import { selectSandbox, useCompanyStore } from '../../state/company/index.js';
+import { useExtraServices } from './preview-sidebar/useExtraServices.js';
 
 interface CompanyApiReferenceTabProps {
   sessionId: number;
@@ -15,70 +25,22 @@ interface CompanyApiReferenceTabProps {
 
 export function CompanyApiReferenceTab({ sessionId }: CompanyApiReferenceTabProps) {
   const { data } = useSandboxStatus(sessionId);
+  const extraServices = useExtraServices(sessionId);
 
-  // Mirror BuilderView's poll cadence so the service list (primary +
-  // microservices + attached) stays fresh even when no SSE wiring is
-  // active for this view.
-  const [extraServices, setExtraServices] = useState<ServiceOption[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    async function reload() {
-      try {
-        const r = await fetch(`/api/company/sessions/${sessionId}/services`);
-        if (!r.ok) return;
-        const body = (await r.json()) as {
-          services: Array<{
-            service_id: string;
-            name: string;
-            status: string;
-            runtime_paused?: boolean;
-            preview_url: string | null;
-            is_primary?: boolean;
-          }>;
-        };
-        if (cancelled) return;
-        setExtraServices(
-          (body.services ?? [])
-            // Primary is already injected by ApiReferenceTab from `snapshot`
-            // — including it here would double-list it in the switcher.
-            .filter((s) => !s.is_primary && !!s.preview_url)
-            .map((s) => ({
-              id: s.service_id,
-              label: s.name || s.service_id,
-              previewUrl: s.preview_url!,
-              status: s.status,
-              runtimePaused: !!s.runtime_paused,
-            })),
-        );
-      } catch {
-        /* keep last-known list on transient failure */
-      }
-    }
-    void reload();
-    const t = setInterval(reload, 4_000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [sessionId]);
-
-  // Same SSE-driven refresh hook BuilderView uses: when the agent writes
-  // a new openapi.{yaml,json} file, the runner emits sandbox.file_changed
-  // and useCompanyStream dispatches this scoped window event.
-  const [fileChangeTick, setFileChangeTick] = useState(0);
-  useEffect(() => {
-    const eventName = `sandbox:file-changed:${sessionId}`;
-    const handler = () => setFileChangeTick((n) => n + 1);
-    window.addEventListener(eventName, handler);
-    return () => window.removeEventListener(eventName, handler);
-  }, [sessionId]);
+  // SSE-driven OpenAPI refresh: bump the tick whenever the sandbox slice
+  // records a new file change for this session. `seq` is monotonic so
+  // forwarding it through to `ApiReferenceTab.fileChangeTick` causes a
+  // re-fetch of the spec without redundant intermediate state.
+  const lastFileChangeSeq = useCompanyStore(
+    (s) => selectSandbox(s, sessionId).lastFileChange?.seq ?? 0,
+  );
 
   return (
     <ApiReferenceTab
       sessionId={sessionId}
       snapshot={data}
       extraServices={extraServices}
-      fileChangeTick={fileChangeTick}
+      fileChangeTick={lastFileChangeSeq}
     />
   );
 }

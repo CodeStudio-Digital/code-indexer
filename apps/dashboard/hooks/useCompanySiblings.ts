@@ -6,175 +6,222 @@
  * the tab bar:
  *   - `parent` is the root (the "Main" tab is the parent itself).
  *   - `children` are the active sub-sessions, ordered by id.
- *   - `activeSessionId` mirrors the user's selected tab and is
- *     persisted per parent in `localStorage[company-active-subsession:N]`.
+ *   - `activeSessionId` is the URL's `:frontId` segment.
  *
- * The hook does NOT subscribe to SSE here — sub-sessions each have
- * their own metaBus, and the dashboard mounts `useCompanyStream` on
- * the active tab's id to consume that one. We refresh the children
- * list lazily on action (create/rename/archive) and on demand.
+ * Phase 1b: selection is the URL's source of truth. `setActiveSessionId`
+ * issues `navigate(...)`. A one-shot localStorage seed migrates old
+ * sessions that were last opened pre-router; the entry is deleted on
+ * read so the URL becomes authoritative going forward.
  */
-import { useCallback, useEffect, useState } from 'react';
-import type { CompanySession } from '@mcp/company/types.js';
+import { useCallback, useEffect, useRef } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import type { CompanySession } from '@mcp/company-contracts';
+import { useCompanyStore, selectSiblings } from '../state/company/index.js';
+import {
+  buildAgentsUrl,
+  parseAgentsParams,
+} from '../features/agents/routing.js';
+import { DEFAULT_TAB_FOR_ZONE, type Zone } from '../features/agents/zones/types.js';
 
 export interface SubSessionsState {
   parent: CompanySession | null;
   children: CompanySession[];
   loading: boolean;
-  /** Persisted: active tab id; defaults to the parent's id (the Main tab). */
+  /** URL-derived active tab id; defaults to the parent's id (Main). */
   activeSessionId: number | null;
 }
 
 const STORAGE_KEY = (rootId: number) => `company-active-subsession:${rootId}`;
 
+function readPersistedOnce(rootId: number): number | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY(rootId));
+    if (!raw) return null;
+    // Drain the legacy entry — Phase 1b makes the URL authoritative; this
+    // value only seeds the URL once for users mid-session.
+    window.localStorage.removeItem(STORAGE_KEY(rootId));
+    return Number(raw);
+  } catch {
+    return null;
+  }
+}
+
 export function useCompanySiblings(rootSessionId: number | null) {
-  const [state, setState] = useState<SubSessionsState>({
-    parent: null,
-    children: [],
-    loading: false,
-    activeSessionId: null,
-  });
+  const navigate = useNavigate();
+  const routeParams = useParams<{
+    rootId?: string;
+    frontId?: string;
+    zone?: string;
+    tab?: string;
+  }>();
+  const baseState = useCompanyStore((s) => selectSiblings(s, rootSessionId));
+
+  const sessionEnsure = useCompanyStore((s) => s.sessionEnsure);
+  const sessionLoaded = useCompanyStore((s) => s.sessionLoaded);
+  const sessionSetLoading = useCompanyStore((s) => s.sessionSetLoading);
+  const sessionUpsertChild = useCompanyStore((s) => s.sessionUpsertChild);
+  const sessionRemoveChild = useCompanyStore((s) => s.sessionRemoveChild);
+
+  // ─── URL-driven active session id ────────────────────────────
+  const route = parseAgentsParams(routeParams, rootSessionId ?? undefined);
+  const activeSessionId = route?.frontId ?? rootSessionId;
+  const state: SubSessionsState = { ...baseState, activeSessionId };
+
+  // ─── Navigate helper that preserves zone+tab ────────────────
+  const navigateToFront = useCallback(
+    (frontId: number | 'main') => {
+      if (rootSessionId == null) return;
+      const zone: Zone = route?.zone ?? 'work';
+      const tab = route?.tab ?? DEFAULT_TAB_FOR_ZONE[zone];
+      navigate(buildAgentsUrl(rootSessionId, frontId, zone, tab));
+    },
+    [rootSessionId, route?.zone, route?.tab, navigate],
+  );
+
+  // One-shot localStorage migration: if the URL doesn't already pin a
+  // front and the user has a legacy persisted selection, seed the URL
+  // once. After this `localStorage` is no longer read.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current) return;
+    if (rootSessionId == null) return;
+    if (routeParams.frontId != null) {
+      seededRef.current = true;
+      return;
+    }
+    const persisted = readPersistedOnce(rootSessionId);
+    if (persisted == null) {
+      seededRef.current = true;
+      return;
+    }
+    seededRef.current = true;
+    navigateToFront(persisted);
+  }, [rootSessionId, routeParams.frontId, navigateToFront]);
 
   const refresh = useCallback(async () => {
     if (rootSessionId == null) return;
-    setState((prev) => ({ ...prev, loading: true }));
+    sessionEnsure(rootSessionId);
+    sessionSetLoading(rootSessionId, true);
     try {
       const res = await fetch(`/api/company/sessions/${rootSessionId}/children`);
       if (!res.ok) {
-        setState((prev) => ({ ...prev, loading: false }));
+        sessionSetLoading(rootSessionId, false);
         return;
       }
       const body = (await res.json()) as { parent: CompanySession; children: CompanySession[] };
-      const parentId = body.parent.id;
-
-      // Read persisted selection. Validate against the freshly-loaded
-      // children + parent so a deleted tab doesn't leave us pointing at
-      // a ghost.
-      let persisted: number | null = null;
-      if (typeof window !== 'undefined') {
-        try {
-          const raw = window.localStorage.getItem(STORAGE_KEY(parentId));
-          if (raw) persisted = Number(raw);
-        } catch { /* ignore */ }
-      }
-      const validIds = new Set<number>([parentId, ...body.children.map((c) => c.id)]);
-
-      setState((prev) => {
-        const stillValid = prev.activeSessionId != null && validIds.has(prev.activeSessionId);
-        const persistedValid = persisted != null && validIds.has(persisted);
-        const next = stillValid
-          ? prev.activeSessionId
-          : (persistedValid ? persisted : parentId);
-        return {
-          parent: body.parent,
-          children: body.children,
-          loading: false,
-          activeSessionId: next,
-        };
-      });
+      sessionLoaded(body.parent.id, body.parent, body.children);
     } catch (e) {
       console.error('useCompanySiblings: refresh failed:', e);
-      setState((prev) => ({ ...prev, loading: false }));
+      sessionSetLoading(rootSessionId, false);
     }
-  }, [rootSessionId]);
+  }, [rootSessionId, sessionEnsure, sessionLoaded, sessionSetLoading]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
-  const setActiveSessionId = useCallback((sessionId: number | null) => {
-    setState((prev) => ({ ...prev, activeSessionId: sessionId }));
-    if (rootSessionId == null || typeof window === 'undefined') return;
-    // The localStorage key is keyed by the ROOT session id so children
-    // and parent both map back to the same persisted choice.
-    try {
-      const root = state.parent?.id ?? rootSessionId;
-      if (sessionId == null) {
-        window.localStorage.removeItem(STORAGE_KEY(root));
-      } else {
-        window.localStorage.setItem(STORAGE_KEY(root), String(sessionId));
-      }
-    } catch { /* ignore */ }
-  }, [rootSessionId, state.parent]);
+  const setActiveSessionId = useCallback(
+    (sessionId: number | null) => {
+      if (rootSessionId == null || sessionId == null) return;
+      navigateToFront(sessionId);
+    },
+    [rootSessionId, navigateToFront],
+  );
 
-  const createChild = useCallback(async (name: string): Promise<CompanySession | null> => {
-    if (rootSessionId == null) return null;
-    const parentId = state.parent?.id ?? rootSessionId;
-    try {
-      const res = await fetch(`/api/company/sessions/${parentId}/children`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      if (!res.ok) {
-        console.error(`createChild failed: ${res.status}`);
+  const createChild = useCallback(
+    async (name: string): Promise<CompanySession | null> => {
+      if (rootSessionId == null) return null;
+      const parentId = state.parent?.id ?? rootSessionId;
+      try {
+        const res = await fetch(`/api/company/sessions/${parentId}/children`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        if (!res.ok) {
+          console.error(`createChild failed: ${res.status}`);
+          return null;
+        }
+        const child = (await res.json()) as CompanySession;
+        sessionUpsertChild(parentId, child);
+        navigateToFront(child.id);
+        return child;
+      } catch (e) {
+        console.error('createChild failed:', e);
         return null;
       }
-      const child = (await res.json()) as CompanySession;
-      setState((prev) => ({
-        ...prev,
-        children: [...prev.children.filter((c) => c.id !== child.id), child]
-          .sort((a, b) => a.id - b.id),
-        activeSessionId: child.id,
-      }));
-      // Persist the new selection so a reload lands on the new tab.
-      if (typeof window !== 'undefined') {
-        try { window.localStorage.setItem(STORAGE_KEY(parentId), String(child.id)); } catch { /* ignore */ }
+    },
+    [rootSessionId, state.parent, sessionUpsertChild, navigateToFront],
+  );
+
+  const renameChild = useCallback(
+    async (sessionId: number, name: string): Promise<boolean> => {
+      if (rootSessionId == null) return false;
+      const parentId = state.parent?.id ?? rootSessionId;
+      // Parent renames hit `PATCH /sessions/:id` (the session CRUD endpoint).
+      // Child renames hit `PATCH /sessions/:parentId/children/:childId` so the
+      // backend can enforce parent-child invariants. Same function so callers
+      // (e.g. FrontTabsBar) don't have to branch.
+      const isParent = sessionId === parentId;
+      const url = isParent
+        ? `/api/company/sessions/${parentId}`
+        : `/api/company/sessions/${parentId}/children/${sessionId}`;
+      try {
+        const res = await fetch(url, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        if (!res.ok) return false;
+        const body = (await res.json()) as CompanySession | { session: CompanySession };
+        // Parent endpoint wraps in `{ session }`; child endpoint returns the row directly.
+        const updated = 'session' in body ? body.session : body;
+        if (isParent) {
+          // Parent rename also bumps the in-store parent record so the
+          // "Main" tab label refreshes without a refetch round-trip.
+          sessionLoaded(parentId, updated, state.children);
+        } else {
+          sessionUpsertChild(parentId, updated);
+        }
+        return true;
+      } catch (e) {
+        console.error('renameChild failed:', e);
+        return false;
       }
-      return child;
-    } catch (e) {
-      console.error('createChild failed:', e);
-      return null;
-    }
-  }, [rootSessionId, state.parent]);
+    },
+    [rootSessionId, state.parent, state.children, sessionUpsertChild, sessionLoaded],
+  );
 
-  const renameChild = useCallback(async (childId: number, name: string): Promise<boolean> => {
-    if (rootSessionId == null) return false;
-    const parentId = state.parent?.id ?? rootSessionId;
-    try {
-      const res = await fetch(`/api/company/sessions/${parentId}/children/${childId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      if (!res.ok) return false;
-      const updated = (await res.json()) as CompanySession;
-      setState((prev) => ({
-        ...prev,
-        children: prev.children.map((c) => (c.id === updated.id ? updated : c)),
-      }));
-      return true;
-    } catch (e) {
-      console.error('renameChild failed:', e);
-      return false;
-    }
-  }, [rootSessionId, state.parent]);
-
-  const archiveChild = useCallback(async (childId: number): Promise<boolean> => {
-    if (rootSessionId == null) return false;
-    const parentId = state.parent?.id ?? rootSessionId;
-    try {
-      const res = await fetch(`/api/company/sessions/${parentId}/children/${childId}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) return false;
-      setState((prev) => {
-        const children = prev.children.filter((c) => c.id !== childId);
-        const stillActive = prev.activeSessionId !== childId;
-        const fallback = parentId;
-        return {
-          ...prev,
-          children,
-          activeSessionId: stillActive ? prev.activeSessionId : fallback,
-        };
-      });
-      return true;
-    } catch (e) {
-      console.error('archiveChild failed:', e);
-      return false;
-    }
-  }, [rootSessionId, state.parent]);
+  const archiveChild = useCallback(
+    async (childId: number): Promise<boolean> => {
+      if (rootSessionId == null) return false;
+      const parentId = state.parent?.id ?? rootSessionId;
+      try {
+        const res = await fetch(`/api/company/sessions/${parentId}/children/${childId}`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) return false;
+        sessionRemoveChild(parentId, childId);
+        // Active front just disappeared — fall back to Main so the URL
+        // isn't pointing at a dead child id.
+        if (activeSessionId === childId) {
+          navigateToFront('main');
+        }
+        return true;
+      } catch (e) {
+        console.error('archiveChild failed:', e);
+        return false;
+      }
+    },
+    [rootSessionId, state.parent, sessionRemoveChild, activeSessionId, navigateToFront],
+  );
 
   return {
-    ...state,
+    parent: state.parent,
+    children: state.children,
+    loading: state.loading,
+    activeSessionId: state.activeSessionId,
     refresh,
     setActiveSessionId,
     createChild,

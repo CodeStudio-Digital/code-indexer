@@ -12,7 +12,15 @@ export interface PreviewIframeProps {
   onRestartDev: () => Promise<void>;
   sessionId: number;
   fileChangeTick?: number;
-  extraServices?: Array<{ id: string; label: string; previewUrl: string; status: string; runtimePaused?: boolean }>;
+  extraServices?: Array<{
+    id: string;
+    label: string;
+    previewUrl: string;
+    status: string;
+    runtimePaused?: boolean;
+    previewStrategy?: 'proxy-prefix' | 'proxy-root' | 'port-direct';
+    hostPort?: number;
+  }>;
 }
 
 const STEP_LABELS: Record<SandboxStepLabel, string> = {
@@ -47,7 +55,30 @@ export function PreviewIframe({
     selectedService !== 'main'
       ? extraServices.find((s) => s.id === selectedService) ?? null
       : null;
-  const effectivePreviewUrl = activeExtra ? activeExtra.previewUrl : sandbox?.previewUrl ?? '';
+
+  // Phase 4: when the chosen service uses `port-direct`, the iframe bypasses
+  // the `/preview/${id}` proxy and loads `http://localhost:${hostPort}`
+  // directly. This is the path for projects whose dev server doesn't
+  // tolerate a path prefix (Next dev, raw Vite with `--base /`, etc.).
+  // The proxied URL stays as the fallback for everything else.
+  function resolveIframeSrc(): string {
+    if (activeExtra) {
+      if (
+        activeExtra.previewStrategy === 'port-direct' &&
+        typeof activeExtra.hostPort === 'number' &&
+        activeExtra.hostPort > 0
+      ) {
+        return `http://localhost:${activeExtra.hostPort}/`;
+      }
+      return activeExtra.previewUrl;
+    }
+    // The primary's strategy is encoded by the dashboard's primary
+    // service entry in `extraServices` when present. When absent (the
+    // typical case in builder mode), fall back to the legacy proxy URL
+    // built by the sandbox manager.
+    return sandbox?.previewUrl ?? '';
+  }
+  const effectivePreviewUrl = resolveIframeSrc();
   const effectiveStatus = activeExtra
     ? activeExtra.status === 'ready' || activeExtra.status === 'running'
       ? 'ready'

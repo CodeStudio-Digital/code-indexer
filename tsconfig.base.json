@@ -31,6 +31,8 @@
       "@mcp/code-agent/*": ["packages/code-agent/src/*"],
       "@mcp/company": ["packages/company/src/index.ts"],
       "@mcp/company/*": ["packages/company/src/*"],
+      "@mcp/company-contracts": ["packages/company-contracts/src/index.ts"],
+      "@mcp/company-contracts/*": ["packages/company-contracts/src/*"],
       "@apps/*": ["apps/*"]
     }
   }

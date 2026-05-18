@@ -11,6 +11,7 @@
     { "path": "../store" },
     { "path": "../services" },
     { "path": "../code-agent" },
-    { "path": "../design-system" }
+    { "path": "../design-system" },
+    { "path": "../company-contracts" }
   ]
 }

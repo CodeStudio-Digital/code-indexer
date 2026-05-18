@@ -7,17 +7,26 @@
  *   - Answer on behalf of the target (when an agent dies without
  *     responding to a `wait=true` send)
  *
- * The panel polls every 5s; SSE wiring for `inbox_*` events arrives in a
- * follow-up alongside the rest of the company stream cleanup.
+ * Phase 2: messages live in the `inboxSlice`. Each `inbox_message_*`
+ * SSE event bumps a sequence counter the panel watches with `useEffect`
+ * — when it changes, the panel refetches and hydrates the slice. The
+ * 5 s poll stays only as a fallback for when the SSE stream is
+ * disconnected (the orchestrator is dormant or the user just opened
+ * the tab without starting/reattaching).
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Inbox, RefreshCw, Send, Square } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Textarea } from '../../components/ui/textarea.js';
-import { useApi, apiPost } from '../../hooks/useApi.js';
-import type { AgentInboxMessage, InboxStatus } from '@mcp/company/types.js';
+import { apiPost } from '../../hooks/useApi.js';
+import {
+  selectInbox,
+  selectStream,
+  useCompanyStore,
+} from '../../state/company/index.js';
+import type { AgentInboxMessage, InboxStatus } from '@mcp/company-contracts';
 
 interface InboxPanelProps {
   companySessionId: number;
@@ -39,15 +48,64 @@ export function InboxPanel({ companySessionId }: InboxPanelProps) {
     const params = new URLSearchParams();
     if (statusFilter !== 'all') params.set('status', statusFilter);
     const q = params.toString();
-    return `/company/sessions/${companySessionId}/inbox${q ? `?${q}` : ''}`;
+    return `/api/company/sessions/${companySessionId}/inbox${q ? `?${q}` : ''}`;
   }, [companySessionId, statusFilter]);
-  const messages = useApi<AgentInboxMessage[]>(queryUrl);
 
+  const slot = useCompanyStore((s) => selectInbox(s, companySessionId));
+  const inboxHydrate = useCompanyStore((s) => s.inboxHydrate);
+  const inboxSetLoading = useCompanyStore((s) => s.inboxSetLoading);
+  const inboxSetError = useCompanyStore((s) => s.inboxSetError);
+  const connected = useCompanyStore((s) => selectStream(s, companySessionId).connected);
+
+  const refresh = useCallback(async () => {
+    inboxSetLoading(companySessionId, true);
+    inboxSetError(companySessionId, null);
+    try {
+      const res = await fetch(queryUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = (await res.json()) as AgentInboxMessage[];
+      inboxHydrate(companySessionId, body);
+    } catch (e) {
+      inboxSetError(companySessionId, e instanceof Error ? e.message : String(e));
+    } finally {
+      inboxSetLoading(companySessionId, false);
+    }
+  }, [companySessionId, queryUrl, inboxHydrate, inboxSetLoading, inboxSetError]);
+
+  // Initial load + reload when the status filter changes.
   useEffect(() => {
-    const t = setInterval(() => messages.refetch(), 5000);
-    return () => clearInterval(t);
+    void refresh();
+  }, [refresh]);
+
+  // SSE-driven refetch — any `inbox_message_*` event bumps the slice's
+  // `lastEventSeq` and we reload the list. Cheaper than polling every
+  // 5 s and tighter than waiting for the user to hit refresh.
+  useEffect(() => {
+    if (slot.lastEventSeq === 0) return;
+    void refresh();
+    // refresh is stable per (companySessionId, queryUrl); intentionally
+    // omit it so the effect runs ONLY when the counter ticks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [slot.lastEventSeq]);
+
+  // Poll fallback — only while disconnected, same pattern as DrivePanel.
+  useEffect(() => {
+    if (connected) return;
+    const handle = setInterval(() => {
+      void refresh();
+    }, 5000);
+    return () => clearInterval(handle);
+  }, [connected, refresh]);
+
+  const messages = useMemo(
+    () => Array.from(slot.messagesById.values()).sort((a, b) => b.id - a.id),
+    [slot.messagesById],
+  );
+
+  const filtered = useMemo(() => {
+    if (statusFilter === 'all') return messages;
+    return messages.filter((m) => m.status === statusFilter);
+  }, [messages, statusFilter]);
 
   return (
     <div className="flex h-full flex-col">
@@ -55,7 +113,7 @@ export function InboxPanel({ companySessionId }: InboxPanelProps) {
         <div className="flex items-center gap-2">
           <Inbox className="h-4 w-4 text-muted-foreground" />
           <span className="text-xs text-muted-foreground">
-            {messages.data?.length ?? 0} {t('agents:inbox.messages')}
+            {filtered.length} {t('agents:inbox.messages')}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -71,25 +129,25 @@ export function InboxPanel({ companySessionId }: InboxPanelProps) {
             <option value="cancelled">cancelled</option>
             <option value="expired">expired</option>
           </select>
-          <Button size="sm" variant="ghost" onClick={() => messages.refetch()}>
+          <Button size="sm" variant="ghost" onClick={() => void refresh()}>
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
 
       <div className="flex-1 overflow-auto">
-        {messages.data && messages.data.length === 0 && (
+        {slot.initialized && filtered.length === 0 && (
           <div className="px-6 py-12 text-center text-sm text-muted-foreground">
             {t('agents:inbox.empty')}
           </div>
         )}
         <ul className="divide-y">
-          {messages.data?.map((m) => (
+          {filtered.map((m) => (
             <InboxRow
               key={m.id}
               message={m}
               companySessionId={companySessionId}
-              onChanged={() => messages.refetch()}
+              onChanged={() => void refresh()}
             />
           ))}
         </ul>

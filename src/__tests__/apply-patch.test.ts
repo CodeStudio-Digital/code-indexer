@@ -424,7 +424,9 @@ describe('apply_patch normalization & atomicity', () => {
     const msg = captured!.message;
     expect(msg).toMatch(/did not match source/);
     expect(msg).toMatch(/before=1 removed=1 after=1/);
-    expect(msg).toMatch(/CRLF endings, no BOM/);
+    // Phrasing makes explicit that CRLF/BOM are normalized before matching,
+    // so a reader doesn't mistake "no BOM" for a diagnostic claim.
+    expect(msg).toMatch(/CRLF normalized for matching, no BOM detected/);
     expect(msg).toMatch(/Search starts with: "line1⏎nope⏎line3"/);
   });
 
@@ -447,6 +449,141 @@ describe('apply_patch normalization & atomicity', () => {
 *** End Patch`);
     await applyParsedPatch(patch, ctx);
     expect(readFileSync(join(dir, 'foo.ts'), 'utf8')).toBe('ALPHA\nBETA\ngamma\n');
+  });
+});
+
+// ─── Multi-block hunk auto-split ──────────────────────────────────
+// Regression for the "apply_patch fails on standard unified-diff hunks" bug:
+// a single `@@` block containing multiple change groups separated by
+// unchanged context lines used to fail because the parser concatenated all
+// removed lines into a contiguous block, producing a search string that
+// doesn't exist in the source. The parser now auto-splits such hunks into
+// independent PatchHunks, each anchored by the surrounding context.
+describe('apply_patch multi-block hunks', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'apply-patch-multiblock-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('splits a hunk with two change groups separated by one context line', async () => {
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'foo.ts'), 'a\nb\nc\nd\ne\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: foo.ts
+@@
+ a
+-b
++B
+ c
+-d
++D
+ e
+*** End Patch`);
+    // Parser should have produced two hunks from this one @@ block.
+    const update = patch.actions[0];
+    if (update.kind !== 'update') throw new Error('expected update');
+    expect(update.hunks).toHaveLength(2);
+    await applyParsedPatch(patch, ctx);
+    expect(readFileSync(join(dir, 'foo.ts'), 'utf8')).toBe('a\nB\nc\nD\ne\n');
+  });
+
+  it('carries multiple context lines between change groups as anchor', async () => {
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'foo.ts'), 'a\nb\nc\nd\ne\nf\ng\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: foo.ts
+@@
+ a
+-b
++B
+ c
+ d
+ e
+-f
++F
+ g
+*** End Patch`);
+    const update = patch.actions[0];
+    if (update.kind !== 'update') throw new Error('expected update');
+    expect(update.hunks).toHaveLength(2);
+    // Second hunk's contextBefore carries the 3-line bridge as anchor.
+    expect(update.hunks[1].contextBefore).toEqual(['c', 'd', 'e']);
+    await applyParsedPatch(patch, ctx);
+    expect(readFileSync(join(dir, 'foo.ts'), 'utf8')).toBe('a\nB\nc\nd\ne\nF\ng\n');
+  });
+
+  it('splits add-only multi-block hunks', async () => {
+    // Hunk inserts at two distinct points; no removals at all. Split must
+    // fire on the second `+` even though the first change group had no `-`.
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'foo.ts'), 'a\nb\nc\nd\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: foo.ts
+@@
+ a
++inserted1
+ b
+ c
++inserted2
+ d
+*** End Patch`);
+    const update = patch.actions[0];
+    if (update.kind !== 'update') throw new Error('expected update');
+    expect(update.hunks).toHaveLength(2);
+    await applyParsedPatch(patch, ctx);
+    expect(readFileSync(join(dir, 'foo.ts'), 'utf8')).toBe(
+      'a\ninserted1\nb\nc\ninserted2\nd\n',
+    );
+  });
+
+  it('handles three mixed change groups in one @@ block', async () => {
+    // Adversarial: remove+add, add-only, remove+add — all in a single hunk.
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'foo.ts'), 'a\nb\nc\nd\ne\nf\ng\nh\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: foo.ts
+@@
+ a
+-b
++B
+ c
++inserted
+ d
+ e
+-f
++F
+ g
+ h
+*** End Patch`);
+    const update = patch.actions[0];
+    if (update.kind !== 'update') throw new Error('expected update');
+    expect(update.hunks).toHaveLength(3);
+    await applyParsedPatch(patch, ctx);
+    expect(readFileSync(join(dir, 'foo.ts'), 'utf8')).toBe(
+      'a\nB\nc\ninserted\nd\ne\nF\ng\nh\n',
+    );
+  });
+
+  it('still throws when a removed line genuinely does not exist', async () => {
+    // Split must not silently swallow real mismatches — the split logic
+    // depends on context lines after a +/-, so a "broken" hunk where the
+    // removed text is wrong should still fail loudly.
+    const ctx = makeCtx(dir);
+    writeFileSync(join(dir, 'foo.ts'), 'alpha\nbeta\ngamma\n');
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: foo.ts
+@@
+ alpha
+-DOES_NOT_EXIST
++nope
+ gamma
+*** End Patch`);
+    await expect(applyParsedPatch(patch, ctx)).rejects.toThrow(/did not match/);
+    // File untouched (atomicity guarantee).
+    expect(readFileSync(join(dir, 'foo.ts'), 'utf8')).toBe('alpha\nbeta\ngamma\n');
   });
 });
 

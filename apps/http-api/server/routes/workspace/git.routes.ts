@@ -1,10 +1,39 @@
-import type { Hono } from 'hono';
+import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { guardWorkspaceRequest } from './guards.js';
 import { gitStatus, gitDiff, gitLog, gitInit, gitAdd, gitReset, gitCommit, gitDiscard } from './git-service.js';
 import { parseIntQuery, parseJsonBody } from '../_helpers.js';
 import { runGeneralAi, GeneralAiNotConfiguredError } from '@mcp/services/ai-general/generalClient.js';
 import { extractFirstJson } from '@mcp/services/ai-general/extract-json.js';
+import { publish } from '../../../coder-bus.js';
+import { activeOrchestrators } from '../company/stream.js';
+
+/**
+ * Publish `git.status_changed` on the session's meta-bus whenever a
+ * mutation (init/add/reset/discard/commit) lands. Multi-tab dashboards
+ * and any future cross-session observer can invalidate their cached
+ * git status without polling.
+ *
+ * Silent no-op when the session has no live orchestrator — there's no
+ * SSE consumer to notify in that case.
+ */
+function publishGitStatusChanged(
+  c: Context,
+  changeType: 'commit' | 'stage' | 'reset' | 'discard' | 'init',
+): void {
+  const sidRaw = c.req.param('sid');
+  const pidRaw = c.req.param('pid');
+  const sessionId = Number(sidRaw);
+  const projectId = Number(pidRaw);
+  if (!Number.isFinite(sessionId) || !Number.isFinite(projectId)) return;
+  const orchestrator = activeOrchestrators.get(sessionId);
+  if (!orchestrator) return;
+  publish(orchestrator.metaBus, 'git.status_changed', {
+    sessionId,
+    projectId,
+    changeType,
+  });
+}
 
 const MAX_AI_DIFF_CHARS = 40_000;
 
@@ -47,6 +76,7 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
     if (guard instanceof Response) return guard;
     const result = await gitInit(guard.resolved.root);
     if (!result.ok) return c.json({ error: result.message }, 500);
+    publishGitStatusChanged(c, 'init');
     return c.json({ ok: true, status: await gitStatus(guard.resolved.root) });
   });
 
@@ -61,6 +91,7 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
     }
     const result = await gitAdd(rootGuard.resolved.root, paths);
     if (!result.ok) return c.json({ error: result.message }, 500);
+    publishGitStatusChanged(c, 'stage');
     return c.json({ ok: true, status: await gitStatus(rootGuard.resolved.root) });
   });
 
@@ -75,6 +106,7 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
     }
     const result = await gitReset(rootGuard.resolved.root, paths);
     if (!result.ok) return c.json({ error: result.message }, 500);
+    publishGitStatusChanged(c, 'reset');
     return c.json({ ok: true, status: await gitStatus(rootGuard.resolved.root) });
   });
 
@@ -90,6 +122,7 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
     const status = await gitStatus(rootGuard.resolved.root);
     const result = await gitDiscard(rootGuard.resolved.root, paths, status);
     if (!result.ok) return c.json({ error: result.message }, 500);
+    publishGitStatusChanged(c, 'discard');
     return c.json({ ok: true, status: await gitStatus(rootGuard.resolved.root) });
   });
 
@@ -100,6 +133,7 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
     const message = typeof body.message === 'string' ? body.message : '';
     const result = await gitCommit(guard.resolved.root, message);
     if (!result.ok) return c.json({ error: result.message }, 400);
+    publishGitStatusChanged(c, 'commit');
     return c.json({
       ok: true,
       hash: result.hash,

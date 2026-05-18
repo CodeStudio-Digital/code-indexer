@@ -21,6 +21,14 @@ export interface ServiceOption {
   previewUrl: string;
   status: string;
   runtimePaused?: boolean;
+  /**
+   * Preview routing strategy chosen for this service (Phase 4). When
+   * `port-direct`, the preview iframe loads `http://localhost:${hostPort}`
+   * directly instead of going through the proxy at `previewUrl`.
+   */
+  previewStrategy?: 'proxy-prefix' | 'proxy-root' | 'port-direct';
+  /** Required when `previewStrategy === 'port-direct'`. */
+  hostPort?: number;
 }
 
 export interface ApiReferenceTabProps {

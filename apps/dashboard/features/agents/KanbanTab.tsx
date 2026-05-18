@@ -21,12 +21,11 @@ import { KANBAN_COLUMNS } from '@mcp/company/types.js';
 
 interface KanbanTabProps {
   companySessionId: number;
-  streamCards: Map<number, KanbanCardFull>;
 }
 
-export function KanbanTab({ companySessionId, streamCards }: KanbanTabProps) {
+export function KanbanTab({ companySessionId }: KanbanTabProps) {
   const { t } = useTranslation(['agents', 'common']);
-  const kanban = useKanbanState(companySessionId, streamCards);
+  const kanban = useKanbanState(companySessionId);
   const [selectedCard, setSelectedCard] = useState<KanbanCardFull | null>(null);
   const [createDialog, setCreateDialog] = useState<{ open: boolean; column: KanbanColumnType }>({
     open: false,
