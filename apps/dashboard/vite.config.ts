@@ -67,7 +67,13 @@ export default defineConfig({
           });
         },
       },
-      '/preview': {
+      // Phase D — terminal WebSocket. Single endpoint, but the path
+      // shape `/ws/terminal/:sessionId` means we proxy the whole `/ws/`
+      // prefix so future WS routes land here too (the company-stream WS
+      // lives under `/api/company/...` and goes through the `/api` proxy
+      // above; it's the standalone `/ws/*` routes that need this).
+      // `ws: true` is mandatory for upgrade handshakes.
+      '/ws': {
         target: 'http://localhost:3333',
         changeOrigin: true,
         ws: true,
