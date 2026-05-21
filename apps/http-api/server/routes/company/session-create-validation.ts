@@ -58,6 +58,14 @@ export interface CreateSessionBody {
     notes?: string;
     is_default?: boolean;
   }>;
+  /**
+   * Phase B "master observer": when true, every peer-to-peer inbox
+   * message also generates a fire-and-forget `notify` copy addressed
+   * to the master so the orchestrator stays aware of inter-subordinate
+   * traffic without gating it. Persisted under the same key in
+   * `config_json` and read at runtime by `InboxQueue.send`.
+   */
+  master_broadcast_subscribe?: boolean;
 }
 
 /**

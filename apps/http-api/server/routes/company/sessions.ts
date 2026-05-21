@@ -192,6 +192,13 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         ...(body.allowed_models && body.allowed_models.length > 0
           ? { allowed_models: body.allowed_models }
           : {}),
+        // Phase B "master observer": when true, every peer-to-peer
+        // inbox message also enqueues a fire-and-forget `notify` copy
+        // for the master so it stays aware of inter-subordinate
+        // traffic. Default off (absent) — opt-in via the dialog.
+        ...(body.master_broadcast_subscribe === true
+          ? { master_broadcast_subscribe: true }
+          : {}),
         // Builder config is persisted inside the free-form config_json so
         // no migration is required. SandboxService reads it back on start.
         ...(body.builder

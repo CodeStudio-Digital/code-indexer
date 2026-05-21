@@ -13,7 +13,7 @@
  */
 export type Zone = 'work' | 'build' | 'data';
 
-export type WorkTab = 'board' | 'kanban' | 'pipelines';
+export type WorkTab = 'board' | 'kanban' | 'pipelines' | 'transcript';
 export type BuildTab = 'docs' | 'tests' | 'files' | 'git' | 'api' | 'terminal';
 export type DataTab = 'drive' | 'snapshots' | 'archived';
 
@@ -23,7 +23,7 @@ export type ZoneTab =
   | { zone: 'data'; tab: DataTab };
 
 export const ZONE_TABS: { [Z in Zone]: readonly Extract<ZoneTab, { zone: Z }>['tab'][] } = {
-  work: ['board', 'kanban', 'pipelines'] as const,
+  work: ['board', 'kanban', 'pipelines', 'transcript'] as const,
   build: ['docs', 'tests', 'files', 'git', 'api', 'terminal'] as const,
   data: ['drive', 'snapshots', 'archived'] as const,
 };

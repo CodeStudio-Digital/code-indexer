@@ -179,6 +179,33 @@ export class InboxQueue {
       kind: args.kind,
     });
 
+    // Phase B "master observer": when the template opts into
+    // `master_broadcast_subscribe`, every peer-to-peer message also
+    // generates a fire-and-forget `notify` copy addressed to the master
+    // so the orchestrator stays aware of inter-subordinate traffic
+    // without gating it. Read from the live session config so toggling
+    // the flag at runtime takes effect on the next send. We skip the
+    // copy when the master router is unwired (test fixtures) and when
+    // the original message was already master-bound (handled above).
+    if (this.masterRouter && this.shouldBroadcastToMaster()) {
+      try {
+        this.masterRouter.enqueueForMaster({
+          fromAgentRunId: args.fromAgentRunId,
+          fromRole: args.fromRole,
+          kind: 'notify',
+          body: formatBroadcastBody(args, message.id),
+          waitToken: null,
+        });
+      } catch (e) {
+        // Broadcast failure must not break the primary delivery path.
+        console.warn(
+          `[inbox] master broadcast copy failed for message ${message.id}: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
+    }
+
     // Try to deliver right now — the target may be idle. The drain
     // helper handles the actual reactivation; if the target is busy
     // the message stays `pending` and the next `drainOnIdle` (fired
@@ -196,6 +223,24 @@ export class InboxQueue {
     }
 
     return { message, deliveredImmediately: false, waitToken };
+  }
+
+  /**
+   * Check the session's `config_json` for the `master_broadcast_subscribe`
+   * flag. Defensive parsing — bad JSON / missing field → `false`. Cheap
+   * (small string) but called once per peer-to-peer send; if traffic
+   * volume becomes a hot spot, swap to a cached read invalidated by
+   * `session.config_updated`.
+   */
+  private shouldBroadcastToMaster(): boolean {
+    try {
+      const row = this.deps.ctx.companyStore.getCompanySession(this.deps.ctx.companySessionId);
+      if (!row?.config_json) return false;
+      const cfg = JSON.parse(row.config_json) as { master_broadcast_subscribe?: unknown };
+      return cfg.master_broadcast_subscribe === true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -447,5 +492,27 @@ export function formatInboxPrompt(msg: AgentInboxMessage): string {
     `[INBOX message_id=${msg.id} from=@${msg.from_role}] ${msg.body}\n\n` +
     `Respond using respond_to_inbox(message_id=${msg.id}, answer=...). ` +
     `If you need to delegate first, do so before responding.`
+  );
+}
+
+/**
+ * Format the body of the broadcast copy delivered to the master when
+ * `master_broadcast_subscribe` is on. The master sees this as a
+ * fire-and-forget notify — no response required, no action implied —
+ * carrying the original message id so the operator can cross-reference
+ * the transcript panel.
+ */
+function formatBroadcastBody(
+  args: { fromAgentRunId: number; fromRole: string; toRole?: string; toAgentRunId?: number; kind: InboxKind; body: string },
+  originalMessageId: number,
+): string {
+  const target = args.toRole
+    ? `@${args.toRole}`
+    : args.toAgentRunId != null
+      ? `run=${args.toAgentRunId}`
+      : '@?';
+  return (
+    `[INBOX-OBSERVED message_id=${originalMessageId} ${args.fromRole}→${target} kind=${args.kind}]\n` +
+    args.body
   );
 }

@@ -55,6 +55,14 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   // it picks outside. The editor that owns the per-row state lives in
   // `new-company-dialog/AllowedModelsEditor.tsx`.
   const [allowedModels, setAllowedModels] = useState<PoolEntry[]>([]);
+  /**
+   * Phase B "living company": when on, every peer-to-peer inbox message
+   * also generates a fire-and-forget `notify` copy addressed to the
+   * master so the orchestrator stays aware of inter-subordinate traffic.
+   * Default off — opt-in because the master sees more context but
+   * spends a turn processing it.
+   */
+  const [masterBroadcastSubscribe, setMasterBroadcastSubscribe] = useState(false);
   const [creating, setCreating] = useState(false);
 
   const selectedTemplate = templates?.find((t) => t.id === selectedTemplateId);
@@ -166,6 +174,9 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
         // would reject every spawn. Empty == "no restriction", matching
         // the legacy behavior.
         ...(allowedModels.length > 0 ? { allowed_models: allowedModels } : {}),
+        // Phase B "master observer": include only when on; absence keeps
+        // the legacy session shape intact.
+        ...(masterBroadcastSubscribe ? { master_broadcast_subscribe: true } : {}),
         // Only send `builder` when the user picked a real stack. Leaving
         // the field absent keeps the payload identical to the legacy
         // format, so nothing about non-builder sessions changes server-side.
@@ -457,6 +468,24 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
             getModelsForProvider={getModelsForProvider}
             getDefaultModel={getDefaultModel}
           />
+
+          <label className="flex items-start gap-2 text-xs select-none cursor-pointer">
+            <input
+              type="checkbox"
+              checked={masterBroadcastSubscribe}
+              onChange={(e) => setMasterBroadcastSubscribe(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="flex-1">
+              <span className="font-medium">Master observa peer-to-peer</span>
+              <span className="block text-muted-foreground mt-0.5">
+                Cada mensagem entre subordinados gera uma cópia notify para o master,
+                que aparece como <code>[INBOX-OBSERVED]</code> no próximo turno dele.
+                Útil para empresas em que o master precisa entender o que os times trocam
+                sem ser o intermediário forçado.
+              </span>
+            </span>
+          </label>
         </div>
 
         {/* Footer */}

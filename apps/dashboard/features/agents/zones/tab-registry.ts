@@ -23,6 +23,7 @@ import {
   GitBranch,
   GitCompare,
   KanbanSquare,
+  MessageCircle,
   MessageSquare,
   Network,
   TerminalSquare,
@@ -44,6 +45,7 @@ export const TAB_REGISTRY: readonly TabDef[] = [
   { zone: 'work', tab: 'board', Icon: MessageSquare, labelKey: 'company.board', fallbackLabel: 'Board' },
   { zone: 'work', tab: 'kanban', Icon: KanbanSquare, labelKey: 'company.kanban', fallbackLabel: 'Kanban' },
   { zone: 'work', tab: 'pipelines', Icon: Network, labelKey: 'company.pipelines', fallbackLabel: 'Pipelines' },
+  { zone: 'work', tab: 'transcript', Icon: MessageCircle, labelKey: 'company.transcript', fallbackLabel: 'Transcript' },
   // Build — agent artefacts
   { zone: 'build', tab: 'docs', Icon: BookText, labelKey: 'company.docs', fallbackLabel: 'Docs' },
   { zone: 'build', tab: 'tests', Icon: FlaskConical, labelKey: 'company.tests', fallbackLabel: 'Tests' },
