@@ -42,6 +42,16 @@ export type {
   RerankResult,
 } from './reranker.js';
 
+export { AutoDiscoveryService, _resetAutoDiscoveryThrottle } from './auto-discovery.js';
+export type {
+  AutoDiscoveryServiceOpts,
+  DepManifest,
+  DepSuggestion,
+  PackageManager,
+  ScanInput,
+  ScanResult,
+} from './auto-discovery.js';
+
 export { DocError, docErrorStatus } from './errors.js';
 export type { DocErrorKind } from './errors.js';
 

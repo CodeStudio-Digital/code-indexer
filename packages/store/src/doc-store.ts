@@ -166,6 +166,25 @@ export interface DocVectorTombstoneRow extends DocVectorRef {
   last_error: string | null;
 }
 
+// ─── Auto-discovery suggestions (migration 096) ─────────────────────
+
+export type DocSuggestionStatus = 'pending' | 'approved' | 'dismissed' | 'indexed';
+
+export interface DocSourceSuggestion {
+  id: number;
+  project_id: number;
+  package_manager: string;
+  package_name: string;
+  package_version: string | null;
+  suggested_url: string;
+  suggested_title: string | null;
+  confidence: number;
+  status: DocSuggestionStatus;
+  discovered_at: string;
+  decided_at: string | null;
+  indexed_source_id: number | null;
+}
+
 // ─── Row mappers ────────────────────────────────────────────────────
 
 function boolFromInt(n: number | boolean): boolean {
@@ -934,6 +953,88 @@ export class DocStore {
       )
       .all(sanitized, limit) as Array<{ chunk_id: number; rank: number }>;
     return rows;
+  }
+
+  // ─── Auto-discovery suggestions (migration 096) ─────────────────
+
+  /**
+   * Insert (or skip-if-exists) a single suggestion. Returns true when a
+   * new row landed; false when the UNIQUE (project_id, package_manager,
+   * package_name) constraint blocked the insert.
+   */
+  upsertSuggestion(input: {
+    project_id: number;
+    package_manager: string;
+    package_name: string;
+    package_version?: string | null;
+    suggested_url: string;
+    suggested_title?: string | null;
+    confidence?: number;
+  }): boolean {
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO doc_source_suggestions (
+           project_id, package_manager, package_name, package_version,
+           suggested_url, suggested_title, confidence
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.project_id,
+        input.package_manager,
+        input.package_name,
+        input.package_version ?? null,
+        input.suggested_url,
+        input.suggested_title ?? null,
+        input.confidence ?? 0.5,
+      );
+    return Number(result.changes) > 0;
+  }
+
+  listSuggestions(opts: {
+    projectId: number;
+    status?: DocSuggestionStatus;
+  }): DocSourceSuggestion[] {
+    const where: string[] = ['project_id = @projectId'];
+    const params: Record<string, unknown> = { projectId: opts.projectId };
+    if (opts.status) {
+      where.push('status = @status');
+      params.status = opts.status;
+    }
+    return this.db
+      .prepare(
+        `SELECT * FROM doc_source_suggestions
+           WHERE ${where.join(' AND ')}
+           ORDER BY confidence DESC, discovered_at DESC, id DESC`,
+      )
+      .all(params) as DocSourceSuggestion[];
+  }
+
+  getSuggestion(id: number): DocSourceSuggestion | null {
+    const row = this.db
+      .prepare('SELECT * FROM doc_source_suggestions WHERE id = ?')
+      .get(id) as DocSourceSuggestion | undefined;
+    return row ?? null;
+  }
+
+  setSuggestionStatus(
+    id: number,
+    status: DocSuggestionStatus,
+    indexedSourceId?: number | null,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE doc_source_suggestions
+            SET status            = ?,
+                decided_at        = datetime('now'),
+                indexed_source_id = ?
+          WHERE id = ?`,
+      )
+      .run(status, indexedSourceId ?? null, id);
+  }
+
+  deleteSuggestion(id: number): boolean {
+    const result = this.db.prepare('DELETE FROM doc_source_suggestions WHERE id = ?').run(id);
+    return Number(result.changes) > 0;
   }
 }
 
