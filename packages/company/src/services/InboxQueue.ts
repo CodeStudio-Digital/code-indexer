@@ -32,6 +32,11 @@ import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { MasterAttention } from '@mcp/company/services/MasterAttention.js';
 import type { SubordinateLifecycle } from '@mcp/company/services/SubordinateLifecycle.js';
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
+import type {
+  MasterInboxRouter,
+  MasterEnqueueResult,
+} from '@mcp/company/services/MasterInboxRouter.js';
+import { MASTER_INBOX_SENTINEL } from '@mcp/company/services/MasterInboxRouter.js';
 import type { AgentInboxMessage, InboxKind, InboxStatus } from '@mcp/company/types.js';
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
@@ -73,6 +78,14 @@ export class InboxQueue {
   private readonly waiters = new Map<string, PendingWaiter>();
   /** Per-`agentRunId` async mutex. Stored as a chain of promises. */
   private readonly drainMutexes = new Map<number, Promise<void>>();
+  /**
+   * Late-bound MasterInboxRouter. Set by the orchestrator after both
+   * services exist (router needs MasterLifecycle, which is built before
+   * InboxQueue). Mensagens com `to_role='__master__'` são redirecionadas
+   * para o router; sem ele, ficariam pending para sempre porque o
+   * master não é um `company_agent_run` consumindo drain.
+   */
+  private masterRouter: MasterInboxRouter | null = null;
 
   constructor(private readonly deps: InboxQueueDeps) {
     // Listen for `inbox_answered` so the sender's wait-promise resolves
@@ -91,11 +104,49 @@ export class InboxQueue {
     });
   }
 
+  /**
+   * Bind the {@link MasterInboxRouter} that handles `to_role='__master__'`
+   * messages. Called once by the orchestrator after both services exist.
+   * Pass `null` to detach (test cleanup).
+   */
+  setMasterRouter(router: MasterInboxRouter | null): void {
+    this.masterRouter = router;
+  }
+
   // ─── Send ─────────────────────────────────────────────────────
 
   send(args: SendArgs): SendResult {
     if (!args.toRole && typeof args.toAgentRunId !== 'number') {
       throw new Error('send_to_agent: pass either target_role or target_agent_run_id.');
+    }
+
+    // Short-circuit: messages addressed to the master sentinel bypass
+    // cycle detection (master is excluded from the BFS seeds anyway) and
+    // peer drain logic (master is not a `company_agent_run`). Routed to
+    // MasterInboxRouter which coalesces multiple inbound notifications
+    // into a single resurrect/notify call.
+    if (args.toRole === MASTER_INBOX_SENTINEL) {
+      if (!this.masterRouter) {
+        throw new Error(
+          'InboxQueue: master sentinel target requires a bound MasterInboxRouter. ' +
+            'Wire it via setMasterRouter() during orchestrator construction.',
+        );
+      }
+      const result: MasterEnqueueResult = this.masterRouter.enqueueForMaster({
+        fromAgentRunId: args.fromAgentRunId,
+        fromRole: args.fromRole,
+        kind: args.kind,
+        body: args.body,
+        waitToken: args.wait ? makeToken() : null,
+      });
+      // When the sender asked to wait, register a waiter so
+      // `waitForAnswer(token)` resolves once the master answers via
+      // `respond_to_inbox`. Reuses the same wait_token path as peers.
+      return {
+        message: result.message,
+        deliveredImmediately: result.deliveredImmediately,
+        waitToken: result.message.wait_token ?? undefined,
+      };
     }
 
     if (this.detectCycle({

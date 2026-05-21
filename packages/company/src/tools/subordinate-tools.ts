@@ -372,6 +372,79 @@ export const sendToAgent: CoderTool = {
   },
 };
 
+// ─── send_to_master ──────────────────────────────────────────────
+
+const SEND_TO_MASTER_DESC =
+  'Queue a message for the Master orchestrator via the persistent master inbox.\n' +
+  "Unlike ask_master (which BLOCKS your session until the master replies in the same turn), this tool persists the message even when the master's turn has ended — it will be revived/resumed automatically and process the queued message. " +
+  'Use kind="notify" with wait=false for fire-and-forget status updates ("smoke tests passing", "deployment done"). ' +
+  'Use kind="question" with wait=true when you need an answer but want the master to handle it asynchronously (your session blocks until the master answers via respond_to_inbox).\n' +
+  "USE: when the master may be between turns and you can't wait for them to come back interactively.\n" +
+  "USE: for batched status updates so multiple subordinates' messages coalesce into a single master turn instead of N resurrects.\n" +
+  "DON'T: use for in-flight Q&A while the master is clearly active — ask_master is faster and lighter.";
+
+export const sendToMaster: CoderTool = {
+  name: 'send_to_master',
+  description: maybeTerse(SEND_TO_MASTER_DESC),
+  source: 'native',
+  parameters: {
+    type: 'object',
+    properties: {
+      message: {
+        type: 'string',
+        description: 'Body of the message. For kind="question" frame it as a single, answerable question.',
+      },
+      kind: {
+        type: 'string',
+        enum: ['question', 'notify'],
+        description: '"question" expects an answer; "notify" is fire-and-forget. Default: "notify".',
+      },
+      wait: {
+        type: 'boolean',
+        description:
+          'When true, your session BLOCKS until the master answers via respond_to_inbox. Defaults to true for kind="question", false for kind="notify".',
+      },
+    },
+    required: ['message'],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const body = String(args.message ?? '').trim();
+    if (!body) return err('message cannot be empty');
+    const kind = (args.kind as 'question' | 'notify' | undefined) ?? 'notify';
+    const wait = args.wait == null ? kind === 'question' : Boolean(args.wait);
+
+    const company = ctx.companyContext;
+    if (!company) return err('send_to_master requires a company orchestrator context');
+    if (company.agentRunId == null) {
+      return err('send_to_master requires the caller to be a registered subordinate');
+    }
+
+    try {
+      const sent = company.orchestrator.inboxSend({
+        fromAgentRunId: company.agentRunId,
+        fromRole: company.agentRole,
+        toRole: '__master__',
+        kind,
+        body,
+        wait,
+      });
+
+      if (!wait || !sent.waitToken) {
+        return ok(
+          `Message ${sent.message.id} queued for @master ` +
+            `(${sent.deliveredImmediately ? 'delivered' : 'queued — master will pick it up'}).`,
+        );
+      }
+
+      const answer = await company.orchestrator.inboxWait(sent.waitToken);
+      return ok(`Master answered: ${answer}`);
+    } catch (e) {
+      return err(`send_to_master failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  },
+};
+
 // ─── respond_to_inbox ────────────────────────────────────────────
 
 export const respondToInbox: CoderTool = {
@@ -462,6 +535,7 @@ export function buildSubordinateTools(): CoderTool[] {
     submitPlanToMaster,
     submitTasksToMaster,
     sendToAgent,
+    sendToMaster,
     respondToInbox,
     readMyInbox,
   ];

@@ -32,7 +32,17 @@ export type CompanyInternalEvent =
   /** A user message arrived for the master — reset idle countdown. */
   | { type: 'user.message_received' }
   /** Number of running subordinates changed — IdleController re-evaluates. */
-  | { type: 'subordinates.changed' };
+  | { type: 'subordinates.changed' }
+  /**
+   * Master inbox drain delivered one or more queued messages from
+   * subordinates. Phase A "living company" — listened by the transcript
+   * SSE (Phase B) so the dashboard can show the master's incoming feed.
+   */
+  | {
+      type: 'master.inbox_received';
+      messageIds: number[];
+      fromRoles: string[];
+    };
 
 export type CompanyInternalEventType = CompanyInternalEvent['type'];
 

@@ -259,6 +259,27 @@ export function createApp() {
     console.warn(`[company] Startup recovery failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
+  // Phase A "living company": surface any sessions that carry pending
+  // master inbox messages from before the restart. Orchestrators are
+  // lazy (built on first dashboard visit / stream reconnect), so the
+  // actual drain happens via `MasterInboxRouter.reviveIfPending` in the
+  // orchestrator constructor. This log just makes the operator aware so
+  // they know which sessions still need someone to "look at them" to
+  // wake the master.
+  try {
+    const sessionsWithPending = deps.companyStore.listSessionsWithPendingMasterInbox();
+    if (sessionsWithPending.length > 0) {
+      console.log(
+        `[company] Pending master inbox: ${sessionsWithPending.length} session(s) ` +
+          `awaiting revive on next open — ids: ${sessionsWithPending.join(', ')}`,
+      );
+    }
+  } catch (e) {
+    console.warn(
+      `[company] Master inbox scan failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
   // QA test runs: any row in `status='running'` after restart cannot be
   // a live Playwright invocation (the host process is gone). Mark them
   // aborted so the dashboard's TestsTab stops showing the spinner

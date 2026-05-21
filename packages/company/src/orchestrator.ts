@@ -53,6 +53,7 @@ import { SandboxService } from '@mcp/company/services/SandboxService.js';
 import { PipelineService, type PipelineValidationResult } from '@mcp/company/services/PipelineService.js';
 import { PipelineExecutor } from '@mcp/company/services/PipelineExecutor.js';
 import { InboxQueue, type SendArgs as InboxSendArgs, type SendResult as InboxSendResult } from '@mcp/company/services/InboxQueue.js';
+import { MasterInboxRouter } from '@mcp/company/services/MasterInboxRouter.js';
 import { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
 import { CompanyEventBus } from '@mcp/company/services/CompanyEventBus.js';
 import type {
@@ -129,6 +130,13 @@ export class CompanyOrchestrator {
   // Inbox queue is constructed alongside pipelines and back-wired
   // into `subordinates` via `setOnSubordinateIdle`.
   private readonly inbox!: InboxQueue;
+  /**
+   * Master inbox router — handles `to_role='__master__'` messages.
+   * Coalesces simultaneous notifications into a single resurrect/notify
+   * so 3-4 subordinates yelling at a dead master spawn ONE master turn,
+   * not four. Phase A of the "living company" restructure.
+   */
+  private readonly masterInbox!: MasterInboxRouter;
   /** Company-scoped shared file drive (see `CompanyDriveStore`). */
   readonly driveStore: CompanyDriveStore;
 
@@ -276,6 +284,36 @@ export class CompanyOrchestrator {
     (this as unknown as { inbox: InboxQueue }).inbox = inbox;
     subordinates.setOnSubordinateIdle((agentRunId, role) => {
       void inbox.drainOnIdle(agentRunId, role);
+    });
+
+    // Master inbox router — Phase A "living company". Built after master
+    // and inbox exist so we can back-wire the router into the queue's
+    // `to_role='__master__'` short-circuit. Boot-time scan on the same
+    // tick: if the previous Node process crashed with queued master
+    // messages, this orchestrator's first awaking triggers their drain
+    // (which in turn calls `master.notify` — alive flow if a runner is
+    // already up, resurrect flow otherwise).
+    const masterInbox = new MasterInboxRouter({
+      ctx: this.ctx,
+      master,
+      publisher: this.publisher,
+      eventBus: this.eventBus,
+    });
+    (this as unknown as { masterInbox: MasterInboxRouter }).masterInbox = masterInbox;
+    inbox.setMasterRouter(masterInbox);
+    // Defer the boot-time scan to a microtask so the orchestrator
+    // constructor returns first — listeners on `master.inbox_received`
+    // (Phase B transcript) can subscribe before the first emit.
+    queueMicrotask(() => {
+      try {
+        masterInbox.reviveIfPending();
+      } catch (e) {
+        console.warn(
+          `[company s=${this.companySessionId}] master inbox revive on init failed: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
     });
   }
 
@@ -982,5 +1020,16 @@ export class CompanyOrchestrator {
     toAgentRunId?: number;
   }): boolean {
     return this.inbox.detectCycle(args);
+  }
+
+  /**
+   * Manually flush any pending master inbox messages. Called by the
+   * HTTP-API bootstrap after orchestrators rehydrate so sessions that
+   * accumulated subordinate notifications during a Node crash still
+   * trigger the master's resurrect. Idempotent — no-op when the queue
+   * for this session is empty.
+   */
+  revivePendingMasters(): void {
+    this.masterInbox.reviveIfPending();
   }
 }

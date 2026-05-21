@@ -38,6 +38,7 @@ export function buildMasterTools(orchestrator: CompanyOrchestrator): CoderTool[]
     finalizeSubordinates(orchestrator),
     listContainers(orchestrator),
     readContainerLogs(orchestrator),
+    respondToInbox(orchestrator),
     ...buildPipelineMasterTools(orchestrator),
   ];
 }
@@ -768,6 +769,42 @@ function listContainers(orchestrator: CompanyOrchestrator): CoderTool {
       const footer =
         '\nUse read_container_logs(service_id=<id>, tail=<n>) to inspect a specific container.';
       return ok(rows.join('\n') + footer);
+    },
+  };
+}
+
+// ─── respond_to_inbox ──────────────────────────────────────────
+
+function respondToInbox(orchestrator: CompanyOrchestrator): CoderTool {
+  return {
+    name: 'respond_to_inbox',
+    description:
+      'Answer a queued message a subordinate addressed to you via send_to_master with kind="question". ' +
+      'The `message_id` is shown in the [INBOX ...] block of the user turn that injected the message. ' +
+      'The waiting subordinate unblocks immediately and receives your answer as the resolved value of its send_to_master call.',
+    parameters: {
+      type: 'object',
+      properties: {
+        message_id: {
+          type: 'number',
+          description: 'Id of the inbox message to answer (printed in the [INBOX ...] header).',
+        },
+        answer: { type: 'string', description: 'Your answer. Plain text — keep it focused.' },
+      },
+      required: ['message_id', 'answer'],
+      additionalProperties: false,
+    },
+    source: 'native',
+    handler: async (args) => {
+      const messageId = Number(args.message_id);
+      const answer = String(args.answer ?? '').trim();
+      if (!Number.isFinite(messageId)) return err('message_id must be a number');
+      if (!answer) return err('answer cannot be empty');
+      const ok2 = orchestrator.inboxRespond(messageId, answer);
+      if (!ok2) {
+        return err(`Message ${messageId} is not answerable (not found or already terminal).`);
+      }
+      return ok(`Answered inbox message ${messageId}.`);
     },
   };
 }

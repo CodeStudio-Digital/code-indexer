@@ -107,6 +107,7 @@ import { qualityInterventions090 } from './090_quality_interventions.js';
 import { companySessionRecoveredAt091 } from './091_company_session_recovered_at.js';
 import { docSourcesLlmLinks092 } from './092_doc_sources_llm_links.js';
 import { turnRequestResponseMeta093 } from './093_turn_request_response_meta.js';
+import { masterInboxSentinel094 } from './094_master_inbox_sentinel.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -208,6 +209,7 @@ export const MIGRATIONS: Migration[] = [
   companySessionRecoveredAt091,
   docSourcesLlmLinks092,
   turnRequestResponseMeta093,
+  masterInboxSentinel094,
 ];
 
 /**

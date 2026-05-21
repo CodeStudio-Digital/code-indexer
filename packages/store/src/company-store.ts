@@ -1567,6 +1567,61 @@ export class CompanyStore {
   }
 
   /**
+   * Atomically claim every `pending` message addressed to the master
+   * sentinel (`to_role = '__master__'`) for a session and flip them to
+   * `delivered`. Returns the claimed messages in FIFO order.
+   *
+   * The router that calls this coalesces multiple subordinate
+   * notifications into a single master turn — that's why the claim is
+   * batched rather than one-at-a-time. The conditional `WHERE status = 'pending'`
+   * prevents two competing routers from double-delivering the same row
+   * (cross-process safety; in-process safety is handled by the router's
+   * per-session mutex).
+   */
+  claimAllPendingMasterMessages(companySessionId: number): AgentInboxMessage[] {
+    const tx = this.db.transaction(() => {
+      const rows = this.db.prepare(
+        `SELECT * FROM agent_inbox
+         WHERE company_session_id = ?
+           AND to_role = '__master__'
+           AND status = 'pending'
+         ORDER BY datetime(created_at) ASC, id ASC`,
+      ).all(companySessionId) as InboxRow[];
+      if (rows.length === 0) return [] as AgentInboxMessage[];
+      const update = this.db.prepare(
+        `UPDATE agent_inbox
+         SET status = 'delivered', delivered_at = datetime('now')
+         WHERE id = ? AND status = 'pending'`,
+      );
+      const claimed: AgentInboxMessage[] = [];
+      for (const row of rows) {
+        const result = update.run(row.id);
+        if (result.changes > 0) {
+          const m = this.getInboxMessage(row.id);
+          if (m) claimed.push(m);
+        }
+      }
+      return claimed;
+    });
+    return tx();
+  }
+
+  /**
+   * Session ids that currently have at least one `pending` message
+   * addressed to the master sentinel. Used by the orchestrator's
+   * boot-time revival scan so a crashed server doesn't strand the
+   * master while subordinate notifications sit in the queue.
+   */
+  listSessionsWithPendingMasterInbox(): number[] {
+    const rows = this.db.prepare(
+      `SELECT DISTINCT company_session_id AS id
+       FROM agent_inbox
+       WHERE to_role = '__master__' AND status = 'pending'`,
+    ).all() as { id: number }[];
+    return rows.map((r) => r.id);
+  }
+
+  /**
    * Generic status flip. Used for `cancelled` / `expired` paths so the
    * routes/queue don't have to format their own SQL.
    */
