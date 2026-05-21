@@ -22,6 +22,10 @@ export interface CreateSessionBody {
     model: string;
     project_ids: number[];
     tier?: string;
+    /** Phase E: enable extended thinking for subordinates spawned with this role. */
+    thinking?: boolean;
+    /** Phase E: Anthropic-specific thinking budget. Ignored by other providers. */
+    thinkingBudgetTokens?: number;
   }>;
   /**
    * When set, flips the session into builder ("v0-style") mode. The

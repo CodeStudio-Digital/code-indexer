@@ -77,6 +77,22 @@ export type RoleConfig = {
   /** Per-role sampling temperature (forwarded to the runner via
    *  `SubordinateLifecycle.spawn`). See `CompanyRoleConfig.temperature`. */
   temperature?: number;
+  /**
+   * Phase E: enable extended thinking ("deep reasoning") for subordinates
+   * spawned with this role. Forwarded into `runCoder({ thinking })` →
+   * `runner.opts.thinking`, which each provider adapter translates into
+   * the appropriate API parameter (Anthropic `thinking.type=enabled`,
+   * Gemini `reasoning`, etc.). Providers that don't support it ignore
+   * the flag silently.
+   *
+   * `thinkingBudgetTokens` only matters for Anthropic — passed to the
+   * SDK as `thinking.budget_tokens`. Defaults to provider-determined
+   * (usually 5000) when undefined.
+   *
+   * Both fields are optional; absence is identical to legacy behaviour.
+   */
+  thinking?: boolean;
+  thinkingBudgetTokens?: number;
 };
 
 function buildPromptRoster(
@@ -219,9 +235,19 @@ export class MasterLifecycle implements IMasterNotifier {
     this._roleConfigs = configs;
   }
 
-  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number } | null {
+  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number; thinking?: boolean; thinkingBudgetTokens?: number } | null {
     const cfg = this._roleConfigs.find((r) => r.role === role);
-    return cfg ? { provider: cfg.provider, model: cfg.model, tier: cfg.tier, skills: cfg.skills, systemPromptOverride: cfg.systemPromptOverride, projectIds: cfg.projectIds, temperature: cfg.temperature } : null;
+    return cfg ? {
+      provider: cfg.provider,
+      model: cfg.model,
+      tier: cfg.tier,
+      skills: cfg.skills,
+      systemPromptOverride: cfg.systemPromptOverride,
+      projectIds: cfg.projectIds,
+      temperature: cfg.temperature,
+      thinking: cfg.thinking,
+      thinkingBudgetTokens: cfg.thinkingBudgetTokens,
+    } : null;
   }
 
   /** Current allowed-models pool. Empty array = no restriction. */

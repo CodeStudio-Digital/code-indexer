@@ -23,6 +23,16 @@ export interface RoleConfig {
   fallback_model?: string;
   /** Sampling temperature override for this role (range [0, 1]). */
   temperature?: number;
+  /**
+   * Phase E: when true, subordinates spawned with this role run with
+   * extended thinking (deep reasoning) on providers that support it.
+   */
+  thinking?: boolean;
+  /**
+   * Phase E: Anthropic-specific thinking budget (defaults to ~5000 when
+   * undefined). Ignored by providers that don't support it.
+   */
+  thinkingBudgetTokens?: number;
 }
 
 export interface SkillDef {
@@ -207,6 +217,57 @@ export function RoleEditModal({
               placeholder={t('agents:role.temperaturePlaceholder', { defaultValue: 'auto (by agent preset)' })}
               className="rounded-md border bg-background px-3 py-1.5 text-sm font-mono w-32"
             />
+          </div>
+
+          {/* Extended thinking — Phase E */}
+          <div className="space-y-1.5">
+            <label className="flex items-start gap-2 text-xs cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={!!role.thinking}
+                onChange={(e) =>
+                  onUpdate({
+                    thinking: e.target.checked || undefined,
+                    // Drop the budget when thinking is off so we don't
+                    // ship a stale number through the next save.
+                    ...(e.target.checked ? {} : { thinkingBudgetTokens: undefined }),
+                  })
+                }
+                className="mt-0.5"
+              />
+              <span className="flex-1">
+                <span className="font-medium text-foreground">Extended thinking</span>
+                <span className="block text-muted-foreground mt-0.5">
+                  Habilita deep reasoning para subordinados deste role em providers
+                  que suportam (Anthropic, Gemini). Custa mais tokens — use para tarefas
+                  realmente difíceis. Não afeta providers que ignoram o flag.
+                </span>
+              </span>
+            </label>
+            {role.thinking && (
+              <div className="ml-6 flex items-center gap-2">
+                <label className="text-[11px] text-muted-foreground">Budget (tokens):</label>
+                <input
+                  type="number"
+                  min={1024}
+                  step={1024}
+                  value={role.thinkingBudgetTokens ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === '') {
+                      onUpdate({ thinkingBudgetTokens: undefined });
+                      return;
+                    }
+                    const parsed = parseInt(v, 10);
+                    if (!Number.isFinite(parsed) || parsed < 0) return;
+                    onUpdate({ thinkingBudgetTokens: parsed });
+                  }}
+                  placeholder="auto (~5000)"
+                  className="rounded-md border bg-background px-2 py-1 text-xs font-mono w-28"
+                />
+                <span className="text-[10px] text-muted-foreground">Anthropic only</span>
+              </div>
+            )}
           </div>
 
           {/* Skills — grouped by author/namespace */}

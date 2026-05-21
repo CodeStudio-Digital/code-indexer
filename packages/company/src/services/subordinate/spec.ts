@@ -50,8 +50,19 @@ export interface SpawnSubordinateSpec {
    * (deep reasoning) on providers that support it. Threaded through to
    * `runCoder({ thinking })` and consumed by the provider adapter. The
    * master decides per spawn — not inherited from the master's own flag.
+   *
+   * Phase E "thinkmode per role": when undefined here, `SubordinateLifecycle.spawn`
+   * falls back to `RoleConfig.thinking` so the template default applies
+   * without the master having to opt in on every call.
    */
   thinking?: boolean;
+  /**
+   * Anthropic-specific budget for the extended-thinking response. Forwarded
+   * to the runner as `thinkingBudgetTokens` and from there to the SDK's
+   * `thinking.budget_tokens`. Ignored by providers that don't support it.
+   * Defaults to provider-level (~5000) when undefined.
+   */
+  thinkingBudgetTokens?: number;
 }
 
 /**

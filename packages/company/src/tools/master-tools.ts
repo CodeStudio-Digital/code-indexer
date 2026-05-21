@@ -161,6 +161,13 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           ? [...orchestrator.getMasterLastUserAttachments()]
           : undefined;
 
+        // Phase E: when the role template enables `thinking`, it
+        // wins by default — the master's `thinking` argument can
+        // still override on a per-spawn basis (e.g. for a routine
+        // task that doesn't need deep reasoning).
+        const argThinking = args.thinking as boolean | undefined;
+        const effectiveThinking = argThinking ?? defaults?.thinking;
+
         const result = await orchestrator.spawnSubordinate({
           role,
           task,
@@ -175,7 +182,8 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           roleOverride: defaults?.systemPromptOverride,
           temperature: defaults?.temperature,
           attachments: attachments && attachments.length > 0 ? attachments : undefined,
-          thinking: args.thinking as boolean | undefined,
+          thinking: effectiveThinking,
+          thinkingBudgetTokens: defaults?.thinkingBudgetTokens,
         });
 
         // Auto-assign agent to Kanban card and move to in_progress

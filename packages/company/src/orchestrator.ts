@@ -472,7 +472,7 @@ export class CompanyOrchestrator {
     return this.master.getLastUserAttachments();
   }
 
-  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: import('@mcp/company/types.js').RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number } | null {
+  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: import('@mcp/company/types.js').RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number; thinking?: boolean; thinkingBudgetTokens?: number } | null {
     return this.master.getRoleDefaults(role);
   }
 
