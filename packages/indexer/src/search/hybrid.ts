@@ -7,6 +7,7 @@ import type { RerankerService } from '@mcp/indexer/search/reranker.js';
 import { planQuery } from '@mcp/indexer/search/planner.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import type { HybridSearchResult, SearchMode, SearchType, DBFile, DBSymbol, ContextSnapshot } from '@mcp/shared/types.js';
+import { rrfMerge as cpRrfMerge } from '@mcp/candidate-pipeline/scorers/rrf.js';
 
 /** Diagnostic info returned alongside search results. */
 export interface SearchDiagnostics {
@@ -339,46 +340,54 @@ export class HybridSearch {
     return results;
   }
 
+  /**
+   * RRF merge of two ranked lists, delegating the scoring math to the
+   * canonical `rrfMerge` in `@mcp/candidate-pipeline/scorers/rrf`. We layer
+   * the indexer-specific per-source metadata (`fts_rank`, `vector_score`)
+   * on top so diagnostics keep working.
+   *
+   * Paridade: `K = RRF_K = 60` matches the framework's `RRF_DEFAULT_K`.
+   * See `packages/candidate-pipeline/src/__tests__/scorers.test.ts` for
+   * the canonical formula.
+   */
   private rrfMerge(
     ftsResults: HybridSearchResult[],
     vectorResults: HybridSearchResult[],
     limit: number
   ): HybridSearchResult[] {
-    const scoreMap = new Map<string, HybridSearchResult>();
-
-    // Score FTS results
+    // Side channel: track first-occurrence metadata per (type, id) key.
+    type Meta = { fts_rank: number | null; vector_score: number | null; original: HybridSearchResult };
+    const meta = new Map<string, Meta>();
     for (let rank = 0; rank < ftsResults.length; rank++) {
       const r = ftsResults[rank];
       const key = `${r.type}:${r.id}`;
-      const score = 1 / (RRF_K + rank + 1);
-
-      if (scoreMap.has(key)) {
-        const existing = scoreMap.get(key)!;
-        existing.score += score;
-        existing.fts_rank = rank + 1;
-      } else {
-        scoreMap.set(key, { ...r, score, fts_rank: rank + 1 });
-      }
+      if (!meta.has(key)) meta.set(key, { fts_rank: rank + 1, vector_score: null, original: r });
+      else meta.get(key)!.fts_rank = rank + 1;
     }
-
-    // Score Vector results
     for (let rank = 0; rank < vectorResults.length; rank++) {
       const r = vectorResults[rank];
       const key = `${r.type}:${r.id}`;
-      const score = 1 / (RRF_K + rank + 1);
-
-      if (scoreMap.has(key)) {
-        const existing = scoreMap.get(key)!;
-        existing.score += score;
-        existing.vector_score = r.vector_score;
-      } else {
-        scoreMap.set(key, { ...r, score, vector_score: r.vector_score });
-      }
+      const existing = meta.get(key);
+      if (!existing) meta.set(key, { fts_rank: null, vector_score: r.vector_score, original: r });
+      else existing.vector_score = r.vector_score;
     }
 
-    return Array.from(scoreMap.values())
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
+    // Frame each source as a Rankable<candidateId=`type:id`> for cpRrfMerge.
+    const ftsRankable = ftsResults.map((r) => ({ candidateId: `${r.type}:${r.id}` }));
+    const vecRankable = vectorResults.map((r) => ({ candidateId: `${r.type}:${r.id}` }));
+    const merged = cpRrfMerge(
+      [
+        { name: 'fts', items: ftsRankable },
+        { name: 'vector', items: vecRankable },
+      ],
+      { k: RRF_K, limit },
+    );
+
+    // Reconstruct HybridSearchResult preserving original payload + metadata.
+    return merged.map(({ candidateId, rrfScore }) => {
+      const m = meta.get(candidateId)!;
+      return { ...m.original, score: rrfScore, fts_rank: m.fts_rank, vector_score: m.vector_score };
+    });
   }
 
   /**

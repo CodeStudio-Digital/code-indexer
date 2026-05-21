@@ -13,11 +13,16 @@ import { Input } from '../../components/ui/input.js';
 import type { ClaudeCodeFlowState } from './types.js';
 
 interface ClaudeCodeConnectionDialogProps {
+  providerId?: string;
   onClose: () => void;
   onConnected: (providerId?: string) => Promise<void> | void;
 }
 
-export function ClaudeCodeConnectionDialog({ onClose, onConnected }: ClaudeCodeConnectionDialogProps) {
+export function ClaudeCodeConnectionDialog({
+  providerId,
+  onClose,
+  onConnected,
+}: ClaudeCodeConnectionDialogProps) {
   const { t } = useTranslation(['admin', 'common']);
   const [flow, setFlow] = useState<ClaudeCodeFlowState>({ state: 'idle' });
   const [manualCode, setManualCode] = useState('');
@@ -49,7 +54,7 @@ export function ClaudeCodeConnectionDialog({ onClose, onConnected }: ClaudeCodeC
             const p = await fetch('/api/admin/oauth/claude-code/poll', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ state: j.state }),
+              body: JSON.stringify({ state: j.state, provider_id: providerId }),
             });
             const pj = (await p.json()) as {
               status: string;
@@ -89,7 +94,7 @@ export function ClaudeCodeConnectionDialog({ onClose, onConnected }: ClaudeCodeC
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [providerId]);
 
   const submitManualCode = async () => {
     if (flow.state !== 'waiting' || !manualCode.trim()) return;

@@ -199,12 +199,18 @@ export class CompanyStore {
   /**
    * List active (non-archived) sub-sessions of a parent, ordered by id
    * so the dashboard renders tabs in creation order.
+   *
+   * `archived_at` filtering: until migration 087 the column didn't
+   * exist and archived fronts came back on reload. We exclude any
+   * child whose `archived_at` is set so the dashboard's `FrontTabsBar`
+   * stops re-rendering deleted tabs.
    */
   listChildSessions(parentSessionId: number): CompanySession[] {
     return this.db
       .prepare(
         `SELECT * FROM company_sessions
          WHERE parent_session_id = ?
+           AND archived_at IS NULL
          ORDER BY id ASC`,
       )
       .all(parentSessionId) as CompanySession[];
@@ -452,13 +458,34 @@ export class CompanyStore {
           updated_at = datetime('now')
       WHERE status IN ('running', 'working') AND archive_id IS NULL
     `).run().changes;
+    // P15c (migration 091): stamp `recovered_at` + `recovered_reason`
+    // so the dashboard's SessionHeader can render a "Recovered" pill
+    // distinguishing this paused state from a user-initiated pause.
+    // The pill clears when the session next transitions out of
+    // `paused` (via `clearSessionRecoveryFlag` on the next message).
     const companySessions = this.db.prepare(`
       UPDATE company_sessions
       SET status = 'paused',
+          recovered_at = datetime('now'),
+          recovered_reason = 'server_restart',
           updated_at = datetime('now')
       WHERE status = 'running'
     `).run().changes;
     return { agentRuns, companySessions };
+  }
+
+  /**
+   * Clear the P15c recovery flag on a single session. Called when the
+   * session next transitions back to `running` (a fresh user message
+   * resurrects the master). Idempotent.
+   */
+  clearSessionRecoveryFlag(companySessionId: number): void {
+    this.db.prepare(`
+      UPDATE company_sessions
+      SET recovered_at = NULL,
+          recovered_reason = NULL
+      WHERE id = ? AND recovered_at IS NOT NULL
+    `).run(companySessionId);
   }
 
   // ─── Board ─────────────────────────────────────────────────────
@@ -483,7 +510,8 @@ export class CompanyStore {
       content,
       JSON.stringify(mentions ?? []),
     );
-    return this.getBoardEntry(Number(r.lastInsertRowid))!;
+    const entry = this.getBoardEntry(Number(r.lastInsertRowid))!;
+    return entry;
   }
 
   getBoardEntry(id: number): BoardEntry | null {
@@ -692,7 +720,8 @@ export class CompanyStore {
       input.tag ?? null,
       input.created_by ?? 'master',
     );
-    return this.getKanbanCard(Number(r.lastInsertRowid))!;
+    const card = this.getKanbanCard(Number(r.lastInsertRowid))!;
+    return card;
   }
 
   getKanbanCard(cardId: number): KanbanCard | null {
@@ -1054,12 +1083,17 @@ export class CompanyStore {
           `).run(archiveId, companySessionId).changes
         : 0;
 
-      // 4. Reset session to idle so /start can be called again. Keep
-      //    `template_id`, `config_json`, projects, sandboxes untouched.
+      // 4. Reset session to idle. For PARENT sessions this is "reset
+      //    flow" — the row stays visible in the sidebar so the user
+      //    can `/start` it again. For CHILD sessions (fronts) we ALSO
+      //    stamp `archived_at` so `listChildSessions` stops returning
+      //    it — otherwise an "archived" front re-appears the next
+      //    time the dashboard loads (migration 087).
       this.db.prepare(`
         UPDATE company_sessions
            SET status = 'idle',
                master_session_id = NULL,
+               archived_at = CASE WHEN parent_session_id IS NULL THEN archived_at ELSE datetime('now') END,
                updated_at = datetime('now')
          WHERE id = ?
       `).run(companySessionId);
@@ -1450,7 +1484,8 @@ export class CompanyStore {
       input.body,
       input.waitToken ?? null,
     );
-    return this.getInboxMessage(Number(r.lastInsertRowid))!;
+    const msg = this.getInboxMessage(Number(r.lastInsertRowid))!;
+    return msg;
   }
 
   getInboxMessage(id: number): AgentInboxMessage | null {

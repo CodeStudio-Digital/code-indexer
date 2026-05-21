@@ -1,7 +1,7 @@
 import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { guardWorkspaceRequest } from './guards.js';
-import { gitStatus, gitDiff, gitLog, gitInit, gitAdd, gitReset, gitCommit, gitDiscard } from './git-service.js';
+import { gitStatus, gitDiff, gitLog, gitInit, gitAdd, gitReset, gitCommit, gitDiscard, gitPush } from './git-service.js';
 import { parseIntQuery, parseJsonBody } from '../_helpers.js';
 import { runGeneralAi, GeneralAiNotConfiguredError } from '@mcp/services/ai-general/generalClient.js';
 import { extractFirstJson } from '@mcp/services/ai-general/extract-json.js';
@@ -124,6 +124,19 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
     if (!result.ok) return c.json({ error: result.message }, 500);
     publishGitStatusChanged(c, 'discard');
     return c.json({ ok: true, status: await gitStatus(rootGuard.resolved.root) });
+  });
+
+  app.post('/api/company/sessions/:sid/projects/:pid/git/push', async (c) => {
+    const guard = guardWorkspaceRequest(c, deps, '.');
+    if (guard instanceof Response) return guard;
+    const result = await gitPush(guard.resolved.root);
+    if (!result.ok) return c.json({ error: result.message }, 400);
+    return c.json({
+      ok: true,
+      message: result.message,
+      setUpstream: result.setUpstream,
+      status: await gitStatus(guard.resolved.root),
+    });
   });
 
   app.post('/api/company/sessions/:sid/projects/:pid/git/commit', async (c) => {

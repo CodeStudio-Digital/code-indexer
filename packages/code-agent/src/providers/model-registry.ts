@@ -73,9 +73,16 @@ export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
   // ── Gemini ───────────────────────────────────────────────────────────────
   'gemini-2.5-flash':           { maxTools: 64,  contextWindow: 1_048_576, maxOutputTokens: 65_536 },
   'gemini-2.5-flash-preview-04-17': { maxTools: 64, contextWindow: 1_048_576, maxOutputTokens: 65_536 },
+  'gemini-2.5-flash-lite':      { maxTools: 64,  contextWindow: 1_048_576, maxOutputTokens: 65_536 },
   'gemini-2.5-pro':             { maxTools: 128, contextWindow: 1_048_576, maxOutputTokens: 65_536 },
   'gemini-2.0-flash':           { maxTools: 64,  contextWindow: 1_048_576, maxOutputTokens: 8_192 },
   'gemini-2.0-flash-lite':      { maxTools: 64,  contextWindow: 1_048_576, maxOutputTokens: 8_192 },
   'gemini-1.5-pro':             { maxTools: 64,  contextWindow: 2_097_152, maxOutputTokens: 8_192 },
   'gemini-1.5-flash':           { maxTools: 64,  contextWindow: 1_048_576, maxOutputTokens: 8_192 },
+  // 3.x preview — listed in google-oauth.ts defaultModels; limits per gemini-cli tokenLimits.ts (1M default).
+  'gemini-3-pro-preview':                 { maxTools: 128, contextWindow: 1_048_576, maxOutputTokens: 65_536 },
+  'gemini-3.1-pro-preview':               { maxTools: 128, contextWindow: 1_048_576, maxOutputTokens: 65_536 },
+  'gemini-3.1-pro-preview-customtools':   { maxTools: 128, contextWindow: 1_048_576, maxOutputTokens: 65_536 },
+  'gemini-3-flash-preview':               { maxTools: 64,  contextWindow: 1_048_576, maxOutputTokens: 65_536 },
+  'gemini-3.1-flash-lite-preview':        { maxTools: 64,  contextWindow: 1_048_576, maxOutputTokens: 65_536 },
 };

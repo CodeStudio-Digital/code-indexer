@@ -49,6 +49,24 @@ export function applySubordinateWaitingStatus(
 export interface SessionIdlePayload {
   reason?: string;
   errorDetail?: string;
+  /** P15a — ISO timestamp of when the master's runner exited. */
+  endedAt?: string;
+  /** P15a — true when the exit looked unexpected (error or no recent user msg). */
+  unexpected?: boolean;
+}
+
+/**
+ * Reducer for the P15b `session_stalled` event. Stores the
+ * "stalled since" delta so the dashboard banner can show "Sessão parada
+ * há 6 min". `null` clears the stall.
+ */
+export function applySessionStalled(prev: StreamState, stalledSinceMs: number): StreamState {
+  return { ...prev, sessionStalledSinceMs: stalledSinceMs };
+}
+
+export function clearSessionStalled(prev: StreamState): StreamState {
+  if (prev.sessionStalledSinceMs == null) return prev;
+  return { ...prev, sessionStalledSinceMs: null };
 }
 
 export function applySessionIdle(prev: StreamState, d: SessionIdlePayload): StreamState {
@@ -64,5 +82,12 @@ export function applySessionIdle(prev: StreamState, d: SessionIdlePayload): Stre
         }
       : prev.masterState,
     masterErrorDetail: isError ? (d.errorDetail ?? 'unknown') : null,
+    // P15a — these fields drive the "Master finished/ended" banner.
+    // The reducer keeps prior values when the event carries no `endedAt`
+    // (e.g. legacy `session_idle` from a server that pre-dates this
+    // payload extension); a fresh `endedAt` always wins.
+    masterEndedAt: d.endedAt ?? prev.masterEndedAt,
+    masterEndedUnexpected:
+      d.endedAt !== undefined ? !!d.unexpected : prev.masterEndedUnexpected,
   };
 }

@@ -134,13 +134,30 @@ export const submitPlan: CoderTool = {
       // picks up build's defaults (planMode=false, build.txt prompt),
       // and inject a <system-reminder> so the model in this live run
       // immediately switches gears without waiting for a fresh turn.
-      if (runner.agentId === 'plan') {
+      //
+      // The reminder rides as `extraUserBlocks` on the tool result instead
+      // of a direct `appendSystemReminder` push: pushing a `user` message
+      // from inside the handler lands it BEFORE the tool_result the runner
+      // emits on return, producing `assistant(tool_use) → user → tool` —
+      // strict OpenAI-compatible providers (Kimi Code) reject that with
+      // "400 tool_call_ids did not have response messages". extraUserBlocks
+      // is consumed by the runner AFTER the tool_result is pushed, keeping
+      // the required `assistant → tool → user` adjacency.
+      const transitioning = runner.agentId === 'plan';
+      if (transitioning) {
         ctx.setSessionAgent?.('build');
-        runner.appendSystemReminder(
-          'Mode transition: Plan → Build. The plan was approved. Now execute it per build-mode instructions: read with prepare_edit / get_symbol_body before editing, apply changes, run the project verify (npm test / pnpm typecheck / appropriate) after each batch, and report concrete diffs. No further plan submission needed — proceed directly to edits.',
-        );
       }
-      return ok(formatPlanResult(true, parsed.feedback));
+      const result: ToolResult = { content: formatPlanResult(true, parsed.feedback) };
+      if (transitioning) {
+        result.extraUserBlocks = [
+          {
+            type: 'text',
+            text:
+              '<system-reminder>Mode transition: Plan → Build. The plan was approved. Now execute it per build-mode instructions: read with prepare_edit / get_symbol_body before editing, apply changes, run the project verify (npm test / pnpm typecheck / appropriate) after each batch, and report concrete diffs. No further plan submission needed — proceed directly to edits.</system-reminder>',
+          },
+        ];
+      }
+      return result;
     }
     rejected.add(hash);
     ctx.resolvePlan?.(id, 'rejected', parsed.feedback);

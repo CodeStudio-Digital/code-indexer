@@ -10,6 +10,7 @@
   "dependencies": {
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
-    "@mcp/services": "workspace:*"
+    "@mcp/services": "workspace:*",
+    "@mcp/candidate-pipeline": "workspace:*"
   }
 }

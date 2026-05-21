@@ -14,6 +14,21 @@ export interface CompanySession {
    * session (a parent or a standalone single-tab session).
    */
   parent_session_id: number | null;
+  /**
+   * Soft-delete timestamp (migration 087). Set when a sub-session
+   * ("front") is archived from `FrontTabsBar`; `listChildSessions`
+   * filters these out so the tab stays gone after reload. NULL for
+   * active sessions and for parent rows (which use the reset flow).
+   */
+  archived_at?: string | null;
+  /**
+   * P15c — set by `recoverStaleAgentRuns()` at boot when a `running`
+   * session is swept back to `paused` (the server crashed/restarted
+   * mid-run). Cleared by `clearSessionRecoveryFlag` on next resurrection.
+   */
+  recovered_at?: string | null;
+  /** Free-form reason for the most recent recovery (e.g. 'server_restart'). */
+  recovered_reason?: string | null;
   created_at: string;
   updated_at: string;
 }

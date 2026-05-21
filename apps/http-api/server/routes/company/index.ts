@@ -21,6 +21,7 @@ import { mountCompanyServiceLifecycleRoutes } from './service-lifecycle.js';
 import { mountCompanySandboxRoutes } from './sandbox.js';
 import { mountCompanyServicesRoutes } from './services.js';
 import { mountQaRoutes } from './qa/index.js';
+import { mountCompanyRecommendationsRoutes } from './recommendations.js';
 
 export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyTemplateRoutes(app, deps);
@@ -46,4 +47,6 @@ export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanySandboxRoutes(app, deps);
   mountCompanyServicesRoutes(app, deps);
   mountQaRoutes(app, deps);
+  // Pipeline-backed recommendations (RolePipeline + KanbanPriorityPipeline).
+  mountCompanyRecommendationsRoutes(app, deps);
 }

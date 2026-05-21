@@ -94,6 +94,19 @@ import { snapshotEmbeddingHash076 } from './076_snapshot_embedding_hash.js';
 import { pipelinesChat077 } from './077_pipelines_chat.js';
 import { sessionUnrestrictedToolOutput078 } from './078_session_unrestricted_tool_output.js';
 import { sessionFileSnapshots079 } from './079_session_file_snapshots.js';
+import { subAgentResultCache081 } from './081_sub_agent_result_cache.js';
+import { embeddingLsh082 } from './082_embedding_lsh.js';
+import { qualityClassifications083 } from './083_quality_classifications.js';
+import { counterfactualLogs084 } from './084_counterfactual_logs.js';
+import { pipelineFoundation085 } from './085_pipeline_foundation.js';
+import { docCorpus086 } from './086_doc_corpus.js';
+import { companySessionArchivedAt087 } from './087_company_session_archived_at.js';
+import { vectorTombstones088 } from './088_vector_tombstones.js';
+import { docSourcesRequiredPath089 } from './089_doc_sources_required_path.js';
+import { qualityInterventions090 } from './090_quality_interventions.js';
+import { companySessionRecoveredAt091 } from './091_company_session_recovered_at.js';
+import { docSourcesLlmLinks092 } from './092_doc_sources_llm_links.js';
+import { turnRequestResponseMeta093 } from './093_turn_request_response_meta.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -182,6 +195,19 @@ export const MIGRATIONS: Migration[] = [
   pipelinesChat077,
   sessionUnrestrictedToolOutput078,
   sessionFileSnapshots079,
+  subAgentResultCache081,
+  embeddingLsh082,
+  qualityClassifications083,
+  counterfactualLogs084,
+  pipelineFoundation085,
+  docCorpus086,
+  companySessionArchivedAt087,
+  vectorTombstones088,
+  docSourcesRequiredPath089,
+  qualityInterventions090,
+  companySessionRecoveredAt091,
+  docSourcesLlmLinks092,
+  turnRequestResponseMeta093,
 ];
 
 /**

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AlertCircle, RefreshCw } from 'lucide-react';
+import { cn } from '../../lib/utils.js';
 import { useApi } from '../../hooks/useApi.js';
 import { useCompanyStream } from '../../hooks/useCompanyStream.js';
 import { useCompanySiblings } from '../../hooks/useCompanySiblings.js';
@@ -14,6 +15,9 @@ import { MasterComposer } from './MasterComposer.js';
 import { FrontTabsBar } from './FrontTabsBar.js';
 import { ResetSessionDialog } from './ResetSessionDialog.js';
 import type { RoleConfig, SkillDef } from './RoleEditModal.js';
+import { ConnectionPhaseStrip } from './ConnectionPhaseStrip.js';
+import { MasterStatusBanner } from './MasterStatusBanner.js';
+import { SessionStalledBanner } from './SessionStalledBanner.js';
 import { ZoneLayout } from './zones/ZoneLayout.js';
 import { DEFAULT_TAB_FOR_ZONE, type Zone } from './zones/types.js';
 import { buildAgentsUrl, parseAgentsParams } from './routing.js';
@@ -21,7 +25,9 @@ import { AgentsSidebar } from './session-view/AgentsSidebar.js';
 import { SessionHeader } from './session-view/SessionHeader.js';
 import { NewRoleDialog } from './session-view/NewRoleDialog.js';
 import { parseConfig } from './session-view/types.js';
-import { PreviewSidebar } from './preview-sidebar/PreviewSidebar.js';
+import { SidebarRail, type SidePanel } from './preview-sidebar/SidebarRail.js';
+import { SidebarPanels } from './preview-sidebar/SidebarPanels.js';
+import { useResizableWidth } from '../../hooks/useResizableWidth.js';
 import type {
   AvailableProject,
   PersistedAgentRun,
@@ -32,6 +38,14 @@ interface CompanySessionViewProps {
   sessionId: number;
   sessionName: string;
   sessionStatus: string;
+  /**
+   * Outer-app sessions-list sidebar toggle (owned by `AgentsTab`).
+   * When provided, `SessionHeader` renders a button that controls it
+   * — letting us merge the AgentsTab top bar into SessionHeader and
+   * show only one bar.
+   */
+  sessionsListOpen?: boolean;
+  onToggleSessionsList?: () => void;
 }
 
 interface SessionFullData {
@@ -42,6 +56,9 @@ interface SessionFullData {
     config_json: string;
     template_id: number | null;
     last_user_message?: string | null;
+    /** P15c — set when boot recovery flipped this session to `paused`. */
+    recovered_at?: string | null;
+    recovered_reason?: string | null;
   };
   projects: SessionProject[];
   agentRuns: PersistedAgentRun[];
@@ -64,7 +81,13 @@ interface SessionFullData {
   masterPrompts?: MasterPrompt[];
 }
 
-export function CompanySessionView({ sessionId, sessionName, sessionStatus }: CompanySessionViewProps) {
+export function CompanySessionView({
+  sessionId,
+  sessionName,
+  sessionStatus,
+  sessionsListOpen,
+  onToggleSessionsList,
+}: CompanySessionViewProps) {
   const { t } = useTranslation('agents');
 
   // Multi-front (migration 067): the URL identifies the ROOT session
@@ -99,7 +122,20 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
   // Local UI state — only the bits that the shell coordinates across
   // its children (modal open/close, agent panel collapsed flag).
   const [agentPanelOpen, setAgentPanelOpen] = useState(true);
-  const [previewPanelOpen, setPreviewPanelOpen] = useState(true);
+  // Right-rail panel selection: `null` collapses the panel and shows
+  // only the icon rail. The rail itself is always mounted; Preview is
+  // gated on `builderMode` but Inbox / Env / Databases work for every
+  // session.
+  const [sidePanel, setSidePanel] = useState<SidePanel | null>('preview');
+  // Drag-resizable width for whichever right panel is mounted. Width
+  // is persisted globally — switching between Preview and Inbox keeps
+  // the user's chosen size.
+  const sidePanelSizer = useResizableWidth({
+    defaultWidth: 448,
+    minWidth: 280,
+    maxWidth: 960,
+    storageKey: 'agents.sidePanel.width',
+  });
   const [modalSession, setModalSession] = useState<{
     coderSessionId: number;
     role: string;
@@ -157,6 +193,15 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
     (config as { builder?: unknown }).builder
   );
 
+  // For non-builder sessions, the Preview icon is hidden — if the
+  // default `'preview'` selection would point at a hidden icon, treat
+  // it as collapsed. Explicit toggles later are respected.
+  const sidePanelEffective: SidePanel | null =
+    sidePanel === 'preview' && !builderMode ? null : sidePanel;
+  const togglePanel = (panel: SidePanel) => {
+    setSidePanel((cur) => (cur === panel ? null : panel));
+  };
+
   // Session already has a run if status is not idle/draft — use sendMessage, not start.
   const sessionAlreadyRan =
     sessionStatus === 'running' ||
@@ -212,10 +257,10 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
         siblings={siblings}
         agentPanelOpen={agentPanelOpen}
         onToggleAgentPanel={() => setAgentPanelOpen((v) => !v)}
-        previewPanelOpen={builderMode ? previewPanelOpen : undefined}
-        onTogglePreviewPanel={
-          builderMode ? () => setPreviewPanelOpen((v) => !v) : undefined
-        }
+        sessionsListOpen={sessionsListOpen}
+        onToggleSessionsList={onToggleSessionsList}
+        recoveredAt={sessionData?.session.recovered_at ?? null}
+        recoveredReason={sessionData?.session.recovered_reason ?? null}
         onResetClick={() => setResetDialogOpen(true)}
       />
 
@@ -241,12 +286,29 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
         />
 
         <div className="flex-1 flex flex-col overflow-hidden">
+          <ConnectionPhaseStrip phase={stream.connectionPhase} />
           {stream.error && (
             <div className="mx-3 mt-3 p-3 rounded-lg border border-destructive/30 bg-destructive/5 text-xs text-destructive flex items-start gap-2">
               <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
               <p>{stream.error}</p>
             </div>
           )}
+
+          <MasterStatusBanner
+            endedAt={stream.masterEndedAt}
+            unexpected={stream.masterEndedUnexpected}
+            errorDetail={stream.masterErrorDetail}
+          />
+
+          <SessionStalledBanner
+            stalledSinceMs={stream.sessionStalledSinceMs}
+            onContinue={() =>
+              stream.sendMessage(
+                '[SYSTEM] Status check — any blockers? Update the board with current progress and pick up the next task.',
+                [],
+              )
+            }
+          />
 
           {stream.started && !stream.masterState && !stream.error && (
             <div className="flex items-center justify-center py-8">
@@ -295,15 +357,39 @@ export function CompanySessionView({ sessionId, sessionName, sessionStatus }: Co
           </div>
         </div>
 
-        {/* Right preview pane — only for builder-mode sessions, and only
-            when the user hasn't collapsed it. Sub-sessions share the
-            parent's sandbox so we always feed the ROOT id, not
-            `activeSessionId`. */}
-        {builderMode && previewPanelOpen && (
-          <div className="w-[28rem] xl:w-[34rem] border-l flex-shrink-0 overflow-hidden flex flex-col">
-            <PreviewSidebar sessionId={sessionId} />
-          </div>
+        {/* Right drawer: drag-resizable content panel + always-on icon
+            rail. Preview is gated on builder mode; Inbox / Env /
+            Databases work for every session. Sub-sessions share the
+            parent's sandbox so we always feed the ROOT session id.
+            The width persists in localStorage and applies to every
+            panel, not just Preview. */}
+        {sidePanelEffective !== null && (
+          <>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              onMouseDown={sidePanelSizer.startResize}
+              className={cn(
+                'w-1 cursor-col-resize shrink-0 transition-colors',
+                sidePanelSizer.resizing
+                  ? 'bg-primary/60'
+                  : 'bg-border hover:bg-primary/40',
+              )}
+              title="Drag to resize"
+            />
+            <div
+              style={{ width: sidePanelSizer.width }}
+              className="border-l flex-shrink-0 overflow-hidden flex flex-col"
+            >
+              <SidebarPanels sessionId={sessionId} active={sidePanelEffective} />
+            </div>
+          </>
         )}
+        <SidebarRail
+          active={sidePanelEffective}
+          onToggle={togglePanel}
+          showPreview={builderMode}
+        />
       </div>
 
       {modalSession && (

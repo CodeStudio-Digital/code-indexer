@@ -390,6 +390,53 @@ export class CodeIndexDB {
       END;
     `);
 
+    // Doc chunks FTS (migration 086 — RAG over external documentation).
+    // Wrapped in a try/exec block so DBs that haven't reached version 86
+    // yet don't trip on the missing base table. Once the migration runs
+    // on the next startup, this becomes a no-op.
+    try {
+      this.db.exec(`SELECT 1 FROM doc_chunks LIMIT 1`);
+      this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS doc_chunks_fts USING fts5(
+          content, summary, heading_path,
+          content='doc_chunks', content_rowid='id',
+          tokenize='unicode61 remove_diacritics 2'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS doc_chunks_ai AFTER INSERT ON doc_chunks BEGIN
+          INSERT INTO doc_chunks_fts(rowid, content, summary, heading_path)
+          VALUES (new.id, new.content, COALESCE(new.summary,''), COALESCE(new.heading_path,''));
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS doc_chunks_ad AFTER DELETE ON doc_chunks BEGIN
+          INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, content, summary, heading_path)
+          VALUES ('delete', old.id, old.content, COALESCE(old.summary,''), COALESCE(old.heading_path,''));
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS doc_chunks_au AFTER UPDATE ON doc_chunks BEGIN
+          INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, content, summary, heading_path)
+          VALUES ('delete', old.id, old.content, COALESCE(old.summary,''), COALESCE(old.heading_path,''));
+          INSERT INTO doc_chunks_fts(rowid, content, summary, heading_path)
+          VALUES (new.id, new.content, COALESCE(new.summary,''), COALESCE(new.heading_path,''));
+        END;
+      `);
+
+      // Backfill if existing rows are present but FTS is empty (covers the
+      // case where chunks were inserted via raw SQL before triggers existed).
+      try {
+        const count = (this.db.prepare('SELECT COUNT(*) as c FROM doc_chunks_fts').get() as { c: number }).c;
+        if (count === 0) {
+          const chunkCount = (this.db.prepare('SELECT COUNT(*) as c FROM doc_chunks').get() as { c: number }).c;
+          if (chunkCount > 0) {
+            this.db.exec(
+              `INSERT INTO doc_chunks_fts(rowid, content, summary, heading_path)
+               SELECT id, content, COALESCE(summary,''), COALESCE(heading_path,'') FROM doc_chunks`,
+            );
+          }
+        }
+      } catch { /* ignore */ }
+    } catch { /* doc_chunks table not yet created — migration 086 not yet applied */ }
+
     // Migrations for v3.2 — add columns to existing tables
     try { this.db.exec('SELECT layer FROM files LIMIT 1'); } catch {
       this.db.exec(`
@@ -1216,8 +1263,14 @@ export class CodeIndexDB {
   // ─── Vector IDs ─────────────────────────────────────────────────
 
   saveVectorIds(projectId: number, vectors: Array<{ vectorId: string; filePath?: string; type: 'file' | 'symbol' | 'symbol_body' | 'snapshot' }>): void {
+    // INSERT OR REPLACE — re-indexing the same file legitimately produces
+    // the same `vector_id` (it's deterministic). The old `INSERT` raised
+    // SQLITE_CONSTRAINT_UNIQUE on (project_id, vector_id) every re-index
+    // run, killing the whole batch. REPLACE refreshes file_path/type
+    // (which may legitimately change when a file is moved/renamed) and
+    // is idempotent for the common no-change case.
     const insert = this.db.prepare(`
-      INSERT INTO vector_ids (project_id, vector_id, file_path, type)
+      INSERT OR REPLACE INTO vector_ids (project_id, vector_id, file_path, type)
       VALUES (?, ?, ?, ?)
     `);
 

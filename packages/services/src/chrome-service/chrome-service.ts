@@ -110,6 +110,41 @@ export class ChromeService {
   }
 
   /**
+   * Connect a Playwright `Browser` instance to the running ChromeService
+   * via its WebSocket endpoint. Returns null when the service is disabled,
+   * not yet healthy, or the connection itself fails — callers are expected
+   * to treat null as "browser rendering not available" and fall back.
+   *
+   * Used by the doc indexer's `BrowserBackend` to escalate fetches that
+   * tripped bot-detection signals. The returned `Browser` is shared with
+   * any other consumer of the same WS endpoint — callers MUST scope their
+   * work to a fresh `browser.newContext()` and close it after use, never
+   * call `browser.close()` (that would kill the shared instance).
+   *
+   * `playwright-core` is loaded lazily so processes that never call
+   * `connectBrowser()` don't pay the import cost on boot.
+   */
+  async connectBrowser(): Promise<import('playwright-core').Browser | null> {
+    const state = await this.getEndpoint({ probe: true });
+    if (state.status !== 'running' || state.alive === false || !state.wsEndpoint) {
+      return null;
+    }
+    try {
+      const { chromium } = await import('playwright-core');
+      // Default Playwright connect timeout is 30s — bring it down so the
+      // doc indexer's per-page budget isn't blown on a single unreachable
+      // hop. Callers can compose this with their own outer timeout.
+      const browser = await chromium.connect(state.wsEndpoint, { timeout: 10_000 });
+      return browser;
+    } catch (err) {
+      console.warn(
+        `[chrome-service] connectBrowser failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
    * Provision the Chrome container, healthcheck it, persist `running`,
    * and backfill the env var into every eligible active session.
    * Idempotent: when called concurrently the second invocation reuses

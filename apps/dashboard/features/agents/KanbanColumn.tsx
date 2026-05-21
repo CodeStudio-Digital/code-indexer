@@ -26,6 +26,12 @@ interface KanbanColumnProps {
   onCardClick: (card: KanbanCardFull) => void;
   onDrop: (cardId: number, column: KanbanColumnType) => void;
   onCreateCard?: (column: KanbanColumnType) => void;
+  /**
+   * Optional priority scores per card id, populated after Recompute
+   * Priorities runs. When provided, cards are sorted DESC by score
+   * within the column instead of by `position`.
+   */
+  priorityScores?: Map<number, number>;
 }
 
 export const KanbanColumn = React.memo(function KanbanColumn({
@@ -34,10 +40,19 @@ export const KanbanColumn = React.memo(function KanbanColumn({
   onCardClick,
   onDrop,
   onCreateCard,
+  priorityScores,
 }: KanbanColumnProps) {
   const { t } = useTranslation('agents');
   const [dragOver, setDragOver] = useState(false);
-  const sorted = [...cards].sort((a, b) => a.position - b.position);
+  // When priority scores are present, sort by score desc (tiebreak: position).
+  const sorted = priorityScores && priorityScores.size > 0
+    ? [...cards].sort((a, b) => {
+        const sa = priorityScores.get(a.id) ?? -Infinity;
+        const sb = priorityScores.get(b.id) ?? -Infinity;
+        if (sb !== sa) return sb - sa;
+        return a.position - b.position;
+      })
+    : [...cards].sort((a, b) => a.position - b.position);
   const columnLabel = t(COLUMN_LABEL_KEYS[column]);
 
   return (
@@ -86,6 +101,7 @@ export const KanbanColumn = React.memo(function KanbanColumn({
             key={card.id}
             card={card}
             onClick={() => onCardClick(card)}
+            priorityScore={priorityScores?.get(card.id)}
           />
         ))}
 

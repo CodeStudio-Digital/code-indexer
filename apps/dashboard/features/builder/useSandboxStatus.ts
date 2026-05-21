@@ -1,21 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
+import {
+  selectSandbox,
+  selectStream,
+  useCompanyStore,
+} from '../../state/company/index.js';
 
 /**
  * Tracks the backend sandbox state for a company session.
  *
- * Implementation: polls `GET /api/company/sessions/:id/sandbox` until the
- * sandbox reaches `ready` or `error`, then slows the poll down to a
- * heartbeat interval. We intentionally don't piggyback on the company SSE
- * stream — that hook is already doing a lot, and a dedicated poll keeps
- * the preview pane independent (e.g. easier to unmount without tearing
- * down the chat stream).
+ * **Update model (post-P14b — no more polling):**
+ *   - Initial fetch on mount + on `sessionId` change.
+ *   - Refetch ONLY when the backend publishes a sandbox lifecycle event
+ *     (`sandbox.status_changed`, `sandbox.ready`, `sandbox.paused`,
+ *     `sandbox.resumed`, `sandbox.error`, `sandbox.destroyed`,
+ *     `sandbox.provisioning`, `sandbox.step`). `useCompanyStream` routes
+ *     those events into `sandboxSlice.statusSeq`; this hook subscribes
+ *     to that counter and refetches on each bump.
+ *   - **Polling fallback only when the SSE stream is disconnected** (e.g.
+ *     dormant orchestrator, browser came back from sleep). 10 s slow
+ *     heartbeat — enough to recover, light enough to ignore.
  *
- * Cadence:
- *   - 1s while `pending` / `provisioning` / `destroying`
- *   - 10s once `ready` / `error` / `destroyed` or sandbox is null
- *
- * Returns the last known snapshot plus a manual `refresh()` for the UI
- * when the user clicks the reload button.
+ * The legacy 1.5–10 s setInterval poller is gone. Browsers running a
+ * single dashboard tab with the company view open should now make
+ * ~0–1 sandbox requests per minute under normal conditions, vs
+ * ~30–40 before.
  */
 
 export type SandboxPollStatus =
@@ -66,11 +74,13 @@ export interface SandboxSnapshot {
     | null;
 }
 
-const FAST_MS = 1_500;
-const SLOW_MS = 10_000;
-// `error` deliberately polls slow: the record is stable, the UI shows
-// the message, and the user must click Retry to change anything.
-const TERMINAL: SandboxPollStatus[] = ['ready', 'paused', 'error', 'destroyed'];
+/**
+ * Slow heartbeat used ONLY when the SSE stream is disconnected.
+ * 10 s is the same value the legacy poller used in its terminal
+ * state, so behavior degrades gracefully if the user keeps the tab
+ * open while their orchestrator is dormant.
+ */
+const DISCONNECTED_HEARTBEAT_MS = 10_000;
 
 export function useSandboxStatus(sessionId: number | null): {
   data: SandboxSnapshot | null;
@@ -82,12 +92,21 @@ export function useSandboxStatus(sessionId: number | null): {
   const [data, setData] = useState<SandboxSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cancelled = useRef(false);
-  const bump = useRef(0);
+  // Local manual-refresh counter so callers' `refresh()` triggers a
+  // refetch without depending on the SSE seq.
+  const [manualSeq, setManualSeq] = useState(0);
 
-  function refresh() {
-    bump.current += 1;
-    // Force an immediate refetch by triggering a state change via error reset.
-    setError(null);
+  // Subscribe to the event-driven sandbox status counter and the
+  // connection state — connected sessions skip the heartbeat.
+  const statusSeq = useCompanyStore((s) =>
+    sessionId == null ? 0 : selectSandbox(s, sessionId).statusSeq,
+  );
+  const connected = useCompanyStore((s) =>
+    sessionId == null ? false : selectStream(s, sessionId).connected,
+  );
+
+  function refresh(): void {
+    setManualSeq((n) => n + 1);
   }
 
   /**
@@ -103,7 +122,7 @@ export function useSandboxStatus(sessionId: number | null): {
         credentials: 'include',
       });
     } catch {
-      /* the next poll will surface the new state anyway */
+      /* the next sandbox event will surface the new state */
     }
     refresh();
   }
@@ -123,34 +142,26 @@ export function useSandboxStatus(sessionId: number | null): {
         credentials: 'include',
       });
     } catch {
-      /* swallow — next poll surfaces state */
+      /* swallow — next event surfaces state */
     }
     refresh();
   }
 
+  // Single-fetch effect — runs on sessionId change, manual refresh,
+  // and any incoming sandbox status event.
   useEffect(() => {
     cancelled.current = false;
     if (sessionId === null) {
       setData(null);
       return;
     }
-
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let bumpSeen = bump.current;
-    async function tick() {
-      if (cancelled.current) return;
-      let latest: SandboxSnapshot | null = null;
+    async function fetchOnce(): Promise<void> {
       try {
-        // `credentials: 'include'` so the browser saves the signed
-        // preview cookie the server returns. Same-origin would already
-        // persist cookies, but we're explicit here to avoid silent
-        // breakage if the dashboard is ever served from a CDN subdomain.
         const res = await fetch(`/api/company/sessions/${sessionId}/sandbox`, {
           credentials: 'include',
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = (await res.json()) as SandboxSnapshot;
-        latest = json;
         if (cancelled.current) return;
         setData(json);
         setError(null);
@@ -158,29 +169,25 @@ export function useSandboxStatus(sessionId: number | null): {
         if (cancelled.current) return;
         setError(e instanceof Error ? e.message : String(e));
       }
-      if (cancelled.current) return;
-      const snapshot = latest ?? data;
-      const status = snapshot?.sandbox?.status ?? (snapshot?.builder ? 'paused' : null);
-      const terminal = !snapshot?.builder || (status !== null && TERMINAL.includes(status));
-      timer = setTimeout(tick, terminal ? SLOW_MS : FAST_MS);
     }
-
-    // Kick off. If `refresh` was called recently, reset the bump cursor
-    // so the next tick runs immediately regardless of current timer.
-    if (bump.current !== bumpSeen) {
-      bumpSeen = bump.current;
-    }
-    tick();
-
+    void fetchOnce();
     return () => {
       cancelled.current = true;
-      if (timer) clearTimeout(timer);
     };
-    // Intentionally NOT depending on `data` — that would restart the
-    // polling loop on every tick. We re-evaluate the interval inside
-    // `tick()` using the captured `data` snapshot, which is sufficient.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, error === null ? 0 : 1]);
+  }, [sessionId, statusSeq, manualSeq]);
+
+  // Disconnected-only heartbeat. When the orchestrator is dormant the
+  // SSE stream is closed and event-driven refresh stops — we tick once
+  // every 10 s as a recovery path. As soon as `connected === true`,
+  // the heartbeat clears itself and event-driven refresh takes over.
+  useEffect(() => {
+    if (sessionId === null || connected) return;
+    const id = setInterval(() => {
+      setManualSeq((n) => n + 1);
+    }, DISCONNECTED_HEARTBEAT_MS);
+    return () => clearInterval(id);
+  }, [sessionId, connected]);
 
   return { data, error, refresh, retry, restartDev };
 }

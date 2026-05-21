@@ -9,30 +9,37 @@ import type {
  * connection (`/api/coder/sessions/:id/pipelines/stream`). Independent
  * of the per-turn chat stream because pipelines outlive any single turn.
  *
- * The hook is a no-op when `sessionId` is null. When the endpoint
- * returns 404 (no executor for this session yet), the hook silently
- * waits — a fresh `POST /pipelines/:pid/start` will spin one up; a
- * subsequent open of the stream will then succeed. The browser's
- * built-in EventSource handles reconnection automatically.
+ * Connection is gated: the hook only opens the stream after confirming a
+ * pipeline execution exists for the session — either persisted (probed
+ * once via `GET /pipelines/executions` on session change) or freshly
+ * started (caller invokes `openStream()` right after
+ * `POST /pipelines/:pid/start`). This avoids the 404-reconnect loop that
+ * happens when no executor has ever been registered for the session.
  */
 export function usePipelineStream(sessionId: number | null): {
   pipelineRuntime: PipelineRuntimeState | null;
+  openStream: () => void;
   reset: () => void;
 } {
   const [runtime, setRuntime] = useState<PipelineRuntimeState | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
+  const openStreamRef = useRef<() => void>(() => {});
 
   const reset = useCallback(() => setRuntime(null), []);
+  const openStream = useCallback(() => openStreamRef.current(), []);
 
   useEffect(() => {
     setRuntime(null);
+    openStreamRef.current = () => {};
     if (sessionId == null) return;
 
     let cancelled = false;
     let backoffMs = 2000;
+    let hasOpened = false;
 
     const connect = () => {
       if (cancelled) return;
+      if (sourceRef.current) return;
       const url = `/api/coder/sessions/${sessionId}/pipelines/stream`;
       const src = new EventSource(url);
       sourceRef.current = src;
@@ -198,32 +205,48 @@ export function usePipelineStream(sessionId: number | null): {
       });
 
       src.onerror = () => {
-        // 404 (no executor yet) and disconnects both land here. EventSource
-        // auto-reconnects, but if the endpoint stays 404 the browser keeps
-        // reconnecting silently — which is fine for our case (will succeed
-        // once the user starts a pipeline).
         src.close();
         sourceRef.current = null;
         if (cancelled) return;
+        // Reconnect only when the stream actually opened at least once.
+        // The "never opened" case is the 404 from a session with no
+        // executor yet — bail out and wait for a fresh `openStream()`
+        // (called by the caller after a successful pipeline start)
+        // instead of spamming the Network tab with retries.
+        if (!hasOpened) return;
         const next = Math.min(backoffMs, 30_000);
         backoffMs = Math.min(backoffMs * 1.5, 30_000);
         setTimeout(connect, next);
       };
 
-      // Reset backoff on successful open.
       src.onopen = () => {
+        hasOpened = true;
         backoffMs = 2000;
       };
     };
 
-    connect();
+    openStreamRef.current = connect;
+
+    // Probe once for a persisted execution. The /executions endpoint
+    // falls through to the durable store when no in-memory executor
+    // exists, so a non-empty result means the SSE will succeed.
+    fetch(`/api/coder/sessions/${sessionId}/pipelines/executions`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((execs: unknown) => {
+        if (cancelled) return;
+        if (Array.isArray(execs) && execs.length > 0) connect();
+      })
+      .catch(() => {
+        // Best-effort probe — caller can still trigger via openStream().
+      });
 
     return () => {
       cancelled = true;
+      openStreamRef.current = () => {};
       sourceRef.current?.close();
       sourceRef.current = null;
     };
   }, [sessionId]);
 
-  return { pipelineRuntime: runtime, reset };
+  return { pipelineRuntime: runtime, openStream, reset };
 }

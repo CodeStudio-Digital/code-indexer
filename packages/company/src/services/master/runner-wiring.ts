@@ -36,6 +36,13 @@ export interface MasterRunnerStateMutators {
   setRunnerExited: (value: boolean) => void;
   /** Set `_ended` — happens in `.finally` so notifications route correctly. */
   setEnded: (value: boolean) => void;
+  /**
+   * Stamp the ISO timestamp of when the runner exited. Set alongside
+   * `setEnded(true)` so the dashboard can render a "Master finished at
+   * HH:MM" banner from the `session_idle` event. Null clears on
+   * resurrection.
+   */
+  setEndedAt: (value: string | null) => void;
   /** Record an end-with-error string. Null clears. */
   setEndedWithError: (value: string | null) => void;
   /** Read `_ended` / `_runnerExited` flags. Needed by the attention listener. */
@@ -141,6 +148,11 @@ export function attachMasterCompletionHandler(
     })
     .finally(() => {
       deps.state.setEnded(true);
+      // Timestamp the exit so the dashboard's session_idle handler can
+      // surface "Master finished at HH:MM" or "Master ended unexpectedly"
+      // without depending on the SSE delivery time (which can lag by
+      // seconds during reconnects).
+      deps.state.setEndedAt(new Date().toISOString());
       if (deps.state.attentionOff) {
         try { deps.state.attentionOff(); } catch { /* best-effort */ }
         deps.state.setAttentionOff(null);

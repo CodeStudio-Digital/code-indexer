@@ -212,6 +212,50 @@ export async function gitDiscard(
   return { ok: true, message: messages.join(', ') || 'nothing to discard' };
 }
 
+export interface GitPushResult extends GitMutationResult {
+  /** True when the local branch had no upstream and one was set with `--set-upstream`. */
+  setUpstream: boolean;
+}
+
+/**
+ * Push the current branch to its upstream. When the branch has no
+ * upstream yet, fall back to `git push --set-upstream origin <branch>`
+ * so first-push workflows work without extra UI steps. Returns the
+ * combined git output for surfacing in the toast.
+ */
+export async function gitPush(root: string): Promise<GitPushResult> {
+  if (!hasGitDir(root)) return { ok: false, message: 'not a git repo', setUpstream: false };
+  // Try the plain `git push` first — git already knows the upstream
+  // for branches that have one configured.
+  const direct = await runGit(root, ['push']);
+  if (direct.ok) {
+    return { ok: true, message: (direct.stderr || direct.stdout).trim() || 'pushed', setUpstream: false };
+  }
+  // No upstream? Detect via the stderr message and retry with
+  // `--set-upstream origin <branch>`. Git emits "has no upstream branch"
+  // and "set-upstream" hints in this case.
+  const combined = (direct.stderr || direct.stdout || '').toLowerCase();
+  const looksLikeNoUpstream =
+    combined.includes('no upstream branch') || combined.includes('set-upstream');
+  if (!looksLikeNoUpstream) {
+    return { ok: false, message: (direct.stderr || direct.stdout).trim() || 'git push failed', setUpstream: false };
+  }
+  // Resolve current branch name.
+  const head = await runGit(root, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (!head.ok) {
+    return { ok: false, message: 'failed to resolve current branch', setUpstream: false };
+  }
+  const branch = head.stdout.trim();
+  if (!branch || branch === 'HEAD') {
+    return { ok: false, message: 'detached HEAD — checkout a branch first', setUpstream: false };
+  }
+  const retry = await runGit(root, ['push', '--set-upstream', 'origin', branch]);
+  if (!retry.ok) {
+    return { ok: false, message: (retry.stderr || retry.stdout).trim() || 'git push failed', setUpstream: true };
+  }
+  return { ok: true, message: (retry.stderr || retry.stdout).trim() || 'pushed', setUpstream: true };
+}
+
 export async function gitCommit(root: string, message: string): Promise<GitCommitResult> {
   if (!hasGitDir(root)) return { ok: false, hash: null, message: 'not a git repo' };
   const trimmed = message.trim();

@@ -4,7 +4,17 @@ import { resolve as pathResolve, relative as pathRelative, isAbsolute } from 'no
 import { statSync as fsStatSync } from 'node:fs';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
-import type { AgentMessage, ChatDelta, ChatUsage, ContentBlock, ToolUseBlock, PlanBlock, QuestionBlock, ToolResultBlock } from '@mcp/code-agent/core/messages.js';
+import type {
+  AgentMessage,
+  ChatDelta,
+  ChatProviderResponseMeta,
+  ChatUsage,
+  ContentBlock,
+  ToolUseBlock,
+  PlanBlock,
+  QuestionBlock,
+  ToolResultBlock,
+} from '@mcp/code-agent/core/messages.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import {
   compactMessages,
@@ -46,6 +56,25 @@ import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { resolveTemperature } from '@mcp/code-agent/inference/temperature.js';
 import { estimateCost } from '@mcp/code-agent/providers/pricing.js';
 import { buildActiveContextBlock } from '@mcp/code-agent/core/active-context.js';
+import { getGlobalToolSelectionOutcomeObserver } from '@mcp/code-agent/tool-selection/global-filter.js';
+import {
+  isGlobalQualityClassifierEnabled,
+  runGlobalQualityClassifiers,
+  getGlobalQualityClassificationStore,
+  getGlobalQualityInterventionStore,
+  buildQualityNudge,
+  detectToolMisuseStreak,
+  getGlobalPolicyEnforcer,
+  shouldClassifyTurn,
+  worstVerdictOf,
+} from '@mcp/services/quality/index.js';
+import type { QualityResult } from '@mcp/services/quality/index.js';
+import type { QualityClassificationRow } from '@mcp/store/quality-classification-store.js';
+import type { InterventionVerdictSnapshot } from '@mcp/store/quality-intervention-store.js';
+import {
+  isGlobalContextRelevanceEnabled,
+  tryGlobalContextCompact,
+} from '@mcp/code-agent/context-relevance/index.js';
 
 /**
  * Recovery transition kinds (PR-4, Row 3 from
@@ -137,6 +166,27 @@ export interface RunnerOptions {
   /** Tools disabled for this specific session. Applied before tier filtering. */
   sessionDisabledTools?: ReadonlySet<string>;
   /**
+   * Optional opt-in filter for the per-turn tool list. Set by the host
+   * when the ToolSelectionPipeline is active (`MCP_PIPELINES_TOOL_SELECTION=1`).
+   *
+   * Contract:
+   *   - The runner calls this AFTER tier/disabled filtering, BEFORE
+   *     serializing tools to the provider.
+   *   - It receives the SERIALIZED tool shape (name/description/parameters)
+   *     because that's what's about to go on the wire — the filter only
+   *     needs identity + descriptive text to score.
+   *   - It must return a non-empty subset of the input. Returning the
+   *     unfiltered list disables the optimization for this turn.
+   *   - It must never throw — failures default to the unfiltered list.
+   */
+  toolSelectionFilter?: (
+    tools: Array<{ name: string; description: string; parameters: import('./tool.js').JsonSchema }>,
+    ctx: {
+      taskText: string;
+      recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }>;
+    },
+  ) => Promise<Array<{ name: string; description: string; parameters: import('./tool.js').JsonSchema }>>;
+  /**
    * Runtime tier overrides for external MCP tools. Maps tool name (e.g.
    * `ext_github__create_issue`) to its tier. Passed through to filterByTiers
    * so external tools respect tier filtering without polluting the static Sets.
@@ -166,6 +216,19 @@ export interface RunnerOptions {
    * as a user message reminder alongside the deliverable reminder to survive compaction.
    */
   companyRoleOverride?: string;
+  /**
+   * Company agent_run_id — populated for company subordinates so quality
+   * classifications can be attributed to the run (kanban quality gate,
+   * off-topic→master inbox alert, role calibration). Null/undefined for
+   * chat-individual sessions.
+   */
+  companyAgentRunId?: number | null;
+  /**
+   * Company session id — populated for company subordinates so cross-cutting
+   * observers (quality result observer) can route to the right inbox /
+   * orchestrator. Null/undefined for chat-individual sessions.
+   */
+  companySessionId?: number | null;
   /**
    * Stateful Responses API: identifier of the previous response (for ChatGPT/Codex
    * sessions running with `store: true`). When set, the provider sends only the
@@ -254,6 +317,83 @@ const UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP = Number(
 );
 /** Per-turn safety budget — emits a warning when the about-to-send payload exceeds this. */
 const TURN_BUDGET_CHARS = Number(process.env.CODER_TURN_BUDGET_CHARS ?? 30_000);
+
+/**
+ * Wire #2 — minimum number of turns between consecutive tool-misuse
+ * planning interventions. Without a cooldown, the intervention would
+ * re-fire on every subsequent turn as long as the 3 flagged verdicts
+ * remain in the recent window. 5 turns gives the model space to recover.
+ */
+const INTERVENTION_COOLDOWN_TURNS = Number(
+  process.env.CODER_TOOL_MISUSE_INTERVENTION_COOLDOWN ?? 5,
+);
+
+/**
+ * Wire #2 — build the planning intervention block. Strong, directive
+ * tone. Tells the model to (a) STOP calling tools, (b) name the loop,
+ * (c) propose a different approach. Equivalent to spawning a Plan agent
+ * but in-place: the current turn becomes the planning turn.
+ */
+function buildToolMisuseInterventionBlock(
+  latestReason: string | null,
+  latestConfidence: number | null,
+): string {
+  const conf = latestConfidence != null ? ` (${Math.round(latestConfidence * 100)}% confidence)` : '';
+  const evidence = latestReason ? `\nMost recent classifier evidence: "${truncateForBlock(latestReason)}".` : '';
+  return [
+    '',
+    '<!-- quality-intervention (auto-generated; do not echo back to the user) -->',
+    '## MANDATORY PLANNING TURN — tool-misuse loop detected',
+    '',
+    `Your last 3 turns triggered \`tool_misuse=flagged\`${conf}. You are stuck in a loop and burning tokens for no progress.${evidence}`,
+    '',
+    '**This turn, you MUST NOT call any tools.** Instead, reply with exactly three sections:',
+    '',
+    '1. **What I have been trying** — one sentence summarizing the repeated approach.',
+    '2. **Why it is not working** — one or two sentences naming the specific failure mode you observe in the recent tool results.',
+    '3. **Different approach** — three bullets describing a CLEARLY different next attempt (different tool, different scope, different file, asking the user a clarifying question — anything but more of the same).',
+    '',
+    'Do not call `Read`, `Bash`, `Grep`, `Edit`, or any other tool this turn. Plan first. The next turn you can resume tools, informed by the plan you just wrote.',
+    '',
+  ].join('\n');
+}
+
+function truncateForBlock(text: string): string {
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  return cleaned.length <= 220 ? cleaned : `${cleaned.slice(0, 220)}…`;
+}
+
+/**
+ * Quality v2, D1 — short stable hash for nudge dedup. Uses sha1 hex
+ * truncated to 16 chars (plenty of collision resistance for the 5-turn
+ * window we compare against; we'd need >2^32 nudges in 5 turns to risk
+ * a collision and that's not a real scenario).
+ */
+function hashShort(text: string): string {
+  try {
+    return createHash('sha1').update(text).digest('hex').slice(0, 16);
+  } catch {
+    // Fallback: length-based "hash" so we still have *something*; only
+    // hit when crypto isn't available which shouldn't happen in Node.
+    return `len-${text.length}`;
+  }
+}
+
+/**
+ * Quality v2, C4 — Convert a `quality_classifications` row into the
+ * verdict-snapshot shape the intervention store expects. Trims `reason`
+ * to a reasonable length so the JSON column doesn't bloat.
+ */
+function rowToVerdictSnapshot(
+  row: import('@mcp/store/quality-classification-store.js').QualityClassificationRow,
+): import('@mcp/store/quality-intervention-store.js').InterventionVerdictSnapshot {
+  return {
+    classifierName: row.classifier_name,
+    verdict: row.verdict,
+    confidence: row.confidence,
+    reason: row.reason ? row.reason.slice(0, 500) : null,
+  };
+}
 /**
  * Doom-loop guard: if the model emits the exact same set of tool calls this
  * many turns in a row, abort the run. Prevents cost blowups when a model
@@ -1067,9 +1207,17 @@ export interface RunnerEvents {
     | 'task_scope'
     | 'shell_allowlist'
     | 'sandbox_required'
-    | 'admin_required';
+    | 'admin_required'
+    | 'policy_hard_block';
     detail?: string;
   }) => void;
+  /**
+   * Quality v2, A2 — Emitted when the next-turn nudge builder waited for
+   * the prior turn's classifier Promise but it didn't resolve within the
+   * timeout. Low-volume diagnostic; not a hard error. Operators tune the
+   * timeout (`MCP_QUALITY_NUDGE_WAIT_TIMEOUT_MS`) using this signal.
+   */
+  quality_nudge_missed: (payload: { runId: string; turn: number }) => void;
 }
 
 /**
@@ -1233,6 +1381,52 @@ export class CoderRunner extends EventEmitter {
   /** Agent Loop v2 stop-guard: ensures we nudge at most once per session
    *  when the model tries to stop with `pending`/`in_progress` todos. */
   private agentLoopV2NudgeUsed = false;
+
+  /**
+   * Wire #2 — Tool-misuse streak intervention bookkeeping.
+   *
+   * When the `tool_misuse` classifier flags 3 consecutive turns, the runner
+   * forces the NEXT turn into a "planning intervention" — appends a strong
+   * directive to the system prompt telling the model to stop, name the
+   * loop, propose a different approach. Without this counter, the
+   * intervention would re-fire on every subsequent turn while the streak
+   * verdicts are still in the recent-window — annoying and wasteful.
+   *
+   * We record the turn number at which we LAST intervened, and require at
+   * least N more turns to pass before considering re-intervention.
+   */
+  private lastToolMisuseInterventionTurn: number | null = null;
+
+  /**
+   * Quality v2, A2 — In-flight classifier Promises, keyed by the turn
+   * they were fired for. The next turn's `buildQualityFeedbackSuffix`
+   * races this Promise against a 2s timeout so the nudge text actually
+   * reflects the latest verdicts (vs the fire-and-forget v1 which left
+   * a race window where the next turn's prompt was assembled BEFORE
+   * the prior turn's classifier finished).
+   *
+   * Auto-cleaned: entries older than `this.turn - 3` are dropped to
+   * avoid memory leak in long sessions.
+   */
+  private pendingClassifyByTurn = new Map<number, Promise<QualityResult | null>>();
+
+  /**
+   * Quality v2, D1 — Last-emitted nudge hash per turn. When the nudge
+   * text is byte-identical to one emitted in the last 5 turns, we suppress
+   * the duplicate (the model already received this message) but still
+   * record the suppression event so the dashboard can show "nudge fired
+   * → suppressed because identical to recent".
+   */
+  private lastNudgeHashByTurn = new Map<number, string>();
+
+  /**
+   * Quality v2, C4 — Pending intervention ids per turn. The runner inserts
+   * a row into `quality_interventions` with outcome='pending' the moment
+   * a nudge or planning block is appended; the value here is the row id.
+   * Later, when the classifier for turn (N+1) completes, the global
+   * runner reads this Map and backfills `outcome` based on verdict delta.
+   */
+  private pendingInterventionByTurn = new Map<number, number>();
 
   /**
    * Per-recovery-path attempt counter (PR-2, R1). Each recovery kind has
@@ -1402,6 +1596,8 @@ export class CoderRunner extends EventEmitter {
     systemPromptChars?: number;
     /** Size of the tools array actually shipped to the provider (JSON-stringified chars). */
     toolsDefChars?: number;
+    /** Sanitized provider request/response metadata (no prompts or auth headers). */
+    responseMeta?: ChatProviderResponseMeta | null;
   }): number | null {
     if (!this.sessionStore) return null;
     // Largest tool_result content size (post-truncation) — surfaces tools
@@ -1450,8 +1646,344 @@ export class CoderRunner extends EventEmitter {
       system_prompt_chars: input.systemPromptChars ?? null,
       tools_def_chars: input.toolsDefChars ?? null,
       estimated_cost_usd: cost > 0 ? cost : null,
+      response_meta: input.responseMeta ?? null,
     });
+
+    // Feed observed tool calls into the global ToolSelection observer so
+    // the FeedbackCollector can backfill shadow-traffic rows with what
+    // tools the agent actually invoked for this task. No-op when the
+    // observer isn't installed.
+    let lastUserText = '';
+    try {
+      for (let i = this.messages.length - 1; i >= 0; i--) {
+        const m = this.messages[i];
+        if (m.role === 'user') {
+          lastUserText = typeof m.content === 'string'
+            ? m.content
+            : m.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
+          break;
+        }
+      }
+      const observer = getGlobalToolSelectionOutcomeObserver();
+      if (observer && input.toolUseBlocks.length > 0 && lastUserText) {
+        observer(lastUserText, input.toolUseBlocks.map((b) => b.name));
+      }
+    } catch {
+      // Observer failures must never break telemetry.
+    }
+
+    // Quality classifiers — runs the 5 classifiers in parallel against the
+    // latest assistant output. v2 changes vs v1:
+    //   - **Adaptive sampling** (A1): skips ~65% of turns when the agent is
+    //     behaving well, always classifies after warn/flagged. Cuts LLM
+    //     cost ~60% on long sessions.
+    //   - **Promise tracked** (A2): the in-flight Promise is stored in
+    //     `pendingClassifyByTurn` so the NEXT turn's nudge builder can
+    //     race it with a 2s timeout, closing the v1 race where the next
+    //     prompt was assembled before the prior verdict landed.
+    if (isGlobalQualityClassifierEnabled() && lastUserText && this.sessionId != null) {
+      try {
+        const lastAssistantText = this.extractLastAssistantText();
+        const hasNarrative = lastAssistantText.length > 0;
+        const lastWorst = this.peekLastSessionWorstVerdict();
+        const shouldClassify = shouldClassifyTurn({
+          turn: this.turn,
+          sessionId: this.sessionId,
+          hasNarrativeText: hasNarrative,
+          lastWorstVerdict: lastWorst,
+        });
+        if (shouldClassify) {
+          // Snapshot the identifiers into locals — `this` may have been
+          // recycled by the next turn by the time the Promise resolves.
+          const snapshotSessionId = this.sessionId;
+          const snapshotCompanySessionId = this.opts.companySessionId ?? null;
+          const snapshotAgentRunId = this.opts.companyAgentRunId ?? null;
+          const snapshotTurn = this.turn;
+          // Run via setImmediate so we don't block the current turn's
+          // `applyTurnResult` path — but we KEEP the Promise so the next
+          // turn can await it. This is the critical v2 change.
+          const promise = new Promise<QualityResult | null>((resolve) => {
+            setImmediate(() => {
+              runGlobalQualityClassifiers({
+                sessionId: snapshotSessionId,
+                companySessionId: snapshotCompanySessionId,
+                agentRunId: snapshotAgentRunId,
+                messageId: `turn-${snapshotTurn}`,
+                taskText: lastUserText,
+                outputText: lastAssistantText,
+                recentToolCalls: input.toolUseBlocks.map((b) => ({
+                  name: b.name,
+                  success: true,
+                  timestampMs: Date.now(),
+                })),
+              }).then(resolve).catch(() => resolve(null));
+            });
+          });
+          this.pendingClassifyByTurn.set(snapshotTurn, promise);
+          // Auto-trim old entries (anything more than 3 turns back is no
+          // longer useful — the nudge builder only awaits the IMMEDIATELY
+          // prior turn's Promise).
+          for (const [t] of this.pendingClassifyByTurn) {
+            if (t < snapshotTurn - 3) this.pendingClassifyByTurn.delete(t);
+          }
+        }
+      } catch {
+        // Classifier failures must never break the run.
+      }
+    }
     return insertedId;
+  }
+
+  /**
+   * Quality v2, A1 — Cheap DB peek to feed `shouldClassifyTurn`. Returns
+   * the worst verdict from the MOST RECENT classified turn (or null when
+   * no prior classification exists). Bounded to the last 30 rows so it
+   * stays a single indexed query.
+   *
+   * Never throws — DB errors return null (sampling falls through to the
+   * default 1/3 rate).
+   */
+  private peekLastSessionWorstVerdict(): import('@mcp/store/quality-classification-store.js').QualityVerdict | null {
+    try {
+      if (this.sessionId == null) return null;
+      const store = getGlobalQualityClassificationStore();
+      if (!store) return null;
+      const rows = store.findRecentBySession(this.sessionId, {
+        limit: 5, // 5 classifiers per turn — captures last turn's verdicts
+        sinceMs: 10 * 60_000,
+      });
+      if (rows.length === 0) return null;
+      // Filter to rows from the SINGLE most recent turn (same message_id).
+      const newestMessageId = rows[0].message_id;
+      const lastTurnRows = rows.filter((r) => r.message_id === newestMessageId);
+      return worstVerdictOf(lastTurnRows);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Quality v2, A2 — Wait briefly for the PRIOR turn's classifier Promise
+   * to complete so `buildQualityFeedbackSuffix` reads fresh verdicts.
+   *
+   * Behavior:
+   *   - When no Promise is pending → returns immediately ('no_op').
+   *   - When the Promise resolves within `timeoutMs` (default 2000) →
+   *     returns 'resolved'. The DB will have the verdicts; the
+   *     subsequent sync builder picks them up.
+   *   - On timeout → returns 'timed_out'. The builder still runs; nudge
+   *     may be empty for this turn (acceptable — fires next turn).
+   *
+   * Configurable timeout via env `MCP_QUALITY_NUDGE_WAIT_TIMEOUT_MS`.
+   * Setting it to `0` disables the wait entirely (back to v1 race behavior).
+   *
+   * Never throws — any error path returns 'no_op' to fail safely.
+   */
+  private async awaitPriorTurnClassifier(): Promise<'no_op' | 'resolved' | 'timed_out'> {
+    try {
+      const timeoutMs = Number(process.env.MCP_QUALITY_NUDGE_WAIT_TIMEOUT_MS ?? 2000);
+      if (timeoutMs <= 0) return 'no_op';
+      const priorTurn = this.turn - 1;
+      const pending = this.pendingClassifyByTurn.get(priorTurn);
+      if (!pending) return 'no_op';
+      let timeoutId: NodeJS.Timeout | undefined;
+      const timeoutSentinel = Symbol('timeout');
+      const race = await Promise.race<unknown>([
+        pending,
+        new Promise((resolve) => {
+          timeoutId = setTimeout(() => resolve(timeoutSentinel), timeoutMs);
+        }),
+      ]);
+      if (timeoutId) clearTimeout(timeoutId);
+      // Consumed — drop so a re-entry doesn't re-await the same Promise.
+      this.pendingClassifyByTurn.delete(priorTurn);
+      return race === timeoutSentinel ? 'timed_out' : 'resolved';
+    } catch {
+      return 'no_op';
+    }
+  }
+
+  /**
+   * Wires #1 + #2 — Build the per-turn quality-feedback suffix that gets
+   * appended to the static system prompt at chat-call time.
+   *
+   * This is the place where the quality classifiers stop being a passive
+   * monitor and start affecting the model's next reply:
+   *
+   *   - **Wire #1 (Nível 1 — soft nudge):** for every classifier that
+   *     emitted a `warn`/`flagged` verdict above the confidence floor in
+   *     the recent window, a one-line corrective hint is appended.
+   *
+   *   - **Wire #2 (Nível 3a — tool-misuse intervention):** when the last 3
+   *     `tool_misuse` rows are all flagged AND we haven't intervened in
+   *     the last `INTERVENTION_COOLDOWN_TURNS` turns, the runner appends
+   *     a strong "planning turn" directive that overrides the soft nudge.
+   *
+   * Returns the SUFFIX text (empty string when nothing to inject). The
+   * caller concatenates it onto `this.opts.systemPrompt` for the chat
+   * call — the cached prefix isn't broken because we only ADD to the
+   * end. Subsequent turns without any feedback restore the unmodified
+   * prompt, so the prefix cache picks up where it left off.
+   *
+   * Never throws. Any DB / store failure returns ''.
+   */
+  private buildQualityFeedbackSuffix(): string {
+    try {
+      if (this.sessionId == null) return '';
+      const store = getGlobalQualityClassificationStore();
+      if (!store) return '';
+
+      // Read a small recent window — enough to find the latest verdict per
+      // classifier and detect the 3-streak. 30 rows × 5 minutes is plenty;
+      // older verdicts are stale and likely refer to a problem the model
+      // has already moved past.
+      const rows = store.findRecentBySession(this.sessionId, {
+        limit: 30,
+        sinceMs: 5 * 60_000,
+      });
+      if (rows.length === 0) return '';
+
+      const parts: string[] = [];
+      let planningTriggered = false;
+      let planningContextRows: QualityClassificationRow[] = [];
+
+      // Wire #2 first — if the streak triggers, it takes precedence over
+      // the soft nudge (the soft nudge text would dilute the intervention).
+      const cooldown = INTERVENTION_COOLDOWN_TURNS;
+      const lastIv = this.lastToolMisuseInterventionTurn;
+      const cooldownOk = lastIv == null || this.turn - lastIv >= cooldown;
+      if (cooldownOk) {
+        const streak = detectToolMisuseStreak(rows, { minConfidence: 0.5, streakLength: 3 });
+        if (streak.triggered) {
+          parts.push(buildToolMisuseInterventionBlock(streak.latestReason, streak.latestConfidence));
+          this.lastToolMisuseInterventionTurn = this.turn;
+          planningTriggered = true;
+          planningContextRows = rows.filter((r) => r.classifier_name === 'tool_misuse').slice(0, 3);
+        }
+      }
+
+      // Wire #1 — always considered; emits empty when nothing meets the bar.
+      // When the intervention block above fired, we still emit the soft nudge
+      // (it covers the OTHER classifiers — off_topic, code_quality, etc.).
+      const nudge = buildQualityNudge(rows, { minConfidence: 0.6 });
+      let nudgeEmitted = false;
+      let nudgeSuppressed = false;
+      if (nudge.text) {
+        // Quality v2, D1 — Dedup identical nudges within a 5-turn window.
+        // When the same text fires turn after turn, the model has already
+        // received the signal; re-injecting it pollutes the prompt and
+        // wastes cache. We still record the suppression event so the
+        // dashboard can show "nudge fired internally but suppressed".
+        const hash = hashShort(nudge.text);
+        const recentlySent = Array.from(this.lastNudgeHashByTurn.entries()).some(
+          ([t, h]) => h === hash && this.turn - t < 5,
+        );
+        if (recentlySent) {
+          nudgeSuppressed = true;
+        } else {
+          parts.push(nudge.text);
+          nudgeEmitted = true;
+          this.lastNudgeHashByTurn.set(this.turn, hash);
+          // Trim old entries (anything older than 10 turns is no longer
+          // relevant for the 5-turn dedup window, with margin).
+          for (const t of this.lastNudgeHashByTurn.keys()) {
+            if (t < this.turn - 10) this.lastNudgeHashByTurn.delete(t);
+          }
+        }
+      }
+
+      const finalText = parts.length > 0 ? `\n${parts.join('\n')}` : '';
+
+      // Quality v2, C4 — Record the intervention(s) for effectiveness
+      // measurement. Outcome starts 'pending' and is backfilled by the
+      // next classifier turn (in global-classifier-runner.ts).
+      if (planningTriggered) {
+        this.recordIntervention(
+          'planning',
+          // Triggering verdicts: the streak that fired the intervention.
+          planningContextRows.map(rowToVerdictSnapshot),
+          finalText.length,
+        );
+      }
+      if (nudgeEmitted) {
+        // Triggering verdicts: the nudge's chosen rows (one per classifier).
+        const triggers = rows
+          .filter((r) => nudge.contributingClassifiers.includes(r.classifier_name))
+          // Dedupe by classifier_name keeping most recent (rows are DESC).
+          .filter((r, i, arr) => arr.findIndex((x) => x.classifier_name === r.classifier_name) === i)
+          .map(rowToVerdictSnapshot);
+        this.recordIntervention('nudge', triggers, finalText.length);
+      } else if (nudgeSuppressed) {
+        // Even when suppressed we record (without nudge_chars) so the
+        // dashboard can show "X% of would-be nudges were dedup'd".
+        const triggers = rows
+          .filter((r) => nudge.contributingClassifiers.includes(r.classifier_name))
+          .filter((r, i, arr) => arr.findIndex((x) => x.classifier_name === r.classifier_name) === i)
+          .map(rowToVerdictSnapshot);
+        this.recordIntervention('nudge_suppressed', triggers, 0);
+      }
+
+      return finalText;
+    } catch {
+      // Feedback is best-effort; a DB error must never break a turn.
+      return '';
+    }
+  }
+
+  /**
+   * Quality v2, C4 — Persist an intervention row with outcome='pending'.
+   * Never throws. Silently no-op when the global store isn't installed
+   * (tests, opt-out env, etc).
+   */
+  private recordIntervention(
+    type: 'nudge' | 'planning' | 'nudge_suppressed',
+    triggers: ReadonlyArray<InterventionVerdictSnapshot>,
+    chars: number,
+  ): void {
+    try {
+      const store = getGlobalQualityInterventionStore();
+      if (!store) return;
+      const id = store.insert({
+        session_id: this.sessionId ?? null,
+        company_session_id: this.opts.companySessionId ?? null,
+        agent_run_id: this.opts.companyAgentRunId ?? null,
+        turn_fired: this.turn,
+        intervention_type: type,
+        triggering_verdicts: triggers,
+        nudge_chars: chars > 0 ? chars : null,
+      });
+      // Track pending id per turn for future synchronous backfill flows
+      // (currently the global runner backfills on the next classify cycle
+      // by querying findPendingByPriorTurn — this map is informational
+      // and could be used by future inline-effectiveness UI).
+      if (type !== 'nudge_suppressed') {
+        this.pendingInterventionByTurn.set(this.turn, id);
+        for (const t of this.pendingInterventionByTurn.keys()) {
+          if (t < this.turn - 5) this.pendingInterventionByTurn.delete(t);
+        }
+      }
+    } catch {
+      /* never throw */
+    }
+  }
+
+  /**
+   * Extract the latest assistant text content (concatenated across text
+   * blocks). Used by the quality classifier observer to score the
+   * agent's just-emitted reply.
+   */
+  private extractLastAssistantText(): string {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      if (m.role !== 'assistant') continue;
+      if (typeof m.content === 'string') return m.content;
+      const parts: string[] = [];
+      for (const b of m.content) {
+        if (b.type === 'text') parts.push(b.text);
+      }
+      if (parts.length > 0) return parts.join(' ');
+    }
+    return '';
   }
 
   constructor(opts: RunnerOptions) {
@@ -1970,6 +2502,56 @@ export class CoderRunner extends EventEmitter {
       }));
     };
     let tools = buildTools();
+
+    // PR13A — opt-in tool-selection filter (ToolSelectionPipeline).
+    // The host wires this via opts.toolSelectionFilter when the env flag
+    // MCP_PIPELINES_TOOL_SELECTION=1 is set. The filter narrows the tool
+    // list by two-tower similarity against the task text, saving ~75% of
+    // system-prompt tokens in long sessions. Safe by design: any throw or
+    // empty return falls back to the unfiltered list.
+    if (this.opts.toolSelectionFilter) {
+      try {
+        // Extract the latest user message text for the task signal.
+        let taskText = '';
+        for (let i = this.messages.length - 1; i >= 0; i--) {
+          const m = this.messages[i];
+          if (m.role === 'user') {
+            taskText = typeof m.content === 'string'
+              ? m.content
+              : m.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
+            break;
+          }
+        }
+        // Build a rolling list of recent tool calls from the message history
+        // for the frequency-boost signal. We look at the last ~30 assistant
+        // turns to keep this cheap.
+        const recentToolCalls: Array<{ name: string; timestampMs: number; ok: boolean }> = [];
+        const horizon = Math.max(0, this.messages.length - 60);
+        for (let i = horizon; i < this.messages.length; i++) {
+          const m = this.messages[i];
+          if (m.role !== 'assistant' || typeof m.content === 'string') continue;
+          for (const block of m.content) {
+            if (block.type === 'tool_use' && typeof block.name === 'string') {
+              recentToolCalls.push({
+                name: block.name,
+                timestampMs: Date.now(),
+                ok: true,
+              });
+            }
+          }
+        }
+        const filtered = await this.opts.toolSelectionFilter(tools, {
+          taskText,
+          recentToolCalls,
+        });
+        if (Array.isArray(filtered) && filtered.length > 0) {
+          tools = filtered;
+        }
+      } catch {
+        // Pipeline failures must never break the runtime.
+      }
+    }
+
     if (this.opts.registry.has('post_to_board') || this.opts.registry.has('read_board')) {
       console.log(
         `[coder] company board tools visible: post_to_board=${tools.some((t) => t.name === 'post_to_board')} ` +
@@ -2096,6 +2678,76 @@ export class CoderRunner extends EventEmitter {
         // Per-turn telemetry flags — captured below by persistTurnTelemetry.
         let summarizerRanThisTurn = false;
         let compactionTriggeredThisTurn = false;
+
+        // ContextRelevance shadow run — fires the pipeline pre-compaction
+        // so `pipeline_telemetry` rows appear and we can validate the
+        // relevance scoring against real conversations BEFORE swapping it
+        // into the production compaction path. Fire-and-forget; never
+        // affects this turn's behavior. Off when MCP_PIPELINES_CONTEXT_RELEVANCE
+        // is unset (the global enabled flag is false). The pipeline drops
+        // messages by relevance budget — when we eventually flip this to
+        // production, replace `this.messages` with `result.keptMessages`.
+        if (isGlobalContextRelevanceEnabled() && this.messages.length > 10) {
+          try {
+            // Map AgentMessage → SessionMessage. Each user→assistant→tool_result
+            // group shares an atomicBlockId so the BudgetAwareSelector can
+            // keep tool_use/tool_result pairs intact when dropping.
+            const sessionMsgs: import('@mcp/code-agent/context-relevance/index.js').SessionMessage[] = [];
+            let blockId = 0;
+            for (let i = 0; i < this.messages.length; i++) {
+              const m = this.messages[i];
+              const text = typeof m.content === 'string'
+                ? m.content
+                : m.content.map((b) => {
+                    if (b.type === 'text') return b.text;
+                    if (b.type === 'tool_result') {
+                      return typeof b.content === 'string' ? b.content : '';
+                    }
+                    return '';
+                  }).filter(Boolean).join('\n');
+              const hasToolEvent = typeof m.content !== 'string'
+                && m.content.some((b) => b.type === 'tool_use' || b.type === 'tool_result');
+              // New block starts on each user message
+              if (m.role === 'user') blockId++;
+              sessionMsgs.push({
+                id: `m${i}`,
+                role: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'tool_result',
+                text,
+                createdAtMs: Date.now() - (this.messages.length - i) * 1000,
+                atomicBlockId: `b${blockId}`,
+                hasToolEvent,
+              });
+            }
+            // Resolve task text (latest user message)
+            let taskText = '';
+            for (let i = this.messages.length - 1; i >= 0; i--) {
+              const m = this.messages[i];
+              if (m.role === 'user') {
+                taskText = typeof m.content === 'string'
+                  ? m.content
+                  : m.content.map((b) => (b.type === 'text' ? b.text : '')).filter(Boolean).join(' ');
+                break;
+              }
+            }
+            // Token budget: half the effective context window when known,
+            // 60k chars-equivalent otherwise. Pipeline drops messages until
+            // under budget — but in shadow mode we just observe the diag.
+            const tokenBudget = tokenLimits?.effective != null
+              ? Math.floor(tokenLimits.effective * 0.5)
+              : 60_000;
+            if (taskText) {
+              // Fire-and-forget — telemetry rows still flush via the sink.
+              void tryGlobalContextCompact({
+                messages: sessionMsgs,
+                taskText,
+                tokenBudget,
+                preserveRecentTurns: 5,
+              });
+            }
+          } catch {
+            // Pipeline shadow must never break a turn.
+          }
+        }
 
         // LLM summarizer — opt-in via CODER_SUMMARIZER_ENABLE=1. Runs ONCE
         // per session the first turn the history grows big enough to trigger
@@ -2233,6 +2885,7 @@ export class CoderRunner extends EventEmitter {
         let pendingText = '';
         const pendingToolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
         const usageBox: { value: ChatUsage | null } = { value: null };
+        const responseMetaBox: { value: ChatProviderResponseMeta | null } = { value: null };
         let retriedThisTurn = false;
         // PR-2 (R5): per-turn counter for exp+jitter transient retries
         // (429 / 5xx / timeout). Resets each turn; provider swaps via
@@ -2273,8 +2926,30 @@ export class CoderRunner extends EventEmitter {
         providerAttempt: while (true) {
           try {
             const messagesForChat = this.assembleMessagesForChat(compactionLimits);
+            // Quality v2, A2 — Wait briefly for the PRIOR turn's classifier
+            // to commit verdicts to the DB before we read them. With v1's
+            // pure fire-and-forget, this read often hit an empty result set
+            // because the LLM call (5-30s) outlasts the gap between turns.
+            // 2s timeout is the sweet spot: long enough to catch ~80% of
+            // verdicts, short enough that it's invisible vs the typical
+            // 5-30s turn time.
+            const waitOutcome = await this.awaitPriorTurnClassifier();
+            // Quality-feedback suffix (Wires #1 + #2). Appended to the
+            // static system prompt; usually empty (returns '' fast when
+            // no recent warn/flagged verdicts exist). Cache-safe: we only
+            // ADD to the end of the prompt, leaving the cached prefix
+            // byte-stable across turns where no nudge fires.
+            const qualitySuffix = this.buildQualityFeedbackSuffix();
+            if (waitOutcome === 'timed_out') {
+              // Emit a low-volume diagnostic so the operator can see how
+              // often the race fix actually saves a nudge vs falls back.
+              this.emit('quality_nudge_missed', { runId: this.runId, turn });
+            }
+            const effectiveSystem = qualitySuffix
+              ? `${this.opts.systemPrompt}${qualitySuffix}`
+              : this.opts.systemPrompt;
             const stream = this.opts.provider.chat({
-              system: this.opts.systemPrompt,
+              system: effectiveSystem,
               messages: messagesForChat,
               tools,
               thinking: this.opts.thinking,
@@ -2305,6 +2980,9 @@ export class CoderRunner extends EventEmitter {
                 },
                 onUsage: (u) => {
                   usageBox.value = u;
+                },
+                onResponseMeta: (meta) => {
+                  responseMetaBox.value = meta;
                 },
                 onResponseId: (id, messageCount) => {
                   this.previousResponseId = id;
@@ -2610,6 +3288,7 @@ export class CoderRunner extends EventEmitter {
             summarizerRan: summarizerRanThisTurn,
             systemPromptChars: this.opts.systemPrompt?.length ?? 0,
             toolsDefChars: JSON.stringify(tools).length,
+            responseMeta: responseMetaBox.value,
           });
           // Hook: completion (session-scoped — suppress for subagents per PR-6 R24).
           if (!this.isSubagent) {
@@ -2946,6 +3625,39 @@ export class CoderRunner extends EventEmitter {
             }
           }
 
+          // Wire #5 (Nível 2) — Policy hard-block. Runs BEFORE the
+          // `phase: 'before'` hook AND before tool dispatch so a flagged
+          // call never reaches the actual implementation. The enforcer
+          // is installed globally by the boot path when
+          // `MCP_PIPELINES_POLICY_HARD_BLOCK=1`; absence → entire branch
+          // short-circuits at the `if` (zero overhead per call).
+          const policyEnforcer = getGlobalPolicyEnforcer();
+          if (policyEnforcer) {
+            let policyDecision;
+            try {
+              policyDecision = await policyEnforcer.evaluate(block.name, block.input);
+            } catch {
+              policyDecision = { allowed: true } as const;
+            }
+            if (!policyDecision.allowed) {
+              const reason = policyDecision.reason ?? 'Policy violation';
+              this.emit('blocked', {
+                runId: this.runId,
+                turn,
+                tool: block.name,
+                reason: 'policy_hard_block',
+                detail: `${reason} (source: ${policyDecision.source ?? 'regex'})`,
+              });
+              this.emit('tool_call_result', block.id, block.name, {
+                content:
+                  `Tool blocked by safety policy: ${reason}\n\n` +
+                  `If you genuinely need this operation, ask the user to confirm via \`ask_user\` first, ` +
+                  `or rephrase the operation to avoid the blocked pattern.`,
+                isError: true,
+              }, 0);
+              continue; // skip the dispatch, classifier, telemetry — same control flow as the existing refusal path above
+            }
+          }
           // Hook: before tool call
           await this.opts.hookRegistry?.fireToolCall({
             sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
@@ -3247,18 +3959,35 @@ export class CoderRunner extends EventEmitter {
           summarizerRan: summarizerRanThisTurn,
           systemPromptChars: this.opts.systemPrompt?.length ?? 0,
           toolsDefChars: JSON.stringify(tools).length,
+          responseMeta: responseMetaBox.value,
         });
         if (extraUserBlocks.length > 0) {
           // Append as a separate user message — providers expect tool results
           // and human content in distinct messages. The text preface keeps the
           // transcript readable when the user reopens the session.
-          this.messages.push({
+          //
+          // Mirror to the session store so the injected content survives
+          // restart/resume. Without the mirror, tools that depend on this
+          // path (view_image, the submit_plan mode-transition reminder)
+          // lose their nudge after a process restart — the in-memory push
+          // alone is volatile.
+          const syntheticUser: AgentMessage = {
             role: 'user',
             content: [
               { type: 'text', text: '[tool-injected content]' },
               ...extraUserBlocks,
             ],
-          });
+          };
+          this.messages.push(syntheticUser);
+          if (this.opts.sessionStore && this.opts.sessionId !== undefined) {
+            try {
+              this.opts.sessionStore.appendMessage(this.opts.sessionId, syntheticUser);
+            } catch (e) {
+              console.warn(
+                `[coder] extraUserBlocks mirror failed: ${e instanceof Error ? e.message : String(e)}`,
+              );
+            }
+          }
         }
       } // end inner while (turn < maxTurns)
 
@@ -3476,6 +4205,7 @@ export class CoderRunner extends EventEmitter {
       onThinking: (t: string) => void;
       onToolCall: (id: string, name: string, input: Record<string, unknown>) => void;
       onUsage: (u: ChatUsage) => void;
+      onResponseMeta: (meta: ChatProviderResponseMeta) => void;
       onResponseId: (id: string, messageCount: number) => void;
       onImageGenerated: (mediaType: string, base64: string) => void;
     }
@@ -3492,6 +4222,9 @@ export class CoderRunner extends EventEmitter {
         break;
       case 'usage':
         handlers.onUsage(delta.usage);
+        break;
+      case 'response_meta':
+        handlers.onResponseMeta(delta.meta);
         break;
       case 'response_id':
         handlers.onResponseId(delta.id, delta.messageCount);

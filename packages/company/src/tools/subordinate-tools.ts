@@ -140,14 +140,28 @@ export const submitPlanToMaster: CoderTool = {
       // Iteration 2: auto plan→build after Master approval. Mirrors the
       // standalone submit_plan flow — when the subordinate was started in
       // `plan` mode, the approval implicitly means "proceed to execution".
-      if (runner.agentId === 'plan') {
+      //
+      // Reminder rides as `extraUserBlocks` on the tool result rather than
+      // a direct `appendSystemReminder` push to avoid breaking strict
+      // OpenAI-style providers (Kimi Code), which reject a `user` message
+      // injected between an `assistant` tool_call and its `tool_result`.
+      // See plan.ts for the full rationale.
+      const transitioning = runner.agentId === 'plan';
+      if (transitioning) {
         ctx.setSessionAgent?.('build');
-        runner.appendSystemReminder(
-          'Mode transition: Plan → Build. The Master approved the plan. Now execute it per build-mode instructions: read with prepare_edit / get_symbol_body before editing, apply changes, run verify after each batch. No further plan submission needed.',
-        );
       }
       const base = `Plan approved by Master.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''}`;
-      return ok(`${base} You may now proceed with mutating tools.`);
+      const result: ToolResult = { content: `${base} You may now proceed with mutating tools.` };
+      if (transitioning) {
+        result.extraUserBlocks = [
+          {
+            type: 'text',
+            text:
+              '<system-reminder>Mode transition: Plan → Build. The Master approved the plan. Now execute it per build-mode instructions: read with prepare_edit / get_symbol_body before editing, apply changes, run verify after each batch. No further plan submission needed.</system-reminder>',
+          },
+        ];
+      }
+      return result;
     }
     ctx.resolvePlan?.(id, 'rejected', parsed.feedback);
     const base = `Plan rejected by Master.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''}`;

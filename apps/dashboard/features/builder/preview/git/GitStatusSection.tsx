@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { GitBranch, Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { GitBranch, Loader2, Upload } from 'lucide-react';
 import { workspaceApi, type GitStatusResponse } from '../api.js';
+import { useNotify } from '../../../../components/ui/dialog-provider.js';
 import { GitChangeItem } from './GitChangeItem.js';
 import { ConfirmDiscardDialog } from './ConfirmDiscardDialog.js';
 
@@ -12,9 +14,44 @@ interface Props {
 }
 
 export function GitStatusSection({ sessionId, projectId, status, onRefresh }: Props) {
+  const { t } = useTranslation('agents');
   const staged = status.files.filter((f) => f.index !== '.' && f.index !== '?');
   const unstaged = status.files.filter((f) => f.worktree !== '.' && f.index !== '?');
   const untracked = status.files.filter((f) => f.index === '?');
+  const [pushing, setPushing] = useState(false);
+  const notify = useNotify();
+  // `git push` is meaningful when:
+  //   - there are unpushed commits (`ahead > 0`), OR
+  //   - the branch has no upstream yet (first push to origin).
+  // Otherwise the button stays visible but disabled so the user can
+  // still see the action exists.
+  const canPush = status.ahead > 0 || !status.upstream;
+
+  async function handlePush() {
+    setPushing(true);
+    try {
+      const result = await workspaceApi.gitPush(sessionId, projectId);
+      await notify({
+        title: t('git.pushDone', 'Push completed'),
+        description: result.setUpstream
+          ? t('git.pushUpstreamSet', 'Upstream set to origin/{{branch}}. {{message}}', {
+              branch: status.branch ?? 'HEAD',
+              message: result.message,
+            })
+          : result.message,
+        variant: 'default',
+      });
+      await onRefresh();
+    } catch (e) {
+      await notify({
+        title: t('git.pushFailed', 'Push failed'),
+        description: e instanceof Error ? e.message : String(e),
+        variant: 'destructive',
+      });
+    } finally {
+      setPushing(false);
+    }
+  }
 
   return (
     <div className="flex flex-col">
@@ -29,6 +66,22 @@ export function GitStatusSection({ sessionId, projectId, status, onRefresh }: Pr
           </span>
         )}
         <span className="flex-1" />
+        <button
+          type="button"
+          onClick={handlePush}
+          disabled={pushing || !canPush}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed text-[11px]"
+          title={
+            !canPush
+              ? t('git.pushUpToDate', 'Nothing to push — branch is in sync')
+              : status.upstream
+                ? t('git.pushTo', 'Push to {{upstream}}', { upstream: status.upstream })
+                : t('git.pushSetUpstream', 'Push --set-upstream origin {{branch}}', { branch: status.branch ?? '' })
+          }
+        >
+          {pushing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+          {t('git.push', 'Push')}
+        </button>
         <span className="text-[10px] text-muted-foreground">{status.files.length} alteraç{status.files.length === 1 ? 'ão' : 'ões'}</span>
       </div>
       {status.files.length === 0 && (

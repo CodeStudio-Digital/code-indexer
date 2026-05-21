@@ -11,6 +11,10 @@ import { createChatProviderAsync } from '@mcp/services/providers/factory.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseIdParam, notFound } from '../_helpers.js';
+import {
+  coderWorkerEnabled,
+  getCoderWorkerPool,
+} from '../../../sse/coderWorkerPoolSingleton.js';
 
 interface AnswerBody {
   answer: string;
@@ -41,8 +45,21 @@ export function mountCoderInteractionRoutes(
   const { sessionStore } = deps;
   const { activeRuns, findPendingInteraction } = runtime;
 
-  app.post('/api/coder/sessions/:id/abort', (c) => {
+  app.post('/api/coder/sessions/:id/abort', async (c) => {
     const id = parseIdParam(c);
+    // P17 — abort the worker's runner first if it's the active path.
+    // The proxy bus on main has no `.runner`, so the legacy branch
+    // below would no-op silently.
+    if (coderWorkerEnabled()) {
+      try {
+        await getCoderWorkerPool().abort(id);
+        return c.json({ ok: true });
+      } catch (err) {
+        console.warn(
+          `[coder] worker abort failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     const bus = activeRuns.get(id);
     if (!bus) return c.json({ error: 'no active run' }, 404);
     bus.ctrl.abort();
@@ -54,6 +71,25 @@ export function mountCoderInteractionRoutes(
     const id = parseIdParam(c);
     const body = await c.req.json<AnswerBody>();
     const answer = body.answer ?? '';
+    // P17 — worker mode: the runner lives in a worker_thread, so we
+    // can't read `entry.runner` directly. Push the answer via the
+    // pool's `provideUserInput` RPC; the worker resolves the pending
+    // `waitForUserInput()` and the runner proceeds normally.
+    if (coderWorkerEnabled()) {
+      try {
+        const ok = await getCoderWorkerPool().provideUserInput(
+          id,
+          JSON.stringify({ answer }),
+        );
+        if (ok) return c.json({ ok: true });
+      } catch (err) {
+        console.warn(
+          `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        // Fall through to the resume path so the user's answer still
+        // lands in the DB and the next /messages can replay it.
+      }
+    }
     const entry = activeRuns.get(id);
     if (entry?.runner) {
       const ok = entry.runner.provideUserInput(JSON.stringify({ answer }));
@@ -80,6 +116,21 @@ export function mountCoderInteractionRoutes(
     const id = parseIdParam(c);
     const body = await c.req.json<PlanResponseBody>();
     const approved = !!body.approved;
+    // P17 — worker mode: forward the verdict via the pool RPC so the
+    // worker-side runner unblocks. See `/answer` for the rationale.
+    if (coderWorkerEnabled()) {
+      try {
+        const ok = await getCoderWorkerPool().provideUserInput(
+          id,
+          JSON.stringify({ approved, feedback: body.feedback }),
+        );
+        if (ok) return c.json({ ok: true });
+      } catch (err) {
+        console.warn(
+          `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     const entry = activeRuns.get(id);
     if (entry?.runner) {
       const ok = entry.runner.provideUserInput(
@@ -181,6 +232,33 @@ export function mountCoderInteractionRoutes(
     const id = parseIdParam(c);
     const body = await c.req.json<TasksResponseBody>();
     const approved = !!body.approved;
+
+    // P17 — worker mode: forward the verdict via the pool RPC. The
+    // worker's `submit_tasks` is blocked in `waitForUserInput()`; this
+    // pushes the JSON it expects and unblocks the tool with the right
+    // approve/reject branch. Without this path, the rest of the
+    // handler would write a synthesized tool_result to the DB while
+    // the worker stays blocked, leaving session state inconsistent
+    // (UI shows "rejected" even when user clicked approve, because
+    // `resolveTasks(approved:false)` runs on the worker side too).
+    if (coderWorkerEnabled()) {
+      try {
+        const ok = await getCoderWorkerPool().provideUserInput(
+          id,
+          JSON.stringify({
+            approved,
+            feedback: body.feedback,
+            tasks: body.tasks,
+            execution_mode: body.execution_mode,
+          }),
+        );
+        if (ok) return c.json({ ok: true });
+      } catch (err) {
+        console.warn(
+          `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
 
     const entry = activeRuns.get(id);
     if (entry?.runner) {

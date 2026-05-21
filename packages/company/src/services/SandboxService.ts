@@ -637,6 +637,22 @@ export class SandboxService {
     // Publish on the company metaBus under a stable `sandbox.*` envelope.
     // The UI subscribes to these events to drive the preview pane.
     this.publisher.publish(`sandbox.${event.kind}`, event);
+
+    // P14b — high-frequency `stats` events skip the secondary
+    // service-status broadcast so the dashboard doesn't refetch
+    // /services every second.
+    if (event.kind === 'stats' || event.kind === 'log' || event.kind === 'step') return;
+
+    // Any non-stats lifecycle transition of the primary sandbox is
+    // also a "services list" mutation from the dashboard's
+    // perspective (the primary is a service row in `/services`).
+    // Publishing this synthetic event lets `useExtraServices` /
+    // `useServicesPolling` refetch on the same SSE wakeup without
+    // adding a second subscription path.
+    this.publisher.publish('sandbox.service.status_changed', {
+      sandboxId: event.sandboxId,
+      kind: event.kind,
+    });
   }
 
 }

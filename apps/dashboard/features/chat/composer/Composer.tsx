@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, FileText, Paperclip, Sparkles, X } from 'lucide-react';
+import { FileText, Paperclip, Sparkles, X } from 'lucide-react';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { useConfirm } from '../../../components/ui/dialog-provider.js';
 import type { AgentAttachment, EnrichedProviderModel, ProviderOption } from '../types.js';
@@ -427,20 +427,6 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
           />
           <div className="flex items-center">
             <MarkdownToolbar onAction={applyAction} disabled={streaming} />
-            {props.supportsThinking && props.setThinking && (
-              <button
-                type="button"
-                onClick={() => props.setThinking!(!props.thinking)}
-                title={props.thinking ? t('composer.thinkingOn') : t('composer.thinkingOff')}
-                className={`ml-1 p-1.5 rounded-md transition-colors ${
-                  props.thinking
-                    ? 'text-purple-600 bg-purple-100 dark:bg-purple-900/30'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                }`}
-              >
-                <Brain className="h-4 w-4" />
-              </button>
-            )}
           </div>
           <ComposerToolbar
             hasInput={hasInput}
@@ -470,6 +456,9 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             sessionId={props.sessionId ?? null}
             selectedPipelineId={props.selectedPipelineId ?? null}
             setSelectedPipelineId={props.setSelectedPipelineId}
+            thinking={props.thinking}
+            setThinking={props.setThinking}
+            supportsThinking={props.supportsThinking}
           />
         </div>
       </div>

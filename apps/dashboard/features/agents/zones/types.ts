@@ -1,20 +1,21 @@
 /**
  * Three-zone IA for the company-mode view. Each zone groups related
- * inner tabs so the 12 flat tabs that used to live in
- * `CompanySessionView` are organized hierarchically:
+ * inner tabs that REPLACE the central content area when selected:
  *
- *   - Work: where the team operates (board, kanban, inbox, pipelines)
- *   - Build: the artefacts the team produces (docs, api ref, tests; +preview/git in later phases)
- *   - Data: persistence and observability (drive, env, databases, snapshots, archived)
+ *   - Work:  team day-to-day work (Board, Kanban, Pipelines)
+ *   - Build: artefacts the team produces (Docs, Tests, Files, Git, API)
+ *   - Data:  per-session persistence surfaces (Drive, Snapshots, Archived)
  *
- * Phase 1 keeps zone + tab in component state. Phase 1b will move them
- * to the URL (`/company/sessions/:rootId/:frontId/:zone/:tab`).
+ * Companion right-side drawer lives in `preview-sidebar/SidebarRail`
+ * and hosts Preview / Inbox / Env / Databases — the "peek" panels that
+ * the user often wants alongside whatever central tab is active rather
+ * than instead of it.
  */
 export type Zone = 'work' | 'build' | 'data';
 
-export type WorkTab = 'board' | 'kanban' | 'inbox' | 'pipelines';
-export type BuildTab = 'docs' | 'api' | 'tests' | 'git';
-export type DataTab = 'drive' | 'env' | 'databases' | 'snapshots' | 'archived';
+export type WorkTab = 'board' | 'kanban' | 'pipelines';
+export type BuildTab = 'docs' | 'tests' | 'files' | 'git' | 'api';
+export type DataTab = 'drive' | 'snapshots' | 'archived';
 
 export type ZoneTab =
   | { zone: 'work'; tab: WorkTab }
@@ -22,9 +23,9 @@ export type ZoneTab =
   | { zone: 'data'; tab: DataTab };
 
 export const ZONE_TABS: { [Z in Zone]: readonly Extract<ZoneTab, { zone: Z }>['tab'][] } = {
-  work: ['board', 'kanban', 'inbox', 'pipelines'] as const,
-  build: ['docs', 'api', 'tests', 'git'] as const,
-  data: ['drive', 'env', 'databases', 'snapshots', 'archived'] as const,
+  work: ['board', 'kanban', 'pipelines'] as const,
+  build: ['docs', 'tests', 'files', 'git', 'api'] as const,
+  data: ['drive', 'snapshots', 'archived'] as const,
 };
 
 export const DEFAULT_TAB_FOR_ZONE: { [Z in Zone]: Extract<ZoneTab, { zone: Z }>['tab'] } = {

@@ -5,6 +5,11 @@ import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import { runSubagent, EXPLORE_ALLOWLIST, IMPLEMENT_ALLOWLIST, extractLastAssistantText, runParallelAgents } from '@mcp/code-agent/tools/implement-subagent.js';
+import {
+  isGlobalSubAgentCacheEnabled,
+  tryGlobalSubAgentRead,
+  writeGlobalSubAgentResult,
+} from '@mcp/services/sub-agent-cache/index.js';
 
 const EXPLORE_SYSTEM_PROMPT = `You are the EXPLORE subagent. A parent coder agent delegated a focused investigation to you.
 
@@ -159,6 +164,40 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
         (filesArg ? ` files=[${filesArg.join(', ')}]` : ''),
       );
 
+      // SubAgent cache check — when `MCP_PIPELINES_SUB_AGENT_CACHE=1` AND
+      // the boot installed the global cache, identical (prompt, project,
+      // agent_type) calls within the TTL window short-circuit here.
+      // Cache key includes:
+      //   - task (raw prompt)
+      //   - type ('explore' | 'implement') — different system prompts
+      //     produce different outputs, so they get separate cache lines
+      //   - files (if `implement` with pathScope) — different scope =
+      //     different cache line
+      // Sessions are NOT part of the key — same task across sessions is
+      // legitimately the same answer.
+      const cacheKeyInput = {
+        prompt: task,
+        agentType: type === 'explore' ? 'Explore' as const : 'general-purpose' as const,
+        recentMutations: filesArg ?? [],
+      };
+      if (isGlobalSubAgentCacheEnabled()) {
+        const hit = tryGlobalSubAgentRead<{
+          header: string;
+          body: string;
+          usage: import('@mcp/code-agent/core/messages.js').ChatUsage;
+        }>(cacheKeyInput, { sessionId: parentSessionId });
+        if (hit) {
+          console.log(
+            `[coder s=${parentSessionId ?? '?'}] spawn_subagent: CACHE HIT type=${type} ` +
+            `ageMs=${hit.ageMs} hitCount=${hit.hitCount}`,
+          );
+          return {
+            ...ok(`[cache-hit ageMs=${hit.ageMs} hits=${hit.hitCount}]\n\n` + hit.result.header + hit.result.body),
+            subUsage: hit.result.usage,
+          };
+        }
+      }
+
       const isImplement = type === 'implement';
       const systemPrompt = isImplement ? IMPLEMENT_SYSTEM_PROMPT : EXPLORE_SYSTEM_PROMPT;
       const allowlist = isImplement ? IMPLEMENT_ALLOWLIST : EXPLORE_ALLOWLIST;
@@ -203,6 +242,18 @@ export function buildSubagentTool(deps: SubagentDeps): CoderTool {
       const body = result.finalText
         ? result.finalText
         : `(subagent did not produce a final summary — reason=${result.reason}. Recommendation: retry with a narrower task or investigate directly with MCP tools.)`;
+
+      // Cache the fresh result so the next identical call short-circuits.
+      // Only cache "good" runs (with final text). Reasons like 'max_turns'
+      // or 'aborted' without text mean the subagent didn't actually
+      // finish — caching that would propagate a bad answer.
+      if (isGlobalSubAgentCacheEnabled() && result.finalText) {
+        writeGlobalSubAgentResult(
+          cacheKeyInput,
+          { header, body, usage: result.usage },
+          { sessionId: parentSessionId },
+        );
+      }
 
       return {
         ...ok(header + body),

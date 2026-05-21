@@ -10,6 +10,18 @@ import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import { buildPipelineMasterTools } from '@mcp/company/tools/pipeline-tools.js';
 import { resolveAgentRunId } from '@mcp/company/tools/path-resolution.js';
+import { observeOutcome } from '@mcp/services/shadow-traffic/index.js';
+
+/** FNV-1a hash — matches the producer in recommendations.ts so observed
+ *  outcomes correlate with the shadow rows created at recommend-role time. */
+function fnv1aHash(text: string): string {
+  let h = 0x811c9dc5 >>> 0;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return (h >>> 0).toString(16);
+}
 
 export function buildMasterTools(orchestrator: CompanyOrchestrator): CoderTool[] {
   return [
@@ -77,10 +89,45 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
     handler: async (args) => {
       try {
         const role = args.role as string;
-        const kanbanCardId = args.kanban_card_id as number | undefined;
+        let kanbanCardId = args.kanban_card_id as number | undefined;
+        let task = args.task as string;
+
+        // P16 — Auto-create a kanban card when the master forgot to
+        // pass `kanban_card_id`. This keeps the board the single
+        // source of truth for "what's in flight" even when the master
+        // skips the discipline. We skip auto-create for trivially
+        // short tasks (likely status checks) so the board doesn't
+        // pollute with one-liners. Auto-created cards carry a
+        // distinguishing first comment so the operator can spot them.
+        if (!kanbanCardId && task && task.trim().length >= 20) {
+          try {
+            const excerpt = task.replace(/\s+/g, ' ').trim().slice(0, 60);
+            const autoCard = orchestrator.kanbanCreateCard({
+              title: `${role}: ${excerpt}${task.length > 60 ? '…' : ''}`,
+              description: task.length > 200 ? task.slice(0, 200) + '…' : task,
+              column: 'in_progress',
+              tag: null,
+              created_by: 'master',
+            });
+            try {
+              orchestrator.kanbanAddComment(
+                autoCard.id,
+                'system',
+                null,
+                '[AUTO] Card created on spawn because the master did not pass `kanban_card_id`. ' +
+                  'Add detailed context comments BEFORE spawning next time so the subordinate has ' +
+                  'file paths / decisions / acceptance criteria embedded in its briefing.',
+              );
+            } catch { /* comment is a nice-to-have */ }
+            kanbanCardId = autoCard.id;
+          } catch {
+            // Auto-create failures must NOT block a spawn. The master
+            // continues without a card — same behavior as before P16.
+            kanbanCardId = undefined;
+          }
+        }
 
         // Inject Kanban card context into task if card_id provided
-        let task = args.task as string;
         if (kanbanCardId) {
           const cardContext = orchestrator.getCardContextForSubordinate(kanbanCardId);
           if (cardContext) {
@@ -139,6 +186,18 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
               orchestrator.kanbanMoveCard(kanbanCardId, 'in_progress');
             }
           } catch { /* non-fatal — card ops shouldn't block spawn */ }
+        }
+
+        // FeedbackCollector — backfill any role_pipeline counterfactual
+        // rows whose query_hash matches THIS task. Records the actually-
+        // spawned role + agentRunId as the true outcome so the analytics
+        // can later compare against the shadow recommendations.
+        if (result.agentRunId) {
+          observeOutcome('role_pipeline', {
+            queryHash: fnv1aHash(task),
+            roleSpawned: role,
+            agentRunId: result.agentRunId,
+          });
         }
 
         return ok(JSON.stringify(result, null, 2));

@@ -294,20 +294,57 @@ function capResult(r: ToolResult, ctx?: ToolContext): ToolResult {
 /**
  * Locate the compiled MCP server script. In dev (tsx) the dist may not exist
  * yet — fall back to the source path which tsx can run.
+ *
+ * Layout possibilities the resolver handles:
+ *   - tsx dev:  packages/code-agent/src/tools/mcp-bridge.ts → apps/mcp-server/index.ts
+ *     Relative from `here`: ../../../../apps/mcp-server/index.ts
+ *   - per-package build: packages/code-agent/dist/tools/mcp-bridge.js → apps/mcp-server/index.js
+ *     (apps is sibling of packages/, NOT under each dist).
+ *   - root-level dist (legacy):  dist/packages/code-agent/src/tools/mcp-bridge.js
+ *
+ * Historic NOTE: `@apps/*` is a TYPESCRIPT PATH ALIAS, not a real directory.
+ * Earlier versions of this resolver dropped the alias string into a
+ * filesystem path which produced a literal `packages/code-agent/@apps/...`
+ * and crashed with MODULE_NOT_FOUND. We now resolve to the repo root
+ * (apps/ as sibling of packages/) via a robust upward search instead.
  */
 function findServerScript(): string {
   const here = dirname(fileURLToPath(import.meta.url));
-  // Walk up looking for either dist/apps/mcp-server/index.js or src/apps/mcp-server/index.ts.
-  // `here` is dist/core/coder/tools (built) or src/core/coder/tools (tsx dev) —
-  // three levels up lands in dist/ or src/ respectively.
-  const candidates = [
-    resolve(here, '../../@apps/mcp-server/index.js'),
-    resolve(here, '../../@apps/mcp-server/index.ts'),
-    resolve(here, '../../../../dist/apps/mcp-server/index.js'),
-    resolve(here, '@apps/mcp-server/index.ts'),
-  ];
+
+  // Walk up from `here` looking for a directory that contains BOTH
+  // `apps/` and `packages/` — that's the repo root. Stops at the
+  // filesystem root if nothing matches.
+  let cursor = here;
+  let repoRoot: string | null = null;
+  for (let i = 0; i < 12; i++) {
+    if (existsSync(resolve(cursor, 'apps')) && existsSync(resolve(cursor, 'packages'))) {
+      repoRoot = cursor;
+      break;
+    }
+    const parent = resolve(cursor, '..');
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+
+  const candidates: string[] = [];
+  if (repoRoot) {
+    candidates.push(
+      resolve(repoRoot, 'apps/mcp-server/index.ts'),
+      resolve(repoRoot, 'apps/mcp-server/index.js'),
+      resolve(repoRoot, 'dist/apps/mcp-server/index.js'),
+      resolve(repoRoot, 'apps/mcp-server/dist/index.js'),
+    );
+  }
+  // Legacy relative fallbacks, in case the repo layout shifts and the
+  // walker doesn't find an `apps/` + `packages/` parent.
+  candidates.push(
+    resolve(here, '../../../../apps/mcp-server/index.ts'),
+    resolve(here, '../../../../apps/mcp-server/index.js'),
+  );
+
   for (const c of candidates) {
     if (existsSync(c)) return c;
   }
+  // Stable fallback for error messaging.
   return candidates[0];
 }

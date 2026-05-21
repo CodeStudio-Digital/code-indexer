@@ -24,6 +24,8 @@ import {
   applyBoardEntry,
   applyMasterPrompt,
   applySessionIdle,
+  applySessionStalled,
+  clearSessionStalled,
   applySubordinateWaitingStatus,
   hydrateMasterPrompts,
   type AgentEventEnvelope,
@@ -41,6 +43,11 @@ export interface StreamSlice {
   streamSetStarted: (sessionId: number, started: boolean) => void;
   streamSetError: (sessionId: number, error: string | null) => void;
   streamSetUserMessage: (sessionId: number, msg: string | null) => void;
+  /** P15d — record the latest SSE phase from the reconnecting client. */
+  streamSetConnectionPhase: (
+    sessionId: number,
+    phase: StreamState['connectionPhase'],
+  ) => void;
 
   // SSE event reducers ──────────────────────────────────────
   streamApplyAgentEvent: (sessionId: number, ev: AgentEventEnvelope) => void;
@@ -53,6 +60,11 @@ export interface StreamSlice {
   streamApplyBoardEntry: (sessionId: number, entry: BoardMessage) => void;
   streamApplyMasterPrompt: (sessionId: number, prompt: MasterPrompt) => void;
   streamApplySessionIdle: (sessionId: number, payload: SessionIdlePayload) => void;
+  /**
+   * P15b — record that the session has stalled (no activity for >N min).
+   * The dashboard renders a Continue banner with a manual nudge action.
+   */
+  streamApplySessionStalled: (sessionId: number, stalledSinceMs: number) => void;
 
   // REST hydration ──────────────────────────────────────────
   streamHydrateMasterPrompts: (sessionId: number, prompts: MasterPrompt[]) => void;
@@ -115,6 +127,13 @@ export const createStreamSlice: StateCreator<StreamSlice, [], [], StreamSlice> =
       streams: withSlot(state.streams, sessionId, (slot) => ({ ...slot, userMessage })),
     })),
 
+  streamSetConnectionPhase: (sessionId, connectionPhase) =>
+    set((state) => ({
+      streams: withSlot(state.streams, sessionId, (slot) =>
+        slot.connectionPhase === connectionPhase ? slot : { ...slot, connectionPhase },
+      ),
+    })),
+
   // ─── SSE event reducers ─────────────────────────────────
 
   streamApplyAgentEvent: (sessionId, ev) =>
@@ -147,6 +166,13 @@ export const createStreamSlice: StateCreator<StreamSlice, [], [], StreamSlice> =
   streamApplySessionIdle: (sessionId, payload) =>
     set((state) => ({
       streams: withSlot(state.streams, sessionId, (slot) => applySessionIdle(slot, payload)),
+    })),
+
+  streamApplySessionStalled: (sessionId, stalledSinceMs) =>
+    set((state) => ({
+      streams: withSlot(state.streams, sessionId, (slot) =>
+        applySessionStalled(slot, stalledSinceMs),
+      ),
     })),
 
   // ─── REST hydration ─────────────────────────────────────

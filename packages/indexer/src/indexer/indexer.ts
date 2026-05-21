@@ -19,6 +19,7 @@ import type {
 import { FileScanner } from '@mcp/indexer/indexer/scanner.js';
 import { TreeSitterExtractor, type TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js';
 import { getIndexJobPool, isIndexWorkersEnabled } from '@mcp/indexer/workers/indexJob/client.js';
+import { NullLshIndexingSink, type LshIndexingSink } from '@mcp/indexer/indexer/lsh-indexing-sink.js';
 
 /**
  * Enriches LLM-extracted symbol references with line numbers and snippets.
@@ -107,6 +108,14 @@ export async function withConcurrency<T>(
 }
 
 export class IndexAgent {
+  /**
+   * Optional LSH indexing sink. Default (`NullLshIndexingSink`) is a
+   * no-op; the application wires `RealLshIndexingSink` to populate the
+   * LSH bucket store alongside vector-store upserts. See
+   * `./lsh-indexing-sink.ts` for the contract.
+   */
+  private lshSink: LshIndexingSink;
+
   constructor(
     private db: CodeIndexDB,
     private provider: LLMProvider,
@@ -114,8 +123,11 @@ export class IndexAgent {
     private vectorStore: VectorStore | null,
     private costTracker: CostTracker,
     private webhookDispatcher: WebhookDispatcherLike | null,
-    private config: IndexerConfig
-  ) {}
+    private config: IndexerConfig,
+    lshSink?: LshIndexingSink,
+  ) {
+    this.lshSink = lshSink ?? new NullLshIndexingSink();
+  }
 
   async indexProject(projectNameOrPath: string, options?: IndexOptions): Promise<IndexResult> {
     const startTime = Date.now();
@@ -765,6 +777,17 @@ export class IndexAgent {
         type: c.metadata.type as 'file' | 'symbol' | 'symbol_body',
       }))
     );
+
+    // LSH bucket sink. Optional — default is no-op. When `RealLshIndexingSink`
+    // is wired, this populates `embedding_simhash_signatures` + `_lsh_buckets`
+    // alongside the vector store so the hybrid search can narrow candidates
+    // via integer bucket lookup before doing full-precision cosine.
+    try {
+      await this.lshSink.afterUpsert(project.id, vectorRecords);
+    } catch {
+      // LSH is best-effort; never fail indexing because of it.
+    }
+
     for (const c of candidates) c.onCommit();
 
     return tokens;

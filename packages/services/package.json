@@ -8,7 +8,12 @@
     "./*": "./src/*"
   },
   "dependencies": {
+    "@mcp/candidate-pipeline": "workspace:*",
     "@mcp/shared": "workspace:*",
-    "@mcp/store": "workspace:*"
+    "@mcp/store": "workspace:*",
+    "cheerio": "^1.2.0",
+    "playwright-core": "^1.60.0",
+    "turndown": "^7.2.4",
+    "unpdf": "^1.6.2"
   }
 }

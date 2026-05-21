@@ -188,14 +188,15 @@ export function SessionSidebar({
       )}
       <aside
         className={cn(
-          'flex flex-col border bg-card overflow-hidden',
+          'flex flex-col bg-card overflow-hidden',
           // Mobile: fixed slide-in drawer from the left.
-          'fixed inset-y-0 left-0 z-50 w-[85%] max-w-[320px] rounded-r-xl shadow-2xl',
+          'fixed inset-y-0 left-0 z-50 w-[85%] max-w-[320px] rounded-r-xl shadow-2xl border',
           'transition-transform duration-200 ease-out',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
-          // Desktop (lg+): part of the grid column, always visible, no transform.
-          'lg:static lg:inset-auto lg:z-auto lg:w-auto lg:max-w-none lg:translate-x-0',
-          'lg:rounded-xl lg:rounded-r-xl lg:shadow-none lg:transition-none',
+          // Desktop (lg+): flush IDE-style column — only a right border, no
+          // rounded corners or shadow, no transitions.
+          'lg:static lg:inset-auto lg:z-auto lg:w-[280px] lg:max-w-none lg:shrink-0 lg:translate-x-0',
+          'lg:rounded-none lg:shadow-none lg:transition-none lg:border-0 lg:border-r',
         )}
       >
       <div className="p-3 border-b space-y-3">

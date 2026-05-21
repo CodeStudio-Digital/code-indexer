@@ -45,7 +45,13 @@ export interface IdleControllerDeps {
   /** Called when auto-continue should resurrect the master with a default prompt. */
   onAutoContinue: () => void;
   consumeMasterShouldContinue: () => boolean;
-  master: Pick<IMasterNotifier, 'endedWithError'> & { readonly hasEnded: boolean };
+  master: Pick<IMasterNotifier, 'endedWithError'> & {
+    readonly hasEnded: boolean;
+    /** ISO timestamp of the most recent runner exit (null when never exited). */
+    readonly endedAt?: string | null;
+    /** ISO timestamp of the most recent user message (null when no message yet). */
+    readonly lastUserMessageAt?: string | null;
+  };
 }
 
 export class IdleController implements IIdleController {
@@ -126,9 +132,31 @@ export class IdleController implements IIdleController {
     } catch { /* ignore */ }
 
     const err = this.deps.master.endedWithError;
+    const endedAt = this.deps.master.endedAt ?? null;
+    // "Unexpected" =
+    //   - master ended with an error, OR
+    //   - the master exited without a recent (≤30s) user message —
+    //     i.e. it didn't shut down in response to a user turn.
+    // The 30s window absorbs the gap between a user pressing send and
+    // the master finishing a turn whose `done` promise settles.
+    const lastUserMs = this.deps.master.lastUserMessageAt
+      ? Date.parse(this.deps.master.lastUserMessageAt)
+      : 0;
+    const endedMs = endedAt ? Date.parse(endedAt) : Date.now();
+    const noRecentUserMessage = !lastUserMs || endedMs - lastUserMs > 30_000;
+    const unexpected = !!err || noRecentUserMessage;
     const idlePayload = err
-      ? { reason: 'master_error' as const, errorDetail: err }
-      : { reason: 'waiting_for_input' as const };
+      ? {
+          reason: 'master_error' as const,
+          errorDetail: err,
+          endedAt: endedAt ?? undefined,
+          unexpected,
+        }
+      : {
+          reason: 'waiting_for_input' as const,
+          endedAt: endedAt ?? undefined,
+          unexpected,
+        };
     this.deps.bus.publish('session_idle', idlePayload);
     this.resetTimer();
   }

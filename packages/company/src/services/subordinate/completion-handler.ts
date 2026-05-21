@@ -241,8 +241,19 @@ export function attachSubordinateCompletionHandler(
         try {
           const cardId = deps.kanban.findCardForAgent(agentRunId);
           if (cardId) {
+            // P16 — include the final assistant text as a "result
+            // summary" comment so the operator and master can audit
+            // what the subordinate produced without leaving the card.
+            // Capped so a verbose final message doesn't bloat the
+            // card's comment list.
+            const summary = finalText
+              ? finalText.length > 1500
+                ? finalText.slice(0, 1500) + '\n\n[…truncated]'
+                : finalText
+              : '(no final assistant text — see board deliverable)';
             deps.kanban.addComment(cardId, role, agentRunId,
-              `[AUTO] Agent completed successfully${resumedTag}. Status: waiting for next instructions.`);
+              `[AUTO] Agent completed successfully${resumedTag}.\n\n` +
+              `**Result summary:**\n\n${summary}`);
           }
         } catch { /* best-effort */ }
         logSkillOutcome(handle.session.id, agentRunId, 'success');

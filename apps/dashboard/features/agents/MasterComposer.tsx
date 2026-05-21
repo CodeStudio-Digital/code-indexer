@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { Brain, Paperclip, Send, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Brain, ChevronDown, ChevronUp, Paperclip, Send, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { MarkdownToolbar } from '../chat/composer/MarkdownToolbar.js';
 import { useMarkdownShortcuts } from '../chat/composer/useMarkdownShortcuts.js';
@@ -14,13 +15,34 @@ interface MasterComposerProps {
   supportsThinking?: boolean;
 }
 
+const COLLAPSED_KEY = 'agents.composer.collapsed';
+
+function readCollapsed(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(COLLAPSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 export function MasterComposer({ onSend, placeholder, disabled, supportsThinking }: MasterComposerProps) {
+  const { t } = useTranslation('agents');
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [thinking, setThinking] = useState(false);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { handleKeyDown: mdHandleKeyDown, applyAction } = useMarkdownShortcuts(textareaRef, input, setInput);
+
+  function toggleCollapsed() {
+    setCollapsed((cur) => {
+      const next = !cur;
+      try { window.localStorage.setItem(COLLAPSED_KEY, String(next)); } catch { /* quota */ }
+      return next;
+    });
+  }
 
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -47,8 +69,17 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
   }
 
   return (
-    <div className="space-y-2">
-      {attachments.length > 0 && (
+    <div className="space-y-2 relative">
+      <button
+        type="button"
+        onClick={toggleCollapsed}
+        title={collapsed ? t('composer.expand', 'Expand composer') : t('composer.minimize', 'Minimize composer')}
+        className="absolute -top-3 right-2 z-10 h-6 w-6 rounded-full border bg-card flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shadow-sm"
+      >
+        {collapsed ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      </button>
+
+      {!collapsed && attachments.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {attachments.map((a, i) => (
             <div key={i} className="relative group">
@@ -79,42 +110,48 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             disabled={disabled}
-            className="w-full resize-y px-3 py-2 text-sm min-h-[60px] max-h-[300px] bg-transparent focus:outline-none"
-            rows={3}
+            className={
+              collapsed
+                ? 'w-full resize-none px-3 py-1.5 text-sm min-h-[32px] max-h-[120px] bg-transparent focus:outline-none'
+                : 'w-full resize-y px-3 py-2 text-sm min-h-[60px] max-h-[300px] bg-transparent focus:outline-none'
+            }
+            rows={collapsed ? 1 : 3}
           />
-          <div className="flex items-center gap-1 border-t">
-            <label className="cursor-pointer">
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  handleFiles(e.target.files);
-                  e.target.value = '';
-                }}
-              />
-              <span className="inline-flex items-center justify-center h-7 w-7 ml-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors">
-                <Paperclip className="h-3.5 w-3.5" />
-              </span>
-            </label>
-            <MarkdownToolbar onAction={applyAction} />
-            {supportsThinking && (
-              <button
-                type="button"
-                onClick={() => setThinking((v) => !v)}
-                title={thinking ? 'Thinking mode: ON' : 'Thinking mode: OFF'}
-                className={`ml-1 p-1.5 rounded-md transition-colors ${
-                  thinking
-                    ? 'text-purple-600 bg-purple-100 dark:bg-purple-900/30'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                }`}
-              >
-                <Brain className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
+          {!collapsed && (
+            <div className="flex items-center gap-1 border-t">
+              <label className="cursor-pointer">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    handleFiles(e.target.files);
+                    e.target.value = '';
+                  }}
+                />
+                <span className="inline-flex items-center justify-center h-7 w-7 ml-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors">
+                  <Paperclip className="h-3.5 w-3.5" />
+                </span>
+              </label>
+              <MarkdownToolbar onAction={applyAction} />
+              {supportsThinking && (
+                <button
+                  type="button"
+                  onClick={() => setThinking((v) => !v)}
+                  title={thinking ? 'Thinking mode: ON' : 'Thinking mode: OFF'}
+                  className={`ml-1 p-1.5 rounded-md transition-colors ${
+                    thinking
+                      ? 'text-purple-600 bg-purple-100 dark:bg-purple-900/30'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                  }`}
+                >
+                  <Brain className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <Button onClick={handleSend} disabled={disabled || !input.trim()} size="sm" className="h-9 shrink-0">
           <Send className="h-3.5 w-3.5" />

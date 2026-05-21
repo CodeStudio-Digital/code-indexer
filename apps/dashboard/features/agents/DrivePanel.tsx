@@ -13,18 +13,46 @@
  * behind a manual action regardless of connection state.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { FolderOpen, RefreshCw, Trash2, Upload, FileText, Eye, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Code2, Download, Eye, FileText, FolderOpen, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { apiPost, apiDelete } from '../../hooks/useApi.js';
+import { useResizableWidth } from '../../hooks/useResizableWidth.js';
+import { cn } from '../../lib/utils.js';
+import { MarkdownView } from '../builder/preview/files/viewer/MarkdownView.js';
 import {
   selectDrive,
   selectStream,
   useCompanyStore,
 } from '../../state/company/index.js';
 import type { DriveFileMeta } from '../../state/company/driveSlice.js';
+
+type ViewMode = 'raw' | 'preview';
+
+function inferKind(path: string): 'md' | 'html' | 'pdf' | 'other' {
+  const ext = path.toLowerCase().split('.').pop() ?? '';
+  if (ext === 'md' || ext === 'mdx' || ext === 'markdown') return 'md';
+  if (ext === 'html' || ext === 'htm') return 'html';
+  if (ext === 'pdf') return 'pdf';
+  return 'other';
+}
+
+function downloadAsFile(name: string, content: string, mime = 'text/plain;charset=utf-8'): void {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  // The drive paths may include nested directories; pick the leaf.
+  a.download = name.split('/').pop() || 'file';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Defer revoke to give the browser time to start the download.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 type DriveFile = DriveFileMeta;
 
@@ -50,6 +78,7 @@ function formatBytes(n: number): string {
 }
 
 export function DrivePanel({ companySessionId }: DrivePanelProps) {
+  const { t } = useTranslation('agents');
   const url = `/company/sessions/${companySessionId}/drive`;
 
   // ─── Slice subscription ──────────────────────────────────────
@@ -63,6 +92,18 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
   const [viewer, setViewer] = useState<DriveReadResponse | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerError, setViewerError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('preview');
+
+  // Drag-resizable file list. Anchored to the left edge — drag RIGHT to
+  // grow. Width persists per-user so frequent operators don't re-tune
+  // every session.
+  const listSizer = useResizableWidth({
+    defaultWidth: 320,
+    minWidth: 200,
+    maxWidth: 720,
+    storageKey: 'agents.drive.listWidth',
+    anchor: 'left',
+  });
 
   const [showUpload, setShowUpload] = useState(false);
   const [uploadPath, setUploadPath] = useState('');
@@ -259,6 +300,13 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
     [url, refresh, selectedPath],
   );
 
+  // Reset to preview mode each time the user opens a different file —
+  // markdown rendering is the more useful default, the raw toggle is
+  // there for inspecting front-matter / verifying agent output.
+  useEffect(() => {
+    setViewMode('preview');
+  }, [selectedPath]);
+
   const files = useMemo(() => Array.from(slot.files.values()), [slot.files]);
   const scope = slot.scope ?? '';
 
@@ -273,7 +321,7 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
         <div className="flex items-center gap-2">
           <FolderOpen className="h-4 w-4 text-muted-foreground" />
           <span className="text-xs text-muted-foreground">
-            {files.length} file{files.length === 1 ? '' : 's'}
+            {t('drive.fileCount', { count: files.length })}
           </span>
           {scope ? (
             <Badge variant="outline" className="text-[10px] font-mono">
@@ -286,7 +334,7 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
             size="sm"
             variant="ghost"
             onClick={() => void refresh()}
-            title="Refresh"
+            title={t('common.refresh', 'Refresh')}
             className="h-7 w-7 p-0"
           >
             <RefreshCw className="h-3.5 w-3.5" />
@@ -297,7 +345,7 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
             className="h-7 gap-1 text-xs"
           >
             <Upload className="h-3.5 w-3.5" />
-            {showUpload ? 'Cancel' : 'Attach'}
+            {showUpload ? t('common.cancel', 'Cancel') : t('drive.attach', 'Attach')}
           </Button>
           <label className="inline-flex">
             <input
@@ -322,7 +370,7 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
             >
               <span>
                 <FolderOpen className="h-3.5 w-3.5" />
-                Attach folder
+                {t('drive.attachFolder', 'Attach folder')}
               </span>
             </Button>
           </label>
@@ -416,17 +464,19 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
         </form>
       ) : null}
 
-      <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-[minmax(260px,_1fr)_2fr]">
+      <div className="flex-1 overflow-hidden flex">
         {/* List */}
-        <div className="overflow-auto border-r">
+        <div
+          style={{ width: listSizer.width }}
+          className="overflow-auto border-r flex-shrink-0"
+        >
           {slot.loading && !slot.initialized ? (
-            <div className="p-3 text-xs text-muted-foreground">Loading…</div>
+            <div className="p-3 text-xs text-muted-foreground">{t('common.loading', 'Loading…')}</div>
           ) : slot.error ? (
             <div className="p-3 text-xs text-destructive">{slot.error}</div>
           ) : sortedFiles.length === 0 ? (
             <div className="p-3 text-xs text-muted-foreground">
-              The drive is empty. Use <strong>Attach</strong> to upload a document, or let the
-              agents write to it.
+              {t('drive.empty', 'The drive is empty. Use Attach to upload a document, or let the agents write to it.')}
             </div>
           ) : (
             <ul className="divide-y">
@@ -459,7 +509,7 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
                       void handleDelete(f.path);
                     }}
                     className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100"
-                    title="Delete"
+                    title={t('common.delete', 'Delete')}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -469,45 +519,157 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
           )}
         </div>
 
-        {/* Viewer */}
-        <div className="overflow-auto bg-muted/10">
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          onMouseDown={listSizer.startResize}
+          className={cn(
+            'w-1 cursor-col-resize shrink-0 transition-colors',
+            listSizer.resizing ? 'bg-primary/60' : 'bg-border hover:bg-primary/40',
+          )}
+          title={t('common.resizeHandle', 'Drag to resize')}
+        />
+
+        {/* Viewer. `min-w-0` makes the flex item respect the column
+            width so long lines inside the <pre> trigger horizontal
+            scroll instead of pushing the panel wider. */}
+        <div className="flex-1 min-w-0 overflow-hidden bg-muted/10">
           {!selectedPath ? (
             <div className="p-6 text-xs text-muted-foreground flex items-center gap-2">
-              <Eye className="h-4 w-4" /> Select a file on the left to preview its content.
+              <Eye className="h-4 w-4" /> {t('drive.selectFile', 'Select a file on the left to view it.')}
             </div>
           ) : viewerLoading ? (
-            <div className="p-3 text-xs text-muted-foreground">Loading…</div>
+            <div className="p-3 text-xs text-muted-foreground">{t('common.loading', 'Loading…')}</div>
           ) : viewerError ? (
             <div className="p-3 text-xs text-destructive">{viewerError}</div>
           ) : viewer ? (
-            <div className="flex h-full flex-col">
-              <div className="flex items-center justify-between border-b px-3 py-2 bg-background">
-                <div className="text-xs font-mono truncate">{viewer.meta.path}</div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-muted-foreground">
-                    {formatBytes(viewer.meta.sizeBytes)}
-                    {viewer.truncated ? ' (truncated)' : ''}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setSelectedPath(null);
-                      setViewer(null);
-                    }}
-                    className="h-6 w-6 p-0"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-              <pre className="flex-1 overflow-auto p-3 text-xs font-mono whitespace-pre-wrap break-words">
-                {viewer.content}
-              </pre>
-            </div>
+            <DriveFileViewer
+              data={viewer}
+              viewMode={viewMode}
+              onViewModeChange={setViewMode}
+              onClose={() => {
+                setSelectedPath(null);
+                setViewer(null);
+              }}
+            />
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+interface DriveFileViewerProps {
+  data: DriveReadResponse;
+  viewMode: ViewMode;
+  onViewModeChange: (m: ViewMode) => void;
+  onClose: () => void;
+}
+
+/**
+ * Viewer for a single drive file. Honors the user's `viewMode` choice
+ * for content with a rendered representation (markdown, html) and
+ * always falls back to raw text otherwise.
+ *
+ * The download button creates a `Blob` of the displayed content and
+ * triggers a save with the original leaf name. Works for any text
+ * file — PDFs aren't stored as text so they go through this same
+ * "save the raw bytes" path.
+ */
+function DriveFileViewer({ data, viewMode, onViewModeChange, onClose }: DriveFileViewerProps) {
+  const { t } = useTranslation('agents');
+  const kind = inferKind(data.meta.path);
+  const canPreview = kind === 'md' || kind === 'html';
+  const effectiveMode: ViewMode = canPreview ? viewMode : 'raw';
+
+  const mime =
+    kind === 'md' ? 'text/markdown;charset=utf-8'
+    : kind === 'html' ? 'text/html;charset=utf-8'
+    : kind === 'pdf' ? 'application/pdf'
+    : 'text/plain;charset=utf-8';
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-2 border-b px-3 py-2 bg-background">
+        <div className="text-xs font-mono truncate flex-1" title={data.meta.path}>
+          {data.meta.path}
+        </div>
+        {canPreview && (
+          <div className="inline-flex rounded-md border overflow-hidden text-[11px]">
+            <button
+              type="button"
+              onClick={() => onViewModeChange('preview')}
+              className={cn(
+                'px-2 py-0.5 inline-flex items-center gap-1 transition-colors',
+                effectiveMode === 'preview' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60',
+              )}
+              title={t('drive.renderPreview', 'Render preview')}
+            >
+              <Eye className="h-3 w-3" /> {t('common.preview', 'Preview')}
+            </button>
+            <button
+              type="button"
+              onClick={() => onViewModeChange('raw')}
+              className={cn(
+                'px-2 py-0.5 inline-flex items-center gap-1 transition-colors border-l',
+                effectiveMode === 'raw' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60',
+              )}
+              title={t('drive.showRaw', 'Show raw text')}
+            >
+              <Code2 className="h-3 w-3" /> {t('common.raw', 'Raw')}
+            </button>
+          </div>
+        )}
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => downloadAsFile(data.meta.path, data.content, mime)}
+          className="h-7 px-2 text-xs gap-1"
+          title={t('drive.downloadFile', 'Download file')}
+        >
+          <Download className="h-3.5 w-3.5" /> {t('common.download', 'Download')}
+        </Button>
+        <span className="text-[10px] text-muted-foreground">
+          {data.meta.sizeBytes < 1024
+            ? `${data.meta.sizeBytes} B`
+            : data.meta.sizeBytes < 1024 * 1024
+              ? `${(data.meta.sizeBytes / 1024).toFixed(1)} KB`
+              : `${(data.meta.sizeBytes / 1024 / 1024).toFixed(2)} MB`}
+          {data.truncated ? ' (truncated)' : ''}
+        </span>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onClose}
+          className="h-6 w-6 p-0"
+          title={t('common.close', 'Close')}
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {kind === 'pdf' ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 p-6 text-xs text-muted-foreground">
+          <FileText className="h-8 w-8 opacity-40" />
+          <span>{t('drive.pdfDownloadOnly', 'PDFs cannot be previewed inline — use the Download button.')}</span>
+        </div>
+      ) : kind === 'html' && effectiveMode === 'preview' ? (
+        // `srcdoc` avoids needing a server-served URL; the sandbox attrs
+        // strip script/popup execution so a malicious agent-written page
+        // can't reach into the dashboard.
+        <iframe
+          srcDoc={data.content}
+          sandbox=""
+          className="flex-1 w-full bg-white border-0"
+          title={data.meta.path}
+        />
+      ) : kind === 'md' && effectiveMode === 'preview' ? (
+        <MarkdownView text={data.content} />
+      ) : (
+        <pre className="flex-1 overflow-auto p-3 text-xs font-mono whitespace-pre">
+          {data.content}
+        </pre>
+      )}
     </div>
   );
 }

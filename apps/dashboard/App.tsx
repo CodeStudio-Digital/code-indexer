@@ -13,6 +13,7 @@ import { ProjectDetail, ProjectList } from './features/project/index.js';
 import { AgentsTab } from './features/agents/AgentsTab.js';
 import { DesignSystemsTab } from './features/design-systems/DesignSystemsTab.js';
 import { TelemetryDashboard } from './features/telemetry/TelemetryDashboard.js';
+import { DocsPage } from './features/docs/DocsPage.js';
 import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { AppShell } from './AppShell.js';
@@ -78,6 +79,7 @@ const router = createBrowserRouter([
       { path: 'admin', element: <Admin /> },
       { path: 'design-systems', element: <DesignSystemsRoute /> },
       { path: 'telemetry', element: <TelemetryDashboard /> },
+      { path: 'docs', element: <DocsPage /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

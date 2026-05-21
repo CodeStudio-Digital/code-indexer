@@ -2,6 +2,10 @@ import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import {
+  getWorkerOrchestratorPool,
+  workerOrchestratorEnabled,
+} from '../../../sse/workerPoolSingleton.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { withSessionLock } from '../coder/sessionLock.js';
@@ -110,12 +114,22 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     // orchestratorRegistry.set() — the second would silently overwrite the
     // first orchestrator and a second runCoder loop would race the first.
     const decision = await withSessionLock(id, async (): Promise<
-      | { kind: 'success'; orchestrator: CompanyOrchestrator }
+      | {
+          kind: 'success';
+          orchestrator: CompanyOrchestrator;
+          bus: CompanyOrchestrator['metaBus'];
+          workerEnabled: boolean;
+        }
       | { kind: 'reject'; status: 404 | 409 | 500; body: { error: string } }
     > => {
       const cur = companyStore.getCompanySession(id);
       if (!cur) return { kind: 'reject', status: 404, body: { error: 'Not found' } };
-      if (cur.status === 'running' || orchestratorRegistry.has(id)) {
+      const workerEnabled = workerOrchestratorEnabled();
+      if (
+        cur.status === 'running' ||
+        orchestratorRegistry.has(id) ||
+        (workerEnabled && getWorkerOrchestratorPool().has(id))
+      ) {
         return { kind: 'reject', status: 409, body: { error: 'Already running' } };
       }
 
@@ -131,12 +145,29 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string;
       }>;
 
-      const orchestrator = new CompanyOrchestrator({
-        companySessionId: id,
-        companyStore,
-        db,
-      });
-      orchestratorRegistry.set(id, orchestrator);
+      // P13: When the worker flag is set AND the built worker file
+      // exists, the orchestrator lives in a dedicated worker_thread.
+      // The main-side proxy mimics the same surface (`startMaster`,
+      // `metaBus`, etc.) so the rest of this handler is identical.
+      // When the flag is off, falls back to the legacy in-process
+      // instance — same behavior as before P13 landed.
+      let orchestrator: CompanyOrchestrator;
+      let busForPump: CompanyOrchestrator['metaBus'];
+      if (workerEnabled) {
+        const pool = getWorkerOrchestratorPool();
+        const spawned = await pool.getOrSpawn(id);
+        orchestrator = spawned.orchestrator;
+        busForPump = spawned.bus;
+      } else {
+        const local = new CompanyOrchestrator({
+          companySessionId: id,
+          companyStore,
+          db,
+        });
+        orchestratorRegistry.set(id, local);
+        orchestrator = local;
+        busForPump = local.metaBus;
+      }
 
       // Pause any pipeline executions that were 'running' before the
       // server restart. The dashboard will surface a Resume button.
@@ -159,23 +190,36 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[company s=${id}] Master start failed:`, msg);
-        orchestratorRegistry.delete(id);
+        if (workerEnabled) {
+          // The worker still exists — evict so the next /start gets a
+          // fresh worker rather than a half-initialized one.
+          void getWorkerOrchestratorPool().evict(id);
+        } else {
+          orchestratorRegistry.delete(id);
+        }
         companyStore.updateCompanySessionStatus(id, 'error');
         return { kind: 'reject', status: 500, body: { error: `Master start failed: ${msg}` } };
       }
 
       // Persist the user message so it survives page reload
       companyStore.setLastUserMessage(id, userMessage);
-      return { kind: 'success', orchestrator };
+      return { kind: 'success', orchestrator, bus: busForPump, workerEnabled };
     });
 
     if (decision.kind === 'reject') {
       return c.json(decision.body, decision.status);
     }
 
-    return pumpBusToSSE(c, decision.orchestrator.metaBus, {
+    return pumpBusToSSE(c, decision.bus, {
       since: -1,
-      onDone: () => orchestratorRegistry.scheduleEviction(id),
+      onDone: () => {
+        if (decision.workerEnabled) {
+          // Worker pool handles eviction via its own TTL sweep — no
+          // explicit `scheduleEviction` needed.
+          return;
+        }
+        orchestratorRegistry.scheduleEviction(id);
+      },
     });
   });
 

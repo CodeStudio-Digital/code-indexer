@@ -5,6 +5,7 @@
   "nav.admin": "Admin",
   "nav.telemetry": "Telemetry",
   "nav.dashboard": "Dashboard",
+  "nav.docs": "Documentation",
   "actions.save": "Save",
   "actions.saving": "Saving…",
   "actions.saved": "Saved",

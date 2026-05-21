@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage, ChatProviderResponseMeta } from '@mcp/code-agent/core/messages.js';
 import type {
   CoderSession, CoderSessionGroup, CoderMessageRow, SessionWithMessages, CoderSessionStats, CoderPlanRow, CoderPlanStatus,
   CoderTask, TasksState, CoderTasksRow, TaskExecutionMode, RecentCoderSession,
@@ -1417,8 +1417,20 @@ export class SessionStore {
     tools_def_chars?: number | null;
     /** USD cost computed from pricing table. Migration 072. */
     estimated_cost_usd?: number | null;
+    /** Sanitized provider request/response metadata. Migration 093. */
+    response_meta?: ChatProviderResponseMeta | null;
   }): number | null {
     try {
+      const meta = input.response_meta ?? null;
+      const request = meta?.request;
+      const response = meta?.response;
+      const requestBetasJson = request?.betas && request.betas.length > 0
+        ? JSON.stringify(request.betas)
+        : null;
+      const responseRateLimitsJson =
+        response?.rate_limits && Object.keys(response.rate_limits).length > 0
+          ? JSON.stringify(response.rate_limits)
+          : null;
       const r = this.db
         .prepare(
           `INSERT INTO coder_turn_telemetry (
@@ -1428,8 +1440,14 @@ export class SessionStore {
             cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens,
             history_chars, tool_count, tools_called_json,
             largest_tool_result_chars, compaction_triggered, summarizer_ran, paginate_count,
-            system_prompt_chars, tools_def_chars, estimated_cost_usd
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            system_prompt_chars, tools_def_chars, estimated_cost_usd,
+            request_api_model, request_requested_model, request_display_model,
+            request_max_tokens, request_stream, request_betas_json,
+            request_thinking_type, request_effort,
+            response_status, response_ok, response_request_id,
+            response_retry_after, response_x_should_retry,
+            response_rate_limits_json, response_path
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.session_id,
@@ -1453,6 +1471,21 @@ export class SessionStore {
           input.system_prompt_chars ?? null,
           input.tools_def_chars ?? null,
           input.estimated_cost_usd ?? null,
+          request?.api_model ?? null,
+          request?.requested_model ?? null,
+          request?.display_model ?? null,
+          request?.max_tokens ?? null,
+          request?.stream == null ? null : request.stream ? 1 : 0,
+          requestBetasJson,
+          request?.thinking_type ?? null,
+          request?.effort ?? null,
+          response?.status ?? null,
+          response?.ok == null ? null : response.ok ? 1 : 0,
+          response?.request_id ?? null,
+          response?.retry_after ?? null,
+          response?.x_should_retry ?? null,
+          responseRateLimitsJson,
+          meta?.path ?? null,
         );
       return Number(r.lastInsertRowid);
     } catch (e) {
@@ -1955,13 +1988,13 @@ export class SessionStore {
 
     const by_model = this.db
       .prepare(
-        `SELECT t.model AS model, COUNT(*) AS turns,
+        `SELECT COALESCE(t.request_api_model, t.model) AS model, COUNT(*) AS turns,
                 COALESCE(SUM(t.input_tokens), 0)         AS input_tokens,
                 COALESCE(SUM(t.output_tokens), 0)        AS output_tokens,
                 COALESCE(SUM(t.estimated_cost_usd), 0)   AS estimated_cost_usd
          FROM coder_turn_telemetry t
-         WHERE t.model IS NOT NULL${turnWhere}
-         GROUP BY t.model
+         WHERE COALESCE(t.request_api_model, t.model) IS NOT NULL${turnWhere}
+         GROUP BY COALESCE(t.request_api_model, t.model)
          ORDER BY input_tokens DESC`,
       )
       .all(...turnParams) as Array<{

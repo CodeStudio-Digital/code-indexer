@@ -1,22 +1,37 @@
 import { useEffect, useState } from 'react';
+import {
+  selectSandbox,
+  selectStream,
+  useCompanyStore,
+} from '../../../state/company/index.js';
 import type { ServiceOption } from '../../builder/preview/api-reference/ApiReferenceTab.js';
 
 /**
- * Poll `/api/company/sessions/:id/services` and project the response
- * into the `ServiceOption[]` shape expected by `PreviewIframe`.
+ * Fetch `/api/company/sessions/:id/services` once and refetch only
+ * on backend service events (`sandbox.service.*`).
  *
- * Both `PreviewSidebar` (agents view) and `CompanyApiReferenceTab` use
- * this — sharing the hook keeps the polling cadence consistent and
- * avoids two parallel intervals when the same session has both panels
- * open. Phase 4 will replace the poll with SSE `service.*` events
- * once the backend publishes them; consumers won't need to change.
+ * Both `SidebarPanels` (agents view) and `CompanyApiReferenceTab` use
+ * this — sharing the hook keeps every consumer aligned on one source
+ * of truth. Post-P14b the hook is purely SSE-driven; a slow polling
+ * fallback (5 s) only kicks in when the company stream is disconnected
+ * so a dormant session still surfaces newly-added services.
  *
  * The primary service is filtered out because `PreviewIframe` already
  * gets it from `snapshot.sandbox.previewUrl`. Including it here would
  * double-list it in the service switcher.
  */
-export function useExtraServices(sessionId: number | null, intervalMs = 4_000): ServiceOption[] {
+const DISCONNECTED_HEARTBEAT_MS = 5_000;
+
+export function useExtraServices(sessionId: number | null): ServiceOption[] {
   const [services, setServices] = useState<ServiceOption[]>([]);
+  const [manualSeq, setManualSeq] = useState(0);
+
+  const servicesSeq = useCompanyStore((s) =>
+    sessionId == null ? 0 : selectSandbox(s, sessionId).servicesSeq,
+  );
+  const connected = useCompanyStore((s) =>
+    sessionId == null ? false : selectStream(s, sessionId).connected,
+  );
 
   useEffect(() => {
     if (sessionId == null) return;
@@ -58,12 +73,19 @@ export function useExtraServices(sessionId: number | null, intervalMs = 4_000): 
     }
 
     void reload();
-    const handle = setInterval(reload, intervalMs);
     return () => {
       cancelled = true;
-      clearInterval(handle);
     };
-  }, [sessionId, intervalMs]);
+  }, [sessionId, servicesSeq, manualSeq]);
+
+  // Disconnected-only fallback. As soon as the company stream
+  // reconnects this interval clears itself and event-driven refresh
+  // takes over.
+  useEffect(() => {
+    if (sessionId == null || connected) return;
+    const id = setInterval(() => setManualSeq((n) => n + 1), DISCONNECTED_HEARTBEAT_MS);
+    return () => clearInterval(id);
+  }, [sessionId, connected]);
 
   return services;
 }

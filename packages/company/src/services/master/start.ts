@@ -112,6 +112,8 @@ export async function startMaster(
 
   ctx.companyStore.setMasterSessionId(ctx.companySessionId, masterSession.id);
   ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'running');
+  // P15c — clear the recovery flag set by `recoverStaleAgentRuns()` on boot.
+  ctx.companyStore.clearSessionRecoveryFlag(ctx.companySessionId);
 
   const inputs = await buildMasterPromptInputs(
     ctx,

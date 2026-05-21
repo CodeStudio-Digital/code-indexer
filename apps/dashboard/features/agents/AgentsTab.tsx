@@ -71,7 +71,7 @@ export function AgentsTab() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-6rem)]">
+    <div className="flex h-[100dvh]">
       {/* Sidebar — full-width on mobile when open, hidden otherwise */}
       <div className={cn(
         'border-r flex flex-col bg-card flex-shrink-0',
@@ -186,35 +186,35 @@ export function AgentsTab() {
         'overflow-hidden flex flex-col',
         agentsSidebarOpen ? 'hidden md:flex md:flex-1' : 'flex flex-1',
       )}>
-        {/* Top bar with toggle button */}
-        <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
-          <button
-            onClick={() => setAgentsSidebarOpen((v) => !v)}
-            className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-            title={agentsSidebarOpen ? 'Fechar painel' : 'Abrir painel'}
-          >
-            {agentsSidebarOpen
-              ? <PanelLeftClose className="h-4 w-4" />
-              : <PanelLeft className="h-4 w-4" />
-            }
-          </button>
-          {selectedSession && (
-            <span className="text-xs text-muted-foreground truncate">{selectedSession.name}</span>
-          )}
-          {!selectedSession && (
+        {/* Empty-state top bar: only when no session is selected. When
+            a session IS selected, the sessions-list toggle is rendered
+            inside `SessionHeader` instead — that lets us collapse two
+            stacked top bars into one. */}
+        {!selectedSession && (
+          <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
+            <button
+              onClick={() => setAgentsSidebarOpen((v) => !v)}
+              className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              title={agentsSidebarOpen ? 'Fechar painel' : 'Abrir painel'}
+            >
+              {agentsSidebarOpen
+                ? <PanelLeftClose className="h-4 w-4" />
+                : <PanelLeft className="h-4 w-4" />
+              }
+            </button>
             <span className="text-xs text-muted-foreground">{t('sessions')}</span>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Mobile back button */}
         {selectedSession && (
-          <button
-            className="md:hidden flex items-center gap-1 px-3 py-2 text-xs text-muted-foreground border-b hover:bg-muted transition-colors shrink-0"
-            onClick={() => setAgentsSidebarOpen(true)}
-          >
-            <ChevronLeft className="h-3.5 w-3.5" />
-            {t('sessions')}
-          </button>
+            <button
+                className="md:hidden flex items-center gap-1 px-3 py-2 text-xs text-muted-foreground border-b hover:bg-muted transition-colors shrink-0"
+                onClick={() => setAgentsSidebarOpen(true)}
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+              {t('sessions')}
+            </button>
         )}
 
         {selectedSession ? (
@@ -224,6 +224,8 @@ export function AgentsTab() {
               sessionId={selectedSession.id}
               sessionName={selectedSession.name}
               sessionStatus={selectedSession.status}
+              sessionsListOpen={agentsSidebarOpen}
+              onToggleSessionsList={() => setAgentsSidebarOpen((v) => !v)}
             />
           </div>
         ) : (

@@ -12,6 +12,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   Activity,
+  BookOpen,
   Boxes,
   ChevronLeft,
   ChevronRight,
@@ -75,7 +76,7 @@ function NavButton({ icon, label, active, collapsed, onClick }: NavButtonProps) 
  * breadcrumb in the topbar without ad-hoc string matching at the call site.
  */
 interface ActiveView {
-  page: 'home' | 'project' | 'agents' | 'admin' | 'design-systems' | 'telemetry' | 'other';
+  page: 'home' | 'project' | 'agents' | 'admin' | 'design-systems' | 'telemetry' | 'docs' | 'other';
   projectId: number | null;
   sessionId: number | null;
 }
@@ -100,6 +101,7 @@ function parsePathname(pathname: string, search: string): ActiveView {
   if (pathname.startsWith('/admin')) return { page: 'admin', projectId: null, sessionId: null };
   if (pathname.startsWith('/design-systems')) return { page: 'design-systems', projectId: null, sessionId: null };
   if (pathname.startsWith('/telemetry')) return { page: 'telemetry', projectId: null, sessionId: null };
+  if (pathname.startsWith('/docs')) return { page: 'docs', projectId: null, sessionId: null };
   return { page: 'other', projectId: null, sessionId: null };
 }
 
@@ -216,6 +218,13 @@ export function AppShell() {
               onClick={() => go('/telemetry')}
             />
             <NavButton
+              icon={<BookOpen className="h-4 w-4 shrink-0" />}
+              label={t('nav.docs')}
+              active={view.page === 'docs'}
+              collapsed={sidebarCollapsed}
+              onClick={() => go('/docs')}
+            />
+            <NavButton
               icon={<Settings className="h-4 w-4 shrink-0" />}
               label={t('nav.admin')}
               active={view.page === 'admin'}
@@ -236,22 +245,31 @@ export function AppShell() {
           </nav>
           <div
             className={cn(
-              'border-t flex flex-col',
-              sidebarCollapsed ? 'p-1.5 items-center' : 'p-3',
+              'border-t flex',
+              sidebarCollapsed ? 'p-1.5 flex-col items-center gap-1' : 'p-2 flex-row items-center gap-1',
             )}
           >
-            {!sidebarCollapsed && (
-              <div className="px-3 mb-1 text-[10px] text-muted-foreground">
-                <div>{t('footer.title')} Dashboard</div>
-                <div className="opacity-60">© 2026</div>
-              </div>
-            )}
+            <LanguageSwitcher />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setDark((d) => !d)}
+                  aria-label={t('theme.toggle')}
+                  className="h-8 w-8"
+                >
+                  {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">{t('theme.toggle')}</TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   className={cn(
-                    'hidden md:flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors',
-                    !sidebarCollapsed && 'w-full',
+                    'hidden md:flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors h-8 w-8',
+                    !sidebarCollapsed && 'ml-auto',
                   )}
                   onClick={toggleCollapsed}
                   aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -271,44 +289,31 @@ export function AppShell() {
         </aside>
 
         <div className="flex flex-col min-w-0">
-          <header className="h-16 border-b bg-card/60 backdrop-blur sticky top-0 z-30 flex items-center px-4 gap-3">
-            <button
-              className="md:hidden p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors shrink-0"
-              onClick={() => setMobileSidebarOpen(true)}
-              aria-label="Open navigation"
-            >
-              <Menu className="h-5 w-5" />
-            </button>
-            <button
-              onClick={() => go('/')}
-              className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {t('nav.dashboard')}
-            </button>
-            <BreadcrumbForView view={view} />
-            <div className="ml-auto flex items-center gap-2">
-              <LanguageSwitcher />
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setDark((d) => !d)}
-                title={t('theme.toggle')}
-              >
-                {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-              </Button>
-            </div>
-          </header>
-
           <main
             className={cn(
-              'flex-1 w-full mx-auto',
-              view.page !== 'agents' && view.page !== 'design-systems' && 'px-3 py-4 sm:px-6 sm:py-6',
+              'flex-1 w-full mx-auto min-h-0',
+              view.page !== 'agents'
+                && view.page !== 'design-systems'
+                && view.page !== 'project'
+                && 'px-3 py-4 sm:px-6 sm:py-6',
             )}
           >
             <Outlet />
           </main>
         </div>
       </div>
+
+      {/* Mobile-only floating button to open the sidebar drawer, since the
+          top header that used to host the burger is gone. */}
+      <button
+        type="button"
+        onClick={() => setMobileSidebarOpen(true)}
+        aria-label="Open navigation"
+        className="md:hidden fixed top-2 left-2 z-40 p-2 rounded-md bg-card/90 border shadow-sm text-muted-foreground hover:text-foreground"
+      >
+        <Menu className="h-4 w-4" />
+      </button>
+
       {mobileSidebarOpen && (
         <div
           className="fixed inset-0 z-30 bg-black/40 md:hidden"
@@ -316,29 +321,6 @@ export function AppShell() {
         />
       )}
     </div>
-  );
-}
-
-function BreadcrumbForView({ view }: { view: ActiveView }) {
-  const { t } = useTranslation();
-  const features = useFeatures();
-  if (view.page === 'home' || view.page === 'other') return null;
-  let label: string | null = null;
-  if (view.page === 'project') label = null; // shown via ActiveProjectName
-  else if (view.page === 'agents') label = t('nav.agents');
-  else if (view.page === 'design-systems' && features.designSystemEnabled) label = t('nav.designSystems');
-  else if (view.page === 'admin') label = t('nav.admin');
-  else if (view.page === 'telemetry') label = t('nav.telemetry');
-
-  return (
-    <>
-      <ChevronRight className="h-4 w-4 text-muted-foreground" />
-      {view.page === 'project' && view.projectId != null ? (
-        <ActiveProjectName projectId={view.projectId} />
-      ) : (
-        <span className="text-sm font-semibold">{label}</span>
-      )}
-    </>
   );
 }
 
@@ -350,9 +332,4 @@ function ActiveProjectIndicator({ projectId }: { projectId: number }) {
       <span className="truncate">{data?.name ?? `#${projectId}`}</span>
     </div>
   );
-}
-
-function ActiveProjectName({ projectId }: { projectId: number }) {
-  const { data } = useApi<{ id: number; name: string }>(`/projects/${projectId}`);
-  return <span className="text-sm font-semibold truncate">{data?.name ?? `#${projectId}`}</span>;
 }

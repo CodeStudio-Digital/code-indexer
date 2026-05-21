@@ -48,11 +48,15 @@ export function useCompanyStream(companySessionId: number | null) {
   const streamApplyBoardEntry = useCompanyStore((s) => s.streamApplyBoardEntry);
   const streamApplyMasterPrompt = useCompanyStore((s) => s.streamApplyMasterPrompt);
   const streamApplySessionIdle = useCompanyStore((s) => s.streamApplySessionIdle);
+  const streamApplySessionStalled = useCompanyStore((s) => s.streamApplySessionStalled);
+  const streamSetConnectionPhase = useCompanyStore((s) => s.streamSetConnectionPhase);
   const streamHydrateMasterPromptsAction = useCompanyStore((s) => s.streamHydrateMasterPrompts);
   const streamHydrateFromInitialFetch = useCompanyStore((s) => s.streamHydrateFromInitialFetch);
   const kanbanApplyEvent = useCompanyStore((s) => s.kanbanApplyEvent);
   const kanbanHydrate = useCompanyStore((s) => s.kanbanHydrate);
   const sandboxApplyFileChange = useCompanyStore((s) => s.sandboxApplyFileChange);
+  const sandboxBumpStatus = useCompanyStore((s) => s.sandboxBumpStatus);
+  const sandboxBumpServices = useCompanyStore((s) => s.sandboxBumpServices);
   const driveApplyAdded = useCompanyStore((s) => s.driveApplyAdded);
   const driveApplyUpdated = useCompanyStore((s) => s.driveApplyUpdated);
   const driveApplyDeleted = useCompanyStore((s) => s.driveApplyDeleted);
@@ -124,6 +128,14 @@ export function useCompanyStream(companySessionId: number | null) {
         streamApplySessionIdle(companySessionId, data as SessionIdlePayload);
         return;
       }
+      if (eventType === 'session_stalled') {
+        const d = (data ?? {}) as { stalledSinceMs?: number };
+        streamApplySessionStalled(
+          companySessionId,
+          typeof d.stalledSinceMs === 'number' ? d.stalledSinceMs : 0,
+        );
+        return;
+      }
       if (eventType === 'error') {
         receivedDoneRef.current = true;
         streamSetConnected(companySessionId, false);
@@ -144,6 +156,37 @@ export function useCompanyStream(companySessionId: number | null) {
           serviceId: payload.serviceId,
           changeType: payload.changeType,
         });
+        return;
+      }
+      // P14b — sandbox lifecycle events kill the legacy 1.5–10 s
+      // poller in `useSandboxStatus`. `SandboxService.forwardEvent`
+      // republishes every non-`stats`/`log`/`step` sandbox transition
+      // under these names; the slice bumps `statusSeq` and the hook
+      // refetches `/sandbox` once per event. We also bump
+      // `servicesSeq` because the primary sandbox is a row in
+      // `/services`, so a status change there is a services-list
+      // mutation too.
+      if (
+        eventType === 'sandbox.ready' ||
+        eventType === 'sandbox.paused' ||
+        eventType === 'sandbox.resumed' ||
+        eventType === 'sandbox.error' ||
+        eventType === 'sandbox.destroying' ||
+        eventType === 'sandbox.destroyed' ||
+        eventType === 'sandbox.provisioning'
+      ) {
+        sandboxBumpStatus(companySessionId);
+        sandboxBumpServices(companySessionId);
+        return;
+      }
+      // Service-list mutations (add/remove + synthetic status_changed
+      // emitted on every primary-sandbox transition by forwardEvent).
+      if (
+        eventType === 'sandbox.service.added' ||
+        eventType === 'sandbox.service.removed' ||
+        eventType === 'sandbox.service.status_changed'
+      ) {
+        sandboxBumpServices(companySessionId);
         return;
       }
       if (eventType === 'drive.file_added' || eventType === 'drive.file_updated') {
@@ -188,10 +231,14 @@ export function useCompanyStream(companySessionId: number | null) {
       streamApplyBoardEntry,
       streamApplyMasterPrompt,
       streamApplySessionIdle,
+      streamApplySessionStalled,
+      streamSetConnectionPhase,
       streamSetConnected,
       streamSetError,
       kanbanApplyEvent,
       sandboxApplyFileChange,
+      sandboxBumpStatus,
+      sandboxBumpServices,
       driveApplyAdded,
       driveApplyUpdated,
       driveApplyDeleted,
@@ -300,6 +347,7 @@ export function useCompanyStream(companySessionId: number | null) {
           await loadKanbanFromDB();
           await opts.onReconnect?.(attempt);
         },
+        onPhase: (phase) => streamSetConnectionPhase(companySessionId, phase),
         isTerminal: (ev) => ev.event === 'done' || ev.event === 'error',
       });
 
@@ -523,6 +571,10 @@ export function useCompanyStream(companySessionId: number | null) {
     error: stream.error,
     userMessage: stream.userMessage,
     masterErrorDetail: stream.masterErrorDetail,
+    masterEndedAt: stream.masterEndedAt,
+    masterEndedUnexpected: stream.masterEndedUnexpected,
+    sessionStalledSinceMs: stream.sessionStalledSinceMs,
+    connectionPhase: stream.connectionPhase,
     start,
     resume,
     reattach,

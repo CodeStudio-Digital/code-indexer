@@ -21,6 +21,9 @@ export interface SnapshotFileSummary {
   addedLines: number;
   removedLines: number;
   resolved: boolean;
+  /** Set by the company-scope route. `null` for coder-scope. */
+  projectId?: number | null;
+  projectName?: string | null;
 }
 
 export interface SnapshotHunkLine {

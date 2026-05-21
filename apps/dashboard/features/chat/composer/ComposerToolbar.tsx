@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Maximize2, Network, Paperclip, Repeat, Send, Settings2, Shield, Square, Thermometer } from 'lucide-react';
+import { Brain, Maximize2, Network, Paperclip, Repeat, Send, Settings2, Shield, Square, Thermometer } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -53,6 +53,17 @@ interface ComposerToolbarProps {
   /** Currently-selected pipeline id, or null when not in pipeline mode. */
   selectedPipelineId: number | null;
   setSelectedPipelineId?: (v: number | null) => void;
+  /**
+   * Per-session extended-thinking toggle. Only rendered when the active
+   * provider/model declares `supportsThinking` (see provider-caps.ts). The flag
+   * propagates through useAgentChatState → POST /api/coder/sessions/:id/messages
+   * → runner → ChatProvider.chat({ thinking: true }), where the provider maps
+   * it to its native parameter (Anthropic extendedThinking, Gemini
+   * thinkingConfig, OpenAI reasoning.effort, etc).
+   */
+  thinking?: boolean;
+  setThinking?: (v: boolean) => void;
+  supportsThinking?: boolean;
 }
 
 export const ComposerToolbar = React.memo(function ComposerToolbar({
@@ -83,6 +94,9 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   sessionId,
   selectedPipelineId,
   setSelectedPipelineId,
+  thinking,
+  setThinking,
+  supportsThinking,
 }: ComposerToolbarProps) {
   const { t } = useTranslation(['chat', 'common']);
   return (
@@ -194,6 +208,29 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
           className="h-7 w-16 text-xs font-mono px-1.5"
         />
       </div>
+
+      {/* Extended-thinking toggle. Only shown when the active provider/model
+          declares `supportsThinking` (provider-caps.ts). Mirrors the chip
+          styling of the `cap`/`full` button below for visual consistency. */}
+      {supportsThinking && setThinking && (
+        <button
+          type="button"
+          onClick={() => setThinking(!thinking)}
+          className={`hidden sm:inline-flex items-center gap-1 h-7 px-2 rounded-md text-xs font-mono transition-colors ${
+            thinking
+              ? 'bg-purple-500/15 text-purple-600 hover:bg-purple-500/25 dark:text-purple-300'
+              : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+          }`}
+          title={t('chat:toolbar.thinking', {
+            defaultValue:
+              'Extended thinking: the model reasons step-by-step before answering. Slower and pricier on Pro/Opus tiers; quality bump on hard problems. Capped at 8K thinking tokens to avoid runaway loops.',
+          })}
+          aria-pressed={thinking ?? false}
+        >
+          <Brain className="h-3.5 w-3.5" />
+          <span>{thinking ? 'think+' : 'think'}</span>
+        </button>
+      )}
 
       {/* Unrestricted-tool-output toggle (migration 078). When on, lifts the
           per-tool-call truncation cap from ~24 KB to ~1 MB so verbose MCP
@@ -348,6 +385,24 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
                 />
               </div>
             </div>
+            {supportsThinking && setThinking && (
+              <button
+                type="button"
+                onClick={() => setThinking(!thinking)}
+                className={`w-full inline-flex items-center justify-center gap-2 h-8 px-3 rounded-md text-xs font-mono transition-colors ${
+                  thinking
+                    ? 'bg-purple-500/15 text-purple-600 hover:bg-purple-500/25 dark:text-purple-300'
+                    : 'border border-input text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+                aria-pressed={thinking ?? false}
+              >
+                <Brain className="h-3.5 w-3.5" />
+                <span>
+                  {t('chat:toolbar.thinking', { defaultValue: 'Extended thinking' })}
+                  {thinking ? ' • on' : ''}
+                </span>
+              </button>
+            )}
             <FallbackPicker
               fallbackProvider={fallbackProvider}
               fallbackModel={fallbackModel}

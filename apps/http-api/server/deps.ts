@@ -23,12 +23,91 @@ import { QaTestResultStore } from '@mcp/services/qa/store/qa-test-result-store.j
 import { ChromeServiceStore } from '@mcp/store/chrome-service-store.js';
 import { DesignSystemStore } from '@mcp/store/design-system-store.js';
 import { VerdaccioStore } from '@mcp/store/verdaccio-store.js';
+import { PipelineTelemetryStore } from '@mcp/store/pipeline-telemetry-store.js';
+import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
+import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
+import { SqliteTelemetrySink } from '@mcp/candidate-pipeline/sqlite-sink.js';
+import type { TelemetrySink } from '@mcp/candidate-pipeline/stats.js';
+import {
+  InMemoryToolEmbeddingStore,
+  type EmbeddingFn,
+} from '@mcp/code-agent/tool-selection/index.js';
+import {
+  InMemoryMessageEmbeddingStore,
+  createContextRelevancePipeline,
+} from '@mcp/code-agent/context-relevance/index.js';
+import type {
+  ContextRelevanceQuery,
+  MessageCandidate,
+} from '@mcp/code-agent/context-relevance/index.js';
+import type { CandidatePipeline } from '@mcp/candidate-pipeline';
+import { SubAgentResultCacheStore } from '@mcp/store/sub-agent-result-cache-store.js';
+import { SubAgentResultCache } from '@mcp/services/sub-agent-cache/index.js';
+import { DocStore } from '@mcp/store/doc-store.js';
+import {
+  BrowserBackend,
+  detectBlocked,
+  DocHybridSearch,
+  DocIngestProgressTracker,
+  EscalatingFetcher,
+  IndexDocumentationUseCase,
+  PlainFetchBackend,
+  UrlFetcher,
+} from '@mcp/services/services/docs/index.js';
+import { InMemoryRoleEmbeddingStore } from '@mcp/company/role-pipeline/index.js';
+import { QualityClassificationStore } from '@mcp/store/quality-classification-store.js';
+import { QualityInterventionStore } from '@mcp/store/quality-intervention-store.js';
+import { CounterfactualLogStore } from '@mcp/store/counterfactual-log-store.js';
+import {
+  CodeQualityClassifier,
+  CompletenessClassifier,
+  OffTopicClassifier,
+  PolicyClassifier,
+  QualityClassifierPipeline,
+  ToolMisuseClassifier,
+} from '@mcp/services/quality/index.js';
+import {
+  ShadowTrafficRunner,
+  FeedbackCollector,
+  ToolSelectionOutcomeMatcher,
+  RolePipelineOutcomeMatcher,
+  KanbanPriorityOutcomeMatcher,
+} from '@mcp/services/shadow-traffic/index.js';
+import {
+  buildToolSelectionShadowVariants,
+  DEFAULT_TOOL_SELECTION_VARIANTS,
+  applyToolSelectionThin,
+  type ThinTool,
+} from '@mcp/code-agent/tool-selection/index.js';
+import type {
+  ToolSelectionQuery,
+} from '@mcp/code-agent/tool-selection/index.js';
+import type { CoderTool } from '@mcp/code-agent/core/tool.js';
+import { LshIndexStore } from '@mcp/store/lsh-index-store.js';
+import { LSHIndex } from '@mcp/indexer/search/lsh-index.js';
+import {
+  NullLshIndexingSink,
+  RealLshIndexingSink,
+  type LshIndexingSink,
+} from '@mcp/indexer/indexer/lsh-indexing-sink.js';
 import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
 import {
   createAndSeedProviderStore,
   createSearchBundle,
   deriveKindLabel,
 } from '@mcp/indexer/bootstrap/index.js';
+import type { ChromeService } from '@mcp/services/chrome-service/chrome-service.js';
+
+/**
+ * Late-bound ChromeService reference shared with the doc indexer's
+ * `BrowserBackend`. Populated by `server.ts` after the ChromeService
+ * singleton is constructed. Null = browser escalation unavailable; the
+ * EscalatingFetcher silently degrades to plain results.
+ */
+let chromeServiceForDocs: ChromeService | null = null;
+export function setChromeServiceForDocs(svc: ChromeService | null): void {
+  chromeServiceForDocs = svc;
+}
 
 /**
  * Segregated dependency blocks. Routes and mount functions should declare
@@ -122,6 +201,176 @@ export interface DesignSystemDeps {
   verdaccioStore: VerdaccioStore;
 }
 
+export interface PipelineDeps {
+  /**
+   * Per-stage telemetry rows emitted by the candidate-pipeline framework
+   * (migration 080). Buffered in-memory and flushed in batches — the table
+   * is append-only and indexed by (pipeline_name, stage, created_at).
+   */
+  pipelineTelemetryStore: PipelineTelemetryStore;
+  /**
+   * Admin-managed provider+model bindings per pipeline+role (migration 080).
+   * The resolver consults this with a session→template→global hierarchy.
+   */
+  pipelineBindingsStore: PipelineProviderBindingsStore;
+  /**
+   * Resolves which provider/model/config a given pipeline should use for a
+   * given role, given the current session+template context. Every pipeline
+   * stage that calls an LLM goes through this resolver — never instantiates
+   * a provider client directly.
+   */
+  pipelineProviderResolver: PipelineProviderResolver;
+  /**
+   * SQLite-backed telemetry sink. Pass to any `new CandidatePipeline({ telemetry })`
+   * to get automatic per-stage rows in `pipeline_telemetry`.
+   */
+  pipelineTelemetrySink: TelemetrySink;
+  /**
+   * Shared cache of tool-description embeddings used by the
+   * ToolSelectionPipeline. Tools change rarely so this stays small.
+   */
+  toolEmbeddingStore: InMemoryToolEmbeddingStore;
+  /**
+   * Adapter that exposes the indexer's EmbeddingService as the simple
+   * `EmbeddingFn` interface the candidate-pipeline framework expects.
+   * Returns a Float32Array of the embedding for a single text input.
+   */
+  toolSelectionEmbed: EmbeddingFn;
+  /**
+   * Per-process store of message embeddings used by the ContextRelevance
+   * pipeline. Keyed by message-id; intentionally lives in-memory because
+   * messages are session-scoped and lose value the moment the session ends.
+   */
+  messageEmbeddingStore: InMemoryMessageEmbeddingStore;
+  /**
+   * Pre-built ContextRelevance pipeline. Installed as the global by the
+   * boot path (toggled via `MCP_PIPELINES_CONTEXT_RELEVANCE=1`). The
+   * runtime consults it before falling through to deterministic
+   * compaction.
+   */
+  contextRelevancePipeline: CandidatePipeline<ContextRelevanceQuery, MessageCandidate>;
+  /**
+   * SQLite-backed cache of sub-agent (Explore / Plan / general-purpose)
+   * outputs keyed by (prompt_hash, context_digest, agent_type). Lets the
+   * runtime skip an expensive sub-agent run when the exact same query has
+   * been answered within its TTL window.
+   */
+  subAgentResultCache: SubAgentResultCache;
+  /**
+   * Shared embeddings of role descriptions, used by the RolePipeline's
+   * two-tower scorer. Roles change with template revisions, so this stays
+   * small and lives in-memory.
+   */
+  roleEmbeddingStore: InMemoryRoleEmbeddingStore;
+  /**
+   * Persistent store of quality verdicts (`quality_classifications`).
+   * Read by the admin UI; written by `QualityClassifierPipeline`.
+   */
+  qualityClassificationStore: QualityClassificationStore;
+  /**
+   * Persistent store of quality interventions (`quality_interventions`,
+   * migration 090). Inserts on every nudge / planning intervention so the
+   * dashboard can answer "did the next turn improve?" without inference.
+   */
+  qualityInterventionStore: QualityInterventionStore;
+  /**
+   * Shadow-traffic counterfactual log table. Inserts come from
+   * shadow side-effects; outcome backfills come from feedback collectors.
+   */
+  counterfactualLogStore: CounterfactualLogStore;
+  /**
+   * Five-classifier pipeline (off-topic / completeness / code / policy /
+   * tool-misuse). Runs all in parallel via Promise.allSettled.
+   * Provider per classifier is resolved via PipelineProviderResolver, so
+   * the admin picks model/provider/temperature without a redeploy.
+   */
+  qualityClassifierPipeline: QualityClassifierPipeline;
+  /**
+   * Shadow-traffic runner for the ToolSelectionPipeline. Sample rate is
+   * driven by the MCP_SHADOW_TOOL_SELECTION_RATE env var (default 0 = off).
+   * When > 0, deterministically samples a fraction of requests and runs
+   * configured `k` variants in parallel, logging each variant's selection
+   * to `counterfactual_logs`.
+   */
+  toolSelectionShadowRunner: ShadowTrafficRunner<ToolSelectionQuery>;
+  /**
+   * Setter for the tool registry used by the shadow runner. The runner
+   * integration calls this once during boot; until then shadow variants
+   * see an empty registry and emit empty selections (visible in the
+   * counterfactual logs so the gap is obvious).
+   */
+  setToolSelectionRegistry: (fn: () => CoderTool[]) => void;
+  /**
+   * LSH index for codebase embeddings. Stores 32-bit SimHash signatures +
+   * multi-hash buckets per (project, entity_type, entity_id). Indexer
+   * integration calls `lshIndex.indexMany(...)` alongside its vector-store
+   * upsert; search calls `lshIndex.candidatesFor(...)` to narrow candidates
+   * before doing full-precision cosine similarity in the vector store.
+   */
+  lshIndex: LSHIndex;
+  /** Direct store handle for diagnostics + admin maintenance endpoints. */
+  lshIndexStore: LshIndexStore;
+  /**
+   * Sink the IndexAgent calls after vector-store upserts. Null when LSH
+   * is disabled (`MCP_LSH_INDEXING != '1'`); real impl pushes signatures
+   * + buckets into the LSH store. Default: disabled so existing indexing
+   * paths see zero overhead.
+   */
+  lshIndexingSink: LshIndexingSink;
+  /**
+   * Counterfactual feedback collector. Calls observe(...) when the
+   * runtime sees a real outcome (tool actually called, role spawned,
+   * card moved to done) so the shadow analytics get backfilled.
+   */
+  feedbackCollector: FeedbackCollector;
+  /**
+   * Pre-bound `RunnerOptions.toolSelectionFilter` factory. Returns a
+   * filter function the runner calls per turn, only when
+   * `MCP_PIPELINES_TOOL_SELECTION === '1'`. Returns `undefined` when the
+   * flag is off — making `opts.toolSelectionFilter` undefined and skipping
+   * the hook entirely. Zero runtime overhead when disabled.
+   */
+  buildToolSelectionFilter: () => undefined | ((
+    tools: ThinTool[],
+    ctx: { taskText: string; recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }> },
+  ) => Promise<ThinTool[]>);
+  /**
+   * Companion to `buildToolSelectionFilter` — the runtime calls this
+   * with the recently-invoked tool names so the FeedbackCollector can
+   * backfill `true_outcome_json` on shadow rows. Safe to call when the
+   * feature is off (no-op).
+   */
+  observeToolSelectionOutcome: (taskText: string, toolsCalled: ReadonlyArray<string>) => void;
+}
+
+export interface DocCorpusDeps {
+  /**
+   * Persistence layer for the documentation corpus (migration 086).
+   * Owns CRUD over `doc_collections`, `doc_sources`, `doc_chunks`, plus
+   * the FTS5 search helper consumed by `DocHybridSearch`.
+   */
+  docStore: DocStore;
+  /**
+   * Hybrid (FTS5 + vector) retrieval over the doc corpus. Wired into the
+   * agent's `rag_search_docs` tool at boot via `setGlobalDocSearch` so
+   * any session in the process can search docs without per-runner setup.
+   */
+  docHybridSearch: DocHybridSearch;
+  /**
+   * Orchestrates one PDF/URL ingestion at a time. The HTTP routes
+   * (`/api/docs/...`) and any background recovery code call into the same
+   * instance — concurrency control lives in `doc_sources.status`.
+   */
+  indexDocsUseCase: IndexDocumentationUseCase;
+  /**
+   * In-memory cache of the latest progress frame per source. Shared
+   * between the writer (use-case onProgress) and the reader
+   * (`GET /api/docs/sources/:id/progress`). Lost on process restart —
+   * by design (boot recovery already flips in-flight sources to error).
+   */
+  docProgressTracker: DocIngestProgressTracker;
+}
+
 export interface CompanyDeps {
   companyStore: CompanyStore;
   /**
@@ -163,7 +412,9 @@ export type ServerDeps = CoreDeps
   & CompanyDeps
   & QaDeps
   & ChromeServiceDeps
-  & DesignSystemDeps;
+  & DesignSystemDeps
+  & PipelineDeps
+  & DocCorpusDeps;
 
 export function createDeps(): ServerDeps {
   const config = loadConfig();
@@ -198,6 +449,248 @@ export function createDeps(): ServerDeps {
   const chromeServiceStore = new ChromeServiceStore(db.raw());
   const designSystemStore = new DesignSystemStore(db.raw());
   const verdaccioStore = new VerdaccioStore(db.raw());
+  const pipelineTelemetryStore = new PipelineTelemetryStore(db.raw());
+  const pipelineBindingsStore = new PipelineProviderBindingsStore(db.raw());
+  const pipelineProviderResolver = new PipelineProviderResolver(pipelineBindingsStore, providerStore);
+  const pipelineTelemetrySink = new SqliteTelemetrySink(pipelineTelemetryStore);
+
+  // Tool-selection plumbing. The embed adapter wraps the existing indexer
+  // EmbeddingService into a single-text `EmbeddingFn`. ToolEmbeddingStore is
+  // shared across all sessions in this process — tools don't vary per
+  // session so re-embedding would be wasteful.
+  const toolEmbeddingStore = new InMemoryToolEmbeddingStore();
+  const toolSelectionEmbed: EmbeddingFn = async (text: string) => {
+    const result = await embeddingService.embedQuery(text);
+    return Float32Array.from(result.vector);
+  };
+
+  // Context-relevance shares the same embedding adapter; message vectors
+  // live in their own store keyed by message-id. The pipeline reads
+  // messages via the `getMessages` closure provided per-request from the
+  // runner — here we build it with a placeholder that the runtime
+  // overrides at call time via the helper's `messages` argument.
+  const messageEmbeddingStore = new InMemoryMessageEmbeddingStore();
+  const contextRelevancePipeline = createContextRelevancePipeline({
+    getMessages: () => [], // overridden per-request by applyContextCompaction
+    embed: toolSelectionEmbed,
+    messageEmbeddingStore,
+    telemetry: pipelineTelemetrySink,
+  });
+
+  // Sub-agent result cache: dedupe repeated Explore/Plan/general-purpose
+  // calls within their TTL windows (Explore=30m, Plan=5m, general=15m).
+  const subAgentResultCacheStore = new SubAgentResultCacheStore(db.raw());
+  const subAgentResultCache = new SubAgentResultCache(subAgentResultCacheStore);
+
+  // Documentação (RAG) — global corpus of external docs (PDF + URL crawl).
+  // Reuses the embedding service / vector store that the indexer pipeline
+  // already wired; collections are tenant-wide, so no per-project state.
+  //
+  // Render pipeline: plain fetch first; auto-escalate to headless Chrome
+  // (via the existing ChromeService WS endpoint) when bot-detection signals
+  // fire. The browser connector is lazy — it only spins up Playwright when
+  // a fetch actually trips the detector AND ChromeService is running. With
+  // ChromeService off, the connector returns null and the EscalatingFetcher
+  // silently keeps the plain result (annotated with `blockedSignals`).
+  //
+  // `docFetcher` is shared by every ingestion run so the per-host throttle
+  // + robots cache + cookie jar are reused across collections. If memory
+  // pressure becomes an issue, swap to per-source instances.
+  const docStore = new DocStore(db.raw());
+  const docFetcher = new UrlFetcher();
+  const plainRender = new PlainFetchBackend(docFetcher);
+  const browserRender = new BrowserBackend(async () => {
+    // Late-bound: chromeService isn't constructed yet at this point in
+    // createDeps (it's owned by server.ts and only assigned after the
+    // sandbox manager wires). The closure captures `chromeServiceRef`
+    // populated by setChromeServiceForDocs below.
+    const svc = chromeServiceForDocs;
+    if (!svc) return null;
+    return svc.connectBrowser();
+  });
+  const docRenderer = new EscalatingFetcher(plainRender, browserRender, detectBlocked);
+  const docHybridSearch = new DocHybridSearch(docStore, embeddingService, vectorStore);
+  // In-memory cache of the latest progress frame per source. Wired so
+  // both the use-case (writer) and the HTTP route (reader) share the
+  // same instance. Lost on process restart — fine because boot
+  // recovery flips any in-flight source to `error` anyway.
+  const docProgressTracker = new DocIngestProgressTracker();
+  const indexDocsUseCase = new IndexDocumentationUseCase({
+    docStore,
+    embeddingService,
+    vectorStore,
+    pipelineProviderResolver,
+    renderBackend: docRenderer,
+    progressTracker: docProgressTracker,
+  });
+
+  // RolePipeline shared embedding store — keyed by (role + skills) so a
+  // template revision invalidates entries automatically.
+  const roleEmbeddingStore = new InMemoryRoleEmbeddingStore();
+
+  // Quality classifier pipeline — five single-task classifiers running in
+  // parallel via Promise.allSettled. Provider per classifier resolves via
+  // PipelineProviderResolver (admin-configured).
+  const qualityClassificationStore = new QualityClassificationStore(db.raw());
+  const qualityInterventionStore = new QualityInterventionStore(db.raw());
+  const counterfactualLogStore = new CounterfactualLogStore(db.raw());
+  const qualityClassifierPipeline = new QualityClassifierPipeline({
+    classifiers: [
+      new OffTopicClassifier(pipelineProviderResolver),
+      new CompletenessClassifier(pipelineProviderResolver),
+      new CodeQualityClassifier(pipelineProviderResolver),
+      new PolicyClassifier(pipelineProviderResolver),
+      new ToolMisuseClassifier(pipelineProviderResolver),
+    ],
+    store: qualityClassificationStore,
+    telemetry: pipelineTelemetrySink,
+  });
+
+  // Shadow-traffic for ToolSelectionPipeline. Sample rate is environment
+  // controlled — keep it off by default so test/dev runs don't burn
+  // embedding calls. Production opts in by setting the env var.
+  //
+  // The tool registry is supplied lazily via a mutable ref so the runtime
+  // integration can install it once the code-agent runner is wired up.
+  // Until then, `getAllToolsRef` returns an empty list and the variants
+  // emit empty selections — harmless for shadow but visible in counterfactual
+  // logs as a signal that the integration isn't done yet.
+  const shadowSampleRate = parseFloat(process.env.MCP_SHADOW_TOOL_SELECTION_RATE ?? '0') || 0;
+  let getAllToolsRef: () => CoderTool[] = () => [];
+  const toolSelectionShadowVariants = buildToolSelectionShadowVariants({
+    getAllTools: () => getAllToolsRef(),
+    embed: toolSelectionEmbed,
+    toolEmbeddingStore,
+    variantKs: DEFAULT_TOOL_SELECTION_VARIANTS,
+  });
+  const toolSelectionShadowRunner = new ShadowTrafficRunner<ToolSelectionQuery>({
+    pipelineName: 'tool_selection',
+    variants: toolSelectionShadowVariants,
+    store: counterfactualLogStore,
+    sampleRate: shadowSampleRate,
+    telemetry: pipelineTelemetrySink,
+  });
+  // Setter the future runtime integration calls once during boot. Until
+  // then, shadow runs see an empty tool registry — harmless, visible as
+  // empty rows in counterfactual_logs so the gap is obvious.
+  const setToolSelectionRegistry = (fn: () => CoderTool[]): void => {
+    getAllToolsRef = fn;
+  };
+
+  // LSH index for codebase embeddings. Default dim=768 matches bge-base/m3
+  // and most OpenAI-compatible embedding endpoints used by the indexer.
+  // The exact dim doesn't matter for correctness — `simHashSignature` only
+  // dot-products against the configured hyperplanes; vectors shorter than
+  // `dim` are zero-padded (the loop caps at `Math.min(embedding.length, plane.length)`).
+  const lshIndexStore = new LshIndexStore(db.raw());
+  const lshIndex = new LSHIndex({
+    dim: parseInt(process.env.MCP_LSH_DIM ?? '768', 10) || 768,
+    store: lshIndexStore,
+    numHyperplanes: 32,
+    numHashes: 4,
+    numBuckets: 256,
+    seed: 0x1ce1ce1c,
+  });
+  // LSH indexing sink — disabled by default (no overhead on indexing hot
+  // path). Opt in with MCP_LSH_INDEXING=1 to start populating LSH buckets
+  // automatically as the indexer commits embeddings.
+  const lshIndexingSink: LshIndexingSink = process.env.MCP_LSH_INDEXING === '1'
+    ? new RealLshIndexingSink(lshIndex)
+    : new NullLshIndexingSink();
+
+  // Counterfactual feedback collector — registers a matcher per known
+  // shadow pipeline. Runtime hooks call collector.observe(...) when they
+  // see a real outcome (master spawned X, agent called tool Y, …).
+  const feedbackCollector = new FeedbackCollector({
+    store: counterfactualLogStore,
+    matchers: [
+      new ToolSelectionOutcomeMatcher(),
+      new RolePipelineOutcomeMatcher(),
+      new KanbanPriorityOutcomeMatcher(),
+    ],
+  });
+
+  // Tool-selection runtime filter factory. The runner calls this once
+  // when constructing its RunnerOptions; we return either a filter
+  // function (env flag on) or undefined (flag off → runner skips the
+  // hook entirely).
+  //
+  // The filter is ALSO the producer side of the shadow-traffic +
+  // counterfactual loop: after production selection completes, the same
+  // query is handed to `toolSelectionShadowRunner` (deterministic
+  // sampling by task hash) which runs the k=8 / k=16 variants off-path
+  // and logs predictions. The feedback collector picks up these rows
+  // later via `observeToolSelectionOutcome` when the runtime sees what
+  // tools were actually called.
+  const toolSelectionFilterEnabled = process.env.MCP_PIPELINES_TOOL_SELECTION === '1';
+
+  /**
+   * FNV-1a hash of the task text — deterministic shadow-sampling key
+   * AND the query_hash linking shadow predictions to later observed
+   * outcomes (tools actually called).
+   */
+  const toolSelectionQueryHash = (taskText: string): string => {
+    let h = 0x811c9dc5 >>> 0;
+    for (let i = 0; i < taskText.length; i++) {
+      h ^= taskText.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return (h >>> 0).toString(16);
+  };
+
+  const buildToolSelectionFilter = (): undefined | ((
+    tools: ThinTool[],
+    ctx: { taskText: string; recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }> },
+  ) => Promise<ThinTool[]>) => {
+    if (!toolSelectionFilterEnabled) return undefined;
+    return async (tools, ctx) => {
+      const selected = await applyToolSelectionThin({
+        allTools: tools,
+        taskText: ctx.taskText,
+        recentToolCalls: ctx.recentToolCalls,
+        embed: toolSelectionEmbed,
+        embeddingStore: toolEmbeddingStore,
+      });
+      // Shadow producer — fires only when MCP_SHADOW_TOOL_SELECTION_RATE > 0
+      // and the task hash falls inside the sample. Off-path via setImmediate.
+      try {
+        const queryHash = toolSelectionQueryHash(ctx.taskText);
+        toolSelectionShadowRunner.recordAndShadow(
+          {
+            queryHash,
+            payload: {
+              queryId: `tool-selection-${queryHash}`,
+              taskText: ctx.taskText,
+              recentToolEvents: ctx.recentToolCalls,
+              k: 12,
+            },
+          },
+          { toolNames: selected.map((t) => t.name) },
+        );
+      } catch {
+        // Shadow traffic must never affect production.
+      }
+      return selected;
+    };
+  };
+
+  /**
+   * Outcome observer: the runtime calls this with the task text that
+   * triggered the selection and the names of tools the agent actually
+   * called afterwards. The feedback collector matches by query_hash
+   * and fills `true_outcome_json` on the corresponding shadow rows.
+   */
+  const observeToolSelectionOutcome = (taskText: string, toolsCalled: ReadonlyArray<string>): void => {
+    if (!toolSelectionFilterEnabled || toolsCalled.length === 0) return;
+    try {
+      feedbackCollector.observe('tool_selection', {
+        queryHash: toolSelectionQueryHash(taskText),
+        toolsCalled: [...toolsCalled],
+      });
+    } catch {
+      // Best-effort.
+    }
+  };
 
   const embeddingKind = deriveKindLabel(embeddingService, 'EmbeddingService');
   const vectorStoreKind = deriveKindLabel(vectorStore, 'VectorStore');
@@ -228,8 +721,34 @@ export function createDeps(): ServerDeps {
     chromeServiceStore,
     designSystemStore,
     verdaccioStore,
+    pipelineTelemetryStore,
+    pipelineBindingsStore,
+    pipelineProviderResolver,
+    pipelineTelemetrySink,
+    toolEmbeddingStore,
+    toolSelectionEmbed,
+    messageEmbeddingStore,
+    contextRelevancePipeline,
+    subAgentResultCache,
+    roleEmbeddingStore,
+    qualityClassificationStore,
+    qualityInterventionStore,
+    counterfactualLogStore,
+    qualityClassifierPipeline,
+    toolSelectionShadowRunner,
+    setToolSelectionRegistry,
+    lshIndex,
+    lshIndexStore,
+    lshIndexingSink,
+    feedbackCollector,
+    buildToolSelectionFilter,
+    observeToolSelectionOutcome,
     embeddingKind,
     vectorStoreKind,
+    docStore,
+    docHybridSearch,
+    indexDocsUseCase,
+    docProgressTracker,
     mcpBearerResolver: null,
   };
 }

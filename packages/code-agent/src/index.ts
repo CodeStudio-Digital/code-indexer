@@ -7,6 +7,7 @@ import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { getGlobalToolSelectionFilter } from '@mcp/code-agent/tool-selection/global-filter.js';
 import { buildSystemPrompt } from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
 import { workspaceFromProject, type WorkspaceContext } from '@mcp/code-agent/core/workspace.js';
@@ -60,6 +61,7 @@ import { lspTools } from '@mcp/code-agent/tools/lsp.js';
 import { ptyTools } from '@mcp/code-agent/tools/pty.js';
 import { webTools } from '@mcp/code-agent/tools/web.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
+import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { todoTools, generateTodoId } from '@mcp/code-agent/tools/todo.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { goalTools } from '@mcp/code-agent/tools/goal.js';
@@ -203,6 +205,16 @@ export interface RunCoderOptions {
    * dashboard just has to pull on its own cadence.
    */
   onSnapshotRecorded?: (info: { baselineId: number; filePath: string }) => void;
+
+  /**
+   * Optional per-turn tool-list filter (ToolSelectionPipeline runtime
+   * hook). Built by `deps.buildToolSelectionFilter()` in the host; when
+   * undefined, the runner falls back to the unfiltered tool list.
+   *
+   * Forwarded verbatim to the underlying `RunnerOptions.toolSelectionFilter`.
+   * The host typically wires it as `toolSelectionFilter: deps.buildToolSelectionFilter()`.
+   */
+  toolSelectionFilter?: import('./core/runner.js').RunnerOptions['toolSelectionFilter'];
 }
 
 export interface IndexStatus {
@@ -343,6 +355,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(ptyTools);
   registry.registerAll(webTools);
   registry.registerAll(globTools);
+  registry.registerAll(ragSearchDocsTools);
   registry.registerAll(todoTools);
   registry.registerAll(viewImageTools);
   registry.registerAll(goalTools);
@@ -1165,6 +1178,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     context_window: sessionContextWindow,
     isCompanySubordinate: opts.companyContext != null && !opts.companyContext.isMaster,
     companyRoleOverride: opts.companyRoleOverride,
+    // Plumb the company identifiers through so per-turn quality verdicts
+    // can be attributed to the right subordinate run and routed back via
+    // the global QualityResultObserver (Wire #3 kanban gate, Wire #4
+    // off-topic→master inbox alert). Null for chat-individual sessions
+    // — those don't carry company context.
+    companyAgentRunId: opts.companyContext?.agentRunId ?? null,
+    companySessionId: opts.companyContext?.companySessionId ?? null,
     adminOverride: opts.adminOverride,
     agentId: effectiveAgentId,
     sessionTemperature: session.temperature_override,
@@ -1188,6 +1208,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     },
     agentLoopV2,
+    // ToolSelectionPipeline filter — per-call override wins, otherwise
+    // we fall back to the module-level global installed by the boot
+    // path (see `setGlobalToolSelectionFilter`). When neither is set,
+    // the field is undefined and the runner skips the hook entirely.
+    toolSelectionFilter: opts.toolSelectionFilter ?? getGlobalToolSelectionFilter(),
   });
 
   // Rehydrate the lightweight todo list from the DB so a session resume

@@ -1,0 +1,149 @@
+/**
+ * applyToolSelectionThin tests — verifies the stripped-tool path works
+ * end-to-end without needing the full pipeline + CoderTool[] shape.
+ */
+import { describe, expect, it, vi } from 'vitest';
+import {
+  applyToolSelectionThin,
+  InMemoryToolEmbeddingStore,
+  type EmbeddingFn,
+  type ThinTool,
+} from '../index.js';
+
+const toyEmbed: EmbeddingFn = async (text: string) => {
+  const arr = new Float32Array(4);
+  for (let i = 0; i < 4; i++) arr[i] = (text.toLowerCase().charCodeAt(i) || 0) / 128;
+  let norm = 0;
+  for (let i = 0; i < 4; i++) norm += arr[i] * arr[i];
+  norm = Math.sqrt(norm) || 1;
+  for (let i = 0; i < 4; i++) arr[i] /= norm;
+  return arr;
+};
+
+function makeTool(name: string, desc?: string): ThinTool {
+  return { name, description: desc ?? `${name} description`, parameters: { type: 'object', properties: {} } };
+}
+
+const ALL_TOOLS: ThinTool[] = [
+  ...['Read','Write','Edit','Bash','Glob','Grep','TodoWrite','PowerShell'].map((n) => makeTool(n)),
+  ...['DesignSystem','Database','WebFetch','GitStatus','Kanban','Slack','Notion','Jira','PlaywrightRun','Sandbox'].map((n) => makeTool(n)),
+];
+
+describe('applyToolSelectionThin', () => {
+  it('returns allTools unchanged when task text is too short', async () => {
+    const out = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'hi',
+      embed: toyEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+    });
+    expect(out).toBe(ALL_TOOLS);
+  });
+
+  it('returns allTools unchanged when count <= k', async () => {
+    const small = ALL_TOOLS.slice(0, 5);
+    const out = await applyToolSelectionThin({
+      allTools: small,
+      taskText: 'frontend bug fix in login flow',
+      embed: toyEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 10,
+    });
+    expect(out).toBe(small);
+  });
+
+  it('filters and always includes essentials', async () => {
+    const out = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'totally unrelated topic about astronomy and stars',
+      embed: toyEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 10,
+    });
+    expect(out.length).toBeLessThanOrEqual(10 + 8); // essentials + slots up to k
+    const names = new Set(out.map((t) => t.name));
+    // Core essentials must be present.
+    for (const ess of ['Read', 'Write', 'Edit', 'Bash', 'TodoWrite']) {
+      expect(names.has(ess)).toBe(true);
+    }
+  });
+
+  it('fires onResult with token-savings estimate', async () => {
+    const onResult = vi.fn();
+    await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'frontend bug fix in login flow',
+      embed: toyEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 10,
+      onResult,
+    });
+    expect(onResult).toHaveBeenCalled();
+    const diag = onResult.mock.calls[0][0];
+    expect(diag.consideredCount).toBe(ALL_TOOLS.length);
+    expect(diag.estimatedTokensSaved).toBeGreaterThanOrEqual(0);
+    expect(diag.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('uses cached embeddings on second call', async () => {
+    const store = new InMemoryToolEmbeddingStore();
+    let embedCalls = 0;
+    const countingEmbed: EmbeddingFn = async (text) => {
+      embedCalls++;
+      return toyEmbed(text);
+    };
+    await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'first task',
+      embed: countingEmbed,
+      embeddingStore: store,
+      k: 10,
+    });
+    const callsAfterFirst = embedCalls;
+    embedCalls = 0;
+    await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'second task',
+      embed: countingEmbed,
+      embeddingStore: store,
+      k: 10,
+    });
+    // Second run: only the task embedding is fresh; tool embeddings cached.
+    expect(embedCalls).toBe(1);
+    expect(callsAfterFirst).toBeGreaterThan(1);
+  });
+
+  it('falls back to allTools when embed throws', async () => {
+    const failingEmbed: EmbeddingFn = async () => {
+      throw new Error('boom');
+    };
+    const out = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'frontend bug fix in login flow',
+      embed: failingEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 10,
+    });
+    expect(out).toBe(ALL_TOOLS);
+  });
+
+  it('frequency-boost lifts recently-used non-essential tools', async () => {
+    const now = Date.now();
+    const out = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'unrelated topic',
+      embed: toyEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 10,
+      recentToolCalls: [
+        { name: 'Kanban', timestampMs: now - 1000 },
+        { name: 'Kanban', timestampMs: now - 500 },
+        { name: 'Kanban', timestampMs: now - 100 },
+        { name: 'Kanban', timestampMs: now - 50 },
+        { name: 'Kanban', timestampMs: now - 10 },
+      ],
+    });
+    const names = new Set(out.map((t) => t.name));
+    expect(names.has('Kanban')).toBe(true);
+  });
+});

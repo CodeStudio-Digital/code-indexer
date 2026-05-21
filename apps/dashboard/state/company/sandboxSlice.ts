@@ -27,10 +27,29 @@ export interface SandboxFileChange {
 
 export interface SandboxState {
   lastFileChange: SandboxFileChange | null;
+  /**
+   * Monotonic counter bumped whenever the backend publishes a
+   * sandbox status/lifecycle event (`sandbox.status_changed`,
+   * `sandbox.ready`, `sandbox.paused`, `sandbox.error`, `sandbox.destroyed`).
+   * Replaces the 1.5s setInterval poll in `useSandboxStatus`.
+   * Components depend on this seq via `useEffect(..., [seq])` and
+   * call their fetch on bump.
+   */
+  statusSeq: number;
+  /**
+   * Same pattern for `/services` list mutations
+   * (`sandbox.service.added`, `sandbox.service.removed`,
+   * `sandbox.service.status_changed`). Replaces the 4-5s polls
+   * across `useServicesPolling`, `useExtraServices`, and the
+   * `BuilderView` inline poller.
+   */
+  servicesSeq: number;
 }
 
 export const INITIAL_SANDBOX_STATE: SandboxState = {
   lastFileChange: null,
+  statusSeq: 0,
+  servicesSeq: 0,
 };
 
 export interface SandboxSlice {
@@ -40,6 +59,10 @@ export interface SandboxSlice {
     sessionId: number,
     payload: Omit<SandboxFileChange, 'seq' | 'at'>,
   ) => void;
+  /** Bumps `statusSeq`. Consumers refetch `/sandbox` on each tick. */
+  sandboxBumpStatus: (sessionId: number) => void;
+  /** Bumps `servicesSeq`. Consumers refetch `/services` on each tick. */
+  sandboxBumpServices: (sessionId: number) => void;
   sandboxReset: (sessionId: number) => void;
 }
 
@@ -74,6 +97,22 @@ export const createSandboxSlice: StateCreator<SandboxSlice, [], [], SandboxSlice
           seq: (slot.lastFileChange?.seq ?? 0) + 1,
           at: Date.now(),
         },
+      })),
+    })),
+
+  sandboxBumpStatus: (sessionId) =>
+    set((state) => ({
+      sandbox: withSlot(state.sandbox, sessionId, (slot) => ({
+        ...slot,
+        statusSeq: slot.statusSeq + 1,
+      })),
+    })),
+
+  sandboxBumpServices: (sessionId) =>
+    set((state) => ({
+      sandbox: withSlot(state.sandbox, sessionId, (slot) => ({
+        ...slot,
+        servicesSeq: slot.servicesSeq + 1,
       })),
     })),
 

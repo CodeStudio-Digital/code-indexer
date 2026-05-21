@@ -36,6 +36,11 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
     costTracker: deps.costTracker,
     webhookDispatcher: deps.webhookDispatcher,
     config: deps.config,
+    // Wire the LSH sink so indexing populates embedding_simhash_signatures
+    // + embedding_lsh_buckets alongside the vector store. When
+    // MCP_LSH_INDEXING is unset, deps.lshIndexingSink is a NullLshIndexingSink
+    // (no-op), so this is safe to wire unconditionally.
+    lshIndexingSink: deps.lshIndexingSink,
   });
 
   app.get('/api/projects', (c) => c.json(db.listProjects()));

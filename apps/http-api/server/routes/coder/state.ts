@@ -1,10 +1,11 @@
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { SessionStore } from '@mcp/code-agent/index.js';
+import type { CoderRunBus } from '../../../coder-bus.js';
+import { wireRunnerEventsToBus } from '../../../sse/runnerWiring.js';
 import {
-  publish,
-  markEnded,
-  type CoderRunBus,
-} from '../../../coder-bus.js';
+  coderWorkerEnabled,
+  getCoderWorkerPool,
+} from '../../../sse/coderWorkerPoolSingleton.js';
 import { CoderPipelineRegistry } from './pipelines-state.js';
 
 /**
@@ -28,105 +29,61 @@ export interface CoderRuntime {
 }
 
 export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
-  const activeRuns = new Map<number, CoderRunBus>();
+  const localRuns = new Map<number, CoderRunBus>();
   const BUS_LINGER_MS = 30_000;
   const coderPipelineRegistry = new CoderPipelineRegistry();
 
-  /**
-   * Wire a CoderRunner's events onto the bus. Same event shape the SSE
-   * handlers were emitting before the refactor — clients parse it the
-   * same way.
-   */
-  function wireRunnerToBus(runner: CoderRunner, bus: CoderRunBus) {
-    runner.on('text_delta', (text) => {
-      publish(bus, 'text', { text });
-    });
-    runner.on('thinking_delta', (text) => {
-      publish(bus, 'thinking', { text });
-    });
-    runner.on('tool_call_start', (id, name, input) => {
-      publish(bus, 'tool_call_start', { id, name, input });
-    });
-    runner.on('tool_call_result', (id, name, result, durationMs) => {
-      publish(bus, 'tool_call_result', { id, name, result, duration_ms: durationMs });
-    });
-    runner.on('message_complete', (message, usage) => {
-      publish(bus, 'message_complete', { message, usage });
-    });
-    runner.on('plan_posted', (block) => {
-      publish(bus, 'plan', block);
-    });
-    runner.on('question_posted', (block) => {
-      publish(bus, 'question', block);
-    });
-    runner.on('tasks_posted', (payload) => {
-      publish(bus, 'tasks_posted', payload);
-    });
-    runner.on('task_started', (payload) => {
-      publish(bus, 'task_started', payload);
-    });
-    runner.on('task_finished', (payload) => {
-      publish(bus, 'task_finished', payload);
-    });
-    runner.on('todos_updated', (payload) => {
-      publish(bus, 'todos_updated', payload);
-    });
-    runner.on('provider_swapped', (provider, model) => {
-      publish(bus, 'provider_swapped', { provider, model });
-    });
-    runner.on('fallback_activated', (payload) => {
-      // Dashboard needs {from, to, reason} to render a visible badge explaining
-      // why the provider changed — the silent provider_swapped event alone
-      // leaves users wondering whether they got rate-limited or misconfigured.
-      publish(bus, 'fallback_activated', payload);
-    });
-    runner.on('history_compacted', (payload) => {
-      // Surfaces auto-continue summarization so the user can audit which turns
-      // were silently dropped — previously only visible via server console logs.
-      publish(bus, 'history_compacted', payload);
-    });
-    runner.on('agents_group_start', (payload) => {
-      publish(bus, 'agents_group_start', payload);
-    });
-    runner.on('agent_progress', (payload) => {
-      publish(bus, 'agent_progress', payload);
-    });
-    runner.on('agents_group_end', (payload) => {
-      publish(bus, 'agents_group_end', payload);
-    });
-    runner.on('auto_continue', (count, max) => {
-      publish(bus, 'auto_continue', { count, max });
-    });
-    runner.on('context_status', (payload) => {
-      publish(bus, 'context_status', payload);
-    });
-    // Lifecycle events (Phase 1 hardening): structured signals that fire once
-    // per run / turn / batch / safety-block. Wired here so the dashboard and
-    // future golden-test transcripts see the same payload the runner emits.
-    runner.on('run_started', (payload) => {
-      publish(bus, 'run_started', payload);
-    });
-    runner.on('provider_call', (payload) => {
-      publish(bus, 'provider_call', payload);
-    });
-    runner.on('tool_batch', (payload) => {
-      publish(bus, 'tool_batch', payload);
-    });
-    runner.on('blocked', (payload) => {
-      publish(bus, 'blocked', payload);
-    });
-    runner.on('done', (reason, error) => {
-      if (error) {
-        // Surface provider/runner errors to the server log. The dashboard SSE
-        // only shows "— error —" without the message, which made Gemini
-        // failures (e.g. empty model id → silent 400) near-impossible to
-        // diagnose without CLI reproduction.
-        console.error(`[coder] session run failed (${reason}):`, error.message);
-        if (error.stack) console.error(error.stack);
+  // `activeRuns` is presented to consumers as a `Map<number, CoderRunBus>`
+  // — but its `.get()` / `.has()` fall through to the worker pool when
+  // `MCP_CODER_WORKER=1`. This keeps every existing route file
+  // (interaction.ts, snapshot.ts, ws upgrade, etc.) working unchanged
+  // while the coder path opt-in workers are live. Routes that NEED to
+  // route by bus (e.g. ws.ts mirror) still see a single CoderRunBus per
+  // session — the worker-mirrored one when the flag is on.
+  const activeRuns: Map<number, CoderRunBus> = new Proxy(localRuns, {
+    get(target, prop, receiver) {
+      if (prop === 'get') {
+        return (id: number): CoderRunBus | undefined => {
+          const local = target.get(id);
+          if (local) return local;
+          if (coderWorkerEnabled()) {
+            const fromPool = getCoderWorkerPool().getBus(id);
+            if (fromPool) return fromPool;
+          }
+          return undefined;
+        };
       }
-      publish(bus, 'done', { reason, error: error?.message });
-      markEnded(bus, 'done', { reason, error: error?.message });
-    });
+      if (prop === 'has') {
+        return (id: number): boolean => {
+          if (target.has(id)) return true;
+          if (coderWorkerEnabled()) {
+            return getCoderWorkerPool().has(id);
+          }
+          return false;
+        };
+      }
+      // `delete` clears both — the pool's evict is async fire-and-forget.
+      if (prop === 'delete') {
+        return (id: number): boolean => {
+          const had = target.delete(id);
+          if (coderWorkerEnabled()) {
+            void getCoderWorkerPool().evict(id);
+          }
+          return had;
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+
+  /**
+   * Wire a CoderRunner's events onto the bus. Delegates to the shared
+   * `wireRunnerEventsToBus` helper so the in-process path and the
+   * P17 worker (`coder-worker.ts`) emit identical event shapes.
+   */
+  function wireRunnerToBus(runner: CoderRunner, bus: CoderRunBus): void {
+    wireRunnerEventsToBus(runner, bus);
   }
 
   /**

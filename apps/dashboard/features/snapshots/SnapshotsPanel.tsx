@@ -37,6 +37,11 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
   const [busy, setBusy] = useState(false);
   // mobile: when a baseline is selected, drop the list to focus the diff
   const [mobileShowDiff, setMobileShowDiff] = useState(false);
+  // Project filter: `null` shows files from every project. Built from the
+  // distinct `projectId`s observed in the loaded snapshot list. Resets to
+  // null on session change to avoid showing an empty filter for a project
+  // that no longer has snapshots.
+  const [projectFilter, setProjectFilter] = useState<number | null>(null);
   const lastRefreshKey = useRef<number | undefined>(refreshKey);
 
   const reload = useCallback(async () => {
@@ -199,6 +204,28 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
   }, [files, scope, sessionId, reload, confirm]);
 
   const activeCount = useMemo(() => files.filter((f) => f.status === 'active').length, [files]);
+  // Distinct projects across the loaded files. Stable order by name.
+  const projects = useMemo(() => {
+    const seen = new Map<number, string>();
+    for (const f of files) {
+      if (f.projectId != null && f.projectName) seen.set(f.projectId, f.projectName);
+    }
+    return Array.from(seen.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [files]);
+  const filesForList = useMemo(
+    () => (projectFilter == null ? files : files.filter((f) => f.projectId === projectFilter)),
+    [files, projectFilter],
+  );
+  // The list view receives filtered files. Reset the selected baseline
+  // when the project filter changes and the current selection is no
+  // longer visible — otherwise the diff pane would show stale data.
+  useEffect(() => {
+    if (selectedBaselineId == null) return;
+    const stillVisible = filesForList.some((f) => f.baselineId === selectedBaselineId);
+    if (!stillVisible) setSelectedBaselineId(null);
+  }, [filesForList, selectedBaselineId]);
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-background">
@@ -218,6 +245,21 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
           <h2 className="font-medium text-sm truncate">
             Snapshots <span className="text-muted-foreground">({activeCount} active)</span>
           </h2>
+          {projects.length > 1 && (
+            <select
+              className="text-xs bg-background border rounded px-1.5 py-0.5 max-w-[160px]"
+              value={projectFilter ?? ''}
+              onChange={(e) =>
+                setProjectFilter(e.target.value === '' ? null : Number(e.target.value))
+              }
+              title="Filtrar por projeto"
+            >
+              <option value="">Todos os projetos</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          )}
         </div>
         <div className="flex gap-1.5 flex-shrink-0">
           <Button
@@ -258,11 +300,12 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
             <div className="p-3 text-xs text-muted-foreground">Loading…</div>
           ) : (
             <SnapshotFileList
-              files={files}
+              files={filesForList}
               selectedBaselineId={selectedBaselineId}
               onSelect={handleSelect}
               showClosed={showClosed}
               onToggleShowClosed={setShowClosed}
+              showProjectLabel={projects.length > 1 && projectFilter == null}
             />
           )}
         </div>

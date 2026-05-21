@@ -57,10 +57,23 @@ export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
     if (!Number.isFinite(companySessionId)) return c.json({ error: 'bad id' }, 400);
     const includeClosed = c.req.query('includeClosed') === '1';
     const coderIds = listCoderSessionIdsForCompany(sessionStore.getDb(), companySessionId);
-    const allFiles: FileSummary[] = [];
+    // Enrich each file with `projectId` + `projectName` so the dashboard
+    // can group / filter by project. Without this, files from agents
+    // running in different projects of the same company collide in the
+    // UI (same `filePath`, no way to tell them apart). Lookup is per
+    // coder-session: each `coder_sessions` row has exactly one project.
+    const allFiles: Array<FileSummary & { projectId: number | null; projectName: string | null }> = [];
     for (const coderId of coderIds) {
+      const session = sessionStore.getSession(coderId);
+      const project = session ? db.getProject(session.project_id) : null;
       const files = await service.listFiles('coder', coderId, { includeClosed });
-      allFiles.push(...files);
+      for (const f of files) {
+        allFiles.push({
+          ...f,
+          projectId: project?.id ?? null,
+          projectName: project?.name ?? null,
+        });
+      }
     }
     return c.json({ files: allFiles });
   });

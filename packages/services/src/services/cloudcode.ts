@@ -28,10 +28,19 @@ export { OAuth2Client };
  * known client and applies the same rate-limit tiers.
  * Format: GeminiCLI/<version>/<model> (<platform>; <arch>; terminal)
  */
-const GEMINI_CLI_VERSION = '0.37.1';
+const GEMINI_CLI_VERSION = '0.42.0';
 function userAgent(model?: string): string {
   return `GeminiCLI/${GEMINI_CLI_VERSION}/${model ?? 'unknown'} (${platform()}; ${arch()}; terminal)`;
 }
+
+/**
+ * Cap on tokens the model can spend on hidden thinking, mirrors
+ * `DEFAULT_THINKING_MODE` from gemini-cli's packages/core/src/config/models.ts.
+ * Without a budget, Gemini 3.x can spiral into long internal monologues that
+ * consume context without producing output. 8K is the upstream default and
+ * what we apply on both the API-key and CloudCode paths.
+ */
+export const DEFAULT_THINKING_MODE = 8192;
 
 // ─── Thought signature (mirrors gemini-cli) ─────────────────────
 
@@ -383,7 +392,7 @@ export async function* streamGenerateContent(
   if (thinkingEnabled) {
     requestWithSession.generationConfig = {
       ...(request.generationConfig as Record<string, unknown> | undefined),
-      thinkingConfig: { includeThoughts: true },
+      thinkingConfig: { includeThoughts: true, thinkingBudget: DEFAULT_THINKING_MODE },
     };
   }
   // ALWAYS inject thoughtSignature on functionCall parts — Gemini 3.x models

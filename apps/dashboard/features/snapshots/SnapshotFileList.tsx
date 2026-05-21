@@ -9,6 +9,10 @@ interface Props {
   onSelect: (baselineId: number) => void;
   showClosed: boolean;
   onToggleShowClosed: (v: boolean) => void;
+  /** When true, render the project name as a small label above the
+   *  file path. Used by the company-scope panel when more than one
+   *  project has snapshots in the same session. */
+  showProjectLabel?: boolean;
 }
 
 function statusKind(f: SnapshotFileSummary): 'A' | 'M' | 'D' {
@@ -32,6 +36,7 @@ export function SnapshotFileList({
   onSelect,
   showClosed,
   onToggleShowClosed,
+  showProjectLabel,
 }: Props) {
   const [filter, setFilter] = useState('');
   const filtered = useMemo(() => {
@@ -75,7 +80,14 @@ export function SnapshotFileList({
               <Badge variant="outline" className={cn('font-mono w-6 justify-center px-1 py-0', STATUS_STYLES[kind])}>
                 {kind}
               </Badge>
-              <span className="flex-1 truncate font-mono">{f.filePath}</span>
+              <span className="flex-1 min-w-0 flex flex-col">
+                {showProjectLabel && f.projectName && (
+                  <span className="text-[9px] uppercase tracking-wide text-muted-foreground truncate">
+                    {f.projectName}
+                  </span>
+                )}
+                <span className="truncate font-mono">{f.filePath}</span>
+              </span>
               {f.oversized ? (
                 <span className="text-[10px] uppercase tracking-wide text-muted-foreground">big</span>
               ) : f.pendingHunks > 0 ? (
@@ -113,7 +125,14 @@ export function SnapshotFileList({
                 <Badge variant="outline" className={cn('font-mono w-6 justify-center px-1 py-0', STATUS_STYLES[kind])}>
                   {kind}
                 </Badge>
-                <span className="flex-1 truncate font-mono line-through">{f.filePath}</span>
+                <span className="flex-1 min-w-0 flex flex-col">
+                  {showProjectLabel && f.projectName && (
+                    <span className="text-[9px] uppercase tracking-wide text-muted-foreground truncate">
+                      {f.projectName}
+                    </span>
+                  )}
+                  <span className="truncate font-mono line-through">{f.filePath}</span>
+                </span>
                 <span className="text-[10px] uppercase tracking-wide">
                   {f.status === 'closed_kept' ? 'kept' : 'reverted'}
                 </span>

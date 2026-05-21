@@ -16,9 +16,25 @@ import { publish as busPublish, markEnded as busMarkEnded } from '@apps/http-api
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 
 export class MetaBusPublisher implements IMetaBusPublisher {
+  /**
+   * Optional callback fired before each publish. Used by `IdleWatchdog`
+   * to reset its "last activity" timestamp without forcing the
+   * watchdog to subscribe to every event type explicitly. Set via
+   * `setActivityListener` after construction so wiring order
+   * (publisher first, watchdog later) stays clean.
+   */
+  private activityListener: (() => void) | null = null;
+
   constructor(readonly bus: CoderRunBus) {}
 
+  setActivityListener(listener: (() => void) | null): void {
+    this.activityListener = listener;
+  }
+
   publish(event: string, data: unknown): void {
+    if (this.activityListener) {
+      try { this.activityListener(); } catch { /* best-effort */ }
+    }
     busPublish(this.bus, event, data);
   }
 

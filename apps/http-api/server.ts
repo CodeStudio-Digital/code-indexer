@@ -18,8 +18,15 @@ import { mountExportRoutes } from './server/routes/export.js';
 import { mountModelsRoutes } from './server/routes/models.js';
 import { mountStatsRoutes } from './server/routes/stats.js';
 import { mountTelemetryRoutes } from './server/routes/telemetry.js';
+import { mountAdminPipelineBindingsRoutes } from './server/routes/admin/pipeline-bindings.js';
+import { mountAdminPipelineTelemetryRoutes } from './server/routes/admin/pipeline-telemetry.js';
+import { mountAdminQualityRoutes } from './server/routes/admin/quality.js';
+import { mountAdminLshRoutes } from './server/routes/admin/lsh.js';
+import { mountAdminDriftRoutes } from './server/routes/admin/drift.js';
+import { mountWorkersDiagnosticRoute } from './server/routes/admin/workers.js';
 import { mountCoderRoutes } from './server/routes/coder/index.js';
 import { mountPreviewRoutes, attachPreviewUpgrade } from './server/routes/preview.js';
+import { attachCompanyStreamUpgrade } from './server/routes/company/ws.js';
 import { mountWorkspaceRoutes } from './server/routes/workspace/index.js';
 import {
   setCompanySandboxStore,
@@ -29,6 +36,22 @@ import {
 import { setCompanyLocalProjectStore } from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
 import { setEnvToolStore } from '@mcp/company/tools/env-tools.js';
 import { setDatabaseToolStores } from '@mcp/company/tools/database-tools.js';
+import {
+  setGlobalToolSelectionFilter,
+  setGlobalToolSelectionOutcomeObserver,
+} from '@mcp/code-agent/tool-selection/index.js';
+import {
+  setGlobalQualityClassifierPipeline,
+  setGlobalQualityClassificationStore,
+  setGlobalQualityInterventionStore,
+  setGlobalQualityResultObserver,
+  setGlobalPolicyEnforcer,
+  PolicyEnforcer,
+} from '@mcp/services/quality/index.js';
+import { setGlobalSubAgentCache } from '@mcp/services/sub-agent-cache/index.js';
+import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relevance/index.js';
+import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
+import { makeQualityAlertObserver } from './server/quality-observer.js';
 import { createMcpHttpApp } from '../mcp-server/http/mcp-http-transport.js';
 import { composeAuth } from './auth/composition.js';
 import { bearerMiddleware, getAuthCtx } from './auth/bearer-middleware.js';
@@ -57,6 +80,9 @@ import {
 import { setQaPreviewConfig } from '@mcp/services/sandbox/sandbox-manager.js';
 import { mountDesignSystemRoutes } from './server/routes/design-system/index.js';
 import { mountConfigRoutes } from './server/routes/config.js';
+import { mountDocsRoutes } from './server/routes/docs/index.js';
+import { setChromeServiceForDocs } from './server/deps.js';
+import { setGlobalDocSearch } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
 
@@ -73,6 +99,61 @@ export function createApp() {
   setCompanyLocalProjectStore(deps.companyLocalProjectStore);
   setEnvToolStore(deps.companySessionEnvStore);
   setDatabaseToolStores(deps.companySessionDatabaseStore, deps.companySessionEnvStore);
+  // Install the global ToolSelectionPipeline filter. When
+  // MCP_PIPELINES_TOOL_SELECTION is unset, buildToolSelectionFilter()
+  // returns undefined and the global stays disabled — zero overhead.
+  setGlobalToolSelectionFilter(deps.buildToolSelectionFilter());
+  setGlobalToolSelectionOutcomeObserver(deps.observeToolSelectionOutcome);
+  // Quality classifiers — pipeline already constructed in deps; we just
+  // install it as the global and toggle it via env flag.
+  setGlobalQualityClassifierPipeline(
+    deps.qualityClassifierPipeline,
+    process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS === '1',
+  );
+  // Read side — the runner peeks at recent verdicts when building each
+  // next system prompt (Wire #1 nudge, Wire #2 tool-misuse intervention).
+  // Always installed; the runner short-circuits via the env flag.
+  setGlobalQualityClassificationStore(deps.qualityClassificationStore);
+  // Quality v2, C4 — Intervention store. Runner records every nudge /
+  // planning intervention; global runner backfills the outcome when the
+  // next classifier turn lands. Powers the "Intervention effectiveness"
+  // dashboard panel.
+  setGlobalQualityInterventionStore(deps.qualityInterventionStore);
+  // Observer side — Wire #4 v2 aggregated alerts. Replaces the v1
+  // per-flag spam with bucketed alerts that flush by threshold/interval
+  // and then cooldown. Also widens coverage from off_topic-only to
+  // off_topic + policy + tool_misuse (each in its own bucket).
+  setGlobalQualityResultObserver(makeQualityAlertObserver());
+  // Wire #5 (Nível 2) — Policy hard-block enforcer. Off by default;
+  // operators opt in with MCP_PIPELINES_POLICY_HARD_BLOCK=1. The
+  // regex pre-filter runs in microseconds — only the optional LLM
+  // classifier path (gated by *_LLM=1) adds latency. We deliberately
+  // keep the classifier path off by default to avoid 500ms-1s per
+  // Bash call.
+  if (process.env.MCP_PIPELINES_POLICY_HARD_BLOCK === '1') {
+    setGlobalPolicyEnforcer(
+      new PolicyEnforcer({
+        useClassifier: process.env.MCP_PIPELINES_POLICY_HARD_BLOCK_LLM === '1',
+      }),
+    );
+  } else {
+    setGlobalPolicyEnforcer(undefined);
+  }
+  // SubAgent result cache — installed unconditionally so even when the
+  // flag is off, future toggles take effect immediately. Enable bit is
+  // separate so the spawn handler can short-circuit before the lookup.
+  setGlobalSubAgentCache(
+    deps.subAgentResultCache,
+    process.env.MCP_PIPELINES_SUB_AGENT_CACHE === '1',
+  );
+  setGlobalContextRelevancePipeline(
+    deps.contextRelevancePipeline,
+    process.env.MCP_PIPELINES_CONTEXT_RELEVANCE === '1',
+  );
+  setGlobalFeedbackCollector(deps.feedbackCollector);
+  // (HotStateCache removed — bench showed SQLite p95 = 33 µs for
+  // tail-polling reads, so the cache was net-negative. See
+  // bench/results/hot-state-cache-baseline-2026-05-20.json.)
   setQaTestRunStore(deps.qaTestRunStore);
   setQaEndpointEnvStore(deps.companySessionEnvStore);
   // Design System is gated by DESIGN_SYSTEM_ENABLED (default ON). When off,
@@ -110,6 +191,10 @@ export function createApp() {
     httpApiPort: deps.config.dashboard.port,
   });
   setChromeService(chromeService);
+  // Hand the same ChromeService to the doc indexer's BrowserBackend so
+  // bot-blocked fetches can escalate to Chromium via the existing WS
+  // endpoint instead of spinning up a private browser per request.
+  setChromeServiceForDocs(chromeService);
 
   // Verdaccio singleton — embedded npm registry for the Design System
   // Creator pipeline. Boot recovery is handled together with chrome's,
@@ -192,6 +277,40 @@ export function createApp() {
   // `errored`. Closes the door on session-68-style ghost runs where the
   // streaming reporter was wired wrong but the agent moved on.
   startQaWatchdog(deps.qaTestRunStore);
+
+  // Documentação: any doc_sources row left in `fetching|indexing` after
+  // a server restart is orphaned (the in-flight `IndexDocumentationUseCase`
+  // didn't survive the process exit). Mark them `error` so the UI shows a
+  // coherent state and the user can hit "Re-indexar".
+  try {
+    const { recovered } = deps.docStore.recoverStaleSources();
+    if (recovered > 0) {
+      console.log(`[doc-indexer] Boot: ${recovered} stale doc_source(s) → error`);
+    }
+  } catch (e) {
+    console.warn(`[doc-indexer] Boot recovery failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // Best-effort drain of the vector tombstone retry queue (migration 088).
+  // Tombstones accumulate when a DELETE source/collection couldn't reach
+  // the remote vector store. This runs OFF the boot critical path via
+  // `setImmediate` — failures don't block startup and any leftovers will
+  // be retried on the next boot.
+  setImmediate(() => {
+    void deps.indexDocsUseCase.sweepTombstones(500)
+      .then(({ drained, still_pending }) => {
+        if (drained > 0 || still_pending > 0) {
+          console.log(
+            `[doc-indexer] Boot: drained ${drained} vector tombstone(s), ${still_pending} still pending`,
+          );
+        }
+      })
+      .catch((e) => {
+        console.warn(
+          `[doc-indexer] Boot tombstone sweep failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      });
+  });
 
   // Verdaccio auto-start: same idempotent pattern as chrome-service.
   void verdaccioService.recoverOnBoot().catch((e) => {
@@ -282,6 +401,12 @@ export function createApp() {
   mountModelsRoutes(app, deps);
   mountStatsRoutes(app, deps);
   mountTelemetryRoutes(app, deps);
+  mountAdminPipelineBindingsRoutes(app, deps);
+  mountAdminPipelineTelemetryRoutes(app, deps);
+  mountAdminQualityRoutes(app, deps);
+  mountAdminLshRoutes(app, deps);
+  mountAdminDriftRoutes(app, deps);
+  mountWorkersDiagnosticRoute(app);
   app.route('/api/admin', createAdminRouter(deps.providerStore));
   mountCoderRoutes(app, deps);
   mountConfigRoutes(app, deps);
@@ -297,17 +422,46 @@ export function createApp() {
   mountPreviewRoutes(app, deps);
   mountWorkspaceRoutes(app, deps);
 
+  // Documentação (RAG) — global doc corpus + ingestion routes. Mounted
+  // alongside its sibling tool wiring: `setGlobalDocSearch` installs the
+  // backend the `rag_search_docs` agent tool reads from at call time, so
+  // the moment routes are live, every agent in this process can search.
+  mountDocsRoutes(app, deps);
+  setGlobalDocSearch(deps.docHybridSearch);
+
   return { app, db: deps.db, chromeService };
 }
 
 export async function startServer(port: number, host: string) {
   const { app, chromeService } = createApp();
   console.log(`MCP Code Indexer API running at http://${host}:${port}`);
+  // Honest worker status — DOES the flag actually take effect, or is
+  // the worker file missing? The legacy log just echoed the env var,
+  // which lied silently when running under tsx without a build.
+  const [{ describeWorkerOrchestratorStatus }, { describeCoderWorkerStatus }] = await Promise.all([
+    import('./sse/workerPoolSingleton.js'),
+    import('./sse/coderWorkerPoolSingleton.js'),
+  ]);
+  const company = describeWorkerOrchestratorStatus();
+  const coder = describeCoderWorkerStatus();
+  const fmt = (s: { enabled: boolean; envFlag: boolean; reason: string | null }): string => {
+    if (s.enabled) return `ON (${s.reason ?? ''})`;
+    if (s.envFlag) return `OFF — ${s.reason}`;
+    return 'off';
+  };
+  console.log(`[workers] company orchestrator: ${fmt(company)}`);
+  console.log(`[workers] coder runs: ${fmt(coder)}`);
+  console.log(
+    `[workers] diagnostics: GET ${host === '0.0.0.0' ? 'localhost' : host}:${port}/api/admin/workers`,
+  );
   // `serve()` returns the underlying Node http.Server. We need that
   // reference to attach the WebSocket upgrade handler for the preview
   // proxy (Vite HMR uses WS). Hono itself has no notion of upgrades.
   const server = serve({ fetch: app.fetch, port, hostname: host });
   attachPreviewUpgrade(server as unknown as import('node:http').Server);
+  // P14: parallel WebSocket transport for company sessions. Default
+  // remains SSE; the dashboard opts in via `?transport=ws`.
+  attachCompanyStreamUpgrade(server as unknown as import('node:http').Server);
 
   // Chrome Service auto-start deferred until after serve() so the
   // /api/health reachability probe inside recoverOnBoot finds the port open.
@@ -339,7 +493,14 @@ const gracefulShutdown = (signal: NodeJS.Signals): void => {
   shuttingDown = true;
   void (async () => {
     try {
-      await Promise.allSettled([closeDbWriter(), closeIndexJobPool()]);
+      const { disposeWorkerOrchestratorPool } = await import('./sse/workerPoolSingleton.js');
+      const { disposeCoderWorkerPool } = await import('./sse/coderWorkerPoolSingleton.js');
+      await Promise.allSettled([
+        closeDbWriter(),
+        closeIndexJobPool(),
+        disposeWorkerOrchestratorPool(),
+        disposeCoderWorkerPool(),
+      ]);
     } catch (err) {
       console.error('[shutdown] worker pool close failed:', err);
     } finally {

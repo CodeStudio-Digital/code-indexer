@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Activity, AlertTriangle, DollarSign, Loader2, Scissors } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
+import { PipelineTelemetryPanel } from '../admin/PipelineTelemetryPanel.js';
+import { QualityPanel } from '../admin/QualityPanel.js';
 
 interface ProviderRow {
   provider: string;
@@ -110,7 +113,60 @@ function sinceForKey(key: string): string | null {
 
 interface ProjectOption { id: number; name: string }
 
+/**
+ * Top-level `/telemetry` page.
+ *
+ * Previously a flat "session telemetry" dashboard, now wrapped in tabs so
+ * the panels that used to live in the admin tray (pipeline traces, hot
+ * state cache, quality classifiers) live next to the global stats they
+ * relate to. Operators land here when they want observability — every
+ * dashboard-shaped panel is one click away from each other instead of
+ * spread between `/admin` tabs and `/telemetry`.
+ *
+ * Tab list:
+ *   - overview  : the existing global session stats (cost, tokens, top tools)
+ *   - pipeline  : per-stage candidate-pipeline traces
+ *   - quality   : 5-classifier verdict distribution + counterfactual stats
+ */
 export function TelemetryDashboard() {
+  const { t } = useTranslation(['telemetry', 'common']);
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Activity className="h-5 w-5" />
+        <h1 className="text-lg font-semibold">{t('telemetry:title')}</h1>
+      </div>
+      <p className="text-sm text-muted-foreground">{t('telemetry:subtitle')}</p>
+
+      <Tabs defaultValue="overview">
+        <TabsList>
+          <TabsTrigger value="overview">{t('telemetry:tabs.overview', { defaultValue: 'Overview' })}</TabsTrigger>
+          <TabsTrigger value="pipeline">{t('telemetry:tabs.pipeline', { defaultValue: 'Pipeline Telemetry' })}</TabsTrigger>
+          <TabsTrigger value="quality">{t('telemetry:tabs.quality', { defaultValue: 'Quality' })}</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="space-y-4">
+          <TelemetryOverview />
+        </TabsContent>
+
+        <TabsContent value="pipeline">
+          <PipelineTelemetryPanel />
+        </TabsContent>
+
+        <TabsContent value="quality">
+          <QualityPanel />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+/**
+ * Original `/telemetry` flat-page content, kept verbatim — overall session
+ * stats with project + since filters. Lives as a sibling tab to the
+ * pipeline / quality panels above.
+ */
+function TelemetryOverview() {
   const { t } = useTranslation(['telemetry', 'common']);
   const [projectId, setProjectId] = useState<number | 'all'>('all');
   const [sinceKey, setSinceKey] = useState<string>('all');
@@ -127,12 +183,6 @@ export function TelemetryDashboard() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <Activity className="h-5 w-5" />
-        <h1 className="text-lg font-semibold">{t('telemetry:title')}</h1>
-      </div>
-      <p className="text-sm text-muted-foreground">{t('telemetry:subtitle')}</p>
-
       {/* Filters: project + since. Both rebind to the same URL — the API
           serves filtered aggregations natively (migration 072). */}
       <div className="flex flex-wrap gap-2 text-xs">

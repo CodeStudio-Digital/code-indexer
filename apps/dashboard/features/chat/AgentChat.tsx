@@ -76,6 +76,14 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [snapshotPending, setSnapshotPending] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [metaSidebarOpen, setMetaSidebarOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    const saved = localStorage.getItem('chatMetaSidebarOpen');
+    return saved == null ? true : saved === 'true';
+  });
+  useEffect(() => {
+    localStorage.setItem('chatMetaSidebarOpen', String(metaSidebarOpen));
+  }, [metaSidebarOpen]);
   const [thinking, setThinking] = useState(false);
   /** PR-4: when set, the Composer's send button flips to "Run pipeline". */
   const [selectedPipelineId, setSelectedPipelineId] = useState<number | null>(null);
@@ -84,7 +92,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const { data: sessionData, refetch: refetchSession, update: updateSessionData } = useApi<SessionData>(sessionUrl);
 
   const stream = useAgentStream(selectedId);
-  const { pipelineRuntime } = usePipelineStream(selectedId);
+  const { pipelineRuntime, openStream: openPipelineStream } = usePipelineStream(selectedId);
   const {
     streaming,
     currentTurn,
@@ -336,10 +344,13 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
       await apiPost(`/coder/sessions/${selectedId}/pipelines/${pipelineId}/start`, {
         initial_input: initialInput,
       });
+      // Now that the executor is registered server-side, open the SSE.
+      // The hook stays closed until this call to avoid the 404-retry loop.
+      openPipelineStream();
     } catch (err) {
       console.warn('[pipeline] start failed:', err);
     }
-  }, [selectedId]);
+  }, [selectedId, openPipelineStream]);
 
 
   /**
@@ -771,7 +782,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
         open={skillConfigOpen}
         onOpenChange={setSkillConfigOpen}
       />
-      <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-4 h-[calc(100dvh-180px)] sm:h-[calc(100dvh-220px)] min-h-[520px] lg:min-h-[600px]">
+      <div className="flex h-full min-h-0">
         <SessionSidebar
           sessions={sessions ?? null}
           groups={groups ?? null}
@@ -813,7 +824,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
           currentProviderModels={currentProviderModels}
         />
 
-        <main className="flex rounded-xl border bg-card overflow-hidden min-h-0">
+        <main className="flex flex-1 min-w-0 bg-card overflow-hidden min-h-0">
           {!selectedId ? (
             <EmptyChatState
               onNew={handleNewSession}
@@ -839,6 +850,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                   onOpenMetrics={() => setMetricsOpen(true)}
                   onOpenSnapshots={() => setSnapshotsOpen(true)}
                   pendingSnapshots={snapshotPending}
+                  metaSidebarOpen={metaSidebarOpen}
+                  onToggleMetaSidebar={() => setMetaSidebarOpen((v) => !v)}
                 />
               )}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -908,7 +921,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 }}
               />
               </div>
-              {sessionData?.session && (
+              {sessionData?.session && metaSidebarOpen && (
                 <SessionStateSidebar
                   sessionId={sessionData.session.id}
                   refreshKey={stateRefreshKey + sidebarRefreshTick}

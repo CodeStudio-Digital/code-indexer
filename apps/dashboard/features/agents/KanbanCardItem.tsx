@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Lock, CheckSquare, Users, Tag } from 'lucide-react';
+import { Lock, CheckSquare, Users, Sparkles } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import type { KanbanCardFull } from '@mcp/company/types.js';
 
@@ -14,9 +14,24 @@ const TAG_COLORS: Record<string, string> = {
 interface KanbanCardItemProps {
   card: KanbanCardFull;
   onClick: () => void;
+  /**
+   * Pipeline-computed priority score (0..something positive after the
+   * weighted-sum normalization). Only displayed when the user has
+   * recomputed priorities at least once this session.
+   */
+  priorityScore?: number;
 }
 
-export const KanbanCardItem = React.memo(function KanbanCardItem({ card, onClick }: KanbanCardItemProps) {
+/** Convert a normalized priority score into a 1-5 dot rating. */
+function scoreToDots(score: number): number {
+  if (score >= 2.0) return 5;
+  if (score >= 1.5) return 4;
+  if (score >= 1.0) return 3;
+  if (score >= 0.5) return 2;
+  return 1;
+}
+
+export const KanbanCardItem = React.memo(function KanbanCardItem({ card, onClick, priorityScore }: KanbanCardItemProps) {
   const { t } = useTranslation('agents');
   const checkedCount = card.checklist.filter((i) => i.checked).length;
   const totalChecklist = card.checklist.length;
@@ -44,8 +59,20 @@ export const KanbanCardItem = React.memo(function KanbanCardItem({ card, onClick
         </div>
       )}
 
+      {/* Priority badge (top-right, only when computed). Dot rating so it's
+          glanceable; tooltip shows the raw score for the curious. */}
+      {priorityScore !== undefined && (
+        <div
+          className="absolute top-2 right-2 flex items-center gap-0.5 text-[10px] text-amber-400"
+          title={`Priority score: ${priorityScore.toFixed(3)}`}
+        >
+          <Sparkles className="h-3 w-3" />
+          <span>{'•'.repeat(scoreToDots(priorityScore))}</span>
+        </div>
+      )}
+
       {/* Title */}
-      <h4 className="text-sm font-medium leading-tight mb-1.5 pr-4 line-clamp-2">
+      <h4 className="text-sm font-medium leading-tight mb-1.5 pr-12 line-clamp-2">
         {card.title}
       </h4>
 

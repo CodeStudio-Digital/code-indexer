@@ -136,6 +136,19 @@ export class MasterLifecycle implements IMasterNotifier {
    */
   private _runnerExited = false;
   private _endedWithError: string | null = null;
+  /**
+   * ISO timestamp of the most recent runner exit (set in
+   * `runner-wiring.ts` `.finally`, cleared on `resurrect`). Surfaced
+   * via the `session_idle` payload so the dashboard can render a
+   * "Master finished at HH:MM" banner.
+   */
+  private _endedAt: string | null = null;
+  /**
+   * ISO timestamp of the most recent user message. Used by
+   * `IdleController` to decide whether a runner exit is "unexpected"
+   * (no recent user activity) or "completed in response to a turn".
+   */
+  private _lastUserMessageAt: string | null = null;
   private _companyContext: CompanyContext | null = null;
   private _promptBlock = '';
   /** Unsubscribe from the permanent `MasterAttention` listener wired in `wireAllForRunner`. */
@@ -176,6 +189,10 @@ export class MasterLifecycle implements IMasterNotifier {
   get isAlive(): boolean { return !this._ended && !!this._handle?.runner; }
   get hasEnded(): boolean { return this._ended; }
   get endedWithError(): string | null { return this._endedWithError; }
+  /** ISO timestamp of when the runner most recently exited. */
+  get endedAt(): string | null { return this._endedAt; }
+  /** ISO timestamp of when a user message most recently arrived. */
+  get lastUserMessageAt(): string | null { return this._lastUserMessageAt; }
 
   setShouldContinue(value: boolean): void {
     this._shouldContinue = value;
@@ -294,6 +311,9 @@ export class MasterLifecycle implements IMasterNotifier {
     else this.deps.idle?.onMasterEnded();
   }
   private notifyIdleUserMessage(): void {
+    // Stamp BEFORE notifying so any synchronous idle re-check that
+    // reads `lastUserMessageAt` sees the fresh value.
+    this._lastUserMessageAt = new Date().toISOString();
     if (this.deps.eventBus) this.deps.eventBus.emit({ type: 'user.message_received' });
     else this.deps.idle?.onUserMessageReceived();
   }
@@ -381,6 +401,7 @@ export class MasterLifecycle implements IMasterNotifier {
       setEnded: (v) => { self._ended = v; },
       setRunnerExited: (v) => { self._runnerExited = v; },
       setEndedWithError: (v) => { self._endedWithError = v; },
+      setEndedAt: (v) => { self._endedAt = v; },
     };
   }
 
@@ -444,6 +465,11 @@ export class MasterLifecycle implements IMasterNotifier {
         this.deps.ctx.companySessionId,
         'running',
       );
+      // P15c — fresh user message resurrects the master; clear the
+      // "Recovered after restart" pill so the dashboard hides it.
+      this.deps.ctx.companyStore.clearSessionRecoveryFlag(
+        this.deps.ctx.companySessionId,
+      );
     } catch { /* ignore */ }
     void this.resurrect(message, attachments, options.thinking);
     return { ok: true };
@@ -487,6 +513,7 @@ export class MasterLifecycle implements IMasterNotifier {
       setRunnerExited: (v) => { self._runnerExited = v; },
       setEnded: (v) => { self._ended = v; },
       setEndedWithError: (v) => { self._endedWithError = v; },
+      setEndedAt: (v) => { self._endedAt = v; },
       get isEnded() { return self._ended; },
       get isRunnerExited() { return self._runnerExited; },
       notifyIdleEnded: () => self.notifyIdleEnded(),

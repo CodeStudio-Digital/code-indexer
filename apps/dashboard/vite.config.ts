@@ -46,6 +46,26 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3333',
         changeOrigin: true,
+        // SSE (text/event-stream) responses must NOT be buffered — http-proxy
+        // defaults swallow chunked responses until close. Explicitly clear
+        // `accept-encoding` on the way out and surface `X-Accel-Buffering: no`
+        // on the way back so the dashboard sees events the moment the server
+        // flushes them, not at stream close.
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            const accept = (req.headers.accept ?? '') as string;
+            if (accept.includes('text/event-stream')) {
+              proxyReq.setHeader('accept-encoding', 'identity');
+            }
+          });
+          proxy.on('proxyRes', (proxyRes) => {
+            const ctype = (proxyRes.headers['content-type'] ?? '') as string;
+            if (ctype.includes('text/event-stream')) {
+              proxyRes.headers['x-accel-buffering'] = 'no';
+              proxyRes.headers['cache-control'] = 'no-cache, no-transform';
+            }
+          });
+        },
       },
       '/preview': {
         target: 'http://localhost:3333',

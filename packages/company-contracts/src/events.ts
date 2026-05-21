@@ -93,10 +93,39 @@ export type KanbanCardUnassignedData = { cardId: number; agentRunId: number };
 export interface SessionIdlePayload {
   reason?: string;
   errorDetail?: string;
+  /**
+   * Timestamp (ISO) of when the master's runner exited. Set by
+   * `runner-wiring.ts` `.finally` and propagated through `IdleController`
+   * so the dashboard can render a "Master finished at HH:MM" banner.
+   * Distinguishes "still busy, just idle for a bit" from "actually ended".
+   */
+  endedAt?: string;
+  /**
+   * True when the runner exit looked unexpected (errored, or terminated
+   * with no recent user message). The dashboard shows a persistent
+   * orange banner with `errorDetail` instead of the soft "finished" toast.
+   */
+  unexpected?: boolean;
 }
 
 export interface ErrorPayload {
   error?: string;
+}
+
+/**
+ * P15b — published by `IdleWatchdog` when the orchestrator has gone N
+ * minutes without any bus activity AND the master is still alive AND
+ * no subordinates are running. Indicates a likely deadlock (master
+ * blocked on a tool wait, all subs blocked too).
+ *
+ * Fired ONCE per stall window. Reset when any activity comes through
+ * the publisher; re-fires after the next stall threshold is reached.
+ */
+export interface SessionStalledPayload {
+  /** Milliseconds since the last bus activity. */
+  stalledSinceMs: number;
+  /** Free-form reason — currently always 'no_progress'. */
+  reason: 'no_progress';
 }
 
 // ─── Sandbox ───────────────────────────────────────────────────

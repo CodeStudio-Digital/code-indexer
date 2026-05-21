@@ -197,22 +197,29 @@ export function useCompanySiblings(rootSessionId: number | null) {
     async (childId: number): Promise<boolean> => {
       if (rootSessionId == null) return false;
       const parentId = state.parent?.id ?? rootSessionId;
-      try {
-        const res = await fetch(`/api/company/sessions/${parentId}/children/${childId}`, {
-          method: 'DELETE',
-        });
-        if (!res.ok) return false;
-        sessionRemoveChild(parentId, childId);
-        // Active front just disappeared — fall back to Main so the URL
-        // isn't pointing at a dead child id.
-        if (activeSessionId === childId) {
-          navigateToFront('main');
+      const res = await fetch(`/api/company/sessions/${parentId}/children/${childId}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        // Parse the backend's error message and surface it as an Error
+        // so `FrontTabsBar.handleArchive` shows the real reason instead
+        // of the generic "server rejected the request" toast.
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = (await res.json()) as { error?: string };
+          if (body.error) detail = body.error;
+        } catch {
+          /* response had no JSON body */
         }
-        return true;
-      } catch (e) {
-        console.error('archiveChild failed:', e);
-        return false;
+        throw new Error(detail);
       }
+      sessionRemoveChild(parentId, childId);
+      // Active front just disappeared — fall back to Main so the URL
+      // isn't pointing at a dead child id.
+      if (activeSessionId === childId) {
+        navigateToFront('main');
+      }
+      return true;
     },
     [rootSessionId, state.parent, sessionRemoveChild, activeSessionId, navigateToFront],
   );

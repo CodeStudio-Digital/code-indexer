@@ -157,6 +157,32 @@ export interface ChatUsage {
   thinking_tokens?: number;
 }
 
+export interface ChatProviderResponseMeta {
+  /**
+   * Provider endpoint path, sanitized to exclude host, query secrets, and body.
+   * Example: `/v1/messages`.
+   */
+  path?: string | null;
+  request?: {
+    api_model?: string | null;
+    requested_model?: string | null;
+    display_model?: string | null;
+    max_tokens?: number | null;
+    stream?: boolean | null;
+    betas?: string[] | null;
+    thinking_type?: string | null;
+    effort?: string | null;
+  };
+  response?: {
+    status?: number | null;
+    ok?: boolean | null;
+    request_id?: string | null;
+    retry_after?: string | null;
+    x_should_retry?: string | null;
+    rate_limits?: Record<string, string | null> | null;
+  };
+}
+
 /**
  * Streaming events emitted by ChatProvider.chat() and re-emitted by the runner.
  */
@@ -167,6 +193,7 @@ export type ChatDelta =
   | { type: 'tool_call_args'; id: string; partial_json: string }
   | { type: 'tool_call_end'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'usage'; usage: ChatUsage }
+  | { type: 'response_meta'; meta: ChatProviderResponseMeta }
   /**
    * Server-side response identifier returned by stateful APIs (currently only
    * the OpenAI Responses API used by ChatGPT/Codex with `store: true`). The

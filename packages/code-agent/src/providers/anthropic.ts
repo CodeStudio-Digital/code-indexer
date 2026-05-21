@@ -1,6 +1,11 @@
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
-import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import type {
+  AgentMessage,
+  ChatDelta,
+  ChatProviderResponseMeta,
+  ContentBlock,
+} from '@mcp/code-agent/core/messages.js';
 
 type AnthropicResolvedRequestModel = {
   apiModel: string;
@@ -27,6 +32,23 @@ type AnthropicStreamEvent = {
   content_block?: { type?: string; id?: string; name?: string };
   delta?: { type?: string; text?: string; partial_json?: string };
   usage?: { output_tokens?: number };
+};
+
+type AnthropicHeadersLike = {
+  get(name: string): string | null;
+  forEach(callback: (value: string, key: string) => void): void;
+};
+
+type AnthropicResponseLike = {
+  status: number;
+  ok: boolean;
+  headers: AnthropicHeadersLike;
+};
+
+type AnthropicRawStreamResult = {
+  stream: AsyncIterable<AnthropicStreamEvent>;
+  response: AnthropicResponseLike | null;
+  requestId: string | null | undefined;
 };
 
 /**
@@ -167,18 +189,47 @@ export class AnthropicChatProvider implements ChatProvider {
     };
     let stream: AsyncIterable<AnthropicStreamEvent>;
     let finalMessage: (() => Promise<{ usage?: Partial<AnthropicStreamUsage> }>) | null = null;
+    let responseMeta: ChatProviderResponseMeta | null = null;
     if (this.streamViaCreate) {
-      stream = await this.createRawStream(params, req.signal);
+      const raw = await this.createRawStream(params, req.signal);
+      stream = raw.stream;
+      responseMeta = buildAnthropicResponseMeta({
+        params,
+        response: raw.response,
+        requestId: raw.requestId,
+        resolvedModel,
+        useBetaMessages: this.useBetaMessages,
+      });
     } else if (this.useBetaMessages) {
       const helper = this.client.beta.messages.stream(
         params as Parameters<typeof this.client.beta.messages.stream>[0],
       );
-      stream = helper as AsyncIterable<AnthropicStreamEvent>;
+      const wrapped = await helper.withResponse();
+      stream = wrapped.data as AsyncIterable<AnthropicStreamEvent>;
       finalMessage = () => helper.finalMessage() as Promise<{ usage?: Partial<AnthropicStreamUsage> }>;
+      responseMeta = buildAnthropicResponseMeta({
+        params,
+        response: wrapped.response,
+        requestId: wrapped.request_id,
+        resolvedModel,
+        useBetaMessages: true,
+      });
     } else {
       const helper = this.client.messages.stream(params as Anthropic.MessageStreamParams);
-      stream = helper as AsyncIterable<AnthropicStreamEvent>;
+      const wrapped = await helper.withResponse();
+      stream = wrapped.data as AsyncIterable<AnthropicStreamEvent>;
       finalMessage = () => helper.finalMessage() as Promise<{ usage?: Partial<AnthropicStreamUsage> }>;
+      responseMeta = buildAnthropicResponseMeta({
+        params,
+        response: wrapped.response,
+        requestId: wrapped.request_id,
+        resolvedModel,
+        useBetaMessages: false,
+      });
+    }
+
+    if (responseMeta) {
+      yield { type: 'response_meta', meta: responseMeta };
     }
 
     // Track in-progress tool uses indexed by content block index
@@ -289,21 +340,103 @@ export class AnthropicChatProvider implements ChatProvider {
   private async createRawStream(
     params: Record<string, unknown>,
     signal?: AbortSignal,
-  ): Promise<AsyncIterable<AnthropicStreamEvent>> {
+  ): Promise<AnthropicRawStreamResult> {
     const requestOptions = signal ? { signal } : undefined;
     if (this.useBetaMessages) {
       const response = await this.client.beta.messages.create(
         { ...params, stream: true } as Parameters<typeof this.client.beta.messages.create>[0],
         requestOptions,
       ).withResponse();
-      return response.data as AsyncIterable<AnthropicStreamEvent>;
+      return {
+        stream: response.data as AsyncIterable<AnthropicStreamEvent>,
+        response: response.response,
+        requestId: response.request_id,
+      };
     }
     const response = await this.client.messages.create(
       { ...params, stream: true } as Anthropic.MessageCreateParamsStreaming,
       requestOptions,
     ).withResponse();
-    return response.data as AsyncIterable<AnthropicStreamEvent>;
+    return {
+      stream: response.data as AsyncIterable<AnthropicStreamEvent>,
+      response: response.response,
+      requestId: response.request_id,
+    };
   }
+}
+
+function buildAnthropicResponseMeta(input: {
+  params: Record<string, unknown>;
+  response: AnthropicResponseLike | null;
+  requestId: string | null | undefined;
+  resolvedModel: AnthropicResolvedRequestModel | undefined;
+  useBetaMessages: boolean;
+}): ChatProviderResponseMeta {
+  const headers = input.response?.headers ?? null;
+  const thinking = asRecord(input.params.thinking);
+  const outputConfig = asRecord(input.params.output_config);
+  const betas = Array.isArray(input.params.betas)
+    ? input.params.betas.filter((b): b is string => typeof b === 'string')
+    : null;
+  const requestId =
+    input.requestId ??
+    headers?.get('request-id') ??
+    headers?.get('anthropic-request-id') ??
+    headers?.get('x-request-id') ??
+    null;
+  const effort =
+    input.resolvedModel?.effort ??
+    asString(outputConfig?.effort) ??
+    asString(thinking?.effort) ??
+    null;
+
+  return {
+    path: input.useBetaMessages ? '/v1/messages?beta=true' : '/v1/messages',
+    request: {
+      api_model: asString(input.params.model) ?? input.resolvedModel?.apiModel ?? null,
+      requested_model: input.resolvedModel?.requestedModel ?? null,
+      display_model: input.resolvedModel?.displayModel ?? null,
+      max_tokens: asNumber(input.params.max_tokens),
+      stream: true,
+      betas,
+      thinking_type: asString(thinking?.type),
+      effort,
+    },
+    response: {
+      status: input.response?.status ?? null,
+      ok: input.response?.ok ?? null,
+      request_id: requestId,
+      retry_after: headers?.get('retry-after') ?? null,
+      x_should_retry: headers?.get('x-should-retry') ?? null,
+      rate_limits: collectAnthropicRateLimitHeaders(headers),
+    },
+  };
+}
+
+function collectAnthropicRateLimitHeaders(headers: AnthropicHeadersLike | null): Record<string, string | null> | null {
+  if (!headers) return null;
+  const out: Record<string, string | null> = {};
+  headers.forEach((value, key) => {
+    const lower = key.toLowerCase();
+    if (lower.startsWith('anthropic-ratelimit-')) {
+      out[lower] = value;
+    }
+  });
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function toAnthropicMessage(m: AgentMessage): Anthropic.MessageParam | null {

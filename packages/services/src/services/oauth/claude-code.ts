@@ -736,8 +736,6 @@ export function getClaudeCodeBetasForModel(
   },
 ): string[] {
   const cleanModel = claudeCodeModelFamily(model);
-  const experimentalBetasEnabled =
-    !isTruthyEnv(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS);
   const modernFirstPartyModel = isClaudeCodeModernFirstPartyModel(model);
   const supportsInterleavedThinking = supportsClaudeCodeInterleavedThinking(model);
   const betas: string[] = [];
@@ -745,17 +743,15 @@ export function getClaudeCodeBetasForModel(
   if (includeOAuth) betas.push(CLAUDE_CODE_OAUTH_BETA);
   if (isClaudeCodeOneMillionContext(model)) betas.push(CLAUDE_CODE_CONTEXT_1M_BETA);
   if (
-    experimentalBetasEnabled &&
     supportsInterleavedThinking &&
     !isTruthyEnv(process.env.DISABLE_INTERLEAVED_THINKING)
   ) {
     betas.push(CLAUDE_CODE_INTERLEAVED_THINKING_BETA);
-    if (!opts?.thinkingDisplay) betas.push(CLAUDE_CODE_REDACT_THINKING_BETA);
   }
-  if (experimentalBetasEnabled && modernFirstPartyModel) {
+  if (modernFirstPartyModel) {
     betas.push(CLAUDE_CODE_CONTEXT_MANAGEMENT_BETA);
   }
-  if (experimentalBetasEnabled) betas.push(CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA);
+  if (modernFirstPartyModel) betas.push(CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA);
   if (opts?.hasEffort) betas.push(CLAUDE_CODE_EFFORT_BETA);
   // token-efficient-tools-2025-02-19 only matters when tools are present and
   // the request runs against a modern Claude 4+ model. The upstream bundle
@@ -763,7 +759,7 @@ export function getClaudeCodeBetasForModel(
   // because it shrinks tool-call serialization with no behavioral downside,
   // gated by an env opt-out.
   if (
-    experimentalBetasEnabled &&
+    !isTruthyEnv(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS) &&
     modernFirstPartyModel &&
     opts?.hasTools &&
     !isTruthyEnv(process.env.CLAUDE_CODE_DISABLE_TOKEN_EFFICIENT_TOOLS)
@@ -945,7 +941,10 @@ export function buildClaudeCodeTokenExchangeRequest(input: {
   return {
     url: CLAUDE_CODE_TOKEN_URL,
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'anthropic-version': CLAUDE_CODE_ANTHROPIC_VERSION,
+      'Content-Type': 'application/json',
+    },
     body,
   };
 }
@@ -966,7 +965,10 @@ export function buildClaudeCodeRefreshRequest(input: {
   return {
     url: CLAUDE_CODE_TOKEN_URL,
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'anthropic-version': CLAUDE_CODE_ANTHROPIC_VERSION,
+      'Content-Type': 'application/json',
+    },
     body,
   };
 }

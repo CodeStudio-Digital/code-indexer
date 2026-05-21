@@ -33,6 +33,10 @@
       "@mcp/company/*": ["packages/company/src/*"],
       "@mcp/company-contracts": ["packages/company-contracts/src/index.ts"],
       "@mcp/company-contracts/*": ["packages/company-contracts/src/*"],
+      "@mcp/candidate-pipeline": ["packages/candidate-pipeline/src/index.ts"],
+      "@mcp/candidate-pipeline/*": ["packages/candidate-pipeline/src/*"],
+      "@mcp/orchestrator-host": ["packages/orchestrator-host/src/index.ts"],
+      "@mcp/orchestrator-host/*": ["packages/orchestrator-host/src/*"],
       "@apps/*": ["apps/*"]
     }
   }

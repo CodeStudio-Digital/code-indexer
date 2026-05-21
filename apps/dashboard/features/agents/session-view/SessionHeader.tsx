@@ -2,7 +2,6 @@ import { useTranslation } from 'react-i18next';
 import {
   Crown,
   FolderGit2,
-  Monitor,
   PanelLeft,
   PanelLeftClose,
   RefreshCw,
@@ -29,9 +28,22 @@ interface SessionHeaderProps {
   siblings: ReturnType<typeof useCompanySiblings>;
   agentPanelOpen: boolean;
   onToggleAgentPanel: () => void;
-  /** When set, renders the preview-panel toggle button (right side). */
-  previewPanelOpen?: boolean;
-  onTogglePreviewPanel?: () => void;
+  /**
+   * Outer-app toggle: shows/hides the sessions-list sidebar owned by
+   * `AgentsTab`. When omitted (e.g. on routes that don't sit inside
+   * AgentsTab) the button is hidden. Same icon as the agent-panel
+   * toggle on purpose — both are panel toggles, but they operate on
+   * different sidebars.
+   */
+  sessionsListOpen?: boolean;
+  onToggleSessionsList?: () => void;
+  /**
+   * P15c — ISO timestamp set by the boot-time recovery sweep when the
+   * server restart caught this session in `running` status. Renders a
+   * "Recovered" pill so the user understands why the session is paused.
+   */
+  recoveredAt?: string | null;
+  recoveredReason?: string | null;
   onResetClick: () => void;
 }
 
@@ -51,8 +63,10 @@ export function SessionHeader({
   siblings,
   agentPanelOpen,
   onToggleAgentPanel,
-  previewPanelOpen,
-  onTogglePreviewPanel,
+  sessionsListOpen,
+  onToggleSessionsList,
+  recoveredAt,
+  recoveredReason,
   onResetClick,
 }: SessionHeaderProps) {
   const { t } = useTranslation('agents');
@@ -64,11 +78,51 @@ export function SessionHeader({
 
   return (
     <div className="px-4 py-2.5 border-b flex items-center gap-2 flex-wrap">
+      {onToggleSessionsList && (
+        <button
+          type="button"
+          className={cn(
+            'p-1.5 rounded-md transition-colors shrink-0',
+            sessionsListOpen
+              ? 'bg-muted text-foreground'
+              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+          )}
+          onClick={onToggleSessionsList}
+          title={sessionsListOpen ? t('fronts.closeList', 'Close sessions list') : t('fronts.openList', 'Open sessions list')}
+        >
+          {sessionsListOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
+        </button>
+      )}
+      <button
+        type="button"
+        className={cn(
+          'p-1.5 rounded-md transition-colors shrink-0',
+          agentPanelOpen
+            ? 'bg-muted text-foreground'
+            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+        )}
+        onClick={onToggleAgentPanel}
+        title={t('company.toggleAgents')}
+      >
+        {agentPanelOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
+      </button>
       <Users className="h-4 w-4 text-muted-foreground" />
       <h2 className="text-sm font-semibold">{sessionName}</h2>
       <Badge variant={stream.connected ? 'default' : 'outline'} className="text-[10px]">
         {stream.connected ? t('company.live') : (reportedStatus ?? sessionStatus)}
       </Badge>
+      {recoveredAt && (
+        <Badge
+          variant="outline"
+          className="text-[10px] gap-1 border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+          title={t('sessionRecovered.tooltip', 'This session was paused by a server restart on {{at}}. Send a message to resume.', {
+            at: formatRecoveredAt(recoveredAt),
+            reason: recoveredReason,
+          })}
+        >
+          {t('sessionRecovered.badge', 'Recovered')}
+        </Badge>
+      )}
       {totalFronts > 1 && runningFronts > 0 && (
         <span className="text-[10px] text-muted-foreground">
           {runningFronts}/{totalFronts} fronts
@@ -119,35 +173,17 @@ export function SessionHeader({
       >
         <RotateCcw className="h-3.5 w-3.5 mr-1" /> Reset
       </Button>
-      <button
-        type="button"
-        className={cn(
-          'p-1.5 rounded-md transition-colors shrink-0',
-          !stream.masterState && 'ml-auto',
-          agentPanelOpen
-            ? 'bg-muted text-foreground'
-            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-        )}
-        onClick={onToggleAgentPanel}
-        title={t('company.toggleAgents')}
-      >
-        {agentPanelOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
-      </button>
-      {onTogglePreviewPanel && (
-        <button
-          type="button"
-          className={cn(
-            'p-1.5 rounded-md transition-colors shrink-0',
-            previewPanelOpen
-              ? 'bg-muted text-foreground'
-              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-          )}
-          onClick={onTogglePreviewPanel}
-          title="Toggle preview panel"
-        >
-          <Monitor className="h-4 w-4" />
-        </button>
-      )}
     </div>
   );
+}
+
+/** Format a SQLite/ISO timestamp into a short locale string. */
+function formatRecoveredAt(ts: string): string {
+  try {
+    const iso = ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z';
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? ts : d.toLocaleString();
+  } catch {
+    return ts;
+  }
 }

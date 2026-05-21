@@ -1,18 +1,21 @@
 /**
- * Poll `/api/company/sessions/:id/services` every 5s while mounted.
+ * Fetch `/api/company/sessions/:id/services` once on mount + refetch
+ * on sandbox service events.
  *
- * Manual SSE replacement would be a follow-up; until then 5s polling
- * is enough granularity for the status transitions users actually
- * notice (provisioning → ready, ready → error). Polling is paused
- * implicitly when the panel unmounts via the cleanup return.
- *
- * Extracted from `ServicesSidebar.tsx` so the sidebar component itself
- * stays focused on render decisions, and the polling logic can be
- * reused/tested in isolation.
+ * Naming kept for backward-compat — the hook used to poll every 5 s.
+ * Post-P14b it's purely SSE-driven: any `sandbox.service.*` event
+ * bumps `sandboxSlice.servicesSeq`, and this hook re-runs its fetch
+ * on the bump. A 5 s polling fallback fires ONLY when the company
+ * stream is disconnected.
  */
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import {
+  selectSandbox,
+  selectStream,
+  useCompanyStore,
+} from '../../../state/company/index.js';
 import type { ServiceRow } from './types.js';
 
 export interface UseServicesPollingResult {
@@ -24,13 +27,19 @@ export interface UseServicesPollingResult {
   setError: (msg: string | null) => void;
 }
 
+const DISCONNECTED_HEARTBEAT_MS = 5_000;
+
 export function useServicesPolling(sessionId: number): UseServicesPollingResult {
   const { t } = useTranslation('agents');
   const [services, setServices] = useState<ServiceRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [manualSeq, setManualSeq] = useState(0);
 
-  async function reload() {
+  const servicesSeq = useCompanyStore((s) => selectSandbox(s, sessionId).servicesSeq);
+  const connected = useCompanyStore((s) => selectStream(s, sessionId).connected);
+
+  async function reload(): Promise<void> {
     setLoading(true);
     try {
       const r = await fetch(`/api/company/sessions/${sessionId}/services`);
@@ -46,14 +55,20 @@ export function useServicesPolling(sessionId: number): UseServicesPollingResult 
     }
   }
 
+  // Initial fetch + refetch on service events / manual refresh.
   useEffect(() => {
     void reload();
-    // Poll every 5s while the panel is open so status transitions
-    // (provisioning → ready) surface without a dedicated SSE stream.
-    const interval = setInterval(reload, 5_000);
-    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, servicesSeq, manualSeq]);
+
+  // Disconnected-only fallback: tick a manual refresh every 5 s when
+  // the company SSE stream is closed (dormant session). Cleared as
+  // soon as the stream reconnects and event-driven refresh resumes.
+  useEffect(() => {
+    if (connected) return;
+    const id = setInterval(() => setManualSeq((n) => n + 1), DISCONNECTED_HEARTBEAT_MS);
+    return () => clearInterval(id);
+  }, [connected]);
 
   return { services, loading, error, reload, setError };
 }

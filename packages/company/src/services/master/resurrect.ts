@@ -48,6 +48,8 @@ export interface MasterResurrectStateMutators {
   setEnded: (v: boolean) => void;
   setRunnerExited: (v: boolean) => void;
   setEndedWithError: (v: string | null) => void;
+  /** Clear the ended-at timestamp when the runner restarts. */
+  setEndedAt: (v: string | null) => void;
 }
 
 export interface MasterResurrectDeps {
@@ -113,6 +115,7 @@ export async function resurrectMaster(
     deps.state.setEnded(false);
     deps.state.setRunnerExited(false);
     deps.state.setEndedWithError(null);
+    deps.state.setEndedAt(null);
     deps.state.refreshHandle(handle.runner, handle.done);
 
     // Flush queued messages that arrived during spin-up.

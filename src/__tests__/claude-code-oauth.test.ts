@@ -8,6 +8,7 @@ import {
   buildClaudeCodeTokenExchangeRequest,
   claudeCodeAuthHeaders,
   createClaudeCodeFetchWithRetry,
+  getClaudeCodeBetasForModel,
   parseClaudeCodeRateLimitHeaders,
 } from '@mcp/services/services/oauth/claude-code.js';
 
@@ -63,7 +64,10 @@ describe('Claude Code OAuth parity helpers', () => {
     })).toEqual({
       url: 'https://platform.claude.com/v1/oauth/token',
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
       body: {
         grant_type: 'authorization_code',
         code: 'code',
@@ -85,7 +89,10 @@ describe('Claude Code OAuth parity helpers', () => {
     expect(buildClaudeCodeRefreshRequest({ refreshToken: 'refresh' })).toEqual({
       url: 'https://platform.claude.com/v1/oauth/token',
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
       body: {
         grant_type: 'refresh_token',
         refresh_token: 'refresh',
@@ -106,6 +113,29 @@ describe('Claude Code OAuth parity helpers', () => {
     expect(claudeCodeAuthHeaders({ apiKey: 'sk-test' })).toMatchObject({
       'x-api-key': 'sk-test',
     });
+  });
+
+  it('keeps official Claude Code default betas even when optional experimental betas are disabled', () => {
+    process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = '1';
+    try {
+      const betas = getClaudeCodeBetasForModel('claude-opus-4-7[1m]', true, {
+        hasEffort: true,
+        hasTools: true,
+      });
+      expect(betas).toEqual([
+        'claude-code-20250219',
+        'oauth-2025-04-20',
+        'context-1m-2025-08-07',
+        'interleaved-thinking-2025-05-14',
+        'context-management-2025-06-27',
+        'prompt-caching-scope-2026-01-05',
+        'effort-2025-11-24',
+      ]);
+      expect(betas).not.toContain('token-efficient-tools-2025-02-19');
+      expect(betas).not.toContain('redact-thinking-2026-02-12');
+    } finally {
+      delete process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
+    }
   });
 });
 

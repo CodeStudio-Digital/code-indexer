@@ -13,7 +13,9 @@ describe('tool tiers', () => {
     // Locked-down count so accidental additions show up in CI.
     // Bumped to 41 when `find_tools` + `request_review` were added (Camadas
     // 3 and 4 — lazy tool discovery and reviewer subagent).
-    expect(TIER_COUNTS.bootstrap).toBe(41);
+    // Bumped to 42 when `rag_search_docs` joined (Documentação feature —
+    // read-only RAG over the user-curated doc corpus).
+    expect(TIER_COUNTS.bootstrap).toBe(42);
   });
 
   it('navigate tier contains the expected tools', () => {

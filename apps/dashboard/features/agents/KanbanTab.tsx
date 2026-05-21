@@ -1,6 +1,6 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Loader2 } from 'lucide-react';
+import { Plus, Loader2, Sparkles, X } from 'lucide-react';
 import { KanbanColumn } from './KanbanColumn.js';
 import { KanbanCardModal } from './KanbanCardModal.js';
 import { useKanbanState } from './useKanbanState.js';
@@ -18,6 +18,11 @@ import type {
   KanbanTag,
 } from '@mcp/company/types.js';
 import { KANBAN_COLUMNS } from '@mcp/company/types.js';
+import {
+  recomputeKanbanPriorities,
+  type KanbanPriorityDiagnostic,
+} from './recommendations-api.js';
+import { RecommendRoleDialog } from './RecommendRoleDialog.js';
 
 interface KanbanTabProps {
   companySessionId: number;
@@ -33,6 +38,33 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
   });
   const [newTitle, setNewTitle] = useState('');
   const [newTag, setNewTag] = useState<KanbanTag | ''>('');
+  // Priority-pipeline state — populated when the user clicks "Recompute
+  // priorities". Cards display badges + columns sort by score until the
+  // user clears it.
+  const [priorityDiag, setPriorityDiag] = useState<KanbanPriorityDiagnostic[] | null>(null);
+  const [priorityLoading, setPriorityLoading] = useState(false);
+  const [priorityError, setPriorityError] = useState<string | null>(null);
+  const [recommendOpen, setRecommendOpen] = useState(false);
+  const [recommendTask, setRecommendTask] = useState('');
+  const priorityScores = useMemo(() => {
+    if (!priorityDiag) return undefined;
+    const m = new Map<number, number>();
+    for (const d of priorityDiag) m.set(d.id, d.score);
+    return m;
+  }, [priorityDiag]);
+
+  const handleRecomputePriorities = useCallback(async () => {
+    setPriorityLoading(true);
+    setPriorityError(null);
+    try {
+      const result = await recomputeKanbanPriorities(companySessionId);
+      setPriorityDiag(result.diagnostics);
+    } catch (e) {
+      setPriorityError((e as Error).message);
+    } finally {
+      setPriorityLoading(false);
+    }
+  }, [companySessionId]);
 
   // Group cards by column
   const cardsByColumn = new Map<KanbanColumnType, KanbanCardFull[]>();
@@ -94,6 +126,49 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
           {kanban.error}
         </div>
       )}
+      {priorityError && (
+        <div className="mx-3 mt-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded text-sm text-amber-400">
+          Priority recompute failed: {priorityError}
+        </div>
+      )}
+
+      {/* Toolbar: priority pipeline trigger + clear */}
+      <div className="px-3 pt-2 pb-1 flex items-center gap-2 text-xs">
+        <Button
+          size="sm"
+          variant={priorityScores ? 'default' : 'outline'}
+          onClick={() => void handleRecomputePriorities()}
+          disabled={priorityLoading}
+        >
+          {priorityLoading ? (
+            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+          ) : (
+            <Sparkles className="h-3 w-3 mr-1" />
+          )}
+          {priorityScores ? 'Refresh priorities' : 'Recompute priorities'}
+        </Button>
+        {priorityScores && (
+          <Button size="sm" variant="ghost" onClick={() => setPriorityDiag(null)}>
+            <X className="h-3 w-3 mr-1" /> Clear
+          </Button>
+        )}
+        {priorityScores && (
+          <span className="text-muted-foreground">
+            {priorityScores.size} cards ranked — columns sorted by score
+          </span>
+        )}
+        <div className="flex-1" />
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            setRecommendTask('');
+            setRecommendOpen(true);
+          }}
+        >
+          <Sparkles className="h-3 w-3 mr-1" /> Recommend role
+        </Button>
+      </div>
 
       {/* Columns */}
       <div className="flex-1 overflow-x-auto p-3">
@@ -106,6 +181,7 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
               onCardClick={handleCardClick}
               onDrop={handleDrop}
               onCreateCard={handleCreateCard}
+              priorityScores={priorityScores}
             />
           ))}
         </div>
@@ -176,6 +252,14 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Recommend role dialog (PR12 — RolePipeline integration) */}
+      <RecommendRoleDialog
+        sessionId={companySessionId}
+        open={recommendOpen}
+        onClose={() => setRecommendOpen(false)}
+        initialTask={recommendTask}
+      />
     </div>
   );
 }

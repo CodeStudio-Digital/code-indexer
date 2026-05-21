@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Bot, Gauge, GitCompare, Info, PanelLeft, Sparkles, Wrench } from 'lucide-react';
+import { AlertTriangle, Bot, Gauge, GitCompare, Info, PanelLeft, PanelRightClose, PanelRightOpen, Sparkles, Wrench } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -31,9 +31,13 @@ interface ChatHeaderProps {
   onOpenSnapshots?: () => void;
   /** Pending file-snapshot count to badge on the Snapshots button. 0 hides the badge. */
   pendingSnapshots?: number;
+  /** Whether the right-side Meta sidebar is currently open. */
+  metaSidebarOpen?: boolean;
+  /** Toggle the Meta sidebar (goal/tasks/skills/services). Hides the button if undefined. */
+  onToggleMetaSidebar?: () => void;
 }
 
-export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, pendingSnapshots }: ChatHeaderProps) {
+export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar }: ChatHeaderProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Persisted (from DB) + runtime delta (current run, if streaming).
   const totalIn = session.total_input_tokens;
@@ -210,6 +214,33 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
           </TooltipTrigger>
           <TooltipContent>{t('chat:header.sessionDetails')}</TooltipContent>
         </Tooltip>
+        {onToggleMetaSidebar && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={metaSidebarOpen ? t('chat:header.hideMeta') : t('chat:header.showMeta')}
+                aria-pressed={metaSidebarOpen}
+                onClick={onToggleMetaSidebar}
+                className={cn(
+                  'hidden lg:inline-flex p-1.5 rounded-md transition-colors',
+                  metaSidebarOpen
+                    ? 'bg-accent text-accent-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                {metaSidebarOpen ? (
+                  <PanelRightClose className="h-4 w-4" />
+                ) : (
+                  <PanelRightOpen className="h-4 w-4" />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {metaSidebarOpen ? t('chat:header.hideMeta') : t('chat:header.showMeta')}
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
     </div>
   );

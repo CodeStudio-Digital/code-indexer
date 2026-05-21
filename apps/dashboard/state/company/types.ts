@@ -85,6 +85,32 @@ export interface StreamState {
   userMessage: string | null;
   /** Master error detail when `session_idle` reports `master_error`. */
   masterErrorDetail: string | null;
+  /**
+   * P15a — ISO timestamp of the most recent master runner exit. Drives
+   * the "Master finished at HH:MM" banner. Cleared when the master is
+   * resurrected on the next user turn.
+   */
+  masterEndedAt: string | null;
+  /**
+   * P15a — true when the most recent runner exit looked unexpected
+   * (errored, or no user message in the prior 30s). Renders an orange
+   * persistent banner; false renders a soft auto-dismiss info toast.
+   */
+  masterEndedUnexpected: boolean;
+  /**
+   * P15b — milliseconds since the last bus activity at the moment
+   * `session_stalled` fired. `null` when the session is making
+   * progress; cleared by any activity reducer (board, agent_event, etc.).
+   */
+  sessionStalledSinceMs: number | null;
+  /**
+   * P15d — current SSE lifecycle phase. Drives a thin top strip that
+   * tells the user we're catching up after a reconnect (`replaying`)
+   * or the connection broke and is about to retry (`disconnected`).
+   * `connected` field is the boolean health summary; this one carries
+   * the finer-grained state.
+   */
+  connectionPhase: 'connecting' | 'replaying' | 'live' | 'disconnected' | 'idle';
 }
 
 export const INITIAL_STREAM_STATE: StreamState = {
@@ -98,6 +124,10 @@ export const INITIAL_STREAM_STATE: StreamState = {
   error: null,
   userMessage: null,
   masterErrorDetail: null,
+  masterEndedAt: null,
+  masterEndedUnexpected: false,
+  sessionStalledSinceMs: null,
+  connectionPhase: 'idle',
 };
 
 // ─── Sibling/front-tab slice state ────────────────────────────

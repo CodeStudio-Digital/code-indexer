@@ -93,6 +93,10 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'glob',
   'todo_write',
   'invoke_skill',
+  // RAG over the user-managed documentation corpus (Documentação sidebar).
+  // Read-only, parallel-safe; always available so any agent mode can fall
+  // back to external docs instead of guessing or hammering web_fetch.
+  'rag_search_docs',
   // Skill discovery — needed in lazy/compact modes so the agent can fetch
   // skill descriptions and bodies on demand without paying for them up front.
   'get_skills_list',
@@ -295,6 +299,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   glob: 'Find files matching a glob pattern',
   todo_write: 'Update the lightweight todo list sidebar',
   invoke_skill: 'Invoke a reusable skill by ID',
+  rag_search_docs: 'Search the indexed documentation corpus (Documentação)',
   // ─── Subordinate kanban ──────────────────────────────────────
   post_to_board: 'Post to the shared company board',
   read_board: 'Read shared company board messages',

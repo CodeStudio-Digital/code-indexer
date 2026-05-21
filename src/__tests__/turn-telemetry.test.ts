@@ -60,6 +60,29 @@ describe('coder_turn_telemetry — SessionStore.recordTurnTelemetry', () => {
       compaction_triggered: false,
       summarizer_ran: false,
       paginate_count: 0,
+      response_meta: {
+        path: '/v1/messages?beta=true',
+        request: {
+          api_model: 'claude-sonnet-4-6-20260320',
+          requested_model: 'default',
+          display_model: 'Sonnet 4.6',
+          max_tokens: 64000,
+          stream: true,
+          betas: ['oauth-2025-04-20'],
+          thinking_type: 'enabled',
+          effort: 'high',
+        },
+        response: {
+          status: 200,
+          ok: true,
+          request_id: 'req_test',
+          retry_after: null,
+          x_should_retry: null,
+          rate_limits: {
+            'anthropic-ratelimit-unified-status': 'allowed',
+          },
+        },
+      },
     });
 
     const rows = store.getTurnTelemetry(sessionId);
@@ -74,6 +97,21 @@ describe('coder_turn_telemetry — SessionStore.recordTurnTelemetry', () => {
     expect(row.largest_tool_result_chars).toBe(9000);
     expect(row.is_subagent).toBe(0);
     expect(row.compaction_triggered).toBe(0);
+    expect(row.request_api_model).toBe('claude-sonnet-4-6-20260320');
+    expect(row.request_requested_model).toBe('default');
+    expect(row.request_display_model).toBe('Sonnet 4.6');
+    expect(row.request_max_tokens).toBe(64000);
+    expect(row.request_stream).toBe(1);
+    expect(JSON.parse(String(row.request_betas_json))).toEqual(['oauth-2025-04-20']);
+    expect(row.request_thinking_type).toBe('enabled');
+    expect(row.request_effort).toBe('high');
+    expect(row.response_status).toBe(200);
+    expect(row.response_ok).toBe(1);
+    expect(row.response_request_id).toBe('req_test');
+    expect(row.response_path).toBe('/v1/messages?beta=true');
+    expect(JSON.parse(String(row.response_rate_limits_json))).toEqual({
+      'anthropic-ratelimit-unified-status': 'allowed',
+    });
   });
 
   it('preserves turn ordering and tags subagent rows', () => {

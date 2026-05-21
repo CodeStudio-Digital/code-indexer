@@ -1,5 +1,6 @@
 import React from 'react';
 import { CompanySessionView } from '../agents/CompanySessionView.js';
+import { useExtraServices } from '../agents/preview-sidebar/useExtraServices.js';
 import { PreviewPanel } from './PreviewPanel.js';
 import { useSandboxStatus } from './useSandboxStatus.js';
 
@@ -23,9 +24,19 @@ export interface BuilderViewProps {
   sessionId: number;
   sessionName: string;
   sessionStatus: string;
+  /** Forwarded to `CompanySessionView` so its header can host the
+   *  sessions-list toggle owned by `AgentsTab`. */
+  sessionsListOpen?: boolean;
+  onToggleSessionsList?: () => void;
 }
 
-export function BuilderView({ sessionId, sessionName, sessionStatus }: BuilderViewProps) {
+export function BuilderView({
+  sessionId,
+  sessionName,
+  sessionStatus,
+  sessionsListOpen,
+  onToggleSessionsList,
+}: BuilderViewProps) {
   const { data, refresh, retry, restartDev } = useSandboxStatus(sessionId);
   const [leftPct, setLeftPct] = usePersistedRatio(sessionId, 0.55);
   // Monotonically-incrementing counter bumped whenever the server emits
@@ -41,51 +52,12 @@ export function BuilderView({ sessionId, sessionName, sessionStatus }: BuilderVi
     return () => window.removeEventListener(eventName, handler);
   }, [sessionId]);
 
-  // Poll the multi-service list so the preview's switcher dropdown
-  // sees additions/removals without relying on the sandbox.service.*
-  // SSE event wiring. 4s cadence balances freshness vs load — the
-  // add/remove flows complete in tens of seconds anyway.
-  const [extraServices, setExtraServices] = React.useState<
-    Array<{ id: string; label: string; previewUrl: string; status: string; runtimePaused?: boolean }>
-  >([]);
-  React.useEffect(() => {
-    let cancelled = false;
-    async function reload() {
-      try {
-        const r = await fetch(`/api/company/sessions/${sessionId}/services`);
-        if (!r.ok) return;
-        const body = (await r.json()) as {
-          services: Array<{
-            service_id: string;
-            name: string;
-            status: string;
-            runtime_paused?: boolean;
-            preview_url: string | null;
-          }>;
-        };
-        if (cancelled) return;
-        setExtraServices(
-          (body.services ?? [])
-            .filter((s) => !!s.preview_url)
-            .map((s) => ({
-              id: s.service_id,
-              label: s.name || s.service_id,
-              previewUrl: s.preview_url!,
-              status: s.status,
-              runtimePaused: !!s.runtime_paused,
-            })),
-        );
-      } catch {
-        /* keep last-known list on transient failure */
-      }
-    }
-    void reload();
-    const t = setInterval(reload, 4_000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [sessionId]);
+  // Multi-service list for the preview switcher. Post-P14b this reads
+  // from the shared SSE-driven `useExtraServices` hook instead of the
+  // legacy 4 s setInterval that used to live here and a separate
+  // duplicate in the preview-sidebar hook. One source of truth, zero
+  // polling while the company SSE stream is alive.
+  const extraServices = useExtraServices(sessionId);
 
   const draggingRef = React.useRef(false);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -100,6 +72,8 @@ export function BuilderView({ sessionId, sessionName, sessionStatus }: BuilderVi
         sessionId={sessionId}
         sessionName={sessionName}
         sessionStatus={sessionStatus}
+        sessionsListOpen={sessionsListOpen}
+        onToggleSessionsList={onToggleSessionsList}
       />
     );
   }
@@ -124,32 +98,13 @@ export function BuilderView({ sessionId, sessionName, sessionStatus }: BuilderVi
 
   return (
     <div ref={containerRef} className="flex h-full w-full min-h-0">
-      <div style={{ width: `${leftPct * 100}%` }} className="min-w-0 flex flex-col">
+      <div style={{ width: `${100}%` }} className="min-w-0 flex flex-col">
         <CompanySessionView
           sessionId={sessionId}
           sessionName={sessionName}
           sessionStatus={sessionStatus}
-        />
-      </div>
-      {/* Drag handle. `cursor-col-resize` + a 4px hit area keeps the
-          divider unobtrusive but grabbable. */}
-      <div
-        onPointerDown={startDrag}
-        onPointerMove={onDrag}
-        onPointerUp={endDrag}
-        className="w-1 bg-border hover:bg-primary/40 cursor-col-resize flex-shrink-0"
-        role="separator"
-        aria-orientation="vertical"
-      />
-      <div style={{ width: `${(1 - leftPct) * 100}%` }} className="min-w-0">
-        <PreviewPanel
-          snapshot={data}
-          onRefresh={refresh}
-          onRetry={retry}
-          onRestartDev={restartDev}
-          sessionId={sessionId}
-          fileChangeTick={fileChangeTick}
-          extraServices={extraServices}
+          sessionsListOpen={sessionsListOpen}
+          onToggleSessionsList={onToggleSessionsList}
         />
       </div>
     </div>

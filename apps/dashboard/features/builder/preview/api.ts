@@ -115,6 +115,10 @@ export const workspaceApi = {
       `${base(sid, pid)}/git/commit`,
       { message },
     ),
+  gitPush: (sid: number, pid: number) =>
+    postJson<{ ok: boolean; message: string; setUpstream: boolean; status: GitStatusResponse }>(
+      `${base(sid, pid)}/git/push`,
+    ),
   suggestCommitMessage: (sid: number, pid: number) =>
     postJson<{ message: string }>(`${base(sid, pid)}/git/suggest-commit-message`),
   suggestStaging: (sid: number, pid: number) =>

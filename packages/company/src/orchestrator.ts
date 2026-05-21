@@ -45,6 +45,7 @@ import { BoardBridge } from '@mcp/company/services/BoardBridge.js';
 import { AgentStatusUpdater } from '@mcp/company/services/AgentStatusUpdater.js';
 import { HumanInTheLoop } from '@mcp/company/services/HumanInTheLoop.js';
 import { IdleController } from '@mcp/company/services/IdleController.js';
+import { IdleWatchdog } from '@mcp/company/services/IdleWatchdog.js';
 import { SubordinateLifecycle, type SpawnSubordinateSpec } from '@mcp/company/services/SubordinateLifecycle.js';
 import { MasterLifecycle, type RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
 import { MasterAttention, type AttentionListener } from '@mcp/company/services/MasterAttention.js';
@@ -218,6 +219,8 @@ export class CompanyOrchestrator {
       master: {
         get endedWithError() { return master.endedWithError; },
         get hasEnded() { return master.hasEnded; },
+        get endedAt() { return master.endedAt; },
+        get lastUserMessageAt() { return master.lastUserMessageAt; },
       },
       consumeMasterShouldContinue: () =>
         humanInLoop.consumeMasterShouldContinue() || master.consumeShouldContinue(),
@@ -228,6 +231,22 @@ export class CompanyOrchestrator {
       },
     });
     (this as unknown as { idle: IdleController }).idle = idle;
+
+    // P15b — IdleWatchdog publishes `session_stalled` after N minutes
+    // of bus inactivity while the master is still alive and no
+    // subordinates are running. The publisher's activity listener
+    // ticks the watchdog without it having to subscribe to each event
+    // type explicitly. Stopped on dispose so a long-evicted orchestrator
+    // doesn't leak the interval.
+    const watchdog = new IdleWatchdog({
+      ctx: this.ctx,
+      bus: this.publisher,
+      master: { get hasEnded() { return master.hasEnded; } },
+      subordinates,
+    });
+    this.publisher.setActivityListener(() => watchdog.recordActivity());
+    watchdog.start();
+    (this as unknown as { watchdog: IdleWatchdog }).watchdog = watchdog;
 
     // Pipelines: thin CRUD + executor that drives subordinates through a
     // stored graph. Constructed last because the executor needs the
@@ -793,6 +812,8 @@ export class CompanyOrchestrator {
     const finalStatus = opts.finalStatus ?? 'error';
     this.ctx.markAborted();
     this.idle.clear();
+    const watchdog = (this as unknown as { watchdog?: IdleWatchdog }).watchdog;
+    if (watchdog) watchdog.dispose();
     this.subordinates.abortAll();
     this.master.abort();
     try {

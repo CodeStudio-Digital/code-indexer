@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import {
   createAuthClient,
   streamGenerateContent as cloudCodeStream,
+  DEFAULT_THINKING_MODE,
   type StreamChunk,
 } from '@mcp/services/services/cloudcode.js';
 
@@ -106,6 +107,9 @@ export class GeminiChatProvider implements ChatProvider {
           tools,
           abortSignal: req.signal,
           ...(typeof temperature === 'number' ? { temperature } : {}),
+          ...(req.thinking
+            ? { thinkingConfig: { includeThoughts: true, thinkingBudget: DEFAULT_THINKING_MODE } }
+            : {}),
         },
       });
     } catch (e) {
@@ -115,7 +119,7 @@ export class GeminiChatProvider implements ChatProvider {
     // Gemini emits complete function calls per chunk (no partial-json streaming
     // the way OpenAI does). We still emit tool_call_start + tool_call_args +
     // tool_call_end so the runner's bookkeeping stays uniform across providers.
-    let lastUsage: { input: number; output: number; cachedRead: number } | null = null;
+    let lastUsage: { input: number; output: number; cachedRead: number; thinking: number } | null = null;
     let finishReason: string | undefined;
 
     try {
@@ -124,7 +128,10 @@ export class GeminiChatProvider implements ChatProvider {
       const parts: Part[] = candidate?.content?.parts ?? [];
 
       for (const part of parts) {
-        if (part.thought) continue; // Thought parts are informational; skip in the public stream.
+        if (part.thought && typeof part.text === 'string' && part.text.length > 0) {
+          yield { type: 'thinking_delta', text: part.text };
+          continue;
+        }
         if (typeof part.text === 'string' && part.text.length > 0) {
           yield { type: 'text_delta', text: part.text };
         }
@@ -144,6 +151,7 @@ export class GeminiChatProvider implements ChatProvider {
           input: chunk.usageMetadata.promptTokenCount ?? 0,
           output: chunk.usageMetadata.candidatesTokenCount ?? 0,
           cachedRead: chunk.usageMetadata.cachedContentTokenCount ?? 0,
+          thinking: chunk.usageMetadata.thoughtsTokenCount ?? 0,
         };
       }
       if (candidate?.finishReason) {
@@ -158,6 +166,7 @@ export class GeminiChatProvider implements ChatProvider {
           input_tokens: lastUsage.input,
           output_tokens: lastUsage.output,
           cache_read_input_tokens: lastUsage.cachedRead,
+          thinking_tokens: lastUsage.thinking || undefined,
         },
       };
     }
@@ -435,7 +444,7 @@ function humanizeGeminiError(e: unknown, model: string): string {
       // fieldViolations is an unknown model id. Detect it via a known-good
       // prefix check — Gemini's current public models all start with
       // `gemini-1.5-`, `gemini-2.0-`, or `gemini-2.5-`.
-      const KNOWN_PREFIXES = ['gemini-1.5-', 'gemini-2.0-', 'gemini-2.5-', 'gemini-embedding'];
+      const KNOWN_PREFIXES = ['gemini-1.5-', 'gemini-2.0-', 'gemini-2.5-', 'gemini-3-', 'gemini-3.1-', 'gemini-embedding'];
       const looksLikeUnknownModel = !KNOWN_PREFIXES.some((p) => model.startsWith(p));
       if (looksLikeUnknownModel) {
         return (

@@ -9,6 +9,7 @@ import type { ProviderName, IndexProgress, IndexResult } from '@mcp/shared/types
 import { createProviderAsync } from '../../providers/factory.js';
 import type { LLMProvider } from '@mcp/indexer/indexer/providers/base.js';
 import { IndexAgent, type EmbeddingProgress } from '@mcp/indexer/indexer/indexer.js';
+import type { LshIndexingSink } from '@mcp/indexer/indexer/lsh-indexing-sink.js';
 import { ProjectError } from './errors.js';
 
 export interface IndexProjectInput {
@@ -26,6 +27,13 @@ export interface IndexUseCaseDeps {
   costTracker: CostTracker;
   webhookDispatcher: WebhookDispatcher;
   config: IndexerConfig;
+  /**
+   * Optional LSH indexing sink. When MCP_LSH_INDEXING=1, the host wires
+   * `RealLshIndexingSink` so the indexer populates
+   * `embedding_simhash_signatures` + `embedding_lsh_buckets` alongside
+   * the vector store. Undefined → `NullLshIndexingSink` (no-op).
+   */
+  lshIndexingSink?: LshIndexingSink;
 }
 
 /** Payload passed to `onStart` before any work begins. Shape kept stable so SSE clients don't regress. */
@@ -233,7 +241,7 @@ export class IndexProjectUseCase {
   }
 
   private buildAgent(provider: LLMProvider, configOverride?: IndexerConfig): IndexAgent {
-    const { db, embeddingService, vectorStore, costTracker, webhookDispatcher, config } = this.deps;
+    const { db, embeddingService, vectorStore, costTracker, webhookDispatcher, config, lshIndexingSink } = this.deps;
     return new IndexAgent(
       db,
       provider,
@@ -242,6 +250,7 @@ export class IndexProjectUseCase {
       costTracker,
       webhookDispatcher,
       configOverride ?? config,
+      lshIndexingSink,
     );
   }
 }

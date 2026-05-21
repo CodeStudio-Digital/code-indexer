@@ -21,6 +21,10 @@ import { AuthPanel } from './AuthPanel.js';
 import { GeneralAiPanel } from './GeneralAiPanel.js';
 import { ChromeServicePanel } from './ChromeServicePanel.js';
 import { VerdaccioPanel } from './VerdaccioPanel.js';
+import { PipelineBindingsPanel } from './PipelineBindingsPanel.js';
+// PipelineTelemetryPanel / QualityPanel were moved
+// to the `/telemetry` page (they're observability surfaces, not config).
+// The Pipelines tab below is the only one that stays here.
 import { useAdminProviders } from './hooks/useAdminProviders.js';
 import type { AdminProvider } from './types.js';
 
@@ -52,6 +56,7 @@ export default function Admin() {
   const [editing, setEditing] = useState<Partial<AdminProvider> | null>(null);
   const [bedrockOpen, setBedrockOpen] = useState(false);
   const [copilotOpen, setCopilotOpen] = useState(false);
+  const [claudeCodeProviderId, setClaudeCodeProviderId] = useState<string | null>(null);
   const [claudeCodeOpen, setClaudeCodeOpen] = useState(false);
   const [chatgptOpen, setChatgptOpen] = useState(false);
   const [googleOpen, setGoogleOpen] = useState(false);
@@ -86,6 +91,7 @@ export default function Admin() {
           <TabsTrigger value="ai-geral">IA Geral</TabsTrigger>
           <TabsTrigger value="chrome-service">Chrome Service</TabsTrigger>
           <TabsTrigger value="verdaccio">Verdaccio</TabsTrigger>
+          <TabsTrigger value="pipeline-bindings">Pipelines</TabsTrigger>
           <TabsTrigger value="auth">{t('admin:tabs.auth')}</TabsTrigger>
         </TabsList>
 
@@ -94,7 +100,13 @@ export default function Admin() {
             <Button variant="outline" onClick={() => setCopilotOpen(true)}>
               {t('admin:connectCopilot')}
             </Button>
-            <Button variant="outline" onClick={() => setClaudeCodeOpen(true)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setClaudeCodeProviderId(null);
+                setClaudeCodeOpen(true);
+              }}
+            >
               {t('admin:connectClaudeCode')}
             </Button>
             <Button variant="outline" onClick={() => setGoogleOpen(true)}>
@@ -146,7 +158,16 @@ export default function Admin() {
                 onLoadProviderModels={loadModels}
                 onRefresh={() => refresh(p.id)}
                 onEdit={() => setEditing(p)}
-                onConnect={p.kind === 'kimi-code' ? () => setKimiCodeOpen(true) : undefined}
+                onConnect={
+                  p.kind === 'kimi-code'
+                    ? () => setKimiCodeOpen(true)
+                    : p.kind === 'claude-code'
+                      ? () => {
+                          setClaudeCodeProviderId(p.id);
+                          setClaudeCodeOpen(true);
+                        }
+                      : undefined
+                }
                 onRemove={() => remove(p.id)}
                 onToggleModel={(modelId, mode, enabled) => toggleModel(p.id, modelId, mode, enabled)}
                 onSetModelEffort={(modelId, mode, level) => setModelEffort(p.id, modelId, mode, level)}
@@ -201,6 +222,10 @@ export default function Admin() {
           <VerdaccioPanel />
         </TabsContent>
 
+        <TabsContent value="pipeline-bindings">
+          <PipelineBindingsPanel />
+        </TabsContent>
+
         <TabsContent value="auth">
           <AuthPanel />
         </TabsContent>
@@ -230,7 +255,11 @@ export default function Admin() {
       )}
       {claudeCodeOpen && (
         <ClaudeCodeConnectionDialog
-          onClose={() => setClaudeCodeOpen(false)}
+          providerId={claudeCodeProviderId ?? undefined}
+          onClose={() => {
+            setClaudeCodeOpen(false);
+            setClaudeCodeProviderId(null);
+          }}
           onConnected={handleConnected}
         />
       )}

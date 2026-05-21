@@ -12,6 +12,7 @@
     { "path": "../services" },
     { "path": "../code-agent" },
     { "path": "../design-system" },
-    { "path": "../company-contracts" }
+    { "path": "../company-contracts" },
+    { "path": "../candidate-pipeline" }
   ]
 }

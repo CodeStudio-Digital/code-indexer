@@ -11,6 +11,10 @@ import {
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
+import {
+  coderWorkerEnabled,
+  getCoderWorkerPool,
+} from '../../../sse/coderWorkerPoolSingleton.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import { withSessionLock } from './sessionLock.js';
 import { enrichContentWithActiveSkills } from './active-skills.js';
@@ -119,6 +123,64 @@ export function mountCoderStreamRoutes(
       | { kind: 'fresh'; bus: ReturnType<typeof createBus> }
       | { kind: 'reject'; status: 409; body: { error: string; code: string } }
     > => {
+      // P17 — worker-backed coder path. Same decision tree, but the
+      // runner lives in a dedicated worker_thread. Synchronous runner
+      // pokes (`isWaitingForInput`, `pushUserMessage`, `interruptWait`)
+      // become RPC round-trips via `CoderWorkerPool`. We short-circuit
+      // BEFORE the legacy decision tree so the rest of this function
+      // stays untouched when the flag is off.
+      if (coderWorkerEnabled()) {
+        const pool = getCoderWorkerPool();
+        const existingBus = pool.getBus(id);
+        if (existingBus && !existingBus.ended) {
+          if (body.attachments && body.attachments.length > 0) {
+            return {
+              kind: 'reject',
+              status: 409,
+              body: {
+                error: 'attachments are only supported on the first message of a session — drop them or wait for the current run to finish',
+                code: 'ATTACHMENTS_MIDRUN_UNSUPPORTED',
+              },
+            };
+          }
+          const waiting = await pool.isWaitingForInput(id).catch(() => false);
+          if (waiting) {
+            if (!body.interject) {
+              return {
+                kind: 'reject',
+                status: 409,
+                body: {
+                  error: 'runner is waiting for an interactive answer — use /answer or /plan-response, or pass {"interject": true} to override',
+                  code: 'INTERACTION_PENDING',
+                },
+              };
+            }
+            await pool.interruptWait(id).catch(() => undefined);
+          }
+          const userMsg: AgentMessage = {
+            role: 'user',
+            content: [{ type: 'text', text: body.content }],
+          };
+          sessionStore.appendMessage(id, userMsg);
+          await pool.pushUserMessage(id, body.content);
+          return { kind: 'attach', bus: existingBus, tailFrom: existingBus.nextSeq - 1 };
+        }
+        // Fresh run via the worker — `runFresh` spawns the worker (if
+        // needed), kicks off `runCoder()` inside it, and returns the
+        // main-side mirrored bus the route can pump to SSE.
+        const freshBus = await pool.runFresh(id, {
+          userMessage: body.content,
+          attachments: body.attachments,
+          maxTurns: body.max_turns,
+          planMode: body.plan_mode,
+          agent: body.agent,
+          profile: body.profile,
+          worktree: body.worktree,
+          thinking: body.thinking,
+        });
+        return { kind: 'fresh', bus: freshBus };
+      }
+
       const existing = activeRuns.get(id);
       if (existing && !existing.ended) {
         // Attachments are intentionally not supported on enqueue-and-attach:
@@ -213,9 +275,16 @@ export function mountCoderStreamRoutes(
       });
     }
 
-    // Fresh run: fire runCoder fire-and-forget. The HTTP response only
-    // subscribes to the bus — if the client disconnects, the run keeps
-    // producing events into the buffer until it finishes.
+    // Fresh run. When the worker flag is on, `pool.runFresh()` already
+    // kicked off `runCoder()` inside the worker — the route just
+    // pumps the mirrored bus to SSE and returns.
+    if (coderWorkerEnabled()) {
+      return pumpBusToSSE(c, decision.bus, { heartbeat: false });
+    }
+    // Legacy in-process fresh run: fire runCoder fire-and-forget. The
+    // HTTP response only subscribes to the bus — if the client
+    // disconnects, the run keeps producing events into the buffer
+    // until it finishes.
     const bus = decision.bus;
     void (async () => {
       try {
@@ -232,6 +301,10 @@ export function mountCoderStreamRoutes(
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
           onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
+          // Wire the ToolSelectionPipeline filter. Returns `undefined` when
+          // MCP_PIPELINES_TOOL_SELECTION is off, so the runner skips the
+          // hook with zero overhead.
+          toolSelectionFilter: deps.buildToolSelectionFilter(),
         });
         setBusRunner(bus, handle.runner);
         publish(bus, 'session', handle.session);
@@ -300,6 +373,7 @@ export function mountCoderStreamRoutes(
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
           onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
+          toolSelectionFilter: deps.buildToolSelectionFilter(),
         });
         setBusRunner(bus, handle.runner);
         publish(bus, 'session', handle.session);
