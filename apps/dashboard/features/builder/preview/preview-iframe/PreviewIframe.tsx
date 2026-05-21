@@ -56,29 +56,14 @@ export function PreviewIframe({
       ? extraServices.find((s) => s.id === selectedService) ?? null
       : null;
 
-  // Phase 4: when the chosen service uses `port-direct`, the iframe bypasses
-  // the `/preview/${id}` proxy and loads `http://localhost:${hostPort}`
-  // directly. This is the path for projects whose dev server doesn't
-  // tolerate a path prefix (Next dev, raw Vite with `--base /`, etc.).
-  // The proxied URL stays as the fallback for everything else.
-  function resolveIframeSrc(): string {
-    if (activeExtra) {
-      if (
-        activeExtra.previewStrategy === 'port-direct' &&
-        typeof activeExtra.hostPort === 'number' &&
-        activeExtra.hostPort > 0
-      ) {
-        return `http://localhost:${activeExtra.hostPort}/`;
-      }
-      return activeExtra.previewUrl;
-    }
-    // The primary's strategy is encoded by the dashboard's primary
-    // service entry in `extraServices` when present. When absent (the
-    // typical case in builder mode), fall back to the legacy proxy URL
-    // built by the sandbox manager.
-    return sandbox?.previewUrl ?? '';
-  }
-  const effectivePreviewUrl = resolveIframeSrc();
+  // Phase C: the sandbox manager now emits a direct loopback URL
+  // (http://127.0.0.1:<hostPort>/) for both primary and secondary
+  // services — the `/preview/:id` proxy was removed. The old
+  // per-stack strategy switch collapses to "render whatever the API
+  // returned", with no path-rewriting fallback.
+  const effectivePreviewUrl = activeExtra
+    ? activeExtra.previewUrl
+    : sandbox?.previewUrl ?? '';
   const effectiveStatus = activeExtra
     ? activeExtra.status === 'ready' || activeExtra.status === 'running'
       ? 'ready'

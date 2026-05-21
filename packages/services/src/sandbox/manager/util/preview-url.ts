@@ -10,12 +10,14 @@ export function resolvePublicBase(): string | null {
 }
 
 /**
- * Default preview URL: relative to the API origin; the preview proxy
- * rewrites `/preview/:id/*` onto `http://127.0.0.1:<hostPort>/`.
- * Subdomain strategies override this via `SandboxManagerOptions.buildPreviewUrl`.
+ * Default preview URL: direct loopback URL to the dev-server inside the
+ * container. The previous proxy at `/preview/:id/*` was removed in
+ * Phase C of the "living company" restructure — single-user dev doesn't
+ * need the auth/path-rewriting middle layer. Subdomain strategies
+ * override this via `SandboxManagerOptions.buildPreviewUrl`.
  */
-export function defaultPreviewUrl(sessionId: string, _hostPort: number): string {
-  return `/preview/${encodeURIComponent(sessionId)}/`;
+export function defaultPreviewUrl(_sessionId: string, hostPort: number): string {
+  return `http://127.0.0.1:${hostPort}/`;
 }
 
 /**

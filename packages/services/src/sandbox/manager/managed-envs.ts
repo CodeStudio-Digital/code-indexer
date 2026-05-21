@@ -34,7 +34,7 @@ import {
 } from '@apps/http-api/server/routes/preview-auth.js';
 import { buildQaPreviewBaseUrl } from '@mcp/services/qa/url-resolver.js';
 import { absolutize } from '@mcp/services/sandbox/manager/util/paths.js';
-import { previewPathPrefixOf, resolvePublicBase } from '@mcp/services/sandbox/manager/util/preview-url.js';
+import { resolvePublicBase } from '@mcp/services/sandbox/manager/util/preview-url.js';
 
 export interface ManagedEnvsDeps {
   envStore: CompanySessionEnvStore | null;
@@ -82,14 +82,19 @@ export function syncManagedEnvs(sessionId: string, deps: ManagedEnvsDeps): void 
     const hostname = idUpper === 'MAIN' ? 'main' : idUpper.toLowerCase();
     desired.set(`SERVICE_URL_${idUpper}`, `http://${hostname}:${sb.containerPort}`);
 
-    // QA preview URL through the http-api proxy, reachable from
-    // sibling containers on different networks (the Chrome Service).
-    if (qaEnabled && sb.previewUrl) {
-      const previewPath = previewPathPrefixOf(sb.previewUrl);
+    // QA preview URL — Phase C: the http-api proxy is gone, so sibling
+    // containers (the Chrome Service) reach the sandbox dev server via
+    // the host gateway alias + the sandbox's loopback port directly.
+    // The port-allocator binds 127.0.0.1, so this assumes the operator
+    // configured rootless Podman / Docker Desktop where the gateway
+    // alias can reach host loopback. Operators on plain Linux Docker
+    // can override via `MCP_QA_API_BASE` (still honored by
+    // `buildQaPreviewBaseUrl` and propagated here).
+    if (qaEnabled && sb.previewUrl && sb.hostPort > 0) {
       const url = buildQaPreviewBaseUrl({
-        httpApiPort: deps.qaPreviewConfig!.httpApiPort,
+        httpApiPort: sb.hostPort,
         runtime: deps.qaRuntime,
-        previewPath,
+        previewPath: '/',
       });
       desired.set(`PLAYWRIGHT_BASE_URL_${idUpper}`, url);
       if (idUpper === 'MAIN') desired.set('PLAYWRIGHT_BASE_URL', url);

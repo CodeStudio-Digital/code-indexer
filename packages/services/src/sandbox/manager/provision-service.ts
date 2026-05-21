@@ -167,7 +167,10 @@ export async function provisionAdditionalService(
   }
 
   const hostPort = await deps.allocator.acquire();
-  const previewUrl = `/preview/${encodeURIComponent(req.sessionId)}/_svc/${encodeURIComponent(req.serviceId)}/`;
+  // Phase C: direct loopback URL — the /preview/:id/_svc/:serviceId/ proxy
+  // was removed. Vite/Next/etc. inside the container serve at root, so
+  // `base: '/'` works without prefix injection.
+  const previewUrl = `http://127.0.0.1:${hostPort}/`;
   const seedLimits = { ...DEFAULT_SANDBOX_LIMITS, ...(req.limits ?? {}) };
   const serviceSandboxId = `${req.sessionId}:${req.serviceId}`;
   const mountKind = req.mountKind ?? 'owned';

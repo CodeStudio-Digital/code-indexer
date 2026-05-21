@@ -147,7 +147,8 @@ export class LocalProcessManager {
     }
 
     const port = await this.allocator.acquire();
-    const previewUrl = `/preview/${encodeURIComponent(input.sessionId)}/`;
+    // Phase C: direct loopback URL — the /preview/:id/ proxy was removed.
+    const previewUrl = `http://127.0.0.1:${port}/`;
     const args = [...input.args];
     const env = { ...input.env, PORT: String(port), HOST: '127.0.0.1' };
     const now = Date.now();

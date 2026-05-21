@@ -123,8 +123,11 @@ describe('syncManagedEnvs (QA gating)', () => {
     });
     manager.syncManagedEnvs('3');
     const env = envStore.asRecord(3);
+    // Phase C: the URL now points at the sandbox's loopback port via
+    // the gateway alias — the http-api proxy that used to wear
+    // `/preview/<id>/` is gone. `injectFakeSandbox` sets hostPort=5173.
     expect(env.PLAYWRIGHT_BASE_URL_MAIN).toMatch(
-      /^http:\/\/host\.(containers|docker)\.internal:3333\/preview\/3\/$/,
+      /^http:\/\/host\.(containers|docker)\.internal:5173\/$/,
     );
     expect(env.PLAYWRIGHT_BASE_URL).toBe(env.PLAYWRIGHT_BASE_URL_MAIN);
     expect(env.MCP_PREVIEW_COOKIE).toMatch(/^3\.\d+\.[0-9a-f]+$/);
@@ -200,7 +203,7 @@ describe('syncManagedEnvs (QA gating)', () => {
     try {
       manager.syncManagedEnvs('7');
       const env = envStore.asRecord(7);
-      expect(env.PLAYWRIGHT_BASE_URL).toBe('https://qa.example.com/preview/7/');
+      expect(env.PLAYWRIGHT_BASE_URL).toBe('https://qa.example.com/');
     } finally {
       if (saved === undefined) delete process.env.MCP_QA_API_BASE;
       else process.env.MCP_QA_API_BASE = saved;

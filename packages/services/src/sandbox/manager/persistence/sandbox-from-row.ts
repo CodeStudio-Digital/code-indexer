@@ -51,8 +51,9 @@ export function buildPrimarySandboxFromRow(
 
 /**
  * Build a secondary-service `Sandbox` from a persisted row. Pure.
- * Mirrors the previewUrl scheme emitted by `provisionAdditionalService`
- * so the `_svc` sentinel in `preview.ts` continues to match.
+ * Mirrors the direct-port URL emitted by `provisionAdditionalService`
+ * — the `/preview/:id/_svc/:serviceId/` proxy was removed in Phase C
+ * of the "living company" restructure.
  */
 export function buildServiceSandboxFromRow(
   row: PersistedSandboxServiceRow,
@@ -60,7 +61,7 @@ export function buildServiceSandboxFromRow(
   runtimePaused: boolean,
   opts: { devServerPort: number },
 ): Sandbox {
-  const previewUrl = `/preview/${encodeURIComponent(String(row.session_id))}/_svc/${encodeURIComponent(row.service_id)}/`;
+  const previewUrl = `http://127.0.0.1:${row.host_port}/`;
   return {
     id: `${row.session_id}:${row.service_id}`,
     containerId: row.container_id,

@@ -257,16 +257,16 @@ describe('resolvePublicBase', () => {
 });
 
 describe('defaultPreviewUrl', () => {
-  it('builds the /preview/<id>/ relative URL', () => {
-    expect(defaultPreviewUrl('42', 34001)).toBe('/preview/42/');
+  it('builds a direct loopback URL pointing at the sandbox host port', () => {
+    expect(defaultPreviewUrl('42', 34001)).toBe('http://127.0.0.1:34001/');
   });
 
-  it('URL-encodes the session id', () => {
-    expect(defaultPreviewUrl('a/b', 34001)).toBe('/preview/a%2Fb/');
+  it('ignores the session id (Phase C: no proxy path)', () => {
+    expect(defaultPreviewUrl('a/b', 34001)).toBe('http://127.0.0.1:34001/');
   });
 
-  it('ignores the host port (proxy doesn\'t need it in the URL)', () => {
-    expect(defaultPreviewUrl('42', 99999)).toBe('/preview/42/');
+  it('honors the host port', () => {
+    expect(defaultPreviewUrl('42', 99999)).toBe('http://127.0.0.1:99999/');
   });
 });
 

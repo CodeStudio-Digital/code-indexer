@@ -23,7 +23,6 @@ import type {
   BuilderStack,
   ProvisionableStack,
 } from '@mcp/services/sandbox/types.js';
-import { formatSetCookie, mintPreviewToken } from '../preview-auth.js';
 import {
   isProvisionableStack,
   resolveExternalProjectSpec,
@@ -266,11 +265,11 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
           }
         : null,
     });
-    if (stack) {
-      const token = mintPreviewToken(String(id));
-      const secure = (c.req.header('x-forwarded-proto') ?? '').toLowerCase() === 'https';
-      response.headers.append('Set-Cookie', formatSetCookie(token, { secure }));
-    }
+    // Phase C: the dashboard preview now points at the sandbox's direct
+    // loopback URL (http://127.0.0.1:<hostPort>/), so the HMAC cookie
+    // the proxy used to verify is no longer minted here. Sibling-
+    // container access (Chrome Service for QA) still uses the
+    // longer-lived MCP_PREVIEW_COOKIE injected by syncManagedEnvs.
     return response;
   });
 }

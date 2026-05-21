@@ -108,10 +108,13 @@ export interface SubordinatePromptContext {
  * Shared builder-mode instructions appended to both master and
  * subordinate prompts when a sandbox binding is active.
  *
- * The MOST IMPORTANT line is about `vite.config.ts`: agents have a
- * habit of rewriting it with a plain-template config, which strips
- * `base`, `server.host: '0.0.0.0'`, and `server.watch.usePolling` —
- * breaking the preview iframe (ECONNREFUSED at the proxy) and HMR.
+ * Reserved files matter: agents have a habit of rewriting
+ * `vite.config.ts` with a plain-template config, which strips
+ * `server.host: '0.0.0.0'` (needed so the container port binding
+ * accepts connections) and `server.watch.usePolling` (needed for
+ * bind-mounted directories under Windows/macOS to propagate file
+ * changes). Phase C removed the `/preview/:id/` proxy — `base` is
+ * no longer reserved.
  */
 function buildBuilderInstructions(b: BuilderPromptContext): string {
   // When workdir/previewUrl are absent the primary container is not running.
@@ -134,16 +137,17 @@ variables (\`env_list\`, \`env_set\`, \`env_unset\`) and databases
   const isAngular = b.stack === 'angular';
   const reservedFiles = isAngular
     ? `- **\`${b.workdir}/angular.json\` → \`projects.*.architect.serve.options\`** —
-  managed by the MCP SandboxService. It contains proxy-specific settings
-  (\`host\`, \`port\`, \`allowedHosts\`, \`servePath\`, \`poll\`). Changing
-  them BREAKS the preview iframe and the file watcher. You MAY edit the
+  managed by the MCP SandboxService. It contains the dev-server bindings
+  (\`host\`, \`port\`, \`allowedHosts\`, \`poll\`). Changing them BREAKS
+  the preview iframe and the file watcher. You MAY edit the
   \`build.options\` block (styles, assets, scripts) freely.`
     : `- **\`${b.workdir}/vite.config.ts\`** — managed by the MCP SandboxService.
-  It contains proxy-specific settings (\`base\`, \`server.host\`,
-  \`server.watch.usePolling\`, \`server.hmr\`) that, if changed, BREAK
-  the preview iframe and HMR immediately. If you need app-level Vite
-  customization (aliases, plugins), add a NEW file (e.g.
-  \`vite.user.config.ts\`) — never overwrite the managed one.`;
+  It contains the dev-server bindings (\`server.host: '0.0.0.0'\` so the
+  container port mapping accepts connections, \`server.watch.usePolling\`
+  for bind-mount change propagation). Changing them BREAKS the preview
+  iframe and HMR immediately. If you need app-level Vite customization
+  (aliases, plugins), add a NEW file (e.g. \`vite.user.config.ts\`) —
+  never overwrite the managed one.`;
 
   const devServerText = isAngular
     ? `\`ng serve\` is already running in the background inside the container

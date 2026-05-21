@@ -25,7 +25,6 @@ import { mountAdminLshRoutes } from './server/routes/admin/lsh.js';
 import { mountAdminDriftRoutes } from './server/routes/admin/drift.js';
 import { mountWorkersDiagnosticRoute } from './server/routes/admin/workers.js';
 import { mountCoderRoutes } from './server/routes/coder/index.js';
-import { mountPreviewRoutes, attachPreviewUpgrade } from './server/routes/preview.js';
 import { attachCompanyStreamUpgrade } from './server/routes/company/ws.js';
 import { mountWorkspaceRoutes } from './server/routes/workspace/index.js';
 import {
@@ -438,9 +437,6 @@ export function createApp() {
   if (deps.config.features.designSystemEnabled) {
     mountDesignSystemRoutes(app, deps);
   }
-  // Builder-mode sandbox preview proxy. Dormant for non-builder sessions
-  // (the route 404s when no sandbox is registered for the sessionId).
-  mountPreviewRoutes(app, deps);
   mountWorkspaceRoutes(app, deps);
 
   // Documentação (RAG) — global doc corpus + ingestion routes. Mounted
@@ -475,11 +471,11 @@ export async function startServer(port: number, host: string) {
   console.log(
     `[workers] diagnostics: GET ${host === '0.0.0.0' ? 'localhost' : host}:${port}/api/admin/workers`,
   );
-  // `serve()` returns the underlying Node http.Server. We need that
-  // reference to attach the WebSocket upgrade handler for the preview
-  // proxy (Vite HMR uses WS). Hono itself has no notion of upgrades.
+  // `serve()` returns the underlying Node http.Server. We keep the
+  // reference to attach the company stream WS upgrade — the dev-server
+  // running inside the sandbox is now reached directly via its
+  // loopback port (no MCP-side proxy / HMR upgrade rewriting).
   const server = serve({ fetch: app.fetch, port, hostname: host });
-  attachPreviewUpgrade(server as unknown as import('node:http').Server);
   // P14: parallel WebSocket transport for company sessions. Default
   // remains SSE; the dashboard opts in via `?transport=ws`.
   attachCompanyStreamUpgrade(server as unknown as import('node:http').Server);
