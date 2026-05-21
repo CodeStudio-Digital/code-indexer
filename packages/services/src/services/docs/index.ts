@@ -19,7 +19,28 @@ export type {
 } from './index-doc-use-case.js';
 
 export { DocHybridSearch, vectorIdForChunk } from './search.js';
-export type { DocSearchInput, DocSearchResult, DocSearchDiagnostics } from './search.js';
+export type {
+  DocSearchInput,
+  DocSearchResult,
+  DocSearchDiagnostics,
+  DocSearchEnhancements,
+  DocHybridSearchEnhancementDeps,
+} from './search.js';
+
+export { QueryRewriter } from './query-rewriter.js';
+export type {
+  QueryRewriterOptions,
+  RewriteOpts,
+  RewriteResult,
+} from './query-rewriter.js';
+
+export { Reranker } from './reranker.js';
+export type {
+  RerankerOptions,
+  RerankOpts,
+  RerankCandidate,
+  RerankResult,
+} from './reranker.js';
 
 export { DocError, docErrorStatus } from './errors.js';
 export type { DocErrorKind } from './errors.js';

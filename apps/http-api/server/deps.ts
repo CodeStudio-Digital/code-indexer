@@ -52,6 +52,8 @@ import {
   EscalatingFetcher,
   IndexDocumentationUseCase,
   PlainFetchBackend,
+  QueryRewriter,
+  Reranker,
   UrlFetcher,
 } from '@mcp/services/services/docs/index.js';
 import { InMemoryRoleEmbeddingStore } from '@mcp/company/role-pipeline/index.js';
@@ -509,7 +511,37 @@ export function createDeps(): ServerDeps {
     return svc.connectBrowser();
   });
   const docRenderer = new EscalatingFetcher(plainRender, browserRender, detectBlocked);
-  const docHybridSearch = new DocHybridSearch(docStore, embeddingService, vectorStore);
+
+  // ─── Doc-search enhancements (Phase 10): query rewriter + reranker ──
+  // Both share the same PipelineProviderResolver as enrichers/classifiers
+  // and are opt-in at call time via `DocSearchInput.enhancements`. Wiring
+  // them here so the wrappers exist regardless of env flags — keeps the
+  // call site (rag_search_docs adapter in server.ts) simple.
+  //
+  // - `docQueryRewriter`: produces 2-3 variants merged via RRF. Backed
+  //   by sub_agent_result_cache (24h TTL) and pipeline_telemetry.
+  // - `docReranker`: re-orders the top-K via LLM scoring. Backed by
+  //   doc_rerank_cache (migration 098) and pipeline_telemetry.
+  //
+  // Both degrade gracefully (no binding configured → no-op) so they are
+  // safe to construct unconditionally and pass to DocHybridSearch.
+  const docQueryRewriter = new QueryRewriter({
+    resolver: pipelineProviderResolver,
+    cache: subAgentResultCacheStore,
+    telemetry: pipelineTelemetryStore,
+  });
+  const docReranker = new Reranker({
+    resolver: pipelineProviderResolver,
+    db: db.raw(),
+    telemetry: pipelineTelemetryStore,
+  });
+  const docHybridSearch = new DocHybridSearch(
+    docStore,
+    embeddingService,
+    vectorStore,
+    undefined,
+    { rewriter: docQueryRewriter, reranker: docReranker },
+  );
   // In-memory cache of the latest progress frame per source. Wired so
   // both the use-case (writer) and the HTTP route (reader) share the
   // same instance. Lost on process restart — fine because boot

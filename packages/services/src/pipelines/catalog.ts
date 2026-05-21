@@ -19,7 +19,8 @@ export type BindingRole =
   | 'scorer_llm'
   | 'hyde'
   | 'compaction_llm'
-  | 'link_extractor';
+  | 'link_extractor'
+  | 'rewriter';
 
 export interface PipelineCatalogEntry {
   pipelineName: string;
@@ -209,8 +210,50 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
   {
     pipelineName: 'doc_search',
     bindingRole: 'reranker',
-    description: 'Optional cross-encoder reranker for the top-K chunks before they are returned to the agent.',
-    introducedInPhase: '9',
+    description:
+      'Optional reranker for the top-K chunks before they are returned to the agent. Default is an LLM-as-reranker that scores each (query, chunk) pair; a cross-encoder model can be swapped in via the admin panel. Caches verdicts in doc_rerank_cache (24h TTL).',
+    recommendedDefault: {
+      providerKind: 'cloudflare',
+      modelHint: '@cf/meta/llama-3.1-8b-instruct',
+      config: { temperature: 0, max_tokens: 600 },
+    },
+    introducedInPhase: '10',
+  },
+  {
+    pipelineName: 'doc_search',
+    bindingRole: 'rewriter',
+    description:
+      'Query rewriter — produces 2-4 variants of the agent query (synonyms, decomposition, expansion) that are searched in parallel and merged via RRF. Anti-hallucination: variants must reuse terms from the original query or technical vocabulary. Opt-in via DOCS_RAG_REWRITE env flag.',
+    recommendedDefault: {
+      providerKind: 'cloudflare',
+      modelHint: '@cf/meta/llama-3.1-8b-instruct',
+      config: { temperature: 0.3, max_tokens: 400 },
+    },
+    introducedInPhase: '10',
+  },
+  {
+    pipelineName: 'docs_research',
+    bindingRole: 'scorer_llm',
+    description:
+      'DocsAgent — main LLM that drives multi-step retrieval: decides which collection to search, when to read full chunks, when to reformulate, and emits the structured docs_finish payload. Recommended: a strong reasoning model (Claude Sonnet, GPT-4o).',
+    recommendedDefault: {
+      providerKind: 'anthropic',
+      modelHint: 'claude-sonnet-4',
+      config: { temperature: 0.2 },
+    },
+    introducedInPhase: '10',
+  },
+  {
+    pipelineName: 'docs_research',
+    bindingRole: 'classifier',
+    description:
+      'DocsAgent — synthesizer LLM called by the docs_synthesize tool to render the final markdown with footnote citations. Lower-cost than the scorer_llm; recommended Llama-8B or GPT-4o-mini.',
+    recommendedDefault: {
+      providerKind: 'cloudflare',
+      modelHint: '@cf/meta/llama-3.1-8b-instruct',
+      config: { temperature: 0.1, max_tokens: 2000 },
+    },
+    introducedInPhase: '10',
   },
   {
     pipelineName: 'doc_ingest',

@@ -108,6 +108,10 @@ import { companySessionRecoveredAt091 } from './091_company_session_recovered_at
 import { docSourcesLlmLinks092 } from './092_doc_sources_llm_links.js';
 import { turnRequestResponseMeta093 } from './093_turn_request_response_meta.js';
 import { masterInboxSentinel094 } from './094_master_inbox_sentinel.js';
+import { coderMessageSelectedSkills095 } from './095_coder_message_selected_skills.js';
+import { docSourceSuggestions096 } from './096_doc_source_suggestions.js';
+import { docsResearchSessions097 } from './097_docs_research_sessions.js';
+import { docRerankCache098 } from './098_doc_rerank_cache.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -210,6 +214,10 @@ export const MIGRATIONS: Migration[] = [
   docSourcesLlmLinks092,
   turnRequestResponseMeta093,
   masterInboxSentinel094,
+  coderMessageSelectedSkills095,
+  docSourceSuggestions096,
+  docsResearchSessions097,
+  docRerankCache098,
 ];
 
 /**

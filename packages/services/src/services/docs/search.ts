@@ -16,10 +16,27 @@ import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import { rrfMerge, RRF_DEFAULT_K } from '@mcp/candidate-pipeline';
 import type { DocChunk, DocStore } from '@mcp/store/doc-store.js';
+import type { ResolveContext } from '../../pipelines/index.js';
+import type { QueryRewriter } from './query-rewriter.js';
+import type { Reranker, RerankCandidate } from './reranker.js';
 
 /** Metadata filter values stored on the vector store side. */
 const VECTOR_FILTER_CORPUS = 'docs';
 const VECTOR_FILTER_TYPE = 'doc_chunk';
+
+/** Default top-K expanded for rerank — gives the reranker headroom. */
+const DEFAULT_RERANK_TOP_K = 20;
+/** Hard cap on rerank top-K (cost control). */
+const MAX_RERANK_TOP_K = 50;
+
+export interface DocSearchEnhancements {
+  /** Run query-rewriter and merge variants via RRF. Default false. */
+  rewrite?: boolean;
+  /** Run reranker on hybrid output before final truncate. Default false. */
+  rerank?: boolean;
+  /** Top-K to pull before rerank. Default 20, capped at MAX_RERANK_TOP_K. */
+  top_k_for_rerank?: number;
+}
 
 export interface DocSearchInput {
   /** Natural-language query. */
@@ -30,6 +47,19 @@ export interface DocSearchInput {
   limit?: number;
   /** Force a particular mode (debugging). */
   mode?: 'hybrid' | 'fts' | 'vector';
+  /**
+   * Opt-in pipeline enhancements (query rewrite + rerank). Caller must
+   * also have wired the corresponding services into the DocHybridSearch
+   * constructor — otherwise the flags are no-ops and the diagnostics
+   * report `rewrite_used=false / rerank_used=false`. Default OFF.
+   */
+  enhancements?: DocSearchEnhancements;
+  /**
+   * Optional binding-resolution context for the enhancement LLMs
+   * (session_id / company_session_id / template_id). Forwarded to
+   * the QueryRewriter and Reranker.
+   */
+  resolveContext?: ResolveContext;
 }
 
 export interface DocSearchResult {
@@ -50,11 +80,28 @@ export interface DocSearchDiagnostics {
   mode: 'hybrid' | 'fts' | 'vector';
   embedding_available: boolean;
   vector_available: boolean;
+  /** Whether query-rewrite actually ran (false if disabled or no binding). */
+  rewrite_used?: boolean;
+  /** Number of query variants (including original) when rewrite ran. */
+  rewrite_variants?: number;
+  /** Whether reranker actually ran (false if disabled or no binding). */
+  rerank_used?: boolean;
+  /** Candidates dropped by the reranker (vs incoming top-K). */
+  rerank_dropped?: number;
+}
+
+export interface DocHybridSearchEnhancementDeps {
+  /** Query rewriter — used when input.enhancements.rewrite is true. */
+  rewriter?: QueryRewriter | null;
+  /** Reranker — used when input.enhancements.rerank is true. */
+  reranker?: Reranker | null;
 }
 
 const SNIPPET_MAX_CHARS = 480;
 
 export class DocHybridSearch {
+  private enhancements: DocHybridSearchEnhancementDeps;
+
   constructor(
     private docStore: DocStore,
     private embeddingService: EmbeddingService | null,
@@ -62,15 +109,34 @@ export class DocHybridSearch {
     private collectionLookup: (name: string) => number | null = (name) => {
       return docStore.getCollectionByName(name)?.id ?? null;
     },
-  ) {}
+    enhancements: DocHybridSearchEnhancementDeps = {},
+  ) {
+    this.enhancements = enhancements;
+  }
 
   async search(input: DocSearchInput): Promise<{
     results: DocSearchResult[];
     diag: DocSearchDiagnostics;
   }> {
     const limit = clamp(input.limit ?? 5, 1, 20);
-    const ftsBudget = Math.max(limit * 4, 20);
-    const vectorBudget = Math.max(limit * 4, 20);
+    const rewriter = this.enhancements.rewriter ?? null;
+    const reranker = this.enhancements.reranker ?? null;
+    const wantRewrite = !!input.enhancements?.rewrite && rewriter != null;
+    const wantRerank = !!input.enhancements?.rerank && reranker != null;
+
+    // When rerank is requested we over-fetch beyond `limit` so the LLM
+    // has more candidates to reorder. The final result is still truncated
+    // to `limit` after rerank.
+    const effectiveLimit = wantRerank
+      ? clamp(
+          input.enhancements?.top_k_for_rerank ?? DEFAULT_RERANK_TOP_K,
+          limit,
+          MAX_RERANK_TOP_K,
+        )
+      : limit;
+
+    const ftsBudget = Math.max(effectiveLimit * 4, 20);
+    const vectorBudget = Math.max(effectiveLimit * 4, 20);
 
     // Resolve collection filter (name → id).
     let collectionId: number | undefined;
@@ -100,33 +166,65 @@ export class DocHybridSearch {
     const useVector =
       forcedMode !== 'fts' && this.embeddingService != null && this.vectorStore != null;
 
-    // Fan out FTS + vector in parallel.
-    const [ftsResults, vectorResults] = await Promise.all([
-      useFts ? this.runFts(input.query, collectionId, ftsBudget) : Promise.resolve([] as RankedHit[]),
-      useVector ? this.runVector(input.query, collectionName, vectorBudget) : Promise.resolve([] as RankedHit[]),
-    ]);
+    // ─── Stage 1: query rewrite (optional) ────────────────────────
+    // Produces N variants (incl. original) that each get a hybrid search.
+    let queries: string[] = [input.query];
+    let rewriteUsed = false;
+    let rewriteVariants = 1;
+    if (wantRewrite && rewriter) {
+      const rewrite = await rewriter.rewrite(input.query, {
+        resolveContext: input.resolveContext,
+      });
+      queries = rewrite.variants;
+      rewriteUsed = rewrite.llmUsed || rewrite.cacheHit;
+      rewriteVariants = rewrite.variants.length;
+    }
+
+    // ─── Stage 2: hybrid retrieval per variant (parallel) ─────────
+    // Each variant produces its own (fts, vector) hit set; we merge
+    // across variants AND sources in a single RRF call so all of them
+    // contribute to the final ranking. When rewrite is off (1 variant),
+    // this reduces to the classic dual-source RRF.
+    const perVariant = await Promise.all(
+      queries.map(async (q) => {
+        const [fts, vec] = await Promise.all([
+          useFts ? this.runFts(q, collectionId, ftsBudget) : Promise.resolve([] as RankedHit[]),
+          useVector ? this.runVector(q, collectionName, vectorBudget) : Promise.resolve([] as RankedHit[]),
+        ]);
+        return { fts, vec };
+      }),
+    );
+
+    // Aggregate per-source totals for diagnostics.
+    const totalFts = perVariant.reduce((acc, v) => acc + v.fts.length, 0);
+    const totalVector = perVariant.reduce((acc, v) => acc + v.vec.length, 0);
 
     const mode: 'hybrid' | 'fts' | 'vector' = forcedMode
       ?? (useVector && useFts ? 'hybrid' : useVector ? 'vector' : 'fts');
 
+    // Build the source list for RRF: one entry per (variant, source) pair
+    // with non-empty items. Naming variant_idx-source distinguishes the
+    // contributions so RRF spreads weight across rather than collapsing
+    // duplicates from the same variant.
+    const sources: Array<{ name: string; items: RankedHit[] }> = [];
+    perVariant.forEach((v, idx) => {
+      if (v.fts.length > 0) sources.push({ name: `fts_v${idx}`, items: v.fts });
+      if (v.vec.length > 0) sources.push({ name: `vector_v${idx}`, items: v.vec });
+    });
+
     // RRF merge — reuses the same K=60 constant the indexer uses.
     // Pre-ranked sources feed `rrfMerge`; if we only have one source,
     // shortcut and skip the per-source-score expansion.
-    const sources = [
-      { name: 'fts',    items: ftsResults },
-      { name: 'vector', items: vectorResults },
-    ].filter((s) => s.items.length > 0);
-
     const merged: Array<RankedHit & { rrfScore?: number }> = sources.length > 1
-      ? rrfMerge(sources, { k: RRF_DEFAULT_K, limit })
-      : (sources[0]?.items ?? []).slice(0, limit).map((h) => ({ ...h, rrfScore: h.score }));
+      ? rrfMerge(sources, { k: RRF_DEFAULT_K, limit: effectiveLimit })
+      : (sources[0]?.items ?? []).slice(0, effectiveLimit).map((h) => ({ ...h, rrfScore: h.score }));
 
     // Hydrate chunks (we have only ids so far).
     const chunkIds = merged.map((m) => Number(m.candidateId));
     const chunks = this.docStore.getChunksByIds(chunkIds);
     const byId = new Map(chunks.map((c) => [c.id, c]));
 
-    const results: DocSearchResult[] = [];
+    let results: DocSearchResult[] = [];
     for (const m of merged) {
       const chunkId = Number(m.candidateId);
       const chunk = byId.get(chunkId);
@@ -145,14 +243,43 @@ export class DocHybridSearch {
       });
     }
 
+    // ─── Stage 3: rerank (optional) ───────────────────────────────
+    let rerankUsed = false;
+    let rerankDropped = 0;
+    if (wantRerank && reranker && results.length > 1) {
+      const candidates: Array<RerankCandidate & { __result: DocSearchResult }> = results.map((r) => ({
+        chunk_id: r.chunk_id,
+        heading_path: r.heading_path,
+        snippet: r.snippet,
+        pre_rerank_score: r.score,
+        concepts: r.concepts,
+        __result: r,
+      }));
+      const rerank = await reranker.rerank(input.query, candidates, {
+        resolveContext: input.resolveContext,
+      });
+      rerankUsed = rerank.reranked;
+      rerankDropped = rerank.dropped;
+      results = rerank.candidates.map((c) => c.__result);
+    }
+
+    // Final truncate to the caller's requested `limit`.
+    if (results.length > limit) {
+      results = results.slice(0, limit);
+    }
+
     return {
       results,
       diag: {
-        fts_hits: ftsResults.length,
-        vector_hits: vectorResults.length,
+        fts_hits: totalFts,
+        vector_hits: totalVector,
         mode,
         embedding_available: this.embeddingService != null,
         vector_available: this.vectorStore != null,
+        rewrite_used: rewriteUsed,
+        rewrite_variants: rewriteVariants,
+        rerank_used: rerankUsed,
+        rerank_dropped: rerankDropped,
       },
     };
   }
