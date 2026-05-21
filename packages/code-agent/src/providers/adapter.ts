@@ -15,6 +15,13 @@ export interface ChatRequest {
   /** Enable thinking/reasoning mode (Gemini thinkingConfig, Anthropic extended thinking, Codex reasoning.effort). */
   thinking?: boolean;
   /**
+   * Per-request thinking budget (in tokens). Only honoured by providers
+   * whose extended-thinking surface accepts a budget (Anthropic). Other
+   * providers ignore it silently. When undefined the provider's
+   * `defaultThinking.budget_tokens` applies.
+   */
+  thinkingBudgetTokens?: number;
+  /**
    * For stateful providers (ChatGPT/Codex with `store: true`): identifier of
    * the prior response. When present, the provider sends only the message
    * delta and lets the backend reconstruct the prefix from the stored response.

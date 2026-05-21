@@ -152,6 +152,14 @@ export interface RunCoderOptions {
   resume?: boolean;
   /** Enable thinking/reasoning mode for providers that support it. */
   thinking?: boolean;
+  /**
+   * Per-request thinking budget (in tokens). Forwarded to the runner via
+   * `runner.opts.thinkingBudgetTokens` and from there into every
+   * `ChatRequest`. Anthropic honours this as `thinking.budget_tokens`;
+   * other providers ignore it. When undefined the provider falls back to
+   * its `defaultThinking` config.
+   */
+  thinkingBudgetTokens?: number;
   /** Company orchestrator context — when present, company tools are registered. */
   companyContext?: import('@mcp/company/types.js').CompanyContext;
   /** Extra system prompt block for company agents (master/subordinate). Appended to the base prompt. */
@@ -215,6 +223,15 @@ export interface RunCoderOptions {
    * The host typically wires it as `toolSelectionFilter: deps.buildToolSelectionFilter()`.
    */
   toolSelectionFilter?: import('./core/runner.js').RunnerOptions['toolSelectionFilter'];
+  /**
+   * Skill IDs the user pre-selected in the chat sidebar. Persisted on the
+   * first user message of this run (migration 095 column
+   * `selected_skill_ids_json`) and re-resolved by the runner into an
+   * `<active_skills>` block on every turn that message is the trailing
+   * one. Empty / undefined means no picks for this turn — the runner skips
+   * the block entirely.
+   */
+  selectedSkillIds?: string[];
 }
 
 export interface IndexStatus {
@@ -795,11 +812,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     rawProfile0 === 'auto' ? inferProfileFromMessage(opts.userMessage ?? '') : rawProfile0;
 
   // ─── Skills ────────────────────────────────────────────────────
+  // Opens a long-lived SkillStore that survives until the runner's `done`
+  // promise resolves — the runner reads it every turn from inside
+  // `assembleMessagesForChat` to materialize the `<active_skills>` block
+  // for messages the user sent with sidebar picks. Closed in the run's
+  // `finally` hook below alongside the other per-run resources.
+  const skillStore = new SkillStore(config.dbPath);
   let resolvedSkills: ResolvedSkill[] = [];
   try {
-    const skillStore = new SkillStore(config.dbPath);
     resolvedSkills = skillStore.resolveActiveSkills(session.id, session.project_id);
-    skillStore.close();
   } catch (e) {
     console.warn(`[coder] skill resolution failed: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -1162,12 +1183,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     initialMessages,
     sessionId: session.id,
     sessionStore: store,
+    skillStore,
     // (assignment below) — keeps recorder in sync with runner.turn
     // even though the runner is constructed after recorder. The recorder
     // reads `runnerRef?.turn` lazily, so this assignment closes the loop.
     maxTurns: opts.maxTurns ?? 50,
     planMode: opts.planMode,
     thinking: opts.thinking,
+    thinkingBudgetTokens: opts.thinkingBudgetTokens,
     activeTiers,
     globalDisabledTools,
     sessionDisabledTools: sessionDisabledTools.size > 0 ? sessionDisabledTools : undefined,
@@ -1315,8 +1338,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   if (!opts.resume) {
     const userBlocks = attachmentsToBlocks(opts.userMessage, opts.attachments);
-    runner.pushUserContent(userBlocks);
-    store.appendMessage(session.id, { role: 'user', content: userBlocks });
+    const pickExtras =
+      opts.selectedSkillIds && opts.selectedSkillIds.length > 0
+        ? { selectedSkillIds: opts.selectedSkillIds }
+        : undefined;
+    runner.pushUserContent(userBlocks, pickExtras);
+    store.appendMessage(session.id, {
+      role: 'user',
+      content: userBlocks,
+      ...(pickExtras ?? {}),
+    });
   } else {
     // Resume: tool_result was already appended to the DB by the API handler.
     // It is already part of initialMessages → runner.messages, so the
@@ -1537,6 +1568,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       await bridge.close();
       for (const b of extraBridges) await b.close();
       store.close();
+      try { skillStore.close(); } catch { /* best-effort */ }
       db.close();
     });
 

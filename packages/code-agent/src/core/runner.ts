@@ -56,6 +56,8 @@ import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { resolveTemperature } from '@mcp/code-agent/inference/temperature.js';
 import { estimateCost } from '@mcp/code-agent/providers/pricing.js';
 import { buildActiveContextBlock } from '@mcp/code-agent/core/active-context.js';
+import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js';
+import type { SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
 import { getGlobalToolSelectionOutcomeObserver } from '@mcp/code-agent/tool-selection/global-filter.js';
 import {
   isGlobalQualityClassifierEnabled,
@@ -194,6 +196,14 @@ export interface RunnerOptions {
   externalToolTiers?: ReadonlyMap<string, ToolTier>;
   /** Enable thinking/reasoning mode for providers that support it (Gemini thinkingConfig). */
   thinking?: boolean;
+  /**
+   * Per-request thinking budget (in tokens). Only meaningful for providers
+   * whose extended-thinking surface accepts a budget (Anthropic) — others
+   * ignore. When undefined, the provider's `defaultThinking.budget_tokens`
+   * applies. Threaded through every ChatRequest so the master / template
+   * can pick a budget per role without restarting the runner.
+   */
+  thinkingBudgetTokens?: number;
   /** Fallback chain for automatic provider recovery on persistent errors. */
   fallbackChain?: import('@mcp/code-agent/core/fallback.js').FallbackChain;
   /** Factory function to create a new provider for fallback. */
@@ -270,6 +280,16 @@ export interface RunnerOptions {
    * need to wire a real DB.
    */
   sessionStore?: import('@mcp/code-agent/sessions/store.js').SessionStore;
+  /**
+   * SkillStore — when present, the runner resolves each `selectedSkillIds`
+   * entry on the trailing user message every turn and injects the bodies
+   * as an `<active_skills>` block alongside `<active-context>`. The block
+   * is rebuilt from live state each turn and is NEVER persisted into
+   * `this.messages`, so picking a skill the user updated mid-session
+   * applies on the very next turn. Optional so subagents and tests that
+   * don't need the user-pick channel can omit it.
+   */
+  skillStore?: import('@mcp/store/skill-store.js').SkillStore;
   /**
    * Agent Loop v2 — opt-in to the live <active-context> injection per turn,
    * the stop-guard, and the auto-continue recap. Set per-session at
@@ -1240,7 +1260,7 @@ export class CoderRunner extends EventEmitter {
    */
   public turn = 0;
   private pendingResolve: ((value: string) => void) | null = null;
-  private pendingUserMessages: string[] = [];
+  private pendingUserMessages: Array<{ text: string; selectedSkillIds?: string[] }> = [];
   private planApproved = false;
   /**
    * Plan-mode enforcement: when the model finishes a turn (no tool calls)
@@ -2122,22 +2142,62 @@ export class CoderRunner extends EventEmitter {
 
   /**
    * Build the messages array passed to provider.chat() for the current turn.
-   * When `agentLoopV2` is on, appends a live `<active-context>` text block to
-   * the trailing user message (or creates a synthetic one if the history
-   * doesn't end on a user message). The block is rebuilt every turn from
-   * live state and is NEVER persisted into `this.messages` — it lives only in
-   * the request payload, so the cached prefix stays byte-stable.
+   *
+   * Two per-turn injections happen here — neither is persisted into
+   * `this.messages`, so the cached prefix stays byte-stable:
+   *   1. `<active_skills>` block (when the last user message has
+   *      `selectedSkillIds` and a `SkillStore` is wired). Resolves bodies
+   *      fresh each turn so a skill edit takes effect on the next send.
+   *   2. `<active-context>` block (only when `agentLoopV2` is on). Goal +
+   *      todos + active task scope built from live state.
+   *
+   * Both blocks are appended as TextBlocks to the trailing user message —
+   * adding a brand-new user message would create two adjacent user roles,
+   * which Anthropic rejects. When the history happens to end on an
+   * assistant message (very rare), a synthetic user message is created.
    */
   private assembleMessagesForChat(
     compactionLimits: import('@mcp/code-agent/core/compaction.js').CompactionLimits | undefined,
   ): AgentMessage[] {
     const compacted = compactHistoryForLLM(this.messages, compactionLimits);
-    if (!this.opts.agentLoopV2) return compacted;
 
+    const activeSkillsBlock = this.buildActiveSkillsBlockForLastUser(compacted);
+    const activeContextBlock = this.opts.agentLoopV2
+      ? this.buildActiveContextBlockForTurn()
+      : null;
+
+    if (!activeSkillsBlock && !activeContextBlock) return compacted;
+
+    const extras: ContentBlock[] = [];
+    // Skills go BEFORE active-context so the model treats them as fresh
+    // user-authored instructions framing the current goal, instead of
+    // reading the live goal first and then second-guessing it.
+    if (activeSkillsBlock) extras.push({ type: 'text', text: activeSkillsBlock });
+    if (activeContextBlock) extras.push({ type: 'text', text: activeContextBlock });
+
+    const cloned = compacted.slice();
+    const lastIdx = cloned.length - 1;
+    if (lastIdx >= 0 && cloned[lastIdx].role === 'user') {
+      const last = cloned[lastIdx];
+      cloned[lastIdx] = {
+        role: 'user',
+        content: [...last.content, ...extras],
+      };
+    } else {
+      cloned.push({ role: 'user', content: extras });
+    }
+    return cloned;
+  }
+
+  /**
+   * Build the `<active-context>` block from live state. Returns null when
+   * `buildActiveContextBlock` returned null (no goal, no todos, no scope).
+   */
+  private buildActiveContextBlockForTurn(): string | null {
     const ctx = this.opts.toolContext;
     const goal = ctx.getGoalState ? ctx.getGoalState() : null;
     const tasksState = ctx.getTasksState ? ctx.getTasksState() : null;
-    const block = buildActiveContextBlock({
+    return buildActiveContextBlock({
       todos: this.currentTodos,
       goal: goal
         ? {
@@ -2149,25 +2209,67 @@ export class CoderRunner extends EventEmitter {
         : null,
       tasksState: tasksState ?? null,
     });
-    if (!block) return compacted;
+  }
 
-    // Append as a TextBlock to the last user message — safer than adding a
-    // new message because Anthropic disallows two adjacent user messages.
-    // If the history ends on an assistant message (rare — only if a turn
-    // emitted text and no tool calls but somehow we still loop), append a
-    // brand-new user message instead.
-    const cloned = compacted.slice();
-    const lastIdx = cloned.length - 1;
-    if (lastIdx >= 0 && cloned[lastIdx].role === 'user') {
-      const last = cloned[lastIdx];
-      cloned[lastIdx] = {
-        role: 'user',
-        content: [...last.content, { type: 'text', text: block } as ContentBlock],
-      };
-    } else {
-      cloned.push({ role: 'user', content: [{ type: 'text', text: block } as ContentBlock] });
+  /**
+   * Resolve `selectedSkillIds` carried on the trailing user message into a
+   * wrapped `<active_skills>` block ready to be appended verbatim. Returns
+   * null when no skills were picked, the skillStore is unwired, or every
+   * picked ID was unknown (handled silently — the user already got UI
+   * feedback at pick time).
+   *
+   * Logs one `skill_usage_log` row per applied skill with
+   * `invoked_by='user'` so the admin telemetry tab can attribute manual
+   * picks. Best-effort: a logging failure does not block the request.
+   */
+  private buildActiveSkillsBlockForLastUser(history: AgentMessage[]): string | null {
+    const store = this.opts.skillStore;
+    if (!store) return null;
+    const lastIdx = history.length - 1;
+    if (lastIdx < 0) return null;
+    const last = history[lastIdx];
+    if (last.role !== 'user') return null;
+    const ids = last.selectedSkillIds;
+    if (!ids || ids.length === 0) return null;
+
+    const userInput = last.content
+      .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
+    const ctx: SkillTemplateContext = {
+      SESSION_ID: this.sessionId != null ? String(this.sessionId) : '',
+      PROJECT_NAME: this.opts.toolContext.projectName ?? '',
+      PROJECT_ROOT: this.opts.toolContext.cwd ?? '',
+      OS: process.platform,
+      TIMESTAMP: new Date().toISOString(),
+      USER_INPUT: userInput,
+    };
+
+    const seen = new Set<string>();
+    const blocks: string[] = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const skill = store.getSkill(id);
+      if (!skill) continue;
+      const body = interpolateSkillVars(skill.prompt_body, ctx);
+      blocks.push(`## ${skill.id} — ${skill.name}\n\n${body}`);
+      if (this.sessionId != null) {
+        try {
+          store.logSkillUsage({
+            session_id: this.sessionId,
+            skill_id: id,
+            invoked_by: 'user',
+            input_text: userInput,
+          });
+        } catch {
+          /* telemetry is best-effort; do not block the turn */
+        }
+      }
     }
-    return cloned;
+
+    if (blocks.length === 0) return null;
+    return `<active_skills>\n${blocks.join('\n\n')}\n</active_skills>`;
   }
 
   /**
@@ -2372,20 +2474,31 @@ export class CoderRunner extends EventEmitter {
    * assistant tool_use block and its tool_result — which would produce an
    * invalid message sequence for the LLM API.
    */
-  pushUserMessage(text: string): void {
-    this.pendingUserMessages.push(text);
+  pushUserMessage(text: string, extras?: { selectedSkillIds?: string[] }): void {
+    this.pendingUserMessages.push({ text, selectedSkillIds: extras?.selectedSkillIds });
   }
 
   private flushPendingMessages(): void {
     while (this.pendingUserMessages.length > 0) {
-      const text = this.pendingUserMessages.shift()!;
-      this.messages.push({ role: 'user', content: [{ type: 'text', text }] });
+      const pending = this.pendingUserMessages.shift()!;
+      const msg: AgentMessage = {
+        role: 'user',
+        content: [{ type: 'text', text: pending.text }],
+      };
+      if (pending.selectedSkillIds && pending.selectedSkillIds.length > 0) {
+        msg.selectedSkillIds = pending.selectedSkillIds;
+      }
+      this.messages.push(msg);
     }
   }
 
   /** Append a user message with arbitrary content blocks (text + image + document). */
-  pushUserContent(blocks: ContentBlock[]): void {
-    this.messages.push({ role: 'user', content: blocks });
+  pushUserContent(blocks: ContentBlock[], extras?: { selectedSkillIds?: string[] }): void {
+    const msg: AgentMessage = { role: 'user', content: blocks };
+    if (extras?.selectedSkillIds && extras.selectedSkillIds.length > 0) {
+      msg.selectedSkillIds = extras.selectedSkillIds;
+    }
+    this.messages.push(msg);
   }
 
   /**
@@ -2953,6 +3066,7 @@ export class CoderRunner extends EventEmitter {
               messages: messagesForChat,
               tools,
               thinking: this.opts.thinking,
+              thinkingBudgetTokens: this.opts.thinkingBudgetTokens,
               sessionId: this.opts.sessionId,
               ...(typeof tempResolution.temperature === 'number'
                 ? { inference: { temperature: tempResolution.temperature } }
