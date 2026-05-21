@@ -220,8 +220,12 @@ export function RoleEditModal({
           </div>
 
           {/* Extended thinking — Phase E */}
-          <div className="space-y-1.5">
-            <label className="flex items-start gap-2 text-xs cursor-pointer select-none">
+          <div
+            className={`rounded-md border bg-card transition-colors ${
+              role.thinking ? 'border-primary/30 bg-primary/[0.03]' : 'border-border'
+            }`}
+          >
+            <label className="flex items-start gap-2.5 p-3 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={!!role.thinking}
@@ -233,18 +237,20 @@ export function RoleEditModal({
                     ...(e.target.checked ? {} : { thinkingBudgetTokens: undefined }),
                   })
                 }
-                className="mt-0.5"
+                className="mt-0.5 h-3.5 w-3.5 accent-primary"
               />
-              <span className="flex-1">
-                <span className="font-medium text-foreground">{t('agents:role.thinking.title')}</span>
+              <span className="flex-1 text-xs leading-snug">
+                <span className="font-medium text-foreground">
+                  {t('agents:role.thinking.title')}
+                </span>
                 <span className="block text-muted-foreground mt-0.5">
                   {t('agents:role.thinking.description')}
                 </span>
               </span>
             </label>
             {role.thinking && (
-              <div className="ml-6 flex items-center gap-2">
-                <label className="text-[11px] text-muted-foreground">
+              <div className="flex items-center gap-2 border-t border-border/60 px-3 py-2">
+                <label className="text-[11px] text-muted-foreground shrink-0">
                   {t('agents:role.thinking.budgetLabel')}
                 </label>
                 <input
@@ -263,9 +269,9 @@ export function RoleEditModal({
                     onUpdate({ thinkingBudgetTokens: parsed });
                   }}
                   placeholder={t('agents:role.thinking.budgetPlaceholder')}
-                  className="rounded-md border bg-background px-2 py-1 text-xs font-mono w-28"
+                  className="h-7 w-28 rounded-md border bg-background px-2 text-xs font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
-                <span className="text-[10px] text-muted-foreground">
+                <span className="ml-auto text-[10px] text-muted-foreground/80 tabular-nums">
                   {t('agents:role.thinking.anthropicOnly')}
                 </span>
               </div>

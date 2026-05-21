@@ -17,9 +17,12 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { RotateCcw } from 'lucide-react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { Button } from '../../../components/ui/button.js';
+import { cn } from '../../../lib/utils.js';
 
 type Target = 'sandbox' | 'host';
 
@@ -164,17 +167,24 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
           ? t('agents:terminal.status.error', { detail: state.detail ?? '' })
           : t('agents:terminal.status.idle');
 
-  const statusClass = state.status === 'open'
-    ? 'text-emerald-500'
-    : state.status === 'connecting'
-      ? 'text-amber-500'
-      : 'text-muted-foreground';
+  const dotClass = cn(
+    'inline-block h-2 w-2 rounded-full',
+    state.status === 'open' && 'bg-emerald-500 shadow-[0_0_6px] shadow-emerald-500/60',
+    state.status === 'connecting' && 'bg-amber-500 animate-pulse',
+    (state.status === 'closed' || state.status === 'error') && 'bg-destructive',
+    state.status === 'idle' && 'bg-muted-foreground/40',
+  );
+  const statusClass = cn(
+    'text-muted-foreground truncate',
+    state.status === 'open' && 'text-foreground/80',
+    (state.status === 'closed' || state.status === 'error') && 'text-destructive',
+  );
 
   return (
     <div className="flex flex-col h-full bg-card">
-      <div className="flex items-center gap-3 px-3 py-2 border-b text-xs">
+      <div className="flex items-center gap-2 px-3 py-2 border-b text-xs">
         <select
-          className="bg-background border rounded px-2 py-1"
+          className="bg-background border border-input rounded-md px-2 h-7 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           value={target}
           onChange={(e) => setTarget(e.target.value as Target)}
           title={t('agents:terminal.targetTitle')}
@@ -182,14 +192,17 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
           <option value="sandbox">{t('agents:terminal.target.sandbox')}</option>
           <option value="host">{t('agents:terminal.target.host')}</option>
         </select>
+        <span className={dotClass} aria-hidden="true" />
         <span className={statusClass}>{statusLabel}</span>
         {(state.status === 'closed' || state.status === 'error') && (
-          <button
-            className="ml-auto px-2 py-1 border rounded hover:bg-muted"
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto h-7 px-2 text-xs"
             onClick={() => setReconnectCount((n) => n + 1)}
           >
-            {t('agents:terminal.reconnect')}
-          </button>
+            <RotateCcw className="h-3 w-3" /> {t('agents:terminal.reconnect')}
+          </Button>
         )}
       </div>
       <div ref={containerRef} className="flex-1 min-h-0 p-1" />

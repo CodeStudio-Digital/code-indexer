@@ -108,8 +108,11 @@ export function InboxTranscriptPanel({ sessionId }: InboxTranscriptPanelProps) {
       </div>
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {slot.initialized && messages.length === 0 && (
-          <div className="text-center text-xs text-muted-foreground py-12">
-            {t('agents:transcript.empty')}
+          <div className="flex h-full flex-col items-center justify-center gap-3 py-12 text-center">
+            <MessageCircle className="h-10 w-10 text-muted-foreground/30" strokeWidth={1.25} />
+            <p className="max-w-xs text-xs text-muted-foreground">
+              {t('agents:transcript.empty')}
+            </p>
           </div>
         )}
         {groups.map((group) => (
@@ -142,7 +145,13 @@ function TranscriptGroup({ group }: { group: TranscriptGroupShape }) {
   if (!head) return null;
   const isThread = group.messages.length > 1;
   return (
-    <div className={isThread ? 'rounded border border-border/40 bg-muted/20 p-2 space-y-1' : 'space-y-1'}>
+    <div
+      className={
+        isThread
+          ? 'rounded-md border border-border/60 bg-muted/30 p-2 space-y-1.5 transition-colors hover:border-border'
+          : 'rounded-md px-2 py-1 space-y-1 transition-colors hover:bg-muted/30'
+      }
+    >
       {group.messages.map((m) => (
         <TranscriptRow key={m.id} message={m} isFollowUp={m !== head && isThread} />
       ))}
@@ -168,27 +177,37 @@ function TranscriptRow({
   const isBroadcastCopy = message.kind === 'notify' && message.to_role === '__master__' && message.body.startsWith('[INBOX-OBSERVED');
 
   return (
-    <div className={`text-[11px] ${isFollowUp ? 'pl-3 border-l-2 border-border/50' : ''}`}>
+    <div className={`text-[11px] ${isFollowUp ? 'pl-3 border-l-2 border-border/60' : ''}`}>
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="font-medium text-foreground">@{message.from_role}</span>
-        <ArrowRight className="h-3 w-3 text-muted-foreground" />
-        <span className="font-medium">{target}</span>
-        <Badge variant="outline" className="text-[9px] px-1 py-0">{message.kind}</Badge>
-        <Badge variant={STATUS_VARIANTS[message.status]} className="text-[9px] px-1 py-0">
+        <span className="font-semibold text-foreground">@{message.from_role}</span>
+        <ArrowRight className="h-3 w-3 text-muted-foreground/70" />
+        <span className="font-semibold">{target}</span>
+        <Badge variant="outline" className="text-[9px] px-1.5 py-0 font-normal">
+          {message.kind}
+        </Badge>
+        <Badge
+          variant={STATUS_VARIANTS[message.status]}
+          className="text-[9px] px-1.5 py-0 font-normal"
+        >
           {message.status}
         </Badge>
         {isBroadcastCopy && (
-          <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-500/50 text-amber-600">
+          <Badge
+            variant="outline"
+            className="text-[9px] px-1.5 py-0 font-normal border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+          >
             {t('agents:transcript.observed')}
           </Badge>
         )}
-        <span className="ml-auto text-[10px] text-muted-foreground">{message.created_at}</span>
+        <span className="ml-auto text-[10px] text-muted-foreground/70 tabular-nums">
+          {message.created_at}
+        </span>
       </div>
-      <pre className="mt-0.5 whitespace-pre-wrap break-words font-mono text-[10.5px] text-muted-foreground">
+      <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[10.5px] leading-relaxed text-muted-foreground">
         {message.body}
       </pre>
       {message.answer && (
-        <pre className="mt-1 ml-3 whitespace-pre-wrap break-words font-mono text-[10.5px] text-emerald-700 dark:text-emerald-400">
+        <pre className="mt-1.5 ml-3 whitespace-pre-wrap break-words font-mono text-[10.5px] leading-relaxed text-emerald-700 dark:text-emerald-400">
           ↳ {message.answer}
         </pre>
       )}

@@ -469,15 +469,23 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
             getDefaultModel={getDefaultModel}
           />
 
-          <label className="flex items-start gap-2 text-xs select-none cursor-pointer">
+          <label
+            className={`flex items-start gap-2.5 rounded-md border p-3 text-xs select-none cursor-pointer transition-colors ${
+              masterBroadcastSubscribe
+                ? 'border-primary/30 bg-primary/[0.03]'
+                : 'border-border hover:bg-muted/30'
+            }`}
+          >
             <input
               type="checkbox"
               checked={masterBroadcastSubscribe}
               onChange={(e) => setMasterBroadcastSubscribe(e.target.checked)}
-              className="mt-0.5"
+              className="mt-0.5 h-3.5 w-3.5 accent-primary"
             />
-            <span className="flex-1">
-              <span className="font-medium">{t('agents:company.masterObserves.title')}</span>
+            <span className="flex-1 leading-snug">
+              <span className="font-medium text-foreground">
+                {t('agents:company.masterObserves.title')}
+              </span>
               <span className="block text-muted-foreground mt-0.5">
                 {t('agents:company.masterObserves.description')}
               </span>
