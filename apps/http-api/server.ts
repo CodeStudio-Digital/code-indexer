@@ -26,6 +26,7 @@ import { mountAdminDriftRoutes } from './server/routes/admin/drift.js';
 import { mountWorkersDiagnosticRoute } from './server/routes/admin/workers.js';
 import { mountCoderRoutes } from './server/routes/coder/index.js';
 import { attachCompanyStreamUpgrade } from './server/routes/company/ws.js';
+import { attachTerminalUpgrade } from './server/routes/terminal-ws.js';
 import { mountWorkspaceRoutes } from './server/routes/workspace/index.js';
 import {
   setCompanySandboxStore,
@@ -446,11 +447,11 @@ export function createApp() {
   mountDocsRoutes(app, deps);
   setGlobalDocSearch(deps.docHybridSearch);
 
-  return { app, db: deps.db, chromeService };
+  return { app, db: deps.db, chromeService, deps };
 }
 
 export async function startServer(port: number, host: string) {
-  const { app, chromeService } = createApp();
+  const { app, chromeService, deps } = createApp();
   console.log(`MCP Code Indexer API running at http://${host}:${port}`);
   // Honest worker status — DOES the flag actually take effect, or is
   // the worker file missing? The legacy log just echoed the env var,
@@ -479,6 +480,13 @@ export async function startServer(port: number, host: string) {
   // P14: parallel WebSocket transport for company sessions. Default
   // remains SSE; the dashboard opts in via `?transport=ws`.
   attachCompanyStreamUpgrade(server as unknown as import('node:http').Server);
+  // Phase D: interactive terminal upgrade. Sandbox target wraps
+  // `podman exec -it`; host target spawns the operator's local shell
+  // (gated by MCP_HOST_TERMINAL_ENABLED=1).
+  attachTerminalUpgrade(server as unknown as import('node:http').Server, {
+    companyStore: deps.companyStore,
+    db: deps.db,
+  });
 
   // Chrome Service auto-start deferred until after serve() so the
   // /api/health reachability probe inside recoverOnBoot finds the port open.

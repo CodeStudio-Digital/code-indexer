@@ -25,6 +25,7 @@ import {
   KanbanSquare,
   MessageSquare,
   Network,
+  TerminalSquare,
   type LucideIcon,
 } from 'lucide-react';
 import type { BuildTab, DataTab, WorkTab, Zone } from './types.js';
@@ -49,6 +50,7 @@ export const TAB_REGISTRY: readonly TabDef[] = [
   { zone: 'build', tab: 'files', Icon: FolderTree, labelKey: 'company.files', fallbackLabel: 'Files' },
   { zone: 'build', tab: 'git', Icon: GitBranch, labelKey: 'company.git', fallbackLabel: 'Git' },
   { zone: 'build', tab: 'api', Icon: BookOpen, labelKey: 'company.apiReference', fallbackLabel: 'API' },
+  { zone: 'build', tab: 'terminal', Icon: TerminalSquare, labelKey: 'company.terminal', fallbackLabel: 'Terminal' },
   // Data — persistence
   { zone: 'data', tab: 'drive', Icon: FolderOpen, labelKey: 'company.drive', fallbackLabel: 'Drive' },
   { zone: 'data', tab: 'snapshots', Icon: GitCompare, labelKey: 'company.snapshots', fallbackLabel: 'Snapshots' },

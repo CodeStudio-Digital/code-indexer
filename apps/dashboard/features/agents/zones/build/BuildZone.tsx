@@ -1,19 +1,21 @@
 /**
  * Build zone: artefacts agents produce during the session.
  *
- * Tabs (left rail): Docs, Tests, Files, Git, API Reference. Files /
- * Git / API moved from the right-side drawer to here so they fill the
- * full content column when active — preview stays as the lone
- * right-side artefact panel.
+ * Tabs (left rail): Docs, Tests, Files, Git, API Reference, Terminal.
+ * Files / Git / API moved from the right-side drawer to here so they
+ * fill the full content column when active — preview stays as the
+ * lone right-side artefact panel.
  *
  * Files/Git/API rely on the session's linked projects, fetched once
- * via `useSessionProjects` so tab switches don't re-hit the API.
+ * via `useSessionProjects` so tab switches don't re-hit the API. The
+ * terminal tab is standalone — connects directly to `/ws/terminal/:id`.
  */
 import DocsTab from '../../DocsTab.js';
 import { TestsTab } from '../../tests/TestsTab.js';
 import { FilesTab as BuilderFilesTab } from '../../../builder/preview/files/FilesTab.js';
 import { GitTab as BuilderGitTab } from '../../../builder/preview/git/GitTab.js';
 import { CompanyApiReferenceTab } from '../../CompanyApiReferenceTab.js';
+import { TerminalPanel } from '../../terminal/TerminalPanel.js';
 import { useSessionProjects } from '../../../builder/preview/useSessionProjects.js';
 import type { BuildTab } from '../types.js';
 
@@ -28,6 +30,7 @@ export function BuildZone({ sessionId, tab }: BuildZoneProps) {
   if (tab === 'docs') return <DocsTab companySessionId={sessionId} />;
   if (tab === 'tests') return <TestsTab sessionId={sessionId} />;
   if (tab === 'api') return <CompanyApiReferenceTab sessionId={sessionId} />;
+  if (tab === 'terminal') return <TerminalPanel sessionId={sessionId} />;
 
   // Files + Git need the project list. Render lightweight states while
   // the fetch settles so the tab doesn't flash empty.
