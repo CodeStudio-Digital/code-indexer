@@ -29,6 +29,8 @@
       "@mcp/design-system/*": ["packages/design-system/src/*"],
       "@mcp/code-agent": ["packages/code-agent/src/index.ts"],
       "@mcp/code-agent/*": ["packages/code-agent/src/*"],
+      "@mcp/docs-agent": ["packages/docs-agent/src/index.ts"],
+      "@mcp/docs-agent/*": ["packages/docs-agent/src/*"],
       "@mcp/company": ["packages/company/src/index.ts"],
       "@mcp/company/*": ["packages/company/src/*"],
       "@mcp/company-contracts": ["packages/company-contracts/src/index.ts"],

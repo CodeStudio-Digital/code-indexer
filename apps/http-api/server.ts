@@ -81,8 +81,13 @@ import { setQaPreviewConfig } from '@mcp/services/sandbox/sandbox-manager.js';
 import { mountDesignSystemRoutes } from './server/routes/design-system/index.js';
 import { mountConfigRoutes } from './server/routes/config.js';
 import { mountDocsRoutes } from './server/routes/docs/index.js';
+import { mountDocsAgentRoutes } from './server/routes/docs-agent/index.js';
 import { setChromeServiceForDocs } from './server/deps.js';
 import { setGlobalDocSearch } from '@mcp/code-agent/tools/rag-search-docs.js';
+import {
+  DocsResearchBridge,
+  setGlobalDocsResearcher,
+} from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
 
@@ -471,6 +476,24 @@ export function createApp() {
       });
     },
   });
+
+  // DocsAgent — multi-step retrieval orchestrator. Installed as a
+  // process singleton so the (separately registered) docs_deep_research
+  // tool can reach it from any in-process CoderRunner via
+  // `getGlobalDocsResearcher()`. Worker-thread coders won't see this
+  // singleton (worker module state is isolated, same constraint that
+  // affects `setGlobalDocSearch`); they fall back to rag_search_docs
+  // until the worker-vs-main singleton story is unified — until then
+  // the dashboard's Research tab and the HTTP endpoint serve as the
+  // canonical entry point.
+  const docsResearchBridge = new DocsResearchBridge({
+    db: deps.db.raw(),
+    docStore: deps.docStore,
+    docHybridSearch: deps.docHybridSearch,
+    pipelineResolver: deps.pipelineProviderResolver,
+  });
+  setGlobalDocsResearcher(docsResearchBridge);
+  mountDocsAgentRoutes(app, deps, docsResearchBridge);
 
   return { app, db: deps.db, chromeService, deps };
 }

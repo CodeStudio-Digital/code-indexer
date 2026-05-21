@@ -17,7 +17,7 @@ import {
 } from '../../../sse/coderWorkerPoolSingleton.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import { withSessionLock } from './sessionLock.js';
-import { enrichContentWithActiveSkills } from './active-skills.js';
+import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
 
 interface SendMessageBody {
   content: string;
@@ -92,23 +92,16 @@ export function mountCoderStreamRoutes(
     const body = await c.req.json<SendMessageBody>();
     if (!body.content?.trim()) return c.json({ error: 'content required' }, 400);
 
-    // Expand manually-picked skills into an `<active_skills>` block. Mutates
-    // body.content so the enriched text flows through both the attach-mode
-    // (pushUserMessage / appendMessage) and fresh-run (runCoder) paths below.
-    if (body.selected_skill_ids && body.selected_skill_ids.length > 0) {
-      const enrich = await enrichContentWithActiveSkills(
-        body.content,
-        body.selected_skill_ids,
-        id,
-        deps,
-      );
-      body.content = enrich.content;
-      if (enrich.missing.length > 0) {
-        console.warn(
-          `[active-skills] session ${id}: skipped unknown skill ids: ${enrich.missing.join(', ')}`,
-        );
-      }
-    }
+    // The list of skill IDs is threaded through to the runner verbatim so it
+    // can rematerialize the `<active_skills>` block per turn. We deliberately
+    // do NOT inline the bodies into `body.content` anymore — that used to
+    // bloat the persisted user message with thousands of tokens of skill
+    // instructions on every turn. The picks are persisted alongside the
+    // message in `coder_messages.selected_skill_ids_json` (migration 095).
+    const selectedSkillIds =
+      body.selected_skill_ids && body.selected_skill_ids.length > 0
+        ? body.selected_skill_ids
+        : undefined;
 
     // Serialize the "do we have an active run?" decision per session so two
     // concurrent POSTs cannot both observe `activeRuns.get(id) === undefined`
@@ -160,9 +153,10 @@ export function mountCoderStreamRoutes(
           const userMsg: AgentMessage = {
             role: 'user',
             content: [{ type: 'text', text: body.content }],
+            ...(selectedSkillIds ? { selectedSkillIds } : {}),
           };
           sessionStore.appendMessage(id, userMsg);
-          await pool.pushUserMessage(id, body.content);
+          await pool.pushUserMessage(id, body.content, selectedSkillIds);
           return { kind: 'attach', bus: existingBus, tailFrom: existingBus.nextSeq - 1 };
         }
         // Fresh run via the worker — `runFresh` spawns the worker (if
@@ -177,6 +171,7 @@ export function mountCoderStreamRoutes(
           profile: body.profile,
           worktree: body.worktree,
           thinking: body.thinking,
+          selectedSkillIds,
         });
         return { kind: 'fresh', bus: freshBus };
       }
@@ -240,9 +235,10 @@ export function mountCoderStreamRoutes(
         const userMsg: AgentMessage = {
           role: 'user',
           content: [{ type: 'text', text: body.content }],
+          ...(selectedSkillIds ? { selectedSkillIds } : {}),
         };
         sessionStore.appendMessage(id, userMsg);
-        runner.pushUserMessage(body.content);
+        runner.pushUserMessage(body.content, { selectedSkillIds });
 
         // Tail mode: subscribe to events from now on, no replay. The runner
         // will emit a fresh `turn_start` (and downstream tool calls) when
@@ -298,6 +294,7 @@ export function mountCoderStreamRoutes(
           profile: body.profile,
           worktree: body.worktree,
           thinking: body.thinking,
+          selectedSkillIds,
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
           onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
@@ -305,6 +302,13 @@ export function mountCoderStreamRoutes(
           // MCP_PIPELINES_TOOL_SELECTION is off, so the runner skips the
           // hook with zero overhead.
           toolSelectionFilter: deps.buildToolSelectionFilter(),
+          // Inject docs_deep_research — the DocsAgent escalation tool.
+          // The bridge singleton is installed in server.ts at boot; the
+          // helper returns false when unset (e.g. headless tests) so the
+          // runner just doesn't see the tool — no errors.
+          onRunnerReady: (runner) => {
+            installDocsDeepResearch(runner);
+          },
         });
         setBusRunner(bus, handle.runner);
         publish(bus, 'session', handle.session);
@@ -373,6 +377,11 @@ export function mountCoderStreamRoutes(
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
           onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
+          // Same docs_deep_research wiring as the fresh-run path so resumed
+          // sessions get the escalation tool on turn 1.
+          onRunnerReady: (runner) => {
+            installDocsDeepResearch(runner);
+          },
           toolSelectionFilter: deps.buildToolSelectionFilter(),
         });
         setBusRunner(bus, handle.runner);
