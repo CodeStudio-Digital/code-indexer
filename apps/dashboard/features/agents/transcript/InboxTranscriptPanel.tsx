@@ -15,6 +15,7 @@
  * consistent without a second cache.
  */
 import { useCallback, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ArrowRight, MessageCircle, RefreshCw } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
 import { Button } from '../../../components/ui/button.js';
@@ -38,6 +39,7 @@ const STATUS_VARIANTS: Record<InboxStatus, 'default' | 'secondary' | 'destructiv
 };
 
 export function InboxTranscriptPanel({ sessionId }: InboxTranscriptPanelProps) {
+  const { t } = useTranslation(['agents']);
   const slot = useCompanyStore((s) => selectInbox(s, sessionId));
   const inboxHydrate = useCompanyStore((s) => s.inboxHydrate);
   const inboxSetLoading = useCompanyStore((s) => s.inboxSetLoading);
@@ -98,7 +100,7 @@ export function InboxTranscriptPanel({ sessionId }: InboxTranscriptPanelProps) {
       <div className="flex items-center justify-between border-b px-3 py-2 text-xs">
         <div className="flex items-center gap-2 text-muted-foreground">
           <MessageCircle className="h-4 w-4" />
-          <span>{messages.length} message(s) · transcript ascending</span>
+          <span>{t('agents:transcript.summary', { count: messages.length })}</span>
         </div>
         <Button size="sm" variant="ghost" onClick={() => void refresh()}>
           <RefreshCw className="h-3.5 w-3.5" />
@@ -107,7 +109,7 @@ export function InboxTranscriptPanel({ sessionId }: InboxTranscriptPanelProps) {
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {slot.initialized && messages.length === 0 && (
           <div className="text-center text-xs text-muted-foreground py-12">
-            No inter-agent messages yet on this session.
+            {t('agents:transcript.empty')}
           </div>
         )}
         {groups.map((group) => (
@@ -155,6 +157,7 @@ function TranscriptRow({
   message: AgentInboxMessage;
   isFollowUp: boolean;
 }) {
+  const { t } = useTranslation(['agents']);
   const target = message.to_role === '__master__'
     ? '@master'
     : message.to_role
@@ -176,7 +179,7 @@ function TranscriptRow({
         </Badge>
         {isBroadcastCopy && (
           <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-500/50 text-amber-600">
-            observed
+            {t('agents:transcript.observed')}
           </Badge>
         )}
         <span className="ml-auto text-[10px] text-muted-foreground">{message.created_at}</span>

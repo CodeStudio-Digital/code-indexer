@@ -236,17 +236,17 @@ export function RoleEditModal({
                 className="mt-0.5"
               />
               <span className="flex-1">
-                <span className="font-medium text-foreground">Extended thinking</span>
+                <span className="font-medium text-foreground">{t('agents:role.thinking.title')}</span>
                 <span className="block text-muted-foreground mt-0.5">
-                  Habilita deep reasoning para subordinados deste role em providers
-                  que suportam (Anthropic, Gemini). Custa mais tokens — use para tarefas
-                  realmente difíceis. Não afeta providers que ignoram o flag.
+                  {t('agents:role.thinking.description')}
                 </span>
               </span>
             </label>
             {role.thinking && (
               <div className="ml-6 flex items-center gap-2">
-                <label className="text-[11px] text-muted-foreground">Budget (tokens):</label>
+                <label className="text-[11px] text-muted-foreground">
+                  {t('agents:role.thinking.budgetLabel')}
+                </label>
                 <input
                   type="number"
                   min={1024}
@@ -262,10 +262,12 @@ export function RoleEditModal({
                     if (!Number.isFinite(parsed) || parsed < 0) return;
                     onUpdate({ thinkingBudgetTokens: parsed });
                   }}
-                  placeholder="auto (~5000)"
+                  placeholder={t('agents:role.thinking.budgetPlaceholder')}
                   className="rounded-md border bg-background px-2 py-1 text-xs font-mono w-28"
                 />
-                <span className="text-[10px] text-muted-foreground">Anthropic only</span>
+                <span className="text-[10px] text-muted-foreground">
+                  {t('agents:role.thinking.anthropicOnly')}
+                </span>
               </div>
             )}
           </div>

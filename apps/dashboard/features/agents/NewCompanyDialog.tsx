@@ -477,12 +477,9 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
               className="mt-0.5"
             />
             <span className="flex-1">
-              <span className="font-medium">Master observa peer-to-peer</span>
+              <span className="font-medium">{t('agents:company.masterObserves.title')}</span>
               <span className="block text-muted-foreground mt-0.5">
-                Cada mensagem entre subordinados gera uma cópia notify para o master,
-                que aparece como <code>[INBOX-OBSERVED]</code> no próximo turno dele.
-                Útil para empresas em que o master precisa entender o que os times trocam
-                sem ser o intermediário forçado.
+                {t('agents:company.masterObserves.description')}
               </span>
             </span>
           </label>

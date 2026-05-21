@@ -16,6 +16,7 @@
  * by Vite, no separate CSS import is needed beyond `xterm.css`.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -31,7 +32,10 @@ interface ConnectionState {
   detail?: string;
 }
 
+const ESC = '\x1b';
+
 export function TerminalPanel({ sessionId }: TerminalPanelProps) {
+  const { t } = useTranslation(['agents']);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -114,18 +118,22 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
       if (parsed.type === 'data' && typeof parsed.data === 'string') {
         term.write(parsed.data);
       } else if (parsed.type === 'exit') {
-        term.writeln(`\r\n[33m[shell exited code=${parsed.code}][0m`);
+        term.writeln(
+          `\r\n${ESC}[33m${t('agents:terminal.shellExited', { code: parsed.code ?? '?' })}${ESC}[0m`,
+        );
       } else if (parsed.type === 'error' && typeof parsed.message === 'string') {
-        term.writeln(`\r\n[31m[error: ${parsed.message}][0m`);
+        term.writeln(
+          `\r\n${ESC}[31m${t('agents:terminal.runtimeError', { message: parsed.message })}${ESC}[0m`,
+        );
       }
     };
     ws.onerror = () => {
-      setState({ status: 'error', detail: 'WebSocket transport error' });
+      setState({ status: 'error', detail: t('agents:terminal.transportError', { defaultValue: 'WebSocket transport error' }) });
     };
     ws.onclose = (ev) => {
       setState({
         status: 'closed',
-        detail: ev.reason || `closed (code ${ev.code})`,
+        detail: ev.reason || t('agents:terminal.closedCode', { code: ev.code, defaultValue: 'closed (code {{code}})' }),
       });
     };
 
@@ -144,17 +152,17 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
       try { ws.close(1000, 'panel unmount'); } catch { /* best-effort */ }
       wsRef.current = null;
     };
-  }, [wsUrl, reconnectCount]);
+  }, [wsUrl, reconnectCount, t]);
 
   const statusLabel = state.status === 'open'
-    ? `Connected (${target})`
+    ? t('agents:terminal.status.connected', { target })
     : state.status === 'connecting'
-      ? 'Connecting…'
+      ? t('agents:terminal.status.connecting')
       : state.status === 'closed'
-        ? `Disconnected: ${state.detail ?? ''}`
+        ? t('agents:terminal.status.disconnected', { detail: state.detail ?? '' })
         : state.status === 'error'
-          ? `Error: ${state.detail ?? ''}`
-          : 'Idle';
+          ? t('agents:terminal.status.error', { detail: state.detail ?? '' })
+          : t('agents:terminal.status.idle');
 
   const statusClass = state.status === 'open'
     ? 'text-emerald-500'
@@ -169,10 +177,10 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
           className="bg-background border rounded px-2 py-1"
           value={target}
           onChange={(e) => setTarget(e.target.value as Target)}
-          title="Terminal target"
+          title={t('agents:terminal.targetTitle')}
         >
-          <option value="sandbox">Sandbox (container)</option>
-          <option value="host">Host (your machine)</option>
+          <option value="sandbox">{t('agents:terminal.target.sandbox')}</option>
+          <option value="host">{t('agents:terminal.target.host')}</option>
         </select>
         <span className={statusClass}>{statusLabel}</span>
         {(state.status === 'closed' || state.status === 'error') && (
@@ -180,7 +188,7 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
             className="ml-auto px-2 py-1 border rounded hover:bg-muted"
             onClick={() => setReconnectCount((n) => n + 1)}
           >
-            Reconnect
+            {t('agents:terminal.reconnect')}
           </button>
         )}
       </div>
