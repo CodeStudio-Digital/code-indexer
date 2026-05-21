@@ -50,6 +50,7 @@
   "terminal.runtimeError": "[erro: {{message}}]",
   "terminal.transportError": "Erro de transporte WebSocket",
   "terminal.closedCode": "encerrado (code {{code}})",
+  "terminal.diagnoseFailed": "Diagnose falhou: {{message}}",
   "company.inputPlaceholder": "Descreva a tarefa para seu time de IA...",
   "company.inputPlaceholderMaster": "Envie uma mensagem para o Master...",
   "company.config": "Configuração da Empresa",

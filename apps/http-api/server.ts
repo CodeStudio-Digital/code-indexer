@@ -26,7 +26,7 @@ import { mountAdminDriftRoutes } from './server/routes/admin/drift.js';
 import { mountWorkersDiagnosticRoute } from './server/routes/admin/workers.js';
 import { mountCoderRoutes } from './server/routes/coder/index.js';
 import { attachCompanyStreamUpgrade } from './server/routes/company/ws.js';
-import { attachTerminalUpgrade } from './server/routes/terminal-ws.js';
+import { attachTerminalUpgrade, mountTerminalDiagnoseRoute } from './server/routes/terminal-ws.js';
 import { mountWorkspaceRoutes } from './server/routes/workspace/index.js';
 import {
   setCompanySandboxStore,
@@ -439,13 +439,38 @@ export function createApp() {
     mountDesignSystemRoutes(app, deps);
   }
   mountWorkspaceRoutes(app, deps);
+  // Phase D — terminal diagnose endpoint. Pre-flight HTTP check the
+  // dashboard's TerminalPanel hits before opening the WS upgrade, so
+  // gate rejections surface as structured JSON instead of an opaque
+  // WebSocket close code 1006.
+  mountTerminalDiagnoseRoute(app, { companyStore: deps.companyStore, db: deps.db });
 
   // Documentação (RAG) — global doc corpus + ingestion routes. Mounted
   // alongside its sibling tool wiring: `setGlobalDocSearch` installs the
   // backend the `rag_search_docs` agent tool reads from at call time, so
   // the moment routes are live, every agent in this process can search.
   mountDocsRoutes(app, deps);
-  setGlobalDocSearch(deps.docHybridSearch);
+  // Env-flag-aware adapter — the tool interface (DocSearchBackend in
+  // packages/code-agent) only exposes {query,collection,limit}, so the
+  // enhancements (rewrite + rerank) live in this wrapper. Default OFF;
+  // operators turn them on via env vars without redeploying the tool.
+  //   DOCS_RAG_REWRITE=1  → query rewriter ON  (Phase 10 feature)
+  //   DOCS_RAG_RERANK=1   → LLM reranker ON   (Phase 10 feature)
+  // Both still degrade to no-op when the corresponding binding is
+  // unconfigured in the admin panel — flags only control the OPT-IN.
+  const docsRagRewrite = process.env.DOCS_RAG_REWRITE === '1';
+  const docsRagRerank = process.env.DOCS_RAG_RERANK === '1';
+  setGlobalDocSearch({
+    search: async (input) => {
+      return deps.docHybridSearch.search({
+        ...input,
+        enhancements:
+          docsRagRewrite || docsRagRerank
+            ? { rewrite: docsRagRewrite, rerank: docsRagRerank }
+            : undefined,
+      });
+    },
+  });
 
   return { app, db: deps.db, chromeService, deps };
 }

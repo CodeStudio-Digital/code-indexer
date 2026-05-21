@@ -35,6 +35,7 @@
 import { createRequire } from 'node:module';
 import type { Duplex } from 'node:stream';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import type { Hono } from 'hono';
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { orchestratorRegistry } from '../../sse/OrchestratorRegistry.js';
@@ -115,6 +116,67 @@ const DEFAULT_ORIGINS = new Set(['http://localhost', 'http://127.0.0.1']);
 export interface TerminalUpgradeDeps {
   companyStore: CompanyStore;
   db: CodeIndexDB;
+}
+
+/**
+ * Pre-flight HTTP diagnose. Returns the same gate decision the WS
+ * upgrade applies, but as a JSON response — the browser can't read
+ * the HTTP status of a rejected WebSocket upgrade (the spec collapses
+ * every rejection into close code 1006 with no reason), so the
+ * TerminalPanel calls this endpoint first and surfaces the structured
+ * error instead of an opaque "code 1006".
+ *
+ * Mounted at `GET /api/terminal/diagnose?sessionId=N&target=sandbox|host`.
+ */
+export function mountTerminalDiagnoseRoute(app: Hono, deps: TerminalUpgradeDeps): void {
+  app.get('/api/terminal/diagnose', (c) => {
+    const sessionIdRaw = c.req.query('sessionId') ?? '';
+    const targetRaw = c.req.query('target') ?? 'sandbox';
+    const sessionId = Number(sessionIdRaw);
+    if (!Number.isFinite(sessionId)) {
+      return c.json({ ok: false, code: 400, error: 'sessionId is required and must be numeric' }, 400);
+    }
+    if (targetRaw !== 'sandbox' && targetRaw !== 'host') {
+      return c.json({ ok: false, code: 400, error: `target must be 'sandbox' or 'host' (got '${targetRaw}')` }, 400);
+    }
+    if (targetRaw === 'host' && process.env.MCP_HOST_TERMINAL_ENABLED !== '1') {
+      return c.json(
+        {
+          ok: false,
+          code: 403,
+          error: 'Host terminal is disabled. Set MCP_HOST_TERMINAL_ENABLED=1 in the http-api process env and restart the server.',
+          remediation: 'env',
+        },
+        403,
+      );
+    }
+    if (!tryLoadPty()) {
+      return c.json(
+        {
+          ok: false,
+          code: 503,
+          error: 'node-pty failed to load on this server. Check the [terminal-ws] warning in the server log.',
+          remediation: 'native-dep',
+        },
+        503,
+      );
+    }
+    const spec = targetRaw === 'sandbox'
+      ? resolveSandboxSpec(sessionId)
+      : resolveHostSpec(sessionId, deps);
+    if ('error' in spec) {
+      return c.json(
+        {
+          ok: false,
+          code: spec.status,
+          error: spec.error,
+          remediation: spec.status === 404 ? 'open-session' : spec.status === 409 ? 'provision' : null,
+        },
+        spec.status as 400 | 404 | 409 | 500,
+      );
+    }
+    return c.json({ ok: true, target: targetRaw, label: spec.label });
+  });
 }
 
 /**

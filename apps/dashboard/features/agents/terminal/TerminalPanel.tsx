@@ -101,61 +101,115 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
     if (!term) return;
 
     setState({ status: 'connecting' });
-    const cols = term.cols;
-    const rows = term.rows;
-    const fullUrl = `${wsUrl}&cols=${cols}&rows=${rows}`;
-    const ws = new WebSocket(fullUrl);
-    wsRef.current = ws;
+    let cancelled = false;
+    let ws: WebSocket | null = null;
+    let detachListeners: (() => void) | null = null;
 
-    ws.onopen = () => {
-      setState({ status: 'open' });
-      term.focus();
+    const attachWs = (sock: WebSocket): void => {
+      sock.onopen = () => {
+        setState({ status: 'open' });
+        term.focus();
+      };
+      sock.onmessage = (ev) => {
+        let parsed: { type?: string; data?: string; code?: number; message?: string };
+        try {
+          parsed = JSON.parse(typeof ev.data === 'string' ? ev.data : '');
+        } catch {
+          return;
+        }
+        if (parsed.type === 'data' && typeof parsed.data === 'string') {
+          term.write(parsed.data);
+        } else if (parsed.type === 'exit') {
+          term.writeln(
+            `\r\n${ESC}[33m${t('agents:terminal.shellExited', { code: parsed.code ?? '?' })}${ESC}[0m`,
+          );
+        } else if (parsed.type === 'error' && typeof parsed.message === 'string') {
+          term.writeln(
+            `\r\n${ESC}[31m${t('agents:terminal.runtimeError', { message: parsed.message })}${ESC}[0m`,
+          );
+        }
+      };
+      sock.onerror = () => {
+        setState({
+          status: 'error',
+          detail: t('agents:terminal.transportError', { defaultValue: 'WebSocket transport error' }),
+        });
+      };
+      sock.onclose = (ev) => {
+        setState({
+          status: 'closed',
+          detail:
+            ev.reason ||
+            t('agents:terminal.closedCode', { code: ev.code, defaultValue: 'closed (code {{code}})' }),
+        });
+      };
+      const onDataDisposable = term.onData((data) => {
+        if (sock.readyState !== WebSocket.OPEN) return;
+        sock.send(JSON.stringify({ type: 'data', data }));
+      });
+      const onResizeDisposable = term.onResize(({ cols: c, rows: r }) => {
+        if (sock.readyState !== WebSocket.OPEN) return;
+        sock.send(JSON.stringify({ type: 'resize', cols: c, rows: r }));
+      });
+      detachListeners = () => {
+        onDataDisposable.dispose();
+        onResizeDisposable.dispose();
+      };
     };
-    ws.onmessage = (ev) => {
-      let parsed: { type?: string; data?: string; code?: number; message?: string };
+
+    // Pre-flight HTTP diagnose — the browser collapses every WS
+    // upgrade rejection into close code 1006 with no reason, so we
+    // ask the server first and surface a structured error instead.
+    const doConnect = async (): Promise<void> => {
       try {
-        parsed = JSON.parse(typeof ev.data === 'string' ? ev.data : '');
-      } catch {
+        const probe = await fetch(
+          `/api/terminal/diagnose?sessionId=${sessionId}&target=${target}`,
+          { headers: { accept: 'application/json' } },
+        );
+        if (cancelled) return;
+        if (!probe.ok) {
+          const body = (await probe
+            .json()
+            .catch(() => ({ error: `HTTP ${probe.status}` }))) as { error?: string };
+          setState({ status: 'error', detail: body.error ?? `HTTP ${probe.status}` });
+          return;
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setState({
+          status: 'error',
+          detail: t('agents:terminal.diagnoseFailed', {
+            message: e instanceof Error ? e.message : String(e),
+            defaultValue: 'Diagnose request failed: {{message}}',
+          }),
+        });
         return;
       }
-      if (parsed.type === 'data' && typeof parsed.data === 'string') {
-        term.write(parsed.data);
-      } else if (parsed.type === 'exit') {
-        term.writeln(
-          `\r\n${ESC}[33m${t('agents:terminal.shellExited', { code: parsed.code ?? '?' })}${ESC}[0m`,
-        );
-      } else if (parsed.type === 'error' && typeof parsed.message === 'string') {
-        term.writeln(
-          `\r\n${ESC}[31m${t('agents:terminal.runtimeError', { message: parsed.message })}${ESC}[0m`,
-        );
-      }
-    };
-    ws.onerror = () => {
-      setState({ status: 'error', detail: t('agents:terminal.transportError', { defaultValue: 'WebSocket transport error' }) });
-    };
-    ws.onclose = (ev) => {
-      setState({
-        status: 'closed',
-        detail: ev.reason || t('agents:terminal.closedCode', { code: ev.code, defaultValue: 'closed (code {{code}})' }),
-      });
+
+      if (cancelled) return;
+      const cols = term.cols;
+      const rows = term.rows;
+      const fullUrl = `${wsUrl}&cols=${cols}&rows=${rows}`;
+      ws = new WebSocket(fullUrl);
+      wsRef.current = ws;
+      attachWs(ws);
     };
 
-    const onDataDisposable = term.onData((data) => {
-      if (ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ type: 'data', data }));
-    });
-    const onResizeDisposable = term.onResize(({ cols: c, rows: r }) => {
-      if (ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ type: 'resize', cols: c, rows: r }));
-    });
+    void doConnect();
 
     return () => {
-      onDataDisposable.dispose();
-      onResizeDisposable.dispose();
-      try { ws.close(1000, 'panel unmount'); } catch { /* best-effort */ }
+      cancelled = true;
+      detachListeners?.();
+      if (ws) {
+        try {
+          ws.close(1000, 'panel unmount');
+        } catch {
+          /* best-effort */
+        }
+      }
       wsRef.current = null;
     };
-  }, [wsUrl, reconnectCount, t]);
+  }, [wsUrl, reconnectCount, t, sessionId, target]);
 
   const statusLabel = state.status === 'open'
     ? t('agents:terminal.status.connected', { target })

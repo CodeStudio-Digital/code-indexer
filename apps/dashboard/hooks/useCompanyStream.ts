@@ -408,18 +408,37 @@ export function useCompanyStream(companySessionId: number | null) {
 
   const reattach = useCallback(async () => {
     if (companySessionId == null) return;
+    // Optimistic: assume there IS an orchestrator until /attach proves
+    // otherwise. We undo `started` below if the endpoint returns 404
+    // (no active orchestrator) — without that undo the "Iniciando
+    // master" loader sat forever on paused sessions that the user
+    // hadn't yet woken up.
     streamSetStarted(companySessionId, true);
     streamSetConnected(companySessionId, true);
     streamSetError(companySessionId, null);
     await loadKanbanFromDB();
+    let attached = false;
     try {
       await openStream({
         url: `/api/company/sessions/${companySessionId}/attach`,
         method: 'GET',
-        suppressError: (e) => e.message === 'HTTP 404',
+        suppressError: (e) => {
+          if (e.message === 'HTTP 404') {
+            // No active orchestrator — paused/idle session. Reset the
+            // optimistic flags so the UI shows the regular "send a
+            // message to resume" surface instead of an infinite loader.
+            streamSetStarted(companySessionId, false);
+            streamSetConnected(companySessionId, false);
+            return true;
+          }
+          return false;
+        },
       });
+      attached = true;
     } finally {
-      await loadFinalStateFromDB();
+      // Only refresh from DB when we actually had a stream — otherwise
+      // we just re-render the same rows we hydrated on mount.
+      if (attached) await loadFinalStateFromDB();
     }
   }, [
     companySessionId,
