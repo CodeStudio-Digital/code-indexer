@@ -79,6 +79,14 @@ export interface DocCrawlConfig {
    * `force_browser_unavailable` in `blocked_signals`.
    */
   force_browser?: boolean;
+  /**
+   * Hybrid render mode: Chromium ONLY on the seed page (depth=0) to
+   * surface JS-rendered nav, then plain HTTP for every discovered
+   * leaf. Massive cost win on Unity-ScriptReference-style sites
+   * where the sidebar is JS-only but each leaf is plain HTML.
+   * Priority when both are set: `force_browser` wins.
+   */
+  browser_seed_only?: boolean;
 }
 
 export interface DocIngestEstimate {

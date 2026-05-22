@@ -81,6 +81,13 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
   // don't fire. Available regardless of crawlEnabled — even a single
   // page can need browser rendering.
   const [forceBrowser, setForceBrowser] = useState(false);
+  // Hybrid mode: Chromium only on the seed (depth=0) so the JS-rendered
+  // nav is captured once, then plain HTTP for every discovered leaf.
+  // Most cost-effective option for Unity-ScriptReference-style sites.
+  // Mutually exclusive with `forceBrowser` (force_browser wins per
+  // crawler.ts policy); the UI greys this out when forceBrowser is on
+  // so the priority is visible.
+  const [browserSeedOnly, setBrowserSeedOnly] = useState(false);
 
   // PDF form state
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -96,6 +103,12 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
     setSameOrigin(true);
     setRequiredPath('');
     setLlmExtractLinks(false);
+    // Render-mode flags — both were missing from reset() before this
+    // PR (carry-over bug from when force_browser was added). Now that
+    // there are two toggles, the leak was visible: reopening the modal
+    // after a previous run would keep the prior selections checked.
+    setForceBrowser(false);
+    setBrowserSeedOnly(false);
     setPdfFile(null);
     setPdfTitle('');
     setPdfError(null);
@@ -273,11 +286,15 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                 )}
 
                 {/*
-                  Force-browser toggle — OUTSIDE the `crawlEnabled` block.
+                  Render-mode toggles — OUTSIDE the `crawlEnabled` block.
                   Even a single-page index benefits when the nav is JS-only
                   (Unity ScriptReference seed page, sites with SPA shell that
-                  still has body content). Persisted to `doc_sources.crawl_force_browser`
-                  so re-index inherits the choice.
+                  still has body content). Two flags:
+                    * forceBrowser     → Chromium every page (expensive).
+                    * browserSeedOnly  → Chromium just on the seed, plain
+                                          HTTP for leaves (sweet spot for
+                                          Unity-style nav).
+                  Both persist in doc_sources so re-index inherits.
                 */}
                 <div className="flex items-start justify-between gap-3 border-t pt-3">
                   <div className="flex-1">
@@ -295,7 +312,33 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                   <Switch
                     id="docs-force-browser"
                     checked={forceBrowser}
-                    onCheckedChange={setForceBrowser}
+                    onCheckedChange={(v) => {
+                      setForceBrowser(v);
+                      // Mutually exclusive with the seed-only mode — turning
+                      // force_browser on subsumes seed-only.
+                      if (v) setBrowserSeedOnly(false);
+                    }}
+                  />
+                </div>
+
+                <div className="flex items-start justify-between gap-3 pt-1">
+                  <div className="flex-1">
+                    <Label htmlFor="docs-browser-seed-only" className="block">
+                      {t('addSource.browserSeedOnly')}
+                    </Label>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      <Trans
+                        t={t}
+                        i18nKey="addSource.browserSeedOnlyHelp"
+                        components={{ code: <code /> }}
+                      />
+                    </p>
+                  </div>
+                  <Switch
+                    id="docs-browser-seed-only"
+                    checked={browserSeedOnly}
+                    disabled={forceBrowser}
+                    onCheckedChange={setBrowserSeedOnly}
                   />
                 </div>
               </div>
@@ -370,6 +413,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                     required_path: requiredPath.trim() || undefined,
                     llm_extract_links: llmExtractLinks || undefined,
                     force_browser: forceBrowser || undefined,
+                    browser_seed_only: browserSeedOnly || undefined,
                   },
                 },
                 cb,

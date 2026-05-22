@@ -57,6 +57,8 @@
   "addSource.llmExtractLinksHelp": "Runs an LLM on the seed page to find URLs the HTML parser misses (JS-rendered sidebars, data attributes, embedded JSON). One LLM call per source. Useful for sites like Unity ScriptReference. Configure the model in Admin → Pipelines → <code>doc_ingest/link_extractor</code>.",
   "addSource.forceBrowser": "Render with Chromium (advanced)",
   "addSource.forceBrowserHelp": "Fetches every page with a headless browser instead of plain HTTP — captures sidebars / menus / nav populated by JavaScript (e.g. Unity ScriptReference, sites with an SPA shell). Requires ChromeService enabled in <code>Admin → Chrome Service</code>. Each page takes ~15-30s (vs ~100ms plain), only use when needed. When ChromeService is disabled, indexing degrades to plain and marks each page with <code>force_browser_unavailable</code>.",
+  "addSource.browserSeedOnly": "Chromium on the seed only, plain HTTP for the rest (recommended for Unity-style docs)",
+  "addSource.browserSeedOnlyHelp": "Hybrid mode: Chromium runs JS on the seed URL only — surfaces links the HTML parser misses (Unity ScriptReference sidebar, Docusaurus hash-router nav, etc.). Every discovered leaf is then fetched via plain HTTP, since each leaf is usually static HTML once you have the URL. Much cheaper than <code>force_browser</code>: 1× slow (seed) + N× fast (leaves). Disabled when <code>force_browser</code> is on (force_browser wins).",
   "addSource.cancel": "Cancel",
   "addSource.submit": "Index",
   "addSource.pdfDropzone": "Drag a PDF here or click to choose",

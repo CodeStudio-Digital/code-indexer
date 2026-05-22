@@ -75,11 +75,22 @@ export async function crawlUrl(opts: CrawlOptions): Promise<RawPage[]> {
   // Literal substring the URL must contain. Null = no constraint.
   // Trimmed empty string also degrades to null (treat blank UI input as "off").
   const requiredPath = (crawl.required_path ?? '').trim() || null;
-  // Per-source opt-in: when true, the EscalatingFetcher skips its
-  // heuristic and renders every page via the browser backend. Plumbed
-  // through to `renderer.render(url, { forceBrowser })` for each fetch.
-  // Sitemap discovery is intentionally exempt (XML, no JS) — see below.
-  const forceBrowser = crawl.force_browser === true;
+  // Per-source render-mode flags. Two opt-ins coexist:
+  //   * `force_browser`     → every page (depth 0..N) via Chromium. Most
+  //                           expensive. Required when the leaves
+  //                           themselves are SPA-rendered.
+  //   * `browser_seed_only` → ONLY the seed (depth === 0) via Chromium;
+  //                           every discovered leaf goes plain. Sweet
+  //                           spot for sites where the SIDEBAR/NAV is
+  //                           JS-only but each leaf is plain HTML
+  //                           (Unity ScriptReference, Algolia DocSearch).
+  //   * neither             → all plain (existing default).
+  // Priority: `force_browser` wins when both are set. Documented in the
+  // dialog help text so toggling both isn't a footgun.
+  // Sitemap discovery (below) ALWAYS uses the plain UrlFetcher — XML
+  // doesn't need a browser.
+  const forceBrowserAll = crawl.force_browser === true;
+  const browserSeedOnly = crawl.browser_seed_only === true && !forceBrowserAll;
 
   // Fail loudly if the user-supplied seed isn't parseable as a URL — a
   // silent skip in the BFS loop used to produce "DONE 0 pages 3ms" with
@@ -136,8 +147,21 @@ export async function crawlUrl(opts: CrawlOptions): Promise<RawPage[]> {
 
     let raw: Awaited<ReturnType<RenderBackend['render']>> | null = null;
     let reason: string | undefined;
+    // Decide whether THIS specific fetch goes through Chromium.
+    //   * `force_browser=true` → always.
+    //   * `browser_seed_only=true` AND we're on a depth-0 URL (seed or
+    //     sitemap-discovered entry that joins the frontier at depth 0) →
+    //     just this one fetch via Chromium so the JS-rendered nav becomes
+    //     visible to the cheerio link extractor downstream. Every
+    //     follow-up at depth >= 1 goes through plain HTTP — the win that
+    //     makes a 1000-page crawl finish in minutes instead of hours.
+    const useBrowserForThisPage =
+      forceBrowserAll || (browserSeedOnly && next.depth === 0);
     try {
-      raw = await renderer.render(normalized, forceBrowser ? { forceBrowser: true } : undefined);
+      raw = await renderer.render(
+        normalized,
+        useBrowserForThisPage ? { forceBrowser: true } : undefined,
+      );
     } catch (err) {
       reason = err instanceof Error ? err.message : String(err);
       opts.onPageFetched?.({ url: normalized, ok: false, reason, totalFetched: pagesFetched });

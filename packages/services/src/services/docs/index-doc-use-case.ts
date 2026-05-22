@@ -908,6 +908,7 @@ function defaultCrawlConfig(source: DocSource): DocCrawlConfig {
     required_path: source.crawl_required_path,
     llm_extract_links: source.crawl_llm_extract_links,
     force_browser: source.crawl_force_browser,
+    browser_seed_only: source.crawl_browser_seed_only,
   };
 }
 

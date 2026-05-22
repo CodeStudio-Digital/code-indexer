@@ -57,6 +57,8 @@
   "addSource.llmExtractLinksHelp": "Roda um LLM na página inicial para encontrar URLs que o parser HTML não vê (sidebars JS-rendered, data attributes, JSON embedded). 1 chamada por source. Útil para sites como Unity ScriptReference. Configure o modelo em Admin → Pipelines → <code>doc_ingest/link_extractor</code>.",
   "addSource.forceBrowser": "Usar Chromium para renderizar (avançado)",
   "addSource.forceBrowserHelp": "Busca cada página com um navegador headless em vez de HTTP simples — captura sidebars / menus / nav populados por JavaScript (ex: Unity ScriptReference, sites com SPA shell). Requer ChromeService habilitado em <code>Admin → Chrome Service</code>. Cada página leva ~15-30s (vs ~100ms plain), use só quando necessário. Se o ChromeService estiver desligado, a indexação degrada para plain e marca <code>force_browser_unavailable</code>.",
+  "addSource.browserSeedOnly": "Chromium só na seed, plain HTTP no resto (recomendado p/ Unity)",
+  "addSource.browserSeedOnlyHelp": "Modo híbrido: o Chromium executa JS apenas na URL inicial para descobrir links que ficam invisíveis a parsers HTML (sidebar do Unity ScriptReference, nav de Docusaurus com hash-router, etc). Cada página folha então é buscada com HTTP simples — geralmente é HTML estático. Custo bem menor que <code>force_browser</code>: 1× lento (seed) + N× rápido (folhas). Desativado quando <code>force_browser</code> está ligado (esse vence).",
   "addSource.cancel": "Cancelar",
   "addSource.submit": "Indexar",
   "addSource.pdfDropzone": "Arraste um PDF ou clique para escolher",

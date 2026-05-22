@@ -72,6 +72,8 @@ interface CreateUrlSourceBody {
     llm_extract_links?: boolean;
     /** Migration 099: bypass `EscalatingFetcher` heuristic and render every page via Chromium. */
     force_browser?: boolean;
+    /** Migration 101: hybrid — Chromium only on the seed (depth=0), plain HTTP for every leaf. */
+    browser_seed_only?: boolean;
   };
   /** Skip the actual ingestion, just create the row. Useful for the
    *  dashboard's "Save first, index later" flow. */

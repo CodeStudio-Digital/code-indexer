@@ -69,6 +69,17 @@ export interface DocCrawlConfig {
    * in the resulting `RawPage.blocked_signals`.
    */
   force_browser?: boolean;
+  /**
+   * Hybrid render mode: use Chromium ONLY for the seed page (depth=0)
+   * so JS-rendered navigation is captured, then fall back to plain
+   * HTTP for every discovered leaf. Massive cost win on sites like
+   * Unity ScriptReference where the sidebar is JS-only but each leaf
+   * page is plain HTML once you have the URL.
+   *
+   * Priority when both flags are on: `force_browser` wins (renders
+   * every page via Chromium). Documented in the modal help text.
+   */
+  browser_seed_only?: boolean;
 }
 
 export interface DocSource {
@@ -94,6 +105,7 @@ export interface DocSource {
   crawl_required_path: string | null;
   crawl_llm_extract_links: boolean;
   crawl_force_browser: boolean;
+  crawl_browser_seed_only: boolean;
   pdf_size_bytes: number | null;
   cost_usd: number;
   created_at: string;
@@ -242,6 +254,7 @@ function mapSource(row: Record<string, unknown>): DocSource {
     crawl_required_path: (row.crawl_required_path as string | null) ?? null,
     crawl_llm_extract_links: boolFromInt(row.crawl_llm_extract_links as number),
     crawl_force_browser: boolFromInt(row.crawl_force_browser as number),
+    crawl_browser_seed_only: boolFromInt(row.crawl_browser_seed_only as number),
     pdf_size_bytes: (row.pdf_size_bytes as number | null) ?? null,
     cost_usd: (row.cost_usd as number) ?? 0,
     created_at: row.created_at as string,
@@ -356,13 +369,13 @@ export class DocStore {
         collection_id, type, uri, title,
         crawl_enabled, crawl_max_pages, crawl_max_depth, crawl_same_origin,
         crawl_include_pattern, crawl_exclude_pattern, crawl_required_path,
-        crawl_llm_extract_links, crawl_force_browser,
+        crawl_llm_extract_links, crawl_force_browser, crawl_browser_seed_only,
         pdf_size_bytes
       ) VALUES (
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
-        ?, ?,
+        ?, ?, ?,
         ?
       )
     `);
@@ -380,6 +393,7 @@ export class DocStore {
       normalizeRequiredPath(crawl.required_path),
       crawl.llm_extract_links ? 1 : 0,
       crawl.force_browser ? 1 : 0,
+      crawl.browser_seed_only ? 1 : 0,
       input.pdf_size_bytes ?? null,
     );
     this.refreshCollectionCounts(input.collection_id);
@@ -471,6 +485,7 @@ export class DocStore {
                 crawl_required_path      = @required_path,
                 crawl_llm_extract_links  = @llm_extract_links,
                 crawl_force_browser      = @force_browser,
+                crawl_browser_seed_only  = @browser_seed_only,
                 updated_at               = datetime('now')
           WHERE id = @id`,
       )
@@ -485,6 +500,7 @@ export class DocStore {
         required_path: normalizeRequiredPath(crawl.required_path),
         llm_extract_links: crawl.llm_extract_links ? 1 : 0,
         force_browser: crawl.force_browser ? 1 : 0,
+        browser_seed_only: crawl.browser_seed_only ? 1 : 0,
       });
   }
 
