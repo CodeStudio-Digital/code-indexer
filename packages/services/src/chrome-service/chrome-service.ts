@@ -151,9 +151,17 @@ export class ChromeService {
       const browser = await chromium.connect(wsEndpoint, { timeout: 10_000 });
       return browser;
     } catch (err) {
-      console.warn(
-        `[chrome-service] connectBrowser failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[chrome-service] connectBrowser failed: ${message}`);
+      // Classify the failure so the operator sees an actionable hint
+      // instead of just the raw Playwright banner. The mismatch error in
+      // particular ("Looks like Playwright was just updated…") is
+      // recoverable, but only if the operator knows BOTH a constant
+      // bump AND a Chrome Service restart are required.
+      const verdict = classifyChromeServiceError(message);
+      if (verdict.kind !== 'unknown') {
+        console.warn(`[chrome-service] hint (${verdict.kind}): ${verdict.hint}`);
+      }
       return null;
     }
   }

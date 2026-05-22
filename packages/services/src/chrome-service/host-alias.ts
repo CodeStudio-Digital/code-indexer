@@ -12,20 +12,26 @@
 
 /**
  * Default tag for the Chrome Service image. **Must** match the
- * `@playwright/test` version pinned in
+ * `playwright-core` MAJOR.MINOR pinned in `packages/services/package.json`
+ * AND the `@playwright/test` version installed by
  * `playwright-bootstrap.ts:installPlaywrightTestClient` — Playwright's
- * client refuses to connect to a server with a different MAJOR.MINOR
+ * client refuses to connect to a server whose MAJOR.MINOR differs
  * (`browserType.connect` throws "Looks like Playwright was just
  * updated…").
  *
  * Updating this tag is a coordinated change:
- *   1. bump this constant
- *   2. bump the pinned client version in playwright-bootstrap.ts
- *   3. operators with a running Chrome Service must restart it from
+ *   1. bump `playwright-core` in `packages/services/package.json` (use
+ *      an EXACT version, no caret, so a future `npm install` cannot
+ *      silently drift the client past this image)
+ *   2. bump both constants below to the same `MAJOR.MINOR.PATCH`
+ *   3. bump the pinned client version in playwright-bootstrap.ts (it
+ *      already imports `PINNED_PLAYWRIGHT_TEST_VERSION` from here, so
+ *      step 2 covers it)
+ *   4. operators with a running Chrome Service must restart it from
  *      the Admin Panel so the new image is pulled.
  */
-export const DEFAULT_CHROME_SERVICE_IMAGE = 'mcr.microsoft.com/playwright:v1.59.1-jammy';
-export const PINNED_PLAYWRIGHT_TEST_VERSION = '1.59.1';
+export const DEFAULT_CHROME_SERVICE_IMAGE = 'mcr.microsoft.com/playwright:v1.60.0-jammy';
+export const PINNED_PLAYWRIGHT_TEST_VERSION = '1.60.0';
 
 /** Default port the run-server binds inside the container (and via -p on the host). */
 export const DEFAULT_CHROME_SERVICE_PORT = 9222;
@@ -116,6 +122,7 @@ export type ChromeServiceFailureKind =
   | 'image-pull'
   | 'network-unreachable'
   | 'run-server-crash'
+  | 'client-server-version-mismatch'
   | 'unknown';
 
 /**
@@ -133,6 +140,24 @@ export function classifyChromeServiceError(stderr: string): {
   hint: string;
 } {
   const text = (stderr ?? '').toLowerCase();
+  // Order matters: the version-mismatch banner ALSO contains the word
+  // "playwright" + "updated" but those tokens aren't unique to this
+  // failure mode, so we match the precise wording Playwright emits
+  // BEFORE the broader "run-server" fallback below would swallow it.
+  if (
+    /looks like playwright was just updated/.test(text) ||
+    /executable doesn't exist at \/ms-playwright/.test(text) ||
+    /(current|required):.*mcr\.microsoft\.com\/playwright:v/.test(text)
+  ) {
+    return {
+      kind: 'client-server-version-mismatch',
+      hint:
+        'The Playwright npm client (playwright-core / @playwright/test) was upgraded past ' +
+        'the Chrome Service image. Bump `DEFAULT_CHROME_SERVICE_IMAGE` + `PINNED_PLAYWRIGHT_TEST_VERSION` ' +
+        'in `packages/services/src/chrome-service/host-alias.ts` to match the client version, then ' +
+        'restart the Chrome Service from Admin → Chrome Service so the new image is pulled.',
+    };
+  }
   if (
     /manifest|pull|registry|denied|unauthorized/.test(text) ||
     /image\s+not\s+found|not\s+found.*image/.test(text)
