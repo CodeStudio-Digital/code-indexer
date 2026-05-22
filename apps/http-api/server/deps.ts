@@ -501,6 +501,10 @@ export function createDeps(): ServerDeps {
   const docStore = new DocStore(db.raw());
   const docFetcher = new UrlFetcher();
   const plainRender = new PlainFetchBackend(docFetcher);
+  // Pass the SAME `docFetcher` to the browser backend so a force_browser
+  // crawl shares the per-host throttle (penalty, Retry-After, jitter)
+  // with the plain path. Without this the browser path would `page.goto`
+  // unbounded and trip 429s much faster than the polite plain fetcher.
   const browserRender = new BrowserBackend(async () => {
     // Late-bound: chromeService isn't constructed yet at this point in
     // createDeps (it's owned by server.ts and only assigned after the
@@ -509,7 +513,7 @@ export function createDeps(): ServerDeps {
     const svc = chromeServiceForDocs;
     if (!svc) return null;
     return svc.connectBrowser();
-  });
+  }, docFetcher);
   const docRenderer = new EscalatingFetcher(plainRender, browserRender, detectBlocked);
 
   // ─── Doc-search enhancements (Phase 10): query rewriter + reranker ──

@@ -149,9 +149,28 @@ const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+/**
+ * Optional cross-backend host throttle. When provided, `BrowserBackend`
+ * acquires a slot through this before opening a context — so a
+ * `force_browser=true` crawl shares the EXACT same per-host pacing
+ * budget as the plain HTTP path. Without it, the browser backend would
+ * fire `page.goto` concurrently and trip 429s far faster than the
+ * polite plain fetcher.
+ *
+ * Implemented today by `UrlFetcher.acquireHostSlot`; kept as an
+ * interface so the backend stays decoupled (the e2b runner, a future
+ * benchmark harness, or a unit test can pass a fake throttle).
+ */
+export interface HostThrottle {
+  acquireHostSlot<T>(host: string, task: () => Promise<T>): Promise<T>;
+}
+
 export class BrowserBackend implements RenderBackend {
   readonly name = 'browser' as const;
-  constructor(private connect: BrowserConnector) {}
+  constructor(
+    private connect: BrowserConnector,
+    private hostThrottle: HostThrottle | null = null,
+  ) {}
 
   async isAvailable(): Promise<boolean> {
     try {
@@ -166,6 +185,19 @@ export class BrowserBackend implements RenderBackend {
   }
 
   async render(url: string, opts: RenderOpts = {}): Promise<RenderResult> {
+    // Share the per-host pacing with the plain backend when wired. Per
+    // ORIGIN, not per path — same host throttle bucket as the
+    // UrlFetcher uses.
+    if (this.hostThrottle) {
+      const host = tryParseHost(url);
+      if (host) {
+        return this.hostThrottle.acquireHostSlot(host, () => this.doRender(url, opts));
+      }
+    }
+    return this.doRender(url, opts);
+  }
+
+  private async doRender(url: string, opts: RenderOpts = {}): Promise<RenderResult> {
     // `opts.forceBrowser` ignored here — we're already the browser path.
     const browser = await this.connect();
     if (!browser) {
@@ -210,6 +242,15 @@ export class BrowserBackend implements RenderBackend {
       if (page) await page.close().catch(() => {});
       if (context) await context.close().catch(() => {});
     }
+  }
+}
+
+/** Defensive URL parse — returns null on malformed input so the throttle bypass never crashes a render. */
+function tryParseHost(url: string): string | null {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
   }
 }
 
