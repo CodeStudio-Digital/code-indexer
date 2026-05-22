@@ -88,6 +88,7 @@ import {
   DocsResearchBridge,
   setGlobalDocsResearcher,
 } from '@mcp/docs-agent/bridges/docs-bridge.js';
+import { setCoderWorkerDocDeps } from './sse/coderWorkerPoolSingleton.js';
 import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
 
@@ -465,8 +466,8 @@ export function createApp() {
   // unconfigured in the admin panel — flags only control the OPT-IN.
   const docsRagRewrite = process.env.DOCS_RAG_REWRITE === '1';
   const docsRagRerank = process.env.DOCS_RAG_RERANK === '1';
-  setGlobalDocSearch({
-    search: async (input) => {
+  const docSearchBackend = {
+    search: async (input: Parameters<typeof deps.docHybridSearch.search>[0]) => {
       return deps.docHybridSearch.search({
         ...input,
         enhancements:
@@ -475,17 +476,20 @@ export function createApp() {
             : undefined,
       });
     },
-  });
+  };
+  setGlobalDocSearch(docSearchBackend);
 
   // DocsAgent — multi-step retrieval orchestrator. Installed as a
   // process singleton so the (separately registered) docs_deep_research
   // tool can reach it from any in-process CoderRunner via
-  // `getGlobalDocsResearcher()`. Worker-thread coders won't see this
-  // singleton (worker module state is isolated, same constraint that
-  // affects `setGlobalDocSearch`); they fall back to rag_search_docs
-  // until the worker-vs-main singleton story is unified — until then
-  // the dashboard's Research tab and the HTTP endpoint serve as the
-  // canonical entry point.
+  // `getGlobalDocsResearcher()`.
+  //
+  // For worker-thread coders (MCP_CODER_WORKER=1), the singleton DOESN'T
+  // propagate across `worker_threads` module boundaries — so we ALSO
+  // wire the same backends into `setCoderWorkerDocDeps`. The worker
+  // boot installs RPC shims that route `rag_search_docs` /
+  // `docs_deep_research` calls back to THESE singletons via the
+  // MessageBridge. Zero duplication, single source of truth.
   const docsResearchBridge = new DocsResearchBridge({
     db: deps.db.raw(),
     docStore: deps.docStore,
@@ -493,6 +497,7 @@ export function createApp() {
     pipelineResolver: deps.pipelineProviderResolver,
   });
   setGlobalDocsResearcher(docsResearchBridge);
+  setCoderWorkerDocDeps({ docSearch: docSearchBackend, docsResearch: docsResearchBridge });
   mountDocsAgentRoutes(app, deps, docsResearchBridge);
 
   return { app, db: deps.db, chromeService, deps };

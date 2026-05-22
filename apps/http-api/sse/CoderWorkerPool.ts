@@ -33,6 +33,30 @@ import {
   type CoderRunBus,
 } from '../coder-bus.js';
 import type { CoderAttachment } from '@mcp/code-agent/index.js';
+import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
+import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
+
+/**
+ * Optional doc-corpus deps the host wires AFTER `boot/createApp` has built
+ * `DocHybridSearch` + `DocsResearchBridge`. The pool holds them in a mutable
+ * box because the main-process server.ts can't construct them before
+ * `getCoderWorkerPool` runs (the singleton resolves lazily on the first
+ * runFresh request, by which point the deps are ready).
+ *
+ * When set, each `ensureEntry()` call wires bridge handlers that route
+ * `rag_search_docs` / `docs_deep_research` from the worker process BACK
+ * to these main-thread singletons via MessageBridge RPC. Worker-side
+ * shims live in `apps/http-api/workers/coder-worker.ts`.
+ *
+ * Both fields stay nullable so headless tests / detached runners can
+ * spawn the pool without docs support — the worker shim degrades to
+ * the same "not configured" message the in-process path already used to
+ * emit when `setGlobalDocSearch(null)` was active.
+ */
+export interface CoderWorkerDocDeps {
+  docSearch?: DocSearchBackend | null;
+  docsResearch?: DocsResearchBridge | null;
+}
 
 export interface CoderWorkerPoolOpts {
   /** Absolute path Node spawns — built `.js` in prod, dev bootstrap `.mjs` in dev. */
@@ -55,6 +79,13 @@ export interface CoderWorkerPoolOpts {
   postRunLingerMs?: number;
   /** Logger. */
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
+  /**
+   * Mutable doc-deps box. Mutated by the singleton wire-up
+   * (`setCoderWorkerDocDeps` in `coderWorkerPoolSingleton.ts`); the pool
+   * reads each field at ensureEntry-time so a deps update propagates
+   * to the NEXT worker spawned.
+   */
+  docDeps?: CoderWorkerDocDeps;
 }
 
 interface PoolEntry {
@@ -292,6 +323,41 @@ export class CoderWorkerPool {
     // `pumpBusToSSE(c, bus, …)` calls keep working without change.
     const bus = createBus(new AbortController());
     const bridge = host.requireBridge();
+    // ─── Wire RPC bridges from worker → main ─────────────────────────
+    // Worker boot installs a `DocSearchBackend` shim that calls
+    // `bridge.request('docSearch', ...)`. The corresponding handler
+    // lives HERE — routes the request to the main-process singleton.
+    // Without this, `rag_search_docs` from inside the worker fails
+    // with "doc corpus backend is not wired into this process" — the
+    // singleton set via `setGlobalDocSearch` in server.ts lives in the
+    // main-thread module instance and worker_threads don't share module
+    // state.
+    //
+    // Same pattern for `docs_deep_research` via `DocsResearchBridge`.
+    //
+    // Handlers degrade gracefully when the deps box is empty (tests,
+    // headless runs) — they throw an error whose message matches the
+    // in-process "not configured" message so the worker shim can
+    // forward it verbatim.
+    const offDocSearch = bridge.handle('docSearch', async (payload) => {
+      const backend = this.opts.docDeps?.docSearch;
+      if (!backend) {
+        throw new Error(
+          'rag_search_docs is not configured: the doc corpus backend is not wired into this process. Ask the user to ensure the Documentação feature is enabled.',
+        );
+      }
+      return backend.search(payload as Parameters<DocSearchBackend['search']>[0]);
+    });
+    const offDocsResearch = bridge.handle('docsResearch', async (payload) => {
+      const researcher = this.opts.docDeps?.docsResearch;
+      if (!researcher) {
+        throw new Error(
+          'docs_deep_research is not configured: no DocsResearchBridge installed. Use rag_search_docs as a fallback.',
+        );
+      }
+      return researcher.runResearch(payload as Parameters<DocsResearchBridge['runResearch']>[0]);
+    });
+
     const offEvent = bridge.on('bus.event', (payload) => {
       const env = payload as { event: string; data: unknown };
       publish(bus, env.event, env.data);
@@ -334,6 +400,8 @@ export class CoderWorkerPool {
       detachBusMirror: () => {
         try { offEvent(); } catch { /* best-effort */ }
         try { offEnd(); } catch { /* best-effort */ }
+        try { offDocSearch(); } catch { /* best-effort */ }
+        try { offDocsResearch(); } catch { /* best-effort */ }
       },
     };
     this.entries.set(sessionId, entry);

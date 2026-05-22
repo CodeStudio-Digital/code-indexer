@@ -43,6 +43,16 @@ import {
   type CoderAttachment,
 } from '../../../packages/code-agent/src/index.js';
 import type { CoderRunner } from '../../../packages/code-agent/src/core/runner.js';
+import {
+  setGlobalDocSearch,
+  type DocSearchBackend,
+} from '../../../packages/code-agent/src/tools/rag-search-docs.js';
+import {
+  setGlobalDocsResearcher,
+  installDocsDeepResearch,
+  type DocsResearchBridge,
+} from '../../../packages/docs-agent/src/bridges/docs-bridge.js';
+import type { DocsResearchResult } from '../../../packages/docs-agent/src/types.js';
 import { createBus, publish, markEnded, setBusRunner, subscribe } from '../coder-bus.js';
 import { wireRunnerEventsToBus } from '../sse/runnerWiring.js';
 
@@ -64,6 +74,40 @@ const bridge = new MessageBridge({
     console.warn(`[coder-worker ${sessionId}] listener error in ${context}:`, err);
   },
 });
+
+// ─── Doc-corpus shim: route to the main process via RPC ──────────────
+// `worker_threads` don't share module state, so the `setGlobalDocSearch`
+// + `setGlobalDocsResearcher` singletons populated in server.ts on the
+// main thread are NULL here. Without this shim, `rag_search_docs` from
+// inside the worker would error with "doc corpus backend is not wired
+// into this process". We install a thin proxy that forwards every
+// `search` / `runResearch` call back to the main thread via
+// `bridge.request`; the corresponding handlers live in
+// `apps/http-api/sse/CoderWorkerPool.ts`. The actual `DocHybridSearch`
+// + `DocsResearchBridge` instances live ONCE in the main process —
+// zero duplication, single source of truth.
+const docSearchShim: DocSearchBackend = {
+  search: async (input) =>
+    bridge.request<Awaited<ReturnType<DocSearchBackend['search']>>>(
+      'docSearch',
+      input,
+      // 60s covers a worst-case rewrite+rerank round-trip on a slow
+      // provider; the in-process path has no timeout at all but workers
+      // need a ceiling to surface stuck-RPC bugs instead of hanging.
+      { timeoutMs: 60_000 },
+    ),
+};
+setGlobalDocSearch(docSearchShim);
+
+// `DocsResearchBridge` is a CLASS in @mcp/docs-agent; here we only
+// implement the `runResearch` method that `docs_deep_research` actually
+// calls. The structural cast is honest — a deep-research run takes
+// minutes (multi-turn LLM), hence the much higher timeout.
+const docsResearcherShim = {
+  runResearch: (input: Parameters<DocsResearchBridge['runResearch']>[0]): Promise<DocsResearchResult> =>
+    bridge.request<DocsResearchResult>('docsResearch', input, { timeoutMs: 10 * 60_000 }),
+} as unknown as DocsResearchBridge;
+setGlobalDocsResearcher(docsResearcherShim);
 
 // Worker-local state for the active run. Re-set on every `runFresh`.
 const ctrl = new AbortController();
@@ -118,6 +162,14 @@ bridge.handle('runFresh', async (payload) => {
       selectedSkillIds: opts.selectedSkillIds,
       signal: ctrl.signal,
       onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
+      // Mirror the in-process wiring in routes/coder/stream.ts so the
+      // docs_deep_research tool appears on turn 1 of every worker-thread
+      // run too. Pulls the singleton we installed above; if neither
+      // shim nor real bridge is set the helper returns false and the
+      // tool just doesn't appear.
+      onRunnerReady: (innerRunner) => {
+        installDocsDeepResearch(innerRunner);
+      },
     } as Parameters<typeof runCoder>[0]);
     handle = result;
     runner = result.runner;

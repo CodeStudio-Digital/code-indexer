@@ -7,10 +7,20 @@
  * `workerFileResolution.ts` for the detection logic.
  */
 import { loadConfig } from '@mcp/shared/utils/config.js';
-import { CoderWorkerPool } from './CoderWorkerPool.js';
+import {
+  CoderWorkerPool,
+  type CoderWorkerDocDeps,
+} from './CoderWorkerPool.js';
 import { resolveWorkerFile, type ResolvedWorker } from './workerFileResolution.js';
 
 let cachedPool: CoderWorkerPool | null = null;
+/**
+ * Mutable box for doc-corpus deps. Server.ts populates it during boot via
+ * `setCoderWorkerDocDeps(...)`; `getCoderWorkerPool()` reads it when the
+ * pool is first instantiated AND keeps a reference, so updates after
+ * the first call also propagate to subsequently-spawned workers.
+ */
+const docDeps: CoderWorkerDocDeps = {};
 
 function tryResolve(): ResolvedWorker | null {
   return resolveWorkerFile(import.meta.url, 'coder-worker');
@@ -72,8 +82,32 @@ export function getCoderWorkerPool(): CoderWorkerPool {
       else if (level === 'warn') console.warn(msg);
       else console.log(msg);
     },
+    // Pass the shared deps BOX (not a snapshot). Subsequent updates via
+    // `setCoderWorkerDocDeps` mutate the same object the pool reads
+    // inside `ensureEntry`, so adding deps after the first spawn still
+    // benefits later worker spawns.
+    docDeps,
   });
   return cachedPool;
+}
+
+/**
+ * Wire main-thread doc-corpus deps into the coder worker pool. Called by
+ * `server.ts` right after `DocHybridSearch` + `DocsResearchBridge` are
+ * built so when the worker pool spawns workers, their `rag_search_docs`
+ * and `docs_deep_research` tools can RPC back to these instances via
+ * MessageBridge. Without this wire-up the worker process has no
+ * `setGlobalDocSearch` singleton populated and both tools error out
+ * with "not configured" at the first agent call.
+ *
+ * Safe to call multiple times — fields are updated in-place. Pass
+ * `null` to detach (tests).
+ */
+export function setCoderWorkerDocDeps(
+  deps: { docSearch?: CoderWorkerDocDeps['docSearch']; docsResearch?: CoderWorkerDocDeps['docsResearch'] },
+): void {
+  if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
+  if (deps.docsResearch !== undefined) docDeps.docsResearch = deps.docsResearch;
 }
 
 export function coderWorkerEnabled(): boolean {
