@@ -10,6 +10,7 @@ import agentsPtBR from './locales/pt-BR/agents.json';
 import costsPtBR from './locales/pt-BR/costs.json';
 import searchPtBR from './locales/pt-BR/search.json';
 import telemetryPtBR from './locales/pt-BR/telemetry.json';
+import docsPtBR from './locales/pt-BR/docs.json';
 
 import commonEn from './locales/en/common.json';
 import adminEn from './locales/en/admin.json';
@@ -19,6 +20,7 @@ import agentsEn from './locales/en/agents.json';
 import costsEn from './locales/en/costs.json';
 import searchEn from './locales/en/search.json';
 import telemetryEn from './locales/en/telemetry.json';
+import docsEn from './locales/en/docs.json';
 
 i18n
   .use(LanguageDetector)
@@ -34,6 +36,7 @@ i18n
         costs: costsPtBR,
         search: searchPtBR,
         telemetry: telemetryPtBR,
+        docs: docsPtBR,
       },
       en: {
         common: commonEn,
@@ -44,6 +47,7 @@ i18n
         costs: costsEn,
         search: searchEn,
         telemetry: telemetryEn,
+        docs: docsEn,
       },
     },
     fallbackLng: 'pt-BR',

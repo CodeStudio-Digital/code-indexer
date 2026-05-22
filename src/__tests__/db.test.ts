@@ -57,13 +57,13 @@ describe('CodeIndexDB', () => {
 
   describe('migrations', () => {
     it('applies all migrations on a fresh DB', () => {
-      expect(db.getSchemaVersion()).toBe(94);
+      expect(db.getSchemaVersion()).toBe(95);
     });
 
     it('re-opening an existing DB does not re-apply migrations', () => {
       db.close();
       const db2 = new CodeIndexDB(dbPath);
-      expect(db2.getSchemaVersion()).toBe(94);
+      expect(db2.getSchemaVersion()).toBe(95);
       db2.close();
     });
 

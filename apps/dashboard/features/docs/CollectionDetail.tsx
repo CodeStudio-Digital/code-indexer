@@ -10,6 +10,7 @@
  * collection list stays purely navigational.
  */
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Loader2, Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
@@ -30,6 +31,7 @@ interface Props {
 }
 
 export function CollectionDetail({ collection, onChanged }: Props) {
+  const { t } = useTranslation('docs');
   const notify = useNotify();
   const confirm = useConfirm();
   const [sources, setSources] = useState<DocSource[] | null>(null);
@@ -45,7 +47,7 @@ export function CollectionDetail({ collection, onChanged }: Props) {
       setSources(await listSources(collection.id));
     } catch (e) {
       void notify({
-        title: 'Erro ao carregar sources',
+        title: t('detail.loadErrorTitle'),
         description: (e as Error).message,
         variant: 'destructive',
       });
@@ -59,7 +61,7 @@ export function CollectionDetail({ collection, onChanged }: Props) {
   if (!collection) {
     return (
       <div className="rounded-md border border-dashed bg-muted/20 p-10 text-center text-sm text-muted-foreground">
-        Selecione uma coleção à esquerda — ou crie uma nova — para gerenciar fontes.
+        {t('detail.empty')}
       </div>
     );
   }
@@ -67,11 +69,10 @@ export function CollectionDetail({ collection, onChanged }: Props) {
   async function onDeleteCollection() {
     if (!collection) return;
     const ok = await confirm({
-      title: `Excluir coleção "${collection.name}"?`,
-      description:
-        'Todas as sources, chunks e vetores serão removidos. Esta ação não pode ser desfeita.',
+      title: t('detail.deleteConfirmTitle', { name: collection.name }),
+      description: t('detail.deleteConfirmDescription'),
       variant: 'destructive',
-      confirmLabel: 'Excluir',
+      confirmLabel: t('detail.deleteConfirmLabel'),
     });
     if (!ok) return;
     setBusy(true);
@@ -80,20 +81,18 @@ export function CollectionDetail({ collection, onChanged }: Props) {
       await onChanged();
       if (result.queued_for_retry > 0) {
         void notify({
-          title: 'Coleção excluída (vetores em fila)',
-          description:
-            `${result.queued_for_retry} vetor(es) não puderam ser removidos do índice remoto agora ` +
-            `e ficaram em fila para retry automático no próximo boot do servidor.`,
+          title: t('detail.deletedQueuedTitle'),
+          description: t('detail.deletedQueuedDescription', { count: result.queued_for_retry }),
         });
       } else if (result.remote_deleted > 0) {
         void notify({
-          title: 'Coleção excluída',
-          description: `${result.remote_deleted} vetor(es) removidos do índice remoto.`,
+          title: t('detail.deletedTitle'),
+          description: t('detail.deletedDescription', { count: result.remote_deleted }),
         });
       }
     } catch (e) {
       void notify({
-        title: 'Falha ao excluir',
+        title: t('detail.deleteFailedTitle'),
         description: (e as Error).message,
         variant: 'destructive',
       });
@@ -111,7 +110,7 @@ export function CollectionDetail({ collection, onChanged }: Props) {
             <p className="text-sm text-muted-foreground mt-1">{collection.description}</p>
           )}
           <div className="text-xs text-muted-foreground mt-1">
-            {collection.source_count} sources · {collection.chunk_count} chunks
+            {t('detail.summary', { sources: collection.source_count, chunks: collection.chunk_count })}
           </div>
           {collection.status === 'error' && collection.status_message && (
             <div className="mt-2 text-xs text-destructive">{collection.status_message}</div>
@@ -127,15 +126,15 @@ export function CollectionDetail({ collection, onChanged }: Props) {
           />
           <Button size="sm" variant="ghost" onClick={onDeleteCollection} disabled={busy}>
             {busy ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Trash2 className="h-3 w-3 mr-1 text-red-500" />}
-            Excluir
+            {t('detail.delete')}
           </Button>
         </div>
       </header>
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
-          <TabsTrigger value="sources">Sources</TabsTrigger>
-          <TabsTrigger value="search">Buscar</TabsTrigger>
+          <TabsTrigger value="sources">{t('detail.tabsSources')}</TabsTrigger>
+          <TabsTrigger value="search">{t('detail.tabsSearch')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="sources" className="space-y-3 mt-3">

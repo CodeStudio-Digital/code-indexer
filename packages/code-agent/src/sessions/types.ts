@@ -104,6 +104,14 @@ export interface CoderMessageRow {
    * Migration 075 adds the column; pre-PR-4 rows are 0/null.
    */
   is_meta?: 0 | 1 | null;
+  /**
+   * JSON array of skill IDs the user picked in the sidebar when sending
+   * this message (migration 095). NULL when no picks were made or for
+   * pre-migration rows. The runner re-resolves each ID against the skill
+   * store on every turn so updates to a skill's prompt body take effect
+   * immediately — we never persist the skill body itself here.
+   */
+  selected_skill_ids_json?: string | null;
 }
 
 /**

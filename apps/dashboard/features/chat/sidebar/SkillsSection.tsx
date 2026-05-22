@@ -1,5 +1,6 @@
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, Sparkles, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Search, Sparkles, X } from 'lucide-react';
 import { CollapsibleSection } from './CollapsibleSection.js';
 import { useProjectSkills, type SessionSkill } from './useProjectSkills.js';
 import { groupSkillsByNamespace } from '@mcp/code-agent/skills/namespace.js';
@@ -26,6 +27,8 @@ export function SkillsSection({ sessionId, selected, onToggleSelect }: SkillsSec
         {selected.length}
       </span>
     ) : null;
+
+  const isSearching = search.trim().length > 0;
 
   return (
     <CollapsibleSection
@@ -66,32 +69,119 @@ export function SkillsSection({ sessionId, selected, onToggleSelect }: SkillsSec
             {search ? t('skills.noMatches') : t('skills.empty')}
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-1">
             {[...grouped.entries()].map(([namespace, items]) => (
-              <div key={namespace}>
-                <div className="px-1 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {namespace} ({items.length})
-                </div>
-                <ul className="space-y-0.5">
-                  {items
-                    .slice()
-                    .sort((a, b) => a.name.localeCompare(b.name))
-                    .map((skill) => (
-                      <SkillRow
-                        key={skill.id}
-                        skill={skill as SessionSkill}
-                        selected={selectedSet.has(skill.id)}
-                        onToggle={() => onToggleSelect(skill.id)}
-                      />
-                    ))}
-                </ul>
-              </div>
+              <SkillGroup
+                key={namespace}
+                sessionId={sessionId}
+                namespace={namespace}
+                items={items as SessionSkill[]}
+                selectedSet={selectedSet}
+                onToggleSelect={onToggleSelect}
+                forceOpen={isSearching}
+              />
             ))}
           </div>
         )}
       </div>
     </CollapsibleSection>
   );
+}
+
+/**
+ * Collapsible subgroup inside the Skills section. Lighter visual treatment
+ * than the top-level `CollapsibleSection` (no border, no sticky header) so
+ * it nests cleanly. Persists open/closed state per (session, namespace) in
+ * localStorage. Force-opens whenever the parent search field is non-empty
+ * so search matches are never hidden inside a collapsed group.
+ */
+function SkillGroup({
+  sessionId,
+  namespace,
+  items,
+  selectedSet,
+  onToggleSelect,
+  forceOpen,
+}: {
+  sessionId: number;
+  namespace: string;
+  items: SessionSkill[];
+  selectedSet: Set<string>;
+  onToggleSelect: (skillId: string) => void;
+  forceOpen: boolean;
+}) {
+  const storageKey = `chat:sidebar:${sessionId}:skills:group:${namespace}`;
+  const [open, setOpen] = useState<boolean>(() => readOpen(storageKey, false));
+
+  useEffect(() => {
+    setOpen(readOpen(storageKey, false));
+  }, [storageKey]);
+
+  const toggle = useCallback(() => {
+    setOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(storageKey, next ? '1' : '0');
+      } catch {
+        /* ignore quota / unavailable */
+      }
+      return next;
+    });
+  }, [storageKey]);
+
+  const isOpen = forceOpen || open;
+  const sortedItems = [...items].sort((a, b) => a.name.localeCompare(b.name));
+  const selectedInGroup = sortedItems.reduce(
+    (n, s) => (selectedSet.has(s.id) ? n + 1 : n),
+    0,
+  );
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={isOpen}
+        className="w-full flex items-center gap-1 px-1 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <span className="shrink-0">
+          {isOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </span>
+        <span className="truncate">{namespace}</span>
+        <span className="ml-auto flex items-center gap-1 normal-case tracking-normal">
+          {selectedInGroup > 0 && (
+            <span className="px-1 py-0 rounded bg-info/15 text-info text-[9px] font-medium">
+              {selectedInGroup}/{items.length}
+            </span>
+          )}
+          {selectedInGroup === 0 && <span className="text-[10px]">({items.length})</span>}
+        </span>
+      </button>
+      {isOpen && (
+        <ul className="space-y-0.5">
+          {sortedItems.map((skill) => (
+            <SkillRow
+              key={skill.id}
+              skill={skill}
+              selected={selectedSet.has(skill.id)}
+              onToggle={() => onToggleSelect(skill.id)}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function readOpen(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === '1') return true;
+    if (v === '0') return false;
+  } catch {
+    /* ignore */
+  }
+  return fallback;
 }
 
 function SkillRow({

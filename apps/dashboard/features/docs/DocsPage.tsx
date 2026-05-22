@@ -15,7 +15,7 @@
  * project picker.
  */
 import { useEffect, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { BookOpen } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
 import { CollectionsList } from './CollectionsList.js';
@@ -30,7 +30,7 @@ interface ProjectOption {
 }
 
 export function DocsPage() {
-  const { t } = useTranslation();
+  const { t } = useTranslation('docs');
   const [collections, setCollections] = useState<DocCollection[] | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -81,11 +81,16 @@ export function DocsPage() {
           <BookOpen className="h-5 w-5" />
         </div>
         <div>
-          <h1 className="text-2xl font-semibold">{t('nav.docs')}</h1>
+          <h1 className="text-2xl font-semibold">{t('title')}</h1>
           <p className="text-sm text-muted-foreground">
-            Indexed external documentation that any agent can query via{' '}
-            <code className="text-xs bg-muted px-1 py-0.5 rounded">rag_search_docs</code>. Add PDFs
-            or URLs; the indexer chunks, enriches, and embeds them.
+            <Trans
+              t={t}
+              i18nKey="subtitle"
+              values={{ tool: 'rag_search_docs' }}
+              components={{
+                tool: <code className="text-xs bg-muted px-1 py-0.5 rounded" />,
+              }}
+            />
           </p>
         </div>
       </header>
@@ -98,9 +103,9 @@ export function DocsPage() {
 
       <Tabs defaultValue="collections" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="collections">Collections</TabsTrigger>
-          <TabsTrigger value="suggestions">Suggestions</TabsTrigger>
-          <TabsTrigger value="research">Research</TabsTrigger>
+          <TabsTrigger value="collections">{t('tabs.collections')}</TabsTrigger>
+          <TabsTrigger value="suggestions">{t('tabs.suggestions')}</TabsTrigger>
+          <TabsTrigger value="research">{t('tabs.research')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="collections">
@@ -119,7 +124,7 @@ export function DocsPage() {
           <div className="space-y-3">
             {projects.length > 0 && (
               <div className="flex items-center gap-2 text-sm">
-                <label className="text-muted-foreground">Project:</label>
+                <label className="text-muted-foreground">{t('projectPicker.label')}</label>
                 <select
                   value={pickedProjectId ?? ''}
                   onChange={(e) => setPickedProjectId(parseInt(e.target.value, 10))}

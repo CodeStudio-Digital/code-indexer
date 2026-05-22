@@ -94,6 +94,14 @@ export interface ContentBlock {
 export interface PersistedMessage {
   role: 'user' | 'assistant' | 'tool';
   content: ContentBlock[];
+  /**
+   * Skill IDs the user pre-selected in the sidebar when sending this user
+   * message (migration 095). Rendered as audit pills above the user bubble
+   * so the chat shows WHICH skills were applied to a turn without dumping
+   * the (potentially huge) skill bodies into the bubble itself. Absent for
+   * assistant/tool messages and for pre-migration user rows.
+   */
+  selectedSkillIds?: string[];
 }
 
 export interface MessageRow {

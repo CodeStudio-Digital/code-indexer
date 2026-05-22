@@ -9,6 +9,7 @@
  * not retained server-side. The action button hides itself in that case.
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { FileText, Globe, Loader2, RefreshCcw, Trash2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -32,6 +33,7 @@ interface Props {
 }
 
 export function SourceList({ collection, sources, onChanged }: Props) {
+  const { t } = useTranslation('docs');
   const confirm = useConfirm();
   const notify = useNotify();
   // `kind: 'reindex'` re-runs the whole pipeline (fetch → gate → chunk
@@ -48,10 +50,10 @@ export function SourceList({ collection, sources, onChanged }: Props) {
 
   async function onDelete(src: DocSource) {
     const ok = await confirm({
-      title: 'Excluir source?',
-      description: `${src.uri}\n\n${src.chunk_count} chunks serão removidos.`,
+      title: t('sources.deleteConfirmTitle'),
+      description: t('sources.deleteConfirmDescription', { uri: src.uri, count: src.chunk_count }),
       variant: 'destructive',
-      confirmLabel: 'Excluir',
+      confirmLabel: t('sources.deleteConfirmLabel'),
     });
     if (!ok) return;
     try {
@@ -63,20 +65,18 @@ export function SourceList({ collection, sources, onChanged }: Props) {
       // from the table is already the confirmation.
       if (result.queued_for_retry > 0) {
         void notify({
-          title: 'Source excluído (vetores em fila)',
-          description:
-            `${result.queued_for_retry} vetor(es) não puderam ser removidos do índice remoto agora ` +
-            `e ficaram em fila para retry automático no próximo boot do servidor.`,
+          title: t('sources.deletedQueuedTitle'),
+          description: t('sources.deletedQueuedDescription', { count: result.queued_for_retry }),
         });
       } else if (result.remote_deleted > 0) {
         void notify({
-          title: 'Source excluído',
-          description: `${result.remote_deleted} vetor(es) removidos do índice remoto.`,
+          title: t('sources.deletedTitle'),
+          description: t('sources.deletedDescription', { count: result.remote_deleted }),
         });
       }
     } catch (e) {
       void notify({
-        title: 'Falha ao excluir',
+        title: t('sources.deleteFailedTitle'),
         description: (e as Error).message,
         variant: 'destructive',
       });
@@ -86,9 +86,8 @@ export function SourceList({ collection, sources, onChanged }: Props) {
   function onReindex(src: DocSource) {
     if (src.type !== 'url') {
       void notify({
-        title: 'Re-index indisponível',
-        description:
-          'PDFs precisam ser re-enviados — o binário não fica armazenado no servidor.',
+        title: t('sources.reindexUnavailableTitle'),
+        description: t('sources.reindexUnavailableDescription'),
       });
       return;
     }
@@ -96,13 +95,12 @@ export function SourceList({ collection, sources, onChanged }: Props) {
   }
 
   if (sources === null) {
-    return <div className="text-xs text-muted-foreground italic">Carregando sources…</div>;
+    return <div className="text-xs text-muted-foreground italic">{t('sources.loading')}</div>;
   }
   if (sources.length === 0) {
     return (
       <div className="rounded-md border border-dashed bg-muted/20 p-8 text-center text-sm text-muted-foreground">
-        Nenhuma source ainda. Clique em <strong>+ Adicionar</strong> acima para colar uma URL ou
-        arrastar um PDF.
+        {t('sources.emptyPrefix')} <strong>{t('sources.emptyAction')}</strong> {t('sources.emptySuffix')}
       </div>
     );
   }
@@ -113,12 +111,12 @@ export function SourceList({ collection, sources, onChanged }: Props) {
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
             <tr>
-              <th className="text-left px-3 py-2">Source</th>
-              <th className="text-left px-3 py-2 w-20">Status</th>
-              <th className="text-right px-3 py-2 w-20">Chunks</th>
-              <th className="text-right px-3 py-2 w-32">Páginas</th>
-              <th className="text-right px-3 py-2 w-44">Última indexação</th>
-              <th className="text-right px-3 py-2 w-32">Ações</th>
+              <th className="text-left px-3 py-2">{t('sources.columnSource')}</th>
+              <th className="text-left px-3 py-2 w-20">{t('sources.columnStatus')}</th>
+              <th className="text-right px-3 py-2 w-20">{t('sources.columnChunks')}</th>
+              <th className="text-right px-3 py-2 w-32">{t('sources.columnPages')}</th>
+              <th className="text-right px-3 py-2 w-44">{t('sources.columnLastIndexed')}</th>
+              <th className="text-right px-3 py-2 w-32">{t('sources.columnActions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -145,13 +143,9 @@ export function SourceList({ collection, sources, onChanged }: Props) {
                         }
                         onStartForceRetry={async (sourceId) => {
                           const ok = await confirm({
-                            title: 'Forçar re-embed?',
-                            description:
-                              'Vai apagar TODO o mapping de vetores deste source no SQLite e re-embedar do zero. ' +
-                              'Use quando você suspeita que o vector store remoto rejeitou silenciosamente os upserts anteriores ' +
-                              '(badge verde mas a busca retorna 0 mesmo em queries que deveriam matchar). ' +
-                              'Os chunks textuais ficam intactos — só re-roda embed + upsert.',
-                            confirmLabel: 'Forçar re-embed',
+                            title: t('sources.forceReembedTitle'),
+                            description: t('sources.forceReembedDescription'),
+                            confirmLabel: t('sources.forceReembedConfirm'),
                           });
                           if (!ok) return;
                           setActiveStream({ sourceId, kind: 'retry-embed', force: true });
@@ -174,7 +168,7 @@ export function SourceList({ collection, sources, onChanged }: Props) {
                       <Button
                         size="sm"
                         variant="ghost"
-                        title="Re-indexar"
+                        title={t('sources.actionsReindexTitle')}
                         onClick={() => onReindex(s)}
                         disabled={s.status === 'fetching' || s.status === 'indexing'}
                       >
@@ -185,7 +179,7 @@ export function SourceList({ collection, sources, onChanged }: Props) {
                         )}
                       </Button>
                     )}
-                    <Button size="sm" variant="ghost" title="Excluir" onClick={() => void onDelete(s)}>
+                    <Button size="sm" variant="ghost" title={t('sources.actionsDeleteTitle')} onClick={() => void onDelete(s)}>
                       <Trash2 className="h-3 w-3 text-red-500" />
                     </Button>
                   </div>

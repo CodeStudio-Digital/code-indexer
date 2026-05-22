@@ -109,6 +109,16 @@ export interface AgentMessage {
    * its `task_budget` continuation messages (`query.ts`).
    */
   isMeta?: boolean;
+  /**
+   * Skill IDs the user pre-selected in the chat sidebar when sending this
+   * message (migration 095). Pure metadata: never forwarded to the provider
+   * inside `content`, never serialized by any adapter. The runner reads
+   * this on `assembleMessagesForChat` and injects an `<active_skills>` block
+   * into the trailing user message at request time (same per-turn mechanism
+   * as `<active-context>`). The UI uses it to render audit pills above the
+   * user bubble.
+   */
+  selectedSkillIds?: string[];
 }
 
 /**

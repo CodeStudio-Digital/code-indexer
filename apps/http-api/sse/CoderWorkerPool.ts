@@ -80,6 +80,8 @@ export interface RunFreshOpts {
   /** POJO worktree opts — survives structuredClone across MessagePort. */
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;
+  /** Skill IDs the user pre-selected in the sidebar; forwarded to runCoder. */
+  selectedSkillIds?: string[];
 }
 
 export class CoderWorkerPool {
@@ -153,12 +155,16 @@ export class CoderWorkerPool {
   }
 
   /** Forward a follow-up user message to the worker's runner. */
-  async pushUserMessage(sessionId: number, content: string): Promise<void> {
+  async pushUserMessage(
+    sessionId: number,
+    content: string,
+    selectedSkillIds?: string[],
+  ): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) throw new Error(`coder-pool: no active run for session ${sessionId}`);
     this.cancelPostRunEvict(entry);
     entry.lastTouchedAt = Date.now();
-    await entry.host.requireBridge().request('pushUserMessage', { content });
+    await entry.host.requireBridge().request('pushUserMessage', { content, selectedSkillIds });
   }
 
   /**

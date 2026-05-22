@@ -11,6 +11,7 @@
  * /api/docs/collections/:id/sources/{pdf|url} with `Accept: text/event-stream`.
  */
 import { useRef, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { FileText, Globe, Plus, Upload } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import {
@@ -56,6 +57,7 @@ interface Props {
 const PDF_MAX_BYTES = 50 * 1024 * 1024;
 
 export function AddSourceDialog({ collection, onAdded }: Props) {
+  const { t } = useTranslation('docs');
   const [open, setOpen] = useState(false);
   const [running, setRunning] = useState<{ kind: 'pdf' | 'url' } | null>(null);
 
@@ -117,7 +119,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
       return;
     }
     if (file.size > PDF_MAX_BYTES) {
-      setPdfError(`Arquivo muito grande (${(file.size / 1e6).toFixed(1)} MB). Limite: 50 MB.`);
+      setPdfError(t('addSource.pdfTooLarge', { size: (file.size / 1e6).toFixed(1) }));
       setPdfFile(null);
       return;
     }
@@ -129,7 +131,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0] ?? null;
     if (file && !file.name.toLowerCase().endsWith('.pdf')) {
-      setPdfError('Apenas arquivos .pdf são aceitos.');
+      setPdfError(t('addSource.pdfOnly'));
       return;
     }
     onPdfChosen(file);
@@ -156,15 +158,14 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button size="sm">
-          <Plus className="h-3 w-3 mr-1" /> Adicionar
+          <Plus className="h-3 w-3 mr-1" /> {t('addSource.button')}
         </Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Adicionar source à "{collection.name}"</DialogTitle>
+          <DialogTitle>{t('addSource.title', { collection: collection.name })}</DialogTitle>
           <DialogDescription>
-            Anexe um PDF ou cole uma URL. A indexação roda em segundo plano com gate de relevância
-            antes do enriquecimento.
+            {t('addSource.description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -172,20 +173,20 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
           <Tabs defaultValue="url">
             <TabsList>
               <TabsTrigger value="url">
-                <Globe className="h-3 w-3 mr-1" /> URL
+                <Globe className="h-3 w-3 mr-1" /> {t('addSource.tabsUrl')}
               </TabsTrigger>
               <TabsTrigger value="pdf">
-                <FileText className="h-3 w-3 mr-1" /> PDF
+                <FileText className="h-3 w-3 mr-1" /> {t('addSource.tabsPdf')}
               </TabsTrigger>
             </TabsList>
 
             <TabsContent value="url" className="space-y-3 mt-3">
               <div className="space-y-1.5">
-                <Label htmlFor="docs-url">URL</Label>
+                <Label htmlFor="docs-url">{t('addSource.urlLabel')}</Label>
                 <Input
                   id="docs-url"
                   type="url"
-                  placeholder="https://docs.unity3d.com/Manual/index.html"
+                  placeholder={t('addSource.urlPlaceholder')}
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                 />
@@ -194,10 +195,9 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
               <div className="rounded-md border p-3 space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <Label className="block">Crawl da documentação inteira</Label>
+                    <Label className="block">{t('addSource.crawlEnabled')}</Label>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Quando ativo, segue links da mesma origem até os limites abaixo. O gate
-                      descarta páginas irrelevantes antes do enriquecimento.
+                      {t('addSource.crawlEnabledHelp')}
                     </p>
                   </div>
                   <Switch checked={crawlEnabled} onCheckedChange={setCrawlEnabled} />
@@ -206,7 +206,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                 {crawlEnabled && (
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <Label htmlFor="docs-max-pages">Máx. páginas</Label>
+                      <Label htmlFor="docs-max-pages">{t('addSource.maxPages')}</Label>
                       <Input
                         id="docs-max-pages"
                         type="number"
@@ -217,7 +217,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                       />
                     </div>
                     <div className="space-y-1">
-                      <Label htmlFor="docs-max-depth">Máx. profundidade</Label>
+                      <Label htmlFor="docs-max-depth">{t('addSource.maxDepth')}</Label>
                       <Input
                         id="docs-max-depth"
                         type="number"
@@ -229,7 +229,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                     </div>
                     <div className="col-span-2 flex items-center justify-between">
                       <Label htmlFor="docs-same-origin" className="text-xs text-muted-foreground">
-                        Manter na mesma origem
+                        {t('addSource.sameOrigin')}
                       </Label>
                       <Switch
                         id="docs-same-origin"
@@ -238,30 +238,29 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                       />
                     </div>
                     <div className="col-span-2 space-y-1">
-                      <Label htmlFor="docs-required-path">Caminho obrigatório (URL deve conter)</Label>
+                      <Label htmlFor="docs-required-path">{t('addSource.requiredPath')}</Label>
                       <Input
                         id="docs-required-path"
                         type="text"
-                        placeholder="/6000.3/Documentation/Manual/"
+                        placeholder={t('addSource.requiredPathPlaceholder')}
                         value={requiredPath}
                         onChange={(e) => setRequiredPath(e.target.value)}
                       />
                       <p className="text-[11px] text-muted-foreground">
-                        Substring literal. Páginas cuja URL não contenha esse texto são puladas.
-                        Útil para fixar uma versão da doc (ex: Unity 6000.3) e evitar drift para outras.
-                        Deixe em branco para desativar.
+                        {t('addSource.requiredPathHelp')}
                       </p>
                     </div>
                     <div className="col-span-2 flex items-start justify-between gap-3 pt-1">
                       <div className="flex-1">
                         <Label htmlFor="docs-llm-extract-links" className="block">
-                          Usar LLM para extrair links (avançado)
+                          {t('addSource.llmExtractLinks')}
                         </Label>
                         <p className="text-[11px] text-muted-foreground mt-0.5">
-                          Roda um LLM na página inicial para encontrar URLs que o parser HTML não vê
-                          (sidebars JS-rendered, data attributes, JSON embedded). 1 chamada por source.
-                          Útil para sites como Unity ScriptReference. Configure o modelo em
-                          Admin → Pipelines → <code>doc_ingest/link_extractor</code>.
+                          <Trans
+                            t={t}
+                            i18nKey="addSource.llmExtractLinksHelp"
+                            components={{ code: <code /> }}
+                          />
                         </p>
                       </div>
                       <Switch
@@ -283,15 +282,14 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                 <div className="flex items-start justify-between gap-3 border-t pt-3">
                   <div className="flex-1">
                     <Label htmlFor="docs-force-browser" className="block">
-                      Usar Chromium para renderizar (avançado)
+                      {t('addSource.forceBrowser')}
                     </Label>
                     <p className="text-[11px] text-muted-foreground mt-0.5">
-                      Busca cada página com um navegador headless em vez de HTTP simples — captura
-                      sidebars / menus / nav populados por JavaScript (ex: Unity ScriptReference,
-                      sites com SPA shell). Requer ChromeService habilitado em{' '}
-                      <code>Admin → Chrome Service</code>. Cada página leva ~15-30s (vs ~100ms
-                      plain), use só quando necessário. Se o ChromeService estiver desligado, a
-                      indexação degrada para plain e marca <code>force_browser_unavailable</code>.
+                      <Trans
+                        t={t}
+                        i18nKey="addSource.forceBrowserHelp"
+                        components={{ code: <code /> }}
+                      />
                     </p>
                   </div>
                   <Switch
@@ -304,10 +302,10 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
 
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="ghost" onClick={() => handleOpenChange(false)}>
-                  Cancelar
+                  {t('addSource.cancel')}
                 </Button>
                 <Button onClick={() => void onSubmitUrl()} disabled={!url.trim()}>
-                  Indexar
+                  {t('addSource.submit')}
                 </Button>
               </div>
             </TabsContent>
@@ -321,10 +319,10 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
               >
                 <Upload className="h-6 w-6 mx-auto text-muted-foreground" />
                 <div className="text-sm font-medium mt-2">
-                  {pdfFile ? pdfFile.name : 'Arraste um PDF ou clique para escolher'}
+                  {pdfFile ? pdfFile.name : t('addSource.pdfDropzone')}
                 </div>
                 <div className="text-xs text-muted-foreground mt-1">
-                  Máx. 50 MB. Apenas arquivos .pdf.
+                  {t('addSource.pdfDropzoneHint')}
                 </div>
                 <input
                   ref={fileInputRef}
@@ -337,7 +335,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
               {pdfError && <div className="text-xs text-destructive">{pdfError}</div>}
               {pdfFile && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="docs-pdf-title">Título (opcional)</Label>
+                  <Label htmlFor="docs-pdf-title">{t('addSource.pdfTitle')}</Label>
                   <Input
                     id="docs-pdf-title"
                     value={pdfTitle}
@@ -347,10 +345,10 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
               )}
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="ghost" onClick={() => handleOpenChange(false)}>
-                  Cancelar
+                  {t('addSource.cancel')}
                 </Button>
                 <Button onClick={() => void onSubmitPdf()} disabled={!pdfFile}>
-                  Indexar
+                  {t('addSource.submit')}
                 </Button>
               </div>
             </TabsContent>

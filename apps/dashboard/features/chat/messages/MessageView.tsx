@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Brain, ChevronDown, ChevronRight, FileText, GitBranch, ImageIcon, Loader2, Paperclip, User } from 'lucide-react';
+import { Bot, Brain, ChevronDown, ChevronRight, FileText, GitBranch, ImageIcon, Loader2, Paperclip, Sparkles, User } from 'lucide-react';
 import type { AgentsGroup, ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Avatar, AvatarFallback } from '../../../components/ui/avatar.js';
 import { cn } from '../../../lib/utils.js';
@@ -182,6 +182,8 @@ function UserMessage({
     return positional?.base64 ? positional : b;
   };
 
+  const appliedSkills = message.selectedSkillIds ?? [];
+
   return (
     <div className="flex gap-3 items-start justify-end group/user group/msg">
       <div className="flex-1 min-w-0 max-w-[100%] flex flex-col items-end">
@@ -200,6 +202,23 @@ function UserMessage({
           {text && <CopyMarkdownButton text={text} />}
           <span>you{tokenBadge}</span>
         </div>
+        {appliedSkills.length > 0 && (
+          <div
+            className="flex flex-wrap gap-1 mb-1 justify-end max-w-[100%]"
+            aria-label="Skills applied to this turn"
+          >
+            {appliedSkills.map((id) => (
+              <span
+                key={id}
+                title={id}
+                className="inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-[10px] normal-case tracking-normal text-violet-600 dark:text-violet-300"
+              >
+                <Sparkles className="h-2.5 w-2.5" />
+                <span className="max-w-[140px] truncate">{id}</span>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="rounded-2xl rounded-tr-sm bg-gray-50 dark:bg-gray-900 border border-primary/40 text-foreground px-4 py-2.5 shadow-sm max-h-[60vh] max-w-[100%] overflow-y-auto">
           {text && (
             <div className="text-sm">

@@ -444,10 +444,14 @@ export class SessionStore {
     // adds the column with default 0 — pre-PR-4 rows read back as
     // isMeta=undefined, which renders the same as the legacy "always
     // visible" behaviour.
+    //
+    // Migration 095: `selected_skill_ids_json` carries the user's sidebar
+    // picks. Stored only when non-empty so existing audit queries keep
+    // seeing NULL on every row that wasn't sent with picks.
     const stmt = this.db.prepare(`
       INSERT INTO coder_messages
-        (session_id, role, content_json, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, is_meta)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (session_id, role, content_json, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, is_meta, selected_skill_ids_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const r = stmt.run(
       sessionId,
@@ -458,6 +462,9 @@ export class SessionStore {
       usage?.cache_read_input_tokens ?? 0,
       usage?.cache_creation_input_tokens ?? 0,
       message.isMeta ? 1 : 0,
+      message.selectedSkillIds && message.selectedSkillIds.length > 0
+        ? JSON.stringify(message.selectedSkillIds)
+        : null,
     );
     this.db
       .prepare('UPDATE coder_sessions SET updated_at = datetime(\'now\') WHERE id = ?')
@@ -836,6 +843,9 @@ export class SessionStore {
       role: r.role,
       content: JSON.parse(r.content_json),
       ...(r.is_meta ? { isMeta: true as const } : {}),
+      ...(r.selected_skill_ids_json
+        ? { selectedSkillIds: JSON.parse(r.selected_skill_ids_json) as string[] }
+        : {}),
     }));
     return { session, messages, message_rows: rows };
   }
@@ -900,6 +910,9 @@ export class SessionStore {
       role: r.role,
       content: JSON.parse(r.content_json),
       ...(r.is_meta ? { isMeta: true as const } : {}),
+      ...(r.selected_skill_ids_json
+        ? { selectedSkillIds: JSON.parse(r.selected_skill_ids_json) as string[] }
+        : {}),
     }));
     return { session, messages, message_rows: rows };
   }
@@ -948,6 +961,9 @@ export class SessionStore {
       role: r.role,
       content: JSON.parse(r.content_json),
       ...(r.is_meta ? { isMeta: true as const } : {}),
+      ...(r.selected_skill_ids_json
+        ? { selectedSkillIds: JSON.parse(r.selected_skill_ids_json) as string[] }
+        : {}),
     }));
     return { messages, message_rows: rows };
   }

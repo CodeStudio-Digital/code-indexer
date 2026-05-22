@@ -98,6 +98,7 @@ interface RunFreshPayload {
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;
+  selectedSkillIds?: string[];
 }
 
 bridge.handle('runFresh', async (payload) => {
@@ -114,6 +115,7 @@ bridge.handle('runFresh', async (payload) => {
       profile: opts.profile,
       worktree: opts.worktree,
       thinking: opts.thinking,
+      selectedSkillIds: opts.selectedSkillIds,
       signal: ctrl.signal,
       onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
     } as Parameters<typeof runCoder>[0]);
@@ -165,9 +167,12 @@ bridge.handle('interruptWait', () => {
 });
 
 bridge.handle('pushUserMessage', (payload) => {
-  const { content } = payload as { content: string };
+  const { content, selectedSkillIds } = payload as {
+    content: string;
+    selectedSkillIds?: string[];
+  };
   if (!runner) throw new Error('coder-worker: no runner — call runFresh first');
-  runner.pushUserMessage(content);
+  runner.pushUserMessage(content, { selectedSkillIds });
   return { ok: true };
 });
 

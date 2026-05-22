@@ -1,25 +1,32 @@
 /**
- * Server-side enrichment for user messages that arrive with manually
- * pre-selected skill IDs (the sidebar's SkillsSection).
+ * Resolve and interpolate the skill bodies for IDs the user pre-selected in
+ * the sidebar's SkillsSection.
  *
- * The picked skills are expanded into an `<active_skills>` block prepended to
- * the user message body — full interpolated prompt body included — so the
- * agent receives the skill content inline on the very next turn, without
- * needing to call `get_skill_content` / `invoke_skill` first.
+ * Historical note: this module used to prepend an `<active_skills>` block
+ * directly into the user's message body so the model would see the skills
+ * inline on the next turn. The downside was that the enriched (huge)
+ * content got persisted into `coder_messages.content_json`, bloating the
+ * chat transcript with thousands of tokens of skill instructions per turn.
  *
- * This complements (does NOT replace) the auto-matcher in
- * `src/core/coder/skills/skill-matcher.ts`. Auto-matched skills still appear
- * in the system prompt; picked skills are reinforced inside the user message
- * so the model treats them as deliberately requested for THIS turn.
+ * Today the route handler stores the user's raw text + a small array of
+ * skill IDs (`coder_messages.selected_skill_ids_json`, migration 095). The
+ * runner re-resolves the IDs every turn inside `assembleMessagesForChat`
+ * and inlines the bodies as a per-turn `<active_skills>` block on the
+ * trailing user message — same mechanism as `<active-context>`, never
+ * persisted. This module is no longer used by the request handler; it
+ * stays only as a deprecated helper kept available to legacy callers.
+ *
+ * @deprecated The block is now assembled by the runner per turn; do not
+ *   pre-compute it from the HTTP layer.
  */
 import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js';
 import type { SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
 import type { CoderDeps, CoreDeps } from '../../deps.js';
 
-export interface EnrichResult {
-  /** Final content with the `<active_skills>` block prepended, or the original if nothing applied. */
-  content: string;
-  /** IDs that were resolved and inlined. */
+export interface PreparedActiveSkills {
+  /** Skill blocks already interpolated against the session/project context, deduped, order-preserved. */
+  blocks: string[];
+  /** IDs that were resolved and turned into blocks. */
   applied: string[];
   /** IDs that were requested but could not be resolved (deleted / unknown). */
   missing: string[];
@@ -28,26 +35,23 @@ export interface EnrichResult {
 type EnrichDeps = Pick<CoderDeps, 'sessionStore' | 'skillStore'> & Pick<CoreDeps, 'db'>;
 
 /**
- * Build the `<active_skills>` block and return the enriched content.
- *
- * Reuses the shared `deps.skillStore` (no extra DB handle) so calls from the
- * request handler hit the same WAL transaction set as everything else.
- *
- * Logs a usage row with `invoked_by='user'` for every applied skill so the
- * admin telemetry tab can attribute manual picks.
+ * Resolve each picked skill against the store, interpolate template vars,
+ * and return ordered, deduped markdown blocks. The caller is responsible
+ * for wrapping them into `<active_skills>…</active_skills>` and deciding
+ * where to inject (system prompt, last user message, etc.).
  */
-export async function enrichContentWithActiveSkills(
-  content: string,
+export function prepareActiveSkillsBlocks(
+  userInput: string,
   skillIds: readonly string[],
   sessionId: number,
   deps: EnrichDeps,
-): Promise<EnrichResult> {
+): PreparedActiveSkills {
   if (skillIds.length === 0) {
-    return { content, applied: [], missing: [] };
+    return { blocks: [], applied: [], missing: [] };
   }
   const session = deps.sessionStore.getSession(sessionId);
   if (!session) {
-    return { content, applied: [], missing: [...skillIds] };
+    return { blocks: [], applied: [], missing: [...skillIds] };
   }
   const project = deps.db.getProject(session.project_id);
   const store = deps.skillStore;
@@ -57,7 +61,7 @@ export async function enrichContentWithActiveSkills(
     PROJECT_ROOT: project?.root_path ?? '',
     OS: process.platform,
     TIMESTAMP: new Date().toISOString(),
-    USER_INPUT: content,
+    USER_INPUT: userInput,
   };
 
   const applied: string[] = [];
@@ -77,17 +81,7 @@ export async function enrichContentWithActiveSkills(
     const interpolated = interpolateSkillVars(skill.prompt_body, templateCtx);
     blocks.push(`## ${skill.id} — ${skill.name}\n\n${interpolated}`);
     applied.push(skill.id);
-    store.logSkillUsage({
-      session_id: sessionId,
-      skill_id: id,
-      invoked_by: 'user',
-      input_text: content,
-    });
   }
 
-  if (blocks.length === 0) {
-    return { content, applied, missing };
-  }
-  const enriched = `<active_skills>\n${blocks.join('\n\n')}\n</active_skills>\n\n${content}`;
-  return { content: enriched, applied, missing };
+  return { blocks, applied, missing };
 }

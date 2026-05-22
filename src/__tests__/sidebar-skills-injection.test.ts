@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { SkillStore } from '@mcp/store/skill-store.js';
 import { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import { enrichContentWithActiveSkills } from '@apps/http-api/server/routes/coder/active-skills.js';
+import { prepareActiveSkillsBlocks } from '@apps/http-api/server/routes/coder/active-skills.js';
 
-describe('enrichContentWithActiveSkills — manual skill picks from sidebar', () => {
+describe('prepareActiveSkillsBlocks — manual skill picks from sidebar', () => {
   let dir: string;
   let dbPath: string;
   let db: CodeIndexDB;
@@ -41,7 +41,7 @@ describe('enrichContentWithActiveSkills — manual skill picks from sidebar', ()
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('prepends an <active_skills> block with the picked skill body', async () => {
+  it('returns interpolated blocks without touching the user input', () => {
     skillStore.upsertSkill({
       id: 'docx',
       name: 'DOCX Writer',
@@ -49,7 +49,7 @@ describe('enrichContentWithActiveSkills — manual skill picks from sidebar', ()
       prompt_body: 'Use the docx library. Always validate the output file.',
     });
 
-    const result = await enrichContentWithActiveSkills(
+    const result = prepareActiveSkillsBlocks(
       'Create a memo about Q4 results.',
       ['docx'],
       sessionId,
@@ -58,16 +58,15 @@ describe('enrichContentWithActiveSkills — manual skill picks from sidebar', ()
 
     expect(result.applied).toEqual(['docx']);
     expect(result.missing).toEqual([]);
-    expect(result.content.startsWith('<active_skills>\n')).toBe(true);
-    expect(result.content).toContain('## docx — DOCX Writer');
-    expect(result.content).toContain('Use the docx library.');
-    expect(result.content.endsWith('Create a memo about Q4 results.')).toBe(true);
+    expect(result.blocks).toHaveLength(1);
+    expect(result.blocks[0]).toContain('## docx — DOCX Writer');
+    expect(result.blocks[0]).toContain('Use the docx library.');
   });
 
-  it('silently skips unknown skill ids and records them as missing', async () => {
+  it('silently skips unknown skill ids and records them as missing', () => {
     skillStore.upsertSkill({ id: 'pdf', name: 'PDF', prompt_body: 'pdf-body' });
 
-    const result = await enrichContentWithActiveSkills(
+    const result = prepareActiveSkillsBlocks(
       'do it',
       ['pdf', 'does-not-exist'],
       sessionId,
@@ -76,70 +75,48 @@ describe('enrichContentWithActiveSkills — manual skill picks from sidebar', ()
 
     expect(result.applied).toEqual(['pdf']);
     expect(result.missing).toEqual(['does-not-exist']);
-    expect(result.content).toContain('## pdf — PDF');
-    expect(result.content).not.toContain('does-not-exist');
+    expect(result.blocks).toHaveLength(1);
+    expect(result.blocks[0]).toContain('## pdf — PDF');
+    expect(result.blocks.join('\n')).not.toContain('does-not-exist');
   });
 
-  it('interpolates SESSION_ID, PROJECT_NAME, PROJECT_ROOT placeholders', async () => {
+  it('interpolates SESSION_ID, PROJECT_NAME, PROJECT_ROOT, USER_INPUT placeholders', () => {
     skillStore.upsertSkill({
       id: 'router',
       name: 'Router',
-      prompt_body: 'session=${SESSION_ID} project=${PROJECT_NAME} root=${PROJECT_ROOT}',
+      prompt_body:
+        'session=${SESSION_ID} project=${PROJECT_NAME} root=${PROJECT_ROOT} input=${USER_INPUT}',
     });
 
-    const result = await enrichContentWithActiveSkills(
+    const result = prepareActiveSkillsBlocks(
       'go',
       ['router'],
       sessionId,
       { db, sessionStore, skillStore },
     );
 
-    expect(result.content).toContain('session=42');
-    expect(result.content).toContain('project=Demo Project');
-    expect(result.content).toContain('root=/srv/demo');
+    const body = result.blocks[0];
+    expect(body).toContain('session=42');
+    expect(body).toContain('project=Demo Project');
+    expect(body).toContain('root=/srv/demo');
+    expect(body).toContain('input=go');
   });
 
-  it('returns the content unchanged when no skill ids are provided', async () => {
-    const text = 'plain message';
-    const result = await enrichContentWithActiveSkills(text, [], sessionId, {
+  it('returns empty blocks when no skill ids are provided', () => {
+    const result = prepareActiveSkillsBlocks('plain message', [], sessionId, {
       db,
       sessionStore,
       skillStore,
     });
-    expect(result.content).toBe(text);
+    expect(result.blocks).toEqual([]);
     expect(result.applied).toEqual([]);
     expect(result.missing).toEqual([]);
   });
 
-  it('writes a skill_usage_log row with invoked_by="user" for every applied skill', async () => {
-    skillStore.upsertSkill({ id: 'a', name: 'A', prompt_body: 'a' });
-    skillStore.upsertSkill({ id: 'b', name: 'B', prompt_body: 'b' });
-
-    await enrichContentWithActiveSkills(
-      'multi',
-      ['a', 'b'],
-      sessionId,
-      { db, sessionStore, skillStore },
-    );
-
-    const rows = db
-      .raw()
-      .prepare(
-        `SELECT skill_id, invoked_by FROM skill_usage_log
-         WHERE session_id = ?
-         ORDER BY skill_id`,
-      )
-      .all(sessionId) as Array<{ skill_id: string; invoked_by: string }>;
-    expect(rows).toEqual([
-      { skill_id: 'a', invoked_by: 'user' },
-      { skill_id: 'b', invoked_by: 'user' },
-    ]);
-  });
-
-  it('dedupes repeated ids so the block stays deterministic on accidental double-picks', async () => {
+  it('dedupes repeated ids so the block stays deterministic on accidental double-picks', () => {
     skillStore.upsertSkill({ id: 'once', name: 'Once', prompt_body: 'O' });
 
-    const result = await enrichContentWithActiveSkills(
+    const result = prepareActiveSkillsBlocks(
       'go',
       ['once', 'once', 'once'],
       sessionId,
@@ -147,7 +124,6 @@ describe('enrichContentWithActiveSkills — manual skill picks from sidebar', ()
     );
 
     expect(result.applied).toEqual(['once']);
-    const occurrences = (result.content.match(/## once — Once/g) ?? []).length;
-    expect(occurrences).toBe(1);
+    expect(result.blocks).toHaveLength(1);
   });
 });

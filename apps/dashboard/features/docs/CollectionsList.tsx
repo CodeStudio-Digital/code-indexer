@@ -6,6 +6,7 @@
  * inside `CollectionDetail` so this list stays purely navigational.
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Loader2, Plus } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export function CollectionsList({ collections, selectedId, onSelect, onChanged }: Props) {
+  const { t } = useTranslation('docs');
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -51,10 +53,10 @@ export function CollectionsList({ collections, selectedId, onSelect, onChanged }
     <aside className="space-y-2">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-          Coleções
+          {t('collections.heading')}
         </h2>
         <Button size="sm" variant="ghost" onClick={() => setShowForm((v) => !v)}>
-          <Plus className="h-3 w-3 mr-1" /> Nova
+          <Plus className="h-3 w-3 mr-1" /> {t('collections.new')}
         </Button>
       </div>
 
@@ -63,13 +65,13 @@ export function CollectionsList({ collections, selectedId, onSelect, onChanged }
           <form className="p-3 space-y-2" onSubmit={onCreate}>
             <Input
               autoFocus
-              placeholder="Nome (ex: unity-docs)"
+              placeholder={t('collections.namePlaceholder')}
               value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={80}
             />
             <Textarea
-              placeholder="Descrição (opcional)"
+              placeholder={t('collections.descriptionPlaceholder')}
               rows={2}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -85,11 +87,11 @@ export function CollectionsList({ collections, selectedId, onSelect, onChanged }
                   setError(null);
                 }}
               >
-                Cancelar
+                {t('collections.cancel')}
               </Button>
               <Button type="submit" size="sm" disabled={creating || !name.trim()}>
                 {creating ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
-                Criar
+                {t('collections.create')}
               </Button>
             </div>
           </form>
@@ -98,11 +100,11 @@ export function CollectionsList({ collections, selectedId, onSelect, onChanged }
 
       <div className="space-y-1.5">
         {collections === null && (
-          <div className="text-xs text-muted-foreground italic px-2">Carregando…</div>
+          <div className="text-xs text-muted-foreground italic px-2">{t('collections.loading')}</div>
         )}
         {collections?.length === 0 && (
           <div className="text-xs text-muted-foreground italic px-2">
-            Nenhuma coleção ainda. Crie a primeira para começar a indexar PDFs ou URLs.
+            {t('collections.empty')}
           </div>
         )}
         {collections?.map((c) => (
@@ -125,8 +127,8 @@ export function CollectionsList({ collections, selectedId, onSelect, onChanged }
               <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{c.description}</div>
             )}
             <div className="flex items-center gap-3 text-[11px] text-muted-foreground mt-1">
-              <span>{c.source_count} sources</span>
-              <span>{c.chunk_count} chunks</span>
+              <span>{t('collections.sourcesCount', { count: c.source_count })}</span>
+              <span>{t('collections.chunksCount', { count: c.chunk_count })}</span>
             </div>
           </button>
         ))}
@@ -136,18 +138,19 @@ export function CollectionsList({ collections, selectedId, onSelect, onChanged }
 }
 
 function StatusBadge({ status }: { status: DocCollection['status'] }) {
+  const { t } = useTranslation('docs');
   if (status === 'indexing') {
     return (
       <Badge variant="outline" className="text-[10px]">
         <Loader2 className="h-2.5 w-2.5 mr-0.5 animate-spin" />
-        indexing
+        {t('collections.statusIndexing')}
       </Badge>
     );
   }
   if (status === 'error') {
     return (
       <Badge variant="outline" className="text-[10px] border-destructive text-destructive">
-        error
+        {t('collections.statusError')}
       </Badge>
     );
   }
