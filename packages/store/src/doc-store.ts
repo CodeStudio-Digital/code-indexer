@@ -58,6 +58,17 @@ export interface DocCrawlConfig {
    * when no `link_extractor` binding is configured. See Addendum 4.
    */
   llm_extract_links?: boolean;
+  /**
+   * When true, every page in the crawl is fetched via the browser
+   * backend (Chromium/Playwright), bypassing the `EscalatingFetcher`
+   * heuristic. Required for docs whose navigation is populated by
+   * client-side JS (Unity ScriptReference, Algolia DocSearch shells,
+   * Docusaurus with JS-only sidebars). Cost: ~15-30s per page vs
+   * ~100ms for the plain fetcher. Falls back gracefully to plain when
+   * the ChromeService is disabled, annotating `force_browser_unavailable`
+   * in the resulting `RawPage.blocked_signals`.
+   */
+  force_browser?: boolean;
 }
 
 export interface DocSource {
@@ -82,6 +93,7 @@ export interface DocSource {
   crawl_exclude_pattern: string | null;
   crawl_required_path: string | null;
   crawl_llm_extract_links: boolean;
+  crawl_force_browser: boolean;
   pdf_size_bytes: number | null;
   cost_usd: number;
   created_at: string;
@@ -229,6 +241,7 @@ function mapSource(row: Record<string, unknown>): DocSource {
     crawl_exclude_pattern: (row.crawl_exclude_pattern as string | null) ?? null,
     crawl_required_path: (row.crawl_required_path as string | null) ?? null,
     crawl_llm_extract_links: boolFromInt(row.crawl_llm_extract_links as number),
+    crawl_force_browser: boolFromInt(row.crawl_force_browser as number),
     pdf_size_bytes: (row.pdf_size_bytes as number | null) ?? null,
     cost_usd: (row.cost_usd as number) ?? 0,
     created_at: row.created_at as string,
@@ -343,13 +356,13 @@ export class DocStore {
         collection_id, type, uri, title,
         crawl_enabled, crawl_max_pages, crawl_max_depth, crawl_same_origin,
         crawl_include_pattern, crawl_exclude_pattern, crawl_required_path,
-        crawl_llm_extract_links,
+        crawl_llm_extract_links, crawl_force_browser,
         pdf_size_bytes
       ) VALUES (
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
-        ?,
+        ?, ?,
         ?
       )
     `);
@@ -366,6 +379,7 @@ export class DocStore {
       crawl.exclude_pattern ?? null,
       normalizeRequiredPath(crawl.required_path),
       crawl.llm_extract_links ? 1 : 0,
+      crawl.force_browser ? 1 : 0,
       input.pdf_size_bytes ?? null,
     );
     this.refreshCollectionCounts(input.collection_id);
@@ -456,6 +470,7 @@ export class DocStore {
                 crawl_exclude_pattern    = @exclude_pattern,
                 crawl_required_path      = @required_path,
                 crawl_llm_extract_links  = @llm_extract_links,
+                crawl_force_browser      = @force_browser,
                 updated_at               = datetime('now')
           WHERE id = @id`,
       )
@@ -469,6 +484,7 @@ export class DocStore {
         exclude_pattern: crawl.exclude_pattern ?? null,
         required_path: normalizeRequiredPath(crawl.required_path),
         llm_extract_links: crawl.llm_extract_links ? 1 : 0,
+        force_browser: crawl.force_browser ? 1 : 0,
       });
   }
 

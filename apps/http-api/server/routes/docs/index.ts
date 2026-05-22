@@ -66,6 +66,12 @@ interface CreateUrlSourceBody {
     same_origin?: boolean;
     include_pattern?: string | null;
     exclude_pattern?: string | null;
+    /** Migration 089: literal substring pin (e.g. `/6000.3/Documentation/Manual/`). */
+    required_path?: string | null;
+    /** Migration 092: run an LLM on the seed page to find URLs cheerio missed. */
+    llm_extract_links?: boolean;
+    /** Migration 099: bypass `EscalatingFetcher` heuristic and render every page via Chromium. */
+    force_browser?: boolean;
   };
   /** Skip the actual ingestion, just create the row. Useful for the
    *  dashboard's "Save first, index later" flow. */

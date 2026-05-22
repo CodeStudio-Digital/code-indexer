@@ -41,6 +41,25 @@ export interface RenderResult {
   blockedSignals?: string[];
 }
 
+export interface RenderOpts {
+  /** Per-call timeout, forwarded to the underlying transport. */
+  timeoutMs?: number;
+  /**
+   * Force the browser backend for THIS call regardless of the
+   * `EscalatingFetcher`'s heuristic. Honored by `EscalatingFetcher` —
+   * the leaf backends ignore it (a `PlainFetchBackend` can't grow a
+   * Chromium and a `BrowserBackend` is already browser). When set,
+   * `EscalatingFetcher`:
+   *   - skips `plain.render` + `detectBlocked()` entirely
+   *   - calls `browser.render(url)` directly
+   *   - falls back to plain (with `force_browser_unavailable` signal)
+   *     when no browser is wired OR `isAvailable()` is false
+   *   - falls back to plain (with `force_browser_failed` signal) when
+   *     the browser call throws
+   */
+  forceBrowser?: boolean;
+}
+
 export interface RenderBackend {
   readonly name: 'plain' | 'browser' | 'escalating';
   /**
@@ -49,7 +68,7 @@ export interface RenderBackend {
    * if false.
    */
   isAvailable(): Promise<boolean>;
-  render(url: string, opts?: { timeoutMs?: number }): Promise<RenderResult>;
+  render(url: string, opts?: RenderOpts): Promise<RenderResult>;
 }
 
 // ─── PlainFetchBackend ────────────────────────────────────────────────
@@ -58,7 +77,10 @@ export class PlainFetchBackend implements RenderBackend {
   readonly name = 'plain' as const;
   constructor(private fetcher: UrlFetcher) {}
   async isAvailable(): Promise<boolean> { return true; }
-  async render(url: string): Promise<RenderResult> {
+  async render(url: string, _opts?: RenderOpts): Promise<RenderResult> {
+    // `_opts` accepted for interface compatibility; plain has no notion of
+    // timeout or forceBrowser. `forceBrowser` only matters at the
+    // EscalatingFetcher layer.
     const page = await this.fetcher.fetchPage(url);
     return fetchedToResult(page, 'plain');
   }
@@ -143,7 +165,8 @@ export class BrowserBackend implements RenderBackend {
     }
   }
 
-  async render(url: string, opts: { timeoutMs?: number } = {}): Promise<RenderResult> {
+  async render(url: string, opts: RenderOpts = {}): Promise<RenderResult> {
+    // `opts.forceBrowser` ignored here — we're already the browser path.
     const browser = await this.connect();
     if (!browser) {
       throw new Error('browser backend unavailable: ChromeService not connected');
@@ -211,7 +234,39 @@ export class EscalatingFetcher implements RenderBackend {
     return this.plain.isAvailable();
   }
 
-  async render(url: string, opts?: { timeoutMs?: number }): Promise<RenderResult> {
+  async render(url: string, opts?: RenderOpts): Promise<RenderResult> {
+    // ─── Force-browser branch (per-source opt-in, migration 099) ──
+    // The operator explicitly opted in via the AddSourceDialog. Skip
+    // plain + detectBlocked entirely and try the browser straight. If
+    // the browser is unwired or unhealthy, fall back to plain (with a
+    // distinguishing signal so the UI/log makes it obvious that the
+    // intent was honored even when the realisation degraded).
+    if (opts?.forceBrowser) {
+      if (!this.browser) {
+        console.warn(`[doc-indexer] force_browser=1 but no browser backend wired — falling back to plain for ${url}`);
+        const plain = await this.plain.render(url, opts);
+        return { ...plain, blockedSignals: ['force_browser_unavailable'] };
+      }
+      const available = await this.browser.isAvailable();
+      if (!available) {
+        console.warn(`[doc-indexer] force_browser=1 but browser unavailable — falling back to plain for ${url}`);
+        const plain = await this.plain.render(url, opts);
+        return { ...plain, blockedSignals: ['force_browser_unavailable'] };
+      }
+      console.log(`[doc-indexer] force_browser=1 — bypassing plain on ${url}`);
+      try {
+        const result = await this.browser.render(url, opts);
+        return { ...result, blockedSignals: ['force_browser'] };
+      } catch (err) {
+        console.warn(
+          `[doc-indexer] force_browser=1 render failed: ${err instanceof Error ? err.message : String(err)} — falling back to plain`,
+        );
+        const plain = await this.plain.render(url, opts);
+        return { ...plain, blockedSignals: ['force_browser', 'force_browser_failed'] };
+      }
+    }
+
+    // ─── Default heuristic branch (status / cf / spa_shell / …) ──
     const first = await this.plain.render(url, opts);
     const signals = this.isBlocked(first);
     if (signals.length === 0) return first;

@@ -907,6 +907,7 @@ function defaultCrawlConfig(source: DocSource): DocCrawlConfig {
     exclude_pattern: source.crawl_exclude_pattern,
     required_path: source.crawl_required_path,
     llm_extract_links: source.crawl_llm_extract_links,
+    force_browser: source.crawl_force_browser,
   };
 }
 

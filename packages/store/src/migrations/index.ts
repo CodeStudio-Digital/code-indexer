@@ -112,6 +112,7 @@ import { coderMessageSelectedSkills095 } from './095_coder_message_selected_skil
 import { docSourceSuggestions096 } from './096_doc_source_suggestions.js';
 import { docsResearchSessions097 } from './097_docs_research_sessions.js';
 import { docRerankCache098 } from './098_doc_rerank_cache.js';
+import { docSourcesForceBrowser099 } from './099_doc_sources_force_browser.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -218,6 +219,7 @@ export const MIGRATIONS: Migration[] = [
   docSourceSuggestions096,
   docsResearchSessions097,
   docRerankCache098,
+  docSourcesForceBrowser099,
 ];
 
 /**

@@ -68,6 +68,17 @@ export interface DocCrawlConfig {
    * binding is set.
    */
   llm_extract_links?: boolean;
+  /**
+   * When true, every page in the crawl is fetched via Chromium
+   * (headless browser) instead of plain HTTP — required for docs
+   * whose navigation is populated by client-side JavaScript (Unity
+   * ScriptReference, sites with an SPA shell that still has body
+   * content). Costs ~15-30s per page vs ~100ms plain. Requires
+   * ChromeService to be enabled in Admin → Chrome Service; if
+   * unavailable, falls back to plain and annotates each page with
+   * `force_browser_unavailable` in `blocked_signals`.
+   */
+  force_browser?: boolean;
 }
 
 export interface DocIngestEstimate {

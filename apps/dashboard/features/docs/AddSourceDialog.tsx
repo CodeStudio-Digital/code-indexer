@@ -72,6 +72,13 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
   // the static HTML parser missed (JS-rendered nav trees, data
   // attributes, embedded JSON page maps). 1 LLM call per source.
   const [llmExtractLinks, setLlmExtractLinks] = useState(false);
+  // When on, the crawler bypasses the EscalatingFetcher heuristic and
+  // renders every page via Chromium (ChromeService/Playwright). Required
+  // for docs whose nav is JS-only (Unity ScriptReference, etc.) — the
+  // body has plenty of content so `spa_shell`/`body_too_short` signals
+  // don't fire. Available regardless of crawlEnabled — even a single
+  // page can need browser rendering.
+  const [forceBrowser, setForceBrowser] = useState(false);
 
   // PDF form state
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -265,6 +272,34 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                     </div>
                   </div>
                 )}
+
+                {/*
+                  Force-browser toggle — OUTSIDE the `crawlEnabled` block.
+                  Even a single-page index benefits when the nav is JS-only
+                  (Unity ScriptReference seed page, sites with SPA shell that
+                  still has body content). Persisted to `doc_sources.crawl_force_browser`
+                  so re-index inherits the choice.
+                */}
+                <div className="flex items-start justify-between gap-3 border-t pt-3">
+                  <div className="flex-1">
+                    <Label htmlFor="docs-force-browser" className="block">
+                      Usar Chromium para renderizar (avançado)
+                    </Label>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Busca cada página com um navegador headless em vez de HTTP simples — captura
+                      sidebars / menus / nav populados por JavaScript (ex: Unity ScriptReference,
+                      sites com SPA shell). Requer ChromeService habilitado em{' '}
+                      <code>Admin → Chrome Service</code>. Cada página leva ~15-30s (vs ~100ms
+                      plain), use só quando necessário. Se o ChromeService estiver desligado, a
+                      indexação degrada para plain e marca <code>force_browser_unavailable</code>.
+                    </p>
+                  </div>
+                  <Switch
+                    id="docs-force-browser"
+                    checked={forceBrowser}
+                    onCheckedChange={setForceBrowser}
+                  />
+                </div>
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
@@ -336,6 +371,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                     same_origin: sameOrigin,
                     required_path: requiredPath.trim() || undefined,
                     llm_extract_links: llmExtractLinks || undefined,
+                    force_browser: forceBrowser || undefined,
                   },
                 },
                 cb,

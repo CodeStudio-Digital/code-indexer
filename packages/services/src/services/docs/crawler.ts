@@ -75,6 +75,11 @@ export async function crawlUrl(opts: CrawlOptions): Promise<RawPage[]> {
   // Literal substring the URL must contain. Null = no constraint.
   // Trimmed empty string also degrades to null (treat blank UI input as "off").
   const requiredPath = (crawl.required_path ?? '').trim() || null;
+  // Per-source opt-in: when true, the EscalatingFetcher skips its
+  // heuristic and renders every page via the browser backend. Plumbed
+  // through to `renderer.render(url, { forceBrowser })` for each fetch.
+  // Sitemap discovery is intentionally exempt (XML, no JS) — see below.
+  const forceBrowser = crawl.force_browser === true;
 
   // Fail loudly if the user-supplied seed isn't parseable as a URL — a
   // silent skip in the BFS loop used to produce "DONE 0 pages 3ms" with
@@ -132,7 +137,7 @@ export async function crawlUrl(opts: CrawlOptions): Promise<RawPage[]> {
     let raw: Awaited<ReturnType<RenderBackend['render']>> | null = null;
     let reason: string | undefined;
     try {
-      raw = await renderer.render(normalized);
+      raw = await renderer.render(normalized, forceBrowser ? { forceBrowser: true } : undefined);
     } catch (err) {
       reason = err instanceof Error ? err.message : String(err);
       opts.onPageFetched?.({ url: normalized, ok: false, reason, totalFetched: pagesFetched });
