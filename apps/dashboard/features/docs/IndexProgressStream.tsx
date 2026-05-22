@@ -10,6 +10,7 @@
  * the error message), and let the caller dismiss the surrounding UI.
  */
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Progress } from '../../components/ui/progress.js';
@@ -27,6 +28,7 @@ interface Props {
 }
 
 export function IndexProgressStream({ start, onClose }: Props) {
+  const { t } = useTranslation('docs');
   const [progress, setProgress] = useState<DocIngestProgressFrame | null>(null);
   const [done, setDone] = useState<DocIngestDoneFrame | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -81,16 +83,16 @@ export function IndexProgressStream({ start, onClose }: Props) {
           )}
           <span className="text-sm font-medium">
             {error
-              ? 'Falha na indexação'
+              ? t('progress.indexFailed')
               : done
-                ? 'Indexação concluída'
+                ? t('progress.indexDone')
                 : progress
-                  ? PHASE_LABEL[progress.phase]
-                  : 'Iniciando…'}
+                  ? t(PHASE_LABEL[progress.phase])
+                  : t('progress.starting')}
           </span>
         </div>
         <Button size="sm" variant="ghost" disabled={running} onClick={() => void onClose()}>
-          Fechar
+          {t('progress.close')}
         </Button>
       </div>
       <div className="px-4 py-3 space-y-3">
@@ -98,26 +100,26 @@ export function IndexProgressStream({ start, onClose }: Props) {
           <>
             <Progress value={percent} className="h-1.5" />
             <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-              <Stat label="Fase" value={PHASE_LABEL[progress.phase]} />
-              <Stat label="Progresso" value={`${progress.current}/${progress.total}`} />
+              <Stat label={t('progress.stat.phase')} value={t(PHASE_LABEL[progress.phase])} />
+              <Stat label={t('progress.stat.progress')} value={`${progress.current}/${progress.total}`} />
               {progress.pages_fetched != null && (
-                <Stat label="Páginas buscadas" value={String(progress.pages_fetched)} />
+                <Stat label={t('progress.stat.pagesFetched')} value={String(progress.pages_fetched)} />
               )}
               {progress.pages_accepted != null && (
                 <Stat
-                  label="Aceitas / rejeitadas"
+                  label={t('progress.stat.pagesAcceptedRejected')}
                   value={`${progress.pages_accepted} / ${progress.pages_rejected ?? 0}`}
                 />
               )}
               {progress.pages_via_browser != null && progress.pages_via_browser > 0 && (
                 <Stat
-                  label="Via browser"
+                  label={t('progress.stat.pagesViaBrowser')}
                   value={String(progress.pages_via_browser)}
-                  hint="Páginas que dispararam bot-detection e foram refetchadas via Chrome headless"
+                  hint={t('progress.stat.pagesViaBrowserHint')}
                 />
               )}
               {progress.chunks_indexed != null && (
-                <Stat label="Chunks" value={String(progress.chunks_indexed)} />
+                <Stat label={t('progress.stat.chunks')} value={String(progress.chunks_indexed)} />
               )}
             </div>
             {progress.label && (
@@ -128,20 +130,20 @@ export function IndexProgressStream({ start, onClose }: Props) {
 
         {done && (
           <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-            <Stat label="Chunks indexados" value={String(done.chunks_indexed)} />
-            <Stat label="Páginas buscadas" value={String(done.pages_fetched)} />
-            <Stat label="Aceitas" value={String(done.pages_accepted)} />
-            <Stat label="Rejeitadas" value={String(done.pages_rejected)} />
+            <Stat label={t('progress.stat.chunksIndexed')} value={String(done.chunks_indexed)} />
+            <Stat label={t('progress.stat.pagesFetched')} value={String(done.pages_fetched)} />
+            <Stat label={t('progress.stat.pagesAccepted')} value={String(done.pages_accepted)} />
+            <Stat label={t('progress.stat.pagesRejected')} value={String(done.pages_rejected)} />
             {done.pages_via_browser > 0 && (
               <Stat
-                label="Via browser"
+                label={t('progress.stat.pagesViaBrowser')}
                 value={String(done.pages_via_browser)}
-                hint="Páginas que dispararam bot-detection e foram refetchadas via Chrome headless"
+                hint={t('progress.stat.pagesViaBrowserHint')}
               />
             )}
-            <Stat label="Tempo" value={`${(done.elapsed_ms / 1000).toFixed(1)}s`} />
+            <Stat label={t('progress.stat.time')} value={`${(done.elapsed_ms / 1000).toFixed(1)}s`} />
             {done.cost_usd > 0 && (
-              <Stat label="Custo" value={`$${done.cost_usd.toFixed(4)}`} />
+              <Stat label={t('progress.stat.cost')} value={`$${done.cost_usd.toFixed(4)}`} />
             )}
           </div>
         )}

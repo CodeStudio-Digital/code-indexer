@@ -19,6 +19,7 @@
  * `<pre>` instead of crashing.
  */
 import { memo, useEffect, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check } from 'lucide-react';
@@ -107,6 +108,7 @@ interface HighlightedBlockProps {
 const MAX_HIGHLIGHT_BYTES = 200_000;
 
 function HighlightedBlock({ code, lang }: HighlightedBlockProps) {
+  const { t } = useTranslation('docs');
   const dark = useIsDark();
   const theme: ShikiTheme = dark ? 'github-dark' : 'github-light';
   const [html, setHtml] = useState<string | null>(null);
@@ -154,7 +156,7 @@ function HighlightedBlock({ code, lang }: HighlightedBlockProps) {
     return (
       <div className="relative my-2 rounded-md border bg-card overflow-hidden">
         <div className="flex items-center justify-between px-2 py-1 border-b text-[10px] uppercase tracking-wide text-muted-foreground">
-          <span>{tooLarge ? 'plain (large)' : (resolvedLang ?? 'text')}</span>
+          <span>{tooLarge ? t('research.codeLargeWarning') : (resolvedLang ?? 'text')}</span>
           <CopyButton onClick={copy} copied={copied} />
         </div>
         <pre className="p-3 overflow-auto text-[12px] leading-snug font-mono whitespace-pre">
@@ -182,15 +184,16 @@ function HighlightedBlock({ code, lang }: HighlightedBlockProps) {
 }
 
 function CopyButton({ onClick, copied }: { onClick: () => void; copied: boolean }) {
+  const { t } = useTranslation('docs');
   return (
     <button
       type="button"
       onClick={onClick}
       className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-muted/60 text-[10px]"
-      aria-label="Copiar código"
+      aria-label={t('research.codeCopyAriaLabel')}
     >
       {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-      {copied ? 'copiado' : 'copiar'}
+      {copied ? t('research.codeCopied') : t('research.codeCopy')}
     </button>
   );
 }

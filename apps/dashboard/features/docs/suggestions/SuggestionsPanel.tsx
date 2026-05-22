@@ -9,6 +9,7 @@
  *      existing collection or create a new one.
  */
 import { useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { Loader2, CheckCircle2, XCircle, Search, RefreshCcw, ExternalLink } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import {
@@ -29,6 +30,7 @@ interface Props {
 }
 
 export function SuggestionsPanel({ projectId, onChanged }: Props) {
+  const { t } = useTranslation('docs');
   const [suggestions, setSuggestions] = useState<DocSourceSuggestion[] | null>(null);
   const [collections, setCollections] = useState<DocCollection[] | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -101,7 +103,7 @@ export function SuggestionsPanel({ projectId, onChanged }: Props) {
   if (projectId == null) {
     return (
       <div className="rounded-md border border-dashed bg-muted/30 px-4 py-6 text-sm text-muted-foreground">
-        Select a project to scan its dependency manifests.
+        {t('suggestions.emptyProjectHint')}
       </div>
     );
   }
@@ -110,27 +112,25 @@ export function SuggestionsPanel({ projectId, onChanged }: Props) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-base font-semibold">Suggested collections</h3>
+          <h3 className="text-base font-semibold">{t('suggestions.heading')}</h3>
           <p className="text-sm text-muted-foreground">
-            Scans <code className="bg-muted px-1 rounded text-xs">package.json</code>,{' '}
-            <code className="bg-muted px-1 rounded text-xs">requirements.txt</code>,{' '}
-            <code className="bg-muted px-1 rounded text-xs">Cargo.toml</code>,{' '}
-            <code className="bg-muted px-1 rounded text-xs">go.mod</code>,{' '}
-            <code className="bg-muted px-1 rounded text-xs">composer.json</code>, and{' '}
-            <code className="bg-muted px-1 rounded text-xs">Gemfile</code> for packages whose docs
-            you may want to index.
+            <Trans
+              t={t}
+              i18nKey="suggestions.description"
+              components={{ code: <code className="bg-muted px-1 rounded text-xs" /> }}
+            />
           </p>
         </div>
         <Button onClick={handleScan} disabled={scanning} variant="secondary">
           {scanning ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Scanning…
+              {t('suggestions.scanning')}
             </>
           ) : (
             <>
               <RefreshCcw className="mr-2 h-4 w-4" />
-              Scan dependencies
+              {t('suggestions.scanButton')}
             </>
           )}
         </Button>
@@ -144,23 +144,31 @@ export function SuggestionsPanel({ projectId, onChanged }: Props) {
 
       {scanResult && (
         <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-          Scan complete: detected <strong>{scanResult.packagesDetected}</strong> packages across{' '}
-          {scanResult.manifestsFound.length > 0
-            ? scanResult.manifestsFound.join(', ')
-            : 'no manifests'}
-          , inserted <strong>{scanResult.suggestionsInserted}</strong> new suggestions, skipped{' '}
-          <strong>{scanResult.suggestionsSkipped}</strong> (already known or unresolvable).
+          <Trans
+            t={t}
+            i18nKey="suggestions.scanResult"
+            values={{
+              detected: scanResult.packagesDetected,
+              manifests:
+                scanResult.manifestsFound.length > 0
+                  ? scanResult.manifestsFound.join(', ')
+                  : t('suggestions.scanResultManifestsEmpty'),
+              inserted: scanResult.suggestionsInserted,
+              skipped: scanResult.suggestionsSkipped,
+            }}
+            components={{ strong: <strong /> }}
+          />
         </div>
       )}
 
       {suggestions == null ? (
         <div className="text-sm text-muted-foreground flex items-center gap-2">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+          <Loader2 className="h-4 w-4 animate-spin" /> {t('suggestions.loading')}
         </div>
       ) : suggestions.length === 0 ? (
         <div className="rounded-md border border-dashed bg-muted/20 px-4 py-6 text-sm text-muted-foreground flex flex-col items-center gap-2">
           <Search className="h-5 w-5" />
-          <span>No pending suggestions. Click “Scan dependencies” to populate.</span>
+          <span>{t('suggestions.empty')}</span>
         </div>
       ) : (
         <ul className="space-y-2">
@@ -189,6 +197,7 @@ interface RowProps {
 }
 
 function SuggestionRow({ suggestion, collections, pending, onApprove, onDismiss }: RowProps) {
+  const { t } = useTranslation('docs');
   // Default to the package_manager as collection name — gives a clean
   // grouping ("npm-docs", "pypi-docs") that the user can override.
   const defaultCollection =
@@ -217,7 +226,7 @@ function SuggestionRow({ suggestion, collections, pending, onApprove, onDismiss 
               <span className="text-xs text-muted-foreground">v{suggestion.package_version}</span>
             )}
             <span className={`text-xs px-1.5 py-0.5 rounded ${confidenceTone}`}>
-              {confidencePct}% confident
+              {t('suggestions.confidence', { percent: confidencePct })}
             </span>
           </div>
           {suggestion.suggested_title && (
@@ -241,7 +250,7 @@ function SuggestionRow({ suggestion, collections, pending, onApprove, onDismiss 
               onChange={(e) => setCollectionName(e.target.value)}
               disabled={pending}
               className="h-8 w-44 rounded-md border bg-background px-2 text-xs"
-              placeholder="collection name"
+              placeholder={t('suggestions.collectionPlaceholder')}
             />
             <Button
               size="sm"
@@ -249,7 +258,7 @@ function SuggestionRow({ suggestion, collections, pending, onApprove, onDismiss 
               disabled={pending || collectionName.trim().length === 0}
             >
               {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-              <span className="ml-1">Approve</span>
+              <span className="ml-1">{t('suggestions.approve')}</span>
             </Button>
             <Button
               size="sm"
@@ -258,7 +267,7 @@ function SuggestionRow({ suggestion, collections, pending, onApprove, onDismiss 
               disabled={pending}
             >
               <XCircle className="h-3 w-3" />
-              <span className="ml-1">Dismiss</span>
+              <span className="ml-1">{t('suggestions.dismiss')}</span>
             </Button>
           </div>
         </div>

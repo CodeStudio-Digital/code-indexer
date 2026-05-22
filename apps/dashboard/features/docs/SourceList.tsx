@@ -253,6 +253,7 @@ function SourceHealthBadge({
   onStartRetry: (sourceId: number) => void;
   onStartForceRetry: (sourceId: number) => void;
 }) {
+  const { t } = useTranslation('docs');
   const active = source.status === 'fetching' || source.status === 'indexing';
   const { health, refetch } = useSourceHealth(source.id, active ? '' : source.updated_at);
   // Refresh on demand after the retry stream's onClose lands. The caller
@@ -267,16 +268,16 @@ function SourceHealthBadge({
           variant="outline"
           className="text-[10px] border-emerald-500 text-emerald-600"
         >
-          ✓ {health.chunks_embedded}/{health.chunks_persisted} embedded
+          {t('sources.embeddedComplete', { count: health.chunks_embedded, total: health.chunks_persisted })}
         </Badge>
         <Button
           size="sm"
           variant="ghost"
           className="h-5 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
           onClick={() => onStartForceRetry(source.id)}
-          title="Forçar re-embed (wipe + retry) — use quando a busca retorna 0 apesar do badge verde (upsert remoto rejeitado silenciosamente)."
+          title={t('sources.forceReembedActionTitle')}
         >
-          Forçar re-embed
+          {t('sources.forceReembedAction')}
         </Button>
       </div>
     );
@@ -286,18 +287,22 @@ function SourceHealthBadge({
       <Badge
         variant="outline"
         className="text-[10px] border-amber-500 text-amber-600"
-        title={`${health.missing_count} chunk(s) sem vetor no índice remoto.`}
+        title={t('sources.embeddedMissingTooltip', { count: health.missing_count })}
       >
-        ⚠ {health.chunks_embedded}/{health.chunks_persisted} embedded ({health.missing_count} faltando)
+        {t('sources.embeddedMissing', {
+          count: health.chunks_embedded,
+          total: health.chunks_persisted,
+          missing: health.missing_count,
+        })}
       </Badge>
       <Button
         size="sm"
         variant="ghost"
         className="h-5 px-2 text-[10px] text-amber-600 hover:text-amber-700"
         onClick={() => onStartRetry(source.id)}
-        title="Embeddar só os chunks faltantes (sem re-fetchar a página)"
+        title={t('sources.reembedActionTitle')}
       >
-        Re-embedar
+        {t('sources.reembedAction')}
       </Button>
     </div>
   );
@@ -310,6 +315,7 @@ function SourceHealthBadge({
  * already terminal (the row's status badge + chunk counts cover that).
  */
 function SourceLiveProgress({ source }: { source: DocSource }) {
+  const { t } = useTranslation('docs');
   const active = source.status === 'fetching' || source.status === 'indexing';
   const snapshot = useSourceProgress(source.id, active);
   if (!active || !snapshot) return null;
@@ -325,9 +331,11 @@ function SourceLiveProgress({ source }: { source: DocSource }) {
         />
       </div>
       <div className="text-[10px] text-muted-foreground tabular-nums">
-        {PHASE_LABEL[snapshot.phase]}: {snapshot.current}/{snapshot.total}
+        {t(PHASE_LABEL[snapshot.phase])}: {snapshot.current}/{snapshot.total}
         {snapshot.pages_via_browser != null && snapshot.pages_via_browser > 0 && (
-          <span className="ml-2 text-amber-600">· {snapshot.pages_via_browser} via browser</span>
+          <span className="ml-2 text-amber-600">
+            · {t('sources.viaBrowser', { count: snapshot.pages_via_browser })}
+          </span>
         )}
       </div>
     </div>
