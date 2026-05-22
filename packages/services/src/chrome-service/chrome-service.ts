@@ -36,6 +36,7 @@ import { hasQaPlaywrightSkill } from '@mcp/company/services/SandboxService.js';
 import {
   buildHostFacingWsEndpoint,
   buildLoopbackHealthUrl,
+  buildLoopbackWsEndpoint,
   classifyChromeServiceError,
   DEFAULT_CHROME_SERVICE_PORT,
 } from './host-alias.js';
@@ -129,12 +130,25 @@ export class ChromeService {
     if (state.status !== 'running' || state.alive === false || !state.wsEndpoint) {
       return null;
     }
+    // CRITICAL: do NOT use `state.wsEndpoint` here. That field carries the
+    // container-facing alias (`ws://host.containers.internal:<port>/`)
+    // because it's the endpoint we BACKFILL INTO SANDBOX CONTAINER ENV
+    // VARS — sandbox sidecars resolve `host.containers.internal` via
+    // slirp4netns. But this method runs in the HOST process (http-api,
+    // doc indexer's BrowserBackend, MCP server), where the alias has
+    // no DNS resolver and `chromium.connect` throws
+    // `getaddrinfo ENOTFOUND host.containers.internal`. The loopback
+    // helper points at `127.0.0.1:<port>` — the same port that the
+    // container's `-p host_port:9222` published to the host. See
+    // `host-alias.ts` for the full sandbox-vs-host endpoint matrix.
+    const cfg = this.store.getConfig();
+    const wsEndpoint = buildLoopbackWsEndpoint(cfg.host_port);
     try {
       const { chromium } = await import('playwright-core');
       // Default Playwright connect timeout is 30s — bring it down so the
       // doc indexer's per-page budget isn't blown on a single unreachable
       // hop. Callers can compose this with their own outer timeout.
-      const browser = await chromium.connect(state.wsEndpoint, { timeout: 10_000 });
+      const browser = await chromium.connect(wsEndpoint, { timeout: 10_000 });
       return browser;
     } catch (err) {
       console.warn(

@@ -84,6 +84,28 @@ export function buildLoopbackHealthUrl(port: number = DEFAULT_CHROME_SERVICE_POR
   return `http://127.0.0.1:${port}/`;
 }
 
+/**
+ * Pure: the loopback WS endpoint the http-api process itself uses to
+ * connect to the Chrome Service via Playwright.
+ *
+ * Critically distinct from `buildHostFacingWsEndpoint`:
+ *   - `buildHostFacingWsEndpoint(...)` returns `ws://host.containers.internal:<port>/`
+ *     — the alias SANDBOX CONTAINERS use to reach the Chrome Service
+ *     across the runtime gateway. Resolves via slirp4netns (Podman)
+ *     or the Docker Desktop DNS shim.
+ *   - `buildLoopbackWsEndpoint(...)` returns `ws://127.0.0.1:<port>/`
+ *     — the URL the HOST process uses, because the container alias
+ *     does NOT resolve outside containers (`getaddrinfo ENOTFOUND
+ *     host.containers.internal`).
+ *
+ * Used by `ChromeService.connectBrowser` (the doc indexer's force-browser
+ * branch + QA tool fall-back when the agent runs from the host). Never
+ * hand this URL to a sandbox container — they need the alias.
+ */
+export function buildLoopbackWsEndpoint(port: number = DEFAULT_CHROME_SERVICE_PORT): string {
+  return `ws://127.0.0.1:${port}/`;
+}
+
 function resolveHostAlias(runtime: ContainerRuntime): string {
   return runtime === 'podman' ? 'host.containers.internal' : 'host.docker.internal';
 }
