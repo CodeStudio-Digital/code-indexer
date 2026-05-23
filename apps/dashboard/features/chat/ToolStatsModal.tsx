@@ -88,7 +88,7 @@ export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps
       onClick={onClose}
     >
       <div
-        className="bg-card border rounded-lg shadow-lg w-full max-w-2xl max-h-[85vh] flex flex-col"
+        className="bg-card border rounded-lg shadow-lg w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b px-4 py-3">
@@ -115,7 +115,7 @@ export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps
           </div>
         )}
 
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 min-h-0">
           <div className="p-4 space-y-4">
             {loading && !data && (
               <div className="text-xs text-muted-foreground">Loading tool stats…</div>
@@ -123,12 +123,12 @@ export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps
 
             {data && (
               <>
-                <div className="flex items-baseline gap-4 text-xs">
+                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs">
                   <span className="text-muted-foreground">Total tool calls:</span>
                   <span className="font-mono font-semibold tabular-nums">{data.totalCalls}</span>
                   {dominant && (
                     <>
-                      <span className="text-muted-foreground ml-auto">Dominant:</span>
+                      <span className="text-muted-foreground sm:ml-auto">Dominant:</span>
                       <span className="font-mono font-semibold">
                         {dominant.name}{' '}
                         <span className="text-muted-foreground">({dominantPct}%)</span>
@@ -194,30 +194,30 @@ export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps
                       {data.recent.map((r) => (
                         <div
                           key={r.id}
-                          className={`text-[11px] rounded px-2 py-1 border ${
+                          className={`text-[11px] rounded px-2 py-1 border min-w-0 ${
                             r.isError
                               ? 'border-destructive/30 bg-destructive/5'
                               : 'border-border/40 bg-muted/30'
                           }`}
                         >
-                          <div className="flex items-baseline gap-2">
-                            <span className="font-mono font-medium">{r.name}</span>
+                          <div className="flex items-baseline gap-2 min-w-0">
+                            <span className="font-mono font-medium truncate">{r.name}</span>
                             {r.isError && (
                               <Badge
                                 variant="outline"
-                                className="text-[9px] px-1 py-0 border-destructive/40 text-destructive"
+                                className="text-[9px] px-1 py-0 border-destructive/40 text-destructive shrink-0"
                               >
                                 error
                               </Badge>
                             )}
-                            <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">
+                            <span className="ml-auto text-[10px] text-muted-foreground tabular-nums shrink-0">
                               {r.durationMs}ms
                             </span>
-                            <span className="text-[10px] text-muted-foreground tabular-nums">
+                            <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
                               {r.createdAt}
                             </span>
                           </div>
-                          <pre className="mt-0.5 whitespace-pre-wrap break-words font-mono text-[10px] text-muted-foreground">
+                          <pre className="mt-0.5 max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] text-muted-foreground">
                             {r.argsPreview || '(no args)'}
                           </pre>
                         </div>
