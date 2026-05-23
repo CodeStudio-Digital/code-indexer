@@ -64,6 +64,7 @@ import {
   runGlobalQualityClassifiers,
   getGlobalQualityClassificationStore,
   getGlobalQualityInterventionStore,
+  getGlobalQualityWatchdog,
   buildQualityNudge,
   detectToolMisuseStreak,
   getGlobalPolicyEnforcer,
@@ -1251,6 +1252,24 @@ export interface RunnerEvents {
    */
   quality_nudge_missed: (payload: { runId: string; turn: number }) => void;
   /**
+   * Emitted when the QualityWatchdog LLM (Apêndice 3 — Parte A)
+   * returns a non-'ok' verdict for the current session. Dashboard
+   * renders a separate banner with the LLM's reason text; the runner
+   * also injects a one-shot system reminder on the next turn when
+   * the verdict's `recommendedAction` is 'nudge' or 'stop'.
+   */
+  quality_watchdog_alert: (payload: {
+    turn: number;
+    sessionId: number;
+    suspectTool: string;
+    verdict: 'ok' | 'warn' | 'flagged' | 'error';
+    confidence: number;
+    reason: string;
+    recommendedAction: 'stop' | 'nudge' | 'ok';
+    providerId: string;
+    modelId: string;
+  }) => void;
+  /**
    * Emitted when one of the four loop-detection guards fires. Lets the
    * dashboard show a banner instead of just logging to the server
    * terminal — historically the user only learned about a loop by
@@ -1423,6 +1442,44 @@ export class CoderRunner extends EventEmitter {
   private recentTurnDominance: Array<{ name: string; hadText: boolean }> = [];
 
   /**
+   * Rolling list of tool names called recently (newest at the end).
+   * Maintained alongside the dominance window but with a wider cap so
+   * the QualityWatchdog can run histogram analysis on a longer horizon
+   * than the dominance guard. Trimmed lazily when it grows past 60.
+   *
+   * Distinct from `toolCallFreq` (which is keyed by arg-hash for the
+   * dup-call cap) — the watchdog wants tool *name* repetition, not
+   * arg repetition.
+   */
+  private watchdogRecentNames: string[] = [];
+
+  /**
+   * Rolling snapshot of recent tool calls (with isError + argsPreview)
+   * forwarded to the watchdog when its LLM check runs. Same cap as
+   * `watchdogRecentNames` — they evict in lockstep.
+   */
+  private watchdogRecentCalls: Array<{
+    turn: number;
+    name: string;
+    isError: boolean;
+    argsPreview?: string;
+  }> = [];
+
+  /**
+   * Last turn the QualityWatchdog LLM was invoked. Used to enforce the
+   * cooldown so the watchdog doesn't burn tokens every turn during a
+   * sustained loop. `-Infinity` = never yet.
+   */
+  private lastWatchdogTurn = -Infinity;
+
+  /**
+   * When the watchdog returns `flagged` with `recommended_action='nudge'`,
+   * this string holds the synthetic system reminder the runner injects
+   * before the next provider call. Consumed-and-cleared once.
+   */
+  private pendingWatchdogNudge: string | null = null;
+
+  /**
    * Lightweight todo list maintained by the `todo_write` tool. Distinct from
    * the heavyweight `submit_tasks` flow — todos never pause the run; they
    * just broadcast a `todos_updated` event so the dashboard can render a
@@ -1548,6 +1605,140 @@ export class CoderRunner extends EventEmitter {
     } catch (e) {
       console.warn(
         `[coder] tool_loop_intervention emit failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  /**
+   * Update the rolling watchdog state with the tools this turn just
+   * fired. Cheap — no LLM. The actual `analyze()` call happens via
+   * `maybeRunWatchdog()` below and only when the pre-filter says the
+   * loop pattern is suspicious AND the cooldown has elapsed.
+   */
+  private recordToolCallsForWatchdog(
+    turn: number,
+    blocks: Array<{ name: string; input: Record<string, unknown> }>,
+    isErrorPerBlock: boolean[],
+  ): void {
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      this.watchdogRecentNames.push(b.name);
+      let argsPreview: string | undefined;
+      try {
+        argsPreview = JSON.stringify(b.input ?? {}).slice(0, 80);
+      } catch {
+        argsPreview = undefined;
+      }
+      this.watchdogRecentCalls.push({
+        turn,
+        name: b.name,
+        isError: isErrorPerBlock[i] ?? false,
+        argsPreview,
+      });
+    }
+    // Cap rolling window at 60 — wide enough for the watchdog's histogram
+    // to be meaningful, narrow enough to keep memory flat across long runs.
+    while (this.watchdogRecentNames.length > 60) this.watchdogRecentNames.shift();
+    while (this.watchdogRecentCalls.length > 60) this.watchdogRecentCalls.shift();
+  }
+
+  /**
+   * Run the QualityWatchdog asynchronously (fire-and-forget) when the
+   * cheap pre-filter detects a suspect pattern AND the cooldown has
+   * elapsed. The watchdog's LLM call doesn't block the turn loop — its
+   * verdict, if `flagged`, queues a system reminder for the NEXT turn
+   * via `pendingWatchdogNudge`.
+   *
+   * Lives separately from the four existing guards because:
+   *   - It runs on cheap heuristic + LLM, not pure-heuristic
+   *   - It catches semantic patterns (e.g. "model keeps trying to fix
+   *     a missing import that doesn't exist") the others miss
+   *   - It nudges instead of aborting — the existing guards still
+   *     abort the run when their thresholds hit
+   */
+  private maybeRunWatchdog(turn: number, lastAssistantText: string): void {
+    const watchdog = getGlobalQualityWatchdog();
+    if (!watchdog) return;
+    if (turn - this.lastWatchdogTurn < watchdog.cooldownTurns) return;
+    const trigger = watchdog.shouldRun(this.watchdogRecentNames);
+    if (!trigger) return;
+    this.lastWatchdogTurn = turn;
+    const sessionId = this.sessionId ?? 0;
+    const recentCalls = [...this.watchdogRecentCalls];
+    const text = lastAssistantText.slice(0, 1500);
+    void watchdog
+      .analyze({ sessionId, turn, recentToolCalls: recentCalls, lastAssistantText: text })
+      .then((verdict) => {
+        this.handleWatchdogVerdict(verdict, turn, trigger.suspectTool);
+      })
+      .catch((e) => {
+        console.warn(
+          `[quality-watchdog] analyze failed at turn ${turn}: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      });
+  }
+
+  /**
+   * Apply a watchdog verdict. Persists the row, emits the bus event,
+   * and queues a system reminder when the verdict warrants a nudge.
+   * Pure side-effects — does not throw.
+   */
+  private handleWatchdogVerdict(
+    verdict: import('@mcp/services/quality/index.js').WatchdogVerdict,
+    turn: number,
+    suspectTool: string,
+  ): void {
+    try {
+      const store = getGlobalQualityClassificationStore();
+      if (store) {
+        // Reuse the existing classifier storage so the dashboard /
+        // admin panels show watchdog verdicts alongside the 5-classifier
+        // pipeline rows. `classifier_name='tool_loop'` keeps them
+        // distinguishable.
+        store.insert({
+          session_id: this.sessionId ?? null,
+          company_session_id: this.opts.companySessionId ?? null,
+          agent_run_id: this.opts.companyAgentRunId ?? null,
+          classifier_name: verdict.classifierName,
+          verdict: verdict.verdict,
+          confidence: verdict.confidence ?? null,
+          reason: verdict.reason ?? null,
+          provider_id: verdict.providerId ?? null,
+          model_id: verdict.modelId ?? null,
+          latency_ms: verdict.latencyMs,
+          raw_response: verdict.raw,
+        });
+      }
+    } catch (e) {
+      console.warn(
+        `[quality-watchdog] persistence failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    this.emit('quality_watchdog_alert', {
+      turn,
+      sessionId: this.sessionId ?? 0,
+      suspectTool,
+      verdict: verdict.verdict,
+      confidence: verdict.confidence ?? 0,
+      reason: verdict.reason ?? '',
+      recommendedAction: verdict.recommendedAction,
+      providerId: verdict.providerId ?? '',
+      modelId: verdict.modelId ?? '',
+    });
+    if (
+      verdict.verdict === 'flagged' &&
+      (verdict.recommendedAction === 'nudge' || verdict.recommendedAction === 'stop')
+    ) {
+      const reason = verdict.reason || `Tool \`${suspectTool}\` appears stuck.`;
+      this.pendingWatchdogNudge =
+        `[QUALITY WATCHDOG] ${reason} ` +
+        `Switch strategy: ask the user, try a different tool, or call update_goal/finish if the work is done. ` +
+        `Repeating \`${suspectTool}\` will not produce new information.`;
+      console.warn(
+        `[quality-watchdog] flagged session=${this.opts.sessionId} turn=${turn} ` +
+          `tool=${suspectTool} action=${verdict.recommendedAction}`,
       );
     }
   }
@@ -2860,6 +3051,22 @@ export class CoderRunner extends EventEmitter {
         turn++;
         this.turn = turn;
         this.emit('turn_start', turn);
+
+        // Consume any pending QualityWatchdog nudge (Apêndice 3 — Parte A).
+        // The watchdog ran async at the end of the previous turn; if it
+        // returned `flagged` we queued a system reminder. Push it now so
+        // the model sees it BEFORE generating this turn's tool calls.
+        if (this.pendingWatchdogNudge) {
+          const nudge = this.pendingWatchdogNudge;
+          this.pendingWatchdogNudge = null;
+          try {
+            this.appendSystemReminder(nudge);
+          } catch (e) {
+            console.warn(
+              `[quality-watchdog] reminder injection failed: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        }
 
         // Periodically remind subordinate agents to post a deliverable before stopping.
         if (this.opts.isCompanySubordinate && turn > 1 && turn % SUBORDINATE_REMINDER_INTERVAL === 0) {
@@ -4245,6 +4452,26 @@ export class CoderRunner extends EventEmitter {
         }
 
         this.messages.push({ role: 'tool', content: toolResultBlocks });
+
+        // QualityWatchdog hook (Apêndice 3 — Parte A). Run AFTER tool
+        // execution so isError reflects the actual outcome. The pre-filter
+        // is cheap; the LLM call (if triggered) is fire-and-forget so we
+        // don't block the turn loop. Verdict, if `flagged`, queues a
+        // system reminder for the NEXT turn via `pendingWatchdogNudge`.
+        try {
+          const isErrorPerBlock = toolUseBlocks.map((b) => {
+            const r = toolResultBlocks.find((tr) => 'tool_use_id' in tr && tr.tool_use_id === b.id);
+            return !!(r && 'is_error' in r && r.is_error);
+          });
+          this.recordToolCallsForWatchdog(turn, toolUseBlocks, isErrorPerBlock);
+          this.maybeRunWatchdog(turn, pendingText);
+        } catch (e) {
+          // Defensive — watchdog plumbing must never break a turn.
+          console.warn(
+            `[quality-watchdog] hook failed at turn ${turn}: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+
         // Telemetry: tool-emitting turn. Capture AFTER tool execution so
         // largest_tool_result_chars and paginate_count reflect what actually
         // happened.

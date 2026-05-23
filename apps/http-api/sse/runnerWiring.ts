@@ -86,6 +86,9 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
   runner.on('tool_loop_intervention', (payload) => {
     publish(bus, 'tool_loop_intervention', payload);
   });
+  runner.on('quality_watchdog_alert', (payload) => {
+    publish(bus, 'quality_watchdog_alert', payload);
+  });
   runner.on('done', (reason, error) => {
     if (error) {
       console.error(`[coder] session run failed (${reason}):`, error.message);

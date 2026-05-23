@@ -69,3 +69,17 @@ export {
   setGlobalPolicyEnforcer,
   getGlobalPolicyEnforcer,
 } from './global-policy-enforcer.js';
+
+export {
+  QualityWatchdog,
+  type QualityWatchdogConfig,
+  type WatchdogChatRunner,
+  type WatchdogAnalyzeInput,
+  type WatchdogToolCallSnapshot,
+  type WatchdogVerdict,
+} from './QualityWatchdog.js';
+
+export {
+  setGlobalQualityWatchdog,
+  getGlobalQualityWatchdog,
+} from './global-watchdog.js';

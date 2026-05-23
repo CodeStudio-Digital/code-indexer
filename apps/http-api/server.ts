@@ -47,7 +47,11 @@ import {
   setGlobalQualityResultObserver,
   setGlobalPolicyEnforcer,
   PolicyEnforcer,
+  QualityWatchdog,
+  setGlobalQualityWatchdog,
+  type WatchdogChatRunner,
 } from '@mcp/services/quality/index.js';
+import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import { setGlobalSubAgentCache } from '@mcp/services/sub-agent-cache/index.js';
 import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relevance/index.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
@@ -91,6 +95,66 @@ import {
 import { setCoderWorkerDocDeps } from './sse/coderWorkerPoolSingleton.js';
 import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
+
+/**
+ * Resolve and install the global Quality Watchdog (Apêndice 3 — tool-loop
+ * detector). Reads env config, instantiates the cheap chat provider once,
+ * and registers a `WatchdogChatRunner` that consumes the provider's stream
+ * and joins the text deltas into a single reply string.
+ *
+ * Defensive: if the env disables the watchdog, the provider creation
+ * fails, or the provider stream is unsupported, the global stays null
+ * and the runner short-circuits the watchdog hook with zero overhead.
+ */
+async function wireQualityWatchdog(): Promise<void> {
+  if (process.env.MCP_QUALITY_WATCHDOG_ENABLED === '0') {
+    setGlobalQualityWatchdog(null);
+    return;
+  }
+  const provider = process.env.MCP_QUALITY_WATCHDOG_PROVIDER ?? 'anthropic';
+  const model = process.env.MCP_QUALITY_WATCHDOG_MODEL ?? 'claude-haiku-4-5';
+
+  let chatProvider;
+  try {
+    chatProvider = await createCoderProvider(provider, model);
+  } catch (e) {
+    console.warn(
+      `[quality-watchdog] provider creation failed (${provider}/${model}): ` +
+        `${e instanceof Error ? e.message : String(e)} — watchdog disabled`,
+    );
+    setGlobalQualityWatchdog(null);
+    return;
+  }
+
+  const runChat: WatchdogChatRunner = async ({ system, user, maxOutputTokens }) => {
+    // The runner uses the AsyncIterable<ChatDelta> stream contract.
+    // For the watchdog we only need the final text, so we consume the
+    // stream and concatenate text deltas. No tools, no thinking.
+    const stream = chatProvider.chat({
+      system,
+      messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
+      tools: [],
+    });
+    let text = '';
+    for await (const delta of stream) {
+      if (delta.type === 'text_delta') text += delta.text;
+      if (maxOutputTokens && text.length > maxOutputTokens * 4) break;
+    }
+    return { text };
+  };
+
+  setGlobalQualityWatchdog(
+    new QualityWatchdog({
+      provider,
+      model,
+      runChat,
+      prefilterCount: Number(process.env.MCP_QUALITY_WATCHDOG_PREFILTER_COUNT ?? 4),
+      prefilterWindow: Number(process.env.MCP_QUALITY_WATCHDOG_PREFILTER_WINDOW ?? 5),
+      cooldownTurns: Number(process.env.MCP_QUALITY_WATCHDOG_COOLDOWN_TURNS ?? 5),
+    }),
+  );
+  console.log(`[quality-watchdog] wired (provider=${provider}, model=${model})`);
+}
 
 export function createApp() {
   const deps = createDeps();
@@ -145,6 +209,23 @@ export function createApp() {
   } else {
     setGlobalPolicyEnforcer(undefined);
   }
+
+  // Quality Watchdog — lightweight LLM that detects tool-loop / stuck
+  // progress patterns. Gated by `MCP_QUALITY_WATCHDOG_ENABLED` (default
+  // ON when provider+model are configured) so operators can disable.
+  // Picks its own cheap model via `MCP_QUALITY_WATCHDOG_PROVIDER` and
+  // `MCP_QUALITY_WATCHDOG_MODEL` (defaults to anthropic/claude-haiku-4-5)
+  // so the main runner's tokens aren't spent on it.
+  //
+  // Fire-and-forget construction: provider creation is async (OAuth
+  // shapes), so we kick it off in the background. If it fails, the
+  // global stays null and the runner short-circuits — no behaviour
+  // change vs. having the watchdog off.
+  void wireQualityWatchdog().catch((e) => {
+    console.warn(
+      `[quality-watchdog] boot wiring failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  });
   // SubAgent result cache — installed unconditionally so even when the
   // flag is off, future toggles take effect immediately. Enable bit is
   // separate so the spawn handler can short-circuit before the lookup.
