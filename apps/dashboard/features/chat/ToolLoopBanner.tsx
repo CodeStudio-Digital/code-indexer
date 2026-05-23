@@ -23,7 +23,11 @@ import type { ToolLoopIntervention } from '../../hooks/agent-stream/types.js';
 import { cn } from '../../lib/utils.js';
 
 interface ToolLoopBannerProps {
-  interventions: readonly ToolLoopIntervention[];
+  /**
+   * May be `undefined` while the hook bootstraps — guard for it so a
+   * race during HMR or a future API drift doesn't crash the chat view.
+   */
+  interventions: readonly ToolLoopIntervention[] | undefined;
 }
 
 const KIND_LABELS: Record<ToolLoopIntervention['kind'], string> = {
@@ -34,7 +38,7 @@ const KIND_LABELS: Record<ToolLoopIntervention['kind'], string> = {
 };
 
 export function ToolLoopBanner({ interventions }: ToolLoopBannerProps) {
-  if (interventions.length === 0) return null;
+  if (!interventions || interventions.length === 0) return null;
   return (
     <div className="flex flex-col gap-1 border-b border-border/60 bg-muted/30 px-3 py-2">
       {interventions.map((iv, idx) => (

@@ -272,6 +272,7 @@ export function useAgentStream(sessionId: number | null) {
     pipelineRuntime: active.pipelineRuntime,
     sidebarRefreshTick: active.sidebarRefreshTick,
     snapshotTick: active.snapshotTick,
+    toolLoopInterventions: active.toolLoopInterventions,
     sendMessage,
     sendWithInterject,
     dismissInteractionPending,
