@@ -165,6 +165,15 @@ export interface ChatUsage {
   cache_read_input_tokens?: number;
   /** Tokens spent on thinking/reasoning (Gemini thinkingConfig, Anthropic extended thinking). */
   thinking_tokens?: number;
+  /**
+   * deepThink — tokens spent on the auxiliary (cheap) model that produces
+   * the pre-thought block. Accumulated separately from `input_tokens` /
+   * `output_tokens` so cost dashboards can split main vs auxiliary spend.
+   * Only populated on `RunResult.totalUsage`, never on a single ChatRequest.
+   */
+  aux_input_tokens?: number;
+  aux_output_tokens?: number;
+  aux_cache_read_input_tokens?: number;
 }
 
 export interface ChatProviderResponseMeta {

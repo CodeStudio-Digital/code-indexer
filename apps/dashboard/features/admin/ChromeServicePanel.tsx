@@ -14,6 +14,7 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, Play, Square, RotateCcw, Check, AlertCircle, Copy } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { copyText } from '../../lib/clipboard.js';
 import {
   fetchChromeService,
   patchChromeService,
@@ -213,9 +214,11 @@ function EndpointPanel({ state }: { state: ChromeServiceState }) {
     );
   }
   function copy() {
-    void navigator.clipboard.writeText(state.wsEndpoint).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+    void copyText(state.wsEndpoint).then((ok) => {
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }
     });
   }
   return (

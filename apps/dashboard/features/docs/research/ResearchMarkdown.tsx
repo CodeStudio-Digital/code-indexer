@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check } from 'lucide-react';
+import { copyText } from '../../../lib/clipboard.js';
 import { cn } from '../../../lib/utils.js';
 import {
   ensureLang,
@@ -141,12 +142,9 @@ function HighlightedBlock({ code, lang }: HighlightedBlockProps) {
   }, [code, lang, theme, tooLarge]);
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(code);
+    if (await copyText(code)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
     }
   }
 

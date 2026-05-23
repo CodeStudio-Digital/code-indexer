@@ -3,6 +3,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { resolve as pathResolve, relative as pathRelative, isAbsolute } from 'node:path';
 import { statSync as fsStatSync } from 'node:fs';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
+import { runPreThink } from '@mcp/code-agent/providers/auxiliary-pre-think.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type {
   AgentMessage,
@@ -16,6 +17,7 @@ import type {
   ToolResultBlock,
 } from '@mcp/code-agent/core/messages.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import { resolveHeartbeatIntervalMs, resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
 import {
   compactMessages,
   PRUNE_PROTECT,
@@ -50,7 +52,7 @@ import { isSummarizerEnabled, summarizeSpan, summarizeSpanV2, renderSummary, ren
 import { computeSnapshot, type TokenSnapshot } from '@mcp/code-agent/core/token-accounting.js';
 import { filterByTiers, profileToTiers, type ToolTier, type CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 import { terseDescription } from '@mcp/code-agent/tools/descriptions.js';
-import { applySmartReducer } from '@mcp/code-agent/core/smart-reducers.js';
+import { applySmartReducer, reducePreThinkInHistory } from '@mcp/code-agent/core/smart-reducers.js';
 import { getModelContextWindow, getModelMaxTools, getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilities.js';
 import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { resolveTemperature } from '@mcp/code-agent/inference/temperature.js';
@@ -101,7 +103,8 @@ export type TransitionKind =
   | 'pre-read-allowed-elided'
   | 'pre-read-allowed-mutation'
   | 'pre-read-auto-downgraded'
-  | 'stop-guard-nudge';
+  | 'stop-guard-nudge'
+  | 'tool-timeout';
 
 /**
  * Stop reasons (PR-4, Row 2). Superset of the original 5 — additions are
@@ -205,6 +208,45 @@ export interface RunnerOptions {
    * can pick a budget per role without restarting the runner.
    */
   thinkingBudgetTokens?: number;
+  /**
+   * Simulated deep-thinking ("deepThink") — orthogonal to `thinking`.
+   *
+   * When true, BEFORE each main-model turn the runner asks a cheaper
+   * auxiliary model to write a few sentences of inner reasoning, then
+   * prefills an `<thinking data-source="aux">…</thinking>` block into the
+   * messages. The main model continues from that scratchpad.
+   *
+   * Independent of `thinking` (native extended-thinking from the API):
+   * both can be on, both can be off. Coexist additively.
+   */
+  deepThink?: boolean;
+  /** Model id for the auxiliary pre-think call. Default 'claude-haiku-4-5-20251001'. */
+  deepThinkModel?: string;
+  /** Provider name for the auxiliary call, resolved via `createProvider`. Default 'anthropic'. */
+  deepThinkProvider?: string;
+  /**
+   * When false (default), skip the pre-think on turns whose last message is
+   * a tool_result — those turns are usually pure routing to the next tool
+   * call and the auxiliary's output would be wasted budget.
+   */
+  preThinkOnToolResults?: boolean;
+  /** Hard timeout for the auxiliary call (ms). Default 8000. */
+  preThinkTimeoutMs?: number;
+  /**
+   * Persist injected `<thinking data-source="aux">` blocks into `this.messages`
+   * so future turns of the main model see the accumulated reasoning. Default
+   * true. Growth is capped by `reducePreThink` in smart-reducers, which keeps
+   * only `preThinkHistoryWindow` most recent ones.
+   */
+  persistPreThoughts?: boolean;
+  /** How many pre-think blocks to keep in history when `persistPreThoughts`. Default 3. */
+  preThinkHistoryWindow?: number;
+  /**
+   * Minimum approximate token count of the last user input required to fire
+   * the auxiliary pre-think. Default 0 (no filter). When > 0, short inputs
+   * ("ok", "yes", "try again") skip the auxiliary — simple heuristic gate.
+   */
+  preThinkMinInputTokens?: number;
   /** Fallback chain for automatic provider recovery on persistent errors. */
   fallbackChain?: import('@mcp/code-agent/core/fallback.js').FallbackChain;
   /** Factory function to create a new provider for fallback. */
@@ -802,6 +844,31 @@ export function approxChars(messages: AgentMessage[]): number {
  * only on the original size, not on the current turn or surrounding context —
  * so once a block is created it never changes.
  */
+/**
+ * Decide whether a tool result should be spilled to the side-file store
+ * (`ToolOutputStore`) so the agent can recover the full content later via
+ * `get_tool_output(id)`. Two triggers:
+ *
+ *   1. **Size**: content exceeds the push-time cap (would otherwise be
+ *      truncated to head + marker by buildToolResultBlock).
+ *   2. **Failure**: the call returned an error, regardless of size.
+ *      Short failure lines ("FAILED tests/foo.py::bar") routinely hide
+ *      the full stack trace behind a smart-reducer or truncation marker
+ *      — preserving the raw output unconditionally on isError lets the
+ *      agent inspect the trace without rerunning the failing command.
+ *
+ * Extracted from the runner's tool-dispatch loop (around the
+ * `toolResultBlocks.push(buildToolResultBlock(...))` site) to keep the
+ * spill condition independently testable. Pure function — caller still
+ * gates on `toolOutputStore` availability separately.
+ */
+export function shouldSpillToolOutput(
+  result: { content: string; isError?: boolean },
+  cap: number,
+): boolean {
+  return result.content.length > cap || !!result.isError;
+}
+
 export function buildToolResultBlock(
   toolUseId: string,
   content: string,
@@ -1051,6 +1118,32 @@ export interface RunnerEvents {
   thinking_delta: (text: string) => void;
   tool_call_start: (id: string, name: string, input: Record<string, unknown>) => void;
   tool_call_result: (id: string, name: string, result: { content: string; isError?: boolean; subUsage?: ChatUsage }, durationMs: number) => void;
+  /**
+   * Periodic heartbeat fired while a tool is in flight, and explicit
+   * progress reports from cooperating tools (via `ctx.reportProgress`).
+   *
+   * Two roles:
+   *   1. Keeps the SSE stream alive so the dashboard's StuckBanner doesn't
+   *      misread legitimately long tool runs as worker stalls.
+   *   2. Surfaces "still working" feedback to the user — with an optional
+   *      substantive `note` ("fetched 3/10 docs") when the tool emits one.
+   *
+   * Suppressed for tools whose timeoutMs is `Infinity` (interactive /
+   * repeatable) — there the runner is correctly idle, and a heartbeat
+   * would confuse the UI.
+   */
+  tool_progress: (payload: { id: string; name: string; elapsedMs: number; note?: string }) => void;
+  /**
+   * Fires once per tool block AFTER smart-reducer + buildToolResultBlock
+   * shaping is complete, carrying the size the LLM actually sees in the
+   * tool_result block. Pair with `tool_call_result` (which fires with the
+   * RAW size) to compute per-call savings:
+   *   savings = result.content.length - shapedChars
+   * Index.ts merges this into the pending tool_calls entry before the
+   * turn flushes via persistAssistantTurn — see the matching listener
+   * there for the persistence path.
+   */
+  tool_call_finalized: (id: string, info: { shapedChars: number }) => void;
   message_complete: (message: AgentMessage, usage: ChatUsage | null) => void;
   turn_start: (turn: number) => void;
   /**
@@ -1304,6 +1397,40 @@ export interface RunnerEvents {
     /** Short human reason for UI. */
     reason: string;
   }) => void;
+  /**
+   * deepThink — emitted right before the auxiliary (cheap) model is asked
+   * to produce a pre-thought for the upcoming main-model turn. Only fires
+   * when `RunnerOptions.deepThink` is on AND `shouldRunPreThink` passes.
+   */
+  pre_think_started: (payload: {
+    runId: string;
+    turn: number;
+    model: string;
+    provider: string;
+  }) => void;
+  /** Streamed chunk of the auxiliary's pre-thought text. UI renders these
+   *  live, mirroring how `thinking_delta` works for native extended-thinking. */
+  pre_think_delta: (payload: {
+    runId: string;
+    turn: number;
+    text: string;
+  }) => void;
+  /** Auxiliary call finished successfully. `text` is the full concatenated
+   *  pre-thought (already trimmed). `usage` is the auxiliary's token usage —
+   *  the runner also accumulates it into `RunResult.totalUsage.aux_*`. */
+  pre_think_completed: (payload: {
+    runId: string;
+    turn: number;
+    text: string;
+    usage: ChatUsage | undefined;
+  }) => void;
+  /** Auxiliary call failed or timed out. The main-model turn proceeds
+   *  WITHOUT the prefilled `<thinking>` block — degrade silently. */
+  pre_think_failed: (payload: {
+    runId: string;
+    turn: number;
+    error: string;
+  }) => void;
 }
 
 /**
@@ -1318,6 +1445,8 @@ export class CoderRunner extends EventEmitter {
   private opts: RunnerOptions;
   private readonly maxTurns: number;
   private aborted = false;
+  /** Lazy cache for the deepThink auxiliary provider. Reset by `setDeepThink`. */
+  private auxProvider?: ChatProvider;
   /**
    * Live turn counter — mirrored from the loop-local `turn` variable so
    * external observers (e.g. SnapshotRecorder via ctx.runner) can stamp
@@ -1606,6 +1735,141 @@ export class CoderRunner extends EventEmitter {
       console.warn(
         `[coder] tool_loop_intervention emit failed: ${e instanceof Error ? e.message : String(e)}`,
       );
+    }
+  }
+
+  /**
+   * Invoke a tool with three guards layered on top of `registry.invoke`:
+   *
+   *   1. **Heartbeat** — emit a `tool_progress` event every
+   *      `MCP_TOOL_HEARTBEAT_MS` (default 5s) so the SSE stream stays alive
+   *      and the dashboard's StuckBanner stops misreading legitimately slow
+   *      tools as worker stalls.
+   *   2. **Per-call timeout** — race the handler against a `setTimeout` whose
+   *      duration is decided by `resolveToolTimeoutMs(tool)`. On expiry, the
+   *      runner resolves with a synthetic `isError` ToolResult and aborts a
+   *      per-call AbortController so cooperative tools (those forwarding
+   *      `ctx.signal` to `fetch`/child processes) can stop their work.
+   *   3. **Per-call AbortController** — chained off the session signal so a
+   *      whole-session abort cancels the in-flight tool too. Lives only for
+   *      this call; cleaned up in the `finally`.
+   *
+   * Tools with `Infinity` timeout (interactive `submit_plan`/`ask_user`,
+   * repeatable `wait_for_*`) bypass BOTH the timeout and the heartbeat —
+   * the runner is correctly idle there, and a heartbeat would confuse the
+   * UI by claiming "still running" while we're really waiting on a human.
+   *
+   * Caveat: `Promise.race` cannot kill a handler whose Promise simply
+   * never resolves. We abort `perCallCtrl` to give cooperative handlers a
+   * chance to clean up; non-cooperative handlers will leak until the worker
+   * process is replaced. That's unavoidable without thread-level kill.
+   */
+  private async invokeToolWithGuards(
+    block: { id: string; name: string; input: Record<string, unknown> },
+  ): Promise<{ result: { content: string; isError?: boolean; subUsage?: ChatUsage; extraUserBlocks?: ContentBlock[] }; durationMs: number; timedOut: boolean }> {
+    const startTs = Date.now();
+    const tool = this.opts.registry.get(block.name);
+    const timeoutMs = tool ? resolveToolTimeoutMs(tool) : Infinity;
+    const heartbeatMs = resolveHeartbeatIntervalMs();
+    const useHeartbeat = Number.isFinite(timeoutMs) && heartbeatMs > 0;
+
+    // Chain a per-call AbortController off the session signal. Any of:
+    // session abort, timeout fire, or the runner being torn down triggers
+    // it. We DON'T mutate `this.opts.toolContext.signal` — multiple tool
+    // calls share that context and a sibling abort would propagate.
+    const perCallCtrl = new AbortController();
+    const parentSignal = this.opts.toolContext.signal;
+    const onParentAbort = () => {
+      try { perCallCtrl.abort(parentSignal?.reason); } catch { /* already aborted */ }
+    };
+    if (parentSignal) {
+      if (parentSignal.aborted) {
+        try { perCallCtrl.abort(parentSignal.reason); } catch { /* */ }
+      } else {
+        parentSignal.addEventListener('abort', onParentAbort, { once: true });
+      }
+    }
+
+    const callCtx: ToolContext = {
+      ...this.opts.toolContext,
+      signal: perCallCtrl.signal,
+      reportProgress: (note: string) => {
+        const trimmed = typeof note === 'string'
+          ? (note.length > 200 ? note.slice(0, 200) + '…' : note)
+          : '';
+        try {
+          this.emit('tool_progress', {
+            id: block.id,
+            name: block.name,
+            elapsedMs: Date.now() - startTs,
+            note: trimmed,
+          });
+        } catch (e) {
+          console.warn(`[coder] tool_progress (note) emit failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      },
+    };
+
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    if (useHeartbeat) {
+      heartbeatTimer = setInterval(() => {
+        try {
+          this.emit('tool_progress', {
+            id: block.id,
+            name: block.name,
+            elapsedMs: Date.now() - startTs,
+          });
+        } catch (e) {
+          console.warn(`[coder] tool_progress (heartbeat) emit failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }, heartbeatMs);
+    }
+
+    let timedOut = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = Number.isFinite(timeoutMs)
+      ? new Promise<{ content: string; isError: true }>((resolve) => {
+          timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            try { perCallCtrl.abort(new Error('tool timeout')); } catch { /* */ }
+            const secs = Math.round(timeoutMs / 1000);
+            resolve({
+              content:
+                `Tool '${block.name}' timed out after ${secs}s. ` +
+                `The tool may have hung on an external resource (network, sub-runner, or remote API). ` +
+                `Consider: (a) retry with narrower arguments, (b) try a different tool, ` +
+                `or (c) ask the user via ask_user how to proceed.`,
+              isError: true,
+            });
+          }, timeoutMs);
+        })
+      : null;
+
+    try {
+      const racers: Array<Promise<{ content: string; isError?: boolean; subUsage?: ChatUsage; extraUserBlocks?: ContentBlock[] }>> = [
+        this.opts.registry.invoke(block.name, block.input, callCtx),
+      ];
+      if (timeoutPromise) racers.push(timeoutPromise);
+      const result = await Promise.race(racers);
+      return { result, durationMs: Date.now() - startTs, timedOut };
+    } catch (err) {
+      // registry.invoke already wraps handler throws into isError results;
+      // this catch is the last-line defense for failures inside the race
+      // plumbing itself (extremely rare).
+      return {
+        result: {
+          content: `Tool '${block.name}' threw unexpectedly during dispatch: ${err instanceof Error ? err.message : String(err)}`,
+          isError: true,
+        },
+        durationMs: Date.now() - startTs,
+        timedOut: false,
+      };
+    } finally {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (parentSignal) {
+        try { parentSignal.removeEventListener('abort', onParentAbort); } catch { /* */ }
+      }
     }
   }
 
@@ -2440,7 +2704,13 @@ export class CoderRunner extends EventEmitter {
   private assembleMessagesForChat(
     compactionLimits: import('@mcp/code-agent/core/compaction.js').CompactionLimits | undefined,
   ): AgentMessage[] {
-    const compacted = compactHistoryForLLM(this.messages, compactionLimits);
+    // deepThink: cap accumulated pre-thoughts BEFORE compaction so the
+    // compactor never sees the stale ones.
+    const windowK = this.opts.preThinkHistoryWindow ?? 3;
+    const messagesAfterPreThinkCap = this.opts.persistPreThoughts === false
+      ? this.messages
+      : reducePreThinkInHistory(this.messages, windowK);
+    const compacted = compactHistoryForLLM(messagesAfterPreThinkCap, compactionLimits);
 
     const activeSkillsBlock = this.buildActiveSkillsBlockForLastUser(compacted);
     const activeContextBlock = this.opts.agentLoopV2
@@ -2791,6 +3061,140 @@ export class CoderRunner extends EventEmitter {
    */
   setThinking(value: boolean | undefined): void {
     this.opts = { ...this.opts, thinking: value };
+  }
+
+  /**
+   * Toggle deepThink (simulated deep-thinking via auxiliary model) for
+   * subsequent turns. Optionally swap the auxiliary model/provider — the
+   * cached `auxProvider` instance is invalidated so the next turn re-resolves
+   * via `createProvider`.
+   */
+  setDeepThink(
+    value: boolean | undefined,
+    opts?: { model?: string; provider?: string },
+  ): void {
+    this.opts = {
+      ...this.opts,
+      deepThink: value,
+      ...(opts?.model ? { deepThinkModel: opts.model } : {}),
+      ...(opts?.provider ? { deepThinkProvider: opts.provider } : {}),
+    };
+    this.auxProvider = undefined;
+  }
+
+  /** Lazy-resolve the auxiliary provider used by deepThink. Returns
+   *  undefined when no `createProvider` factory was wired — that disables
+   *  deepThink silently rather than throwing. */
+  private async resolveAuxProvider(): Promise<ChatProvider | undefined> {
+    if (this.auxProvider) return this.auxProvider;
+    if (!this.opts.createProvider) return undefined;
+    const model = this.opts.deepThinkModel ?? 'claude-haiku-4-5-20251001';
+    const providerName = this.opts.deepThinkProvider ?? 'anthropic';
+    this.auxProvider = await this.opts.createProvider(providerName, model);
+    return this.auxProvider;
+  }
+
+  /** Gate for the per-turn auxiliary call. Returns false when the turn is
+   *  a tool_result follow-up (unless opted-in), or when the trailing user
+   *  text is too short / a trivial confirmation. */
+  private shouldRunPreThink(messages: AgentMessage[]): boolean {
+    if (messages.length === 0) return false;
+    const last = messages[messages.length - 1];
+    const isToolResult = Array.isArray(last.content)
+      && last.content.some((b) => b?.type === 'tool_result');
+    if (isToolResult && !this.opts.preThinkOnToolResults) return false;
+    const minTokens = this.opts.preThinkMinInputTokens ?? 0;
+    if (minTokens > 0 && last.role === 'user') {
+      const userText = last.content
+        .filter((b): b is { type: 'text'; text: string } => b?.type === 'text')
+        .map((b) => b.text)
+        .join(' ')
+        .trim();
+      const approxTokens = Math.ceil(userText.length / 4);
+      if (approxTokens < minTokens) return false;
+      if (/^(ok|sim|s|yes|y|n[ãa]o|no|continue|continua|vai|go)\s*[!.?]*$/i.test(userText)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Orchestrates one auxiliary pre-think turn: resolve provider, gate,
+   *  emit events, swallow errors so the main turn never blocks. Returns the
+   *  pre-thought text (empty string when skipped/failed).
+   *
+   *  Failures (provider missing, factory throws, aux call throws/times out)
+   *  ALWAYS emit `pre_think_failed` with a human-readable reason so the
+   *  operator can see in the Worker Log why deepThink degraded — silent
+   *  degradation is intentional for the main turn (we never block it),
+   *  but never silent for observability. */
+  private async runAuxiliaryPreThink(args: {
+    messages: AgentMessage[];
+    toolNames: string[];
+    turn: number;
+  }): Promise<{ text: string; usage: ChatUsage | undefined }> {
+    if (!this.shouldRunPreThink(args.messages)) {
+      return { text: '', usage: undefined };
+    }
+    const model = this.opts.deepThinkModel ?? 'claude-haiku-4-5-20251001';
+    const providerName = this.opts.deepThinkProvider ?? 'anthropic';
+
+    let provider: ChatProvider | undefined;
+    try {
+      provider = await this.resolveAuxProvider();
+    } catch (err) {
+      // Factory threw — provider not registered, bad credentials, etc.
+      this.emit('pre_think_failed', {
+        runId: this.runId,
+        turn: args.turn,
+        error: `auxiliary provider could not be constructed (${providerName}/${model}): ${err instanceof Error ? err.message : String(err)}`,
+      });
+      return { text: '', usage: undefined };
+    }
+    if (!provider) {
+      // No createProvider factory wired (test/embed harness, or the
+      // operator forgot to enable any provider at all).
+      this.emit('pre_think_failed', {
+        runId: this.runId,
+        turn: args.turn,
+        error: 'auxiliary provider not available: no createProvider factory wired into RunnerOptions (cannot build aux model)',
+      });
+      return { text: '', usage: undefined };
+    }
+
+    this.emit('pre_think_started', {
+      runId: this.runId,
+      turn: args.turn,
+      model,
+      provider: providerName,
+    });
+    try {
+      const result = await runPreThink({
+        provider,
+        messages: args.messages,
+        toolNames: args.toolNames,
+        timeoutMs: this.opts.preThinkTimeoutMs ?? 8000,
+        onDelta: (chunk) => this.emit('pre_think_delta', {
+          runId: this.runId,
+          turn: args.turn,
+          text: chunk,
+        }),
+      });
+      this.emit('pre_think_completed', {
+        runId: this.runId,
+        turn: args.turn,
+        text: result.text,
+        usage: result.usage,
+      });
+      return result;
+    } catch (err) {
+      this.emit('pre_think_failed', {
+        runId: this.runId,
+        turn: args.turn,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { text: '', usage: undefined };
+    }
   }
 
   /**
@@ -3333,6 +3737,10 @@ export class CoderRunner extends EventEmitter {
           reason: tempResolution.reason,
         });
 
+        // deepThink: cache the auxiliary's pre-thought for THIS turn so the
+        // 429/5xx retry loop below doesn't refire the auxiliary every attempt.
+        let preThoughtForThisTurn: { text: string; usage: ChatUsage | undefined } | null = null;
+
         providerAttempt: while (true) {
           try {
             const messagesForChat = this.assembleMessagesForChat(compactionLimits);
@@ -3358,6 +3766,77 @@ export class CoderRunner extends EventEmitter {
             const effectiveSystem = qualitySuffix
               ? `${this.opts.systemPrompt}${qualitySuffix}`
               : this.opts.systemPrompt;
+
+            // ── deepThink: run the auxiliary model BEFORE the main call ────
+            // First attempt only; subsequent retries reuse the cached output.
+            if (this.opts.deepThink && preThoughtForThisTurn === null) {
+              preThoughtForThisTurn = await this.runAuxiliaryPreThink({
+                messages: messagesForChat,
+                toolNames: tools.map((t) => t.name),
+                turn,
+              });
+              if (preThoughtForThisTurn.usage) {
+                const u = preThoughtForThisTurn.usage;
+                totalUsage.aux_input_tokens = (totalUsage.aux_input_tokens ?? 0) + (u.input_tokens ?? 0);
+                totalUsage.aux_output_tokens = (totalUsage.aux_output_tokens ?? 0) + (u.output_tokens ?? 0);
+                totalUsage.aux_cache_read_input_tokens =
+                  (totalUsage.aux_cache_read_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+              }
+            }
+            if (preThoughtForThisTurn) {
+              const text = preThoughtForThisTurn.text;
+              const usage = preThoughtForThisTurn.usage;
+              // Three states worth distinguishing:
+              //   - has text   → prefill into messagesForChat AND persist
+              //   - empty + usage>0 → aux WAS billed but returned no output
+              //     (typical of reasoning models that spent the whole budget
+              //     on reasoning_tokens, e.g. gpt-5 reasoning='high'). Don't
+              //     prefill (nothing to inject), but DO persist a marker so
+              //     the operator sees in the transcript that aux fired and
+              //     came back empty — otherwise it looks like deepThink
+              //     silently skipped that turn.
+              //   - empty + no usage → skipped by gate or hard-failed before
+              //     billing. Nothing to do; the pre_think_failed event already
+              //     surfaced it on the Worker Log.
+              const hasText = text.length > 0;
+              const wasBilled = !!usage && ((usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)) > 0;
+              if (hasText || wasBilled) {
+                const model = this.opts.deepThinkModel ?? 'claude-haiku-4-5-20251001';
+                const emptyAttr = hasText ? '' : ' data-empty="true"';
+                const body = hasText
+                  ? text
+                  : '(empty — auxiliary returned no output text; it likely spent the whole budget on reasoning tokens. Increase output budget or pick a non-reasoning aux model.)';
+                const prefillBlock: ContentBlock = {
+                  type: 'text',
+                  text: `<thinking data-source="aux" data-model="${model}"${emptyAttr}>\n${body}\n</thinking>\n\n`,
+                };
+                if (hasText) {
+                  // Only push to the main-model context when there's actual
+                  // reasoning. An empty block adds zero signal and just costs
+                  // input tokens on the main call.
+                  messagesForChat.push({ role: 'assistant', content: [prefillBlock] });
+                }
+                if (this.opts.persistPreThoughts !== false) {
+                  // No isMeta — we WANT this visible in the transcript so the
+                  // user can see WHY the main model went the way it did. The
+                  // MessageView renders it as a compact emerald block via the
+                  // `<thinking data-source="aux"…>` marker in the text.
+                  const preThinkMsg: AgentMessage = { role: 'assistant', content: [prefillBlock] };
+                  this.messages.push(preThinkMsg);
+                  if (this.opts.sessionStore && this.opts.sessionId !== undefined) {
+                    try {
+                      this.opts.sessionStore.appendMessage(this.opts.sessionId, preThinkMsg);
+                    } catch (e) {
+                      console.warn(
+                        `[coder] pre-think persistence failed: ${e instanceof Error ? e.message : String(e)}`,
+                      );
+                    }
+                  }
+                }
+              }
+            }
+            // ───────────────────────────────────────────────────────────────
+
             const stream = this.opts.provider.chat({
               system: effectiveSystem,
               messages: messagesForChat,
@@ -3914,7 +4393,16 @@ export class CoderRunner extends EventEmitter {
         for (const block of toolUseBlocks) {
           if (this.aborted) break;
           this.emit('tool_call_start', block.id, block.name, block.input);
-
+          // Per-iteration emit-guard: every `tool_call_start` MUST be
+          // followed by exactly one `tool_call_result` (and a matching
+          // `tool_call_finalized`). The catch block below emits a fallback
+          // synthetic result if the dispatch body throws before reaching
+          // its own emit — without it, the UI's in-flight tool spinner
+          // would hang forever and the StuckBanner would fire. Each emit
+          // site below sets this flag so the catch knows the contract is
+          // already satisfied.
+          let emittedFallback = false;
+          try {
           // PR-5 (Row 32) — pre-read enforcement, smarter variant.
           // When the same (path, slice) read has been issued recently, the
           // legacy guard refused outright. The smarter variant evaluates
@@ -4011,6 +4499,7 @@ export class CoderRunner extends EventEmitter {
                     content: downgrade,
                     isError: false,
                   }, 0);
+                  emittedFallback = true;
                   continue; // skip dispatch
                 } else {
                   // Layer 4: rich refusal — pointer + mtime + preview.
@@ -4049,6 +4538,7 @@ export class CoderRunner extends EventEmitter {
                     content: refusal,
                     isError: true,
                   }, 0);
+                  emittedFallback = true;
                   continue; // skip dispatch
                 }
               }
@@ -4119,6 +4609,7 @@ export class CoderRunner extends EventEmitter {
                 content: refusal,
                 isError: true,
               }, 0);
+              emittedFallback = true;
               this.emitToolLoopIntervention({
                 kind: 'dup-call-cap',
                 turn,
@@ -4167,6 +4658,7 @@ export class CoderRunner extends EventEmitter {
                   `or rephrase the operation to avoid the blocked pattern.`,
                 isError: true,
               }, 0);
+              emittedFallback = true;
               continue; // skip the dispatch, classifier, telemetry — same control flow as the existing refusal path above
             }
           }
@@ -4178,13 +4670,19 @@ export class CoderRunner extends EventEmitter {
           });
           const start = Date.now();
           let result;
+          // Per-call timeout flag — set by invokeToolWithGuards when the
+          // race against the timeout promise fires. Used after the emit to
+          // record a `tool-timeout` transition for telemetry.
+          let timedOut = false;
           // Look up the tool definition so the policy module can read its
           // metadata. `registry.get` returns undefined for unknown names —
           // the registry's own `invoke` falls back to an Unknown-tool error
           // which we surface to the model as a normal tool result.
           const toolDef = this.opts.registry.get(block.name);
           if (!toolDef) {
-            result = await this.opts.registry.invoke(block.name, block.input, this.opts.toolContext);
+            const guarded = await this.invokeToolWithGuards(block);
+            result = guarded.result;
+            if (guarded.timedOut) timedOut = true;
           } else {
             const policyCtx: PolicyContext = {
               planMode: !!this.opts.planMode,
@@ -4250,7 +4748,9 @@ export class CoderRunner extends EventEmitter {
               // Either the gate is off, or this is the retry — drop the
               // pending-confirm marker so a third attempt would re-prompt.
               if (confirmHash) this.pendingConfirms.delete(confirmHash);
-              result = await this.opts.registry.invoke(block.name, block.input, this.opts.toolContext);
+              const guarded = await this.invokeToolWithGuards(block);
+              result = guarded.result;
+              if (guarded.timedOut) timedOut = true;
             } else if (
               decision.reason === 'plan_mode'
               && decision.metadata.scopeAware
@@ -4264,7 +4764,9 @@ export class CoderRunner extends EventEmitter {
               const violators = findScopeViolations(candidatePaths, scopeFiles, isPathInsideScope);
               const allInside = candidatePaths.length > 0 && violators.length === 0;
               if (allInside) {
-                result = await this.opts.registry.invoke(block.name, block.input, this.opts.toolContext);
+                const guarded = await this.invokeToolWithGuards(block);
+                result = guarded.result;
+                if (guarded.timedOut) timedOut = true;
               } else {
                 this.emit('blocked', {
                   runId: this.runId,
@@ -4308,6 +4810,13 @@ export class CoderRunner extends EventEmitter {
             );
           }
           this.emit('tool_call_result', block.id, block.name, result, durationMs);
+          emittedFallback = true;
+          if (timedOut) {
+            this.setTransition('tool-timeout');
+            console.warn(
+              `[coder] tool '${block.name}' timed out at turn ${turn} — synthetic isError result emitted`,
+            );
+          }
           // Hook: after tool call
           await this.opts.hookRegistry?.fireToolCall({
             sessionId: 0, projectName: '', provider: this.opts.provider.name ?? 'unknown',
@@ -4315,14 +4824,14 @@ export class CoderRunner extends EventEmitter {
             toolName: block.name, toolArgs: block.input, phase: 'after',
             result, durationMs,
           });
-          // Side-file truncation: if the content is too large AND the runner
-          // has a tool output store wired in, persist the full content and
-          // include the output_id in the truncation marker. This lets the
-          // agent retrieve the elided portion via `get_tool_output(id)` on
-          // demand — without making every large output permanently visible.
+          // Side-file truncation: decide via `shouldSpillToolOutput` so
+          // the policy (size > cap OR isError) is independently testable.
+          // Spilling on errors preserves stack traces that would otherwise
+          // get truncated to a useless head line — see the helper's docs
+          // for the full rationale.
           const cap = this.effectivePushTimeCap;
           let persistedId: string | null = null;
-          if (result.content.length > cap && this.opts.toolContext.toolOutputStore) {
+          if (shouldSpillToolOutput(result, cap) && this.opts.toolContext.toolOutputStore) {
             // Persist the RAW content so get_tool_output can return everything;
             // the reducer below only shapes what goes into the prompt.
             persistedId = this.opts.toolContext.toolOutputStore.put(result.content);
@@ -4449,11 +4958,53 @@ export class CoderRunner extends EventEmitter {
             }
           }
 
-          toolResultBlocks.push(
-            buildToolResultBlock(block.id, shapedContent, shapedIsError, cap, persistedId ?? undefined),
+          const finalBlock = buildToolResultBlock(
+            block.id,
+            shapedContent,
+            shapedIsError,
+            cap,
+            persistedId ?? undefined,
           );
+          toolResultBlocks.push(finalBlock);
+          // Emit shaped-size for savings telemetry. The raw size went out
+          // via `tool_call_result` above (with the unshaped `result`);
+          // index.ts merges these on the matching id before persistAssistantTurn.
+          this.emit('tool_call_finalized', block.id, { shapedChars: finalBlock.content.length });
           if (result.extraUserBlocks && result.extraUserBlocks.length > 0) {
             extraUserBlocks.push(...result.extraUserBlocks);
+          }
+          } catch (err) {
+            // Dispatch crash safety net. Any throw inside the per-block
+            // body — registry plumbing, smart-reducer, hook callback,
+            // mutation tracker, pre/post-dispatch transforms — that the
+            // existing emit sites didn't already handle would leave the
+            // tool spinner hanging in the UI forever (no tool_call_result
+            // → StuckBanner trips). Emit a synthetic isError result + the
+            // matching finalized + a result block so the model gets a
+            // coherent tool_result on its next turn instead of an orphan.
+            //
+            // Programmer-error classes (TypeError/ReferenceError) re-throw
+            // after the fallback so the worker's process-level handler
+            // engages and the run terminates with a real error — a quiet
+            // recovery for those would mask real bugs.
+            if (!emittedFallback) {
+              const msg = err instanceof Error ? err.message : String(err);
+              const fallback = {
+                content: `Tool '${block.name}' dispatch crashed unexpectedly: ${msg}`,
+                isError: true,
+              };
+              try { this.emit('tool_call_result', block.id, block.name, fallback, 0); } catch { /* */ }
+              try { this.emit('tool_call_finalized', block.id, { shapedChars: fallback.content.length }); } catch { /* */ }
+              try {
+                toolResultBlocks.push(buildToolResultBlock(block.id, fallback.content, true, this.effectivePushTimeCap));
+              } catch { /* */ }
+              console.error(
+                `[coder] dispatch crash for '${block.name}' at turn ${turn}: ${msg}`,
+              );
+            }
+            if (err instanceof Error && (err.name === 'TypeError' || err.name === 'ReferenceError')) {
+              throw err;
+            }
           }
         }
 

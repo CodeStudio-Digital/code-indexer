@@ -100,6 +100,14 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     localStorage.setItem('chatWorkerLogOpen', String(workerLogOpen));
   }, [workerLogOpen]);
   const [thinking, setThinking] = useState(false);
+  /**
+   * Per-session deepThink (simulated). Orthogonal to `thinking` — when on,
+   * the runner asks an auxiliary cheap model (Haiku) for a brief pre-thought
+   * before each main-model turn. Propagated via POST /messages
+   * `{deep_think: true}` → runCoder → runner.opts.deepThink. Volatile by
+   * session (mirrors how `thinking` works today — not persisted in DB).
+   */
+  const [deepThink, setDeepThink] = useState(false);
   /** PR-4: when set, the Composer's send button flips to "Run pipeline". */
   const [selectedPipelineId, setSelectedPipelineId] = useState<number | null>(null);
 
@@ -348,8 +356,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
             console.warn('[auto-title] generate-title failed:', err);
           });
       }
-    }, { attachments: atts, agent, maxTurns, thinking, selectedSkillIds });
-  }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking]);
+    }, { attachments: atts, agent, maxTurns, thinking, deepThink, selectedSkillIds });
+  }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, deepThink]);
 
   /**
    * Pipeline-mode send: post to `/pipelines/:pid/start` instead of
@@ -925,6 +933,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 thinking={thinking}
                 setThinking={setThinking}
                 supportsThinking={providerSupportsThinking(provider, providerOptions, model)}
+                deepThink={deepThink}
+                setDeepThink={setDeepThink}
                 fallbackProvider={fallbackProvider}
                 fallbackModel={fallbackModel}
                 onFallbackChange={handleFallbackChange}

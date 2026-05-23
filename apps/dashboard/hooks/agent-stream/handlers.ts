@@ -56,9 +56,85 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       flush();
     },
 
+    // ── deepThink (simulated) — auxiliary cheap model pre-thought ──────
+    // Lifecycle: started → (delta*) → completed | failed. The runner emits
+    // these BEFORE the main provider.chat() call of each main-model turn.
+    // We render a distinct emerald block (vs the purple native thinking)
+    // with the aux model name as a badge.
+    pre_think_started: (data) => {
+      const d = data as { model?: string; provider?: string };
+      blocks.push({
+        type: 'pre_think',
+        text: '',
+        model: String(d.model ?? 'auxiliary'),
+        provider: String(d.provider ?? '?'),
+        status: 'streaming',
+      });
+      flush();
+    },
+
+    pre_think_delta: (data) => {
+      const t = String((data as { text?: string }).text ?? '');
+      if (!t) return;
+      const last = blocks[blocks.length - 1];
+      if (last && last.type === 'pre_think') {
+        last.text += t;
+      } else {
+        // Defensive: delta arrived before started (or after another block
+        // already closed) — synthesize a stub so the chunk isn't lost.
+        blocks.push({
+          type: 'pre_think',
+          text: t,
+          model: 'auxiliary',
+          provider: '?',
+          status: 'streaming',
+        });
+      }
+      flush();
+    },
+
+    pre_think_completed: (data) => {
+      const d = data as { text?: string };
+      const last = blocks[blocks.length - 1];
+      if (last && last.type === 'pre_think') {
+        // Trust the final aggregated text — covers any chunk we missed.
+        if (typeof d.text === 'string' && d.text.length > 0) last.text = d.text;
+        last.status = 'done';
+        flush();
+      }
+    },
+
+    pre_think_failed: (data) => {
+      const d = data as { error?: string };
+      const last = blocks[blocks.length - 1];
+      if (last && last.type === 'pre_think') {
+        last.status = 'failed';
+        last.error = String(d.error ?? 'unknown error');
+        flush();
+      } else {
+        // Failed before any delta — push an empty failed block so the user
+        // sees WHY deepThink degraded (rather than nothing at all).
+        blocks.push({
+          type: 'pre_think',
+          text: '',
+          model: 'auxiliary',
+          provider: '?',
+          status: 'failed',
+          error: String(d.error ?? 'unknown error'),
+        });
+        flush();
+      }
+    },
+
     tool_call_start: (data) => {
       const d = data as { id: string; name: string; input?: Record<string, unknown> };
-      const call: ToolCallEvent = { id: d.id, name: d.name, input: d.input, status: 'running' };
+      const call: ToolCallEvent = {
+        id: d.id,
+        name: d.name,
+        input: d.input,
+        status: 'running',
+        startedAt: Date.now(),
+      };
       toolIndex.set(d.id, blocks.length);
       blocks.push({ type: 'tool', call });
       flush();
@@ -79,9 +155,38 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
             result: d.result,
             durationMs: d.duration_ms,
             status: d.result.isError ? 'error' : 'done',
+            // Clear progress hints — the result is the new source of truth
+            // for elapsed/status; carrying elapsedMs further would confuse
+            // the "running Xs" renderer into showing it on a finished tool.
+            elapsedMs: undefined,
+            progressNote: undefined,
           };
         }
       }
+      flush();
+    },
+
+    /**
+     * Heartbeat (and explicit progress notes) emitted by the runner while a
+     * tool is in flight. Updates the matching block's `elapsedMs` and
+     * (optionally) `progressNote`, then triggers a flush so the "running Xs"
+     * counter ticks live. No-op for unknown ids — safe against late events
+     * landing after a `tool_call_result` cleared the block's transient state.
+     */
+    tool_progress: (data) => {
+      const d = data as { id: string; name: string; elapsedMs: number; note?: string };
+      const idx = toolIndex.get(d.id);
+      if (idx === undefined) return;
+      const block = blocks[idx];
+      if (!block || block.type !== 'tool') return;
+      // Don't reanimate a finished tool — if a heartbeat slips in after
+      // the result event, ignore it. `status === 'running'` is the gate.
+      if (block.call.status !== 'running') return;
+      block.call = {
+        ...block.call,
+        elapsedMs: d.elapsedMs,
+        ...(d.note !== undefined ? { progressNote: d.note } : {}),
+      };
       flush();
     },
 

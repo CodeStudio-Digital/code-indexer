@@ -580,6 +580,14 @@ export class SessionStore {
     is_error: boolean;
     duration_ms: number;
     output_chars?: number;
+    /**
+     * Size of the content the LLM actually saw, AFTER smart-reducer
+     * shaping and the push-time cap in buildToolResultBlock. Pair with
+     * `output_chars` to compute per-call savings; NULL means "not
+     * recorded" (synthetic refusals, pre-shaping early exits) and the
+     * savings aggregation COALESCEs to `output_chars` (savings=0).
+     */
+    output_chars_shaped?: number | null;
     truncated?: boolean;
     phase?: string | null;
     turn_telemetry_id?: number | null;
@@ -588,8 +596,8 @@ export class SessionStore {
       .prepare(`
         INSERT INTO coder_tool_calls
           (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
-           output_chars, truncated, phase, turn_telemetry_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         input.message_id,
@@ -600,6 +608,7 @@ export class SessionStore {
         input.is_error ? 1 : 0,
         input.duration_ms,
         input.output_chars ?? (input.result_text?.length ?? 0),
+        input.output_chars_shaped ?? null,
         input.truncated ? 1 : 0,
         input.phase ?? null,
         input.turn_telemetry_id ?? null,
@@ -631,6 +640,8 @@ export class SessionStore {
       is_error: boolean;
       duration_ms: number;
       output_chars?: number;
+      /** See appendToolCall — post-shaping size for savings telemetry. */
+      output_chars_shaped?: number | null;
       truncated?: boolean;
       phase?: string | null;
       turn_telemetry_id?: number | null;
@@ -653,8 +664,8 @@ export class SessionStore {
     const insertTool = this.db.prepare(`
       INSERT INTO coder_tool_calls
         (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
-         output_chars, truncated, phase, turn_telemetry_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const bumpStmt = this.db.prepare(`
       UPDATE coder_sessions
@@ -689,6 +700,7 @@ export class SessionStore {
           tc.is_error ? 1 : 0,
           tc.duration_ms,
           tc.output_chars ?? (tc.result_text?.length ?? 0),
+          tc.output_chars_shaped ?? null,
           tc.truncated ? 1 : 0,
           tc.phase ?? null,
           tc.turn_telemetry_id ?? null,
@@ -1299,6 +1311,10 @@ export class SessionStore {
    *   - `totalCalls` — overall count across all tools
    *   - `byName`     — sorted descending by count
    *   - `recent`     — last N rows (default 30) for chronological view
+   *   - `savings`    — per-tool and total bytes saved by smart reducers
+   *                    (raw vs. shaped output sizes), with a 4-chars/token
+   *                    estimate. Tools with zero savings are omitted from
+   *                    `byTool` to keep the dashboard card focused.
    *
    * Heavy session optimisation: queries are capped server-side and use
    * the existing `idx_coder_messages_session` index. Empty results for
@@ -1316,6 +1332,13 @@ export class SessionStore {
       durationMs: number;
       createdAt: string;
     }>;
+    savings: {
+      totalRawChars: number;
+      totalShapedChars: number;
+      totalSavedChars: number;
+      totalSavedTokensEst: number;
+      byTool: Array<{ name: string; rawChars: number; shapedChars: number; savedChars: number }>;
+    };
   } {
     const byNameRows = this.db
       .prepare(
@@ -1361,6 +1384,40 @@ export class SessionStore {
         durationMs: number;
         createdAt: string;
       }>;
+    // Savings aggregation — pairs `output_chars` (raw size from the tool)
+    // with `output_chars_shaped` (size the LLM actually saw after smart
+    // reducer + buildToolResultBlock cap). COALESCE to raw when shaped is
+    // NULL (synthetic refusals, pre-shaping early exits, pre-migration
+    // rows) so those contribute zero to the savings total instead of
+    // bogus negative deltas.
+    const savingsRows = this.db
+      .prepare(
+        `SELECT
+            tc.tool_name                                              AS name,
+            COALESCE(SUM(tc.output_chars), 0)                         AS rawChars,
+            COALESCE(SUM(COALESCE(tc.output_chars_shaped, tc.output_chars)), 0) AS shapedChars
+         FROM coder_tool_calls tc
+         JOIN coder_messages m ON m.id = tc.message_id
+         WHERE m.session_id = ?
+         GROUP BY tc.tool_name
+         ORDER BY (rawChars - shapedChars) DESC, name ASC`,
+      )
+      .all(sessionId) as Array<{ name: string; rawChars: number; shapedChars: number }>;
+
+    let totalRawChars = 0;
+    let totalShapedChars = 0;
+    const byToolSavings = savingsRows.map((r) => {
+      totalRawChars += r.rawChars;
+      totalShapedChars += r.shapedChars;
+      return {
+        name: r.name,
+        rawChars: r.rawChars,
+        shapedChars: r.shapedChars,
+        savedChars: Math.max(0, r.rawChars - r.shapedChars),
+      };
+    });
+    const totalSavedChars = Math.max(0, totalRawChars - totalShapedChars);
+
     return {
       totalCalls,
       byName: byNameRows.map((r) => ({
@@ -1377,6 +1434,16 @@ export class SessionStore {
         durationMs: r.durationMs,
         createdAt: r.createdAt,
       })),
+      savings: {
+        totalRawChars,
+        totalShapedChars,
+        totalSavedChars,
+        // 4 chars/token is the textbook English heuristic; same one used
+        // by token-accounting.ts when no provider usage is available. Good
+        // enough for a "tokens saved" headline; we never bill on this.
+        totalSavedTokensEst: Math.round(totalSavedChars / 4),
+        byTool: byToolSavings.filter((b) => b.savedChars > 0).slice(0, 20),
+      },
     };
   }
 

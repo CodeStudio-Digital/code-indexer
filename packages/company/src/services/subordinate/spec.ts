@@ -63,6 +63,16 @@ export interface SpawnSubordinateSpec {
    * Defaults to provider-level (~5000) when undefined.
    */
   thinkingBudgetTokens?: number;
+  /**
+   * Simulated deepThink — auxiliary cheap model produces a pre-thought
+   * before each main-model turn. Independent of `thinking` (can coexist).
+   * When undefined here, `SubordinateLifecycle.spawn` falls back to the
+   * matching `RoleConfig.deepThink*` field (Phase E pattern).
+   */
+  deepThink?: boolean;
+  deepThinkModel?: string;
+  deepThinkProvider?: string;
+  preThinkOnToolResults?: boolean;
 }
 
 /**

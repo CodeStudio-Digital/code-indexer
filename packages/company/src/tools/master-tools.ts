@@ -78,6 +78,10 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
         type: 'boolean',
         description: 'When true, the subordinate runs with extended thinking (deep reasoning) on providers that support it. Costs extra tokens — use only for genuinely hard tasks (complex debugging, critical design, deep analysis). Default: false.',
       },
+      deep_think: {
+        type: 'boolean',
+        description: 'When true, before each subordinate turn an auxiliary cheap model (default Haiku) writes a brief pre-thought that is prefilled as a `<thinking>` block for the main model to continue from. ORTHOGONAL to `thinking` — both can be on. Use for tasks where extra reasoning per dollar helps but you do not want to switch the main model. Default: role template wins; master can override per spawn.',
+      },
     },
     required: ['role', 'task'],
   };
@@ -167,6 +171,9 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
         // task that doesn't need deep reasoning).
         const argThinking = args.thinking as boolean | undefined;
         const effectiveThinking = argThinking ?? defaults?.thinking;
+        // Phase F: same fallback chain for deepThink.
+        const argDeepThink = args.deep_think as boolean | undefined;
+        const effectiveDeepThink = argDeepThink ?? defaults?.deepThink;
 
         const result = await orchestrator.spawnSubordinate({
           role,
@@ -184,6 +191,10 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           attachments: attachments && attachments.length > 0 ? attachments : undefined,
           thinking: effectiveThinking,
           thinkingBudgetTokens: defaults?.thinkingBudgetTokens,
+          deepThink: effectiveDeepThink,
+          deepThinkModel: defaults?.deepThinkModel,
+          deepThinkProvider: defaults?.deepThinkProvider,
+          preThinkOnToolResults: defaults?.preThinkOnToolResults,
         });
 
         // Auto-assign agent to Kanban card and move to in_progress

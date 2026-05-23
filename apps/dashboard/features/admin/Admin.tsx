@@ -19,6 +19,7 @@ import { HygienePanel } from './HygienePanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
 import { AuthPanel } from './AuthPanel.js';
 import { GeneralAiPanel } from './GeneralAiPanel.js';
+import { DeepThinkPanel } from './DeepThinkPanel.js';
 import { ChromeServicePanel } from './ChromeServicePanel.js';
 import { VerdaccioPanel } from './VerdaccioPanel.js';
 import { PipelineBindingsPanel } from './PipelineBindingsPanel.js';
@@ -89,6 +90,7 @@ export default function Admin() {
           <TabsTrigger value="mcp-servers">{t('admin:tabs.mcpServers')}</TabsTrigger>
           <TabsTrigger value="skills">{t('admin:tabs.skills')}</TabsTrigger>
           <TabsTrigger value="ai-geral">IA Geral</TabsTrigger>
+          <TabsTrigger value="deepthink">deepThink</TabsTrigger>
           <TabsTrigger value="chrome-service">Chrome Service</TabsTrigger>
           <TabsTrigger value="verdaccio">Verdaccio</TabsTrigger>
           <TabsTrigger value="pipeline-bindings">Pipelines</TabsTrigger>
@@ -212,6 +214,10 @@ export default function Admin() {
 
         <TabsContent value="ai-geral">
           <GeneralAiPanel />
+        </TabsContent>
+
+        <TabsContent value="deepthink">
+          <DeepThinkPanel />
         </TabsContent>
 
         <TabsContent value="chrome-service">

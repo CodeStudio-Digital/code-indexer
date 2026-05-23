@@ -112,6 +112,12 @@ export interface RunFreshOpts {
   /** POJO worktree opts — survives structuredClone across MessagePort. */
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;
+  /** Simulated deepThink (auxiliary cheap model writes a pre-thought
+   *  before each main-model turn). Orthogonal to `thinking`. */
+  deepThink?: boolean;
+  deepThinkModel?: string;
+  deepThinkProvider?: string;
+  preThinkOnToolResults?: boolean;
   /** Skill IDs the user pre-selected in the sidebar; forwarded to runCoder. */
   selectedSkillIds?: string[];
   /**

@@ -7,6 +7,7 @@ import { Badge } from '../../components/ui/badge.js';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '../../components/ui/dialog.js';
+import { copyText } from '../../lib/clipboard.js';
 import {
   createApiToken, listApiTokens, revokeApiToken, type ApiTokenRow,
 } from './auth-api.js';
@@ -146,7 +147,7 @@ export function ApiTokensPanel() {
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => { if (issued) navigator.clipboard.writeText(issued.rawToken); }}
+              onClick={() => { if (issued) void copyText(issued.rawToken); }}
             >
               <Copy className="h-4 w-4 mr-2" />{t('auth.apiTokens.copy')}
             </Button>

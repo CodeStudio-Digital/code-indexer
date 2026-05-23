@@ -7,6 +7,7 @@ import { Badge } from '../../components/ui/badge.js';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
 import { useApi } from '../../hooks/useApi.js';
+import { copyText } from '../../lib/clipboard.js';
 import { cn, formatRelativeTime } from '../../lib/utils.js';
 import { formatDuration } from './utils.js';
 
@@ -314,12 +315,9 @@ function PlanItem({ plan }: { plan: CoderPlanRow }) {
 
   const onCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(plan.plan_text);
+    if (await copyText(plan.plan_text)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* ignore */
     }
   };
 
@@ -518,12 +516,9 @@ function InputItem({ entry }: { entry: SessionInputRow }) {
 
   const onCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(entry.content);
+    if (await copyText(entry.content)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* ignore */
     }
   };
 

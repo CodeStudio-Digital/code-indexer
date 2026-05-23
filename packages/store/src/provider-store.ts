@@ -93,6 +93,26 @@ export interface OAuthTokenRow {
   updated_at: string;
 }
 
+/**
+ * Operator-pinned defaults for the simulated deepThink mode. When the chat
+ * composer toggles `deepthink+` without overriding fields in the request
+ * body, the runner reads these to pick the auxiliary model + tuning knobs.
+ * `provider` + `model` are required to actually fire deepThink — null means
+ * "fall back to hardcoded Haiku default in resolveAuxProvider()".
+ */
+export interface DeepThinkDefaults {
+  provider: string | null;
+  model: string | null;
+  /** Hard timeout for the auxiliary call (ms). Default 8000 when null. */
+  timeoutMs: number | null;
+  /** How many <thinking data-source="aux"> blocks to keep in history. Default 3. */
+  historyWindow: number | null;
+  /** Skip auxiliary when last user text is shorter than this (~chars/4). Default 0 (no filter). */
+  minInputTokens: number | null;
+  /** Run pre-think on tool_result turns too. Default false. */
+  preThinkOnToolResults: boolean;
+}
+
 export type EmbeddingKind = 'cloudflare' | 'bedrock' | 'null';
 
 export interface EmbeddingConfigRow {
@@ -461,6 +481,27 @@ export class ProviderStore {
 
   setGeneralDefault(providerId: string, modelId: string): void {
     this.setAppSetting('general_default_model', JSON.stringify({ providerId, modelId }));
+  }
+
+  // ─── deepThink defaults ────────────────────────────────────────
+  /**
+   * Operator-pinned defaults for the simulated deepThink auxiliary model.
+   * When the chat composer toggles `deepthink+` without overriding model
+   * via the request body, the runner picks up these defaults. Stored in
+   * `app_settings['deepthink_defaults']` as a single JSON blob.
+   */
+  getDeepThinkDefaults(): DeepThinkDefaults | null {
+    const raw = this.getAppSetting('deepthink_defaults');
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as DeepThinkDefaults;
+    } catch {
+      return null;
+    }
+  }
+
+  setDeepThinkDefaults(defaults: DeepThinkDefaults): void {
+    this.setAppSetting('deepthink_defaults', JSON.stringify(defaults));
   }
 
   // ─── app_settings KV ──────────────────────────────────────────

@@ -407,6 +407,14 @@ export function renderAssistantBlock(
     return <ThinkingBlockView key={`think-${i}`} text={b.text ?? ''} />;
   }
   if (b.type === 'text') {
+    // deepThink — text blocks injected by the runner carry the
+    // `<thinking data-source="aux" data-model="…">` envelope. Render
+    // them as a distinct emerald block so the user sees both the
+    // aux's reasoning AND the main model's reply in the transcript.
+    const preThink = parsePreThinkText(b.text ?? '');
+    if (preThink) {
+      return <PersistedPreThinkBlock key={`pt-${i}`} model={preThink.model} text={preThink.text} empty={preThink.empty} />;
+    }
     return (
       <div key={i} className="text-sm text-foreground/90">
         <Markdown text={b.text ?? ''} />
@@ -568,6 +576,91 @@ function GeneratedImageBlock({ mediaType, base64 }: { mediaType: string; base64:
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * Detects the auxiliary pre-think marker injected by the runner when
+ * `deepThink` is on. Format (see runner.ts wire of deepThink):
+ *   <thinking data-source="aux" data-model="MODEL_ID" [data-empty="true"]>
+ *   {pre-thought text}
+ *   </thinking>
+ *
+ * `data-empty="true"` flags turns where the auxiliary was billed but
+ * returned no output text (reasoning-model burned the whole output budget
+ * on reasoning tokens). The body in that case is an explanatory note that
+ * the UI surfaces as a warning rather than as actual reasoning.
+ *
+ * Returns null when the text is not a pre-think block.
+ */
+const PRE_THINK_RE = /^<thinking\s+data-source="aux"(?:\s+data-model="([^"]*)")?(?:\s+data-empty="([^"]*)")?\s*>\s*([\s\S]*?)\s*<\/thinking>\s*$/;
+
+function parsePreThinkText(raw: string): { model: string; text: string; empty: boolean } | null {
+  if (!raw || !raw.startsWith('<thinking data-source="aux"')) return null;
+  const m = PRE_THINK_RE.exec(raw.trim());
+  if (!m) return null;
+  return {
+    model: m[1] ?? 'auxiliary',
+    text: m[3] ?? '',
+    empty: m[2] === 'true',
+  };
+}
+
+/**
+ * Persisted view of an auxiliary pre-think (deepThink). Distinct from
+ * `ThinkingBlockView` (native reasoning, purple Brain) — this one is
+ * emerald + Sparkles + model badge so the operator can see in the chat
+ * transcript which model auxiliated and what it suggested. Collapsed by
+ * default to keep old turns compact.
+ */
+function PersistedPreThinkBlock({ model, text, empty }: { model: string; text: string; empty: boolean }) {
+  const [open, setOpen] = useState(false);
+  const preview = text.length > 80 ? text.slice(0, 80) + '...' : text;
+  // Empty: aux fired and was billed but returned no output text.
+  // Show in amber (warning) instead of emerald so the operator notices,
+  // and use a distinct preview line.
+  const isEmpty = empty;
+  return (
+    <div className="my-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 text-xs transition-colors ${
+          isEmpty
+            ? 'text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300'
+            : 'text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300'
+        }`}
+      >
+        <Sparkles className="h-3.5 w-3.5" />
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        <span className="font-medium">{isEmpty ? 'Pré-pensamento vazio' : 'Pré-pensamento'}</span>
+        <span
+          className={`px-1.5 py-0.5 rounded text-[10px] font-mono border ${
+            isEmpty
+              ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20'
+              : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20'
+          }`}
+        >
+          {model}
+        </span>
+        {!open && (
+          <span className="italic truncate max-w-[400px] text-muted-foreground">
+            {isEmpty ? 'modelo gastou todo o budget em reasoning_tokens — clique para ver detalhes' : preview}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div
+          className={`mt-1 ml-5 rounded-lg border border-dashed px-3 py-2 text-xs italic whitespace-pre-wrap max-h-[40vh] overflow-y-auto ${
+            isEmpty
+              ? 'border-amber-500/30 bg-amber-500/[0.04] text-amber-900 dark:text-amber-200'
+              : 'border-emerald-500/30 bg-emerald-500/[0.04] text-emerald-900 dark:text-emerald-200'
+          }`}
+        >
+          {text}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -55,7 +55,12 @@ export class OpenAIChatProvider implements ChatProvider {
     if (this.vendor === 'zai') {
       zaiExtras.tool_stream = true;
       // Only glm-5.x accepts the `thinking` parameter; glm-4.* rejects it with 400.
-      if (/^glm-5(\.|-)/.test(this.model)) {
+      // Match `glm-5` (bare), `glm-5.1`, `glm-5-turbo` — the trailing
+      // anchor (?:[.\-]|$) is critical: without it, plain `glm-5` falls
+      // through and the server uses its OWN default (thinking on for
+      // glm-5), so the chat shows "Pensando…" even when the user never
+      // toggled `think+` in the composer.
+      if (/^glm-5(?:[.\-]|$)/.test(this.model)) {
         zaiExtras.thinking = { type: req.thinking ? 'enabled' : 'disabled' };
       }
       const maxTokensEnv = process.env.ZAI_MAX_TOKENS;

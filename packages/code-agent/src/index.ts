@@ -160,6 +160,19 @@ export interface RunCoderOptions {
    * its `defaultThinking` config.
    */
   thinkingBudgetTokens?: number;
+  /**
+   * Simulated deepThink mode — orthogonal to `thinking`. When true, the
+   * runner asks a cheap auxiliary model (default Haiku) to write a few
+   * sentences of reasoning before each main-model turn and prefills them
+   * as a `<thinking data-source="aux">` block. See RunnerOptions.deepThink.
+   */
+  deepThink?: boolean;
+  /** Auxiliary model id. Default 'claude-haiku-4-5-20251001'. */
+  deepThinkModel?: string;
+  /** Auxiliary provider name. Default 'anthropic'. */
+  deepThinkProvider?: string;
+  /** When false (default), skip pre-think on tool_result turns. */
+  preThinkOnToolResults?: boolean;
   /** Company orchestrator context — when present, company tools are registered. */
   companyContext?: import('@mcp/company/types.js').CompanyContext;
   /** Extra system prompt block for company agents (master/subordinate). Appended to the base prompt. */
@@ -1191,6 +1204,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     planMode: opts.planMode,
     thinking: opts.thinking,
     thinkingBudgetTokens: opts.thinkingBudgetTokens,
+    deepThink: opts.deepThink,
+    deepThinkModel: opts.deepThinkModel,
+    deepThinkProvider: opts.deepThinkProvider,
+    preThinkOnToolResults: opts.preThinkOnToolResults,
     activeTiers,
     globalDisabledTools,
     sessionDisabledTools: sessionDisabledTools.size > 0 ? sessionDisabledTools : undefined,
@@ -1385,6 +1402,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       is_error: boolean;
       duration_ms: number;
       output_chars: number;
+      /**
+       * Set by the `tool_call_finalized` listener (below). Records the
+       * shaped size the LLM saw post-reducer/post-cap — pair with
+       * output_chars (raw size) to compute savings. NULL for synthetic
+       * refusals that never reach buildToolResultBlock.
+       */
+      output_chars_shaped: number | null;
       truncated: boolean;
       phase: string | null;
       turn_telemetry_id: number | null;
@@ -1475,6 +1499,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       is_error: Boolean(result.isError),
       duration_ms: durationMs,
       output_chars: content.length,
+      // Stamped later by the `tool_call_finalized` listener. NULL stays
+      // NULL for synthetic refusals (pre-read cap, dup-call cap) which
+      // emit only `tool_call_result` and skip the shaping path.
+      output_chars_shaped: null,
       truncated: isTruncatedOutput(content),
       // PhaseRouter removed — column kept for backward compat with old rows
       // that have it set. Always null going forward.
@@ -1493,6 +1521,24 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       pendingTurn.subagentUsage.cache_creation_input_tokens += result.subUsage.cache_creation_input_tokens ?? 0;
     }
     pendingToolCalls.delete(id);
+  });
+
+  // Item B (savings telemetry): runner emits `tool_call_finalized` AFTER
+  // smart-reducer + buildToolResultBlock shaping is complete. We use it
+  // to stamp the matching pending tool_calls entry with the shaped size
+  // before the turn flushes. Walk in REVERSE because the runner may have
+  // emitted `tool_call_result` more than once for the same id (e.g., the
+  // dup-cap refusal path at runner.ts ~4379 fires a second event after
+  // the original); only the latest entry reflects the final LLM-visible
+  // state.
+  runner.on('tool_call_finalized', (id, info) => {
+    if (!pendingTurn) return;
+    for (let i = pendingTurn.toolCalls.length - 1; i >= 0; i--) {
+      if (pendingTurn.toolCalls[i].tool_use_id === id) {
+        pendingTurn.toolCalls[i].output_chars_shaped = info.shapedChars;
+        break;
+      }
+    }
   });
 
   // The runner pushes a single 'tool' role message after running all tool calls

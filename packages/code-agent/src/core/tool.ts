@@ -89,6 +89,19 @@ export interface CoderTool {
    * identical args are an expected workflow, not a regression.
    */
   repeatable?: boolean;
+  /**
+   * Hard timeout for a single invocation, in milliseconds. When undefined,
+   * the runner applies a default from `core/tool-timeouts.ts` based on the
+   * tool's name/source classification. Set `Infinity` to opt OUT of the
+   * runner-level timeout (used by tools that legitimately manage their own
+   * wait, e.g. `wait_for_compile_clean`).
+   *
+   * On timeout the runner emits a synthetic `tool_call_result` with
+   * `isError: true` and aborts a per-call `AbortController` chained off the
+   * session signal, so cooperative tools (those passing `ctx.signal` to
+   * `fetch`/child processes) can clean up.
+   */
+  timeoutMs?: number;
 }
 
 export interface ToolContext {
@@ -116,6 +129,15 @@ export interface ToolContext {
   unrestrictedToolOutput?: boolean;
   /** Optional abort signal for long-running operations. */
   signal?: AbortSignal;
+  /**
+   * Long-running tools can call this to surface progress to the user mid-run.
+   * Emits a `tool_progress` runner event with the supplied note (truncated
+   * to ~200 chars). No-op when the runner hasn't wired the callback (tests,
+   * subagents). Independent of the runner's periodic heartbeat — use this
+   * to convey substantive progress ("fetched 3/10 docs") rather than just
+   * "still alive".
+   */
+  reportProgress?: (note: string) => void;
   /** Back-reference to the runner so interactive tools (submit_plan, ask_user)
    *  can pause execution waiting for user input. Set automatically by CoderRunner. */
   runner?: import('@mcp/code-agent/core/runner.js').CoderRunner;

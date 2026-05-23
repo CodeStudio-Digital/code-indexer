@@ -232,28 +232,38 @@ export class ChatGPTCodexProvider implements ChatProvider {
 
     const stream = (await (this.client as unknown as {
       responses: {
-        create: (args: Record<string, unknown>) => Promise<AsyncIterable<Record<string, unknown>>>;
+        create: (
+          args: Record<string, unknown>,
+          opts?: { signal?: AbortSignal },
+        ) => Promise<AsyncIterable<Record<string, unknown>>>;
       };
-    }).responses.create({
-      model: this.model,
-      instructions: req.system,
-      input,
-      ...(tools.length > 0 ? { tools, tool_choice: 'auto', parallel_tool_calls: false } : {}),
-      stream: true,
-      // store: opt-in. When CODEX_STORE_RESPONSES=1 we persist server-side
-      // and replay `previous_response_id` next turn for ~40-80% better
-      // cache utilization. Default off — the OAuth backend isn't documented
-      // to support this and we observed silent failures with store=true.
-      store: wantStore,
-      ...(useResume ? { previous_response_id: req.previousResponseId } : {}),
-      // Reasoning effort is only sent when the runner explicitly opted in
-      // via `req.thinking`. When undefined we omit the field so the backend
-      // applies the model's default level (e.g. 'medium' for gpt-5.5).
-      // `summary: 'auto'` requests reasoning summary deltas the user can read.
-      ...(reasoningEffort
-        ? { reasoning: { effort: reasoningEffort, summary: 'auto' } }
-        : {}),
-    })) as AsyncIterable<Record<string, unknown>>;
+    }).responses.create(
+      {
+        model: this.model,
+        instructions: req.system,
+        input,
+        ...(tools.length > 0 ? { tools, tool_choice: 'auto', parallel_tool_calls: false } : {}),
+        stream: true,
+        // store: opt-in. When CODEX_STORE_RESPONSES=1 we persist server-side
+        // and replay `previous_response_id` next turn for ~40-80% better
+        // cache utilization. Default off — the OAuth backend isn't documented
+        // to support this and we observed silent failures with store=true.
+        store: wantStore,
+        ...(useResume ? { previous_response_id: req.previousResponseId } : {}),
+        // Reasoning effort is only sent when the runner explicitly opted in
+        // via `req.thinking`. When undefined we omit the field so the backend
+        // applies the model's default level (e.g. 'medium' for gpt-5.5).
+        // `summary: 'auto'` requests reasoning summary deltas the user can read.
+        ...(reasoningEffort
+          ? { reasoning: { effort: reasoningEffort, summary: 'auto' } }
+          : {}),
+      },
+      // Forward the AbortSignal so the SDK can tear down the underlying
+      // fetch when the runner aborts (e.g. deepThink idle/hard timeout
+      // or user-initiated cancellation). Without this, an idle stream
+      // can wedge for the full HTTP read timeout.
+      req.signal ? { signal: req.signal } : undefined,
+    )) as AsyncIterable<Record<string, unknown>>;
 
     // Track tool calls across streaming events. Keyed by item_id because
     // the Responses API reports args deltas with the item_id, not an index.

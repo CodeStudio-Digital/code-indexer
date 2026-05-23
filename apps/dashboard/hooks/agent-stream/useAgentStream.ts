@@ -60,6 +60,9 @@ export function useAgentStream(sessionId: number | null) {
         maxTurns?: number | null;
         /** Enable thinking/reasoning mode. */
         thinking?: boolean;
+        /** Enable simulated deepThink (auxiliary cheap model writes a
+         *  pre-thought before each main-model turn). Orthogonal to `thinking`. */
+        deepThink?: boolean;
         /**
          * When true and a live run is currently blocked inside an interactive
          * tool, ask the server to break the wait (`interruptWait`) and inject
@@ -94,6 +97,7 @@ export function useAgentStream(sessionId: number | null) {
             profile: extras?.profile,
             max_turns: extras?.maxTurns ?? undefined,
             thinking: extras?.thinking || undefined,
+            deep_think: extras?.deepThink || undefined,
             interject: extras?.interject || undefined,
             selected_skill_ids:
               extras?.selectedSkillIds && extras.selectedSkillIds.length > 0

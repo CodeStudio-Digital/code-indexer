@@ -102,7 +102,16 @@ setGlobalDocSearch(docSearchShim);
 // `DocsResearchBridge` is a CLASS in @mcp/docs-agent; here we only
 // implement the `runResearch` method that `docs_deep_research` actually
 // calls. The structural cast is honest — a deep-research run takes
-// minutes (multi-turn LLM), hence the much higher timeout.
+// minutes (multi-turn LLM), hence the high timeout.
+//
+// NOTE on timeouts: this `timeoutMs` is the IPC-level ceiling on the
+// `bridge.request` round-trip; it's a backstop against a stuck main-thread
+// handler. The PRIMARY recovery barrier now lives on the runner side:
+// `CoderRunner.invokeToolWithGuards` enforces a 30-minute per-tool timeout
+// for `docs_deep_research` (explicit `tool.timeoutMs` on the definition)
+// and emits a synthetic `tool_call_result` on expiry. So even if both this
+// bridge AND the main-side handler hang, the runner unblocks at 30min and
+// the session keeps going. See packages/code-agent/src/core/tool-timeouts.ts.
 const docsResearcherShim = {
   runResearch: (input: Parameters<DocsResearchBridge['runResearch']>[0]): Promise<DocsResearchResult> =>
     bridge.request<DocsResearchResult>('docsResearch', input, { timeoutMs: 10 * 60_000 }),
@@ -340,6 +349,10 @@ interface RunFreshPayload {
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;
+  deepThink?: boolean;
+  deepThinkModel?: string;
+  deepThinkProvider?: string;
+  preThinkOnToolResults?: boolean;
   selectedSkillIds?: string[];
   /**
    * Apêndice 4 Fase 2 — propagate `resume:true` to `runCoder` so the
@@ -366,6 +379,10 @@ bridge.handle('runFresh', async (payload) => {
       profile: opts.profile,
       worktree: opts.worktree,
       thinking: opts.thinking,
+      deepThink: opts.deepThink,
+      deepThinkModel: opts.deepThinkModel,
+      deepThinkProvider: opts.deepThinkProvider,
+      preThinkOnToolResults: opts.preThinkOnToolResults,
       selectedSkillIds: opts.selectedSkillIds,
       resume: opts.resume,
       signal: ctrl.signal,
@@ -461,6 +478,18 @@ bridge.handle('setThinking', (payload) => {
   const { thinking } = payload as { thinking: boolean };
   if (!runner) return { ok: false, reason: 'no_runner' };
   runner.setThinking(thinking);
+  return { ok: true };
+});
+
+bridge.handle('setDeepThink', (payload) => {
+  recordRpc('setDeepThink');
+  const { deepThink, model, provider } = payload as {
+    deepThink: boolean;
+    model?: string;
+    provider?: string;
+  };
+  if (!runner) return { ok: false, reason: 'no_runner' };
+  runner.setDeepThink(deepThink, { model, provider });
   return { ok: true };
 });
 

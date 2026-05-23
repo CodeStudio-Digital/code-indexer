@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Maximize2, Network, Paperclip, Repeat, Send, Settings2, Shield, Square, Thermometer } from 'lucide-react';
+import { Brain, Maximize2, Network, Paperclip, Repeat, Send, Settings2, Shield, Sparkles, Square, Thermometer } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -64,6 +64,15 @@ interface ComposerToolbarProps {
   thinking?: boolean;
   setThinking?: (v: boolean) => void;
   supportsThinking?: boolean;
+  /**
+   * Simulated deepThink — orthogonal to `thinking`. When on, an auxiliary
+   * cheap model (default Haiku) writes a brief pre-thought before each
+   * main-model turn and the runner prefills it as a `<thinking>` block.
+   * Propagates: useAgentChatState → POST /api/coder/sessions/:id/messages
+   * `{deep_think: true}` → runner.opts.deepThink.
+   */
+  deepThink?: boolean;
+  setDeepThink?: (v: boolean) => void;
 }
 
 export const ComposerToolbar = React.memo(function ComposerToolbar({
@@ -97,6 +106,8 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   thinking,
   setThinking,
   supportsThinking,
+  deepThink,
+  setDeepThink,
 }: ComposerToolbarProps) {
   const { t } = useTranslation(['chat', 'common']);
   return (
@@ -229,6 +240,29 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
         >
           <Brain className="h-3.5 w-3.5" />
           <span>{thinking ? 'think+' : 'think'}</span>
+        </button>
+      )}
+
+      {/* Simulated deepThink toggle. Orthogonal to extended-thinking — when
+          on, an auxiliary cheap model writes a brief pre-thought that the
+          runner prefills as a <thinking> block before each main turn. */}
+      {setDeepThink && (
+        <button
+          type="button"
+          onClick={() => setDeepThink(!deepThink)}
+          className={`hidden sm:inline-flex items-center gap-1 h-7 px-2 rounded-md text-xs font-mono transition-colors ${
+            deepThink
+              ? 'bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/25 dark:text-emerald-300'
+              : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+          }`}
+          title={t('chat:toolbar.deepThink', {
+            defaultValue:
+              'deepThink (simulated): an auxiliary cheap model (Haiku) writes a brief pre-thought before each main-model turn. Orthogonal to "think+". Adds latency and a small extra cost, but more reasoning per dollar without switching the main model.',
+          })}
+          aria-pressed={deepThink ?? false}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>{deepThink ? 'deepthink+' : 'deepthink'}</span>
         </button>
       )}
 
@@ -400,6 +434,24 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
                 <span>
                   {t('chat:toolbar.thinking', { defaultValue: 'Extended thinking' })}
                   {thinking ? ' • on' : ''}
+                </span>
+              </button>
+            )}
+            {setDeepThink && (
+              <button
+                type="button"
+                onClick={() => setDeepThink(!deepThink)}
+                className={`w-full inline-flex items-center justify-center gap-2 h-8 px-3 rounded-md text-xs font-mono transition-colors ${
+                  deepThink
+                    ? 'bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/25 dark:text-emerald-300'
+                    : 'border border-input text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+                aria-pressed={deepThink ?? false}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>
+                  {t('chat:toolbar.deepThink', { defaultValue: 'deepThink (simulated)' })}
+                  {deepThink ? ' • on' : ''}
                 </span>
               </button>
             )}

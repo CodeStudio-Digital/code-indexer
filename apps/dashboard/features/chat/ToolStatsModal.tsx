@@ -14,9 +14,16 @@
  * the only way to diagnose was a manual SQL query against the DB.
  */
 import { useEffect, useState } from 'react';
-import { AlertCircle, BarChart3, RefreshCw, X } from 'lucide-react';
+import { AlertCircle, BarChart3, RefreshCw, Scissors, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
+
+interface SavingsByTool {
+  name: string;
+  rawChars: number;
+  shapedChars: number;
+  savedChars: number;
+}
 
 interface ToolStatsResponse {
   sessionId: number;
@@ -35,6 +42,24 @@ interface ToolStatsResponse {
     durationMs: number;
     createdAt: string;
   }>;
+  /**
+   * Optional for forward-compat: pre-migration-102 servers don't return
+   * this field. Component shows the savings card only when present and
+   * `totalSavedChars > 0`.
+   */
+  savings?: {
+    totalRawChars: number;
+    totalShapedChars: number;
+    totalSavedChars: number;
+    totalSavedTokensEst: number;
+    byTool: SavingsByTool[];
+  };
+}
+
+function formatChars(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
 }
 
 interface ToolStatsModalProps {
@@ -140,6 +165,67 @@ export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps
                     </>
                   )}
                 </div>
+
+                {/* Smart reducer savings — only renders when the server
+                    returned a `savings` block AND there was something to
+                    save. Pre-migration-102 servers or sessions with zero
+                    savings yield an absent or empty card; the dashboard
+                    falls back to the existing by-tool/recent view. */}
+                {data.savings && data.savings.totalSavedChars > 0 && (() => {
+                  const sv = data.savings;
+                  const savedPct = sv.totalRawChars > 0
+                    ? Math.round((sv.totalSavedChars / sv.totalRawChars) * 100)
+                    : 0;
+                  const maxToolSaved = Math.max(1, ...sv.byTool.map((t) => t.savedChars));
+                  return (
+                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2">
+                      <div className="flex items-baseline gap-2 text-xs">
+                        <Scissors className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        <span className="font-semibold text-emerald-700 dark:text-emerald-300">
+                          Smart reducer savings
+                        </span>
+                        <span className="ml-auto font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
+                          {formatChars(sv.totalSavedChars)} chars
+                        </span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          ≈ {formatChars(sv.totalSavedTokensEst)} tokens
+                        </span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          ({savedPct}% of raw)
+                        </span>
+                      </div>
+                      {sv.byTool.length > 0 && (
+                        <div className="space-y-1">
+                          {sv.byTool.slice(0, 5).map((t) => {
+                            const widthPct = Math.round((t.savedChars / maxToolSaved) * 100);
+                            const toolPct = t.rawChars > 0
+                              ? Math.round((t.savedChars / t.rawChars) * 100)
+                              : 0;
+                            return (
+                              <div key={t.name} className="text-[11px]">
+                                <div className="flex items-baseline gap-2">
+                                  <span className="font-mono truncate flex-1">{t.name}</span>
+                                  <span className="font-mono tabular-nums text-muted-foreground">
+                                    {formatChars(t.savedChars)}
+                                  </span>
+                                  <span className="text-[10px] text-muted-foreground w-10 text-right">
+                                    {toolPct}%
+                                  </span>
+                                </div>
+                                <div className="h-1 mt-0.5 rounded-full bg-muted overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full bg-emerald-500/70 transition-all"
+                                    style={{ width: `${widthPct}%` }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {data.byName.length === 0 ? (
                   <div className="text-xs text-muted-foreground text-center py-8">

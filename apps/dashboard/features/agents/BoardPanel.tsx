@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { MessageSquare, Zap, HelpCircle, Package, ArrowRightLeft, Check, Copy } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
+import { copyText } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
 import { Markdown } from '../chat/messages/Markdown.js';
 import type { BoardMessage } from '../../hooks/useCompanyStream.js';
@@ -150,24 +151,18 @@ export const BoardPanel = memo(function BoardPanel({
   }, [items.length]);
 
   async function handleCopyMarkdown() {
-    try {
-      await navigator.clipboard.writeText(buildBoardMarkdown(items, sessionName, sessionId));
+    if (await copyText(buildBoardMarkdown(items, sessionName, sessionId))) {
       setCopiedMarkdown(true);
       setTimeout(() => setCopiedMarkdown(false), 1500);
-    } catch {
-      /* best effort */
     }
   }
 
   async function handleCopyMessageMarkdown(message: BoardMessage) {
-    try {
-      await navigator.clipboard.writeText(message.content);
+    if (await copyText(message.content)) {
       setCopiedMessageId(message.id);
       setTimeout(() => {
         setCopiedMessageId((current) => (current === message.id ? null : current));
       }, 1500);
-    } catch {
-      /* best effort */
     }
   }
 

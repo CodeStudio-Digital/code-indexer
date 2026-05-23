@@ -5,6 +5,19 @@ export interface ToolCallEvent {
   result?: { content: string; isError?: boolean };
   durationMs?: number;
   status: 'running' | 'done' | 'error';
+  /** `Date.now()` stamped when `tool_call_start` arrived. Used to render
+   *  "running Xs" while the tool is in flight, AND as a fallback for
+   *  `elapsedMs` if the worker is on an older build that doesn't emit
+   *  `tool_progress`. */
+  startedAt?: number;
+  /** Latest `tool_progress.elapsedMs` from the runner. Updated whenever
+   *  the worker's per-tool heartbeat (or `ctx.reportProgress`) fires.
+   *  Cleared on `tool_call_result`. */
+  elapsedMs?: number;
+  /** Optional substantive progress note emitted by cooperative tools via
+   *  `ctx.reportProgress` (e.g. "fetched 3/10 docs"). Trimmed to ~200
+   *  chars on the runner side. */
+  progressNote?: string;
 }
 
 export interface PlanPrompt {
@@ -95,9 +108,27 @@ export interface AgentsGroup {
 
 // ─── Stream blocks ────────────────────────────────────────────
 
+/**
+ * Live block for the simulated deepThink — a "scratchpad" written by the
+ * auxiliary cheap model BEFORE the main-model turn. Distinct from native
+ * `thinking` (different model, different cost, different visual badge).
+ * Lifecycle: created on `pre_think_started`, grows on each
+ * `pre_think_delta`, sealed on `pre_think_completed` (status='done') or
+ * `pre_think_failed` (status='failed' + error).
+ */
+export interface PreThinkStreamBlock {
+  type: 'pre_think';
+  text: string;
+  model: string;
+  provider: string;
+  status: 'streaming' | 'done' | 'failed';
+  error?: string;
+}
+
 export type StreamBlock =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
+  | PreThinkStreamBlock
   | { type: 'tool'; call: ToolCallEvent }
   | { type: 'plan'; plan: PlanPrompt }
   | { type: 'question'; question: QuestionPrompt }

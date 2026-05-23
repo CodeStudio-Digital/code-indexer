@@ -127,6 +127,11 @@ export const docsDeepResearchTool: CoderTool = {
   mutates: false,
   parallelSafe: true,
   riskLevel: 'read',
+  // Explicit > classifier. Deep research spins a full DocsAgent sub-run
+  // (LLM rounds + rerank + chunk fetches) that legitimately takes several
+  // minutes on a cold cache. The 30-min ceiling is generous but bounded so
+  // a stuck bridge can't freeze the parent session.
+  timeoutMs: 30 * 60_000,
   handler: async (args, ctx): Promise<ToolResult> => {
     const query = String(args.query ?? '').trim();
     if (!query) return err('query cannot be empty');

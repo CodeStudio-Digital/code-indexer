@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Check, Copy, Hash, WrapText, FileText, Code2 } from 'lucide-react';
+import { copyText } from '../../../../../lib/clipboard.js';
 import type { ViewerPrefs } from './useViewerPrefs.js';
 
 interface Props {
@@ -13,12 +14,9 @@ export function ViewerToolbar({ code, prefs, setPrefs, markdownCapable }: Props)
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(code);
+    if (await copyText(code)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable — nothing to do */
     }
   }
 

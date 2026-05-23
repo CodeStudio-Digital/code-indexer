@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Copy } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
+import { copyText } from '../../../lib/clipboard.js';
 
 interface CopyMarkdownButtonProps {
   text: string;
@@ -17,12 +18,9 @@ export function CopyMarkdownButton({ text }: CopyMarkdownButtonProps) {
   const [copied, setCopied] = useState(false);
   const onClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await copyText(text)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* ignore */
     }
   };
   return (

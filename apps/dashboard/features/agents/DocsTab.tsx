@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Code2, Copy, Eye, FileText, FolderOpen, RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { copyText } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
 import { Markdown } from '../chat/messages/Markdown.js';
 
@@ -220,9 +221,11 @@ export default function DocsTab({ companySessionId, services = [] }: DocsTabProp
   }, [flatMarkdownFiles, selected]);
 
   function handleCopy() {
-    navigator.clipboard.writeText(body).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+    void copyText(body).then((ok) => {
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }
     });
   }
 

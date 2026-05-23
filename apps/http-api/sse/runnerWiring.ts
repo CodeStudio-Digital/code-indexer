@@ -26,6 +26,14 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
   runner.on('tool_call_result', (id, name, result, durationMs) => {
     publish(bus, 'tool_call_result', { id, name, result, duration_ms: durationMs });
   });
+  // Periodic heartbeat (and explicit progress notes from cooperating tools)
+  // emitted while a tool is in flight. Riding the same bus → bridge highway
+  // as everything else means the worker IPC / SSE pipe doesn't need any
+  // new plumbing — the dashboard subscribes once and any event resets its
+  // StuckBanner timer.
+  runner.on('tool_progress', (payload) => {
+    publish(bus, 'tool_progress', payload);
+  });
   runner.on('message_complete', (message, usage) => {
     publish(bus, 'message_complete', { message, usage });
   });
@@ -88,6 +96,22 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
   });
   runner.on('quality_watchdog_alert', (payload) => {
     publish(bus, 'quality_watchdog_alert', payload);
+  });
+  // deepThink (simulated) — auxiliary cheap model pre-thought lifecycle.
+  // Without these the chip toggles on but the operator has no signal as to
+  // whether the auxiliary actually ran, streamed, or failed (and degraded
+  // silently). Mirrors the text_delta / thinking_delta pattern.
+  runner.on('pre_think_started', (payload) => {
+    publish(bus, 'pre_think_started', payload);
+  });
+  runner.on('pre_think_delta', (payload) => {
+    publish(bus, 'pre_think_delta', payload);
+  });
+  runner.on('pre_think_completed', (payload) => {
+    publish(bus, 'pre_think_completed', payload);
+  });
+  runner.on('pre_think_failed', (payload) => {
+    publish(bus, 'pre_think_failed', payload);
   });
   runner.on('done', (reason, error) => {
     if (error) {

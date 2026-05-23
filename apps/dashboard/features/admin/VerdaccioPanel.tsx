@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, Play, Square, RotateCcw, Check, AlertCircle, Copy } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { copyText } from '../../lib/clipboard.js';
 import {
   fetchVerdaccio,
   patchVerdaccio,
@@ -221,9 +222,11 @@ function RegistryPanel({ state }: { state: VerdaccioState }) {
     );
   }
   function copy() {
-    void navigator.clipboard.writeText(state.registryUrl).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+    void copyText(state.registryUrl).then((ok) => {
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }
     });
   }
   return (

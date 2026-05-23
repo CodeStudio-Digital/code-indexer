@@ -75,6 +75,10 @@ interface ComposerProps {
   thinking?: boolean;
   setThinking?: (v: boolean) => void;
   supportsThinking?: boolean;
+  /** Simulated deepThink toggle — auxiliary cheap model writes a pre-thought
+   *  before each main-model turn. Orthogonal to `thinking`. */
+  deepThink?: boolean;
+  setDeepThink?: (v: boolean) => void;
   /** Fallback configuration. */
   fallbackProvider?: string | null;
   fallbackModel?: string | null;
@@ -459,6 +463,8 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             thinking={props.thinking}
             setThinking={props.setThinking}
             supportsThinking={props.supportsThinking}
+            deepThink={props.deepThink}
+            setDeepThink={props.setDeepThink}
           />
         </div>
       </div>

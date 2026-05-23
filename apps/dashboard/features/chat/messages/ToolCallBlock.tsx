@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronRight, Loader2, Wrench, X } from 'lucide-react';
 import type { ToolCallEvent } from '../../../hooks/useAgentStream.js';
@@ -21,7 +21,13 @@ export const ToolCallBlock = React.memo(ToolCallBlockInner, (prev, next) => {
     a.status === b.status &&
     a.input === b.input &&
     a.result === b.result &&
-    a.durationMs === b.durationMs
+    a.durationMs === b.durationMs &&
+    // Live-progress fields — without these the heartbeat-driven re-render
+    // would be blocked by the memo and the "running Xs" counter / progress
+    // note would never update.
+    a.startedAt === b.startedAt &&
+    a.elapsedMs === b.elapsedMs &&
+    a.progressNote === b.progressNote
   );
 });
 
@@ -31,6 +37,17 @@ function ToolCallBlockInner({ call }: ToolCallBlockProps) {
   const isMcp = call.name.startsWith('mcp__');
   const display = isMcp ? call.name.replace(/^mcp__[^_]*__/, '').replace(/^mcp__/, '') : call.name;
 
+  // Local 1-second tick while the tool is running, so "running Xs" advances
+  // smoothly between the 5s server-side heartbeats. Disabled (and cleaned up)
+  // as soon as the tool finishes — an idle session pays nothing.
+  const isRunning = call.status === 'running';
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!isRunning || !call.startedAt) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [isRunning, call.startedAt]);
+
   const StatusIcon = call.status === 'running' ? Loader2 : call.status === 'error' ? X : Check;
   const statusColor =
     call.status === 'error'
@@ -38,6 +55,18 @@ function ToolCallBlockInner({ call }: ToolCallBlockProps) {
       : call.status === 'running'
         ? 'text-warning bg-warning/10'
         : 'text-success bg-success/10';
+
+  // Elapsed seconds derived client-side from `startedAt` (when the
+  // tool_call_start event arrived). Falls back to `elapsedMs` from a
+  // server heartbeat if the start timestamp is missing (e.g. legacy event
+  // before the dashboard upgrade). Only meaningful while running.
+  const elapsedSec = isRunning
+    ? call.startedAt
+      ? Math.floor((Date.now() - call.startedAt) / 1000)
+      : call.elapsedMs !== undefined
+        ? Math.floor(call.elapsedMs / 1000)
+        : null
+    : null;
 
   return (
     <div className="my-2 rounded-lg border bg-muted/30 overflow-hidden text-xs">
@@ -58,12 +87,21 @@ function ToolCallBlockInner({ call }: ToolCallBlockProps) {
             mcp
           </Badge>
         )}
-        {call.durationMs !== undefined && (
+        {call.durationMs !== undefined ? (
           <span className="ml-auto text-muted-foreground tabular-nums shrink-0">{call.durationMs}ms</span>
-        )}
+        ) : elapsedSec !== null ? (
+          <span className="ml-auto text-muted-foreground tabular-nums shrink-0">
+            running {elapsedSec}s
+          </span>
+        ) : null}
       </button>
       {open && (
         <div className="px-3 pb-3 pt-1 space-y-2 border-t bg-background/50">
+          {isRunning && call.progressNote && (
+            <div className="mt-2 rounded-md border border-warning/30 bg-warning/[0.06] px-2 py-1.5 font-mono text-[11px] text-warning-foreground">
+              {call.progressNote}
+            </div>
+          )}
           {call.input !== undefined && call.input !== null && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-2 mb-1">{t('messages.toolInput')}</div>

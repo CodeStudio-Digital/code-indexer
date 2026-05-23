@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, ClipboardList, Copy, X } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Textarea } from '../../../components/ui/textarea.js';
+import { copyText } from '../../../lib/clipboard.js';
 import { cn } from '../../../lib/utils.js';
 import { Markdown } from '../messages/Markdown.js';
 
@@ -17,12 +18,9 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
   const [resolved, setResolved] = useState<string | undefined>(plan.resolved);
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(plan.plan);
+    if (await copyText(plan.plan)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* ignore */
     }
   };
   return (
