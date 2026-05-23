@@ -170,6 +170,35 @@ export interface InteractionPending {
 }
 
 /**
+ * Bus event payload emitted whenever one of the four loop-detection
+ * guards (dup-call cap, strict / fuzzy doom-loop, dominance) fires.
+ * Dashboard renders a banner so the user sees the intervention live
+ * instead of having to scrape the server log. Apêndice 3 — silent-
+ * failure work.
+ */
+export interface ToolLoopIntervention {
+  kind: 'dup-call-cap' | 'doom-loop-strict' | 'doom-loop-fuzzy' | 'dominance';
+  turn: number;
+  toolName: string;
+  count: number;
+  threshold: number;
+  window: number;
+  severity: 'refused' | 'aborted';
+  reason: string;
+  /** Diagnostic snapshot of the three guard arrays — explains WHY
+   *  the other guards didn't fire (e.g. fuzzy was 4/6 when dominance
+   *  fired). */
+  snapshot: {
+    strict: string[];
+    fuzzy: string[];
+    dominance: Array<{ name: string; hadText: boolean }>;
+  };
+  /** Wall-clock when the dashboard received the event — useful for
+   *  auto-dismiss / sorting when multiple alerts stack. */
+  receivedAt: number;
+}
+
+/**
  * Per-node runtime status for the chat pipeline runtime overlay.
  * Reduced from the SSE `pipeline_node_*` events. The dashboard mini-graph
  * colors nodes by `status`.
@@ -258,6 +287,12 @@ export interface SessionState {
    * so the user sees new agent edits land in the review UI live.
    */
   snapshotTick: number;
+  /**
+   * Loop-detection interventions delivered by the bus during this run.
+   * Newest first. Cap at 5 — older interventions are dropped to keep the
+   * banner stack manageable. Cleared on next successful user message.
+   */
+  toolLoopInterventions: ToolLoopIntervention[];
 }
 
 export const ZERO_DELTA: RunDelta = {
@@ -283,6 +318,7 @@ export const EMPTY_STATE: SessionState = {
   pipelineRuntime: null,
   sidebarRefreshTick: 0,
   snapshotTick: 0,
+  toolLoopInterventions: [],
 };
 
 export type SessionPatch =

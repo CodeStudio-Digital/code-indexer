@@ -452,6 +452,18 @@ function doomLoopThreshold(): number { return envInt('CODER_DOOM_LOOP_THRESHOLD'
 const DOOM_LOOP_FUZZY_THRESHOLD = Number(process.env.CODER_DOOM_LOOP_FUZZY_THRESHOLD ?? 6);
 
 /**
+ * Opt-in debug logging for the 3 doom-loop guards (strict, fuzzy,
+ * dominance) + the dup-call cap. When `CODER_DOOM_LOOP_DEBUG=1` every
+ * push, reset, and check writes a structured `[doom-loop-debug]` line
+ * so we can diagnose cases where a guard SHOULD have fired but didn't
+ * (e.g. session 722 — 67 update_todo calls without any guard catching).
+ *
+ * Zero overhead when the flag is off — the boolean is captured at
+ * module load and gates each log site.
+ */
+const DEBUG_DOOM_LOOP = process.env.CODER_DOOM_LOOP_DEBUG === '1';
+
+/**
  * Per-arg duplicate-call cap (Fix F — session 609 regression). The fuzzy
  * guard above only catches identical tool *names* in a row; it misses
  * cycles where the model rotates 5 different read_file slices and the
@@ -1238,6 +1250,41 @@ export interface RunnerEvents {
    * timeout (`MCP_QUALITY_NUDGE_WAIT_TIMEOUT_MS`) using this signal.
    */
   quality_nudge_missed: (payload: { runId: string; turn: number }) => void;
+  /**
+   * Emitted when one of the four loop-detection guards fires. Lets the
+   * dashboard show a banner instead of just logging to the server
+   * terminal — historically the user only learned about a loop by
+   * noticing the session was burning tokens with no progress. The
+   * snapshot carries the internal state so future debugging can answer
+   * "WHY did this guard fire and the others didn't?" without needing
+   * to enable `CODER_DOOM_LOOP_DEBUG`. Phase 3 of the "living company"
+   * restructure (Apêndice 3).
+   */
+  tool_loop_intervention: (payload: {
+    /** Which guard tripped. */
+    kind: 'dup-call-cap' | 'doom-loop-strict' | 'doom-loop-fuzzy' | 'dominance';
+    turn: number;
+    /** Tool name (single) for dup-call/dominance; comma-joined for strict/fuzzy. */
+    toolName: string;
+    /** Count that triggered the guard (e.g. 5 for dup-call, 6 for fuzzy). */
+    count: number;
+    /** Threshold the count crossed. */
+    threshold: number;
+    /** Sliding window size (turns). */
+    window: number;
+    /** Whether this fired in "refused" mode (just blocked the call) or
+     *  "aborted" mode (terminated the whole run). */
+    severity: 'refused' | 'aborted';
+    /** Snapshot of the three guard arrays so the dashboard can show
+     *  WHY the other guards didn't fire. */
+    snapshot: {
+      strict: string[];
+      fuzzy: string[];
+      dominance: Array<{ name: string; hadText: boolean }>;
+    };
+    /** Short human reason for UI. */
+    reason: string;
+  }) => void;
 }
 
 /**
@@ -1466,6 +1513,43 @@ export class CoderRunner extends EventEmitter {
   private lastTransition: TransitionKind | null = null;
   private setTransition(kind: TransitionKind): void {
     this.lastTransition = kind;
+  }
+
+  /**
+   * Emit a `tool_loop_intervention` event with a full snapshot of the
+   * three guard arrays. Centralised here so all four loop-detection
+   * sites (dup-call cap, strict/fuzzy doom-loop, dominance) ship the
+   * same payload shape — the dashboard then renders a single banner
+   * pattern regardless of which guard fired.
+   *
+   * Defensive: the bus subscriber lives in the parent process or the
+   * worker bridge; throws here would tear down the run. Wrap the emit
+   * so a misbehaving listener can't poison the loop.
+   */
+  private emitToolLoopIntervention(payload: {
+    kind: 'dup-call-cap' | 'doom-loop-strict' | 'doom-loop-fuzzy' | 'dominance';
+    turn: number;
+    toolName: string;
+    count: number;
+    threshold: number;
+    window: number;
+    severity: 'refused' | 'aborted';
+    reason: string;
+  }): void {
+    try {
+      this.emit('tool_loop_intervention', {
+        ...payload,
+        snapshot: {
+          strict: [...this.recentTurnSignatures].map((s) => s.slice(0, 80)),
+          fuzzy: [...this.recentTurnNamesSignatures],
+          dominance: this.recentTurnDominance.map((e) => ({ name: e.name, hadText: e.hadText })),
+        },
+      });
+    } catch (e) {
+      console.warn(
+        `[coder] tool_loop_intervention emit failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   /**
@@ -3384,6 +3468,13 @@ export class CoderRunner extends EventEmitter {
             continue;
           }
 
+          if (DEBUG_DOOM_LOOP) {
+            console.debug(
+              `[doom-loop-debug] turn=${turn} RESET arrays cause=text-only-completion ` +
+                `(strict.len=${this.recentTurnSignatures.length}, fuzzy.len=${this.recentTurnNamesSignatures.length}, ` +
+                `dominance.len=${this.recentTurnDominance.length}, toolCallFreq.size=${this.toolCallFreq.size})`,
+            );
+          }
           this.recentTurnSignatures.length = 0;
           this.recentTurnNamesSignatures.length = 0;
           this.recentTurnDominance.length = 0;
@@ -3442,6 +3533,12 @@ export class CoderRunner extends EventEmitter {
           if (this.recentTurnSignatures.length > dlThresh) {
             this.recentTurnSignatures.shift();
           }
+          if (DEBUG_DOOM_LOOP) {
+            console.debug(
+              `[doom-loop-debug] turn=${turn} strict.push sig=${sig.slice(0, 80)} ` +
+                `arr.len=${this.recentTurnSignatures.length}/${dlThresh}`,
+            );
+          }
           if (
             this.recentTurnSignatures.length === dlThresh &&
             this.recentTurnSignatures.every((s) => s === sig && s !== '')
@@ -3451,10 +3548,28 @@ export class CoderRunner extends EventEmitter {
               `Last signature: ${sig.slice(0, 200)}${sig.length > 200 ? '…' : ''}. ` +
               `Aborting to avoid cost runaway — fix the underlying issue (wrong args, missing file, bad permission) before retrying.`,
             );
-            console.warn(`[coder] doom-loop aborted at turn ${turn}: ${sig.slice(0, 120)}`);
+            console.warn(
+              `[coder] doom-loop aborted at turn ${turn}: ${sig.slice(0, 120)} ` +
+                `(full strict array: ${JSON.stringify(this.recentTurnSignatures.map((s) => s.slice(0, 60)))})`,
+            );
+            this.emitToolLoopIntervention({
+              kind: 'doom-loop-strict',
+              turn,
+              toolName: toolUseBlocks.map((b) => b.name).join(','),
+              count: dlThresh,
+              threshold: dlThresh,
+              window: dlThresh,
+              severity: 'aborted',
+              reason: `Same tool call repeated ${dlThresh} turns in a row without progress.`,
+            });
             this.setTransition('doom-loop-strict');
             return this.finishWith(totalUsage, 'doom_loop', err);
           }
+        } else if (DEBUG_DOOM_LOOP && turnAllRepeatable) {
+          console.debug(
+            `[doom-loop-debug] turn=${turn} strict.SKIPPED reason=turnAllRepeatable ` +
+              `tools=${toolUseBlocks.map((b) => b.name).join(',')}`,
+          );
         }
 
         // Fuzzy doom-loop guard: catches "same tool names, tweaked args"
@@ -3466,6 +3581,16 @@ export class CoderRunner extends EventEmitter {
           if (this.recentTurnNamesSignatures.length > DOOM_LOOP_FUZZY_THRESHOLD) {
             this.recentTurnNamesSignatures.shift();
           }
+          if (DEBUG_DOOM_LOOP) {
+            const allEqual = this.recentTurnNamesSignatures.every(
+              (s) => s === loose && s !== '',
+            );
+            console.debug(
+              `[doom-loop-debug] turn=${turn} fuzzy.push loose="${loose}" ` +
+                `arr.len=${this.recentTurnNamesSignatures.length}/${DOOM_LOOP_FUZZY_THRESHOLD} ` +
+                `allEqual=${allEqual} arr=${JSON.stringify(this.recentTurnNamesSignatures)}`,
+            );
+          }
           if (
             this.recentTurnNamesSignatures.length === DOOM_LOOP_FUZZY_THRESHOLD &&
             this.recentTurnNamesSignatures.every((s) => s === loose && s !== '')
@@ -3474,10 +3599,25 @@ export class CoderRunner extends EventEmitter {
               `Doom loop detected (fuzzy): the same tool set (${loose}) ran ${DOOM_LOOP_FUZZY_THRESHOLD} turns in a row with tweaked arguments and no progress. ` +
               `Aborting to avoid cost runaway — the model is likely retrying with minor variations instead of adjusting strategy.`,
             );
-            console.warn(`[coder] fuzzy doom-loop aborted at turn ${turn}: ${loose.slice(0, 120)}`);
+            console.warn(
+              `[coder] fuzzy doom-loop aborted at turn ${turn}: ${loose.slice(0, 120)} ` +
+                `(full fuzzy array: ${JSON.stringify(this.recentTurnNamesSignatures)})`,
+            );
+            this.emitToolLoopIntervention({
+              kind: 'doom-loop-fuzzy',
+              turn,
+              toolName: loose,
+              count: DOOM_LOOP_FUZZY_THRESHOLD,
+              threshold: DOOM_LOOP_FUZZY_THRESHOLD,
+              window: DOOM_LOOP_FUZZY_THRESHOLD,
+              severity: 'aborted',
+              reason: `Same tool set (${loose}) ran ${DOOM_LOOP_FUZZY_THRESHOLD} turns with tweaked args and no progress.`,
+            });
             this.setTransition('doom-loop-fuzzy');
             return this.finishWith(totalUsage, 'doom_loop', err);
           }
+        } else if (DEBUG_DOOM_LOOP && turnAllRepeatable) {
+          console.debug(`[doom-loop-debug] turn=${turn} fuzzy.SKIPPED reason=turnAllRepeatable`);
         }
 
         // Dominance guard (Fix G — session 609 regression). Even when the
@@ -3508,6 +3648,13 @@ export class CoderRunner extends EventEmitter {
               if (c > topCount) { topCount = c; topName = n; }
             }
             const ratio = topCount / DOMINANCE_WINDOW;
+            if (DEBUG_DOOM_LOOP) {
+              console.debug(
+                `[doom-loop-debug] turn=${turn} dominance.check window=${DOMINANCE_WINDOW} ` +
+                  `top=${topName}@${topCount}(${Math.round(ratio * 100)}%) textTurns=${textTurns} ` +
+                  `ratioThr=${DOMINANCE_RATIO} fires=${ratio >= DOMINANCE_RATIO && textTurns === 0 && !!topName}`,
+              );
+            }
             if (ratio >= DOMINANCE_RATIO && textTurns === 0 && topName) {
               const err = new Error(
                 `Stuck-loop detected (dominance): \`${topName}\` ran ${topCount}/${DOMINANCE_WINDOW} turns ` +
@@ -3519,10 +3666,27 @@ export class CoderRunner extends EventEmitter {
               console.warn(
                 `[coder] dominance loop aborted at turn ${turn}: ${topName} ${topCount}/${DOMINANCE_WINDOW} no-text`,
               );
+              this.emitToolLoopIntervention({
+                kind: 'dominance',
+                turn,
+                toolName: topName,
+                count: topCount,
+                threshold: Math.ceil(DOMINANCE_WINDOW * DOMINANCE_RATIO),
+                window: DOMINANCE_WINDOW,
+                severity: 'aborted',
+                reason: `\`${topName}\` ran ${topCount}/${DOMINANCE_WINDOW} turns (${Math.round(ratio * 100)}%) with zero assistant text.`,
+              });
               this.setTransition('doom-loop-fuzzy');
               return this.finishWith(totalUsage, 'doom_loop', err);
             }
+          } else if (DEBUG_DOOM_LOOP) {
+            console.debug(
+              `[doom-loop-debug] turn=${turn} dominance.push name="${primaryName}" hadText=${hadText} ` +
+                `arr.len=${this.recentTurnDominance.length}/${DOMINANCE_WINDOW}`,
+            );
           }
+        } else if (DEBUG_DOOM_LOOP && turnAllRepeatable) {
+          console.debug(`[doom-loop-debug] turn=${turn} dominance.SKIPPED reason=turnAllRepeatable`);
         }
 
         // Execute each tool call sequentially and collect results.
@@ -3713,6 +3877,13 @@ export class CoderRunner extends EventEmitter {
             const filtered = prior.filter((t) => t > minTurn);
             filtered.push(turn);
             this.toolCallFreq.set(argHash, filtered);
+            if (DEBUG_DOOM_LOOP) {
+              console.debug(
+                `[doom-loop-debug] turn=${turn} dupCall.push tool=${block.name} ` +
+                  `argHash=${argHash.slice(0, 12)} count=${filtered.length}/${DUP_CALL_THRESHOLD} ` +
+                  `window=${DUP_CALL_WINDOW}`,
+              );
+            }
             if (filtered.length >= DUP_CALL_THRESHOLD) {
               const refusal =
                 `Refused: \`${block.name}\` was called with these exact arguments ${filtered.length} ` +
@@ -3735,8 +3906,22 @@ export class CoderRunner extends EventEmitter {
                 content: refusal,
                 isError: true,
               }, 0);
+              this.emitToolLoopIntervention({
+                kind: 'dup-call-cap',
+                turn,
+                toolName: block.name,
+                count: filtered.length,
+                threshold: DUP_CALL_THRESHOLD,
+                window: DUP_CALL_WINDOW,
+                severity: 'refused',
+                reason: `\`${block.name}\` called with identical args ${filtered.length}× in last ${DUP_CALL_WINDOW} turns — call refused.`,
+              });
               continue; // skip the dispatch below
             }
+          } else if (DEBUG_DOOM_LOOP && isRepeatable) {
+            console.debug(
+              `[doom-loop-debug] turn=${turn} dupCall.SKIPPED tool=${block.name} reason=repeatable`,
+            );
           }
 
           // Wire #5 (Nível 2) — Policy hard-block. Runs BEFORE the

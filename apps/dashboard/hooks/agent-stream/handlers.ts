@@ -9,6 +9,7 @@ import type {
   StreamTaskStatus,
   TodoItem,
   ToolCallEvent,
+  ToolLoopIntervention,
   UpdateSession,
   Usage,
 } from './types.js';
@@ -250,6 +251,16 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // off refreshKey (state-summary fetch, banners) update in lockstep with
       // the prop-driven todo render.
       updateSession(sid, (cur) => ({ todos, sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
+    },
+
+    tool_loop_intervention: (data) => {
+      // Server-emitted when any of the four loop-detection guards fired.
+      // Prepend so the most recent intervention shows first; cap at 5 to
+      // avoid an unbounded banner stack on pathological sessions.
+      const event = { ...(data as ToolLoopIntervention), receivedAt: Date.now() };
+      updateSession(sid, (cur) => ({
+        toolLoopInterventions: [event, ...cur.toolLoopInterventions].slice(0, 5),
+      }));
     },
 
     message_complete: (data) => {

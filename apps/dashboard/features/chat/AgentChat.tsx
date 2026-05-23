@@ -22,6 +22,7 @@ import { providerSupportsThinking } from './composer/provider-caps.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { MessageList } from './messages/MessageList.js';
+import { ToolLoopBanner } from './ToolLoopBanner.js';
 import { SessionDetailsModal } from './SessionDetailsModal.js';
 import { SessionMetricsModal } from './SessionMetricsModal.js';
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
@@ -105,6 +106,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     indexStatus,
     sidebarRefreshTick,
     snapshotTick,
+    toolLoopInterventions,
     sendMessage,
     reattach,
     abort,
@@ -855,6 +857,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 />
               )}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+                <ToolLoopBanner interventions={toolLoopInterventions} />
                 <MessageList
                   sessionData={sessionData ?? null}
                   currentTurn={currentTurn}
