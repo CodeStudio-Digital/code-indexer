@@ -16,7 +16,6 @@
 import { useEffect, useState } from 'react';
 import { AlertCircle, BarChart3, RefreshCw, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
-import { ScrollArea } from '../../components/ui/scroll-area.js';
 import { Badge } from '../../components/ui/badge.js';
 
 interface ToolStatsResponse {
@@ -115,7 +114,12 @@ export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps
           </div>
         )}
 
-        <ScrollArea className="flex-1 min-h-0">
+        {/* Native scroll container — Radix ScrollArea inside flex layouts
+            wouldn't compute Viewport height reliably (Viewport relies on
+            `h-full` which collapses when the Root's height is implicit).
+            `min-h-0` lets the flex item shrink below content size so
+            `overflow-y-auto` can actually clip and scroll. */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="p-4 space-y-4">
             {loading && !data && (
               <div className="text-xs text-muted-foreground">Loading tool stats…</div>
@@ -228,7 +232,7 @@ export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps
               </>
             )}
           </div>
-        </ScrollArea>
+        </div>
       </div>
     </div>
   );
