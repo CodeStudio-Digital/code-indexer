@@ -88,6 +88,26 @@ export function mountCoderStreamRoutes(
   });
 
   /**
+   * Tool-call breakdown for a session — used by the "Tool Stats" modal
+   * in the chat header. Single round-trip diagnosis when the user
+   * suspects the agent is looping (session 722: 67 update_todo calls
+   * dominating 31% of the run). Cap `recent` via query string for
+   * heavier debug sessions.
+   */
+  app.get('/api/coder/sessions/:id/tool-stats', (c) => {
+    const id = parseIdParam(c);
+    const session = sessionStore.getSession(id);
+    if (!session) return c.json({ error: 'session not found' }, 404);
+    const recentRaw = c.req.query('recent');
+    const recent = recentRaw ? Number(recentRaw) : 30;
+    const stats = sessionStore.getToolCallStats(
+      id,
+      Number.isFinite(recent) && recent > 0 ? recent : 30,
+    );
+    return c.json({ sessionId: id, ...stats });
+  });
+
+  /**
    * Diagnose endpoint — the dashboard hits this when `/attach` returns
    * 404 to disambiguate the three states that collapse into the same
    * "no active run" HTTP response:

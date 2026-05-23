@@ -23,6 +23,7 @@ import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { MessageList } from './messages/MessageList.js';
 import { ToolLoopBanner } from './ToolLoopBanner.js';
+import { ToolStatsModal } from './ToolStatsModal.js';
 import { SessionDetailsModal } from './SessionDetailsModal.js';
 import { SessionMetricsModal } from './SessionMetricsModal.js';
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
@@ -75,6 +76,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [skillConfigOpen, setSkillConfigOpen] = useState(false);
   const [metricsOpen, setMetricsOpen] = useState(false);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
+  const [toolStatsOpen, setToolStatsOpen] = useState(false);
   const [snapshotPending, setSnapshotPending] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [metaSidebarOpen, setMetaSidebarOpen] = useState<boolean>(() => {
@@ -774,6 +776,11 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
         onOpenChange={setMetricsOpen}
         sessionId={selectedId}
       />
+      <ToolStatsModal
+        open={toolStatsOpen}
+        onClose={() => setToolStatsOpen(false)}
+        sessionId={selectedId}
+      />
       <ToolConfigDialog
         sessionId={selectedId}
         open={toolConfigOpen}
@@ -851,6 +858,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                   onOpenSkillConfig={() => setSkillConfigOpen(true)}
                   onOpenMetrics={() => setMetricsOpen(true)}
                   onOpenSnapshots={() => setSnapshotsOpen(true)}
+                  onOpenToolStats={() => setToolStatsOpen(true)}
                   pendingSnapshots={snapshotPending}
                   metaSidebarOpen={metaSidebarOpen}
                   onToggleMetaSidebar={() => setMetaSidebarOpen((v) => !v)}

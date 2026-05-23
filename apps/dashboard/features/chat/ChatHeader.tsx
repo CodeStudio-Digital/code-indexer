@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Bot, Gauge, GitCompare, Info, PanelLeft, PanelRightClose, PanelRightOpen, Sparkles, Wrench } from 'lucide-react';
+import { AlertTriangle, BarChart3, Bot, Gauge, GitCompare, Info, PanelLeft, PanelRightClose, PanelRightOpen, Sparkles, Wrench } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -29,6 +29,9 @@ interface ChatHeaderProps {
   onOpenSkillConfig?: () => void;
   onOpenMetrics?: () => void;
   onOpenSnapshots?: () => void;
+  /** Open the Tool Stats modal (aggregated coder_tool_calls breakdown).
+   *  Diagnostic helper added alongside the loop-detection banners. */
+  onOpenToolStats?: () => void;
   /** Pending file-snapshot count to badge on the Snapshots button. 0 hides the badge. */
   pendingSnapshots?: number;
   /** Whether the right-side Meta sidebar is currently open. */
@@ -37,7 +40,7 @@ interface ChatHeaderProps {
   onToggleMetaSidebar?: () => void;
 }
 
-export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar }: ChatHeaderProps) {
+export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar }: ChatHeaderProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Persisted (from DB) + runtime delta (current run, if streaming).
   const totalIn = session.total_input_tokens;
@@ -179,6 +182,21 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
               </button>
             </TooltipTrigger>
             <TooltipContent>{t('chat:header.metrics')}</TooltipContent>
+          </Tooltip>
+        )}
+        {onOpenToolStats && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="Tool stats"
+                onClick={onOpenToolStats}
+                className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <BarChart3 className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Tool stats — what is this session calling?</TooltipContent>
           </Tooltip>
         )}
         {onOpenSnapshots && (

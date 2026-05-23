@@ -1291,6 +1291,95 @@ export class SessionStore {
     return result.changes;
   }
 
+  /**
+   * Aggregate tool-call statistics for a session — used by the
+   * `/api/coder/sessions/:id/tool-stats` diagnostic endpoint so the
+   * operator can answer "what is this session actually doing?" in one
+   * click. Returns:
+   *   - `totalCalls` — overall count across all tools
+   *   - `byName`     — sorted descending by count
+   *   - `recent`     — last N rows (default 30) for chronological view
+   *
+   * Heavy session optimisation: queries are capped server-side and use
+   * the existing `idx_coder_messages_session` index. Empty results for
+   * a fresh session return zeros (not null) so the UI doesn't need a
+   * separate "no data" branch.
+   */
+  getToolCallStats(sessionId: number, recentLimit = 30): {
+    totalCalls: number;
+    byName: Array<{ name: string; count: number; errorCount: number; lastAt: string | null }>;
+    recent: Array<{
+      id: number;
+      name: string;
+      argsPreview: string;
+      isError: boolean;
+      durationMs: number;
+      createdAt: string;
+    }>;
+  } {
+    const byNameRows = this.db
+      .prepare(
+        `SELECT
+            tc.tool_name                  AS name,
+            COUNT(*)                      AS count,
+            COALESCE(SUM(tc.is_error), 0) AS errorCount,
+            MAX(tc.created_at)            AS lastAt
+         FROM coder_tool_calls tc
+         JOIN coder_messages m ON m.id = tc.message_id
+         WHERE m.session_id = ?
+         GROUP BY tc.tool_name
+         ORDER BY count DESC, name ASC`,
+      )
+      .all(sessionId) as Array<{
+        name: string;
+        count: number;
+        errorCount: number;
+        lastAt: string | null;
+      }>;
+    const totalCalls = byNameRows.reduce((acc, r) => acc + r.count, 0);
+    const cappedLimit = Math.max(1, Math.min(200, Math.floor(recentLimit)));
+    const recentRows = this.db
+      .prepare(
+        `SELECT
+            tc.id          AS id,
+            tc.tool_name   AS name,
+            tc.args_json   AS args_json,
+            tc.is_error    AS isError,
+            tc.duration_ms AS durationMs,
+            tc.created_at  AS createdAt
+         FROM coder_tool_calls tc
+         JOIN coder_messages m ON m.id = tc.message_id
+         WHERE m.session_id = ?
+         ORDER BY tc.id DESC
+         LIMIT ?`,
+      )
+      .all(sessionId, cappedLimit) as Array<{
+        id: number;
+        name: string;
+        args_json: string;
+        isError: number;
+        durationMs: number;
+        createdAt: string;
+      }>;
+    return {
+      totalCalls,
+      byName: byNameRows.map((r) => ({
+        name: r.name,
+        count: r.count,
+        errorCount: r.errorCount,
+        lastAt: r.lastAt,
+      })),
+      recent: recentRows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        argsPreview: (r.args_json ?? '').slice(0, 200),
+        isError: r.isError === 1,
+        durationMs: r.durationMs,
+        createdAt: r.createdAt,
+      })),
+    };
+  }
+
   // ─── Session groups (migration 009) ───────────────────────────
 
   listGroups(projectId: number): CoderSessionGroup[] {
