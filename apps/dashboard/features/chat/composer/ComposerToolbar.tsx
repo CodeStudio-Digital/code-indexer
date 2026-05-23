@@ -212,7 +212,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
       {/* Extended-thinking toggle. Only shown when the active provider/model
           declares `supportsThinking` (provider-caps.ts). Mirrors the chip
           styling of the `cap`/`full` button below for visual consistency. */}
-      {supportsThinking && setThinking && (
+      {(
         <button
           type="button"
           onClick={() => setThinking(!thinking)}
