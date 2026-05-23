@@ -182,11 +182,28 @@ export function useAgentStream(sessionId: number | null) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const json = (await res.json().catch(() => ({}))) as { resumed?: boolean };
+      const json = (await res.json().catch(() => ({}))) as {
+        resumed?: boolean;
+        // Apêndice 4 Fase 2 — the answer landed in the DB but the
+        // previous worker is gone. We need to spawn a fresh worker
+        // run from history via POST /messages instead of /continue
+        // (which would start a conflicting in-process runner).
+        resumed_via_worker?: boolean;
+      };
       if (json.resumed) {
         await runStream(
           sid,
           { url: `/api/coder/sessions/${sid}/continue`, method: 'POST', body: resumeBody },
+          onMessageComplete,
+        );
+      } else if (json.resumed_via_worker) {
+        await runStream(
+          sid,
+          {
+            url: `/api/coder/sessions/${sid}/messages`,
+            method: 'POST',
+            body: { content: '', resume: true, ...resumeBody },
+          },
           onMessageComplete,
         );
       }

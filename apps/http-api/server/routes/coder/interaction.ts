@@ -71,11 +71,17 @@ export function mountCoderInteractionRoutes(
     const id = parseIdParam(c);
     const body = await c.req.json<AnswerBody>();
     const answer = body.answer ?? '';
+    // Apêndice 4 Fase 2 — track whether we attempted the worker path.
+    // If yes and we still fall through, the response must signal
+    // `resumed_via_worker:true` so the dashboard POSTs `/messages`
+    // (spinning a new worker run) instead of `/continue` (which would
+    // start a conflicting in-process runner).
+    const inWorkerMode = coderWorkerEnabled();
     // P17 — worker mode: the runner lives in a worker_thread, so we
     // can't read `entry.runner` directly. Push the answer via the
     // pool's `provideUserInput` RPC; the worker resolves the pending
     // `waitForUserInput()` and the runner proceeds normally.
-    if (coderWorkerEnabled()) {
+    if (inWorkerMode) {
       try {
         const ok = await getCoderWorkerPool().provideUserInput(
           id,
@@ -109,16 +115,21 @@ export function mountCoderInteractionRoutes(
       }],
     };
     sessionStore.appendMessage(id, toolMsg);
-    return c.json({ ok: true, resumed: true });
+    return c.json(
+      inWorkerMode
+        ? { ok: true, resumed_via_worker: true }
+        : { ok: true, resumed: true },
+    );
   });
 
   app.post('/api/coder/sessions/:id/plan-response', async (c) => {
     const id = parseIdParam(c);
     const body = await c.req.json<PlanResponseBody>();
     const approved = !!body.approved;
+    const inWorkerMode = coderWorkerEnabled(); // Apêndice 4 Fase 2.
     // P17 — worker mode: forward the verdict via the pool RPC so the
     // worker-side runner unblocks. See `/answer` for the rationale.
-    if (coderWorkerEnabled()) {
+    if (inWorkerMode) {
       try {
         const ok = await getCoderWorkerPool().provideUserInput(
           id,
@@ -182,7 +193,11 @@ export function mountCoderInteractionRoutes(
         }
       }
     }
-    return c.json({ ok: true, resumed: true });
+    return c.json(
+      inWorkerMode
+        ? { ok: true, resumed_via_worker: true }
+        : { ok: true, resumed: true },
+    );
   });
 
   /**
@@ -232,6 +247,7 @@ export function mountCoderInteractionRoutes(
     const id = parseIdParam(c);
     const body = await c.req.json<TasksResponseBody>();
     const approved = !!body.approved;
+    const inWorkerMode = coderWorkerEnabled(); // Apêndice 4 Fase 2.
 
     // P17 — worker mode: forward the verdict via the pool RPC. The
     // worker's `submit_tasks` is blocked in `waitForUserInput()`; this
@@ -241,7 +257,7 @@ export function mountCoderInteractionRoutes(
     // the worker stays blocked, leaving session state inconsistent
     // (UI shows "rejected" even when user clicked approve, because
     // `resolveTasks(approved:false)` runs on the worker side too).
-    if (coderWorkerEnabled()) {
+    if (inWorkerMode) {
       try {
         const ok = await getCoderWorkerPool().provideUserInput(
           id,
@@ -301,7 +317,11 @@ export function mountCoderInteractionRoutes(
       ],
     };
     sessionStore.appendMessage(id, toolMsg);
-    return c.json({ ok: true, resumed: true });
+    return c.json(
+      inWorkerMode
+        ? { ok: true, resumed_via_worker: true }
+        : { ok: true, resumed: true },
+    );
   });
 
   // Set/clear fallback provider+model for a session

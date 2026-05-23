@@ -1672,10 +1672,16 @@ export class CoderRunner extends EventEmitter {
         this.handleWatchdogVerdict(verdict, turn, trigger.suspectTool);
       })
       .catch((e) => {
+        // Apêndice 4 Fase 1 — include name + stack so the post-mortem
+        // can tell a network blip apart from a TypeError in our own
+        // code. Previously this was just `e.message` which often left
+        // the failure mode ambiguous.
+        const name = e instanceof Error ? e.name : 'unknown';
+        const message = e instanceof Error ? e.message : String(e);
+        const stack = e instanceof Error ? e.stack : undefined;
         console.warn(
-          `[quality-watchdog] analyze failed at turn ${turn}: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
+          `[quality-watchdog] analyze failed at turn ${turn}: ${name}: ${message}` +
+            (stack ? `\n${stack}` : ''),
         );
       });
   }

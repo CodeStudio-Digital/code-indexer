@@ -49,6 +49,14 @@ interface SendMessageBody {
    * call `get_skill_content` first.
    */
   selected_skill_ids?: string[];
+  /**
+   * Apêndice 4 Fase 2 — when true, the runner resumes from history
+   * instead of pushing a new user turn. Used by the dashboard after an
+   * `/answer` / `/plan-response` / `/tasks-response` returned
+   * `{resumed_via_worker: true}` (the answer was appended to the DB but
+   * the previous worker is gone). `content` may be empty in this mode.
+   */
+  resume?: boolean;
 }
 
 /**
@@ -140,7 +148,11 @@ export function mountCoderStreamRoutes(
   app.post('/api/coder/sessions/:id/messages', async (c) => {
     const id = parseIdParam(c);
     const body = await c.req.json<SendMessageBody>();
-    if (!body.content?.trim()) return c.json({ error: 'content required' }, 400);
+    // Apêndice 4 Fase 2 — resume-mode skips the content check: the
+    // dashboard sends `{resume: true, content: ''}` after an
+    // /answer-via-worker fallback, where the tool_result is already in
+    // history and there's no new user message to attach.
+    if (!body.resume && !body.content?.trim()) return c.json({ error: 'content required' }, 400);
 
     // The list of skill IDs is threaded through to the runner verbatim so it
     // can rematerialize the `<active_skills>` block per turn. We deliberately
@@ -222,6 +234,11 @@ export function mountCoderStreamRoutes(
           worktree: body.worktree,
           thinking: body.thinking,
           selectedSkillIds,
+          // Apêndice 4 Fase 2 — when the dashboard is resuming via the
+          // worker-fallback path, the synthetic tool_result is already
+          // in history. runCoder({resume:true}) picks up from there
+          // without pushing a new user turn.
+          resume: body.resume,
         });
         return { kind: 'fresh', bus: freshBus };
       }

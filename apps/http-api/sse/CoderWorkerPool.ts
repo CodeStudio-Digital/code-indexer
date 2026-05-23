@@ -113,6 +113,15 @@ export interface RunFreshOpts {
   thinking?: boolean;
   /** Skill IDs the user pre-selected in the sidebar; forwarded to runCoder. */
   selectedSkillIds?: string[];
+  /**
+   * When true, the worker calls `runCoder({ resume: true })` so the runner
+   * picks up from history (last DB message must be `role:'tool'`) instead
+   * of pushing a brand-new user turn. Used by the Apêndice 4 Fase 2
+   * interaction fallback when a previous worker died mid-wait — the
+   * dashboard POSTs `/messages` with `{ resume: true, content: '' }` to
+   * spawn a fresh worker that resumes from the tool_result just appended.
+   */
+  resume?: boolean;
 }
 
 export class CoderWorkerPool {
@@ -306,6 +315,26 @@ export class CoderWorkerPool {
       defaultRequestTimeoutMs: 120_000,
       onCrash: (err) => {
         this.log('error', `[coder-pool] worker session=${sessionId} crashed: ${err.message}`);
+        // Apêndice 4 Fase 1 — structured crash log so post-mortem can
+        // tie the dashboard "Connecting…" hang back to a specific
+        // worker exit. Behind MCP_CODER_WORKER_DEBUG=1 (cheap, but the
+        // stack can be noisy in prod logs).
+        if (process.env.MCP_CODER_WORKER_DEBUG === '1') {
+          const entry = this.entries.get(sessionId);
+          const now = Date.now();
+          console.error(
+            `[coder-pool] worker-crashed ${JSON.stringify({
+              sessionId,
+              errorName: err.name,
+              message: err.message,
+              stack: err.stack,
+              lastTouchedAt: entry?.lastTouchedAt ?? null,
+              msSinceLastTouch: entry?.lastTouchedAt ? now - entry.lastTouchedAt : null,
+              busEnded: entry?.bus?.ended ?? null,
+              hadEntry: !!entry,
+            })}`,
+          );
+        }
         // Notify the SSE pump BEFORE we drop the entry — otherwise
         // `waitEnded(bus)` (in `pumpBusToSSE`) hangs forever and the
         // dashboard sits on "Conectando…" with no terminal event. The

@@ -115,6 +115,24 @@ const bus = createBus(ctrl);
 let handle: RunCoderHandle | null = null;
 let runner: CoderRunner | null = null;
 
+// ─── Diagnostic state (Apêndice 4 Fase 1) ─────────────────────────
+//
+// When the worker dies mid-run, the `emitCrashToBus` log was previously
+// just `{kind, message}` — useful but missing the breadcrumbs needed to
+// localize the cause. We now record the last RPC name and the last bus
+// event so the crash log carries the recent activity that probably
+// triggered the throw. Gated by `MCP_CODER_WORKER_DEBUG=1` so prod
+// logs stay terse.
+const DEBUG = process.env.MCP_CODER_WORKER_DEBUG === '1';
+let lastRpc: string | null = null;
+let lastRpcAt = 0;
+let lastBusEventName: string | null = null;
+let lastBusEventAt = 0;
+function recordRpc(name: string): void {
+  lastRpc = name;
+  lastRpcAt = Date.now();
+}
+
 // ─── Process-level safety net ─────────────────────────────────────
 //
 // Worker threads don't share the main process's `process.on(...)`
@@ -130,10 +148,97 @@ let runner: CoderRunner | null = null;
 // These handlers publish a final `error` event + `markEnded` so the
 // SSE stream closes cleanly with a real reason before the process
 // exits.
+// ─── Crash classification (Apêndice 4 Fase 3) ─────────────────────
+//
+// The previous handler killed the worker on EVERY uncaughtException
+// and let Node 22+ default-kill on EVERY unhandledRejection. That's
+// safe but expensive: a transient provider stream hiccup (network
+// blip, rate-limit retry-after, broken pipe on a backgrounded fetch)
+// took out an active interactive session along with everything else.
+//
+// Classifier rules:
+//   - "fatal" names always terminate (TypeError, ReferenceError, etc.)
+//     — these signal a real bug, not a transient.
+//   - "recoverable" names + message patterns are kept alive UNLESS
+//     three of them land within a 60s window — at which point we
+//     stop pretending it's transient and escalate to fatal.
+//   - Unknown errors default to fatal (conservative). Opt out via
+//     MCP_CODER_WORKER_STRICT_CRASH=1 if a class of error keeps
+//     getting misclassified — that flag reverts to the old
+//     always-fatal behaviour.
+const STRICT_CRASH = process.env.MCP_CODER_WORKER_STRICT_CRASH === '1';
+const RECOVERABLE_ERROR_NAMES = new Set([
+  'AbortError',
+  'TimeoutError',
+  'FetchError',
+  'NetworkError',
+  'RequestError',
+]);
+const RECOVERABLE_MSG_PATTERN =
+  /rate limit|stream interrupted|premature close|socket hang up|aborted|ECONNRESET|EPIPE|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i;
+const FATAL_ERROR_NAMES = new Set([
+  'TypeError',
+  'ReferenceError',
+  'SyntaxError',
+  'RangeError',
+  'AssertionError',
+]);
+type CrashClass = 'recoverable' | 'fatal';
+function classifyCrash(err: unknown): CrashClass {
+  if (STRICT_CRASH) return 'fatal';
+  if (!(err instanceof Error)) return 'fatal';
+  if (FATAL_ERROR_NAMES.has(err.name)) return 'fatal';
+  if (RECOVERABLE_ERROR_NAMES.has(err.name)) return 'recoverable';
+  if (RECOVERABLE_MSG_PATTERN.test(err.message)) return 'recoverable';
+  return 'fatal';
+}
+let recentRecoverableTs: number[] = [];
+function recordRecoverableAndCheckEscalation(): CrashClass {
+  const now = Date.now();
+  // Sliding window of 60s.
+  recentRecoverableTs = recentRecoverableTs.filter((t) => now - t < 60_000);
+  recentRecoverableTs.push(now);
+  // 3rd recoverable in the window: stop forgiving — something is
+  // genuinely broken, take the worker down so the dashboard sees a
+  // terminal event instead of accumulating zombie state.
+  return recentRecoverableTs.length > 3 ? 'fatal' : 'recoverable';
+}
+
 let exitingFromCrash = false;
-function emitCrashToBus(prefix: string, message: string): void {
+function emitCrashToBus(prefix: string, message: string, err?: unknown): void {
   if (exitingFromCrash || bus.ended) return;
   exitingFromCrash = true;
+
+  // Apêndice 4 Fase 1 — Structured crash diagnostics. Behind
+  // `MCP_CODER_WORKER_DEBUG=1` so production logs stay terse but
+  // operators can flip the flag, reproduce, and learn from a single
+  // event WHAT was running when the worker died.
+  if (DEBUG) {
+    const now = Date.now();
+    const errorName = err instanceof Error ? err.name : null;
+    const stack = err instanceof Error ? err.stack : undefined;
+    let runnerWaitingForInput: boolean | null = null;
+    try { runnerWaitingForInput = runner?.isWaitingForInput?.() ?? null; } catch { /* ignore */ }
+    console.error(
+      `[coder-worker] crash ${JSON.stringify({
+        sessionId,
+        kind: prefix,
+        errorName,
+        message,
+        stack,
+        lastRpc,
+        lastRpcAt,
+        msSinceLastRpc: lastRpcAt ? now - lastRpcAt : null,
+        lastBusEventName,
+        lastBusEventAt,
+        msSinceLastBusEvent: lastBusEventAt ? now - lastBusEventAt : null,
+        runnerWaitingForInput,
+        currentTurn: runner?.turn ?? null,
+        busEnded: bus.ended,
+      })}`,
+    );
+  }
+
   try {
     publish(bus, 'error', { message: `${prefix}: ${message}`, sessionId });
     markEnded(bus, 'error', {
@@ -148,8 +253,27 @@ function emitCrashToBus(prefix: string, message: string): void {
 
 process.on('uncaughtException', (err) => {
   const message = err instanceof Error ? err.message : String(err);
-  console.error(`[coder-worker ${sessionId}] uncaughtException:`, err);
-  emitCrashToBus('uncaughtException', message);
+  const initialClass = classifyCrash(err);
+  const finalClass =
+    initialClass === 'recoverable' ? recordRecoverableAndCheckEscalation() : 'fatal';
+  if (finalClass === 'recoverable') {
+    console.warn(
+      `[coder-worker ${sessionId}] uncaughtException (recoverable, keeping worker alive):`,
+      err,
+    );
+    try {
+      publish(bus, 'warning', {
+        message: `recoverable uncaughtException: ${message}`,
+        errorName: err instanceof Error ? err.name : 'unknown',
+      });
+    } catch { /* best-effort */ }
+    return;
+  }
+  console.error(
+    `[coder-worker ${sessionId}] uncaughtException (${initialClass === 'recoverable' ? 'escalated' : 'fatal'}):`,
+    err,
+  );
+  emitCrashToBus('uncaughtException', message, err);
   // `setImmediate` lets the `bridge.emit('bus.end')` flush to the
   // parent thread BEFORE we exit; without it the parent never sees
   // the markEnded event and the dashboard hangs anyway.
@@ -158,11 +282,30 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason) => {
   const message = reason instanceof Error ? reason.message : String(reason);
-  console.error(`[coder-worker ${sessionId}] unhandledRejection:`, reason);
-  emitCrashToBus('unhandledRejection', message);
+  const initialClass = classifyCrash(reason);
+  const finalClass =
+    initialClass === 'recoverable' ? recordRecoverableAndCheckEscalation() : 'fatal';
+  if (finalClass === 'recoverable') {
+    console.warn(
+      `[coder-worker ${sessionId}] unhandledRejection (recoverable, keeping worker alive):`,
+      reason,
+    );
+    try {
+      publish(bus, 'warning', {
+        message: `recoverable unhandledRejection: ${message}`,
+        errorName: reason instanceof Error ? reason.name : 'unknown',
+      });
+    } catch { /* best-effort */ }
+    return;
+  }
+  console.error(
+    `[coder-worker ${sessionId}] unhandledRejection (${initialClass === 'recoverable' ? 'escalated' : 'fatal'}):`,
+    reason,
+  );
+  emitCrashToBus('unhandledRejection', message, reason);
   // Don't force exit — Node 22+ default kills the process anyway,
-  // but we want any chained `.catch()` handlers to still observe
-  // the rejection in case the runner can clean up gracefully.
+  // but the markEnded above guarantees the parent sees the terminal
+  // event before the process dies.
 });
 
 // Forward every bus event to main. `since: -1` replays the buffer so
@@ -170,6 +313,11 @@ process.on('unhandledRejection', (reason) => {
 subscribe(
   bus,
   (ev) => {
+    // Apêndice 4 Fase 1 — breadcrumb for crash diagnostics. The
+    // crash log includes "ms since last bus event" which is the
+    // fastest way to spot a worker dying mid-stream vs idle.
+    lastBusEventName = ev.event;
+    lastBusEventAt = Date.now();
     bridge.emit('bus.event', { seq: ev.seq, event: ev.event, data: ev.data });
   },
   -1,
@@ -193,9 +341,18 @@ interface RunFreshPayload {
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;
   selectedSkillIds?: string[];
+  /**
+   * Apêndice 4 Fase 2 — propagate `resume:true` to `runCoder` so the
+   * worker can pick up from history when the previous worker died
+   * mid-wait. Last DB message must be `role:'tool'`; the route handler
+   * appended the synthetic tool_result before calling runFresh, so the
+   * invariant holds.
+   */
+  resume?: boolean;
 }
 
 bridge.handle('runFresh', async (payload) => {
+  recordRpc('runFresh');
   const opts = payload as RunFreshPayload;
   if (handle) throw new Error('coder-worker: run already in progress');
   try {
@@ -210,6 +367,7 @@ bridge.handle('runFresh', async (payload) => {
       worktree: opts.worktree,
       thinking: opts.thinking,
       selectedSkillIds: opts.selectedSkillIds,
+      resume: opts.resume,
       signal: ctrl.signal,
       onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
       // Mirror the in-process wiring in routes/coder/stream.ts so the
@@ -254,11 +412,13 @@ bridge.handle('runFresh', async (payload) => {
 });
 
 bridge.handle('isWaitingForInput', () => {
+  recordRpc('isWaitingForInput');
   if (!runner) return false;
   return runner.isWaitingForInput();
 });
 
 bridge.handle('interruptWait', () => {
+  recordRpc('interruptWait');
   if (!runner) return { ok: false, reason: 'no_runner' };
   try {
     runner.interruptWait();
@@ -269,6 +429,7 @@ bridge.handle('interruptWait', () => {
 });
 
 bridge.handle('pushUserMessage', (payload) => {
+  recordRpc('pushUserMessage');
   const { content, selectedSkillIds } = payload as {
     content: string;
     selectedSkillIds?: string[];
@@ -288,6 +449,7 @@ bridge.handle('pushUserMessage', (payload) => {
  * leaves the in-flight tool dangling and pollutes session state.
  */
 bridge.handle('provideUserInput', (payload) => {
+  recordRpc('provideUserInput');
   const { value } = payload as { value: string };
   if (!runner) return { ok: false, reason: 'no_runner' };
   const accepted = runner.provideUserInput(value);
@@ -295,6 +457,7 @@ bridge.handle('provideUserInput', (payload) => {
 });
 
 bridge.handle('setThinking', (payload) => {
+  recordRpc('setThinking');
   const { thinking } = payload as { thinking: boolean };
   if (!runner) return { ok: false, reason: 'no_runner' };
   runner.setThinking(thinking);
@@ -302,6 +465,7 @@ bridge.handle('setThinking', (payload) => {
 });
 
 bridge.handle('abort', () => {
+  recordRpc('abort');
   try {
     ctrl.abort();
     if (runner) {
@@ -314,6 +478,7 @@ bridge.handle('abort', () => {
 });
 
 bridge.handle('stop', async () => {
+  recordRpc('stop');
   try {
     ctrl.abort();
     if (runner) {
