@@ -28,6 +28,13 @@ import type {
 import type { PipelineProviderResolver } from '../../pipelines/index.js';
 import { PDF_MAX_BYTES, parsePdf } from './pdf-parser.js';
 import { crawlUrl } from './crawler.js';
+import {
+  readFolder,
+  FOLDER_HARD_MAX_FILES,
+  FOLDER_DEFAULT_INCLUDE_GLOB,
+  FOLDER_DEFAULT_EXCLUDE_GLOB,
+  type FolderReaderEvent,
+} from './folder-reader.js';
 import { gatePages } from './relevance-gate.js';
 import { chunkMarkdown, estimateTokens } from './section-chunker.js';
 import { enrichChunks } from './enricher.js';
@@ -110,6 +117,24 @@ export interface IndexUrlInput {
   url: string;
   crawl?: DocCrawlConfig;
   title?: string;
+}
+
+/**
+ * Input para indexação por pasta (migration 103). `rootPath` é absoluto;
+ * a validação síncrona (existe + é dir + readable) vive no route HTTP,
+ * que rejeita 400 antes mesmo de chamar o use-case.
+ */
+export interface IndexFolderInput {
+  collectionId: number;
+  rootPath: string;
+  title?: string;
+  folder?: {
+    include_glob?: string | null;
+    exclude_glob?: string | null;
+    max_files?: number | null;
+    /** Default true: pula o LLM gate (docs locais geralmente curados). */
+    bypass_relevance_gate?: boolean;
+  };
 }
 
 export class IndexDocumentationUseCase {
@@ -215,6 +240,104 @@ export class IndexDocumentationUseCase {
       return acceptedLength;
     });
     return this.estimateFromPages(heuristic, pages.length);
+  }
+
+// ─── Folder entry point (migration 103) ─────────────────────────
+
+  /**
+   * Indexa uma pasta no filesystem do servidor. Caso de uso real: a
+   * doc offline do Unity Editor (`…\Editor\Data\Documentation\en\
+   * ScriptReference\`) — milhares de HTML estáticos prontos pra
+   * chunkar sem precisar de crawler/Chromium/429.
+   *
+   * Pipeline:
+   *   1. ensureSource({type:'folder', uri:'folder://…', folder_root_path, …})
+   *   2. readFolder(…) → RawPage[]   (substitui crawl/parsePdf)
+   *   3. runIngest(…, { skipGate: source.folder_bypass_relevance_gate })
+   *
+   * O `defaultCrawlConfig` retorna `{}` para folder sources (no-op no
+   * re-index), e os campos `folder_*` em `doc_sources` servem como
+   * fonte de verdade pro re-index herdar configuração.
+   */
+  async indexFolder(
+    input: IndexFolderInput,
+    callbacks?: IndexDocStreamCallbacks,
+  ): Promise<DocIngestResult> {
+    const collection = this.requireCollection(input.collectionId);
+    const rootPath = input.rootPath;
+    // O route já valida (existe, é dir, readable). Aqui só normalizamos
+    // — o source.uri é o root_path em si com prefixo folder:// pra
+    // distinguir de file:// (que tem semântica RFC mais estrita).
+    const uri = `folder://${rootPath}`;
+    const source = this.ensureSource({
+      collection_id: collection.id,
+      type: 'folder',
+      uri,
+      title: input.title ?? null,
+      folder_root_path: rootPath,
+      folder: input.folder,
+    });
+    // `defaultCrawlConfig` para folder retorna `{}` — então o re-index
+    // (sem `input.folder`) lê os defaults persistidos. O caso atual
+    // (primeira indexação OU re-index com override) já está coberto
+    // pelo `ensureSource` acima que grava `folder_*` quando presentes.
+    const skipGate = source.folder_bypass_relevance_gate;
+    return this.runIngest(
+      collection,
+      source,
+      async () => {
+        // Fase "reading" — análoga ao "fetching" do URL, distinta para
+        // a UI rotular corretamente.
+        await callbacks?.onProgress?.({
+          phase: 'reading',
+          current: 0,
+          total: 0,
+          label: rootPath,
+        });
+        const result = await readFolder({
+          rootPath,
+          includeGlob: source.folder_include_glob ?? FOLDER_DEFAULT_INCLUDE_GLOB,
+          excludeGlob: source.folder_exclude_glob ?? FOLDER_DEFAULT_EXCLUDE_GLOB,
+          maxFiles: source.folder_max_files ?? undefined,
+          sourceId: source.id,
+          onEvent: (ev: FolderReaderEvent) => {
+            // Atualiza o progress tracker per-file. O `total` é o N de
+            // arquivos a processar (após cap). Apenas eventos `file`
+            // contam pro progresso visual — `skip`/`error` viram log.
+            if (ev.kind === 'file') {
+              this.deps.progressTracker?.put(source.id, {
+                phase: 'reading',
+                current: ev.index,
+                total: ev.total,
+                label: ev.filePath,
+                pages_fetched: ev.index,
+              });
+              void callbacks?.onProgress?.({
+                phase: 'reading',
+                current: ev.index,
+                total: ev.total,
+                label: ev.filePath,
+                pages_fetched: ev.index,
+              });
+            } else {
+              console.log(
+                `[doc-indexer] folder ${ev.kind}: ${ev.filePath}` +
+                  ('reason' in ev ? ` (${ev.reason})` : '') +
+                  ('message' in ev ? ` — ${ev.message}` : ''),
+              );
+            }
+          },
+        });
+        console.log(
+          `[doc-indexer] folder read done source=${source.id} scanned=${result.filesScanned} ` +
+            `processed=${result.filesProcessed} skipped=${result.filesSkipped} errored=${result.filesErrored} ` +
+            `pages=${result.pages.length} (cap=${FOLDER_HARD_MAX_FILES})`,
+        );
+        return result.pages;
+      },
+      callbacks,
+      { skipGate },
+    );
   }
 
   // ─── Delete + remote vector cleanup ──────────────────────────────
@@ -505,6 +628,14 @@ export class IndexDocumentationUseCase {
     source: DocSource,
     produceRawPages: () => Promise<RawPage[]>,
     callbacks?: IndexDocStreamCallbacks,
+    /**
+     * Opcional: pula o LLM relevance gate completamente. Folder sources
+     * com `folder_bypass_relevance_gate=true` (default) passam isso —
+     * docs locais geralmente já vêm curadas, não pagar LLM por arquivo
+     * é o ponto da feature. URL/PDF nunca pulam (assumem páginas
+     * fetched do mundo aberto, ainda precisam de gate).
+     */
+    runOpts?: { skipGate?: boolean },
   ): Promise<DocIngestResult> {
     const { docStore, progressTracker } = this.deps;
     const startedAt = Date.now();
@@ -554,43 +685,66 @@ export class IndexDocumentationUseCase {
         pages_via_browser: pagesViaBrowser,
       });
 
-      // ── Phase 2: gate ────────────────────────────────────────────
-      await tracked.onProgress?.({
-        phase: 'gating',
-        current: 0,
-        total: rawPages.length,
-      });
-      console.log(`[doc-indexer] phase=gating source=${source.id} pages=${rawPages.length}`);
-      const verdicts = await gatePages(rawPages, {
-        resolver: this.deps.pipelineProviderResolver,
-        resolveContext: this.deps.resolveContext,
-      });
-      const accepted: RawPage[] = [];
-      let rejected = 0;
-      for (let i = 0; i < rawPages.length; i++) {
-        const v = verdicts[i];
-        const page = rawPages[i]!;
-        if (v?.accept) {
+      // ── Phase 2: gate (skippable) ────────────────────────────────
+      let accepted: RawPage[];
+      let rejected: number;
+      if (runOpts?.skipGate) {
+        // Folder bypass path: trata cada page como aceita sem chamar o
+        // LLM. Marca o gate_reason pra telemetria diferenciar "passou
+        // sem ser avaliada" de "passou pelo LLM".
+        accepted = rawPages.map((page) => {
           page.is_documentation = true;
-          page.gate_reason = v.reason;
-          accepted.push(page);
-        } else {
-          page.is_documentation = false;
-          page.gate_reason = v?.reason ?? 'rejected';
-          rejected++;
+          page.gate_reason = 'gate_skipped';
+          return page;
+        });
+        rejected = 0;
+        await tracked.onProgress?.({
+          phase: 'gating',
+          current: rawPages.length,
+          total: rawPages.length,
+          pages_accepted: accepted.length,
+          pages_rejected: 0,
+        });
+        console.log(
+          `[doc-indexer] gate SKIPPED source=${source.id} (folder source w/ bypass=true) — all ${rawPages.length} pages accepted`,
+        );
+      } else {
+        await tracked.onProgress?.({
+          phase: 'gating',
+          current: 0,
+          total: rawPages.length,
+        });
+        console.log(`[doc-indexer] phase=gating source=${source.id} pages=${rawPages.length}`);
+        const verdicts = await gatePages(rawPages, {
+          resolver: this.deps.pipelineProviderResolver,
+          resolveContext: this.deps.resolveContext,
+        });
+        accepted = [];
+        rejected = 0;
+        for (let i = 0; i < rawPages.length; i++) {
+          const v = verdicts[i];
+          const page = rawPages[i]!;
+          if (v?.accept) {
+            page.is_documentation = true;
+            page.gate_reason = v.reason;
+            accepted.push(page);
+          } else {
+            page.is_documentation = false;
+            page.gate_reason = v?.reason ?? 'rejected';
+            rejected++;
+          }
         }
+        await tracked.onProgress?.({
+          phase: 'gating',
+          current: rawPages.length,
+          total: rawPages.length,
+          pages_accepted: accepted.length,
+          pages_rejected: rejected,
+        });
+        console.log(
+          `[doc-indexer] gate done source=${source.id} accepted=${accepted.length} rejected=${rejected}`,
+        );
       }
-      await tracked.onProgress?.({
-        phase: 'gating',
-        current: rawPages.length,
-        total: rawPages.length,
-        pages_accepted: accepted.length,
-        pages_rejected: rejected,
-      });
-
-      console.log(
-        `[doc-indexer] gate done source=${source.id} accepted=${accepted.length} rejected=${rejected}`,
-      );
 
       // ── Phase 3: chunk ───────────────────────────────────────────
       docStore.updateSourceStatus(source.id, 'indexing');
@@ -820,18 +974,20 @@ export class IndexDocumentationUseCase {
    */
   private ensureSource(input: {
     collection_id: number;
-    type: 'pdf' | 'url';
+    type: 'pdf' | 'url' | 'folder';
     uri: string;
     title?: string | null;
     crawl?: DocCrawlConfig;
     pdf_size_bytes?: number;
+    folder_root_path?: string | null;
+    folder?: IndexFolderInput['folder'];
   }): DocSource {
     const { docStore } = this.deps;
     const existing = docStore.listSourcesByCollection(input.collection_id).find(
       (s) => s.uri === input.uri,
     );
     if (existing) {
-      // Persist the crawl config from THIS request so that:
+      // Persist the crawl/folder config from THIS request so that:
       //   1) `runIngest` reads it back via `defaultCrawlConfig(source)` if
       //      the caller didn't pass `crawl` explicitly,
       //   2) the next "Re-indexar" click (which reads from the source row,
@@ -842,9 +998,13 @@ export class IndexDocumentationUseCase {
       // the user sees no behavior change.
       if (input.crawl) {
         docStore.updateSourceCrawlConfig(existing.id, input.crawl);
-        return docStore.getSource(existing.id) ?? existing;
       }
-      return existing;
+      if (input.folder) {
+        docStore.updateSourceFolderConfig(existing.id, input.folder);
+      }
+      return input.crawl || input.folder
+        ? (docStore.getSource(existing.id) ?? existing)
+        : existing;
     }
     return docStore.createSource(input);
   }
@@ -898,6 +1058,11 @@ function buildEmbeddingText(headingPath: string | null, summary: string | null, 
 }
 
 function defaultCrawlConfig(source: DocSource): DocCrawlConfig {
+  // Folder sources não têm config de crawl — retornar `{}` evita que
+  // `runIngest` interprete os zeros default das colunas `crawl_*` como
+  // intenção do operador (ex: `crawl_max_pages: 1` é o DEFAULT da
+  // coluna, não significa "indexa só 1 página da pasta").
+  if (source.type === 'folder') return {};
   return {
     enabled: source.crawl_enabled,
     max_pages: source.crawl_max_pages,

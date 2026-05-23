@@ -303,7 +303,49 @@ export async function indexPdfStream(
   return consumeEventStream(r, callbacks);
 }
 
-/** Re-run ingestion for an existing URL source (PDFs require re-upload). */
+/**
+ * Config para source tipo `'folder'` (migration 103). Espelha o tipo
+ * server-side `DocFolderConfig`.
+ */
+export interface DocFolderConfig {
+  /** Default `**\/*.{html,htm,md,markdown,pdf,txt}`. */
+  include_glob?: string | null;
+  /** Default exclui `node_modules`, `.git`, `dist`, `build`, etc. */
+  exclude_glob?: string | null;
+  /** Default 5000; server clampa hard em 50000. */
+  max_files?: number | null;
+  /** Default true — pula LLM gate (docs locais geralmente curadas). */
+  bypass_relevance_gate?: boolean;
+}
+
+/**
+ * Indexar uma pasta no FS do servidor com live SSE. Caso de uso real:
+ * Unity ScriptReference offline em `…\Editor\Data\Documentation\en\
+ * ScriptReference\`. Mesma forma de callbacks de `indexUrlStream` —
+ * apenas o body é diferente (`path` em vez de `url`).
+ */
+export async function indexFolderStream(
+  collectionId: number,
+  input: { path: string; title?: string; folder?: DocFolderConfig },
+  callbacks: {
+    onStart?: (p: unknown) => void;
+    onProgress?: (p: DocIngestProgressFrame) => void;
+    onDone?: (r: DocIngestDoneFrame) => void;
+    onError?: (msg: string) => void;
+  } = {},
+): Promise<void> {
+  const r = await fetch(`/api/docs/collections/${collectionId}/sources/folder`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'text/event-stream',
+    },
+    body: JSON.stringify(input),
+  });
+  return consumeEventStream(r, callbacks);
+}
+
+/** Re-run ingestion for an existing URL/folder source (PDFs require re-upload). */
 export async function reindexSourceStream(
   collectionId: number,
   sourceId: number,
@@ -364,6 +406,7 @@ export async function searchDocs(input: {
 
 export type DocIngestPhase =
   | 'fetching'
+  | 'reading'    // folder source: glob + per-file read from disk
   | 'gating'
   | 'chunking'
   | 'enriching'

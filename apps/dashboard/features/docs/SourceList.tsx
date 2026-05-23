@@ -10,7 +10,7 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileText, Globe, Loader2, RefreshCcw, Trash2 } from 'lucide-react';
+import { FileText, Folder, Globe, Loader2, RefreshCcw, Trash2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { useConfirm, useNotify } from '../../components/ui/dialog-provider.js';
@@ -84,7 +84,9 @@ export function SourceList({ collection, sources, onChanged }: Props) {
   }
 
   function onReindex(src: DocSource) {
-    if (src.type !== 'url') {
+    // Re-index é suportado para url + folder; PDF precisa de re-upload
+    // (binário não fica retido no servidor).
+    if (src.type === 'pdf') {
       void notify({
         title: t('sources.reindexUnavailableTitle'),
         description: t('sources.reindexUnavailableDescription'),
@@ -126,6 +128,8 @@ export function SourceList({ collection, sources, onChanged }: Props) {
                   <div className="flex items-start gap-2">
                     {s.type === 'pdf' ? (
                       <FileText className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                    ) : s.type === 'folder' ? (
+                      <Folder className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                     ) : (
                       <Globe className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                     )}
@@ -164,7 +168,7 @@ export function SourceList({ collection, sources, onChanged }: Props) {
                 </td>
                 <td className="px-3 py-2 text-right align-top">
                   <div className="flex items-center justify-end gap-1">
-                    {s.type === 'url' && (
+                    {(s.type === 'url' || s.type === 'folder') && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -228,6 +232,16 @@ function SourceStatusBadge({ status }: { status: DocSource['status'] }) {
 function prettyUri(uri: string): string {
   try {
     if (uri.startsWith('pdf://')) return uri.slice('pdf://'.length);
+    // folder://<absolute path> — extrai a parte final do path pra dar
+    // economia visual ("…\Documentation\en\ScriptReference" em vez do
+    // path inteiro). O `s.uri` completo ainda aparece na linha de baixo
+    // (text-xs) pra debugar.
+    if (uri.startsWith('folder://')) {
+      const fullPath = uri.slice('folder://'.length);
+      const segments = fullPath.split(/[\\/]/).filter(Boolean);
+      const tail = segments.slice(-3).join('/');
+      return tail ? `…/${tail}` : fullPath;
+    }
     const u = new URL(uri);
     return `${u.host}${u.pathname}`;
   } catch {

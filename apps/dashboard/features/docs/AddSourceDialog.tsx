@@ -12,7 +12,7 @@
  */
 import { useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { FileText, Globe, Plus, Upload } from 'lucide-react';
+import { FileText, Folder, Globe, Plus, Upload } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import {
   Dialog,
@@ -26,6 +26,7 @@ import { Input } from '../../components/ui/input.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
 import { Switch } from '../../components/ui/switch.js';
 import {
+  indexFolderStream,
   indexPdfStream,
   indexUrlStream,
   type DocCollection,
@@ -59,7 +60,7 @@ const PDF_MAX_BYTES = 50 * 1024 * 1024;
 export function AddSourceDialog({ collection, onAdded }: Props) {
   const { t } = useTranslation('docs');
   const [open, setOpen] = useState(false);
-  const [running, setRunning] = useState<{ kind: 'pdf' | 'url' } | null>(null);
+  const [running, setRunning] = useState<{ kind: 'pdf' | 'url' | 'folder' } | null>(null);
 
   // URL form state
   const [url, setUrl] = useState('');
@@ -95,6 +96,23 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
   const [pdfError, setPdfError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Folder form state (migration 103). Absolute path obrigatório;
+  // include/exclude globs com defaults sensíveis; bypass_relevance_gate
+  // default TRUE (docs locais geralmente curados — operador opta-IN
+  // pelo switch avançado se quiser rodar o gate em pastas mistas).
+  const [folderPath, setFolderPath] = useState('');
+  const [folderTitle, setFolderTitle] = useState('');
+  const [folderIncludeGlob, setFolderIncludeGlob] = useState(
+    '**/*.{html,htm,md,markdown,pdf,txt}',
+  );
+  const [folderExcludeGlob, setFolderExcludeGlob] = useState(
+    '**/{node_modules,.git,dist,build,.next,target,vendor,.cache}/**',
+  );
+  const [folderMaxFiles, setFolderMaxFiles] = useState(5000);
+  const [folderBypassGate, setFolderBypassGate] = useState(true);
+  const [folderAdvancedOpen, setFolderAdvancedOpen] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
+
   function reset() {
     setUrl('');
     setCrawlEnabled(false);
@@ -112,6 +130,15 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
     setPdfFile(null);
     setPdfTitle('');
     setPdfError(null);
+    // Folder form
+    setFolderPath('');
+    setFolderTitle('');
+    setFolderIncludeGlob('**/*.{html,htm,md,markdown,pdf,txt}');
+    setFolderExcludeGlob('**/{node_modules,.git,dist,build,.next,target,vendor,.cache}/**');
+    setFolderMaxFiles(5000);
+    setFolderBypassGate(true);
+    setFolderAdvancedOpen(false);
+    setFolderError(null);
     setRunning(null);
   }
 
@@ -160,6 +187,13 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
     setRunning({ kind: 'pdf' });
   }
 
+  async function onSubmitFolder() {
+    const trimmed = folderPath.trim();
+    if (!trimmed) return;
+    setFolderError(null);
+    setRunning({ kind: 'folder' });
+  }
+
   async function onStreamClosed() {
     setRunning(null);
     await onAdded();
@@ -190,6 +224,9 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
               </TabsTrigger>
               <TabsTrigger value="pdf">
                 <FileText className="h-3 w-3 mr-1" /> {t('addSource.tabsPdf')}
+              </TabsTrigger>
+              <TabsTrigger value="folder">
+                <Folder className="h-3 w-3 mr-1" /> {t('addSource.tabsFolder')}
               </TabsTrigger>
             </TabsList>
 
@@ -395,6 +432,112 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                 </Button>
               </div>
             </TabsContent>
+
+            {/*
+              Folder tab (migration 103). Path absoluto no FS do servidor —
+              o backend valida no POST e retorna 400 estruturado se algo
+              estiver errado. Bloco "Avançado" colapsável esconde glob/
+              max_files/bypass_gate por padrão pra UX limpa.
+            */}
+            <TabsContent value="folder" className="space-y-3 mt-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="docs-folder-path">{t('addSource.folderPath')}</Label>
+                <Input
+                  id="docs-folder-path"
+                  type="text"
+                  placeholder={t('addSource.folderPathPlaceholder')}
+                  value={folderPath}
+                  onChange={(e) => setFolderPath(e.target.value)}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  {t('addSource.folderPathHelp')}
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="docs-folder-title">{t('addSource.folderTitle')}</Label>
+                <Input
+                  id="docs-folder-title"
+                  type="text"
+                  placeholder={t('addSource.folderTitlePlaceholder')}
+                  value={folderTitle}
+                  onChange={(e) => setFolderTitle(e.target.value)}
+                />
+              </div>
+
+              <div className="rounded-md border p-3 space-y-3">
+                <button
+                  type="button"
+                  className="w-full text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+                  onClick={() => setFolderAdvancedOpen((v) => !v)}
+                >
+                  {folderAdvancedOpen ? '▾' : '▸'} {t('addSource.folderAdvanced')}
+                </button>
+
+                {folderAdvancedOpen && (
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="docs-folder-include">{t('addSource.folderIncludeGlob')}</Label>
+                      <Input
+                        id="docs-folder-include"
+                        type="text"
+                        value={folderIncludeGlob}
+                        onChange={(e) => setFolderIncludeGlob(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="docs-folder-exclude">{t('addSource.folderExcludeGlob')}</Label>
+                      <Input
+                        id="docs-folder-exclude"
+                        type="text"
+                        value={folderExcludeGlob}
+                        onChange={(e) => setFolderExcludeGlob(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="docs-folder-max-files">{t('addSource.folderMaxFiles')}</Label>
+                      <Input
+                        id="docs-folder-max-files"
+                        type="number"
+                        min={1}
+                        max={50000}
+                        value={folderMaxFiles}
+                        onChange={(e) => setFolderMaxFiles(Number(e.target.value))}
+                      />
+                    </div>
+                    <div className="flex items-start justify-between gap-3 pt-1">
+                      <div className="flex-1">
+                        <Label htmlFor="docs-folder-bypass-gate" className="block">
+                          {t('addSource.folderBypassGate')}
+                        </Label>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                          {t('addSource.folderBypassGateHelp')}
+                        </p>
+                      </div>
+                      <Switch
+                        id="docs-folder-bypass-gate"
+                        checked={folderBypassGate}
+                        onCheckedChange={setFolderBypassGate}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {folderError && <div className="text-xs text-destructive">{folderError}</div>}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="ghost" onClick={() => handleOpenChange(false)}>
+                  {t('addSource.cancel')}
+                </Button>
+                <Button
+                  onClick={() => void onSubmitFolder()}
+                  disabled={!folderPath.trim()}
+                >
+                  {t('addSource.submit')}
+                </Button>
+              </div>
+            </TabsContent>
           </Tabs>
         )}
 
@@ -426,6 +569,28 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
         {running?.kind === 'pdf' && pdfFile && (
           <IndexProgressStream
             start={(cb) => indexPdfStream(collection.id, pdfFile, cb, pdfTitle.trim() || undefined)}
+            onClose={onStreamClosed}
+          />
+        )}
+
+        {running?.kind === 'folder' && (
+          <IndexProgressStream
+            start={(cb) =>
+              indexFolderStream(
+                collection.id,
+                {
+                  path: folderPath.trim(),
+                  title: folderTitle.trim() || undefined,
+                  folder: {
+                    include_glob: folderIncludeGlob.trim() || undefined,
+                    exclude_glob: folderExcludeGlob.trim() || undefined,
+                    max_files: folderMaxFiles,
+                    bypass_relevance_gate: folderBypassGate,
+                  },
+                },
+                cb,
+              )
+            }
             onClose={onStreamClosed}
           />
         )}

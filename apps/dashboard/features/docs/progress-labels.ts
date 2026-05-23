@@ -12,6 +12,7 @@ import type { DocIngestPhase } from './docs-api.js';
 
 export const PHASE_LABEL: Record<DocIngestPhase, string> = {
   fetching: 'progress.phase.fetching',
+  reading: 'progress.phase.reading',
   gating: 'progress.phase.gating',
   chunking: 'progress.phase.chunking',
   enriching: 'progress.phase.enriching',

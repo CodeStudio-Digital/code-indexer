@@ -14,6 +14,7 @@ import type { PipelineCandidate, PipelineQuery } from '@mcp/candidate-pipeline';
  */
 export type DocIngestPhase =
   | 'fetching'      // URL crawl or PDF page extraction in flight
+  | 'reading'       // folder source: glob + per-file read from disk
   | 'gating'        // relevance gate deciding keep/drop
   | 'chunking'      // section chunker materializing chunks
   | 'enriching'     // per-chunk LLM enrichment
@@ -76,7 +77,7 @@ export interface RawPage extends PipelineCandidate {
   /** Cleaned-up Markdown content. Already stripped of nav/footer noise. */
   markdown: string;
   /** Provenance: how this page got here. */
-  source: 'url' | 'pdf';
+  source: 'url' | 'pdf' | 'folder';
   /** For URL: depth from the seed in the BFS frontier. */
   depth?: number;
   /** Raw byte count of the fetched body — useful for heuristics. */

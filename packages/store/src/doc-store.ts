@@ -14,7 +14,12 @@ type DB = InstanceType<typeof DatabaseConstructor>;
 // ─── Types ──────────────────────────────────────────────────────────
 
 export type DocCollectionStatus = 'idle' | 'indexing' | 'error';
-export type DocSourceType = 'pdf' | 'url';
+/**
+ * Tipo do source. `'pdf'` = upload manual; `'url'` = crawl HTTP;
+ * `'folder'` = leitura recursiva de uma pasta no filesystem do
+ * servidor (migration 103 amplia o CHECK do schema).
+ */
+export type DocSourceType = 'pdf' | 'url' | 'folder';
 export type DocSourceStatus = 'queued' | 'fetching' | 'indexing' | 'done' | 'error';
 
 export interface DocCollection {
@@ -108,8 +113,35 @@ export interface DocSource {
   crawl_browser_seed_only: boolean;
   pdf_size_bytes: number | null;
   cost_usd: number;
+  // Folder config (only meaningful when type === 'folder'; NULL/defaults
+  // em rows pdf/url). Migration 103.
+  folder_root_path: string | null;
+  folder_include_glob: string | null;
+  folder_exclude_glob: string | null;
+  folder_max_files: number | null;
+  folder_bypass_relevance_gate: boolean;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Configuração do source tipo `'folder'` — espelha o que o operador
+ * setou no modal "Add Source → Pasta" no dashboard. Todos os campos
+ * opcionais têm defaults sensíveis aplicados em `createSource`.
+ */
+export interface DocFolderConfig {
+  /** Glob de inclusão (default: `**\/*.{html,htm,md,markdown,pdf,txt}`). */
+  include_glob?: string | null;
+  /** Glob de exclusão (default: `**\/{node_modules,.git,dist,build}/**`). */
+  exclude_glob?: string | null;
+  /** Cap de arquivos lidos (default 5000, server-side hard cap 50000). */
+  max_files?: number | null;
+  /**
+   * Pula o LLM relevance-gate (mais rápido + barato). Default TRUE —
+   * docs locais geralmente já vêm curadas. Operador liga via switch
+   * "Avançado" pra pastas mistas.
+   */
+  bypass_relevance_gate?: boolean;
 }
 
 export interface DocSourceInput {
@@ -118,6 +150,10 @@ export interface DocSourceInput {
   uri: string;
   title?: string | null;
   crawl?: DocCrawlConfig;
+  /** Caminho ABSOLUTO da raiz da pasta (só relevante quando type='folder'). */
+  folder_root_path?: string | null;
+  /** Config folder (só relevante quando type='folder'). */
+  folder?: DocFolderConfig;
   pdf_size_bytes?: number | null;
 }
 
@@ -257,6 +293,15 @@ function mapSource(row: Record<string, unknown>): DocSource {
     crawl_browser_seed_only: boolFromInt(row.crawl_browser_seed_only as number),
     pdf_size_bytes: (row.pdf_size_bytes as number | null) ?? null,
     cost_usd: (row.cost_usd as number) ?? 0,
+    // Folder config (migration 103). Para rows pdf/url antigas ficam
+    // NULL/default — esperado e correto.
+    folder_root_path: (row.folder_root_path as string | null) ?? null,
+    folder_include_glob: (row.folder_include_glob as string | null) ?? null,
+    folder_exclude_glob: (row.folder_exclude_glob as string | null) ?? null,
+    folder_max_files: (row.folder_max_files as number | null) ?? null,
+    folder_bypass_relevance_gate: boolFromInt(
+      (row.folder_bypass_relevance_gate as number | boolean | undefined) ?? 1,
+    ),
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
@@ -364,19 +409,34 @@ export class DocStore {
 
   createSource(input: DocSourceInput): DocSource {
     const crawl = input.crawl ?? {};
+    const folder = input.folder ?? {};
+    // Defense-in-depth contra CHECK no DB: validar o type aqui pra
+    // dar mensagem clara em vez do críptico "constraint failed".
+    if (input.type !== 'pdf' && input.type !== 'url' && input.type !== 'folder') {
+      throw new Error(`createSource: unknown type "${String(input.type)}"`);
+    }
+    // Folder-specific invariant: `folder_root_path` é obrigatório quando
+    // type === 'folder'. Sem ele, o use-case não saberia o que ler.
+    if (input.type === 'folder' && !input.folder_root_path) {
+      throw new Error('createSource(folder): folder_root_path is required');
+    }
     const stmt = this.db.prepare(`
       INSERT INTO doc_sources (
         collection_id, type, uri, title,
         crawl_enabled, crawl_max_pages, crawl_max_depth, crawl_same_origin,
         crawl_include_pattern, crawl_exclude_pattern, crawl_required_path,
         crawl_llm_extract_links, crawl_force_browser, crawl_browser_seed_only,
-        pdf_size_bytes
+        pdf_size_bytes,
+        folder_root_path, folder_include_glob, folder_exclude_glob,
+        folder_max_files, folder_bypass_relevance_gate
       ) VALUES (
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?,
-        ?
+        ?,
+        ?, ?, ?,
+        ?, ?
       )
     `);
     const result = stmt.run(
@@ -395,6 +455,14 @@ export class DocStore {
       crawl.force_browser ? 1 : 0,
       crawl.browser_seed_only ? 1 : 0,
       input.pdf_size_bytes ?? null,
+      input.folder_root_path ?? null,
+      folder.include_glob ?? null,
+      folder.exclude_glob ?? null,
+      folder.max_files ?? null,
+      // Default TRUE (bypass) — docs locais geralmente já vêm curadas.
+      // Operador opta-IN no gate via switch avançado se quiser filtrar
+      // arquivos não-doc da pasta.
+      folder.bypass_relevance_gate === false ? 0 : 1,
     );
     this.refreshCollectionCounts(input.collection_id);
     return this.getSource(result.lastInsertRowid as number)!;
@@ -501,6 +569,37 @@ export class DocStore {
         llm_extract_links: crawl.llm_extract_links ? 1 : 0,
         force_browser: crawl.force_browser ? 1 : 0,
         browser_seed_only: crawl.browser_seed_only ? 1 : 0,
+      });
+  }
+
+  /**
+   * Overwrite the persisted folder config of an existing source row
+   * (migration 103). Called when the operator edits a folder source
+   * via the dashboard ("change include glob") or during re-index when
+   * the request body carries fresh folder knobs.
+   *
+   * Symmetric with `updateSourceCrawlConfig` but for `folder_*` cols.
+   * Does NOT touch `folder_root_path` here — root path is set at
+   * `createSource` time and considered immutable (changing it would
+   * effectively be a new source; the operator should delete + re-add).
+   */
+  updateSourceFolderConfig(id: number, folder: DocFolderConfig): void {
+    this.db
+      .prepare(
+        `UPDATE doc_sources
+            SET folder_include_glob          = @include_glob,
+                folder_exclude_glob          = @exclude_glob,
+                folder_max_files             = @max_files,
+                folder_bypass_relevance_gate = @bypass_relevance_gate,
+                updated_at                   = datetime('now')
+          WHERE id = @id`,
+      )
+      .run({
+        id,
+        include_glob: folder.include_glob ?? null,
+        exclude_glob: folder.exclude_glob ?? null,
+        max_files: folder.max_files ?? null,
+        bypass_relevance_gate: folder.bypass_relevance_gate === false ? 0 : 1,
       });
   }
 

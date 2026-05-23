@@ -21,6 +21,8 @@
 import type { Context, Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { streamSSE } from 'hono/streaming';
+import { accessSync, statSync, constants as fsConstants } from 'node:fs';
+import path from 'node:path';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { attachHeartbeat } from '../../../sse/SSEHeartbeat.js';
@@ -85,6 +87,30 @@ interface SearchBody {
   collection?: string;
   limit?: number;
   mode?: 'hybrid' | 'fts' | 'vector';
+}
+
+/**
+ * Body de criação de source tipo `'folder'` (migration 103). Caminho
+ * absoluto no FS do servidor + globs opcionais. Validado antes do
+ * streamSSE pra retornar 400 estruturado em vez de explodir no meio
+ * da stream.
+ */
+interface CreateFolderSourceBody {
+  /** Absolute path no servidor. Obrigatório. */
+  path: string;
+  title?: string;
+  folder?: {
+    /** Default `**\/*.{html,htm,md,markdown,pdf,txt}`. */
+    include_glob?: string | null;
+    /** Default exclui `node_modules`, `.git`, `dist`, `build`, etc. */
+    exclude_glob?: string | null;
+    /** Default 5000, cap hard server-side 50000. */
+    max_files?: number | null;
+    /** Default true — pula LLM gate (docs locais geralmente curadas). */
+    bypass_relevance_gate?: boolean;
+  };
+  /** Igual url/pdf: cria a row sem indexar (deferred). */
+  defer_indexing?: boolean;
 }
 
 export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
@@ -286,16 +312,137 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  // POST /api/docs/collections/:id/sources/folder — index uma pasta local
+  // (migration 103). Body JSON, não multipart. Validação síncrona de
+  // path absoluto + existe + é dir + readable ANTES do streamSSE pra
+  // dar 400 estruturado em vez de explodir no meio da stream. Honra o
+  // mesmo Accept: text/event-stream do PDF/URL pra UX consistente.
+  app.post('/api/docs/collections/:id/sources/folder', async (c) => {
+    const collectionId = parseIdParam(c);
+    const collection = docStore.getCollection(collectionId);
+    if (!collection) return notFound(c);
+
+    const body = await parseJsonBody<CreateFolderSourceBody>(c);
+    if (!body.path || typeof body.path !== 'string') {
+      return c.json({ error: 'path is required' }, 400);
+    }
+    const rawPath = body.path.trim();
+    // Validação síncrona — defense-in-depth. Sem absoluto não dá pra
+    // distinguir CWD do server (que pode ser qualquer coisa).
+    if (!path.isAbsolute(rawPath)) {
+      return c.json(
+        { error: 'path_invalid', detail: 'path must be absolute' },
+        400,
+      );
+    }
+    let stat;
+    try {
+      stat = statSync(rawPath);
+    } catch (err) {
+      return c.json(
+        {
+          error: 'path_invalid',
+          detail: `cannot stat path: ${err instanceof Error ? err.message : String(err)}`,
+        },
+        400,
+      );
+    }
+    if (!stat.isDirectory()) {
+      return c.json(
+        { error: 'path_invalid', detail: 'path is not a directory' },
+        400,
+      );
+    }
+    try {
+      accessSync(rawPath, fsConstants.R_OK);
+    } catch {
+      return c.json(
+        { error: 'path_invalid', detail: 'path is not readable' },
+        400,
+      );
+    }
+
+    const title = body.title?.trim() || undefined;
+
+    if (body.defer_indexing) {
+      try {
+        const source = docStore.createSource({
+          collection_id: collectionId,
+          type: 'folder',
+          uri: `folder://${rawPath}`,
+          title: title ?? null,
+          folder_root_path: rawPath,
+          folder: body.folder,
+        });
+        return c.json(source, 201);
+      } catch (err) {
+        return mapDocError(c, err);
+      }
+    }
+
+    const accept = c.req.header('accept') ?? '';
+    if (accept.includes('text/event-stream')) {
+      console.log(
+        `[doc-indexer] route: SSE indexFolder collection=${collectionId} path=${rawPath} folder=${JSON.stringify(body.folder ?? {})}`,
+      );
+      markUnbuffered(c);
+      return streamSSE(c, async (stream) => {
+        const stopHeartbeat = attachHeartbeat(stream);
+        let seq = 0;
+        const send = (event: string, data: unknown) =>
+          stream.writeSSE({ id: String(seq++), event, data: JSON.stringify(data) });
+        await send('open', { ok: true, ts: Date.now() });
+        try {
+          await indexDocsUseCase.indexFolder(
+            {
+              collectionId,
+              rootPath: rawPath,
+              title,
+              folder: body.folder,
+            },
+            {
+              onStart: (p) => send('start', p),
+              onProgress: (p) => send('progress', p),
+              onDone: (r) => send('done', r),
+              onError: (m) => send('error', { message: m }),
+            },
+          );
+        } catch (err) {
+          send('error', { message: err instanceof Error ? err.message : String(err) });
+        } finally {
+          stopHeartbeat();
+          await stream.close();
+        }
+      });
+    }
+
+    try {
+      const result = await indexDocsUseCase.indexFolder({
+        collectionId,
+        rootPath: rawPath,
+        title,
+        folder: body.folder,
+      });
+      return c.json(result, 201);
+    } catch (err) {
+      return mapDocError(c, err);
+    }
+  });
+
   // POST /api/docs/collections/:id/sources/:srcId/reindex — re-run ingestion
   // for an existing source. Always SSE (same shape as the URL POST above).
   app.post('/api/docs/collections/:id/sources/:srcId/reindex', async (c) => {
     const srcId = parseIdParam(c, 'srcId');
     const src = docStore.getSource(srcId);
     if (!src) return notFound(c);
-    if (src.type !== 'url') {
-      return c.json({ error: 'PDF reindex requires a fresh upload (the binary is not retained)' }, 400);
+    if (src.type === 'pdf') {
+      return c.json(
+        { error: 'PDF reindex requires a fresh upload (the binary is not retained)' },
+        400,
+      );
     }
-    console.log(`[doc-indexer] route: SSE reindex source=${src.id} url=${src.uri}`);
+    // folder + url ambos suportam re-index via leitura da própria row.
+    console.log(`[doc-indexer] route: SSE reindex source=${src.id} type=${src.type} uri=${src.uri}`);
     markUnbuffered(c);
     return streamSSE(c, async (stream) => {
       const stopHeartbeat = attachHeartbeat(stream);
@@ -304,29 +451,70 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
         stream.writeSSE({ id: String(seq++), event, data: JSON.stringify(data) });
       await send('open', { ok: true, ts: Date.now() });
       try {
-        await indexDocsUseCase.indexUrl(
-          {
-            collectionId: src.collection_id,
-            url: src.uri,
-            title: src.title ?? undefined,
-            crawl: {
-              enabled: src.crawl_enabled,
-              max_pages: src.crawl_max_pages,
-              max_depth: src.crawl_max_depth,
-              same_origin: src.crawl_same_origin,
-              include_pattern: src.crawl_include_pattern,
-              exclude_pattern: src.crawl_exclude_pattern,
-              required_path: src.crawl_required_path,
-              llm_extract_links: src.crawl_llm_extract_links,
+        if (src.type === 'folder') {
+          // Validar que a pasta ainda existe — se o operador moveu/
+          // apagou desde o último run, dar erro claro em vez de SSE
+          // mudo. `folder_root_path` é a fonte de verdade pra re-index
+          // (uri é `folder://<path>` mas pode haver normalização);
+          // fallback para slice do uri se a coluna estiver vazia em
+          // rows antigas (defesa em profundidade).
+          const rootPath =
+            src.folder_root_path ?? src.uri.replace(/^folder:\/\//, '');
+          try {
+            const stat = statSync(rootPath);
+            if (!stat.isDirectory()) {
+              send('error', { message: `re-index failed: path is no longer a directory (${rootPath})` });
+              return;
+            }
+          } catch (err) {
+            send('error', {
+              message:
+                `re-index failed: folder no longer exists at ${rootPath} ` +
+                `(${err instanceof Error ? err.message : String(err)})`,
+            });
+            return;
+          }
+          await indexDocsUseCase.indexFolder(
+            {
+              collectionId: src.collection_id,
+              rootPath,
+              title: src.title ?? undefined,
+              // Sem passar `folder` aqui — `ensureSource` vai achar a
+              // row existente e os campos folder_* persistidos serão
+              // lidos automaticamente.
             },
-          },
-          {
-            onStart: (p) => send('start', p),
-            onProgress: (p) => send('progress', p),
-            onDone: (r) => send('done', r),
-            onError: (m) => send('error', { message: m }),
-          },
-        );
+            {
+              onStart: (p) => send('start', p),
+              onProgress: (p) => send('progress', p),
+              onDone: (r) => send('done', r),
+              onError: (m) => send('error', { message: m }),
+            },
+          );
+        } else {
+          await indexDocsUseCase.indexUrl(
+            {
+              collectionId: src.collection_id,
+              url: src.uri,
+              title: src.title ?? undefined,
+              crawl: {
+                enabled: src.crawl_enabled,
+                max_pages: src.crawl_max_pages,
+                max_depth: src.crawl_max_depth,
+                same_origin: src.crawl_same_origin,
+                include_pattern: src.crawl_include_pattern,
+                exclude_pattern: src.crawl_exclude_pattern,
+                required_path: src.crawl_required_path,
+                llm_extract_links: src.crawl_llm_extract_links,
+              },
+            },
+            {
+              onStart: (p) => send('start', p),
+              onProgress: (p) => send('progress', p),
+              onDone: (r) => send('done', r),
+              onError: (m) => send('error', { message: m }),
+            },
+          );
+        }
       } catch (err) {
         send('error', { message: err instanceof Error ? err.message : String(err) });
       } finally {

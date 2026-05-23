@@ -15,8 +15,23 @@ export type {
   IndexDocUseCaseDeps,
   IndexPdfInput,
   IndexUrlInput,
+  IndexFolderInput,
   IndexDocStreamCallbacks,
 } from './index-doc-use-case.js';
+
+export {
+  readFolder,
+  FOLDER_HARD_MAX_FILES,
+  FOLDER_DEFAULT_MAX_FILES,
+  FOLDER_FILE_SIZE_CAP_BYTES,
+  FOLDER_DEFAULT_INCLUDE_GLOB,
+  FOLDER_DEFAULT_EXCLUDE_GLOB,
+} from './folder-reader.js';
+export type {
+  ReadFolderOptions,
+  ReadFolderResult,
+  FolderReaderEvent,
+} from './folder-reader.js';
 
 export { DocHybridSearch, vectorIdForChunk } from './search.js';
 export type {

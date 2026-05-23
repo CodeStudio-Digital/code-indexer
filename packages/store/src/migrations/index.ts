@@ -115,6 +115,8 @@ import { docRerankCache098 } from './098_doc_rerank_cache.js';
 import { docSourcesForceBrowser099 } from './099_doc_sources_force_browser.js';
 import { chromeServiceImageBump100 } from './100_chrome_service_image_bump.js';
 import { docSourcesBrowserSeedOnly101 } from './101_doc_sources_browser_seed_only.js';
+import { docSourcesFolder103 } from './103_doc_sources_folder.js';
+import { coderToolCallsOutputCharsShaped102 } from './102_coder_tool_calls_output_chars_shaped.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -224,6 +226,8 @@ export const MIGRATIONS: Migration[] = [
   docSourcesForceBrowser099,
   chromeServiceImageBump100,
   docSourcesBrowserSeedOnly101,
+  coderToolCallsOutputCharsShaped102,
+  docSourcesFolder103,
 ];
 
 /**
