@@ -87,6 +87,36 @@ export function mountCoderStreamRoutes(
     return pumpBusToSSE(c, bus, { since: parseLastEventId(c), heartbeat: false });
   });
 
+  /**
+   * Diagnose endpoint — the dashboard hits this when `/attach` returns
+   * 404 to disambiguate the three states that collapse into the same
+   * "no active run" HTTP response:
+   *
+   *   - alive=false, status=idle           — fresh / completed session, normal UI
+   *   - alive=false, status=in_progress    — worker died silently, session
+   *                                          row is stale (boot recovery
+   *                                          will fix it on next restart)
+   *   - alive=true                         — race: worker exists but the
+   *                                          bus was just evicted; client
+   *                                          should retry attach shortly
+   *
+   * Mirrors the shape of the terminal-ws diagnose endpoint so the
+   * dashboard hooks share the same handling pattern. Returns 404 only
+   * when the session row itself doesn't exist.
+   */
+  app.get('/api/coder/sessions/:id/state', (c) => {
+    const id = parseIdParam(c);
+    const session = sessionStore.getSession(id);
+    if (!session) return c.json({ error: 'session not found' }, 404);
+    const alive = activeRuns.has(id);
+    return c.json({
+      sessionId: id,
+      status: session.status,
+      alive,
+      updatedAt: session.updated_at,
+    });
+  });
+
   app.post('/api/coder/sessions/:id/messages', async (c) => {
     const id = parseIdParam(c);
     const body = await c.req.json<SendMessageBody>();

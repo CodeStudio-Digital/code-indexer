@@ -265,6 +265,22 @@ export function createApp() {
     console.warn(`[company] Startup recovery failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
+  // Same idea for individual coder sessions: any row left in an active
+  // status after a restart belongs to a worker that no longer exists.
+  // Flip them to `idle` so the dashboard renders the normal "send a
+  // message" surface instead of a phantom in-flight run. Without this,
+  // sessions hit by a silent worker death sat in `in_progress` forever
+  // (the user couldn't engage them again — the UI thought a run was
+  // still alive).
+  try {
+    const recovered = deps.sessionStore.recoverStaleSessions();
+    if (recovered > 0) {
+      console.log(`[coder] Startup recovery: ${recovered} coder_session(s) → idle`);
+    }
+  } catch (e) {
+    console.warn(`[coder] Startup recovery failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   // Phase A "living company": surface any sessions that carry pending
   // master inbox messages from before the restart. Orchestrators are
   // lazy (built on first dashboard visit / stream reconnect), so the

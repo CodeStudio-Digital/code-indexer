@@ -146,6 +146,36 @@ export async function openStream(
             pendingContent,
           },
         });
+      } else if (err.status === 404 && opts.reattach) {
+        // /attach 404 collapses three states into one HTTP status:
+        // "session never had a run", "worker died silently", "run
+        // completed and the bus was evicted". The /state endpoint
+        // disambiguates so the UI shows a useful message instead of
+        // a generic "HTTP 404: no active run".
+        const stateUrl = opts.url.replace(/\/attach(?:\?.*)?$/, '/state');
+        try {
+          const res = await fetch(stateUrl);
+          if (res.ok) {
+            const body = (await res.json()) as {
+              status?: string;
+              alive?: boolean;
+            };
+            if (body.alive === false && (body.status === 'in_progress' || body.status === 'running' || body.status === 'working')) {
+              // Worker died mid-run, session row is still stale.
+              updateSession(sid, {
+                error: 'Session was interrupted by a server / worker crash. Send a new message to resume.',
+              });
+            } else {
+              // status=idle or completed → the run actually finished or
+              // never started. No error UI needed.
+              updateSession(sid, { error: null });
+            }
+          } else {
+            updateSession(sid, { error: 'No active run on this session.' });
+          }
+        } catch {
+          updateSession(sid, { error: 'No active run on this session.' });
+        }
       } else {
         let msg: string;
         if (e instanceof Error) {

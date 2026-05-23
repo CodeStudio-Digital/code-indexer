@@ -1270,6 +1270,27 @@ export class SessionStore {
     return recovered;
   }
 
+  /**
+   * Boot-time sweep: flip any coder_sessions left in an active status
+   * back to `idle`. The worker that owned them is gone — restart wiped
+   * its in-memory state — so the run is unrecoverable. Without this,
+   * sessions sit with `status='in_progress'` forever, the dashboard
+   * never re-engages, and the user is forced to manually flip the row
+   * via SQL. Mirrors {@link CompanyStore.recoverStaleAgentRuns} in
+   * spirit but is dramatically simpler because coder_sessions has a
+   * single status column (no archive_id, no recovered_at pill — yet).
+   *
+   * Idempotent. Returns the number of rows touched, for the boot log.
+   */
+  recoverStaleSessions(): number {
+    const result = this.db.prepare(`
+      UPDATE coder_sessions
+      SET status = 'idle', updated_at = datetime('now')
+      WHERE status IN ('in_progress', 'running', 'working')
+    `).run();
+    return result.changes;
+  }
+
   // ─── Session groups (migration 009) ───────────────────────────
 
   listGroups(projectId: number): CoderSessionGroup[] {

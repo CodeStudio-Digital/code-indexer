@@ -115,6 +115,56 @@ const bus = createBus(ctrl);
 let handle: RunCoderHandle | null = null;
 let runner: CoderRunner | null = null;
 
+// ─── Process-level safety net ─────────────────────────────────────
+//
+// Worker threads don't share the main process's `process.on(...)`
+// handlers — installing them in `server.ts` has zero effect here. A
+// stray throw inside a tool handler, a hook callback, or (most
+// commonly) a provider stream's `for await` iterator would otherwise
+// kill the worker silently: the parent's `CoderWorkerPool.onCrash`
+// callback fires after `maxRestarts` exhaustion, but by then the
+// `pumpBusToSSE` pipe has already lost the chance to flush a
+// structured error to the dashboard. Result: the user sat on
+// "Conectando…" forever even though the worker was dead.
+//
+// These handlers publish a final `error` event + `markEnded` so the
+// SSE stream closes cleanly with a real reason before the process
+// exits.
+let exitingFromCrash = false;
+function emitCrashToBus(prefix: string, message: string): void {
+  if (exitingFromCrash || bus.ended) return;
+  exitingFromCrash = true;
+  try {
+    publish(bus, 'error', { message: `${prefix}: ${message}`, sessionId });
+    markEnded(bus, 'error', {
+      message: `${prefix}: ${message}`,
+      reason: 'worker-uncaught',
+      sessionId,
+    });
+  } catch (e) {
+    console.error(`[coder-worker ${sessionId}] failed to flush crash event:`, e);
+  }
+}
+
+process.on('uncaughtException', (err) => {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`[coder-worker ${sessionId}] uncaughtException:`, err);
+  emitCrashToBus('uncaughtException', message);
+  // `setImmediate` lets the `bridge.emit('bus.end')` flush to the
+  // parent thread BEFORE we exit; without it the parent never sees
+  // the markEnded event and the dashboard hangs anyway.
+  setImmediate(() => process.exit(1));
+});
+
+process.on('unhandledRejection', (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  console.error(`[coder-worker ${sessionId}] unhandledRejection:`, reason);
+  emitCrashToBus('unhandledRejection', message);
+  // Don't force exit — Node 22+ default kills the process anyway,
+  // but we want any chained `.catch()` handlers to still observe
+  // the rejection in case the runner can clean up gracefully.
+});
+
 // Forward every bus event to main. `since: -1` replays the buffer so
 // events emitted during runCoder() spin-up don't get lost.
 subscribe(

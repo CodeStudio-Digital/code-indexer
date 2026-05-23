@@ -306,6 +306,22 @@ export class CoderWorkerPool {
       defaultRequestTimeoutMs: 120_000,
       onCrash: (err) => {
         this.log('error', `[coder-pool] worker session=${sessionId} crashed: ${err.message}`);
+        // Notify the SSE pump BEFORE we drop the entry — otherwise
+        // `waitEnded(bus)` (in `pumpBusToSSE`) hangs forever and the
+        // dashboard sits on "Conectando…" with no terminal event. The
+        // worker's own `process.on('uncaughtException')` (coder-worker.ts)
+        // covers the case where the run loop throws synchronously. THIS
+        // path covers the harder failures: process exit from OOM, SIGKILL,
+        // segfault in a native dep — anywhere the worker can't run JS
+        // anymore. Belt-and-suspenders.
+        const entry = this.entries.get(sessionId);
+        if (entry?.bus && !entry.bus.ended) {
+          markEnded(entry.bus, 'error', {
+            reason: 'worker-crashed',
+            message: err.message,
+            sessionId,
+          });
+        }
         this.entries.delete(sessionId);
       },
       onError: (err) => {
