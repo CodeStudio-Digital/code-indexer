@@ -15,6 +15,7 @@ import {
   coderWorkerEnabled,
   getCoderWorkerPool,
 } from '../../../sse/coderWorkerPoolSingleton.js';
+import { emitWorkerLog } from '../../../coder-bus.js';
 
 interface AnswerBody {
   answer: string;
@@ -45,6 +46,20 @@ export function mountCoderInteractionRoutes(
   const { sessionStore } = deps;
   const { activeRuns, findPendingInteraction } = runtime;
 
+  /**
+   * Emit a route-level `worker_log` event so the dashboard's
+   * WorkerLogPanel shows endpoint hits alongside runner events. Picks
+   * the bus from the worker pool first (worker mode) or `activeRuns`
+   * (legacy). When neither has a live run, the log is silently dropped
+   * — no client is subscribed to receive it.
+   */
+  const logRouteHit = (sessionId: number, endpoint: string, preview: unknown): void => {
+    const bus = coderWorkerEnabled()
+      ? getCoderWorkerPool().getBus(sessionId)
+      : activeRuns.get(sessionId);
+    emitWorkerLog(bus, 'info', 'route', `POST ${endpoint}`, preview);
+  };
+
   app.post('/api/coder/sessions/:id/abort', async (c) => {
     const id = parseIdParam(c);
     // P17 — abort the worker's runner first if it's the active path.
@@ -71,6 +86,7 @@ export function mountCoderInteractionRoutes(
     const id = parseIdParam(c);
     const body = await c.req.json<AnswerBody>();
     const answer = body.answer ?? '';
+    logRouteHit(id, '/answer', { answer_preview: answer.slice(0, 80) });
     // Apêndice 4 Fase 2 — track whether we attempted the worker path.
     // If yes and we still fall through, the response must signal
     // `resumed_via_worker:true` so the dashboard POSTs `/messages`
@@ -126,6 +142,7 @@ export function mountCoderInteractionRoutes(
     const id = parseIdParam(c);
     const body = await c.req.json<PlanResponseBody>();
     const approved = !!body.approved;
+    logRouteHit(id, '/plan-response', { approved, has_feedback: !!body.feedback });
     const inWorkerMode = coderWorkerEnabled(); // Apêndice 4 Fase 2.
     // P17 — worker mode: forward the verdict via the pool RPC so the
     // worker-side runner unblocks. See `/answer` for the rationale.
@@ -247,6 +264,11 @@ export function mountCoderInteractionRoutes(
     const id = parseIdParam(c);
     const body = await c.req.json<TasksResponseBody>();
     const approved = !!body.approved;
+    logRouteHit(id, '/tasks-response', {
+      approved,
+      task_count: body.tasks?.length ?? 0,
+      execution_mode: body.execution_mode ?? null,
+    });
     const inWorkerMode = coderWorkerEnabled(); // Apêndice 4 Fase 2.
 
     // P17 — worker mode: forward the verdict via the pool RPC. The

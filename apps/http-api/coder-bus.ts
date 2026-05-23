@@ -94,6 +94,54 @@ export function publish(bus: CoderRunBus, event: string, data: unknown): Buffere
   return ev;
 }
 
+/**
+ * Structured logging shorthand for the dashboard's WorkerLogPanel.
+ *
+ * Emits a `worker_log` event carrying `{ts, level, category, message,
+ * data?}`. The dashboard captures every event into `SessionState.eventLog`,
+ * but `worker_log` carries the explicit headline + level + bucket so
+ * cross-cutting concerns (route hits, pool spawns, hook fires) show up
+ * with sensible defaults instead of being inferred from an event name.
+ *
+ * No-ops silently when `bus` is null/undefined so callers can opt in
+ * without guarding every site (`emitWorkerLog(pool.getBus(id), ...)` is
+ * the common pattern and `getBus` returns null when no run is active).
+ */
+export interface WorkerLogPayload {
+  ts: number;
+  level: 'info' | 'warn' | 'error' | 'debug';
+  category:
+    | 'route'
+    | 'pool'
+    | 'worker'
+    | 'runner'
+    | 'tool'
+    | 'quality'
+    | 'provider'
+    | 'lifecycle'
+    | 'message'
+    | 'other';
+  message: string;
+  data?: unknown;
+}
+
+export function emitWorkerLog(
+  bus: CoderRunBus | null | undefined,
+  level: WorkerLogPayload['level'],
+  category: WorkerLogPayload['category'],
+  message: string,
+  data?: unknown,
+): void {
+  if (!bus || bus.ended) return;
+  publish(bus, 'worker_log', {
+    ts: Date.now(),
+    level,
+    category,
+    message,
+    ...(data !== undefined ? { data } : {}),
+  } satisfies WorkerLogPayload);
+}
+
 export function markEnded(bus: CoderRunBus, event: 'done' | 'error', data: unknown) {
   bus.ended = true;
   bus.endReason = { event, data };

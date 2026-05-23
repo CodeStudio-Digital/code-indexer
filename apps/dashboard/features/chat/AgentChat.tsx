@@ -22,8 +22,10 @@ import { providerSupportsThinking } from './composer/provider-caps.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { MessageList } from './messages/MessageList.js';
+import { StuckBanner } from './StuckBanner.js';
 import { ToolLoopBanner } from './ToolLoopBanner.js';
 import { ToolStatsModal } from './ToolStatsModal.js';
+import { WorkerLogPanel } from './WorkerLogPanel.js';
 import { SessionDetailsModal } from './SessionDetailsModal.js';
 import { SessionMetricsModal } from './SessionMetricsModal.js';
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
@@ -87,6 +89,16 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   useEffect(() => {
     localStorage.setItem('chatMetaSidebarOpen', String(metaSidebarOpen));
   }, [metaSidebarOpen]);
+  // Worker-log inspector. Defaults off — a power-user surface, not for
+  // every session. Persist so a debugging operator stays in inspector
+  // mode across reloads.
+  const [workerLogOpen, setWorkerLogOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('chatWorkerLogOpen') === 'true';
+  });
+  useEffect(() => {
+    localStorage.setItem('chatWorkerLogOpen', String(workerLogOpen));
+  }, [workerLogOpen]);
   const [thinking, setThinking] = useState(false);
   /** PR-4: when set, the Composer's send button flips to "Run pipeline". */
   const [selectedPipelineId, setSelectedPipelineId] = useState<number | null>(null);
@@ -109,6 +121,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     sidebarRefreshTick,
     snapshotTick,
     toolLoopInterventions,
+    eventLog,
+    lastEventAt,
     sendMessage,
     reattach,
     abort,
@@ -862,10 +876,17 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                   pendingSnapshots={snapshotPending}
                   metaSidebarOpen={metaSidebarOpen}
                   onToggleMetaSidebar={() => setMetaSidebarOpen((v) => !v)}
+                  workerLogOpen={workerLogOpen}
+                  onToggleWorkerLog={() => setWorkerLogOpen((v) => !v)}
                 />
               )}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
                 <ToolLoopBanner interventions={toolLoopInterventions} />
+                <StuckBanner
+                  streaming={streaming}
+                  lastEventAt={lastEventAt ?? null}
+                  onOpenLog={() => setWorkerLogOpen(true)}
+                />
                 <MessageList
                   sessionData={sessionData ?? null}
                   currentTurn={currentTurn}
@@ -932,6 +953,14 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 }}
               />
               </div>
+              {workerLogOpen && (
+                <div className="w-[440px] shrink-0 min-w-0">
+                  <WorkerLogPanel
+                    entries={eventLog ?? []}
+                    onClose={() => setWorkerLogOpen(false)}
+                  />
+                </div>
+              )}
               {sessionData?.session && metaSidebarOpen && (
                 <SessionStateSidebar
                   sessionId={sessionData.session.id}

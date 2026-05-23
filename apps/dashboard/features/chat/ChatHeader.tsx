@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, BarChart3, Bot, Gauge, GitCompare, Info, PanelLeft, PanelRightClose, PanelRightOpen, Sparkles, Wrench } from 'lucide-react';
+import { AlertTriangle, BarChart3, Bot, Gauge, GitCompare, Info, PanelLeft, PanelRightClose, PanelRightOpen, ScrollText, Sparkles, Wrench } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -38,9 +38,13 @@ interface ChatHeaderProps {
   metaSidebarOpen?: boolean;
   /** Toggle the Meta sidebar (goal/tasks/skills/services). Hides the button if undefined. */
   onToggleMetaSidebar?: () => void;
+  /** Whether the side-by-side Worker Log panel is open. */
+  workerLogOpen?: boolean;
+  /** Toggle the Worker Log panel. Hides the button if undefined. */
+  onToggleWorkerLog?: () => void;
 }
 
-export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar }: ChatHeaderProps) {
+export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog }: ChatHeaderProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Persisted (from DB) + runtime delta (current run, if streaming).
   const totalIn = session.total_input_tokens;
@@ -197,6 +201,29 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
               </button>
             </TooltipTrigger>
             <TooltipContent>Tool stats — what is this session calling?</TooltipContent>
+          </Tooltip>
+        )}
+        {onToggleWorkerLog && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={workerLogOpen ? 'Hide worker log' : 'Show worker log'}
+                aria-pressed={workerLogOpen}
+                onClick={onToggleWorkerLog}
+                className={cn(
+                  'p-1.5 rounded-md transition-colors',
+                  workerLogOpen
+                    ? 'bg-accent text-accent-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                <ScrollText className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {workerLogOpen ? 'Hide worker log' : 'Show worker log — endpoints, hooks, tools, quality gate'}
+            </TooltipContent>
           </Tooltip>
         )}
         {onOpenSnapshots && (

@@ -7,6 +7,7 @@ import {
   publish,
   markEnded,
   setBusRunner,
+  emitWorkerLog,
 } from '../../../coder-bus.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
@@ -92,7 +93,12 @@ export function mountCoderStreamRoutes(
     const bus = activeRuns.get(id);
     if (!bus) return c.json({ error: 'no active run' }, 404);
 
-    return pumpBusToSSE(c, bus, { since: parseLastEventId(c), heartbeat: false });
+    const lastEventId = parseLastEventId(c);
+    emitWorkerLog(bus, 'info', 'route', 'GET /attach', {
+      last_event_id: lastEventId,
+      buffer_size: bus.buffer.length,
+    });
+    return pumpBusToSSE(c, bus, { since: lastEventId, heartbeat: false });
   });
 
   /**
@@ -153,6 +159,22 @@ export function mountCoderStreamRoutes(
     // /answer-via-worker fallback, where the tool_result is already in
     // history and there's no new user message to attach.
     if (!body.resume && !body.content?.trim()) return c.json({ error: 'content required' }, 400);
+    // Log the route hit. The bus may not exist yet (fresh session) —
+    // emitWorkerLog no-ops in that case, but if a worker is still alive
+    // (attach branch) the dashboard sees the incoming POST live.
+    {
+      const existing = coderWorkerEnabled()
+        ? getCoderWorkerPool().getBus(id)
+        : activeRuns.get(id);
+      emitWorkerLog(existing, 'info', 'route', 'POST /messages', {
+        content_preview: body.content?.slice(0, 80) ?? '',
+        resume: !!body.resume,
+        agent: body.agent,
+        profile: body.profile,
+        interject: !!body.interject,
+        attachment_count: body.attachments?.length ?? 0,
+      });
+    }
 
     // The list of skill IDs is threaded through to the runner verbatim so it
     // can rematerialize the `<active_skills>` block per turn. We deliberately
@@ -420,6 +442,9 @@ export function mountCoderStreamRoutes(
     if (!last || last.role !== 'tool') {
       return c.json({ error: 'session not in resumable state' }, 409);
     }
+    // Pre-spawn log: bus is about to be created below. We can't emit
+    // here because no bus exists yet — but the route-entry hit will
+    // appear via the fresh bus's `run_started` event seq=0.
 
     // Take the lock so a /continue racing with a /messages can't both spin
     // up runCoder for the same session. We hold it only across the
@@ -429,6 +454,14 @@ export function mountCoderStreamRoutes(
       const newBus = createBus(ctrl);
       activeRuns.set(id, newBus);
       return newBus;
+    });
+    // Log the route hit on the fresh bus — the dashboard will see the
+    // POST /continue entry seq=0 with the resume context.
+    emitWorkerLog(bus, 'info', 'route', 'POST /continue', {
+      agent: body.agent,
+      profile: body.profile,
+      plan_mode: body.plan_mode,
+      max_turns: body.max_turns,
     });
 
     void (async () => {

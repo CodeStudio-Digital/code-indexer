@@ -1,7 +1,72 @@
 import { createEventHandlers } from './handlers.js';
-import type { StreamBlock, UpdateSession } from './types.js';
+import type { StreamBlock, UpdateSession, WorkerLogEntry } from './types.js';
 import { ZERO_DELTA } from './types.js';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
+
+/**
+ * Cap for `SessionState.eventLog`. Older entries drop off (LIFO trim) so
+ * memory stays bounded across long runs. 1000 entries covers ~5 minutes of
+ * a chatty worker without sliding off the most recent context the user
+ * cares about when debugging a stall.
+ */
+const EVENT_LOG_CAP = 1000;
+
+/**
+ * Derive `{level, category, message}` for the worker-log entry from the
+ * raw SSE event name + payload. Most events flow through this fallback;
+ * the `worker_log` event itself carries those fields explicitly and is
+ * special-cased.
+ */
+function buildLogEntry(eventName: string, data: Record<string, unknown>): WorkerLogEntry {
+  if (eventName === 'worker_log') {
+    const w = data as {
+      ts?: number;
+      level?: WorkerLogEntry['level'];
+      category?: WorkerLogEntry['category'];
+      message?: string;
+    };
+    return {
+      ts: typeof w.ts === 'number' ? w.ts : Date.now(),
+      event: 'worker_log',
+      level: w.level ?? 'info',
+      category: w.category ?? 'other',
+      message: w.message ?? '(no message)',
+      data,
+    };
+  }
+  // Coarse mapping: keep this table tiny — categories are for filtering,
+  // not for forensics. The full event name stays in `event` for power users.
+  let category: WorkerLogEntry['category'] = 'other';
+  let level: WorkerLogEntry['level'] = 'info';
+  if (eventName.startsWith('tool_')) category = 'tool';
+  else if (eventName.startsWith('quality_') || eventName === 'tool_loop_intervention')
+    category = 'quality';
+  else if (
+    eventName === 'provider_call' ||
+    eventName === 'provider_swapped' ||
+    eventName === 'fallback_activated'
+  )
+    category = 'provider';
+  else if (
+    eventName === 'turn_start' ||
+    eventName === 'message_complete' ||
+    eventName === 'history_compacted' ||
+    eventName === 'auto_continue'
+  )
+    category = 'lifecycle';
+  else if (eventName === 'text' || eventName === 'thinking') category = 'message';
+  else if (eventName === 'run_started' || eventName === 'done') category = 'runner';
+  if (eventName === 'error') level = 'error';
+  else if (eventName === 'warning' || eventName === 'tool_loop_intervention') level = 'warn';
+  return {
+    ts: Date.now(),
+    event: eventName,
+    level,
+    category,
+    message: eventName,
+    data,
+  };
+}
 
 export interface OpenStreamOpts {
   url: string;
@@ -119,6 +184,19 @@ export async function openStream(
       } catch {
         return;
       }
+      // Capture EVERY event into the worker log BEFORE dispatch. The
+      // existing per-event handlers below only fire for events the UI
+      // explicitly renders (text, tool_*, plan, etc.) — many events
+      // like history_compacted / provider_call / worker_log have no
+      // chat-side handler but are precious for debugging stalls.
+      const entry = buildLogEntry(ev.event, data);
+      updateSession(sid, (cur) => ({
+        eventLog:
+          cur.eventLog.length < EVENT_LOG_CAP
+            ? [...cur.eventLog, entry]
+            : [...cur.eventLog.slice(cur.eventLog.length - EVENT_LOG_CAP + 1), entry],
+        lastEventAt: entry.ts,
+      }));
       const handler = handlers[ev.event];
       if (handler) handler(data, ev.event);
     },

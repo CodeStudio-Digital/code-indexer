@@ -293,6 +293,50 @@ export interface SessionState {
    * banner stack manageable. Cleared on next successful user message.
    */
   toolLoopInterventions: ToolLoopIntervention[];
+  /**
+   * Flat event log captured from the SSE stream — every event the
+   * worker emits, in arrival order. Powers the WorkerLogPanel (a
+   * collapsible side-by-side inspector). Capped at 1000 entries; older
+   * entries are dropped LIFO so the most recent context survives.
+   */
+  eventLog: WorkerLogEntry[];
+  /**
+   * `Date.now()` of the last event observed on the stream. Used by the
+   * stuck-detection banner — if `streaming` stays true but this stops
+   * advancing for >30s the dashboard shows "Worker idle for Xs —
+   * possible stall". Null until first event arrives.
+   */
+  lastEventAt: number | null;
+}
+
+/**
+ * A single entry in the worker log. Wraps the raw SSE event plus
+ * categorisation derived from the event name (when the server didn't
+ * tag it explicitly via `worker_log`).
+ */
+export interface WorkerLogEntry {
+  /** Local capture time (Date.now). Server-side `ts` is preferred when present in `data.ts`. */
+  ts: number;
+  /** Raw event name from the SSE stream (e.g. `tool_call_start`, `worker_log`, `quality_watchdog_alert`). */
+  event: string;
+  /** Severity. Derived from event semantics or the explicit `level` field on `worker_log` payloads. */
+  level: 'info' | 'warn' | 'error' | 'debug';
+  /** Coarse bucket for filters. */
+  category:
+    | 'route'
+    | 'pool'
+    | 'worker'
+    | 'runner'
+    | 'tool'
+    | 'quality'
+    | 'provider'
+    | 'lifecycle'
+    | 'message'
+    | 'other';
+  /** Short human-readable headline. For `worker_log` payloads this is `data.message`; for others it's derived. */
+  message: string;
+  /** Raw payload — shown when the entry is expanded. */
+  data: unknown;
 }
 
 export const ZERO_DELTA: RunDelta = {
@@ -319,6 +363,8 @@ export const EMPTY_STATE: SessionState = {
   sidebarRefreshTick: 0,
   snapshotTick: 0,
   toolLoopInterventions: [],
+  eventLog: [],
+  lastEventAt: null,
 };
 
 export type SessionPatch =

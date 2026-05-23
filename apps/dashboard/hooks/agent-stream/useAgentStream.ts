@@ -290,6 +290,8 @@ export function useAgentStream(sessionId: number | null) {
     sidebarRefreshTick: active.sidebarRefreshTick,
     snapshotTick: active.snapshotTick,
     toolLoopInterventions: active.toolLoopInterventions,
+    eventLog: active.eventLog,
+    lastEventAt: active.lastEventAt,
     sendMessage,
     sendWithInterject,
     dismissInteractionPending,

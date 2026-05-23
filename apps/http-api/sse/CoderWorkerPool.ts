@@ -30,6 +30,7 @@ import {
   createBus,
   publish,
   markEnded,
+  emitWorkerLog,
   type CoderRunBus,
 } from '../coder-bus.js';
 import type { CoderAttachment } from '@mcp/code-agent/index.js';
@@ -345,6 +346,14 @@ export class CoderWorkerPool {
         // anymore. Belt-and-suspenders.
         const entry = this.entries.get(sessionId);
         if (entry?.bus && !entry.bus.ended) {
+          // Emit a worker_log BEFORE markEnded so the dashboard's
+          // WorkerLogPanel renders the crash with its real reason
+          // alongside the terminal `error` event.
+          emitWorkerLog(entry.bus, 'error', 'pool', 'worker crashed', {
+            sessionId,
+            errorName: err.name,
+            message: err.message,
+          });
           markEnded(entry.bus, 'error', {
             reason: 'worker-crashed',
             message: err.message,
@@ -359,14 +368,22 @@ export class CoderWorkerPool {
     });
     const startedAt = Date.now();
     await host.start();
+    const bootMs = Date.now() - startedAt;
     this.log(
       'info',
-      `[coder-pool] worker spawned session=${sessionId} (boot=${Date.now() - startedAt}ms)`,
+      `[coder-pool] worker spawned session=${sessionId} (boot=${bootMs}ms)`,
     );
 
     // Mirror the worker's bus to a main-side bus so existing
     // `pumpBusToSSE(c, bus, …)` calls keep working without change.
     const bus = createBus(new AbortController());
+    // Log the spawn on the brand-new bus — the dashboard's
+    // WorkerLogPanel will show "worker spawned (boot=Xms)" as the
+    // first event of this run, before any runner events arrive.
+    emitWorkerLog(bus, 'info', 'pool', `worker spawned (boot=${bootMs}ms)`, {
+      sessionId,
+      bootMs,
+    });
     const bridge = host.requireBridge();
     // ─── Wire RPC bridges from worker → main ─────────────────────────
     // Worker boot installs a `DocSearchBackend` shim that calls
