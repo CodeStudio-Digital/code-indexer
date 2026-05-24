@@ -74,7 +74,7 @@ function WorkspaceRoute() {
       projectId={projectId}
       projectName={project.data.name}
       initialSessionId={Number.isFinite(initialSessionId) ? initialSessionId : undefined}
-      onExit={() => navigate(`/projects/${projectId}`)}
+      onExit={() => navigate(`/projects/${projectId}/analytics`)}
     />
   );
 }
@@ -100,8 +100,8 @@ const router = createBrowserRouter([
     element: <AppShell />,
     children: [
       { index: true, element: <HomeRoute /> },
-      { path: 'projects/:id', element: <ProjectRoute /> },
-      { path: 'projects/:id/workspace', element: <WorkspaceRoute /> },
+      { path: 'projects/:id', element: <WorkspaceRoute /> },
+      { path: 'projects/:id/analytics', element: <ProjectRoute /> },
       { path: 'agents', element: <AgentsTab /> },
       { path: 'company/sessions/:rootId', element: <CompanyRedirectRoute /> },
       { path: 'company/sessions/:rootId/:frontId/:zone/:tab', element: <AgentsTab /> },

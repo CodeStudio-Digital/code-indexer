@@ -1,11 +1,12 @@
 /**
- * Sidebar + topbar layout that wraps every routed page. Extracted from
- * `App.tsx` so the router can mount it once and let route children
- * render into the `<Outlet />`.
+ * Top horizontal navbar that wraps non-workspace routes. The Workspace
+ * IDE (`/projects/:id`) opts out via `view.page === 'project'` and runs
+ * full-bleed; everything else (home / agents / admin / telemetry / docs /
+ * design-systems) gets the nav bar.
  *
- * Theme + sidebar-collapsed state are local to the shell because they
- * persist independent of the route. Nav buttons highlight based on
- * `useLocation()`.
+ * Design intent: feels like a software's top menu — small (h-9), tight
+ * font (text-xs / 11-12px), icons + labels. Replaces the old left
+ * sidebar to free vertical space for content.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -14,67 +15,29 @@ import {
   Activity,
   BookOpen,
   Boxes,
-  ChevronLeft,
-  ChevronRight,
-  FolderGit2,
+  Clock,
   Home,
-  Menu,
   Moon,
   Palette,
   Settings,
   Sun,
   Users,
-  X,
 } from 'lucide-react';
 import { Button } from './components/ui/button.js';
-import { TooltipTrigger, Tooltip, TooltipContent } from './components/ui/tooltip.js';
+import { Tooltip, TooltipContent, TooltipTrigger } from './components/ui/tooltip.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './components/ui/dropdown-menu.js';
 import { LanguageSwitcher } from './components/LanguageSwitcher.js';
-import { RecentSessionsList } from './features/recent/RecentSessionsList.js';
 import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
 
-interface NavButtonProps {
-  icon: React.ReactNode;
-  label: string;
-  active: boolean;
-  collapsed: boolean;
-  onClick: () => void;
-}
-
-function NavButton({ icon, label, active, collapsed, onClick }: NavButtonProps) {
-  const btn = (
-    <button
-      onClick={onClick}
-      className={cn(
-        'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-        collapsed && 'justify-center px-2',
-        active
-          ? 'bg-accent text-accent-foreground'
-          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-      )}
-    >
-      {icon}
-      {!collapsed && <span>{label}</span>}
-    </button>
-  );
-
-  if (collapsed) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>{btn}</TooltipTrigger>
-        <TooltipContent side="right">{label}</TooltipContent>
-      </Tooltip>
-    );
-  }
-
-  return btn;
-}
-
-/**
- * Parsed view of the current URL — drives sidebar highlighting and the
- * breadcrumb in the topbar without ad-hoc string matching at the call site.
- */
 interface ActiveView {
   page: 'home' | 'project' | 'agents' | 'admin' | 'design-systems' | 'telemetry' | 'docs' | 'other';
   projectId: number | null;
@@ -105,6 +68,40 @@ function parsePathname(pathname: string, search: string): ActiveView {
   return { page: 'other', projectId: null, sessionId: null };
 }
 
+interface NavItem {
+  id: ActiveView['page'];
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  href: string;
+  show?: boolean;
+}
+
+interface NavButtonProps {
+  item: NavItem;
+  active: boolean;
+  onClick: () => void;
+}
+
+function NavButton({ item, active, onClick }: NavButtonProps) {
+  const Icon = item.icon;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'h-7 inline-flex items-center gap-1.5 px-2 rounded text-[11px] font-medium transition-colors',
+        active
+          ? 'bg-accent text-accent-foreground'
+          : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+      )}
+      aria-current={active ? 'page' : undefined}
+    >
+      <Icon className="h-3 w-3" />
+      <span>{item.label}</span>
+    </button>
+  );
+}
+
 export function AppShell() {
   const { t } = useTranslation();
   const features = useFeatures();
@@ -113,10 +110,6 @@ export function AppShell() {
   const view = useMemo(
     () => parsePathname(location.pathname, location.search),
     [location.pathname, location.search],
-  );
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
-    localStorage.getItem('sidebarCollapsed') === 'true',
   );
   const [dark, setDark] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -130,206 +123,147 @@ export function AppShell() {
     localStorage.setItem('theme', dark ? 'dark' : 'light');
   }, [dark]);
 
-  function toggleCollapsed() {
-    setSidebarCollapsed((v) => {
-      localStorage.setItem('sidebarCollapsed', String(!v));
-      return !v;
-    });
+  // Workspace mode opts out of the AppShell chrome entirely — the IDE
+  // owns 100dvh. Outlet renders directly.
+  if (view.page === 'project') {
+    return (
+      <div className="h-[100dvh] w-full bg-background text-foreground overflow-hidden">
+        <Outlet />
+      </div>
+    );
   }
 
-  function go(path: string) {
-    navigate(path);
-    setMobileSidebarOpen(false);
-  }
+  const nav: NavItem[] = [
+    { id: 'home', label: t('nav.projects'), icon: Home, href: '/' },
+    { id: 'agents', label: t('nav.agents'), icon: Users, href: '/agents' },
+    {
+      id: 'design-systems',
+      label: t('nav.designSystems'),
+      icon: Palette,
+      href: '/design-systems',
+      show: features.designSystemEnabled,
+    },
+    { id: 'telemetry', label: t('nav.telemetry'), icon: Activity, href: '/telemetry' },
+    { id: 'docs', label: t('nav.docs'), icon: BookOpen, href: '/docs' },
+    { id: 'admin', label: t('nav.admin'), icon: Settings, href: '/admin' },
+  ].filter((n) => n.show !== false);
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <div
-        className={cn(
-          'grid grid-cols-1 min-h-screen',
-          sidebarCollapsed ? 'md:grid-cols-[60px_1fr]' : 'md:grid-cols-[260px_1fr]',
-        )}
-      >
-        <aside
-          className={cn(
-            'flex flex-col border-r bg-card',
-            'fixed inset-y-0 left-0 z-40 transition-all duration-200',
-            'md:relative md:translate-x-0 md:z-auto',
-            sidebarCollapsed ? 'md:w-[60px]' : 'md:w-auto',
-            mobileSidebarOpen ? 'translate-x-0 w-64' : '-translate-x-full w-64',
-          )}
+    <div className="h-[100dvh] flex flex-col bg-background text-foreground">
+      <header className="h-9 shrink-0 border-b bg-card/60 backdrop-blur supports-[backdrop-filter]:bg-card/40 flex items-center px-2 gap-1">
+        {/* Brand */}
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          className="h-7 inline-flex items-center gap-1.5 px-2 rounded text-[12px] font-semibold text-foreground hover:bg-muted"
+          aria-label="MCP IDE — home"
         >
-          <button
-            className="md:hidden absolute top-3 right-3 p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-            onClick={() => setMobileSidebarOpen(false)}
-            aria-label="Close navigation"
-          >
-            <X className="h-4 w-4" />
-          </button>
-          <div
-            className={cn(
-              'h-16 flex items-center border-b',
-              sidebarCollapsed ? 'justify-center px-2' : 'gap-2.5 px-5',
-            )}
-          >
-            <div className="h-9 w-9 rounded-xl bg-primary text-primary-foreground flex items-center justify-center shadow-sm shrink-0">
-              <Boxes className="h-5 w-5" />
-            </div>
-            {!sidebarCollapsed && (
-              <div className="flex flex-col leading-tight">
-                <span className="font-semibold text-sm">MCP Indexer</span>
-                <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                  v{__APP_VERSION__}
-                </span>
-              </div>
-            )}
-          </div>
-          <nav
-            className={cn('flex-1 p-3 space-y-1 overflow-hidden', sidebarCollapsed && 'px-1.5')}
-          >
+          <span className="h-5 w-5 rounded-md bg-primary text-primary-foreground grid place-items-center">
+            <Boxes className="h-3 w-3" />
+          </span>
+          <span>MCP&nbsp;IDE</span>
+          <span className="text-[9px] text-muted-foreground uppercase tracking-wider font-normal">
+            v{__APP_VERSION__}
+          </span>
+        </button>
+        <span className="h-4 w-px bg-border mx-0.5" />
+        {/* Nav */}
+        <nav className="flex items-center gap-0.5" aria-label="Primary">
+          {nav.map((item) => (
             <NavButton
-              icon={<Home className="h-4 w-4 shrink-0" />}
-              label={t('nav.projects')}
-              active={view.page === 'home'}
-              collapsed={sidebarCollapsed}
-              onClick={() => go('/')}
+              key={item.id}
+              item={item}
+              active={view.page === item.id}
+              onClick={() => navigate(item.href)}
             />
-            <NavButton
-              icon={<Users className="h-4 w-4 shrink-0" />}
-              label={t('nav.agents')}
-              active={view.page === 'agents'}
-              collapsed={sidebarCollapsed}
-              onClick={() => go('/agents')}
-            />
-            {features.designSystemEnabled && (
-              <NavButton
-                icon={<Palette className="h-4 w-4 shrink-0" />}
-                label={t('nav.designSystems')}
-                active={view.page === 'design-systems'}
-                collapsed={sidebarCollapsed}
-                onClick={() => go('/design-systems')}
-              />
-            )}
-            <NavButton
-              icon={<Activity className="h-4 w-4 shrink-0" />}
-              label={t('nav.telemetry')}
-              active={view.page === 'telemetry'}
-              collapsed={sidebarCollapsed}
-              onClick={() => go('/telemetry')}
-            />
-            <NavButton
-              icon={<BookOpen className="h-4 w-4 shrink-0" />}
-              label={t('nav.docs')}
-              active={view.page === 'docs'}
-              collapsed={sidebarCollapsed}
-              onClick={() => go('/docs')}
-            />
-            <NavButton
-              icon={<Settings className="h-4 w-4 shrink-0" />}
-              label={t('nav.admin')}
-              active={view.page === 'admin'}
-              collapsed={sidebarCollapsed}
-              onClick={() => go('/admin')}
-            />
-            {!sidebarCollapsed && view.page === 'project' && view.projectId != null && (
-              <ActiveProjectIndicator projectId={view.projectId} />
-            )}
-            {!sidebarCollapsed && (
-              <RecentSessionsList
-                activeSessionId={view.sessionId}
-                onSelect={(id, _name, sessionId) =>
-                  go(`/projects/${id}${sessionId ? `?session=${sessionId}` : ''}`)
-                }
-              />
-            )}
-          </nav>
-          <div
-            className={cn(
-              'border-t flex',
-              sidebarCollapsed ? 'p-1.5 flex-col items-center gap-1' : 'p-2 flex-row items-center gap-1',
-            )}
-          >
-            <LanguageSwitcher />
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setDark((d) => !d)}
-                  aria-label={t('theme.toggle')}
-                  className="h-8 w-8"
-                >
-                  {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">{t('theme.toggle')}</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  className={cn(
-                    'hidden md:flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors h-8 w-8',
-                    !sidebarCollapsed && 'ml-auto',
-                  )}
-                  onClick={toggleCollapsed}
-                  aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                >
-                  {sidebarCollapsed ? (
-                    <ChevronRight className="h-4 w-4" />
-                  ) : (
-                    <ChevronLeft className="h-4 w-4" />
-                  )}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                {sidebarCollapsed ? 'Expandir menu' : 'Recolher menu'}
-              </TooltipContent>
-            </Tooltip>
-          </div>
-        </aside>
-
-        <div className="flex flex-col min-w-0">
-          <main
-            className={cn(
-              'flex-1 w-full mx-auto min-h-0',
-              view.page !== 'agents'
-                && view.page !== 'design-systems'
-                && view.page !== 'project'
-                && 'px-3 py-4 sm:px-6 sm:py-6',
-            )}
-          >
-            <Outlet />
-          </main>
+          ))}
+        </nav>
+        {/* Right cluster */}
+        <div className="ml-auto flex items-center gap-0.5">
+          <RecentSessionsDropdown
+            activeSessionId={view.sessionId}
+            onSelect={(projectId, sessionId) =>
+              navigate(`/projects/${projectId}${sessionId ? `?session=${sessionId}` : ''}`)
+            }
+          />
+          <LanguageSwitcher />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setDark((d) => !d)}
+                aria-label={t('theme.toggle')}
+                className="h-7 w-7"
+              >
+                {dark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t('theme.toggle')}</TooltipContent>
+          </Tooltip>
         </div>
-      </div>
-
-      {/* Mobile-only floating button to open the sidebar drawer, since the
-          top header that used to host the burger is gone. */}
-      <button
-        type="button"
-        onClick={() => setMobileSidebarOpen(true)}
-        aria-label="Open navigation"
-        className="md:hidden fixed top-2 left-2 z-40 p-2 rounded-md bg-card/90 border shadow-sm text-muted-foreground hover:text-foreground"
-      >
-        <Menu className="h-4 w-4" />
-      </button>
-
-      {mobileSidebarOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/40 md:hidden"
-          onClick={() => setMobileSidebarOpen(false)}
-        />
-      )}
+      </header>
+      <main className="flex-1 min-h-0 overflow-hidden">
+        <Outlet />
+      </main>
     </div>
   );
 }
 
-function ActiveProjectIndicator({ projectId }: { projectId: number }) {
-  const { data } = useApi<{ id: number; name: string }>(`/projects/${projectId}`);
+/**
+ * Compact "Recent sessions" dropdown in the topbar. Replaces the
+ * always-visible sidebar list — saves vertical space and keeps the
+ * topbar dense.
+ */
+function RecentSessionsDropdown({
+  activeSessionId,
+  onSelect,
+}: {
+  activeSessionId: number | null;
+  onSelect: (projectId: number, sessionId: number) => void;
+}) {
+  // RecentCoderSession = CoderSession + project_name (see @mcp/code-agent
+  // sessions/types). The store query joins projects on project_id.
+  const { data } = useApi<
+    Array<{ id: number; title: string; project_id: number; project_name: string }>
+  >('/coder/sessions/recent?limit=10');
+
   return (
-    <div className="px-3 py-2 rounded-lg bg-primary/10 text-primary flex items-center gap-2 text-sm font-medium">
-      <FolderGit2 className="h-4 w-4 shrink-0" />
-      <span className="truncate">{data?.name ?? `#${projectId}`}</span>
-    </div>
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Recent sessions">
+              <Clock className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent>Recent sessions</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">
+          Recent
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {(!data || data.length === 0) && (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">No recent sessions yet.</div>
+        )}
+        {data?.map((s) => {
+          const active = s.id === activeSessionId;
+          return (
+            <DropdownMenuItem
+              key={s.id}
+              onClick={() => onSelect(s.project_id, s.id)}
+              className={cn('flex flex-col items-start gap-0.5 text-xs', active && 'bg-accent')}
+            >
+              <span className="font-medium truncate w-full">{s.title}</span>
+              <span className="text-[10px] text-muted-foreground truncate w-full">
+                {s.project_name}
+              </span>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
