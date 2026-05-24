@@ -24,7 +24,7 @@
  * layout Zustand store so the user's layout sticks across reloads.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import {
   Bell,
@@ -32,7 +32,14 @@ import {
   GitBranch,
   History,
   MessageSquare,
+  PanelBottomOpen,
+  PanelLeft,
+  PanelRight,
+  RefreshCw,
+  Save,
   Search,
+  TerminalSquare,
+  X,
 } from 'lucide-react';
 import { apiCall } from '../../lib/api-client.js';
 import { useWorkspaceStore } from '../../state/workspace.js';
@@ -46,6 +53,7 @@ import { EditorPane } from './EditorPane.js';
 import { BottomPanel } from './BottomPanel.js';
 import { ActivityRail, type RailItem } from './jetbrains/ActivityRail.js';
 import { StatusBar } from './jetbrains/StatusBar.js';
+import { CommandPalette, type Command } from './jetbrains/CommandPalette.js';
 import { QuickOpen } from './jetbrains/QuickOpen.js';
 import { FileTreeWindow } from './jetbrains/tool-windows/FileTreeWindow.js';
 import { SearchWindow } from './jetbrains/tool-windows/SearchWindow.js';
@@ -79,6 +87,9 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
   const openFile = useWorkspaceStore((s) => s.openFile);
   const [activeSessionId, setActiveSessionId] = useState<number | undefined>(initialSessionId);
   const [quickOpen, setQuickOpen] = useState(false);
+  const [commandPalette, setCommandPalette] = useState(false);
+  const closeFile = useWorkspaceStore((s) => s.closeFile);
+  const openFiles = useWorkspaceStore((s) => s.openFiles);
 
   const handleOpen = useCallback(
     async (path: string) => {
@@ -101,24 +112,184 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
     [projectId, openFile],
   );
 
-  // Ctrl/Cmd+P opens Quick Open. Skip when an editable surface is
-  // focused so the user's text input isn't hijacked — Monaco handles
-  // its own binding internally and that's fine.
+  // Build the command list once per layout-state change. Each command
+  // captures the live setter, so toggling a tool window via the palette
+  // produces the same state delta as clicking the rail icon.
+  const commands = useMemo<Command[]>(() => {
+    const toggleLeft = (id: LeftToolId, label: string): Command => ({
+      id: `view.toggle-left-${id}`,
+      category: 'View',
+      label: `Toggle ${label}`,
+      run: () => layout.toggleLeft(id),
+    });
+    const toggleRight = (id: RightToolId, label: string): Command => ({
+      id: `view.toggle-right-${id}`,
+      category: 'View',
+      label: `Toggle ${label}`,
+      run: () => layout.toggleRight(id),
+    });
+    return [
+      // ── File ──────────────────────
+      {
+        id: 'file.quick-open',
+        category: 'File',
+        label: 'Go to file…',
+        shortcut: 'Ctrl+P',
+        icon: FileCode2,
+        run: () => setQuickOpen(true),
+      },
+      {
+        id: 'file.save-all',
+        category: 'File',
+        label: 'Save all',
+        shortcut: 'Ctrl+Shift+S',
+        icon: Save,
+        run: async () => {
+          for (const f of openFiles) {
+            if (!f.dirty) continue;
+            try {
+              const res = await apiCall<{ ok: true; last_modified: string }>('files.write', {
+                projectId: f.projectId,
+                path: f.path,
+                content: f.content,
+              });
+              useWorkspaceStore.getState().markClean(f.path, res.last_modified);
+            } catch {
+              /* surface via toast when we ship one */
+            }
+          }
+        },
+      },
+      {
+        id: 'file.close-active',
+        category: 'File',
+        label: 'Close active tab',
+        shortcut: 'Ctrl+W',
+        icon: X,
+        run: () => {
+          if (activeFilePath) closeFile(activeFilePath);
+        },
+      },
+      // ── View ──────────────────────
+      toggleLeft('files', 'project files'),
+      toggleLeft('search', 'search'),
+      toggleLeft('snapshots', 'snapshots'),
+      toggleLeft('git', 'git'),
+      toggleRight('chat', 'agent chat'),
+      toggleRight('sessions', 'sessions'),
+      toggleRight('inbox', 'inbox'),
+      {
+        id: 'view.toggle-left-rail',
+        category: 'View',
+        label: 'Toggle left tool panel',
+        shortcut: 'Ctrl+B',
+        icon: PanelLeft,
+        run: () => layout.setActiveLeft(layout.activeLeft ? null : 'files'),
+      },
+      {
+        id: 'view.toggle-right-rail',
+        category: 'View',
+        label: 'Toggle right tool panel',
+        shortcut: 'Ctrl+Alt+B',
+        icon: PanelRight,
+        run: () => layout.setActiveRight(layout.activeRight ? null : 'chat'),
+      },
+      {
+        id: 'view.toggle-terminal',
+        category: 'View',
+        label: 'Toggle terminal',
+        shortcut: 'Ctrl+J',
+        icon: TerminalSquare,
+        run: () => layout.toggleBottom('terminal'),
+      },
+      {
+        id: 'view.toggle-bottom-panel',
+        category: 'View',
+        label: 'Toggle bottom panel',
+        shortcut: 'Ctrl+`',
+        icon: PanelBottomOpen,
+        run: () =>
+          layout.activeBottom ? layout.setActiveBottom(null) : layout.setActiveBottom('terminal'),
+      },
+      // ── Workspace ─────────────────
+      {
+        id: 'workspace.reload',
+        category: 'Workspace',
+        label: 'Reload window',
+        shortcut: 'Ctrl+R',
+        icon: RefreshCw,
+        run: () => window.location.reload(),
+      },
+    ];
+  }, [layout, activeFilePath, closeFile, openFiles]);
+
+  // Global keyboard shortcuts. Each binding is gated on the focus
+  // not being inside another input (Monaco already swallows the
+  // bindings it cares about, so this listener doesn't reach it).
   useEffect(() => {
+    const inEditable = (target: EventTarget | null): boolean => {
+      const el = target as HTMLElement | null;
+      const tag = el?.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || !!el?.isContentEditable;
+    };
     const onKey = (e: KeyboardEvent) => {
-      const isQuickOpen = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'p';
-      if (!isQuickOpen) return;
-      // Ignore inside other inputs unless they're the Monaco editor (which
-      // already swallows Ctrl+P; this listener wouldn't fire then).
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
-      e.preventDefault();
-      setQuickOpen(true);
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      const key = e.key.toLowerCase();
+      // Quick Open
+      if (key === 'p' && !e.shiftKey && !e.altKey) {
+        if (inEditable(e.target)) return;
+        e.preventDefault();
+        setQuickOpen(true);
+        return;
+      }
+      // Command Palette
+      if (key === 'p' && e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        setCommandPalette(true);
+        return;
+      }
+      // Save all
+      if (key === 's' && e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        const saveAll = commands.find((c) => c.id === 'file.save-all');
+        if (saveAll) void saveAll.run();
+        return;
+      }
+      // Close tab
+      if (key === 'w' && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        if (activeFilePath) closeFile(activeFilePath);
+        return;
+      }
+      // Toggle left rail
+      if (key === 'b' && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        layout.setActiveLeft(layout.activeLeft ? null : 'files');
+        return;
+      }
+      // Toggle right rail
+      if (key === 'b' && e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        layout.setActiveRight(layout.activeRight ? null : 'chat');
+        return;
+      }
+      // Toggle terminal
+      if (key === 'j' && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        layout.toggleBottom('terminal');
+        return;
+      }
+      // Toggle bottom panel (` key)
+      if (e.key === '`' && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        if (layout.activeBottom) layout.setActiveBottom(null);
+        else layout.setActiveBottom('terminal');
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [layout, activeFilePath, closeFile, commands]);
 
   return (
     <div className="flex flex-col h-[100dvh] min-h-0 w-full bg-background text-foreground">
@@ -215,6 +386,11 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
         open={quickOpen}
         onClose={() => setQuickOpen(false)}
         onPick={(path) => void handleOpen(path)}
+      />
+      <CommandPalette
+        open={commandPalette}
+        commands={commands}
+        onClose={() => setCommandPalette(false)}
       />
     </div>
   );
