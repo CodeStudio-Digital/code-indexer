@@ -143,6 +143,7 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
                 onResize={(size) => saveWorkspaceLayout({ bottomPanelSize: size })}
               >
                 <BottomPanel
+                  projectId={projectId}
                   isOpen={bottomPanelOpen}
                   onToggle={toggleBottomPanel}
                   onClose={closeBottomPanel}

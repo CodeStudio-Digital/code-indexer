@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { TerminalSquare, AlertCircle, FileText, Search, ChevronDown, ChevronUp, X } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
+import { WorkspaceTerminal } from './WorkspaceTerminal.js';
 
 type TabId = 'terminal' | 'problems' | 'output' | 'search';
 
@@ -22,12 +23,13 @@ const TABS: Array<{ id: TabId; label: string; icon: React.ComponentType<{ classN
 ];
 
 interface BottomPanelProps {
+  projectId: number;
   isOpen: boolean;
   onToggle: () => void;
   onClose: () => void;
 }
 
-export function BottomPanel({ isOpen, onToggle, onClose }: BottomPanelProps) {
+export function BottomPanel({ projectId, isOpen, onToggle, onClose }: BottomPanelProps) {
   const [tab, setTab] = useState<TabId>('terminal');
 
   return (
@@ -80,13 +82,15 @@ export function BottomPanel({ isOpen, onToggle, onClose }: BottomPanelProps) {
         </div>
       </div>
       {isOpen && (
-        <div className="flex-1 min-h-0 overflow-hidden p-2">
-          <div className="h-full grid place-items-center text-xs text-muted-foreground">
-            {tab === 'terminal' && 'Terminal lands on Day 10 — apiStream("terminal.output", …).'}
-            {tab === 'problems' && 'Problems panel coming with LSP diagnostics integration.'}
-            {tab === 'output' && 'Tool output / build logs panel.'}
-            {tab === 'search' && 'Search across files — coming soon.'}
-          </div>
+        <div className="flex-1 min-h-0 overflow-hidden">
+          {tab === 'terminal' && <WorkspaceTerminal projectId={projectId} />}
+          {tab !== 'terminal' && (
+            <div className="h-full grid place-items-center text-xs text-muted-foreground p-2">
+              {tab === 'problems' && 'Problems panel coming with LSP diagnostics integration.'}
+              {tab === 'output' && 'Tool output / build logs panel.'}
+              {tab === 'search' && 'Search across files — coming soon.'}
+            </div>
+          )}
         </div>
       )}
     </div>
