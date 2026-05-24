@@ -16,6 +16,10 @@ import { createProjectsHandlers } from './projects/index.js';
 import { createFilesHandlers } from './files/index.js';
 import { createTerminalHandlers } from './terminal/index.js';
 import { createCoderHandlers } from './coder/index.js';
+import { createLspHandlers } from './lsp/index.js';
+import { createSnapshotsHandlers } from './snapshots/index.js';
+import { createRunsHandlers } from './runs/index.js';
+import { createSearchHandlers } from './search/index.js';
 import type { HandlerDeps } from './types.js';
 
 export type { HandlerDeps } from './types.js';
@@ -24,10 +28,19 @@ export { createProjectsHandlers } from './projects/index.js';
 export { createFilesHandlers } from './files/index.js';
 export { createTerminalHandlers } from './terminal/index.js';
 export { createCoderHandlers } from './coder/index.js';
+export { createLspHandlers } from './lsp/index.js';
+export { createSnapshotsHandlers } from './snapshots/index.js';
+export { createRunsHandlers } from './runs/index.js';
+export { createSearchHandlers } from './search/index.js';
 
 /**
  * Aggregate factory. As more namespaces are extracted, add them here so
  * the Electron main process can mount the full `Api` in one call.
+ *
+ * Not yet wired (Dia 4+): admin, docs, designSystem, company, workspace.
+ * Those serve features (multi-agent, doc RAG, design system) that are
+ * Pro-tier features and don't block the core IDE loop. Their Hono routes
+ * continue to work as legacy adapters.
  */
 export function createHandlers(deps: HandlerDeps): Partial<Api> {
   return {
@@ -35,5 +48,9 @@ export function createHandlers(deps: HandlerDeps): Partial<Api> {
     files: createFilesHandlers(deps),
     terminal: createTerminalHandlers(deps),
     coder: createCoderHandlers(deps),
+    lsp: createLspHandlers(deps),
+    snapshots: createSnapshotsHandlers(deps),
+    runs: createRunsHandlers(deps),
+    search: createSearchHandlers(deps),
   };
 }

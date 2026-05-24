@@ -5,8 +5,10 @@ import type { ApiContext } from './common.js';
  * Source: apps/http-api/server/routes/search.ts.
  */
 
-export type SearchMode = 'hybrid' | 'fts' | 'vector';
-export type SearchType = 'all' | 'symbol' | 'file' | 'snippet';
+/** Mirrors `@mcp/shared/types.SearchMode`. */
+export type SearchMode = 'fts' | 'vector' | 'hybrid' | 'auto';
+/** Mirrors `@mcp/shared/types.SearchType`. */
+export type SearchType = 'files' | 'symbols' | 'all';
 
 export interface SearchResult {
   id: number;

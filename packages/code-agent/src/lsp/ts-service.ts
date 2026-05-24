@@ -254,12 +254,51 @@ export class TsLanguageService {
     return all;
   }
 
+  /**
+   * Completion suggestions at a position. Used by the IDE workspace's
+   * Monaco editor via the `lsp.completion` api-bus handler (debounced
+   * ~300ms client-side). Returns the raw TS API entries plus a trimmed
+   * `detail` so the Monaco render is cheap; consumers fetch full details
+   * via a follow-up call only when the user hovers an entry.
+   */
+  getCompletions(file: string, line: number, column: number): CompletionEntry[] {
+    const service = this.ensureService();
+    const abs = this.toAbs(file);
+    const offset = this.positionToOffset(abs, line, column);
+    if (offset === null) return [];
+    const result = service.getCompletionsAtPosition(abs, offset, {
+      includeCompletionsWithInsertText: true,
+      includeCompletionsForModuleExports: true,
+      triggerKind: ts.CompletionTriggerKind.Invoked,
+    });
+    if (!result) return [];
+    return result.entries.map((e) => ({
+      name: e.name,
+      kind: String(e.kind),
+      sortText: e.sortText,
+      insertText: e.insertText ?? e.name,
+      isSnippet: !!e.isSnippet,
+      // `detail` — short, cheap descriptor. For full info the caller
+      // hits `getQuickInfoAtPosition` (lsp.hover).
+      detail: e.kindModifiers || undefined,
+    }));
+  }
+
   /** Drop internal caches. Called when the process shuts down or project root changes. */
   dispose(): void {
     this.service?.dispose();
     this.service = null;
     this.files.clear();
   }
+}
+
+export interface CompletionEntry {
+  name: string;
+  kind: string;
+  sortText: string;
+  insertText: string;
+  isSnippet: boolean;
+  detail?: string;
 }
 
 // ── Module-level cache with idle-timeout eviction ────
