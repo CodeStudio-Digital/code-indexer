@@ -54,6 +54,11 @@ interface WorkspaceState {
   openFile: (file: OpenFile) => void;
   openDiff: (diff: OpenDiff) => void;
   closeFile: (path: string) => void;
+  /** Close every tab except the given one. Activates the survivor. */
+  closeOthers: (keepPath: string) => void;
+  /** Close every tab to the right of the given one. Active stays put. */
+  closeToTheRight: (anchorPath: string) => void;
+  closeAll: () => void;
   setActive: (path: string | null) => void;
   setContent: (path: string, content: string) => void;
   markClean: (path: string, lastModified: string) => void;
@@ -150,6 +155,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       }
       return { openFiles: next, activeFilePath: nextActive };
     }),
+
+  closeOthers: (keepPath) =>
+    set((s) => {
+      const survivor = s.openFiles.find((f) => f.path === keepPath);
+      if (!survivor) return s;
+      return { openFiles: [survivor], activeFilePath: keepPath };
+    }),
+
+  closeToTheRight: (anchorPath) =>
+    set((s) => {
+      const anchorIx = s.openFiles.findIndex((f) => f.path === anchorPath);
+      if (anchorIx < 0) return s;
+      const next = s.openFiles.slice(0, anchorIx + 1);
+      // If the active tab was on the right side, fall back onto the anchor.
+      let nextActive = s.activeFilePath;
+      if (!next.some((f) => f.path === nextActive)) {
+        nextActive = anchorPath;
+      }
+      return { openFiles: next, activeFilePath: nextActive };
+    }),
+
+  closeAll: () => set({ openFiles: [], activeFilePath: null }),
 
   setActive: (path) => set({ activeFilePath: path }),
 
