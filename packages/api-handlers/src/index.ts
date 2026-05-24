@@ -20,6 +20,7 @@ import { createLspHandlers } from './lsp/index.js';
 import { createSnapshotsHandlers } from './snapshots/index.js';
 import { createRunsHandlers } from './runs/index.js';
 import { createSearchHandlers } from './search/index.js';
+import { createProjectGitHandlers } from './projectGit/index.js';
 import type { HandlerDeps } from './types.js';
 
 export type { HandlerDeps } from './types.js';
@@ -32,6 +33,7 @@ export { createLspHandlers } from './lsp/index.js';
 export { createSnapshotsHandlers } from './snapshots/index.js';
 export { createRunsHandlers } from './runs/index.js';
 export { createSearchHandlers } from './search/index.js';
+export { createProjectGitHandlers } from './projectGit/index.js';
 
 /**
  * Aggregate factory. As more namespaces are extracted, add them here so
@@ -52,5 +54,6 @@ export function createHandlers(deps: HandlerDeps): Partial<Api> {
     snapshots: createSnapshotsHandlers(deps),
     runs: createRunsHandlers(deps),
     search: createSearchHandlers(deps),
+    projectGit: createProjectGitHandlers(deps),
   };
 }

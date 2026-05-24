@@ -57,6 +57,7 @@ import { CommandPalette, type Command } from './jetbrains/CommandPalette.js';
 import { QuickOpen } from './jetbrains/QuickOpen.js';
 import { FileTreeWindow } from './jetbrains/tool-windows/FileTreeWindow.js';
 import { SnapshotsWindow } from './jetbrains/tool-windows/SnapshotsWindow.js';
+import { GitWindow } from './jetbrains/tool-windows/GitWindow.js';
 import { SearchWindow } from './jetbrains/tool-windows/SearchWindow.js';
 import { ChatWindow } from './jetbrains/tool-windows/ChatWindow.js';
 import { SessionsWindow } from './jetbrains/tool-windows/SessionsWindow.js';
@@ -425,13 +426,7 @@ function LeftToolPanel({ projectId, activeFilePath, onOpen, onClose }: LeftToolP
     return <SnapshotsWindow projectId={projectId} onClose={onClose} />;
   }
   if (activeLeft === 'git') {
-    return (
-      <PlaceholderWindow
-        title="Git"
-        hint="Status, log, diff, and commit will land here. Use the terminal in the meantime."
-        onClose={onClose}
-      />
-    );
+    return <GitWindow projectId={projectId} onClose={onClose} />;
   }
   return null;
 }

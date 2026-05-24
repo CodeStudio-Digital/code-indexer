@@ -26,6 +26,7 @@ import type { DocsApi } from './docs.js';
 import type { DesignSystemApi } from './designSystem.js';
 import type { CompanyApi } from './company.js';
 import type { WorkspaceApi } from './workspace.js';
+import type { ProjectGitApi } from './projectGit.js';
 import type { AuthApi } from './auth.js';
 import type { BillingApi } from './billing.js';
 import type {
@@ -57,6 +58,7 @@ export * from './docs.js';
 export * from './designSystem.js';
 export * from './company.js';
 export * from './workspace.js';
+export * from './projectGit.js';
 export * from './auth.js';
 export * from './billing.js';
 export * from './misc.js';
@@ -85,6 +87,9 @@ export interface Api {
   designSystem: DesignSystemApi;
   company: CompanyApi;
   workspace: WorkspaceApi;
+
+  // Local git (project root_path, not sandbox)
+  projectGit: ProjectGitApi;
 
   // Account
   auth: AuthApi;

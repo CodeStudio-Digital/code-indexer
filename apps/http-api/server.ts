@@ -26,6 +26,7 @@ import { mountAdminDriftRoutes } from './server/routes/admin/drift.js';
 import { mountWorkersDiagnosticRoute } from './server/routes/admin/workers.js';
 import { mountCoderRoutes } from './server/routes/coder/index.js';
 import { mountLspRoutes } from './server/routes/lsp/lsp.routes.js';
+import { mountProjectGitRoutes } from './server/routes/project-git.js';
 import { attachCompanyStreamUpgrade } from './server/routes/company/ws.js';
 import { attachTerminalUpgrade, mountTerminalDiagnoseRoute } from './server/routes/terminal-ws.js';
 import { mountWorkspaceRoutes } from './server/routes/workspace/index.js';
@@ -535,6 +536,7 @@ export function createApp() {
   app.route('/api/admin', createAdminRouter(deps.providerStore));
   mountCoderRoutes(app, deps);
   mountLspRoutes(app, deps);
+  mountProjectGitRoutes(app, deps);
   mountConfigRoutes(app, deps);
   // Design System Creator routes (sessions / versions / storybook proxy).
   // Mounted after coder routes so the company sessions referenced by

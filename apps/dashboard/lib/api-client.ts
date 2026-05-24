@@ -128,6 +128,38 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
         url: `/api/snapshots/${ip!.id}`,
         init: { method: 'DELETE' },
       };
+    case 'projectGit.status':
+      return { url: `/api/projects/${ip!.projectId}/git/status`, init: {} };
+    case 'projectGit.diff':
+      return {
+        url: `/api/projects/${ip!.projectId}/git/diff`,
+        init: json({ path: ip!.path, staged: ip!.staged }),
+      };
+    case 'projectGit.log':
+      return {
+        url: `/api/projects/${ip!.projectId}/git/log?limit=${ip!.limit ?? 30}${ip!.path ? `&path=${encodeURIComponent(String(ip!.path))}` : ''}`,
+        init: {},
+      };
+    case 'projectGit.stage':
+      return {
+        url: `/api/projects/${ip!.projectId}/git/stage`,
+        init: json({ paths: ip!.paths }),
+      };
+    case 'projectGit.unstage':
+      return {
+        url: `/api/projects/${ip!.projectId}/git/unstage`,
+        init: json({ paths: ip!.paths }),
+      };
+    case 'projectGit.discard':
+      return {
+        url: `/api/projects/${ip!.projectId}/git/discard`,
+        init: json({ paths: ip!.paths }),
+      };
+    case 'projectGit.commit':
+      return {
+        url: `/api/projects/${ip!.projectId}/git/commit`,
+        init: json({ message: ip!.message, amend: ip!.amend }),
+      };
     case 'lsp.completion':
     case 'lsp.hover':
     case 'lsp.definition':
