@@ -25,6 +25,11 @@ const child = spawn(electronBin, [path.join(__dirname, 'main.ts')], {
   env: {
     ...process.env,
     MCP_ELECTRON_DEV_URL: process.env.MCP_ELECTRON_DEV_URL ?? 'http://localhost:5173',
+    // Default Hono listener on :3333 in dev so the dashboard's legacy
+    // useApi(`/projects`) callsites still work (they fetch via the Vite
+    // proxy to :3333). Set MCP_DEV_HTTP=0 to force IPC-only and surface
+    // any remaining HTTP callsites that need migration.
+    MCP_DEV_HTTP: process.env.MCP_DEV_HTTP ?? '1',
     // tsx loader so the .ts files in apps/electron resolve at runtime.
     NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import tsx/esm`.trim(),
   },

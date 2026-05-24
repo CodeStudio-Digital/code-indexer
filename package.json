@@ -20,6 +20,8 @@
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:dashboard\"",
     "electron:dev": "concurrently \"npm run dev:dashboard\" \"tsx apps/electron/dev.ts\"",
     "electron:build": "node scripts/build-electron.mjs",
+    "electron:rebuild": "electron-rebuild -f -o better-sqlite3",
+    "node:rebuild": "pnpm rebuild better-sqlite3 node-pty",
     "start": "node --max-old-space-size=8192 dist/apps/cli/index.js",
     "start:server": "node --max-old-space-size=8192 dist/apps/mcp-server/index.js",
     "start:api": "node --max-old-space-size=8192 dist/apps/http-api/server.js",
@@ -78,6 +80,7 @@
     "@xterm/xterm": "^5.5.0",
     "minimatch": "^10.0.1",
     "mysql2": "^3.11.5",
+    "node-fetch": "^3.3.2",
     "node-pty": "^1.0.0",
     "openai": "^4.85.4",
     "pg": "^8.13.1",
@@ -96,6 +99,7 @@
     "tw-animate-css": "^1.4.0",
     "unpdf": "^1.6.2",
     "web-tree-sitter": "^0.24.7",
+    "ws": "^8.18.0",
     "yaml": "^2.6.0",
     "zod": "^3.24.2",
     "zustand": "^5.0.9"
@@ -109,9 +113,11 @@
     "@types/react": "^19.0.12",
     "@types/react-dom": "^19.0.4",
     "@types/turndown": "^5.0.6",
+    "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.21",
     "concurrently": "^9.1.2",
+    "@electron/rebuild": "^3.7.1",
     "electron": "^33.4.0",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.24.0",
@@ -132,5 +138,13 @@
     "search",
     "embeddings"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "electron",
+      "esbuild",
+      "node-pty"
+    ]
+  }
 }
