@@ -56,6 +56,7 @@ import { StatusBar } from './jetbrains/StatusBar.js';
 import { CommandPalette, type Command } from './jetbrains/CommandPalette.js';
 import { QuickOpen } from './jetbrains/QuickOpen.js';
 import { FileTreeWindow } from './jetbrains/tool-windows/FileTreeWindow.js';
+import { SnapshotsWindow } from './jetbrains/tool-windows/SnapshotsWindow.js';
 import { SearchWindow } from './jetbrains/tool-windows/SearchWindow.js';
 import { ChatWindow } from './jetbrains/tool-windows/ChatWindow.js';
 import { SessionsWindow } from './jetbrains/tool-windows/SessionsWindow.js';
@@ -421,13 +422,7 @@ function LeftToolPanel({ projectId, activeFilePath, onOpen, onClose }: LeftToolP
     return <SearchWindow projectId={projectId} onOpen={onOpen} onClose={onClose} />;
   }
   if (activeLeft === 'snapshots') {
-    return (
-      <PlaceholderWindow
-        title="Snapshots"
-        hint="Project context notes will land here. Today they live in the analytics view (top-bar shortcut)."
-        onClose={onClose}
-      />
-    );
+    return <SnapshotsWindow projectId={projectId} onClose={onClose} />;
   }
   if (activeLeft === 'git') {
     return (

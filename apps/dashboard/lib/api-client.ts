@@ -94,6 +94,40 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
         url: `/api/projects/${ip!.projectId}/dir`,
         init: json({ path: ip!.path }),
       };
+    case 'snapshots.list':
+      return {
+        url: `/api/projects/${ip!.projectId}/snapshots${ip!.category ? `?category=${encodeURIComponent(String(ip!.category))}` : ''}`,
+        init: {},
+      };
+    case 'snapshots.create':
+      return {
+        url: `/api/projects/${ip!.projectId}/snapshots`,
+        init: json({
+          title: ip!.title,
+          category: ip!.category,
+          content: ip!.content,
+          tags: ip!.tags,
+        }),
+      };
+    case 'snapshots.update':
+      return {
+        url: `/api/snapshots/${ip!.id}`,
+        init: {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: ip!.title,
+            category: ip!.category,
+            content: ip!.content,
+            tags: ip!.tags,
+          }),
+        },
+      };
+    case 'snapshots.delete':
+      return {
+        url: `/api/snapshots/${ip!.id}`,
+        init: { method: 'DELETE' },
+      };
     case 'lsp.completion':
     case 'lsp.hover':
     case 'lsp.definition':
