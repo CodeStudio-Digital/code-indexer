@@ -15,7 +15,6 @@ import {
   ChevronRight,
   ClipboardCopy,
   Edit3,
-  File,
   FilePlus2,
   Folder,
   FolderOpen,
@@ -31,6 +30,7 @@ import { Button } from '../../components/ui/button.js';
 import { useContextMenu, type ContextMenuItem } from '../../components/ui/context-menu.js';
 import { confirm, prompt, toast } from '../../components/ui/prompt-dialog.js';
 import { cn } from '../../lib/utils.js';
+import { fileIconFor } from '../../lib/file-icon.js';
 
 interface FileTreeNode {
   name: string;
@@ -368,14 +368,19 @@ function NodeView({
     const active = node.path === activePath;
     const status = gitStatus.get(node.path);
     const color = colorForStatus(status);
+    // Type-aware icon (TS=blue, JS=yellow, MD=light blue, …). Git
+    // status still colors the LABEL — the icon stays its type color
+    // so the user can spot file kinds at a glance even when 80% of
+    // the tree is the same modified-amber.
+    const { Icon: TypeIcon, colorClass } = fileIconFor(node.path);
     return (
       <>
         {isRenaming ? (
           <InlineRenameInput
             initialName={node.name}
             depth={depth}
-            iconColor={active ? 'text-primary' : 'text-muted-foreground/70'}
-            Icon={File}
+            iconColor={active ? 'text-primary' : colorClass}
+            Icon={TypeIcon}
             onSubmit={(name) => onCommitRename(node.path, name)}
             onCancel={onCancelRename}
           />
@@ -394,10 +399,11 @@ function NodeView({
             style={{ paddingLeft: `${depth * 12 + 6}px` }}
             title={status ? `${node.path}\n(${status})` : node.path}
           >
-            <File
+            <TypeIcon
               className={cn(
-                'h-3 w-3 shrink-0',
-                active ? 'text-primary' : color.text || 'text-muted-foreground/70',
+                'h-3.5 w-3.5 shrink-0',
+                colorClass,
+                !active && 'opacity-90',
               )}
             />
             <span className={cn('truncate', color.text, color.extra)}>{node.name}</span>

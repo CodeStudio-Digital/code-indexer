@@ -18,18 +18,58 @@
  * loopback — every call is in-process IPC.
  */
 
-import { app, BrowserWindow, ipcMain, dialog, shell, Notification } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Notification, protocol } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createApp } from '@apps/http-api/server.js';
 import { mountIpcHandlers } from './src/handlers-mount.js';
 import { startOptionalDevHttp } from './src/dev-http.js';
+import { mountTerminalIpc } from './src/terminal-ipc.js';
+import type { Hono } from 'hono';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DEV_URL = process.env.MCP_ELECTRON_DEV_URL;
-const PRELOAD_PATH = path.join(__dirname, 'preload.js');
+// `.cjs` (not `.js`) because root package.json has "type": "module";
+// Electron's preload loader respects that and would otherwise try to
+// parse the file as ESM, silently failing to expose contextBridge.
+// See dev.ts buildSync block for the full explanation.
+const PRELOAD_PATH = path.join(__dirname, 'preload.cjs');
+
+// ─── Custom protocol for in-process backend ──────────────────────
+//
+// `mcp://app/api/...` is intercepted in the main process and dispatched
+// directly to `honoApp.fetch(Request)`. The renderer keeps using a
+// plain `fetch()` call — there is NO socket, NO loopback, NO Hono dev
+// listener required for the dashboard to talk to its backend.
+//
+// `installFetchBase` (dashboard side) rewrites the relative `/api/*`
+// URLs to `mcp://app/api/*` before the call lands here.
+//
+// Privileges:
+//   - standard:           parsed as `scheme://host/path` (we need this so URL.pathname works)
+//   - secure:             treated as HTTPS-equivalent (no mixed-content warnings)
+//   - supportFetchAPI:    renderer can call `fetch(mcp://…)`
+//   - stream:             keeps response.body as a ReadableStream (SSE!)
+//   - bypassCSP:          renderer's CSP doesn't have to whitelist the scheme
+//   - corsEnabled:        relaxed CORS so the dashboard isn't blocked
+//
+// MUST be registered BEFORE `app.whenReady()` — Electron decides scheme
+// behaviour at module load.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'mcp',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      bypassCSP: true,
+      corsEnabled: true,
+    },
+  },
+]);
 
 async function bootstrap() {
   // Boot the backend in-process. The Hono app is built but not served
@@ -40,8 +80,14 @@ async function bootstrap() {
 
   await app.whenReady();
 
-  mountIpcHandlers(deps);
+  // Pass the Hono app so handlers-mount can register a fallback for
+  // every IPC channel not yet covered by a pure handler in
+  // @mcp/api-handlers. The fallback dispatches via `app.fetch(Request)`
+  // in-process — same routes, zero port. See hono-dispatch.ts.
+  mountIpcHandlers(deps, honoApp);
+  mountTerminalIpc(deps);
   registerNativeIpc();
+  registerMcpProtocol(honoApp);
 
   const window = new BrowserWindow({
     width: 1400,
@@ -99,6 +145,47 @@ function registerNativeIpc() {
   ipcMain.on('app:notify', (_event, opts: { title: string; body: string }) => {
     if (Notification.isSupported()) {
       new Notification({ title: opts.title, body: opts.body }).show();
+    }
+  });
+}
+
+/**
+ * Install the `mcp://` URL handler. Every renderer-side `fetch('mcp://app/api/...')`
+ * lands here, gets translated into an `http://internal/api/...` Request,
+ * and is dispatched through the in-process Hono app. The Response
+ * (including streaming body for SSE) is returned verbatim to the
+ * renderer, so caller code that expects `await fetch(...)` + ReadableStream
+ * behaves identically to talking to a real HTTP server — except there
+ * is no socket, no port, no loopback.
+ */
+function registerMcpProtocol(honoApp: Hono) {
+  protocol.handle('mcp', async (req) => {
+    try {
+      const url = new URL(req.url);
+      // Reconstruct the Hono-side URL. Pathname carries `/api/...`,
+      // search carries the query string. Authority is irrelevant —
+      // Hono routes match on pathname only.
+      const honoUrl = `http://internal${url.pathname}${url.search}`;
+      // GET/HEAD have no body in the spec; passing one (even null) makes
+      // the WHATWG Request constructor throw.
+      const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
+      const honoReq = new Request(honoUrl, {
+        method: req.method,
+        headers: req.headers,
+        body: hasBody ? req.body : undefined,
+        // duplex: 'half' is required when streaming a Request body in
+        // Node 18+'s undici impl. Hono routes consume the body eagerly
+        // (await c.req.json()), so this is harmless but technically
+        // required by the spec when body is a ReadableStream.
+        duplex: hasBody ? 'half' : undefined,
+      } as RequestInit & { duplex?: 'half' });
+      return await honoApp.fetch(honoReq);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return new Response(JSON.stringify({ error: message }), {
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+      });
     }
   });
 }

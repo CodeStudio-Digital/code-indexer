@@ -232,7 +232,9 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
     disposers.push(
       monaco.languages.registerDefinitionProvider(lang, {
         async provideDefinition(model, position) {
-          const path = model.uri.path.replace(/^\//, '');
+          // Backend tsCanonical normalises whatever we send (`/D:/...`,
+          // `D:\\...`, relative), so we hand it the raw model path.
+          const path = model.uri.path;
           try {
             const locs = await apiCall<LspLocationDTO[]>('lsp.definition', {
               projectId,
@@ -240,7 +242,12 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
               position: { line: position.lineNumber, column: position.column },
             });
             return locs.map((loc) => ({
-              uri: monaco.Uri.parse(loc.file),
+              // monaco.Uri.file expects an absolute filesystem path. The
+              // backend returns absolute canonical paths (`d:/MCP/foo.ts`
+              // on Windows) precisely so this call round-trips and Monaco
+              // can match against the open model — or open a new one via
+              // the editor opener if the target file isn't in a tab yet.
+              uri: monaco.Uri.file(loc.file),
               range: toMonacoRange(monaco, loc.range),
             }));
           } catch {
@@ -253,7 +260,7 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
     disposers.push(
       monaco.languages.registerReferenceProvider(lang, {
         async provideReferences(model, position) {
-          const path = model.uri.path.replace(/^\//, '');
+          const path = model.uri.path;
           try {
             const locs = await apiCall<LspLocationDTO[]>('lsp.references', {
               projectId,
@@ -261,7 +268,7 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
               position: { line: position.lineNumber, column: position.column },
             });
             return locs.map((loc) => ({
-              uri: monaco.Uri.parse(loc.file),
+              uri: monaco.Uri.file(loc.file),
               range: toMonacoRange(monaco, loc.range),
             }));
           } catch {
@@ -274,8 +281,135 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
 
   disposers.push(startDiagnosticsLoop(monaco, projectId));
   disposers.push(registerWeakDefinitionProvider(monaco, projectId));
+  disposers.push(registerEditorOpener(monaco, projectId));
 
   registrations.set(projectId, { disposers });
+}
+
+/**
+ * Bridge Monaco's "open this URI" intent to the workspace tab store.
+ *
+ * Without an opener, Ctrl+Click in Monaco gives the model URI to its
+ * built-in opener — which assumes a hosted Monaco workbench, not our
+ * dashboard. The user sees a flicker and nothing else.
+ *
+ * Our opener:
+ *   1. Receives `resource` = `file:///d:/MCP/apps/dashboard/foo.ts`
+ *   2. Looks up the project's root_path (cached) to strip the prefix
+ *   3. Computes the project-relative path Monaco models are keyed by
+ *   4. Pushes onto the workspace store via openFile + fetches content
+ *      asynchronously — by the time the user blinks, MonacoMount has
+ *      swapped to the new tab.
+ *
+ * Returns `true` to tell Monaco "we handled it". Returns `false` only
+ * if the resource isn't a `file:` URI (e.g. clicking through to an
+ * `https:` URL — let the browser handle that).
+ */
+function registerEditorOpener(monaco: Monaco, projectId: number): MonacoNs.IDisposable {
+  let projectRoot: string | null = null;
+  const ensureRoot = async (): Promise<string | null> => {
+    if (projectRoot !== null) return projectRoot;
+    try {
+      const project = await apiCall<{ root_path?: string }>('projects.get', { id: projectId });
+      if (project?.root_path) projectRoot = project.root_path;
+    } catch {
+      /* swallow — opener degrades to no-op */
+    }
+    return projectRoot;
+  };
+
+  function toRel(root: string, absolute: string): string | null {
+    // Canonicalise both sides to lowercase-drive + forward slash.
+    const norm = (p: string): string =>
+      p.replace(/\\/g, '/').replace(/^([a-zA-Z]):/, (_m, d: string) => d.toLowerCase() + ':');
+    const a = norm(absolute);
+    const r = norm(root).replace(/\/$/, '');
+    if (!a.toLowerCase().startsWith(r.toLowerCase() + '/')) return null;
+    return a.slice(r.length + 1);
+  }
+
+  // `registerEditorOpener` arrived in monaco ≥0.34. We're on 0.52, so
+  // this is guaranteed present — but guard anyway so a future Monaco
+  // downgrade doesn't crash the whole workspace at startup.
+  const ed = monaco.editor as unknown as {
+    registerEditorOpener?: (opener: {
+      openCodeEditor: (
+        source: MonacoNs.editor.ICodeEditor,
+        resource: MonacoNs.Uri,
+        selectionOrPosition?: MonacoNs.IRange | MonacoNs.IPosition,
+      ) => boolean | Promise<boolean>;
+    }) => MonacoNs.IDisposable;
+  };
+  if (typeof ed.registerEditorOpener !== 'function') {
+    return { dispose() {} };
+  }
+
+  return ed.registerEditorOpener({
+    async openCodeEditor(source, resource, selectionOrPosition) {
+      if (resource.scheme !== 'file') return false;
+      const root = await ensureRoot();
+      if (!root) return false;
+      const rel = toRel(root, resource.fsPath);
+      if (!rel) return false;
+
+      // Pull dynamically — the store import path matters for tree-shaking
+      // and we don't want lspProvider.ts depending statically on the
+      // workspace store (keeps the module reusable in tests).
+      const { useWorkspaceStore } = await import('../../../state/workspace.js');
+      const store = useWorkspaceStore.getState();
+      const existing = store.openFiles.find((f) => f.path === rel && f.projectId === projectId);
+      if (existing) {
+        store.setActive(rel);
+      } else {
+        // Fetch content first so MonacoMount has it on mount — saves a
+        // visible flicker between "empty model" and "file loaded".
+        try {
+          const file = await apiCall<{ content: string; last_modified: string }>('files.read', {
+            projectId,
+            path: rel,
+          });
+          store.openFile({
+            kind: 'file',
+            projectId,
+            path: rel,
+            content: file.content,
+            dirty: false,
+            lastModified: file.last_modified,
+          });
+        } catch {
+          // Read failed (file gone? permissions?). Fall back to opening
+          // an empty tab — better than swallowing the navigation.
+          store.openFile({
+            kind: 'file',
+            projectId,
+            path: rel,
+            content: '',
+            dirty: false,
+            lastModified: null,
+          });
+        }
+      }
+
+      // Position the cursor at the requested range/position once the
+      // editor swap is committed. Monaco re-mounts the editor on tab
+      // change, so we wait a tick for the new model to be active.
+      if (selectionOrPosition) {
+        const line =
+          'startLineNumber' in selectionOrPosition
+            ? selectionOrPosition.startLineNumber
+            : selectionOrPosition.lineNumber;
+        const column =
+          'startColumn' in selectionOrPosition
+            ? selectionOrPosition.startColumn
+            : selectionOrPosition.column;
+        setTimeout(() => {
+          source?.revealPositionInCenter?.({ lineNumber: line, column });
+          source?.setPosition?.({ lineNumber: line, column });
+        }, 50);
+      }
+      return true;
+    },
+  });
 }
 
 /**
@@ -287,8 +421,36 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
  * Registered as a `*` language provider AFTER the TS/JS-specific ones,
  * so for supported languages the real LSP still wins (Monaco merges
  * provider results — the LSP responses are richer + accurate).
+ *
+ * Path resolution: `search.project` returns `file_path` relative to the
+ * project root. Monaco needs an absolute URI to either match an open
+ * model or open a new tab via the editor opener. We fetch the project
+ * root once at registration and construct `monaco.Uri.file(rootJoin)`.
  */
 function registerWeakDefinitionProvider(monaco: Monaco, projectId: number): MonacoNs.IDisposable {
+  // Cache the project root the first time we need it. Failures are
+  // tolerated — the worst case is "no weak fallback for this projectId".
+  let projectRoot: string | null = null;
+  const ensureRoot = async (): Promise<string | null> => {
+    if (projectRoot !== null) return projectRoot;
+    try {
+      const project = await apiCall<{ root_path?: string }>('projects.get', { id: projectId });
+      if (project?.root_path) projectRoot = project.root_path;
+    } catch {
+      /* keep null; fallback degrades to "no results" instead of crashing */
+    }
+    return projectRoot;
+  };
+
+  function joinAbs(root: string, rel: string): string {
+    // Strip leading "./" and any leading slash so the join doesn't
+    // double-up separators. Use forward slashes throughout — Monaco
+    // accepts both but consistency makes the URIs grep-friendly.
+    const cleaned = rel.replace(/^\.\//, '').replace(/^[/\\]+/, '');
+    const rootFwd = root.replace(/\\/g, '/').replace(/\/$/, '');
+    return `${rootFwd}/${cleaned.replace(/\\/g, '/')}`;
+  }
+
   return monaco.languages.registerDefinitionProvider('*', {
     async provideDefinition(model, position) {
       const word = model.getWordAtPosition(position);
@@ -296,6 +458,8 @@ function registerWeakDefinitionProvider(monaco: Monaco, projectId: number): Mona
       // Skip the symbol-search hop for languages we already covered
       // properly above — TS/JS responses there are exact.
       if (SUPPORTED_LANGUAGES.includes(model.getLanguageId())) return [];
+      const root = await ensureRoot();
+      if (!root) return [];
       try {
         const r = await apiCall<{ results: Array<{ file_path: string; line?: number; name?: string }> }>(
           'search.project',
@@ -315,7 +479,7 @@ function registerWeakDefinitionProvider(monaco: Monaco, projectId: number): Mona
           return ax - bx;
         });
         return candidates.slice(0, 5).map((m) => ({
-          uri: monaco.Uri.parse(m.file_path),
+          uri: monaco.Uri.file(joinAbs(root, m.file_path)),
           range: new monaco.Range(
             Math.max(1, m.line ?? 1),
             1,

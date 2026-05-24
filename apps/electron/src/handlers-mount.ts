@@ -16,6 +16,13 @@ import { ipcMain, MessageChannelMain, type IpcMainEvent } from 'electron';
 import { createHandlers, createContext } from '@mcp/api-handlers';
 import type { ApiError } from '@mcp/api-bus';
 import type { ServerDeps } from '@apps/http-api/server/deps.js';
+import type { Hono } from 'hono';
+import {
+  DISPATCH_TABLE,
+  STREAMING_DISPATCH_PATHS,
+  dispatchHono,
+  dispatchStreaming,
+} from './hono-dispatch.js';
 
 type AnyFn = (...args: unknown[]) => unknown;
 type AnyRecord = Record<string, unknown>;
@@ -52,7 +59,7 @@ function isStreamingLeaf(path: string[], fnName: string): boolean {
   return false;
 }
 
-function bind(handlers: AnyRecord, basePath: string[]) {
+function bind(handlers: AnyRecord, basePath: string[], boundChannels: Set<string>) {
   for (const [key, value] of Object.entries(handlers)) {
     const path = [...basePath, key];
     if (typeof value === 'function') {
@@ -63,8 +70,9 @@ function bind(handlers: AnyRecord, basePath: string[]) {
       } else {
         mountInvoke(channel, fn);
       }
+      boundChannels.add(channel);
     } else if (value && typeof value === 'object') {
-      bind(value as AnyRecord, path);
+      bind(value as AnyRecord, path, boundChannels);
     }
   }
 }
@@ -106,7 +114,71 @@ async function pumpStream(port: Electron.MessagePortMain, fn: AnyFn, payload: un
   }
 }
 
-export function mountIpcHandlers(deps: ServerDeps): void {
+export function mountIpcHandlers(deps: ServerDeps, honoApp?: Hono): void {
   const handlers = createHandlers(deps) as AnyRecord;
-  bind(handlers, []);
+  const boundChannels = new Set<string>();
+  bind(handlers, [], boundChannels);
+
+  // ─── Hono dispatch fallback ─────────────────────────────────
+  //
+  // Anything in the DISPATCH_TABLE that ISN'T already covered by a
+  // pure handler gets a thin IPC wrapper that dispatches via
+  // `app.fetch(Request)` — same Hono routes the dev HTTP listener
+  // serves, but with zero socket. The wrapper marshals the IPC payload
+  // into a synthetic Request and translates the Response back into
+  // either an IPC reply (Promise<T>) or an SSE-→-MessagePort stream.
+  //
+  // As individual namespaces get extracted to pure handlers, their
+  // rows can be deleted from DISPATCH_TABLE. End state: this whole
+  // block deletes itself.
+  if (honoApp) {
+    for (const methodPath of Object.keys(DISPATCH_TABLE)) {
+      const channel = `api:${methodPath.split('.').join(':')}`;
+      if (boundChannels.has(channel)) continue;
+      if (STREAMING_DISPATCH_PATHS.has(methodPath)) {
+        mountHonoStream(channel, methodPath, honoApp);
+      } else {
+        mountHonoInvoke(channel, methodPath, honoApp);
+      }
+    }
+  }
+}
+
+function mountHonoInvoke(channel: string, methodPath: string, app: Hono) {
+  ipcMain.handle(channel, async (_event, input: unknown) => {
+    try {
+      const result = await dispatchHono(app, methodPath, input);
+      return { ok: true, value: result };
+    } catch (err) {
+      return { ok: false, error: serializeError(err) };
+    }
+  });
+}
+
+function mountHonoStream(channel: string, methodPath: string, app: Hono) {
+  ipcMain.on(`stream:${channel}`, (event: IpcMainEvent, msg: { requestId: string; payload: unknown }) => {
+    const { requestId, payload } = msg;
+    const { port1, port2 } = new MessageChannelMain();
+    event.sender.postMessage(`stream-port:${requestId}`, null, [port1]);
+    void pumpHonoStream(port2, methodPath, payload, app);
+  });
+}
+
+async function pumpHonoStream(
+  port: Electron.MessagePortMain,
+  methodPath: string,
+  payload: unknown,
+  app: Hono,
+) {
+  try {
+    port.start();
+    for await (const value of dispatchStreaming(app, methodPath, payload)) {
+      port.postMessage({ type: 'value', value });
+    }
+    port.postMessage({ type: 'done' });
+  } catch (err) {
+    port.postMessage({ type: 'error', error: serializeError(err) });
+  } finally {
+    port.close();
+  }
 }

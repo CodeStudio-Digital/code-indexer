@@ -226,7 +226,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
       {(
         <button
           type="button"
-          onClick={() => setThinking(!thinking)}
+          onClick={() => setThinking && setThinking(!thinking)}
           className={`hidden sm:inline-flex items-center gap-1 h-7 px-2 rounded-md text-xs font-mono transition-colors ${
             thinking
               ? 'bg-purple-500/15 text-purple-600 hover:bg-purple-500/25 dark:text-purple-300'

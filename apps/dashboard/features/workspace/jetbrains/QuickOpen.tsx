@@ -10,11 +10,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FileCode2 } from 'lucide-react';
 import { Dialog, DialogContent } from '../../../components/ui/dialog.js';
 import { Input } from '../../../components/ui/input.js';
 import { apiCall } from '../../../lib/api-client.js';
 import { cn } from '../../../lib/utils.js';
+import { fileIconFor } from '../../../lib/file-icon.js';
 
 interface QuickOpenProps {
   projectId: number;
@@ -163,29 +163,32 @@ export function QuickOpen({ projectId, open, onClose, onPick }: QuickOpenProps) 
               {query ? `No files matching "${query}"` : 'No indexed files in this project.'}
             </div>
           )}
-          {results.map((f, i) => (
-            <button
-              key={f.path}
-              type="button"
-              data-qo-index={i}
-              onMouseEnter={() => setHighlight(i)}
-              onClick={() => choose(f.path)}
-              className={cn(
-                'group w-full text-left px-3 py-1.5 flex items-center gap-2 transition-colors',
-                i === highlight
-                  ? 'bg-accent text-accent-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-              )}
-            >
-              <FileCode2 className="h-3 w-3 shrink-0 text-muted-foreground/70" />
-              <span className="text-[12px] truncate font-medium text-foreground">
-                {basename(f.path)}
-              </span>
-              <span className="text-[10.5px] truncate ml-auto text-muted-foreground/70 font-mono">
-                {dirname(f.path)}
-              </span>
-            </button>
-          ))}
+          {results.map((f, i) => {
+            const { Icon, colorClass } = fileIconFor(f.path);
+            return (
+              <button
+                key={f.path}
+                type="button"
+                data-qo-index={i}
+                onMouseEnter={() => setHighlight(i)}
+                onClick={() => choose(f.path)}
+                className={cn(
+                  'group w-full text-left px-3 py-1.5 flex items-center gap-2 transition-colors',
+                  i === highlight
+                    ? 'bg-accent text-accent-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                <Icon className={cn('h-3.5 w-3.5 shrink-0', colorClass)} />
+                <span className="text-[12px] truncate font-medium text-foreground">
+                  {basename(f.path)}
+                </span>
+                <span className="text-[10.5px] truncate ml-auto text-muted-foreground/70 font-mono">
+                  {dirname(f.path)}
+                </span>
+              </button>
+            );
+          })}
         </div>
         <div className="px-3 py-1.5 border-t bg-card/50 flex items-center gap-3 text-[10px] text-muted-foreground">
           <span>

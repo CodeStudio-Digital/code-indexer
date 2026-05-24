@@ -131,6 +131,10 @@ const STREAMING_METHOD_PATHS = new Set<string>([
   'coder:stream:attach',
   'projects:indexStream',
   'projects:retryEmbeddingsStream',
+  // Terminal PTY — `terminal.open` returns a duplex MessagePort stream
+  // (data/exit/error frames out, data/resize/close frames in via the
+  // same port). Implemented by apps/electron/src/terminal-ipc.ts.
+  'terminal:open',
   'terminal:output',
   'docs:sources:createUrlStream',
   'docs:sources:createPdfStream',
@@ -162,8 +166,56 @@ function buildApiProxy(prefix: string[]): unknown {
   });
 }
 
+/**
+ * Open a bidirectional message channel against a streaming IPC endpoint.
+ *
+ * Unlike `openStream` (which exposes only the async-iterable read side),
+ * `openDuplex` returns a `{ port, ready }` pair where the caller owns the
+ * MessagePort directly. Send via `port.postMessage(value)`, receive via
+ * `port.onmessage = ev => …`. Used by the terminal panel — the PTY
+ * needs both directions over the same channel (keystrokes in, bytes out).
+ *
+ * The `ready` promise resolves when the MessagePort has been transferred
+ * from the main process. Until then, `port.postMessage()` enqueues
+ * (Electron buffers until the other side is reachable).
+ */
+function openDuplex(channel: string, payload: unknown): { port: MessagePort; ready: Promise<void> } {
+  const requestId = nextRequestId();
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((r) => { resolveReady = r; });
+  const intermediate = new MessageChannel();
+  // The renderer-facing port is intermediate.port1; we pump frames from
+  // the transferred Electron port onto it once it arrives. This lets the
+  // caller start posting messages immediately (they queue on port1).
+  const handler = (event: Electron.IpcRendererEvent) => {
+    const transferred = event.ports?.[0];
+    if (!transferred) return;
+    ipcRenderer.removeListener(`stream-port:${requestId}`, handler);
+    transferred.onmessage = (ev) => {
+      const frame = ev.data as { type?: string; value?: unknown };
+      if (frame?.type === 'value') intermediate.port1.postMessage(frame.value);
+      else if (frame?.type === 'done' || frame?.type === 'error') {
+        try { intermediate.port1.close(); } catch { /* */ }
+        try { transferred.close(); } catch { /* */ }
+      }
+    };
+    transferred.start?.();
+    intermediate.port2.onmessage = (ev) => {
+      try { transferred.postMessage(ev.data); } catch { /* port closed */ }
+    };
+    intermediate.port2.start();
+    resolveReady();
+  };
+  ipcRenderer.on(`stream-port:${requestId}`, handler);
+  ipcRenderer.send(`stream:${channel}`, { requestId, payload });
+  intermediate.port1.start();
+  return { port: intermediate.port1, ready };
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   api: buildApiProxy([]),
+  /** Open a bidirectional MessagePort stream. See openDuplex above. */
+  openDuplexStream: (channel: string, payload: unknown) => openDuplex(`api:${channel}`, payload),
   openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
   openExternal: (url: string) => ipcRenderer.send('shell:openExternal', url),
   getAppVersion: () => ipcRenderer.invoke('app:getVersion'),

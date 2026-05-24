@@ -19,22 +19,33 @@ import type { Api } from '@mcp/api-bus';
 type DotPath = string;
 
 /**
- * Base URL for HTTP fetches against the backend. Inside Electron we
- * deliberately bypass the Vite dev proxy and hit the Hono listener on
- * 127.0.0.1:3333 directly — the proxy was eating SSE flushes in
- * practice even with `x-accel-buffering: no`, causing the chat to hang
- * at "iniciando…".
+ * Base URL for HTTP fetches against the backend.
  *
- * Override at runtime via `window.__MCP_API_BASE__` if you need to point
- * at a different host (e.g. tunneled remote backend). In the browser
- * dev mode the empty string keeps requests relative so Vite's proxy
- * still handles them.
+ * Inside Electron: prefix with `mcp://app` so the request rides the
+ * custom protocol handler we registered in the main process — same
+ * Hono routes, but dispatched in-process via `app.fetch(Request)`,
+ * NO socket, NO loopback. The Hono dev HTTP listener stays off by
+ * default (MCP_DEV_HTTP=0).
+ *
+ * In browser dev (vite dev): empty base so relative URLs route through
+ * the Vite proxy → Hono listener (operator runs `MCP_DEV_HTTP=1`).
+ *
+ * Detection: `navigator.userAgent` contains "Electron" in the desktop
+ * shell. We DON'T rely on `window.electronAPI` here — the preload that
+ * exposes that field can fail or load late, and we still want the URL
+ * to point at the mcp:// scheme (which the main process registers
+ * unconditionally). Mirrors install-fetch-base's logic.
+ *
+ * Override at runtime via `window.__MCP_API_BASE__` for tunnels /
+ * remote backends.
  */
 export function apiBaseUrl(): string {
   if (typeof window === 'undefined') return '';
   const override = (window as unknown as { __MCP_API_BASE__?: string }).__MCP_API_BASE__;
   if (typeof override === 'string') return override;
-  if (window.electronAPI) return 'http://127.0.0.1:3333';
+  if (typeof navigator !== 'undefined' && /\bElectron\//i.test(navigator.userAgent)) {
+    return 'mcp://app';
+  }
   return '';
 }
 

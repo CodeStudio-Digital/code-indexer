@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   createBrowserRouter,
   Navigate,
@@ -24,6 +25,7 @@ import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { AppShell } from './AppShell.js';
 import { buildAgentsDefaultUrl } from './features/agents/routing.js';
+import { OnboardingWizard, isOnboarded, resetOnboarding } from './features/onboarding/OnboardingWizard.js';
 
 // ─── Route components ────────────────────────────────────────
 
@@ -120,6 +122,29 @@ const router = createBrowserRouter([
 ]);
 
 export default function App() {
+  // First-run gate. The wizard sets `mcp-ide:onboarded` in localStorage;
+  // subsequent loads skip it. Setting `showOnboarding` to false lets the
+  // user finish the wizard mid-session without forcing a reload.
+  const [showOnboarding, setShowOnboarding] = useState(() => !isOnboarded());
+
+  // Dev helpers — surfaced via DevTools console so QA can re-run the
+  // wizard, inspect Electron bridge state, etc. without rebuilding.
+  //   window.mcp.resetOnboarding()  → clears the flag + shows the wizard
+  //   window.mcp.transport          → 'electron' | 'browser' (sanity check)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const isElectron =
+      typeof navigator !== 'undefined' && /\bElectron\//i.test(navigator.userAgent);
+    (window as unknown as { mcp?: object }).mcp = {
+      transport: isElectron ? 'electron' : 'browser',
+      hasBridge: !!window.electronAPI,
+      resetOnboarding: () => {
+        resetOnboarding();
+        setShowOnboarding(true);
+      },
+    };
+  }, []);
+
   return (
     <TooltipProvider delayDuration={300}>
       <DialogProvider>
@@ -130,6 +155,9 @@ export default function App() {
         <PromptDialogHost />
         <ConfirmDialogHost />
         <ToastHost />
+        {showOnboarding && (
+          <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+        )}
       </DialogProvider>
     </TooltipProvider>
   );

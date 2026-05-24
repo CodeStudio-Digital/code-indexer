@@ -1,6 +1,29 @@
 import ts from 'typescript';
 import { readFileSync, existsSync, statSync } from 'node:fs';
-import { join, resolve, relative, isAbsolute, dirname } from 'node:path';
+import { resolve, isAbsolute, dirname, join } from 'node:path';
+
+/**
+ * TypeScript canonical path: forward slashes only, lowercase Windows
+ * drive letter. The TS compiler stores file names this way internally
+ * (`ts.sys.useCaseSensitiveFileNames` is false on Windows but the path
+ * shape matters for our own .has()/Map lookups).
+ *
+ * Examples:
+ *   "D:\\MCP\\foo.ts"  → "d:/MCP/foo.ts"
+ *   "/D:/MCP/foo.ts"   → "d:/MCP/foo.ts"   (Monaco URI form on Windows)
+ *   "/usr/local/x.ts"  → "/usr/local/x.ts" (POSIX unchanged)
+ */
+function tsCanonical(p: string): string {
+  // Strip leading slash that Monaco URIs add to Windows paths
+  // (file:///D:/foo.ts → /D:/foo.ts).
+  let cleaned = p;
+  if (/^\/[a-zA-Z]:[\\/]/.test(cleaned)) cleaned = cleaned.slice(1);
+  const abs = isAbsolute(cleaned) ? cleaned : resolve(cleaned);
+  return abs
+    .split('\\')
+    .join('/')
+    .replace(/^([a-zA-Z]):/, (_m, d: string) => d.toLowerCase() + ':');
+}
 
 /**
  * In-process TypeScript language service.
@@ -18,7 +41,12 @@ import { join, resolve, relative, isAbsolute, dirname } from 'node:path';
  */
 
 export interface TsPosition {
-  /** Project-relative path. */
+  /**
+   * Absolute file path in TS-canonical form (forward slashes, lowercase
+   * drive letter on Windows). Absolute so the IDE renderer can build a
+   * `monaco.Uri.file(...)` directly — relative paths don't round-trip
+   * through `monaco.Uri.parse` (the first segment becomes the URI scheme).
+   */
   file: string;
   /** 1-based line number (what agents/users see in editors). */
   line: number;
@@ -57,7 +85,7 @@ export class TsLanguageService {
   private compilerOptions: ts.CompilerOptions;
 
   constructor(projectRoot: string) {
-    this.projectRoot = resolve(projectRoot);
+    this.projectRoot = tsCanonical(projectRoot);
     this.compilerOptions = this.loadCompilerOptions();
   }
 
@@ -110,7 +138,8 @@ export class TsLanguageService {
         undefined,
         norm,
       );
-      for (const f of parsed.fileNames) allFiles.add(f);
+      // Normalize so .has()/.includes() against canonical paths matches.
+      for (const f of parsed.fileNames) allFiles.add(tsCanonical(f));
       if (
         parsed.options &&
         Object.keys(parsed.options).length > 0 &&
@@ -201,13 +230,43 @@ export class TsLanguageService {
 
   // ── Path helpers ─────────────────────────────
 
+  /**
+   * Accept either a project-relative path, a backslash-Windows path, or
+   * a Monaco-style `/D:/...` URI path. Always returns the canonical
+   * absolute form (forward slashes, lowercase drive letter on Windows).
+   *
+   * This is THE choke point that prevented Ctrl+Click from working:
+   * Monaco was sending `D:/MCP/foo.ts` (from `model.uri.path.replace`),
+   * `rootFiles` held `D:\MCP\foo.ts` (from `parseJsonConfigFileContent`
+   * on Windows), and `getDefinitionAtPosition` did string-equal lookups
+   * → never matched → empty result → "only self" in the UI.
+   */
   private toAbs(filePath: string): string {
-    return isAbsolute(filePath) ? filePath : resolve(this.projectRoot, filePath);
+    if (isAbsolute(filePath) || /^\/[a-zA-Z]:[\\/]/.test(filePath)) {
+      return tsCanonical(filePath);
+    }
+    return tsCanonical(resolve(this.projectRoot, filePath));
   }
 
-  private toRel(abs: string): string {
-    const rel = relative(this.projectRoot, abs);
-    return rel.split('\\').join('/');
+  /**
+   * If the file isn't already known to the language service, add it as
+   * a synthetic root and force the next call to rebuild the program.
+   *
+   * Why: `loadAndExpandConfig` pulls rootFiles from tsconfig.include —
+   * but the user can open ANY file in the editor (a one-off script, a
+   * test the include forgot, a file in another package). The first
+   * lookup against an "unknown" file used to return empty; now it
+   * rebuilds with the file included. Cost: ~200ms on first hit, free
+   * thereafter (the registry caches).
+   */
+  private ensureFileTracked(absCanonical: string): void {
+    if (this.rootFiles.includes(absCanonical)) return;
+    if (this.files.has(absCanonical)) return;
+    if (!existsSync(absCanonical)) return;
+    this.rootFiles = [...this.rootFiles, absCanonical];
+    // Tear down so the next ensureService() rebuilds with the new root.
+    this.service?.dispose();
+    this.service = null;
   }
 
   /** Convert (line, col) → absolute character offset using live file content. */
@@ -251,29 +310,31 @@ export class TsLanguageService {
   // ── Public API used by tools ──────────────────
 
   getDefinition(file: string, line: number, column: number): DefinitionResult {
-    const service = this.ensureService();
     const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
     const offset = this.positionToOffset(abs, line, column);
     if (offset === null) return { targets: [] };
     const defs = service.getDefinitionAtPosition(abs, offset) ?? [];
     const targets: TsPosition[] = [];
     for (const d of defs) {
       const pos = this.offsetToPosition(d.fileName, d.textSpan.start);
-      targets.push({ file: this.toRel(d.fileName), line: pos.line, column: pos.column });
+      targets.push({ file: tsCanonical(d.fileName), line: pos.line, column: pos.column });
     }
     return { targets };
   }
 
   getReferences(file: string, line: number, column: number): ReferenceResult {
-    const service = this.ensureService();
     const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
     const offset = this.positionToOffset(abs, line, column);
     if (offset === null) return { references: [] };
     const refs = service.getReferencesAtPosition(abs, offset) ?? [];
     const references = refs.map((r) => {
       const pos = this.offsetToPosition(r.fileName, r.textSpan.start);
       return {
-        file: this.toRel(r.fileName),
+        file: tsCanonical(r.fileName),
         line: pos.line,
         column: pos.column,
         isWriteAccess: r.isWriteAccess,
@@ -283,8 +344,9 @@ export class TsLanguageService {
   }
 
   getHover(file: string, line: number, column: number): HoverResult | null {
-    const service = this.ensureService();
     const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
     const offset = this.positionToOffset(abs, line, column);
     if (offset === null) return null;
     const info = service.getQuickInfoAtPosition(abs, offset);
@@ -299,17 +361,18 @@ export class TsLanguageService {
   }
 
   getDiagnostics(file: string): DiagnosticResult[] {
-    const service = this.ensureService();
     const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
     const syntactic = service.getSyntacticDiagnostics(abs);
     const semantic = service.getSemanticDiagnostics(abs);
     const all: DiagnosticResult[] = [];
     for (const d of [...syntactic, ...semantic]) {
-      let fileRel = file;
+      let fileOut = abs;
       let line = 0;
       let column = 0;
       if (d.file && d.start !== undefined) {
-        fileRel = this.toRel(d.file.fileName);
+        fileOut = tsCanonical(d.file.fileName);
         const pos = this.offsetToPosition(d.file.fileName, d.start);
         line = pos.line;
         column = pos.column;
@@ -321,7 +384,7 @@ export class TsLanguageService {
             ? 'warning'
             : 'info';
       all.push({
-        file: fileRel,
+        file: fileOut,
         line,
         column,
         severity,
@@ -340,8 +403,9 @@ export class TsLanguageService {
    * via a follow-up call only when the user hovers an entry.
    */
   getCompletions(file: string, line: number, column: number): CompletionEntry[] {
-    const service = this.ensureService();
     const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
     const offset = this.positionToOffset(abs, line, column);
     if (offset === null) return [];
     const result = service.getCompletionsAtPosition(abs, offset, {
@@ -405,7 +469,9 @@ function touchService(key: string, entry: CachedService): void {
 }
 
 export function getTsService(projectRoot: string): TsLanguageService {
-  const key = resolve(projectRoot);
+  // Canonicalise so callers passing "D:\\MCP" and "d:/MCP" share one service
+  // instead of double-loading the program (~500MB-2GB per duplicate).
+  const key = tsCanonical(projectRoot);
   let entry = services.get(key);
   if (!entry) {
     const svc = new TsLanguageService(key);
@@ -438,6 +504,3 @@ export function isTsFile(file: string): boolean {
   return /\.(ts|tsx|js|jsx|mts|cts|mjs|cjs)$/i.test(file);
 }
 
-// Ensure we re-import the join helper (used nowhere directly — kept here to
-// satisfy lints that worry about unused imports after refactoring).
-void join;

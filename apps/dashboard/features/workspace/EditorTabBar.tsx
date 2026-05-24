@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu.js';
 import { Input } from '../../components/ui/input.js';
+import { fileIconFor } from '../../lib/file-icon.js';
 
 export function EditorTabBar() {
   const openFiles = useWorkspaceStore((s) => s.openFiles);
@@ -118,8 +119,12 @@ function TabChip({
 }: TabChipProps) {
   const isDiff = file.kind === 'diff';
   const display = isDiff ? file.title : (file.path.split('/').pop() ?? file.path);
-  const Icon = isDiff ? GitCompare : FileCode2;
   const dirty = !isDiff && file.dirty;
+  // Type-aware icon (color + glyph). Diff tabs are special — keep the
+  // git-compare icon so the row reads as "review surface" not "code file".
+  const { Icon: TypeIcon, colorClass } = isDiff
+    ? { Icon: GitCompare, colorClass: 'text-amber-300' }
+    : fileIconFor(file.path);
 
   const items: ContextMenuItem[] = [
     { id: 'close', label: 'Close', onSelect: onClose },
@@ -151,9 +156,13 @@ function TabChip({
         className={cn(
           'group relative flex items-center gap-1.5 pl-3 pr-1.5 border-r min-w-0 max-w-[240px] shrink-0 cursor-pointer',
           'transition-colors',
+          // Active tab "lifts" — slightly raised feel via background + a
+          // top accent bar (Cursor / VS Code convention). Inactive tabs
+          // sit recessed and only show the icon color so the eye lands
+          // on file-type cues without active-tab noise.
           active
             ? 'bg-background text-foreground'
-            : 'text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+            : 'bg-card/10 text-muted-foreground hover:bg-muted/40 hover:text-foreground',
         )}
         onClick={onActivate}
         onMouseDown={(e) => {
@@ -165,17 +174,22 @@ function TabChip({
         {...triggerProps}
         title={isDiff ? file.title : file.path}
       >
-        {/* Active accent bar */}
+        {/* Active accent bar — top edge, primary tint, 2px so it reads
+            confidently. Bottom edge stays clean so the tab and editor
+            below share a seamless surface. */}
         {active && (
-          <span aria-hidden className="absolute inset-x-0 bottom-0 h-px bg-primary" />
+          <span aria-hidden className="absolute inset-x-0 top-0 h-[2px] bg-primary" />
         )}
-        <Icon
+        <TypeIcon
           className={cn(
-            'h-3 w-3 shrink-0',
-            active ? 'text-primary' : 'text-muted-foreground/70',
+            'h-3.5 w-3.5 shrink-0',
+            colorClass,
+            !active && 'opacity-80',
           )}
         />
-        <span className="text-[11.5px] truncate font-medium">{display}</span>
+        <span className={cn('text-[11.5px] truncate font-medium', active && 'tracking-tight')}>
+          {display}
+        </span>
         <button
           type="button"
           onClick={(e) => {
@@ -272,7 +286,9 @@ function OverflowDropdown({ files, activeFilePath, onPick, onClose }: OverflowDr
             const subtitle = isDiff ? '' : (file.path.includes('/') ? posixDirname(file.path) : '');
             const dirtyOne = !isDiff && file.dirty;
             const active = file.path === activeFilePath;
-            const Icon = isDiff ? GitCompare : FileCode2;
+            const { Icon, colorClass } = isDiff
+              ? { Icon: GitCompare, colorClass: 'text-amber-300' }
+              : fileIconFor(file.path);
             return (
               <div
                 key={file.path}
@@ -286,7 +302,7 @@ function OverflowDropdown({ files, activeFilePath, onPick, onClose }: OverflowDr
                 }}
                 title={isDiff ? file.title : file.path}
               >
-                <Icon className={cn('h-3 w-3 shrink-0', active ? 'text-primary' : 'text-muted-foreground/70')} />
+                <Icon className={cn('h-3.5 w-3.5 shrink-0', colorClass)} />
                 <div className="flex-1 min-w-0">
                   <div className="text-[12px] font-medium truncate flex items-center gap-1.5">
                     {display}

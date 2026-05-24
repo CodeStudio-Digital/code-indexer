@@ -95,7 +95,14 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
     };
   }, []);
 
-  // Open / close the WebSocket whenever target changes or operator clicks reconnect.
+  // Open / close the terminal transport whenever target changes or operator
+  // clicks reconnect.
+  //
+  // Two transports — same wire protocol:
+  //   - Electron: IPC stream (MessagePort) → main process spawns node-pty
+  //     directly. No socket, no HTTP. Implemented in terminal-ipc.ts.
+  //   - Browser:  legacy WebSocket against /ws/terminal/:id (Hono dev
+  //     listener must be running, MCP_DEV_HTTP=1).
   useEffect(() => {
     const term = xtermRef.current;
     if (!term) return;
@@ -103,7 +110,23 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
     setState({ status: 'connecting' });
     let cancelled = false;
     let ws: WebSocket | null = null;
+    let ipcPort: MessagePort | null = null;
     let detachListeners: (() => void) | null = null;
+
+    const handleFrame = (parsed: { type?: string; data?: string; code?: number; message?: string }): void => {
+      if (parsed.type === 'data' && typeof parsed.data === 'string') {
+        term.write(parsed.data);
+      } else if (parsed.type === 'exit') {
+        term.writeln(
+          `\r\n${ESC}[33m${t('agents:terminal.shellExited', { code: parsed.code ?? '?' })}${ESC}[0m`,
+        );
+      } else if (parsed.type === 'error' && typeof parsed.message === 'string') {
+        term.writeln(
+          `\r\n${ESC}[31m${t('agents:terminal.runtimeError', { message: parsed.message })}${ESC}[0m`,
+        );
+        setState({ status: 'error', detail: parsed.message });
+      }
+    };
 
     const attachWs = (sock: WebSocket): void => {
       sock.onopen = () => {
@@ -111,22 +134,10 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
         term.focus();
       };
       sock.onmessage = (ev) => {
-        let parsed: { type?: string; data?: string; code?: number; message?: string };
         try {
-          parsed = JSON.parse(typeof ev.data === 'string' ? ev.data : '');
+          handleFrame(JSON.parse(typeof ev.data === 'string' ? ev.data : ''));
         } catch {
-          return;
-        }
-        if (parsed.type === 'data' && typeof parsed.data === 'string') {
-          term.write(parsed.data);
-        } else if (parsed.type === 'exit') {
-          term.writeln(
-            `\r\n${ESC}[33m${t('agents:terminal.shellExited', { code: parsed.code ?? '?' })}${ESC}[0m`,
-          );
-        } else if (parsed.type === 'error' && typeof parsed.message === 'string') {
-          term.writeln(
-            `\r\n${ESC}[31m${t('agents:terminal.runtimeError', { message: parsed.message })}${ESC}[0m`,
-          );
+          /* malformed frame */
         }
       };
       sock.onerror = () => {
@@ -157,10 +168,64 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
       };
     };
 
-    // Pre-flight HTTP diagnose — the browser collapses every WS
-    // upgrade rejection into close code 1006 with no reason, so we
-    // ask the server first and surface a structured error instead.
+    const attachIpc = (port: MessagePort): void => {
+      port.onmessage = (ev) => {
+        const frame = ev.data as { type?: string; data?: string; code?: number; message?: string };
+        if (frame && typeof frame === 'object') handleFrame(frame);
+      };
+      setState({ status: 'open' });
+      term.focus();
+      const onDataDisposable = term.onData((data) => {
+        try { port.postMessage({ type: 'data', data }); } catch { /* closed */ }
+      });
+      const onResizeDisposable = term.onResize(({ cols: c, rows: r }) => {
+        try { port.postMessage({ type: 'resize', cols: c, rows: r }); } catch { /* closed */ }
+      });
+      detachListeners = () => {
+        onDataDisposable.dispose();
+        onResizeDisposable.dispose();
+      };
+    };
+
     const doConnect = async (): Promise<void> => {
+      // Pre-flight HTTP diagnose — the browser collapses every WS
+      // upgrade rejection into close code 1006 with no reason, so we
+      // ask the server first and surface a structured error instead.
+      // In Electron the IPC handler validates directly, so we skip the
+      // diagnose hop and let the {type:'error'} frame surface failures.
+      const electron = (window as unknown as { electronAPI?: {
+        openDuplexStream?: (channel: string, payload: unknown) => { port: MessagePort; ready: Promise<void> };
+      } }).electronAPI;
+
+      if (electron?.openDuplexStream && target === 'host') {
+        // Electron host terminal — pure IPC, no socket.
+        try {
+          const { port, ready } = electron.openDuplexStream('terminal:open', {
+            sessionId,
+            target,
+            cols: term.cols,
+            rows: term.rows,
+          });
+          await ready;
+          if (cancelled) {
+            try { port.close(); } catch { /* */ }
+            return;
+          }
+          ipcPort = port;
+          attachIpc(port);
+          return;
+        } catch (e) {
+          if (cancelled) return;
+          setState({
+            status: 'error',
+            detail: e instanceof Error ? e.message : String(e),
+          });
+          return;
+        }
+      }
+
+      // Browser path (or sandbox target in Electron — sandbox terminals
+      // route through the orchestrator which we haven't ported yet).
       try {
         const probe = await fetch(
           `/api/terminal/diagnose?sessionId=${sessionId}&target=${target}`,
@@ -206,6 +271,10 @@ export function TerminalPanel({ sessionId }: TerminalPanelProps) {
         } catch {
           /* best-effort */
         }
+      }
+      if (ipcPort) {
+        try { ipcPort.postMessage({ type: 'close' }); } catch { /* */ }
+        try { ipcPort.close(); } catch { /* */ }
       }
       wsRef.current = null;
     };
