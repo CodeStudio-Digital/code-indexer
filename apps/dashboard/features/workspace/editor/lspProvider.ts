@@ -273,8 +273,61 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
   }
 
   disposers.push(startDiagnosticsLoop(monaco, projectId));
+  disposers.push(registerWeakDefinitionProvider(monaco, projectId));
 
   registrations.set(projectId, { disposers });
+}
+
+/**
+ * Fallback "go to definition" for languages that don't have an LSP yet
+ * (PHP, Java, C#, Python, Go, …). When the user Ctrl/Cmd+Clicks a word,
+ * we ask the indexer to grep the codebase for that symbol and offer up
+ * to a handful of matches — better than the current Monaco no-op.
+ *
+ * Registered as a `*` language provider AFTER the TS/JS-specific ones,
+ * so for supported languages the real LSP still wins (Monaco merges
+ * provider results — the LSP responses are richer + accurate).
+ */
+function registerWeakDefinitionProvider(monaco: Monaco, projectId: number): MonacoNs.IDisposable {
+  return monaco.languages.registerDefinitionProvider('*', {
+    async provideDefinition(model, position) {
+      const word = model.getWordAtPosition(position);
+      if (!word || word.word.length < 2) return [];
+      // Skip the symbol-search hop for languages we already covered
+      // properly above — TS/JS responses there are exact.
+      if (SUPPORTED_LANGUAGES.includes(model.getLanguageId())) return [];
+      try {
+        const r = await apiCall<{ results: Array<{ file_path: string; line?: number; name?: string }> }>(
+          'search.project',
+          {
+            projectId,
+            query: word.word,
+            mode: 'hybrid',
+            type: 'symbols',
+            limit: 8,
+          },
+        );
+        const candidates = r.results ?? [];
+        // Bias matches whose name === the clicked word; rest come after.
+        candidates.sort((a, b) => {
+          const ax = a.name === word.word ? 0 : 1;
+          const bx = b.name === word.word ? 0 : 1;
+          return ax - bx;
+        });
+        return candidates.slice(0, 5).map((m) => ({
+          uri: monaco.Uri.parse(m.file_path),
+          range: new monaco.Range(
+            Math.max(1, m.line ?? 1),
+            1,
+            Math.max(1, m.line ?? 1),
+            1 + word.word.length,
+          ),
+        }));
+      } catch {
+        return [];
+      }
+    },
+  });
 }
 
 export function unregisterLspProviders(projectId: number): void {
