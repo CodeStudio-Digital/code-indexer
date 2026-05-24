@@ -35,10 +35,25 @@ export function EditorPane() {
             <MonacoMount file={activeFile} />
           </Suspense>
         ) : (
-          <div className="h-full grid place-items-center text-xs text-muted-foreground gap-2">
-            <FileCode2 className="h-6 w-6 opacity-50" />
-            <span>Open a file from the tree on the left.</span>
-            <span className="text-[10px]">Ctrl/Cmd+S to save</span>
+          <div className="h-full grid place-items-center text-muted-foreground">
+            <div className="flex flex-col items-center gap-3 px-8 py-12 max-w-sm text-center">
+              <div className="h-12 w-12 rounded-lg bg-primary/10 grid place-items-center">
+                <FileCode2 className="h-5 w-5 text-primary/70" />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-[13px] font-medium text-foreground">No file selected</p>
+                <p className="text-[11.5px] leading-relaxed">
+                  Pick a file from the explorer on the left, or start a conversation with the agent
+                  on the right to scaffold something new.
+                </p>
+              </div>
+              <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground/70">
+                <kbd className="px-1.5 py-0.5 rounded border bg-card font-mono text-[10px]">Ctrl</kbd>
+                <span>+</span>
+                <kbd className="px-1.5 py-0.5 rounded border bg-card font-mono text-[10px]">S</kbd>
+                <span>to save</span>
+              </div>
+            </div>
           </div>
         )}
       </div>

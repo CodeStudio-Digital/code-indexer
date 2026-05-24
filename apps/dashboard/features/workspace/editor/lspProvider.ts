@@ -103,9 +103,15 @@ function mapSeverity(monaco: Monaco, sev: DiagnosticDTO['severity']): MonacoNs.M
 
 /**
  * Walk every TS/JS model that belongs to the active project and refresh
- * its diagnostics via `lsp.diagnostics`. Hooked up to a 1 s interval +
- * to model content changes; we de-dupe per-file by request id so a
- * burst of edits collapses into a single update.
+ * its diagnostics via `lsp.diagnostics`. Uses a 1 s polling interval —
+ * plenty for "show me red squigglies a moment after I stop typing"
+ * without paying for a per-model `onDidChangeContent` listener.
+ *
+ * Earlier attempt called `monaco.editor.onDidChangeModelContent`, which
+ * doesn't exist on the editor namespace — that method only lives on
+ * `IStandaloneCodeEditor` instances. The polling approach also handles
+ * external file changes (writing through the agent or via files.write)
+ * without extra plumbing.
  */
 function startDiagnosticsLoop(monaco: Monaco, projectId: number): MonacoNs.IDisposable {
   let stopped = false;
@@ -114,8 +120,6 @@ function startDiagnosticsLoop(monaco: Monaco, projectId: number): MonacoNs.IDisp
   async function refresh(model: MonacoNs.editor.ITextModel) {
     if (stopped) return;
     if (!SUPPORTED_LANGUAGES.includes(model.getLanguageId())) return;
-    // Monaco model URIs we set via @monaco-editor/react are `inmemory:`
-    // until path: prop is set. We use the model's path as the file.
     const path = model.uri.path.replace(/^\//, '');
     inflight += 1;
     try {
@@ -149,23 +153,10 @@ function startDiagnosticsLoop(monaco: Monaco, projectId: number): MonacoNs.IDisp
     }
   }, 1000);
 
-  // Refresh-on-edit (debounced to avoid hammering during typing).
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  const onChange = monaco.editor.onDidChangeModelContent(() => {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      for (const model of monaco.editor.getModels()) {
-        void refresh(model);
-      }
-    }, 600);
-  });
-
   return {
     dispose() {
       stopped = true;
       clearInterval(timer);
-      if (debounceTimer) clearTimeout(debounceTimer);
-      onChange.dispose();
     },
   };
 }

@@ -99,6 +99,7 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
   return (
     <div className="flex flex-col h-[100dvh] min-h-0 w-full">
       <WorkspaceTopBar
+        projectId={projectId}
         projectName={projectName}
         bottomPanelOpen={bottomPanelOpen}
         onToggleBottomPanel={toggleBottomPanel}

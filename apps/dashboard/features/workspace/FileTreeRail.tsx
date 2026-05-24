@@ -58,24 +58,24 @@ export function FileTreeRail({ projectId, activePath, onOpen }: FileTreeRailProp
   }, [projectId, reloadKey]);
 
   return (
-    <div className="h-full flex flex-col bg-card/40 border-r min-h-0">
-      <div className="h-9 shrink-0 border-b flex items-center justify-between px-2 gap-1">
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-          Files
+    <div className="h-full flex flex-col bg-card/30 border-r min-h-0">
+      <div className="h-8 shrink-0 border-b/50 border-b flex items-center justify-between px-2.5 gap-1">
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em]">
+          Explorer
         </span>
         <Button
           variant="ghost"
           size="icon"
-          className="h-6 w-6"
+          className="h-5 w-5 text-muted-foreground hover:text-foreground"
           onClick={() => setReloadKey((k) => k + 1)}
           aria-label="Reload file tree"
         >
           <RefreshCw className="h-3 w-3" />
         </Button>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto p-1">
-        {loading && <div className="text-xs text-muted-foreground p-2">Loading…</div>}
-        {error && <div className="text-xs text-red-500 p-2">{error}</div>}
+      <div className="flex-1 min-h-0 overflow-y-auto py-1 px-0.5">
+        {loading && <div className="text-[11px] text-muted-foreground px-3 py-2">Loading…</div>}
+        {error && <div className="text-[11px] text-destructive px-3 py-2">{error}</div>}
         {tree && (
           <NodeView
             node={tree}
@@ -111,13 +111,16 @@ function NodeView({ node, depth, activePath, onOpen, renderSelf = true }: NodeVi
         type="button"
         onClick={() => onOpen(node.path)}
         className={cn(
-          'w-full text-left flex items-center gap-1.5 px-1 py-0.5 rounded text-xs hover:bg-muted',
-          active && 'bg-accent text-accent-foreground',
+          'group w-full text-left flex items-center gap-1.5 px-1.5 py-[3px] rounded-sm text-[11.5px] leading-tight',
+          'transition-colors',
+          active
+            ? 'bg-primary/10 text-foreground'
+            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
         )}
-        style={{ paddingLeft: `${depth * 12 + 4}px` }}
+        style={{ paddingLeft: `${depth * 12 + 6}px` }}
         title={node.path}
       >
-        <File className="h-3 w-3 shrink-0 text-muted-foreground" />
+        <File className={cn('h-3 w-3 shrink-0', active ? 'text-primary' : 'text-muted-foreground/70')} />
         <span className="truncate">{node.name}</span>
       </button>
     );
@@ -131,11 +134,19 @@ function NodeView({ node, depth, activePath, onOpen, renderSelf = true }: NodeVi
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className="w-full text-left flex items-center gap-1 px-1 py-0.5 rounded text-xs hover:bg-muted"
-          style={{ paddingLeft: `${depth * 12}px` }}
+          className="w-full text-left flex items-center gap-1 px-1.5 py-[3px] rounded-sm text-[11.5px] leading-tight text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          style={{ paddingLeft: `${depth * 12 + 2}px` }}
         >
-          {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          {expanded ? <FolderOpen className="h-3 w-3 text-amber-500" /> : <Folder className="h-3 w-3 text-amber-500" />}
+          {expanded ? (
+            <ChevronDown className="h-3 w-3 shrink-0" />
+          ) : (
+            <ChevronRight className="h-3 w-3 shrink-0" />
+          )}
+          {expanded ? (
+            <FolderOpen className="h-3 w-3 shrink-0 text-amber-500/80" />
+          ) : (
+            <Folder className="h-3 w-3 shrink-0 text-amber-500/80" />
+          )}
           <span className="truncate">{node.name}</span>
         </button>
       )}

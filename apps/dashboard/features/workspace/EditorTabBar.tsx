@@ -21,15 +21,15 @@ export function EditorTabBar() {
 
   if (openFiles.length === 0) {
     return (
-      <div className="h-9 shrink-0 border-b flex items-center px-3 gap-2 bg-card/40">
-        <FileCode2 className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs text-muted-foreground">No file open</span>
+      <div className="h-8 shrink-0 border-b flex items-center px-3 gap-2 bg-card/20">
+        <FileCode2 className="h-3 w-3 text-muted-foreground/60" />
+        <span className="text-[11px] text-muted-foreground">No file open</span>
       </div>
     );
   }
 
   return (
-    <div className="h-9 shrink-0 border-b flex items-stretch bg-card/40 overflow-x-auto">
+    <div className="h-8 shrink-0 border-b flex items-stretch bg-card/20 overflow-x-auto">
       {openFiles.map((file) => {
         const active = file.path === activeFilePath;
         const display = file.path.split('/').pop() ?? file.path;
@@ -37,13 +37,13 @@ export function EditorTabBar() {
           <div
             key={file.path}
             className={cn(
-              'group flex items-center gap-2 px-3 border-r min-w-0 max-w-[200px] cursor-pointer',
+              'group relative flex items-center gap-1.5 pl-3 pr-1.5 border-r min-w-0 max-w-[200px] cursor-pointer',
+              'transition-colors',
               active
                 ? 'bg-background text-foreground'
                 : 'text-muted-foreground hover:bg-muted/40 hover:text-foreground',
             )}
             onClick={() => setActive(file.path)}
-            // Middle-click closes — common editor affordance.
             onMouseDown={(e) => {
               if (e.button === 1) {
                 e.preventDefault();
@@ -52,8 +52,15 @@ export function EditorTabBar() {
             }}
             title={file.path}
           >
-            <FileCode2 className="h-3 w-3 shrink-0" />
-            <span className="text-xs truncate">{display}</span>
+            {/* Active accent bar */}
+            {active && (
+              <span
+                aria-hidden
+                className="absolute inset-x-0 bottom-0 h-px bg-primary"
+              />
+            )}
+            <FileCode2 className={cn('h-3 w-3 shrink-0', active ? 'text-primary' : 'text-muted-foreground/70')} />
+            <span className="text-[11.5px] truncate font-medium">{display}</span>
             <button
               type="button"
               onClick={(e) => {
@@ -61,11 +68,8 @@ export function EditorTabBar() {
                 closeFile(file.path);
               }}
               className={cn(
-                'shrink-0 h-4 w-4 rounded grid place-items-center hover:bg-muted',
-                // Dirty files: show a filled circle, swap to X on hover so
-                // the close action is still discoverable without losing the
-                // unsaved hint at a glance.
-                file.dirty ? 'text-foreground' : 'text-muted-foreground',
+                'shrink-0 h-4 w-4 rounded-sm grid place-items-center hover:bg-muted transition-colors',
+                file.dirty ? 'text-foreground' : 'text-muted-foreground/70',
               )}
               aria-label={`Close ${display}`}
             >
@@ -75,7 +79,7 @@ export function EditorTabBar() {
                   <X className="h-3 w-3 hidden group-hover:block" />
                 </>
               ) : (
-                <X className="h-3 w-3" />
+                <X className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
               )}
             </button>
           </div>
