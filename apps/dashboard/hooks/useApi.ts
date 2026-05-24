@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { apiBaseUrl } from '../lib/api-client.js';
 
 interface UseApiResult<T> {
   data: T | null;
@@ -31,7 +32,7 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
     setLoading(true);
     setError(null);
 
-    fetch(`/api${url}`, options)
+    fetch(`${apiBaseUrl()}/api${url}`, options)
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -50,7 +51,7 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
 }
 
 export async function apiPost<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(`/api${url}`, {
+  const res = await fetch(`${apiBaseUrl()}/api${url}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -60,12 +61,12 @@ export async function apiPost<T>(url: string, body: unknown): Promise<T> {
 }
 
 export async function apiDelete(url: string): Promise<void> {
-  const res = await fetch(`/api${url}`, { method: 'DELETE' });
+  const res = await fetch(`${apiBaseUrl()}/api${url}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 export async function apiPatch<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(`/api${url}`, {
+  const res = await fetch(`${apiBaseUrl()}/api${url}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -75,7 +76,7 @@ export async function apiPatch<T>(url: string, body: unknown): Promise<T> {
 }
 
 export async function apiPut<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(`/api${url}`, {
+  const res = await fetch(`${apiBaseUrl()}/api${url}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

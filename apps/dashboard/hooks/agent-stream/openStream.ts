@@ -2,6 +2,7 @@ import { createEventHandlers } from './handlers.js';
 import type { StreamBlock, UpdateSession, WorkerLogEntry } from './types.js';
 import { ZERO_DELTA } from './types.js';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
+import { apiBaseUrl } from '../../lib/api-client.js';
 
 /**
  * Cap for `SessionState.eventLog`. Older entries drop off (LIFO trim) so
@@ -166,8 +167,17 @@ export async function openStream(
     onMessageComplete,
   });
 
+  // In Electron the relative `/api/...` URL would route through the Vite
+  // dev proxy, which has been observed to swallow SSE flushes even with
+  // x-accel-buffering disabled. Prefixing with the absolute Hono URL
+  // (localhost:3333 when MCP_DEV_HTTP=1) makes the chat reliable. In
+  // browser dev the prefix is empty so the proxy still handles things.
+  const absoluteUrl = opts.url.startsWith('http')
+    ? opts.url
+    : `${apiBaseUrl()}${opts.url}`;
+
   const client = new ReconnectingSSEClient({
-    url: opts.url,
+    url: absoluteUrl,
     method: opts.method,
     body: opts.body,
     signal: ctrl.signal,
@@ -230,7 +240,7 @@ export async function openStream(
         // completed and the bus was evicted". The /state endpoint
         // disambiguates so the UI shows a useful message instead of
         // a generic "HTTP 404: no active run".
-        const stateUrl = opts.url.replace(/\/attach(?:\?.*)?$/, '/state');
+        const stateUrl = absoluteUrl.replace(/\/attach(?:\?.*)?$/, '/state');
         try {
           const res = await fetch(stateUrl);
           if (res.ok) {

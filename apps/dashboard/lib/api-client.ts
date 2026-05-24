@@ -18,6 +18,26 @@ import type { Api } from '@mcp/api-bus';
 
 type DotPath = string;
 
+/**
+ * Base URL for HTTP fetches against the backend. Inside Electron we
+ * deliberately bypass the Vite dev proxy and hit the Hono listener on
+ * 127.0.0.1:3333 directly — the proxy was eating SSE flushes in
+ * practice even with `x-accel-buffering: no`, causing the chat to hang
+ * at "iniciando…".
+ *
+ * Override at runtime via `window.__MCP_API_BASE__` if you need to point
+ * at a different host (e.g. tunneled remote backend). In the browser
+ * dev mode the empty string keeps requests relative so Vite's proxy
+ * still handles them.
+ */
+export function apiBaseUrl(): string {
+  if (typeof window === 'undefined') return '';
+  const override = (window as unknown as { __MCP_API_BASE__?: string }).__MCP_API_BASE__;
+  if (typeof override === 'string') return override;
+  if (window.electronAPI) return 'http://127.0.0.1:3333';
+  return '';
+}
+
 /** Resolve a dotted method path to the function on `electronAPI.api`. */
 function resolveElectronMethod(path: DotPath): ((input: unknown) => unknown) | null {
   const electron = typeof window !== 'undefined' ? window.electronAPI : undefined;
