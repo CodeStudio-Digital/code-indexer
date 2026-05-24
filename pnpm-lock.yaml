@@ -401,6 +401,8 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
+  packages/worker-pool: {}
+
 packages:
 
   7zip-bin@5.2.0:

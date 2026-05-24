@@ -43,6 +43,8 @@
       "@mcp/api-bus/*": ["packages/api-bus/src/*"],
       "@mcp/api-handlers": ["packages/api-handlers/src/index.ts"],
       "@mcp/api-handlers/*": ["packages/api-handlers/src/*"],
+      "@mcp/worker-pool": ["packages/worker-pool/src/index.ts"],
+      "@mcp/worker-pool/*": ["packages/worker-pool/src/*"],
       "@apps/*": ["apps/*"]
     }
   }
