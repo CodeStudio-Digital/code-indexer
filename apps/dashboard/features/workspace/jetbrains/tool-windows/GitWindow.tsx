@@ -30,6 +30,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { apiCall } from '../../../../lib/api-client.js';
+import { useWorkspaceStore } from '../../../../state/workspace.js';
 import { Button } from '../../../../components/ui/button.js';
 import {
   Dialog,
@@ -81,6 +82,30 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
   const [error, setError] = useState<string | null>(null);
   const [commitOpen, setCommitOpen] = useState(false);
   const [openSections, setOpenSections] = useState({ staged: true, unstaged: true, untracked: false });
+  const openDiff = useWorkspaceStore((s) => s.openDiff);
+
+  const showDiff = useCallback(
+    async (file: GitStatusFile) => {
+      try {
+        const r = await apiCall<{ patch: string }>('projectGit.diff', {
+          projectId,
+          path: file.path,
+          staged: file.staged,
+        });
+        openDiff({
+          kind: 'diff',
+          projectId,
+          path: `diff:${file.staged ? 'staged' : 'unstaged'}:${file.path}`,
+          title: `${file.staged ? 'Staged' : 'Diff'}: ${file.path.split('/').pop() ?? file.path}`,
+          patch: r.patch,
+          source: file.staged ? 'git-staged' : 'git-unstaged',
+        });
+      } catch (err) {
+        window.alert(`Diff failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [projectId, openDiff],
+  );
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -223,6 +248,7 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
                   <FileRow
                     key={`s-${f.path}`}
                     file={f}
+                    onClick={() => void showDiff(f)}
                     actions={
                       <RowButton
                         icon={Minus}
@@ -253,6 +279,7 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
                   <FileRow
                     key={`u-${f.path}`}
                     file={f}
+                    onClick={() => void showDiff(f)}
                     actions={
                       <>
                         <RowButton
@@ -355,16 +382,29 @@ function Section({ title, open, onToggle, bulkAction, children }: SectionProps) 
   );
 }
 
-function FileRow({ file, actions }: { file: GitStatusFile; actions: React.ReactNode }) {
+function FileRow({
+  file,
+  actions,
+  onClick,
+}: {
+  file: GitStatusFile;
+  actions: React.ReactNode;
+  onClick?: () => void;
+}) {
   const k = fileKind(file.state);
   return (
-    <div className="group flex items-center gap-2 px-2.5 py-1 hover:bg-muted/40 transition-colors border-b last:border-b-0 text-[11.5px]">
+    <div
+      className={cn(
+        'group flex items-center gap-2 px-2.5 py-1 transition-colors border-b last:border-b-0 text-[11.5px]',
+        onClick ? 'cursor-pointer hover:bg-muted/40' : 'hover:bg-muted/40',
+      )}
+      onClick={onClick}
+      title={onClick ? `Open diff for ${file.path}` : file.path}
+    >
       <span className={cn('font-mono text-[10px] w-3 shrink-0 text-center', k.color)}>
         {k.letter}
       </span>
-      <span className="truncate flex-1" title={file.path}>
-        {file.path}
-      </span>
+      <span className="truncate flex-1">{file.path}</span>
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         {actions}
       </div>

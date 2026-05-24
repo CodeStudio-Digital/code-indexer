@@ -9,11 +9,17 @@
  * Open files are addressed by absolute project-relative path (the same
  * shape `files.tree` returns), so the editor + tab bar + file tree
  * never disagree about identity.
+ *
+ * A second tab kind — `'diff'` — lets the Git tool window open a
+ * read-only diff in the editor. Diff tabs carry both sides of the
+ * patch so Monaco's DiffEditor renders without another fetch.
  */
 
 import { create } from 'zustand';
 
 export interface OpenFile {
+  /** Discriminator — regular editable file. */
+  kind?: 'file';
   projectId: number;
   /** project-relative posix path, e.g. "src/index.ts" */
   path: string;
@@ -26,11 +32,27 @@ export interface OpenFile {
   lastModified: string | null;
 }
 
+export interface OpenDiff {
+  kind: 'diff';
+  projectId: number;
+  /** Synthetic path used as the tab identity (e.g. "diff:src/foo.ts"). */
+  path: string;
+  /** Friendly label rendered on the tab. */
+  title: string;
+  /** Unified diff text. */
+  patch: string;
+  /** Forwarded so the tab bar can pick an icon / sort. */
+  source: 'git-unstaged' | 'git-staged' | 'other';
+}
+
+export type OpenTab = OpenFile | OpenDiff;
+
 interface WorkspaceState {
-  openFiles: OpenFile[];
+  openFiles: OpenTab[];
   activeFilePath: string | null;
 
   openFile: (file: OpenFile) => void;
+  openDiff: (diff: OpenDiff) => void;
   closeFile: (path: string) => void;
   setActive: (path: string | null) => void;
   setContent: (path: string, content: string) => void;
@@ -53,6 +75,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       };
     }),
 
+  openDiff: (diff) =>
+    set((s) => {
+      const existing = s.openFiles.findIndex((f) => f.path === diff.path && f.projectId === diff.projectId);
+      if (existing >= 0) {
+        // Refresh the patch in-place — same diff for the same path means
+        // the user re-clicked the file in the git tool window with new
+        // changes on disk.
+        const next = [...s.openFiles];
+        next[existing] = diff;
+        return { openFiles: next, activeFilePath: diff.path };
+      }
+      return {
+        openFiles: [...s.openFiles, diff],
+        activeFilePath: diff.path,
+      };
+    }),
+
   closeFile: (path) =>
     set((s) => {
       const idx = s.openFiles.findIndex((f) => f.path === path);
@@ -71,12 +110,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   setContent: (path, content) =>
     set((s) => ({
-      openFiles: s.openFiles.map((f) => (f.path === path ? { ...f, content, dirty: true } : f)),
+      openFiles: s.openFiles.map((f) =>
+        f.path === path && f.kind !== 'diff' ? { ...f, content, dirty: true } : f,
+      ),
     })),
 
   markClean: (path, lastModified) =>
     set((s) => ({
-      openFiles: s.openFiles.map((f) => (f.path === path ? { ...f, dirty: false, lastModified } : f)),
+      openFiles: s.openFiles.map((f) =>
+        f.path === path && f.kind !== 'diff' ? { ...f, dirty: false, lastModified } : f,
+      ),
     })),
 }));
 

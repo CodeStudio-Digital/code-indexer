@@ -23,7 +23,12 @@ import { useWorkspaceStore } from '../../state/workspace.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
 import { EditorTabBar } from './EditorTabBar.js';
 
-const MonacoMount = lazy(() => import('./editor/MonacoMount.js').then((m) => ({ default: m.MonacoMount })));
+const MonacoMount = lazy(() =>
+  import('./editor/MonacoMount.js').then((m) => ({ default: m.MonacoMount })),
+);
+const DiffMount = lazy(() =>
+  import('./editor/DiffMount.js').then((m) => ({ default: m.DiffMount })),
+);
 
 export function EditorPane() {
   const openFiles = useWorkspaceStore((s) => s.openFiles);
@@ -43,7 +48,11 @@ export function EditorPane() {
               </div>
             }
           >
-            <MonacoMount file={activeFile} />
+            {activeFile.kind === 'diff' ? (
+              <DiffMount diff={activeFile} />
+            ) : (
+              <MonacoMount file={activeFile} />
+            )}
           </Suspense>
         ) : (
           <WelcomeScreen />
