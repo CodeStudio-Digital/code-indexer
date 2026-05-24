@@ -36,6 +36,60 @@ interface FileTreeNode {
   children?: FileTreeNode[];
 }
 
+type GitFileStatus =
+  | 'modified'
+  | 'added'
+  | 'deleted'
+  | 'renamed'
+  | 'copied'
+  | 'untracked'
+  | 'ignored'
+  | 'unmerged';
+
+/**
+ * Paint the file label according to its git status. Folders inherit the
+ * most "interesting" color from their children (handled by the recursive
+ * walk below). Untracked + added share green; modified is amber; deleted
+ * is red strikethrough; conflicts are bright red.
+ */
+function colorForStatus(status: GitFileStatus | undefined): { text: string; extra?: string } {
+  switch (status) {
+    case 'modified': return { text: 'text-amber-400' };
+    case 'added': return { text: 'text-emerald-400' };
+    case 'untracked': return { text: 'text-emerald-400' };
+    case 'deleted': return { text: 'text-destructive', extra: 'line-through' };
+    case 'renamed': return { text: 'text-cyan-400' };
+    case 'copied': return { text: 'text-cyan-400' };
+    case 'unmerged': return { text: 'text-red-500' };
+    default: return { text: '' };
+  }
+}
+
+/**
+ * For folders, surface the most severe status of any descendant so the
+ * user spots "something here changed" at the top level without expanding
+ * every directory.
+ */
+function folderStatus(node: FileTreeNode, statusMap: Map<string, GitFileStatus>): GitFileStatus | undefined {
+  if (node.type === 'file') return statusMap.get(node.path);
+  let best: GitFileStatus | undefined;
+  const severity: Record<GitFileStatus, number> = {
+    unmerged: 6,
+    deleted: 5,
+    renamed: 4,
+    modified: 3,
+    added: 2,
+    untracked: 2,
+    copied: 1,
+    ignored: 0,
+  };
+  for (const child of node.children ?? []) {
+    const s = folderStatus(child, statusMap);
+    if (s && (!best || severity[s] > severity[best])) best = s;
+  }
+  return best;
+}
+
 interface FileTreeRailProps {
   projectId: number;
   activePath: string | null;
@@ -48,6 +102,7 @@ export function FileTreeRail({ projectId, activePath, onOpen }: FileTreeRailProp
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [gitStatus, setGitStatus] = useState<Map<string, GitFileStatus>>(() => new Map());
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
   const startRename = useCallback((path: string) => setRenamingPath(path), []);
@@ -92,6 +147,48 @@ export function FileTreeRail({ projectId, activePath, onOpen }: FileTreeRailProp
       });
     return () => {
       cancelled = true;
+    };
+  }, [projectId, reloadKey]);
+
+  // Poll git status every 7s so file rows wear the modified/added/deleted
+  // color without forcing the user to open the Git tool window. Best-
+  // effort — if the project isn't a repo we just paint nothing.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      try {
+        const status = await apiCall<{
+          files: Array<{ path: string; state: GitFileStatus; staged: boolean }>;
+          notARepo: boolean;
+        }>('projectGit.status', { projectId });
+        if (cancelled) return;
+        if (status.notARepo) {
+          setGitStatus(new Map());
+        } else {
+          // Prefer the working-tree (unstaged) state when both exist —
+          // the user cares more about "I changed this file" than "I
+          // already added it". Folders bubble up to the most severe
+          // child color so the project tree is scannable.
+          const map = new Map<string, GitFileStatus>();
+          for (const f of status.files) {
+            const existing = map.get(f.path);
+            if (!existing || (existing === 'unmerged' ? false : true)) {
+              if (!f.staged || !existing) map.set(f.path, f.state);
+            }
+          }
+          setGitStatus(map);
+        }
+      } catch {
+        if (cancelled) return;
+        setGitStatus(new Map());
+      }
+      if (!cancelled) timer = setTimeout(tick, 7_000);
+    };
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
     };
   }, [projectId, reloadKey]);
 
@@ -141,6 +238,7 @@ export function FileTreeRail({ projectId, activePath, onOpen }: FileTreeRailProp
             onStartRename={startRename}
             onCommitRename={commitRename}
             onCancelRename={cancelRename}
+            gitStatus={gitStatus}
             renderSelf={false}
           />
         )}
@@ -160,6 +258,7 @@ interface NodeViewProps {
   onStartRename: (path: string) => void;
   onCommitRename: (fromPath: string, newName: string) => void;
   onCancelRename: () => void;
+  gitStatus: Map<string, GitFileStatus>;
   /** When false, only renders this node's children (used for the root). */
   renderSelf?: boolean;
 }
@@ -175,6 +274,7 @@ function NodeView({
   onStartRename,
   onCommitRename,
   onCancelRename,
+  gitStatus,
   renderSelf = true,
 }: NodeViewProps) {
   const [expanded, setExpanded] = useState(depth === 0);
@@ -185,6 +285,8 @@ function NodeView({
   // For files: highlight + on-click opens. For dirs: toggle expand.
   if (node.type === 'file' && renderSelf) {
     const active = node.path === activePath;
+    const status = gitStatus.get(node.path);
+    const color = colorForStatus(status);
     return (
       <>
         {isRenaming ? (
@@ -209,10 +311,15 @@ function NodeView({
                 : 'text-muted-foreground hover:bg-muted hover:text-foreground',
             )}
             style={{ paddingLeft: `${depth * 12 + 6}px` }}
-            title={node.path}
+            title={status ? `${node.path}\n(${status})` : node.path}
           >
-            <File className={cn('h-3 w-3 shrink-0', active ? 'text-primary' : 'text-muted-foreground/70')} />
-            <span className="truncate">{node.name}</span>
+            <File
+              className={cn(
+                'h-3 w-3 shrink-0',
+                active ? 'text-primary' : color.text || 'text-muted-foreground/70',
+              )}
+            />
+            <span className={cn('truncate', color.text, color.extra)}>{node.name}</span>
           </button>
         )}
         {Menu}
@@ -237,25 +344,32 @@ function NodeView({
               extraLeading={<span className="w-3" />}
             />
           ) : (
-            <button
-              type="button"
-              onClick={() => setExpanded((v) => !v)}
-              {...triggerProps}
-              className="w-full text-left flex items-center gap-1 px-1.5 py-[3px] rounded-sm text-[11.5px] leading-tight text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-              style={{ paddingLeft: `${depth * 12 + 2}px` }}
-            >
-              {expanded ? (
-                <ChevronDown className="h-3 w-3 shrink-0" />
-              ) : (
-                <ChevronRight className="h-3 w-3 shrink-0" />
-              )}
-              {expanded ? (
-                <FolderOpen className="h-3 w-3 shrink-0 text-amber-500/80" />
-              ) : (
-                <Folder className="h-3 w-3 shrink-0 text-amber-500/80" />
-              )}
-              <span className="truncate">{node.name}</span>
-            </button>
+            (() => {
+              const dirStatus = folderStatus(node, gitStatus);
+              const dirColor = colorForStatus(dirStatus);
+              return (
+                <button
+                  type="button"
+                  onClick={() => setExpanded((v) => !v)}
+                  {...triggerProps}
+                  className="w-full text-left flex items-center gap-1 px-1.5 py-[3px] rounded-sm text-[11.5px] leading-tight text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                  style={{ paddingLeft: `${depth * 12 + 2}px` }}
+                  title={dirStatus ? `${node.path}\n(contains ${dirStatus} files)` : node.path}
+                >
+                  {expanded ? (
+                    <ChevronDown className="h-3 w-3 shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3 shrink-0" />
+                  )}
+                  {expanded ? (
+                    <FolderOpen className="h-3 w-3 shrink-0 text-amber-500/80" />
+                  ) : (
+                    <Folder className="h-3 w-3 shrink-0 text-amber-500/80" />
+                  )}
+                  <span className={cn('truncate', dirColor.text)}>{node.name}</span>
+                </button>
+              );
+            })()
           )}
           {Menu}
         </>
@@ -274,6 +388,7 @@ function NodeView({
             onStartRename={onStartRename}
             onCommitRename={onCommitRename}
             onCancelRename={onCancelRename}
+            gitStatus={gitStatus}
           />
         ))}
     </div>
