@@ -64,7 +64,6 @@ import { SnapshotsWindow } from './jetbrains/tool-windows/SnapshotsWindow.js';
 import { GitWindow } from './jetbrains/tool-windows/GitWindow.js';
 import { SearchWindow } from './jetbrains/tool-windows/SearchWindow.js';
 import { ChatWindow } from './jetbrains/tool-windows/ChatWindow.js';
-import { SessionsWindow } from './jetbrains/tool-windows/SessionsWindow.js';
 import { PlaceholderWindow } from './jetbrains/tool-windows/PlaceholderWindow.js';
 
 interface WorkspaceProps {
@@ -81,9 +80,11 @@ const LEFT_ITEMS: RailItem<LeftToolId>[] = [
   { id: 'git', label: 'Git', icon: GitBranch },
 ];
 
+// ChatWindow now hosts the sessions list internally (no more duplicate
+// sidebar inside a narrow rail), so the standalone Sessions icon would
+// just open the same surface twice.
 const RIGHT_ITEMS: RailItem<RightToolId>[] = [
   { id: 'chat', label: 'Agent chat', icon: MessageSquare },
-  { id: 'sessions', label: 'Sessions', icon: History },
   { id: 'inbox', label: 'Inbox', icon: Bell },
 ];
 
@@ -230,7 +231,6 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
       toggleLeft('snapshots', 'snapshots'),
       toggleLeft('git', 'git'),
       toggleRight('chat', 'agent chat'),
-      toggleRight('sessions', 'sessions'),
       toggleRight('inbox', 'inbox'),
       {
         id: 'view.toggle-left-rail',
@@ -419,7 +419,6 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
                     projectId={projectId}
                     projectName={projectName}
                     initialSessionId={activeSessionId}
-                    onSelectSession={(id) => setActiveSessionId(id)}
                     onClose={() => layout.setActiveRight(null)}
                   />
                 </Panel>
@@ -487,7 +486,6 @@ interface RightToolPanelProps {
   projectId: number;
   projectName: string;
   initialSessionId?: number;
-  onSelectSession: (sessionId: number) => void;
   onClose: () => void;
 }
 
@@ -495,7 +493,6 @@ function RightToolPanel({
   projectId,
   projectName,
   initialSessionId,
-  onSelectSession,
   onClose,
 }: RightToolPanelProps) {
   const activeRight = useWorkspaceLayout((s) => s.activeRight);
@@ -505,16 +502,6 @@ function RightToolPanel({
         projectId={projectId}
         projectName={projectName}
         initialSessionId={initialSessionId}
-        onClose={onClose}
-      />
-    );
-  }
-  if (activeRight === 'sessions') {
-    return (
-      <SessionsWindow
-        projectId={projectId}
-        activeSessionId={initialSessionId}
-        onSelectSession={onSelectSession}
         onClose={onClose}
       />
     );

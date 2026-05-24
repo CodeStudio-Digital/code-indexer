@@ -11,7 +11,7 @@
 import { create } from 'zustand';
 
 export type LeftToolId = 'files' | 'search' | 'snapshots' | 'git';
-export type RightToolId = 'chat' | 'sessions' | 'inbox';
+export type RightToolId = 'chat' | 'inbox';
 export type BottomToolId = 'terminal' | 'problems' | 'output' | 'find';
 
 interface WorkspaceLayoutState {
