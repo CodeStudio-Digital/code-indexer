@@ -43,6 +43,7 @@ import type {
 } from './misc.js';
 
 export * from './common.js';
+export * from './electron-bridge.js';
 export * from './coder.js';
 export * from './projects.js';
 export * from './files.js';

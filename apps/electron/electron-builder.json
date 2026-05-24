@@ -1,0 +1,38 @@
+{
+  "appId": "io.mcpide.app",
+  "productName": "MCP IDE",
+  "directories": {
+    "output": "dist/electron-builder",
+    "buildResources": "apps/electron/build"
+  },
+  "files": [
+    "dist/apps/electron/**/*",
+    "dist/dashboard/**/*",
+    "dist/packages/**/*",
+    "package.json"
+  ],
+  "asar": true,
+  "asarUnpack": [
+    "node_modules/better-sqlite3/**/*",
+    "node_modules/node-pty/**/*"
+  ],
+  "win": {
+    "target": ["nsis"],
+    "icon": "apps/electron/build/icon.ico"
+  },
+  "mac": {
+    "target": ["dmg"],
+    "icon": "apps/electron/build/icon.icns"
+  },
+  "linux": {
+    "target": ["AppImage"],
+    "icon": "apps/electron/build/icon.png"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  },
+  "publish": [
+    { "provider": "github" }
+  ]
+}
