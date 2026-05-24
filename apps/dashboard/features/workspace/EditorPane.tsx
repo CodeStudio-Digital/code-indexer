@@ -1,14 +1,18 @@
 /**
- * Editor pane — placeholder in Day 6. Day 7 swaps the body for the
- * Monaco mount + tab bar wired to the workspace store.
+ * Editor pane — Monaco mount + tab bar wired to the Zustand workspace
+ * store. Monaco itself is lazy-loaded (Suspense fallback) so the ~5 MB
+ * gzipped chunk only lands when the user actually opens a project.
  *
- * Even as a placeholder this surface shows the active file's path so
- * the file-tree click→state→render loop is observable end-to-end before
- * Monaco lands.
+ * When no files are open, renders an empty state instead of mounting
+ * Monaco — keeps the editor model count at zero until needed.
  */
 
-import { FileCode2 } from 'lucide-react';
+import { Suspense, lazy } from 'react';
+import { FileCode2, Loader2 } from 'lucide-react';
 import { useWorkspaceStore } from '../../state/workspace.js';
+import { EditorTabBar } from './EditorTabBar.js';
+
+const MonacoMount = lazy(() => import('./editor/MonacoMount.js').then((m) => ({ default: m.MonacoMount })));
 
 export function EditorPane() {
   const openFiles = useWorkspaceStore((s) => s.openFiles);
@@ -17,18 +21,24 @@ export function EditorPane() {
 
   return (
     <div className="h-full flex flex-col bg-background min-h-0">
-      <div className="h-9 shrink-0 border-b flex items-center px-3 gap-2">
-        <FileCode2 className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs text-muted-foreground truncate">
-          {activeFile ? activeFile.path : 'No file open'}
-        </span>
-      </div>
-      <div className="flex-1 min-h-0 overflow-auto">
+      <EditorTabBar />
+      <div className="flex-1 min-h-0 overflow-hidden relative">
         {activeFile ? (
-          <pre className="text-xs p-4 font-mono whitespace-pre">{activeFile.content || '(empty)'}</pre>
+          <Suspense
+            fallback={
+              <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Loading editor…</span>
+              </div>
+            }
+          >
+            <MonacoMount file={activeFile} />
+          </Suspense>
         ) : (
-          <div className="h-full grid place-items-center text-xs text-muted-foreground">
-            Open a file from the tree on the left.
+          <div className="h-full grid place-items-center text-xs text-muted-foreground gap-2">
+            <FileCode2 className="h-6 w-6 opacity-50" />
+            <span>Open a file from the tree on the left.</span>
+            <span className="text-[10px]">Ctrl/Cmd+S to save</span>
           </div>
         )}
       </div>
