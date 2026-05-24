@@ -39,6 +39,8 @@
       "@mcp/candidate-pipeline/*": ["packages/candidate-pipeline/src/*"],
       "@mcp/orchestrator-host": ["packages/orchestrator-host/src/index.ts"],
       "@mcp/orchestrator-host/*": ["packages/orchestrator-host/src/*"],
+      "@mcp/api-bus": ["packages/api-bus/src/index.ts"],
+      "@mcp/api-bus/*": ["packages/api-bus/src/*"],
       "@apps/*": ["apps/*"]
     }
   }
