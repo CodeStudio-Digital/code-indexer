@@ -24,7 +24,7 @@
  * layout Zustand store so the user's layout sticks across reloads.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import {
   Bell,
@@ -46,6 +46,7 @@ import { EditorPane } from './EditorPane.js';
 import { BottomPanel } from './BottomPanel.js';
 import { ActivityRail, type RailItem } from './jetbrains/ActivityRail.js';
 import { StatusBar } from './jetbrains/StatusBar.js';
+import { QuickOpen } from './jetbrains/QuickOpen.js';
 import { FileTreeWindow } from './jetbrains/tool-windows/FileTreeWindow.js';
 import { SearchWindow } from './jetbrains/tool-windows/SearchWindow.js';
 import { ChatWindow } from './jetbrains/tool-windows/ChatWindow.js';
@@ -77,6 +78,7 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const openFile = useWorkspaceStore((s) => s.openFile);
   const [activeSessionId, setActiveSessionId] = useState<number | undefined>(initialSessionId);
+  const [quickOpen, setQuickOpen] = useState(false);
 
   const handleOpen = useCallback(
     async (path: string) => {
@@ -98,6 +100,25 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
     },
     [projectId, openFile],
   );
+
+  // Ctrl/Cmd+P opens Quick Open. Skip when an editable surface is
+  // focused so the user's text input isn't hijacked — Monaco handles
+  // its own binding internally and that's fine.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isQuickOpen = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'p';
+      if (!isQuickOpen) return;
+      // Ignore inside other inputs unless they're the Monaco editor (which
+      // already swallows Ctrl+P; this listener wouldn't fire then).
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+      e.preventDefault();
+      setQuickOpen(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   return (
     <div className="flex flex-col h-[100dvh] min-h-0 w-full bg-background text-foreground">
@@ -189,6 +210,12 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
         />
       </div>
       <StatusBar projectId={projectId} projectName={projectName} />
+      <QuickOpen
+        projectId={projectId}
+        open={quickOpen}
+        onClose={() => setQuickOpen(false)}
+        onPick={(path) => void handleOpen(path)}
+      />
     </div>
   );
 }

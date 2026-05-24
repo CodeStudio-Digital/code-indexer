@@ -85,6 +85,46 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  /**
+   * Delete file or empty directory. Pass `recursive=1` to delete a
+   * non-empty directory.
+   */
+  app.delete('/api/projects/:id/file', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const filePath = c.req.query('path');
+      const recursive = c.req.query('recursive') === '1';
+      if (!filePath) return c.json({ error: 'path query param required' }, 400);
+      return c.json(await h.delete({ projectId, path: filePath, recursive }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  /** Rename / move file or directory. Body: `{ from, to }`. */
+  app.post('/api/projects/:id/file/rename', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const body = await c.req.json<{ from: string; to: string }>();
+      if (!body.from || !body.to) return c.json({ error: 'from + to required' }, 400);
+      return c.json(await h.rename({ projectId, from: body.from, to: body.to }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  /** Create directory (recursive). Body: `{ path }`. */
+  app.post('/api/projects/:id/dir', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const body = await c.req.json<{ path: string }>();
+      if (!body.path) return c.json({ error: 'path required' }, 400);
+      return c.json(await h.mkdir({ projectId, path: body.path }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
   // Legacy detail endpoint — kept for backwards compat with the dashboard's
   // FileViewer. The wildcard route MUST be registered AFTER `/file-tree`
   // and `/file` above so Hono doesn't capture them as wildcard paths.

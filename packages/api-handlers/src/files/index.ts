@@ -103,6 +103,61 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       return { ok: true as const, last_modified: stat.mtime.toISOString() };
     },
 
+    async delete({ projectId, path: rel, recursive }) {
+      const project = requireProject(projectId);
+      const abs = resolveSafe(project.root_path, rel);
+      // Refuse to delete the project root or a path that resolves to it.
+      if (abs === path.resolve(project.root_path)) {
+        throw new ApiError('refuse_root_delete', 400, 'refusing to delete project root');
+      }
+      try {
+        const stat = await fs.stat(abs);
+        if (stat.isDirectory()) {
+          await fs.rm(abs, { recursive: recursive ?? false, force: false });
+        } else {
+          await fs.unlink(abs);
+        }
+        return { ok: true as const };
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') throw new ApiError('not_found', 404, 'file not found');
+        if (code === 'ENOTEMPTY') {
+          throw new ApiError('dir_not_empty', 409, 'directory is not empty (pass recursive: true)');
+        }
+        throw err;
+      }
+    },
+
+    async rename({ projectId, from, to }) {
+      const project = requireProject(projectId);
+      const absFrom = resolveSafe(project.root_path, from);
+      const absTo = resolveSafe(project.root_path, to);
+      await fs.mkdir(path.dirname(absTo), { recursive: true });
+      try {
+        await fs.rename(absFrom, absTo);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new ApiError('not_found', 404, 'source path not found');
+        }
+        throw err;
+      }
+      let lastModified: string | null = null;
+      try {
+        const stat = await fs.stat(absTo);
+        lastModified = stat.mtime.toISOString();
+      } catch {
+        /* renamed away (directory): mtime not meaningful */
+      }
+      return { ok: true as const, last_modified: lastModified };
+    },
+
+    async mkdir({ projectId, path: rel }) {
+      const project = requireProject(projectId);
+      const abs = resolveSafe(project.root_path, rel);
+      await fs.mkdir(abs, { recursive: true });
+      return { ok: true as const };
+    },
+
     async tree({ projectId, maxDepth = 6, root = '.' }) {
       const project = requireProject(projectId);
       const startAbs = resolveSafe(project.root_path, root);

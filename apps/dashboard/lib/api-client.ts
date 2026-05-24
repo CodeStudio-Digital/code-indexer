@@ -79,6 +79,21 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       return { url: `/api/projects/${ip!.projectId}/file?path=${encodeURIComponent(String(ip!.path))}`, init: {} };
     case 'files.write':
       return { url: `/api/projects/${ip!.projectId}/file`, init: { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: ip!.path, content: ip!.content }) } };
+    case 'files.delete':
+      return {
+        url: `/api/projects/${ip!.projectId}/file?path=${encodeURIComponent(String(ip!.path))}${ip!.recursive ? '&recursive=1' : ''}`,
+        init: { method: 'DELETE' },
+      };
+    case 'files.rename':
+      return {
+        url: `/api/projects/${ip!.projectId}/file/rename`,
+        init: json({ from: ip!.from, to: ip!.to }),
+      };
+    case 'files.mkdir':
+      return {
+        url: `/api/projects/${ip!.projectId}/dir`,
+        init: json({ path: ip!.path }),
+      };
     case 'lsp.completion':
     case 'lsp.hover':
     case 'lsp.definition':

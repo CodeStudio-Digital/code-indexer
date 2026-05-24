@@ -52,6 +52,18 @@ export interface FilesApi {
     ctx: ApiContext,
   ): Promise<{ ok: true; last_modified: string }>;
 
+  /** Delete a file (or empty directory). Refuses to delete the project root. */
+  delete(input: { projectId: number; path: string; recursive?: boolean }, ctx: ApiContext): Promise<{ ok: true }>;
+
+  /** Rename / move a file or directory within the project. */
+  rename(
+    input: { projectId: number; from: string; to: string },
+    ctx: ApiContext,
+  ): Promise<{ ok: true; last_modified: string | null }>;
+
+  /** Create an empty directory (recursive). */
+  mkdir(input: { projectId: number; path: string }, ctx: ApiContext): Promise<{ ok: true }>;
+
   /** Recursive file tree for the IDE sidebar. */
   tree(input: { projectId: number; maxDepth?: number; root?: string }, ctx: ApiContext): Promise<FileTreeNode>;
 
