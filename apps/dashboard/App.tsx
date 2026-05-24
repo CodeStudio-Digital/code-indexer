@@ -10,6 +10,7 @@ import { DialogProvider } from './components/ui/dialog-provider.js';
 import { TooltipProvider } from './components/ui/tooltip.js';
 import Admin from './features/admin/index.js';
 import { ProjectDetail, ProjectList } from './features/project/index.js';
+import { Workspace } from './features/workspace/Workspace.js';
 import { AgentsTab } from './features/agents/AgentsTab.js';
 import { DesignSystemsTab } from './features/design-systems/DesignSystemsTab.js';
 import { TelemetryDashboard } from './features/telemetry/TelemetryDashboard.js';
@@ -51,6 +52,33 @@ function ProjectRoute() {
   );
 }
 
+function WorkspaceRoute() {
+  const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const projectId = Number(id);
+  const project = useApi<{ id: number; name: string }>(
+    Number.isFinite(projectId) ? `/projects/${projectId}` : '',
+  );
+
+  if (!Number.isFinite(projectId)) return <Navigate to="/" replace />;
+  if (!project.data) {
+    return <div className="px-4 py-6 text-sm text-muted-foreground">Loading project…</div>;
+  }
+
+  const sessionIdRaw = searchParams.get('session');
+  const initialSessionId = sessionIdRaw ? Number(sessionIdRaw) : undefined;
+
+  return (
+    <Workspace
+      projectId={projectId}
+      projectName={project.data.name}
+      initialSessionId={Number.isFinite(initialSessionId) ? initialSessionId : undefined}
+      onExit={() => navigate(`/projects/${projectId}`)}
+    />
+  );
+}
+
 function CompanyRedirectRoute() {
   const { rootId } = useParams<{ rootId: string }>();
   const id = Number(rootId);
@@ -73,6 +101,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <HomeRoute /> },
       { path: 'projects/:id', element: <ProjectRoute /> },
+      { path: 'projects/:id/workspace', element: <WorkspaceRoute /> },
       { path: 'agents', element: <AgentsTab /> },
       { path: 'company/sessions/:rootId', element: <CompanyRedirectRoute /> },
       { path: 'company/sessions/:rootId/:frontId/:zone/:tab', element: <AgentsTab /> },
