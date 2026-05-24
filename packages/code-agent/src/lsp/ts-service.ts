@@ -75,10 +75,88 @@ export class TsLanguageService {
         skipLibCheck: true,
       };
     }
-    const { config } = ts.readConfigFile(configPath, ts.sys.readFile);
-    const parsed = ts.parseJsonConfigFileContent(config, ts.sys, dirname(configPath));
-    this.rootFiles = parsed.fileNames;
-    return parsed.options;
+    return this.loadAndExpandConfig(configPath);
+  }
+
+  /**
+   * Load a tsconfig + walk its `references` (and the referenced configs'
+   * references, recursively). Vite/Angular/Solid scaffolds emit a thin
+   * tsconfig.json that only contains `{ files: [], references: [...] }`,
+   * pointing at tsconfig.app.json + tsconfig.node.json. Without expansion
+   * the LSP sees zero rootFiles → every import fails with "Cannot find
+   * module" and completion goes silent.
+   *
+   * Merge strategy: deduplicate rootFiles by absolute path, and use the
+   * compilerOptions of the FIRST config that has real options (skipping
+   * the empty composite root). Path mappings (`paths`, `baseUrl`) carry
+   * with the chosen options.
+   */
+  private loadAndExpandConfig(rootConfigPath: string): ts.CompilerOptions {
+    const seen = new Set<string>();
+    const allFiles = new Set<string>();
+    const candidateOptions: ts.CompilerOptions[] = [];
+
+    const visit = (configPath: string): void => {
+      const norm = resolve(configPath);
+      if (seen.has(norm)) return;
+      seen.add(norm);
+
+      const { config, error } = ts.readConfigFile(norm, ts.sys.readFile);
+      if (error || !config) return;
+      const parsed = ts.parseJsonConfigFileContent(
+        config,
+        ts.sys,
+        dirname(norm),
+        undefined,
+        norm,
+      );
+      for (const f of parsed.fileNames) allFiles.add(f);
+      if (
+        parsed.options &&
+        Object.keys(parsed.options).length > 0 &&
+        // Skip the synthetic option set the parser fills in for empty
+        // configs — heuristic: a real options block has compilerOptions
+        // beyond `configFilePath`.
+        Object.keys(parsed.options).some((k) => k !== 'configFilePath')
+      ) {
+        candidateOptions.push(parsed.options);
+      }
+
+      // Walk references. Each reference can point at a config file OR a
+      // directory containing one — match TS's own resolver behaviour.
+      for (const ref of parsed.projectReferences ?? []) {
+        const refPath = ref.path;
+        let candidate = resolve(dirname(norm), refPath);
+        try {
+          const stat = statSync(candidate);
+          if (stat.isDirectory()) {
+            candidate = join(candidate, 'tsconfig.json');
+          }
+        } catch {
+          /* stat failed — try as-is */
+        }
+        if (existsSync(candidate)) visit(candidate);
+      }
+    };
+
+    visit(rootConfigPath);
+    this.rootFiles = Array.from(allFiles);
+
+    // Prefer the first non-empty options set (typically tsconfig.app.json).
+    // Fall back to a permissive default that won't reject every import.
+    if (candidateOptions.length > 0) {
+      return candidateOptions[0];
+    }
+    return {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      allowJs: true,
+      checkJs: false,
+      esModuleInterop: true,
+      skipLibCheck: true,
+      jsx: ts.JsxEmit.Preserve,
+    };
   }
 
   private ensureService(): ts.LanguageService {
