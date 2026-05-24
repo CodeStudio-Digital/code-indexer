@@ -21,6 +21,7 @@ import Editor, { type OnMount } from '@monaco-editor/react';
 import type * as MonacoNs from 'monaco-editor';
 import { apiCall } from '../../../lib/api-client.js';
 import { useWorkspaceStore, type OpenFile } from '../../../state/workspace.js';
+import { registerLspProviders } from './lspProvider.js';
 
 /** Map common file extensions to Monaco language ids. */
 function inferLanguage(path: string): string {
@@ -68,9 +69,16 @@ export function MonacoMount({ file }: MonacoMountProps) {
   const setContent = useWorkspaceStore((s) => s.setContent);
   const markClean = useWorkspaceStore((s) => s.markClean);
 
-  const handleMount = useCallback<OnMount>((editor) => {
-    editorRef.current = editor;
-  }, []);
+  const handleMount = useCallback<OnMount>(
+    (editor, monaco) => {
+      editorRef.current = editor;
+      // Wire LSP providers on first mount for this project. The registry
+      // is idempotent per projectId, so re-mounts (tab switches) are
+      // cheap. Switching project tears the previous set down.
+      registerLspProviders(monaco, file.projectId);
+    },
+    [file.projectId],
+  );
 
   const handleChange = useCallback(
     (value: string | undefined) => {
