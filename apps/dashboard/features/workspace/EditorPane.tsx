@@ -29,6 +29,13 @@ const MonacoMount = lazy(() =>
 const DiffMount = lazy(() =>
   import('./editor/DiffMount.js').then((m) => ({ default: m.DiffMount })),
 );
+const MarkdownView = lazy(() =>
+  import('./editor/MarkdownView.js').then((m) => ({ default: m.MarkdownView })),
+);
+
+function isMarkdownPath(path: string): boolean {
+  return /\.(md|markdown|mdx)$/i.test(path);
+}
 
 export function EditorPane() {
   const openFiles = useWorkspaceStore((s) => s.openFiles);
@@ -50,6 +57,8 @@ export function EditorPane() {
           >
             {activeFile.kind === 'diff' ? (
               <DiffMount diff={activeFile} />
+            ) : isMarkdownPath(activeFile.path) ? (
+              <MarkdownView file={activeFile} />
             ) : (
               <MonacoMount file={activeFile} />
             )}

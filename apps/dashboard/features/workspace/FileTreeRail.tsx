@@ -21,8 +21,11 @@ import {
   FolderOpen,
   FolderPlus,
   RefreshCw,
+  Search,
   Trash2,
+  X,
 } from 'lucide-react';
+import { Input } from '../../components/ui/input.js';
 import { apiCall } from '../../lib/api-client.js';
 import { Button } from '../../components/ui/button.js';
 import { useContextMenu, type ContextMenuItem } from '../../components/ui/context-menu.js';
@@ -103,6 +106,7 @@ export function FileTreeRail({ projectId, activePath, onOpen }: FileTreeRailProp
   const [reloadKey, setReloadKey] = useState(0);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [gitStatus, setGitStatus] = useState<Map<string, GitFileStatus>>(() => new Map());
+  const [search, setSearch] = useState('');
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
   const startRename = useCallback((path: string) => setRenamingPath(path), []);
@@ -207,6 +211,33 @@ export function FileTreeRail({ projectId, activePath, onOpen }: FileTreeRailProp
     return () => window.removeEventListener('keydown', onKey);
   }, [activePath]);
 
+  // Pre-compute the set of folder paths that contain a search match so
+  // the recursive renderer knows which folders to keep expanded. Pure
+  // function of (tree, search) — cheap to memoize once per change.
+  const filterMatches = useMemo(() => {
+    if (!tree || !search.trim()) return null;
+    const q = search.trim().toLowerCase();
+    const visibleFolders = new Set<string>();
+    const visibleFiles = new Set<string>();
+    const visit = (n: FileTreeNode): boolean => {
+      if (n.type === 'file') {
+        if (n.name.toLowerCase().includes(q)) {
+          visibleFiles.add(n.path);
+          return true;
+        }
+        return false;
+      }
+      let anyHit = false;
+      for (const child of n.children ?? []) {
+        if (visit(child)) anyHit = true;
+      }
+      if (anyHit) visibleFolders.add(n.path);
+      return anyHit;
+    };
+    visit(tree);
+    return { visibleFolders, visibleFiles };
+  }, [tree, search]);
+
   return (
     <div className="h-full flex flex-col bg-card/30 min-h-0">
       <div className="h-8 shrink-0 border-b flex items-center justify-between px-2.5 gap-1">
@@ -223,9 +254,35 @@ export function FileTreeRail({ projectId, activePath, onOpen }: FileTreeRailProp
           <RefreshCw className="h-3 w-3" />
         </Button>
       </div>
+      <div className="shrink-0 border-b px-1.5 py-1">
+        <div className="relative">
+          <Search className="h-3 w-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground/70 pointer-events-none" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filter files…"
+            className="h-6 text-[11px] pl-7 pr-6"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 h-4 w-4 grid place-items-center text-muted-foreground/70 hover:text-foreground"
+              aria-label="Clear filter"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </div>
       <div className="flex-1 min-h-0 overflow-y-auto py-1 px-0.5">
         {loading && <div className="text-[11px] text-muted-foreground px-3 py-2">Loading…</div>}
         {error && <div className="text-[11px] text-destructive px-3 py-2">{error}</div>}
+        {tree && filterMatches && filterMatches.visibleFiles.size === 0 && (
+          <div className="text-[11px] text-muted-foreground px-3 py-2">
+            No files match &quot;{search}&quot;.
+          </div>
+        )}
         {tree && (
           <NodeView
             node={tree}
@@ -239,12 +296,18 @@ export function FileTreeRail({ projectId, activePath, onOpen }: FileTreeRailProp
             onCommitRename={commitRename}
             onCancelRename={cancelRename}
             gitStatus={gitStatus}
+            filterMatches={filterMatches}
             renderSelf={false}
           />
         )}
       </div>
     </div>
   );
+}
+
+interface FilterMatches {
+  visibleFolders: Set<string>;
+  visibleFiles: Set<string>;
 }
 
 interface NodeViewProps {
@@ -259,6 +322,7 @@ interface NodeViewProps {
   onCommitRename: (fromPath: string, newName: string) => void;
   onCancelRename: () => void;
   gitStatus: Map<string, GitFileStatus>;
+  filterMatches: FilterMatches | null;
   /** When false, only renders this node's children (used for the root). */
   renderSelf?: boolean;
 }
@@ -275,12 +339,29 @@ function NodeView({
   onCommitRename,
   onCancelRename,
   gitStatus,
+  filterMatches,
   renderSelf = true,
 }: NodeViewProps) {
+  // When a filter is active, force the folder open so the user sees the
+  // path to every match. Otherwise honor the user's manual expansion.
+  const filterActive = filterMatches !== null;
+  const folderShouldShow =
+    !filterActive ||
+    (node.type === 'dir' && filterMatches.visibleFolders.has(node.path)) ||
+    depth === 0;
+  const fileShouldShow =
+    !filterActive || (node.type === 'file' && filterMatches.visibleFiles.has(node.path));
   const [expanded, setExpanded] = useState(depth === 0);
+  // While filtering, all surviving folders are expanded.
+  const isExpanded = filterActive ? true : expanded;
   const items = buildContextItems(node, projectId, onMutated, () => onStartRename(node.path));
   const { triggerProps, Menu } = useContextMenu(items);
   const isRenaming = renamingPath === node.path;
+
+  // Filter pre-render shortcut: bail out before doing any work on a node
+  // that's hidden by the current filter.
+  if (node.type === 'file' && !fileShouldShow) return null;
+  if (node.type === 'dir' && !folderShouldShow && renderSelf) return null;
 
   // For files: highlight + on-click opens. For dirs: toggle expand.
   if (node.type === 'file' && renderSelf) {
@@ -338,7 +419,7 @@ function NodeView({
               initialName={node.name}
               depth={depth}
               iconColor="text-amber-500/80"
-              Icon={expanded ? FolderOpen : Folder}
+              Icon={isExpanded ? FolderOpen : Folder}
               onSubmit={(name) => onCommitRename(node.path, name)}
               onCancel={onCancelRename}
               extraLeading={<span className="w-3" />}
@@ -350,18 +431,21 @@ function NodeView({
               return (
                 <button
                   type="button"
-                  onClick={() => setExpanded((v) => !v)}
+                  onClick={() => {
+                    if (filterActive) return; // filter forces folders open; click is a no-op
+                    setExpanded((v) => !v);
+                  }}
                   {...triggerProps}
                   className="w-full text-left flex items-center gap-1 px-1.5 py-[3px] rounded-sm text-[11.5px] leading-tight text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                   style={{ paddingLeft: `${depth * 12 + 2}px` }}
                   title={dirStatus ? `${node.path}\n(contains ${dirStatus} files)` : node.path}
                 >
-                  {expanded ? (
+                  {isExpanded ? (
                     <ChevronDown className="h-3 w-3 shrink-0" />
                   ) : (
                     <ChevronRight className="h-3 w-3 shrink-0" />
                   )}
-                  {expanded ? (
+                  {isExpanded ? (
                     <FolderOpen className="h-3 w-3 shrink-0 text-amber-500/80" />
                   ) : (
                     <Folder className="h-3 w-3 shrink-0 text-amber-500/80" />
@@ -374,7 +458,7 @@ function NodeView({
           {Menu}
         </>
       )}
-      {expanded &&
+      {isExpanded &&
         children.map((child) => (
           <NodeView
             key={child.path}
@@ -389,6 +473,7 @@ function NodeView({
             onCommitRename={onCommitRename}
             onCancelRename={onCancelRename}
             gitStatus={gitStatus}
+            filterMatches={filterMatches}
           />
         ))}
     </div>
