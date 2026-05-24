@@ -139,17 +139,57 @@ export function MonacoMount({ file }: MonacoMountProps) {
       onChange={handleChange}
       options={{
         fontSize: 13,
-        fontFamily: 'Geist Mono, Cascadia Code, Consolas, monospace',
-        minimap: { enabled: false },
+        fontFamily: 'JetBrains Mono, Cascadia Code, Consolas, "Liberation Mono", Menlo, monospace',
+        fontLigatures: true,
+        fontWeight: '400',
+        lineHeight: 1.55,
+        letterSpacing: 0,
+        // Bracket pair colorization (Monaco ≥0.36) — JetBrains-style depth coloring.
+        bracketPairColorization: { enabled: true, independentColorPoolPerBracketType: true },
+        guides: {
+          bracketPairs: 'active',
+          bracketPairsHorizontal: true,
+          indentation: true,
+        },
+        // Minimap: subtle, small, no rendering of overview ruler so it
+        // doesn't fight the gutter.
+        minimap: {
+          enabled: true,
+          renderCharacters: false,
+          maxColumn: 100,
+          scale: 1,
+          showSlider: 'mouseover',
+        },
         scrollBeyondLastLine: false,
         smoothScrolling: true,
         cursorBlinking: 'smooth',
+        cursorSmoothCaretAnimation: 'on',
         wordWrap: 'off',
         tabSize: 2,
-        renderLineHighlight: 'line',
+        renderLineHighlight: 'gutter',
+        renderWhitespace: 'selection',
+        stickyScroll: { enabled: true, defaultModel: 'outlineModel' },
+        formatOnPaste: true,
+        formatOnType: false,
+        // Padding around the content area — keeps the first line off
+        // the topbar shadow.
+        padding: { top: 8, bottom: 8 },
+        scrollbar: {
+          verticalScrollbarSize: 10,
+          horizontalScrollbarSize: 10,
+          useShadows: false,
+        },
         // The default scrollbars are okay; we hide the rulers since most
         // projects don't have a single shared line-length convention.
         rulers: [],
+        // Acessory features that punch above their weight.
+        folding: true,
+        foldingHighlight: true,
+        showFoldingControls: 'mouseover',
+        unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false },
+        suggest: { showStatusBar: true },
+        wordBasedSuggestions: 'matchingDocuments',
+        inlayHints: { enabled: 'onUnlessPressed' },
       }}
     />
   );
