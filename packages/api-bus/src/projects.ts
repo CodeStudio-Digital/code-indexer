@@ -20,7 +20,10 @@ export interface Project {
 export interface ProjectStats {
   file_count: number;
   symbol_count: number;
+  languages: Record<string, number>;
   total_lines: number;
+  total_size: number;
+  last_indexed: string | null;
   run_count: number;
 }
 
@@ -42,13 +45,13 @@ export interface IndexProjectInput {
   force?: boolean;
 }
 
-export interface IndexProgress {
-  phase: 'discovering' | 'parsing' | 'embedding' | 'writing';
-  total: number;
-  done: number;
-  current_file?: string;
-}
-
+/**
+ * Indexing payloads are passed through as-is from `IndexProjectUseCase`
+ * — the dashboard already understands the existing shapes
+ * (`IndexStartPayload`, `IndexProgressFrame`, `EmbeddingProgressFrame`,
+ * etc. in @mcp/services/services/projects). Typing them here as `unknown`
+ * keeps api-bus from coupling to the use-case's evolving frame shape.
+ */
 export interface IndexResult {
   runId: number;
   totalFiles: number;
@@ -60,9 +63,9 @@ export interface IndexResult {
 }
 
 export type IndexStreamEvent =
-  | { event: 'start'; data: IndexProgress }
-  | { event: 'progress'; data: IndexProgress }
-  | { event: 'done'; data: IndexResult }
+  | { event: 'start'; data: unknown }
+  | { event: 'progress'; data: unknown }
+  | { event: 'done'; data: IndexResult | unknown }
   | { event: 'error'; data: { message: string } };
 
 export interface ProjectsApi {

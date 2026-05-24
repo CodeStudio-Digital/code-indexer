@@ -9,29 +9,15 @@ import type { ApiContext } from './common.js';
  * on Ctrl+S.
  */
 
-export interface ProjectFileSummary {
-  id: number;
-  project_id: number;
-  path: string;
-  language: string | null;
-  loc: number;
-  size_bytes: number;
-  last_modified: string;
-}
-
-export interface FileSymbol {
-  id: number;
-  name: string;
-  kind: string;
-  line: number;
-  column: number;
-}
-
-export interface FileDetail extends ProjectFileSummary {
-  symbols: FileSymbol[];
-  dependencies: Array<{ from_file: string; to_file: string; kind: string }>;
-  dependents: Array<{ from_file: string; to_file: string; kind: string }>;
-}
+/**
+ * File / symbol shapes — passed through from the SQLite store
+ * (@mcp/shared/types: DBFile, DBSymbol, DBFileDependency, etc.). Typed
+ * here as `unknown` so api-bus stays decoupled from the store schema
+ * evolution. Consumers narrow via the existing dashboard types.
+ */
+export type ProjectFileSummary = unknown;
+export type FileSymbol = unknown;
+export type FileDetail = unknown;
 
 export interface ManifestInfo {
   manifest: unknown;
@@ -50,9 +36,9 @@ export interface FileTreeNode {
 }
 
 export interface FilesApi {
-  list(input: { projectId: number }, ctx: ApiContext): Promise<ProjectFileSummary[]>;
+  list(input: { projectId: number }, ctx: ApiContext): Promise<unknown[]>;
   manifest(input: { projectId: number }, ctx: ApiContext): Promise<ManifestInfo>;
-  get(input: { projectId: number; path: string }, ctx: ApiContext): Promise<FileDetail>;
+  get(input: { projectId: number; path: string }, ctx: ApiContext): Promise<unknown>;
 
   /** Raw read of file contents from disk (used by the Monaco editor). */
   read(input: { projectId: number; path: string }, ctx: ApiContext): Promise<{ content: string; encoding: 'utf8' | 'base64' }>;
@@ -69,9 +55,9 @@ export interface FilesApi {
   /** Recursive file tree for the IDE sidebar. */
   tree(input: { projectId: number; maxDepth?: number; root?: string }, ctx: ApiContext): Promise<FileTreeNode>;
 
-  symbol(input: { id: number }, ctx: ApiContext): Promise<FileSymbol>;
-  symbolMembers(input: { id: number }, ctx: ApiContext): Promise<FileSymbol[]>;
+  symbol(input: { id: number }, ctx: ApiContext): Promise<unknown>;
+  symbolMembers(input: { id: number }, ctx: ApiContext): Promise<unknown[]>;
 
-  listConcepts(input: { projectId: number }, ctx: ApiContext): Promise<string[]>;
-  conceptFiles(input: { projectId: number; concept: string }, ctx: ApiContext): Promise<ProjectFileSummary[]>;
+  listConcepts(input: { projectId: number }, ctx: ApiContext): Promise<Array<{ concept: string; count: number }>>;
+  conceptFiles(input: { projectId: number; concept: string }, ctx: ApiContext): Promise<unknown[]>;
 }

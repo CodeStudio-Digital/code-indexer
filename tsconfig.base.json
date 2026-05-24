@@ -41,6 +41,8 @@
       "@mcp/orchestrator-host/*": ["packages/orchestrator-host/src/*"],
       "@mcp/api-bus": ["packages/api-bus/src/index.ts"],
       "@mcp/api-bus/*": ["packages/api-bus/src/*"],
+      "@mcp/api-handlers": ["packages/api-handlers/src/index.ts"],
+      "@mcp/api-handlers/*": ["packages/api-handlers/src/*"],
       "@apps/*": ["apps/*"]
     }
   }

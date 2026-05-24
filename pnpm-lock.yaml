@@ -255,6 +255,8 @@ importers:
 
   packages/api-bus: {}
 
+  packages/api-handlers: {}
+
   packages/candidate-pipeline:
     dependencies:
       '@mcp/shared':

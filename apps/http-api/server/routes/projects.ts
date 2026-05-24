@@ -1,195 +1,129 @@
 import type { Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
+import { createProjectsHandlers, createContext } from '@mcp/api-handlers';
+import { ApiError } from '@mcp/api-bus';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
-import {
-  CreateProjectService,
-  UpdateProjectService,
-  IndexProjectUseCase,
-  ProjectError,
-  type CreateProjectInput,
-  type UpdateProjectInput,
-  type IndexProjectInput,
-} from '@mcp/services/services/projects/index.js';
 
 /**
- * Map a domain ProjectError to its HTTP response. Keeps route handlers a
- * single line — everything else is delegated to the use-case layer.
+ * Hono routes for /api/projects/* — thin adapters that parse the request,
+ * invoke the corresponding handler in `@mcp/api-handlers/projects`, and
+ * serialize the result. The handlers are also mounted on Electron IPC
+ * (see apps/electron/src/ipc/) so the business logic stays in one place.
+ *
+ * SSE adaptation: handlers return `AsyncIterable<IndexStreamEvent>`;
+ * this file wraps that iterable into Hono's streamSSE frames. The
+ * Electron transport instead pumps it onto a MessagePort.
  */
-function mapProjectError(c: Context, err: unknown) {
-  if (err instanceof ProjectError) {
-    return c.json({ error: err.message }, err.statusCode);
+function mapApiError(c: Context, err: unknown) {
+  if (err instanceof ApiError) {
+    return c.json({ error: err.message, code: err.code, ...(err.details ?? {}) }, err.status as never);
   }
   throw err;
 }
 
 export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
-  const { db, vectorStore } = deps;
+  const h = createProjectsHandlers(deps);
 
-  const createService = new CreateProjectService(db);
-  const updateService = new UpdateProjectService(db);
-  const indexUseCase = new IndexProjectUseCase({
-    db,
-    providerStore: deps.providerStore,
-    embeddingService: deps.embeddingService,
-    vectorStore: deps.vectorStore,
-    costTracker: deps.costTracker,
-    webhookDispatcher: deps.webhookDispatcher,
-    config: deps.config,
-    // Wire the LSH sink so indexing populates embedding_simhash_signatures
-    // + embedding_lsh_buckets alongside the vector store. When
-    // MCP_LSH_INDEXING is unset, deps.lshIndexingSink is a NullLshIndexingSink
-    // (no-op), so this is safe to wire unconditionally.
-    lshIndexingSink: deps.lshIndexingSink,
-  });
-
-  app.get('/api/projects', (c) => c.json(db.listProjects()));
-
-  app.post('/api/projects', async (c) => {
-    const body = await parseJsonBody<CreateProjectInput>(c);
+  app.get('/api/projects', async (c) => {
     try {
-      return c.json(createService.execute(body as CreateProjectInput), 201);
+      return c.json(await h.list(undefined, createContext()));
     } catch (err) {
-      return mapProjectError(c, err);
+      return mapApiError(c, err);
     }
   });
 
-  app.get('/api/projects/:id', (c) => {
-    const project = db.getProject(parseIdParam(c));
-    if (!project) return notFound(c);
-    return c.json(project);
+  app.post('/api/projects', async (c) => {
+    try {
+      const body = await parseJsonBody<Parameters<typeof h.create>[0]>(c);
+      return c.json(await h.create(body as Parameters<typeof h.create>[0], createContext()), 201);
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.get('/api/projects/:id', async (c) => {
+    try {
+      return c.json(await h.get({ id: parseIdParam(c) }, createContext()));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return notFound(c);
+      return mapApiError(c, err);
+    }
   });
 
   app.patch('/api/projects/:id', async (c) => {
-    const id = parseIdParam(c);
-    const body = await parseJsonBody<UpdateProjectInput>(c);
     try {
-      return c.json(updateService.execute(id, body as UpdateProjectInput));
+      const id = parseIdParam(c);
+      const body = await parseJsonBody<Omit<Parameters<typeof h.update>[0], 'id'>>(c);
+      return c.json(await h.update({ id, ...body }, createContext()));
     } catch (err) {
-      return mapProjectError(c, err);
+      return mapApiError(c, err);
     }
   });
 
-  /**
-   * Cascading delete: pull every vector_id we have on record for the
-   * project, hand them to the remote vector store, then drop the
-   * SQLite row (which cascades to vector_ids/files/symbols/etc).
-   *
-   * If the remote delete fails — Worker offline, network blip — we
-   * still drop the local rows but enqueue the ids in
-   * `pending_vector_deletes` so the Hygiene panel can retry. Without
-   * this, deleting a project from the dashboard accumulated orphans
-   * in Cloudflare Vectorize indefinitely.
-   */
   app.delete('/api/projects/:id', async (c) => {
-    const id = parseIdParam(c);
-    const project = db.getProject(id);
-    if (!project) return notFound(c);
-
-    const vectorIds = db.snapshotVectorIdsForProject(id);
-    let remoteDeleted = 0;
-    let remoteError: string | null = null;
-
-    if (vectorIds.length > 0) {
-      try {
-        remoteDeleted = await vectorStore.deleteByIds(vectorIds);
-      } catch (err) {
-        remoteError = err instanceof Error ? err.message : String(err);
-        db.enqueuePendingVectorDeletes(
-          vectorIds.map((vid) => ({
-            vector_id: vid,
-            project_name: project.name,
-            error: remoteError,
-          })),
-        );
-      }
+    try {
+      return c.json(await h.delete({ id: parseIdParam(c) }, createContext()));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return notFound(c);
+      return mapApiError(c, err);
     }
-
-    db.deleteProject(id);
-    return c.json({
-      ok: true,
-      vectors_known: vectorIds.length,
-      vectors_deleted_remote: remoteDeleted,
-      remote_error: remoteError,
-    });
   });
 
   app.post('/api/projects/:id/index', async (c) => {
-    const projectId = parseIdParam(c);
-    const body = await parseJsonBody<IndexProjectInput>(c);
     try {
-      return c.json(await indexUseCase.run(projectId, body));
+      const id = parseIdParam(c);
+      const body = await parseJsonBody<Omit<Parameters<typeof h.index>[0], 'id'>>(c);
+      return c.json(await h.index({ id, ...body }, createContext()));
     } catch (err) {
-      return mapProjectError(c, err);
+      return mapApiError(c, err);
     }
   });
 
   /**
-   * Streaming index — runs the same pipeline but pushes IndexProgress frames
-   * over SSE. `IndexProjectUseCase.runStream` centralizes the coalescing and
-   * provider-resolution logic; this route just wires callbacks to the stream.
+   * Streaming index — pumps the handler's AsyncIterable into SSE frames.
+   * Electron will pump the same iterable onto a MessagePort instead.
    */
   app.post('/api/projects/:id/index/stream', async (c) => {
-    const projectId = parseIdParam(c);
-    const project = db.getProject(projectId);
+    const id = parseIdParam(c);
+    const project = deps.db.getProject(id);
     if (!project) return notFound(c);
 
-    const body = await parseJsonBody<IndexProjectInput>(c);
-
+    const body = await parseJsonBody<Omit<Parameters<typeof h.indexStream>[0], 'id'>>(c);
     return streamSSE(c, async (stream) => {
       let seq = 0;
-      const send = (event: string, data: unknown) =>
-        stream.writeSSE({
-          id: String(seq++),
-          event,
-          data: JSON.stringify(data),
-        });
-
-      await indexUseCase.runStream(projectId, body, {
-        onStart: (p) => send('start', p),
-        onProgress: (p) => send('progress', p),
-        onDone: (result) => send('done', {
-          run_id: result.runId,
-          total_files: result.totalFiles,
-          indexed_files: result.indexedFiles,
-          skipped_files: result.skippedFiles,
-          error_count: result.errorCount,
-          duration_ms: result.durationMs,
-          cost_usd: result.costUsd,
-        }),
-        onError: (message) => send('error', { message }),
-      });
-
-      await stream.close();
+      try {
+        for await (const ev of h.indexStream({ id, ...body }, createContext())) {
+          await stream.writeSSE({
+            id: String(seq++),
+            event: ev.event,
+            data: JSON.stringify(ev.data),
+          });
+        }
+      } finally {
+        await stream.close();
+      }
     });
   });
 
-  /**
-   * Retry failed/missing embeddings — runs only the embedding pipeline
-   * (no LLM analysis). Streams progress over SSE.
-   */
   app.post('/api/projects/:id/embeddings/retry/stream', async (c) => {
-    const projectId = parseIdParam(c);
-    const project = db.getProject(projectId);
+    const id = parseIdParam(c);
+    const project = deps.db.getProject(id);
     if (!project) return notFound(c);
 
     return streamSSE(c, async (stream) => {
       let seq = 0;
-      const send = (event: string, data: unknown) =>
-        stream.writeSSE({
-          id: String(seq++),
-          event,
-          data: JSON.stringify(data),
-        });
-
-      await indexUseCase.retryEmbeddingsStream(projectId, {
-        onStart: (p) => send('start', p),
-        onProgress: (p) => send('progress', p),
-        onDone: (result) => send('done', result),
-        onError: (message) => send('error', { message }),
-      });
-
-      await stream.close();
+      try {
+        for await (const ev of h.retryEmbeddingsStream({ id }, createContext())) {
+          await stream.writeSSE({
+            id: String(seq++),
+            event: ev.event,
+            data: JSON.stringify(ev.data),
+          });
+        }
+      } finally {
+        await stream.close();
+      }
     });
   });
 }

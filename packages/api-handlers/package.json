@@ -1,0 +1,15 @@
+{
+  "name": "@mcp/api-handlers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./projects": "./src/projects/index.ts",
+    "./files": "./src/files/index.ts",
+    "./terminal": "./src/terminal/index.ts",
+    "./coder": "./src/coder/index.ts",
+    "./context": "./src/context.ts",
+    "./types": "./src/types.ts"
+  }
+}
