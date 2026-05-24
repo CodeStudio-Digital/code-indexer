@@ -209,17 +209,17 @@ export function AppShell() {
           </Tooltip>
         </div>
       </header>
-      {/* Pages that own their own layout (home grid, agents zones,
-          design-systems gallery, project analytics) keep flush margins so
-          they can use the full viewport. Everything else (admin / docs /
-          telemetry / fallback) gets a comfortable container with breathing
-          room. */}
+      {/* Container padding by route. Pages that own their full-bleed
+          surface (agents zones, design-systems gallery, project analytics)
+          opt out and manage their own margins. Everything else (home grid,
+          admin, docs, telemetry, fallback) gets a comfortable container so
+          content doesn't slam against the viewport. */}
       <main
         className={cn(
           'flex-1 min-h-0 overflow-auto',
-          view.page === 'admin' || view.page === 'docs' || view.page === 'telemetry' || view.page === 'other'
-            ? 'px-6 py-5'
-            : '',
+          view.page === 'agents' || view.page === 'design-systems' || view.page === 'project-analytics'
+            ? ''
+            : 'px-6 py-5',
         )}
       >
         <Outlet />
