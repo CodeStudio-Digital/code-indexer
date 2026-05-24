@@ -26,6 +26,7 @@ import {
 import { apiCall } from '../../lib/api-client.js';
 import { Button } from '../../components/ui/button.js';
 import { useContextMenu, type ContextMenuItem } from '../../components/ui/context-menu.js';
+import { confirm, prompt, toast } from '../../components/ui/prompt-dialog.js';
 import { cn } from '../../lib/utils.js';
 
 interface FileTreeNode {
@@ -63,7 +64,9 @@ export function FileTreeRail({ projectId, activePath, onOpen }: FileTreeRailProp
       try {
         await apiCall<{ ok: true }>('files.rename', { projectId, from: fromPath, to: toPath });
       } catch (err) {
-        window.alert(`Rename failed: ${err instanceof Error ? err.message : String(err)}`);
+        toast.error('Rename failed', {
+          description: err instanceof Error ? err.message : String(err),
+        });
       } finally {
         setRenamingPath(null);
         reload();
@@ -344,8 +347,8 @@ function InlineRenameInput({
 /**
  * Compose the right-click menu for a file-tree node. Same chrome on
  * files and folders. Rename goes via inline input (provided by the
- * parent's `onStartRename`); create / delete / copy use window.prompt
- * + window.confirm until inline create lands too.
+ * parent's `onStartRename`); create / delete go through the global
+ * prompt/confirm dialog hosts since Electron blocks window.* dialogs.
  */
 function buildContextItems(
   node: FileTreeNode,
@@ -357,7 +360,12 @@ function buildContextItems(
   const parentPath = isDir ? node.path : posixDirname(node.path);
 
   const promptCreate = async (kind: 'file' | 'folder') => {
-    const name = window.prompt(`New ${kind} name:`);
+    const name = await prompt({
+      title: `New ${kind}`,
+      description: parentPath ? `Inside ${parentPath}/` : 'At project root',
+      placeholder: kind === 'file' ? 'name.ts' : 'folder-name',
+      confirmLabel: 'Create',
+    });
     if (!name) return;
     const target = posixJoin(parentPath, name);
     try {
@@ -367,13 +375,21 @@ function buildContextItems(
         await apiCall<{ ok: true }>('files.mkdir', { projectId, path: target });
       }
       onMutated();
+      toast.success(`${kind === 'file' ? 'File' : 'Folder'} created`, { description: target });
     } catch (err) {
-      window.alert(`Create failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error('Create failed', {
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
   const doDelete = async () => {
-    const ok = window.confirm(`Delete ${isDir ? 'folder' : 'file'} "${node.name}"?`);
+    const ok = await confirm({
+      title: `Delete ${isDir ? 'folder' : 'file'}?`,
+      description: `"${node.path}" will be removed${isDir ? ' (and everything inside)' : ''}. This cannot be undone.`,
+      confirmLabel: 'Delete',
+      tone: 'destructive',
+    });
     if (!ok) return;
     try {
       await apiCall<{ ok: true }>('files.delete', {
@@ -382,13 +398,19 @@ function buildContextItems(
         recursive: isDir,
       });
       onMutated();
+      toast.success('Deleted', { description: node.path });
     } catch (err) {
-      window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error('Delete failed', {
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
   const doCopyPath = () => {
-    void navigator.clipboard.writeText(node.path).catch(() => undefined);
+    void navigator.clipboard
+      .writeText(node.path)
+      .then(() => toast.info('Path copied', { description: node.path }))
+      .catch(() => toast.error('Could not access clipboard'));
   };
 
   return [

@@ -16,6 +16,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { apiCall } from '../../../../lib/api-client.js';
 import { Button } from '../../../../components/ui/button.js';
 import { Input } from '../../../../components/ui/input.js';
+import { confirm, toast } from '../../../../components/ui/prompt-dialog.js';
 import {
   Dialog,
   DialogContent,
@@ -216,10 +217,17 @@ function SnapshotEditorDialog({
 
   const remove = async () => {
     if (!snapshot) return;
-    if (!window.confirm(`Delete snapshot "${snapshot.title}"?`)) return;
+    const ok = await confirm({
+      title: 'Delete snapshot?',
+      description: `"${snapshot.title}" will be removed. This cannot be undone.`,
+      confirmLabel: 'Delete',
+      tone: 'destructive',
+    });
+    if (!ok) return;
     setSaving(true);
     try {
       await apiCall<{ ok: true }>('snapshots.delete', { id: snapshot.id });
+      toast.success('Snapshot deleted', { description: snapshot.title });
       onDeleted();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));

@@ -8,6 +8,11 @@ import {
 } from 'react-router-dom';
 import { DialogProvider } from './components/ui/dialog-provider.js';
 import { TooltipProvider } from './components/ui/tooltip.js';
+import {
+  PromptDialogHost,
+  ConfirmDialogHost,
+  ToastHost,
+} from './components/ui/prompt-dialog.js';
 import Admin from './features/admin/index.js';
 import { ProjectDetail, ProjectList } from './features/project/index.js';
 import { Workspace } from './features/workspace/Workspace.js';
@@ -119,6 +124,12 @@ export default function App() {
     <TooltipProvider delayDuration={300}>
       <DialogProvider>
         <RouterProvider router={router} />
+        {/* Global hosts — replace Electron-blocked window.prompt/confirm/alert
+            with promise-based dialogs + a toast surface. Mounted once near
+            the React root so any component can call prompt()/confirm()/toast.* */}
+        <PromptDialogHost />
+        <ConfirmDialogHost />
+        <ToastHost />
       </DialogProvider>
     </TooltipProvider>
   );

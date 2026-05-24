@@ -21,6 +21,7 @@ import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { apiPost } from '../../hooks/useApi.js';
+import { confirm } from '../../components/ui/prompt-dialog.js';
 import {
   selectInbox,
   selectStream,
@@ -171,7 +172,12 @@ function InboxRow({
   const [busy, setBusy] = useState(false);
 
   const handleCancel = async () => {
-    if (!window.confirm(t('agents:inbox.confirmCancel'))) return;
+    const ok = await confirm({
+      title: t('agents:inbox.confirmCancel'),
+      confirmLabel: t('agents:inbox.cancelAction', { defaultValue: 'Cancel message' }),
+      tone: 'destructive',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await apiPost(`/company/sessions/${companySessionId}/inbox/${message.id}/cancel`, {

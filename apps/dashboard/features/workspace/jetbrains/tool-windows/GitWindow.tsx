@@ -32,6 +32,7 @@ import {
 import { apiCall } from '../../../../lib/api-client.js';
 import { useWorkspaceStore } from '../../../../state/workspace.js';
 import { Button } from '../../../../components/ui/button.js';
+import { confirm, toast } from '../../../../components/ui/prompt-dialog.js';
 import {
   Dialog,
   DialogContent,
@@ -101,7 +102,9 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
           source: file.staged ? 'git-staged' : 'git-unstaged',
         });
       } catch (err) {
-        window.alert(`Diff failed: ${err instanceof Error ? err.message : String(err)}`);
+        toast.error('Diff failed', {
+          description: err instanceof Error ? err.message : String(err),
+        });
       }
     },
     [projectId, openDiff],
@@ -141,7 +144,9 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
       await apiCall('projectGit.stage', { projectId, paths });
       await reload();
     } catch (err) {
-      window.alert(`Stage failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error('Stage failed', {
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
   const onUnstage = async (paths: string[]) => {
@@ -149,16 +154,32 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
       await apiCall('projectGit.unstage', { projectId, paths });
       await reload();
     } catch (err) {
-      window.alert(`Unstage failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error('Unstage failed', {
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
   const onDiscard = async (paths: string[]) => {
-    if (!window.confirm(`Discard local changes to ${paths.length} file(s)?`)) return;
+    const ok = await confirm({
+      title: `Discard ${paths.length === 1 ? 'change' : `${paths.length} changes`}?`,
+      description:
+        paths.length === 1
+          ? `Local edits to "${paths[0]}" will be reverted to HEAD. This cannot be undone.`
+          : `Local edits to ${paths.length} files will be reverted to HEAD. This cannot be undone.`,
+      confirmLabel: 'Discard',
+      tone: 'destructive',
+    });
+    if (!ok) return;
     try {
       await apiCall('projectGit.discard', { projectId, paths });
       await reload();
+      toast.success('Discarded', {
+        description: paths.length === 1 ? paths[0] : `${paths.length} files reverted`,
+      });
     } catch (err) {
-      window.alert(`Discard failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error('Discard failed', {
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 

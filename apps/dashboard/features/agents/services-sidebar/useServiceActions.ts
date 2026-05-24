@@ -12,6 +12,7 @@
  */
 
 import { useState } from 'react';
+import { prompt } from '../../../components/ui/prompt-dialog.js';
 import { KNOWN_STACKS, type ServiceRow } from './types.js';
 
 export interface UseServiceActionsParams {
@@ -154,10 +155,12 @@ export function useServiceActions({
   async function startOrPromptStack(svc: ServiceRow): Promise<void> {
     if (!svc.is_primary && !svc.stack) {
       const options = KNOWN_STACKS.map((s) => s.value).join(' | ');
-      const picked = window.prompt(
-        `Stack for '${svc.service_id}'?\nOne of: ${options}`,
-        'cf-worker',
-      );
+      const picked = await prompt({
+        title: `Stack for '${svc.service_id}'`,
+        description: `One of: ${options}`,
+        defaultValue: 'cf-worker',
+        confirmLabel: 'Start',
+      });
       if (!picked?.trim()) return;
       await startService(svc.service_id, picked.trim());
       return;
@@ -207,16 +210,17 @@ export function useServiceActions({
   /**
    * Orphaned services lost their row in `company_sandbox_services` so
    * the server has no saved stack to retry with. Pick one from the
-   * known set before firing the POST. Native `window.prompt` is enough
-   * for this rare recovery path; a richer inline dropdown can replace
-   * it once the flow sees real use.
+   * known set before firing the POST. A richer inline dropdown can
+   * replace this once the flow sees real use.
    */
   async function retryOrphanedService(serviceId: string): Promise<void> {
     const options = KNOWN_STACKS.map((s) => s.value).join(' | ');
-    const picked = window.prompt(
-      `Stack for '${serviceId}'?\nOne of: ${options}`,
-      'cf-worker',
-    );
+    const picked = await prompt({
+      title: `Stack for '${serviceId}'`,
+      description: `One of: ${options}`,
+      defaultValue: 'cf-worker',
+      confirmLabel: 'Retry',
+    });
     if (!picked) return;
     const normalized = picked.trim();
     if (!normalized) return;

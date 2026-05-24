@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/button.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
 import { useApi, apiPost, apiDelete } from '../../hooks/useApi.js';
+import { confirm } from '../../components/ui/prompt-dialog.js';
 import { PipelineBuilder } from './pipelines/PipelineBuilder.js';
 import type {
   Pipeline,
@@ -230,7 +231,12 @@ function PipelineRow({
   };
 
   const handleDelete = async () => {
-    if (!window.confirm(t('agents:pipelines.confirmDelete', { name: pipeline.name }))) return;
+    const ok = await confirm({
+      title: t('agents:pipelines.confirmDelete', { name: pipeline.name }),
+      confirmLabel: t('common:delete', { defaultValue: 'Delete' }),
+      tone: 'destructive',
+    });
+    if (!ok) return;
     await apiDelete(`/company/pipelines/${pipeline.id}`);
     onDeleted();
   };
