@@ -1,53 +1,85 @@
 /**
- * Workspace IDE — the new home for `/projects/:id/workspace`. Three
- * resizable columns (FileTreeRail | EditorPane | RightPane) plus a
- * collapsible BottomPanel running the full height of the window.
+ * Workspace IDE — JetBrains-style layout.
  *
- * Layout sizes persist to localStorage (see state/workspace.ts) so the
- * user's chosen widths stick across reloads.
+ *   ┌──────────────────────────────────────────────────────────────────┐
+ *   │  Top bar (breadcrumb + global actions)                            │
+ *   ├─┬──────────────────────────────────┬─┬───────────────────────────┤
+ *   │ │  Left tool panel (optional)       │ │  Right tool panel (opt.)  │
+ *   │L│                                   │R│                           │
+ *   │e│  Editor                           │i│  Editor right-side wells  │
+ *   │f│                                   │g│  (chat, sessions, ...)    │
+ *   │t│                                   │h│                           │
+ *   │ ├───────────────────────────────────┤t│                           │
+ *   │R│  Bottom panel (optional: term…)   │R│                           │
+ *   │a│                                   │a│                           │
+ *   │i│                                   │i│                           │
+ *   │l│                                   │l│                           │
+ *   ├─┴───────────────────────────────────┴─┴───────────────────────────┤
+ *   │  Status bar                                                       │
+ *   └──────────────────────────────────────────────────────────────────┘
  *
- * Day 6 wiring:
- *   - FileTreeRail clicks call apiCall('files.read', …) and push the
- *     file into the Zustand store. EditorPane (placeholder until Day 7)
- *     renders the active file's content read-only.
- *   - RightPane reuses AgentChat unchanged.
- *   - BottomPanel is a skeleton with tabs — content lands in Day 10.
- *
- * The old ProjectDetail view stays at /projects/:id; this Workspace is
- * additive while the IDE matures. Day 16+ swaps the default route.
+ * Activity rails (left & right) toggle tool windows in/out. Clicking the
+ * active icon collapses the panel — matches JetBrains muscle memory.
+ * Sizes + active selections persist to localStorage via the workspace-
+ * layout Zustand store so the user's layout sticks across reloads.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import {
+  Bell,
+  FileCode2,
+  GitBranch,
+  History,
+  MessageSquare,
+  Search,
+} from 'lucide-react';
 import { apiCall } from '../../lib/api-client.js';
-import { useWorkspaceStore, loadWorkspaceLayout, saveWorkspaceLayout } from '../../state/workspace.js';
+import { useWorkspaceStore } from '../../state/workspace.js';
+import {
+  useWorkspaceLayout,
+  type LeftToolId,
+  type RightToolId,
+} from '../../state/workspace-layout.js';
 import { WorkspaceTopBar } from './WorkspaceTopBar.js';
-import { FileTreeRail } from './FileTreeRail.js';
 import { EditorPane } from './EditorPane.js';
-import { RightPane } from './RightPane.js';
 import { BottomPanel } from './BottomPanel.js';
+import { ActivityRail, type RailItem } from './jetbrains/ActivityRail.js';
+import { StatusBar } from './jetbrains/StatusBar.js';
+import { FileTreeWindow } from './jetbrains/tool-windows/FileTreeWindow.js';
+import { SearchWindow } from './jetbrains/tool-windows/SearchWindow.js';
+import { ChatWindow } from './jetbrains/tool-windows/ChatWindow.js';
+import { SessionsWindow } from './jetbrains/tool-windows/SessionsWindow.js';
+import { PlaceholderWindow } from './jetbrains/tool-windows/PlaceholderWindow.js';
 
 interface WorkspaceProps {
   projectId: number;
   projectName: string;
   initialSessionId?: number;
-  /** Called when the user clicks the breadcrumb to leave the workspace. */
   onExit: () => void;
 }
 
-export function Workspace({ projectId, projectName, initialSessionId, onExit }: WorkspaceProps) {
-  const layout = loadWorkspaceLayout();
-  const [bottomPanelOpen, setBottomPanelOpen] = useState(layout.bottomPanelOpen);
+const LEFT_ITEMS: RailItem<LeftToolId>[] = [
+  { id: 'files', label: 'Project files', icon: FileCode2 },
+  { id: 'search', label: 'Search', icon: Search },
+  { id: 'snapshots', label: 'Snapshots', icon: History },
+  { id: 'git', label: 'Git', icon: GitBranch },
+];
 
+const RIGHT_ITEMS: RailItem<RightToolId>[] = [
+  { id: 'chat', label: 'Agent chat', icon: MessageSquare },
+  { id: 'sessions', label: 'Sessions', icon: History },
+  { id: 'inbox', label: 'Inbox', icon: Bell },
+];
+
+export function Workspace({ projectId, projectName, initialSessionId, onExit }: WorkspaceProps) {
+  const layout = useWorkspaceLayout();
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const openFile = useWorkspaceStore((s) => s.openFile);
+  const [activeSessionId, setActiveSessionId] = useState<number | undefined>(initialSessionId);
 
   const handleOpen = useCallback(
     async (path: string) => {
-      // Best-effort: read the file and push it into the store. Errors are
-      // dropped silently here — the editor pane shows "No file open" until
-      // a successful read lands. We'll add an inline error indicator in
-      // Day 7 when the editor is real.
       try {
         const result = await apiCall<{ content: string; encoding: 'utf8' | 'base64' }>('files.read', {
           projectId,
@@ -61,99 +93,214 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
           lastModified: null,
         });
       } catch {
-        /* swallowed; surface error once EditorPane is real */
+        /* surface inline once we ship a toast system */
       }
     },
     [projectId, openFile],
   );
 
-  // Persist horizontal panel sizes when the user drags a handle.
-  const handleHorizontalResize = useCallback(
-    (sizes: number[]) => {
-      const [fileTreeSize, editorSize, rightPaneSize] = sizes;
-      saveWorkspaceLayout({ fileTreeSize, editorSize, rightPaneSize });
-    },
-    [],
-  );
-
-  const toggleBottomPanel = useCallback(() => {
-    setBottomPanelOpen((open) => {
-      const next = !open;
-      saveWorkspaceLayout({ bottomPanelOpen: next });
-      return next;
-    });
-  }, []);
-
-  // Close the panel via the X button — distinct intent from the toggle.
-  const closeBottomPanel = useCallback(() => {
-    setBottomPanelOpen(false);
-    saveWorkspaceLayout({ bottomPanelOpen: false });
-  }, []);
-
-  // Sync the bottom panel state back if a Day-10 keyboard shortcut starts
-  // touching it from outside this component.
-  useEffect(() => {
-    saveWorkspaceLayout({ bottomPanelOpen });
-  }, [bottomPanelOpen]);
-
   return (
-    <div className="flex flex-col h-[100dvh] min-h-0 w-full">
+    <div className="flex flex-col h-[100dvh] min-h-0 w-full bg-background text-foreground">
       <WorkspaceTopBar
         projectId={projectId}
         projectName={projectName}
-        bottomPanelOpen={bottomPanelOpen}
-        onToggleBottomPanel={toggleBottomPanel}
+        bottomPanelOpen={layout.activeBottom !== null}
+        onToggleBottomPanel={() => layout.toggleBottom('terminal')}
         onBackToProject={onExit}
       />
-      <div className="flex-1 min-h-0">
-        <PanelGroup direction="vertical" autoSaveId="mcp-workspace-vertical">
-          <Panel defaultSize={bottomPanelOpen ? 100 - layout.bottomPanelSize : 100} minSize={40}>
-            <PanelGroup
-              direction="horizontal"
-              autoSaveId="mcp-workspace-horizontal"
-              onLayout={handleHorizontalResize}
-            >
-              <Panel defaultSize={layout.fileTreeSize} minSize={10} maxSize={40}>
-                <FileTreeRail
-                  projectId={projectId}
-                  activePath={activeFilePath}
-                  onOpen={handleOpen}
-                />
-              </Panel>
-              <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
-              <Panel defaultSize={layout.editorSize} minSize={30}>
-                <EditorPane />
-              </Panel>
-              <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
-              <Panel defaultSize={layout.rightPaneSize} minSize={20} maxSize={50}>
-                <RightPane
-                  projectId={projectId}
-                  projectName={projectName}
-                  initialSessionId={initialSessionId}
-                />
-              </Panel>
-            </PanelGroup>
-          </Panel>
-          {bottomPanelOpen && (
-            <>
-              <PanelResizeHandle className="h-px bg-border hover:bg-primary/40 transition-colors" />
-              <Panel
-                defaultSize={layout.bottomPanelSize}
-                minSize={15}
-                maxSize={60}
-                onResize={(size) => saveWorkspaceLayout({ bottomPanelSize: size })}
-              >
-                <BottomPanel
-                  projectId={projectId}
-                  isOpen={bottomPanelOpen}
-                  onToggle={toggleBottomPanel}
-                  onClose={closeBottomPanel}
-                />
-              </Panel>
-            </>
-          )}
-        </PanelGroup>
+      <div className="flex flex-1 min-h-0">
+        <ActivityRail
+          side="left"
+          items={LEFT_ITEMS}
+          active={layout.activeLeft}
+          onToggle={layout.toggleLeft}
+        />
+        <div className="flex-1 min-w-0">
+          <PanelGroup direction="horizontal" autoSaveId="mcp-workspace-horizontal-v2">
+            {layout.activeLeft && (
+              <>
+                <Panel
+                  defaultSize={pctOf(layout.leftSize)}
+                  minSize={12}
+                  maxSize={40}
+                  onResize={(size) => layout.setLeftSize(pxOf(size))}
+                >
+                  <LeftToolPanel
+                    activeFilePath={activeFilePath}
+                    onOpen={handleOpen}
+                    onClose={() => layout.setActiveLeft(null)}
+                    projectId={projectId}
+                  />
+                </Panel>
+                <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
+              </>
+            )}
+            <Panel minSize={30}>
+              <PanelGroup direction="vertical" autoSaveId="mcp-workspace-vertical-v2">
+                <Panel minSize={30}>
+                  <EditorPane />
+                </Panel>
+                {layout.activeBottom && (
+                  <>
+                    <PanelResizeHandle className="h-px bg-border hover:bg-primary/40 transition-colors" />
+                    <Panel
+                      defaultSize={pctOf(layout.bottomSize, 'v')}
+                      minSize={12}
+                      maxSize={70}
+                      onResize={(size) => layout.setBottomSize(pxOf(size, 'v'))}
+                    >
+                      <BottomPanel
+                        projectId={projectId}
+                        isOpen={true}
+                        onToggle={() => layout.toggleBottom(layout.activeBottom!)}
+                        onClose={() => layout.setActiveBottom(null)}
+                      />
+                    </Panel>
+                  </>
+                )}
+              </PanelGroup>
+            </Panel>
+            {layout.activeRight && (
+              <>
+                <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
+                <Panel
+                  defaultSize={pctOf(layout.rightSize)}
+                  minSize={16}
+                  maxSize={50}
+                  onResize={(size) => layout.setRightSize(pxOf(size))}
+                >
+                  <RightToolPanel
+                    projectId={projectId}
+                    projectName={projectName}
+                    initialSessionId={activeSessionId}
+                    onSelectSession={(id) => setActiveSessionId(id)}
+                    onClose={() => layout.setActiveRight(null)}
+                  />
+                </Panel>
+              </>
+            )}
+          </PanelGroup>
+        </div>
+        <ActivityRail
+          side="right"
+          items={RIGHT_ITEMS}
+          active={layout.activeRight}
+          onToggle={layout.toggleRight}
+        />
       </div>
+      <StatusBar projectId={projectId} projectName={projectName} />
     </div>
   );
+}
+
+// ─── Tool panel selectors ─────────────────────────────────────
+
+interface LeftToolPanelProps {
+  projectId: number;
+  activeFilePath: string | null;
+  onOpen: (path: string) => void;
+  onClose: () => void;
+}
+
+function LeftToolPanel({ projectId, activeFilePath, onOpen, onClose }: LeftToolPanelProps) {
+  const activeLeft = useWorkspaceLayout((s) => s.activeLeft);
+  if (activeLeft === 'files') {
+    return (
+      <FileTreeWindow
+        projectId={projectId}
+        activePath={activeFilePath}
+        onOpen={onOpen}
+        onClose={onClose}
+      />
+    );
+  }
+  if (activeLeft === 'search') {
+    return <SearchWindow projectId={projectId} onOpen={onOpen} onClose={onClose} />;
+  }
+  if (activeLeft === 'snapshots') {
+    return (
+      <PlaceholderWindow
+        title="Snapshots"
+        hint="Project context notes will land here. Today they live in the analytics view (top-bar shortcut)."
+        onClose={onClose}
+      />
+    );
+  }
+  if (activeLeft === 'git') {
+    return (
+      <PlaceholderWindow
+        title="Git"
+        hint="Status, log, diff, and commit will land here. Use the terminal in the meantime."
+        onClose={onClose}
+      />
+    );
+  }
+  return null;
+}
+
+interface RightToolPanelProps {
+  projectId: number;
+  projectName: string;
+  initialSessionId?: number;
+  onSelectSession: (sessionId: number) => void;
+  onClose: () => void;
+}
+
+function RightToolPanel({
+  projectId,
+  projectName,
+  initialSessionId,
+  onSelectSession,
+  onClose,
+}: RightToolPanelProps) {
+  const activeRight = useWorkspaceLayout((s) => s.activeRight);
+  if (activeRight === 'chat') {
+    return (
+      <ChatWindow
+        projectId={projectId}
+        projectName={projectName}
+        initialSessionId={initialSessionId}
+        onClose={onClose}
+      />
+    );
+  }
+  if (activeRight === 'sessions') {
+    return (
+      <SessionsWindow
+        projectId={projectId}
+        activeSessionId={initialSessionId}
+        onSelectSession={onSelectSession}
+        onClose={onClose}
+      />
+    );
+  }
+  if (activeRight === 'inbox') {
+    return (
+      <PlaceholderWindow
+        title="Inbox"
+        hint="Background agent notifications + interrupt-resume prompts will surface here."
+        onClose={onClose}
+      />
+    );
+  }
+  return null;
+}
+
+// ─── Size conversion helpers ──────────────────────────────────
+//
+// react-resizable-panels works in percent. We persist px so the user's
+// stored width survives window resizes. Conversion uses the window's
+// inner dimension at access time; defaults assume 1400×900.
+
+function pctOf(px: number, axis: 'h' | 'v' = 'h'): number {
+  if (typeof window === 'undefined') return axis === 'h' ? 20 : 25;
+  const dim = axis === 'h' ? window.innerWidth : window.innerHeight;
+  if (!dim) return axis === 'h' ? 20 : 25;
+  return Math.max(8, Math.min(60, (px / dim) * 100));
+}
+
+function pxOf(pct: number, axis: 'h' | 'v' = 'h'): number {
+  if (typeof window === 'undefined') return Math.round((pct / 100) * (axis === 'h' ? 1400 : 900));
+  const dim = axis === 'h' ? window.innerWidth : window.innerHeight;
+  return Math.round((pct / 100) * dim);
 }

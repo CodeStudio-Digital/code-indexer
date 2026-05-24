@@ -39,7 +39,7 @@ import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
 
 interface ActiveView {
-  page: 'home' | 'project' | 'agents' | 'admin' | 'design-systems' | 'telemetry' | 'docs' | 'other';
+  page: 'home' | 'project' | 'project-analytics' | 'agents' | 'admin' | 'design-systems' | 'telemetry' | 'docs' | 'other';
   projectId: number | null;
   sessionId: number | null;
 }
@@ -49,11 +49,17 @@ function parsePathname(pathname: string, search: string): ActiveView {
     return { page: 'home', projectId: null, sessionId: null };
   }
   if (pathname.startsWith('/projects/')) {
-    const id = Number(pathname.split('/')[2]);
+    const parts = pathname.split('/');
+    const id = Number(parts[2]);
+    const subpath = parts[3];
     const params = new URLSearchParams(search);
     const sessionIdRaw = params.get('session');
+    // Only the bare `/projects/:id` (Workspace) gets full-bleed. The
+    // `/analytics` subpath keeps the AppShell chrome so the user can
+    // navigate away — was the dead-end bug the user hit.
+    const page: ActiveView['page'] = subpath === 'analytics' ? 'project-analytics' : 'project';
     return {
-      page: 'project',
+      page,
       projectId: Number.isFinite(id) ? id : null,
       sessionId: sessionIdRaw ? Number(sessionIdRaw) : null,
     };
