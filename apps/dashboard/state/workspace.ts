@@ -59,6 +59,51 @@ interface WorkspaceState {
   markClean: (path: string, lastModified: string) => void;
 }
 
+// ─── Tab persistence per project ──────────────────────────────────
+//
+// Restore the user's open file tabs + active selection when re-opening
+// the same project. Diff tabs are intentionally not persisted — their
+// patch could be stale, and the user can re-click the row in Git to
+// regenerate. Regular file tabs persist with content set back to ''
+// so the editor refetches via apiCall('files.read', …) on activation.
+
+const TABS_STORAGE_PREFIX = 'mcp-ide:workspace-tabs:';
+
+interface PersistedTabs {
+  openFiles: Array<{ projectId: number; path: string }>;
+  activeFilePath: string | null;
+}
+
+export function loadPersistedTabs(projectId: number): PersistedTabs {
+  if (typeof window === 'undefined') return { openFiles: [], activeFilePath: null };
+  try {
+    const raw = window.localStorage.getItem(`${TABS_STORAGE_PREFIX}${projectId}`);
+    if (!raw) return { openFiles: [], activeFilePath: null };
+    const parsed = JSON.parse(raw) as PersistedTabs;
+    return {
+      openFiles: Array.isArray(parsed.openFiles) ? parsed.openFiles : [],
+      activeFilePath: typeof parsed.activeFilePath === 'string' ? parsed.activeFilePath : null,
+    };
+  } catch {
+    return { openFiles: [], activeFilePath: null };
+  }
+}
+
+export function savePersistedTabs(projectId: number, openFiles: OpenTab[], activeFilePath: string | null): void {
+  if (typeof window === 'undefined') return;
+  // Drop diff tabs — they're transient.
+  const realFiles = openFiles.filter((f) => f.kind !== 'diff');
+  const payload: PersistedTabs = {
+    openFiles: realFiles.map((f) => ({ projectId: f.projectId, path: f.path })),
+    activeFilePath,
+  };
+  try {
+    window.localStorage.setItem(`${TABS_STORAGE_PREFIX}${projectId}`, JSON.stringify(payload));
+  } catch {
+    /* localStorage full / disabled — silently drop */
+  }
+}
+
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   openFiles: [],
   activeFilePath: null,

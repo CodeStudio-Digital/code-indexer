@@ -42,7 +42,11 @@ import {
   X,
 } from 'lucide-react';
 import { apiCall } from '../../lib/api-client.js';
-import { useWorkspaceStore } from '../../state/workspace.js';
+import {
+  useWorkspaceStore,
+  loadPersistedTabs,
+  savePersistedTabs,
+} from '../../state/workspace.js';
 import {
   useWorkspaceLayout,
   type LeftToolId,
@@ -113,6 +117,54 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
     },
     [projectId, openFile],
   );
+
+  // Restore the user's previous tab set on first mount of this project.
+  // Skipped when there's nothing persisted to avoid hammering files.read
+  // on a fresh project.
+  useEffect(() => {
+    const persisted = loadPersistedTabs(projectId);
+    if (persisted.openFiles.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const entry of persisted.openFiles) {
+        if (cancelled) return;
+        try {
+          const result = await apiCall<{ content: string; encoding: 'utf8' | 'base64' }>(
+            'files.read',
+            { projectId: entry.projectId, path: entry.path },
+          );
+          if (cancelled) return;
+          openFile({
+            projectId: entry.projectId,
+            path: entry.path,
+            content: result.content,
+            dirty: false,
+            lastModified: null,
+          });
+        } catch {
+          /* file may have been deleted on disk — skip silently */
+        }
+      }
+      if (cancelled) return;
+      if (persisted.activeFilePath) {
+        useWorkspaceStore.getState().setActive(persisted.activeFilePath);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Only re-runs on projectId change. Re-running on `openFile` would
+    // restart the restore loop because openFile mutates the store.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  // Persist tab state on every change so a reload picks up the same set.
+  useEffect(() => {
+    const unsubscribe = useWorkspaceStore.subscribe((state) => {
+      savePersistedTabs(projectId, state.openFiles, state.activeFilePath);
+    });
+    return () => unsubscribe();
+  }, [projectId]);
 
   // Build the command list once per layout-state change. Each command
   // captures the live setter, so toggling a tool window via the palette
