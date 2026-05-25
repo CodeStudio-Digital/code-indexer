@@ -42,6 +42,16 @@ export type CompanyInternalEvent =
       type: 'master.inbox_received';
       messageIds: number[];
       fromRoles: string[];
+    }
+  /**
+   * Emitted by `MasterInboxRouter` after a routeMutex timeout reset.
+   * Tells observers (dashboard, audit log) that the previous in-flight
+   * delivery never settled and we forced the chain to a fresh state.
+   * `reason` carries the diagnostic label for now ('mutex_timeout').
+   */
+  | {
+      type: 'master.inbox_router_recovered';
+      reason: 'mutex_timeout';
     };
 
 export type CompanyInternalEventType = CompanyInternalEvent['type'];

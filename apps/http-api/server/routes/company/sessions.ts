@@ -79,6 +79,66 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     });
   });
 
+  /**
+   * State snapshot — consolidated payload the dashboard fetches BEFORE
+   * deciding whether to /attach. Resolves the "Iniciando Master..."
+   * deadlock: when the orchestrator's master has already terminated,
+   * /attach either 404s (orch evicted) or 200s with no event flow,
+   * leaving the UI's `masterState` null forever.
+   *
+   * This endpoint always returns 200 when the session exists, with:
+   *   - the usual `getCompanySessionFull` payload (session, projects,
+   *     agentRuns, recentBoard, masterPrompts)
+   *   - `liveOrchestrator`: orch still in the registry
+   *   - `masterAlive`:      master has a live runner (not ended)
+   *   - `masterEndedAt`:    ISO timestamp of master end, for the
+   *                         "standby" badge
+   *   - `pendingMasterInboxCount`: drives the "wake master" CTA
+   */
+  app.get('/api/company/sessions/:id/state-snapshot', (c) => {
+    const id = parseIdParam(c);
+    try {
+      companyStore.pruneOrphanCompanySessionProjects(id);
+    } catch {
+      /* same swallow as /sessions/:id */
+    }
+    const full = companyStore.getCompanySessionFull(id);
+    if (!full) return notFound(c);
+
+    const enrichedProjects = full.projects.map((p) => {
+      const proj = db.getProject(p.project_id);
+      return {
+        ...p,
+        project_name: proj?.name ?? `project-${p.project_id}`,
+        root_path: proj?.root_path ?? '',
+      };
+    });
+
+    const orchestrator = orchestratorRegistry.get(id);
+    const liveOrchestrator = !!orchestrator;
+    // `isMasterAlive` is a thin getter on CompanyOrchestrator that
+    // forwards `master.isAlive`. False when the master has either never
+    // started OR finished and is sitting in standby — both cases are
+    // safe to render WITHOUT the loader, which is exactly the bug fix.
+    const masterAlive = orchestrator?.isMasterAlive ?? false;
+    const masterEndedAt = orchestrator?.masterEndedAt ?? null;
+    const pendingMasterInboxCount = companyStore.listInboxMessages({
+      companySessionId: id,
+      toRole: '__master__',
+      status: 'pending',
+      limit: 50,
+    }).length;
+
+    return c.json({
+      ...full,
+      projects: enrichedProjects,
+      liveOrchestrator,
+      masterAlive,
+      masterEndedAt,
+      pendingMasterInboxCount,
+    });
+  });
+
   app.post('/api/company/sessions/:id/duplicate', (c) => {
     const id = parseIdParam(c);
     const source = companyStore.getCompanySession(id);

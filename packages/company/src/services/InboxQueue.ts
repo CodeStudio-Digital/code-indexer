@@ -37,9 +37,18 @@ import type {
   MasterEnqueueResult,
 } from '@mcp/company/services/MasterInboxRouter.js';
 import { MASTER_INBOX_SENTINEL } from '@mcp/company/services/MasterInboxRouter.js';
+import { raceWithTimeout, isMutexTimeout } from '@mcp/company/services/utils/promiseMutex.js';
 import type { AgentInboxMessage, InboxKind, InboxStatus } from '@mcp/company/types.js';
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Ceiling on how long a fresh `drainOnIdle` will wait for its agent's
+ * previous drain to finish. Higher than the master ceiling (30s)
+ * because a real subordinate reactivate can include a worker spawn +
+ * model boot, which is legitimately slower than `master.notify`.
+ */
+const INBOX_DRAIN_MUTEX_TIMEOUT_MS = 60_000;
 
 export interface InboxQueueDeps {
   ctx: SessionContext;
@@ -381,9 +390,28 @@ export class InboxQueue {
     const previous = this.drainMutexes.get(agentRunId) ?? Promise.resolve();
     let release!: () => void;
     const next = new Promise<void>((res) => { release = res; });
-    this.drainMutexes.set(agentRunId, previous.then(() => next));
+    const chained = previous.then(() => next);
+    this.drainMutexes.set(agentRunId, chained);
     try {
-      await previous;
+      // Bound the wait on the previous drain. If a peer's reactivate
+      // hung (rare but possible — runner stuck in a long tool call),
+      // we don't want THIS agent's drain wedged forever. 60s is twice
+      // the master timeout because subordinate reactivate naturally
+      // takes longer (spawn or warm-up of the worker).
+      try {
+        await raceWithTimeout(previous, INBOX_DRAIN_MUTEX_TIMEOUT_MS, `inbox_drain_${agentRunId}`);
+      } catch (e) {
+        if (isMutexTimeout(e)) {
+          console.warn(
+            `[company s=${this.deps.ctx.companySessionId}] inbox drainMutex timed out for agentRunId=${agentRunId} — resetting`,
+          );
+          // Drop the stuck previous from the chain. Subsequent drains
+          // will only await `chained`, not the stuck step.
+          this.drainMutexes.set(agentRunId, next);
+        } else {
+          throw e;
+        }
+      }
       const message = this.deps.ctx.companyStore.claimNextInboxForAgent({
         companySessionId: this.deps.ctx.companySessionId,
         agentRunId,
@@ -410,7 +438,7 @@ export class InboxQueue {
     } finally {
       release();
       // Only forget the chain pointer if no later send() chained on top.
-      if (this.drainMutexes.get(agentRunId) === previous.then(() => next)) {
+      if (this.drainMutexes.get(agentRunId) === chained) {
         this.drainMutexes.delete(agentRunId);
       }
     }

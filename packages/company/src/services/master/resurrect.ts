@@ -27,6 +27,21 @@ import type {
   IBoardPoster,
 } from '@mcp/company/services/ports.js';
 import type { CompanyContext } from '@mcp/company/types.js';
+import { raceWithTimeout, isMutexTimeout } from '@mcp/company/services/utils/promiseMutex.js';
+
+/**
+ * Hard ceiling on a single resurrect cycle. The cycle spans:
+ *   - 1 status flip → 'running'
+ *   - 1 board.post (sync)
+ *   - runCoder() boot — provider connect, registry build, system
+ *     prompt assembly, sandbox check, first turn fire.
+ *
+ * Healthy boots are <5s. 60s is generous; past it we're almost
+ * certainly wedged on the provider side or in a tool init, and the
+ * right call is to fail the resurrect, mark the master ended, and
+ * let the next user turn try fresh.
+ */
+const RESURRECT_TIMEOUT_MS = 60_000;
 
 export interface MasterResurrectStateMutators {
   /** Existing runner handle, or null when never started. */
@@ -131,9 +146,32 @@ export async function resurrectMaster(
     deps.attachCompletion(handle, agentRunId);
   };
 
-  const promise = doResume().finally(() => {
-    deps.state.setResumingPromise(null);
-  });
+  // Wrap doResume() in raceWithTimeout. If the wrapped promise hits
+  // the ceiling, mark the master as ended-with-error so the next
+  // notify() goes through resurrect again with a fresh attempt instead
+  // of trying to pushUserMessage on a half-built runner that never
+  // materialized. The dangling doResume keeps running in the
+  // background (we can't cancel runCoder mid-boot) but the orchestrator
+  // is no longer waiting on its result.
+  const promise = raceWithTimeout(doResume(), RESURRECT_TIMEOUT_MS, 'master_resurrect')
+    .catch((e) => {
+      if (isMutexTimeout(e)) {
+        console.warn(
+          `[company s=${deps.ctx.companySessionId}] master resurrect timed out (${RESURRECT_TIMEOUT_MS}ms) — flagging master as ended`,
+        );
+        deps.state.setEnded(true);
+        deps.state.setEndedWithError('resurrect_timeout');
+        deps.state.setEndedAt(new Date().toISOString());
+        deps.status.setStatus(agentRunId, 'error');
+        // Don't rethrow — caller is fire-and-forget via notify().
+        // Future notify() now sees `_ended=true` and re-enters resurrect.
+        return;
+      }
+      throw e;
+    })
+    .finally(() => {
+      deps.state.setResumingPromise(null);
+    });
   deps.state.setResumingPromise(promise);
   return promise;
 }

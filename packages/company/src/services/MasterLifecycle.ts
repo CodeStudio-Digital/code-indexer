@@ -496,10 +496,16 @@ export class MasterLifecycle implements IMasterNotifier {
       // Apply thinking BEFORE pushing the message so the next turn (which
       // consumes this message) reads the updated flag from `this.opts.thinking`.
       if (options.thinking !== undefined) runner.setThinking(options.thinking);
+      // Enrich with board context so the master gets the same situational
+      // awareness it would get via `notify()`. Without this, a user message
+      // sent while subordinates have been posting updates lands without
+      // any of that context — master then asks redundant questions.
+      // Attachments path skips enrichment (image/file blocks already carry
+      // their own context); only the plain-text turn gets the prefix.
       if (attachments && attachments.length > 0) {
         runner.pushUserContent(attachmentsToBlocks(message, attachments));
       } else {
-        runner.pushUserMessage(message);
+        runner.pushUserMessage(this.enrichWithBoard(message));
       }
       return { ok: true };
     }

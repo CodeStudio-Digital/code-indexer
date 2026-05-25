@@ -20,10 +20,30 @@ export interface AgentStatusPayload {
 export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): StreamState {
   const isMaster = d.role === 'master';
 
-  if (isMaster && prev.masterState) {
+  if (isMaster) {
+    // Previously: only update when masterState existed. That made the
+    // loader stall forever when the master finished before the UI had a
+    // chance to subscribe to the event stream — `applySessionIdle` then
+    // arrived but the `prev.masterState ? {...} : prev.masterState`
+    // guard left the state null. Now we CREATE a minimal masterState
+    // when none exists so subsequent status events can flow through and
+    // CompanySessionView can derive a non-loader phase.
+    if (prev.masterState) {
+      return {
+        ...prev,
+        masterState: { ...prev.masterState, status: d.status, statusMessage: d.message },
+      };
+    }
     return {
       ...prev,
-      masterState: { ...prev.masterState, status: d.status, statusMessage: d.message },
+      masterState: {
+        role: 'master',
+        agentRunId: d.agentRunId,
+        textChunks: [],
+        toolCalls: [],
+        status: d.status,
+        statusMessage: d.message,
+      },
     };
   }
 
@@ -71,16 +91,29 @@ export function clearSessionStalled(prev: StreamState): StreamState {
 
 export function applySessionIdle(prev: StreamState, d: SessionIdlePayload): StreamState {
   const isError = d.reason === 'master_error';
+  const status = isError ? 'error' : 'waiting';
+  const statusMessage =
+    d.errorDetail ?? (isError ? 'Master failed' : 'Waiting for your input');
   return {
     ...prev,
+    // Critical: when session_idle replays from the SSE buffer AFTER a
+    // master that finished before the UI mounted, `prev.masterState`
+    // can be null. Without creating a stub here, the "Iniciando
+    // Master..." loader (conditioned on `!masterState`) would render
+    // forever. The stub carries enough state for the phase indicator
+    // to render the right pill; agentRunId/coderSessionId get filled
+    // in lazily on the next real `agent_status` or via the REST
+    // hydration from /state-snapshot.
     masterState: prev.masterState
-      ? {
-          ...prev.masterState,
-          status: isError ? 'error' : 'waiting',
-          statusMessage:
-            d.errorDetail ?? (isError ? 'Master failed' : 'Waiting for your input'),
-        }
-      : prev.masterState,
+      ? { ...prev.masterState, status, statusMessage }
+      : {
+          role: 'master',
+          agentRunId: 0,
+          textChunks: [],
+          toolCalls: [],
+          status,
+          statusMessage,
+        },
     masterErrorDetail: isError ? (d.errorDetail ?? 'unknown') : null,
     // P15a — these fields drive the "Master finished/ended" banner.
     // The reducer keeps prior values when the event carries no `endedAt`

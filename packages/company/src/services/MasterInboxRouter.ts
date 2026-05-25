@@ -30,6 +30,16 @@ import type { MasterLifecycle } from '@mcp/company/services/MasterLifecycle.js';
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 import type { CompanyEventBus } from '@mcp/company/services/CompanyEventBus.js';
 import type { AgentInboxMessage, InboxKind } from '@mcp/company/types.js';
+import { raceWithTimeout, isMutexTimeout } from '@mcp/company/services/utils/promiseMutex.js';
+
+/**
+ * Hard ceiling on how long `tryDeliverNow` will wait for the previous
+ * delivery in the mutex chain to finish. 30s is generous for a healthy
+ * delivery (claim + master.notify usually completes in <1s); if we
+ * cross it, something is wedged and we'd rather drop the chain than
+ * silently block every future master notification.
+ */
+const ROUTE_MUTEX_TIMEOUT_MS = 30_000;
 
 export interface MasterInboxRouterDeps {
   ctx: SessionContext;
@@ -111,7 +121,33 @@ export class MasterInboxRouter {
     const chained = previous.then(() => next);
     this.routeMutex = chained;
     try {
-      await previous;
+      // Wait for previous deliveries to settle — but only up to 30s.
+      // If the chain wedges (e.g., master.notify never resolves because
+      // resurrect is stuck), we reset the mutex below and proceed with
+      // a fresh claim so the next subordinate doesn't sit forever.
+      try {
+        await raceWithTimeout(previous, ROUTE_MUTEX_TIMEOUT_MS, 'master_inbox_route');
+      } catch (e) {
+        if (isMutexTimeout(e)) {
+          console.warn(
+            `[company s=${this.deps.ctx.companySessionId}] master inbox routeMutex timed out — resetting chain and retrying`,
+          );
+          // Reset chain so future calls don't await the stuck `previous`.
+          // The stuck promise keeps running in the background; we accept
+          // the dangling work to keep the session functional. Publish
+          // for visibility — admin / dashboard can surface the recovery.
+          this.routeMutex = next;
+          if (this.deps.eventBus) {
+            this.deps.eventBus.emit({
+              type: 'master.inbox_router_recovered',
+              reason: 'mutex_timeout',
+            });
+          }
+          // Fall through to claim — we still want to deliver.
+        } else {
+          throw e;
+        }
+      }
       const claimed = this.deps.ctx.companyStore.claimAllPendingMasterMessages(
         this.deps.ctx.companySessionId,
       );

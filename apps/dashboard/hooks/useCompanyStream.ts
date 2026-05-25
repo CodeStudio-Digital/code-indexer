@@ -408,15 +408,38 @@ export function useCompanyStream(companySessionId: number | null) {
 
   const reattach = useCallback(async () => {
     if (companySessionId == null) return;
-    // Optimistic: assume there IS an orchestrator until /attach proves
-    // otherwise. We undo `started` below if the endpoint returns 404
-    // (no active orchestrator) — without that undo the "Iniciando
-    // master" loader sat forever on paused sessions that the user
-    // hadn't yet woken up.
-    streamSetStarted(companySessionId, true);
-    streamSetConnected(companySessionId, true);
+    // First decide whether there's actually an alive master to attach
+    // to. The new /state-snapshot endpoint always returns 200 (when the
+    // session exists) with `liveOrchestrator` + `masterAlive` flags +
+    // the same payload `/sessions/:id` returns. This pre-flight kills
+    // the "Iniciando Master..." deadlock: if the master already ended,
+    // /attach 200 would still hang the UI waiting for events that will
+    // never come, because the SSE replay carries only past `session_idle`
+    // (which used to be a no-op when masterState was null).
     streamSetError(companySessionId, null);
     await loadKanbanFromDB();
+    let snapshot: { liveOrchestrator?: boolean; masterAlive?: boolean } | null = null;
+    try {
+      const r = await fetch(`/api/company/sessions/${companySessionId}/state-snapshot`);
+      if (r.ok) snapshot = (await r.json()) as typeof snapshot;
+    } catch {
+      /* fall through to /attach optimistic path */
+    }
+    // No orchestrator OR master finished: hydrate from DB and stop.
+    // The UI renders the master-idle/standby pill via the phase
+    // indicator selector — never the loader.
+    if (snapshot && (!snapshot.liveOrchestrator || !snapshot.masterAlive)) {
+      streamSetStarted(companySessionId, false);
+      streamSetConnected(companySessionId, false);
+      await loadFinalStateFromDB();
+      return;
+    }
+    // Otherwise master is alive: keep the optimistic loader until the
+    // first agent_status event arrives via SSE. The /attach 404 fallback
+    // below also remains as a belt-and-suspenders for the rare race
+    // where the orchestrator dies between snapshot and attach.
+    streamSetStarted(companySessionId, true);
+    streamSetConnected(companySessionId, true);
     let attached = false;
     try {
       await openStream({
@@ -424,9 +447,6 @@ export function useCompanyStream(companySessionId: number | null) {
         method: 'GET',
         suppressError: (e) => {
           if (e.message === 'HTTP 404') {
-            // No active orchestrator — paused/idle session. Reset the
-            // optimistic flags so the UI shows the regular "send a
-            // message to resume" surface instead of an infinite loader.
             streamSetStarted(companySessionId, false);
             streamSetConnected(companySessionId, false);
             return true;
@@ -436,8 +456,6 @@ export function useCompanyStream(companySessionId: number | null) {
       });
       attached = true;
     } finally {
-      // Only refresh from DB when we actually had a stream — otherwise
-      // we just re-render the same rows we hydrated on mount.
       if (attached) await loadFinalStateFromDB();
     }
   }, [

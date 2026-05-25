@@ -54,6 +54,7 @@ import { PipelineService, type PipelineValidationResult } from '@mcp/company/ser
 import { PipelineExecutor } from '@mcp/company/services/PipelineExecutor.js';
 import { InboxQueue, type SendArgs as InboxSendArgs, type SendResult as InboxSendResult } from '@mcp/company/services/InboxQueue.js';
 import { MasterInboxRouter } from '@mcp/company/services/MasterInboxRouter.js';
+import { RuntimeReconciler } from '@mcp/company/services/RuntimeReconciler.js';
 import { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
 import { CompanyEventBus } from '@mcp/company/services/CompanyEventBus.js';
 import type {
@@ -124,6 +125,21 @@ export class CompanyOrchestrator {
   private readonly idle!: IdleController;
   private readonly subordinates!: SubordinateLifecycle;
   private readonly master!: MasterLifecycle;
+
+  /**
+   * Public alive-check used by the dashboard state-snapshot endpoint
+   * (`GET /api/company/sessions/:id/state-snapshot`). True when the
+   * master has a live `RunCoderHandle` AND hasn't been marked ended.
+   * Mirrors `MasterLifecycle.isAlive` so the orchestrator doesn't have
+   * to leak the whole MasterLifecycle reference through the registry.
+   */
+  get isMasterAlive(): boolean { return this.master?.isAlive ?? false; }
+
+  /** True when MasterLifecycle.start has already produced a runner. */
+  get hasMasterStarted(): boolean { return !!this.master?.handle; }
+
+  /** Forwarded for the same dashboard surface — explains why the loader bails. */
+  get masterEndedAt(): string | null { return this.master?.endedAt ?? null; }
   // Pipelines depend on `subordinates` so they're constructed below.
   private readonly pipelines!: PipelineService;
   private readonly pipelineExecutor!: PipelineExecutor;
@@ -315,6 +331,21 @@ export class CompanyOrchestrator {
         );
       }
     });
+
+    // RuntimeReconciler — periodic DB↔runtime consistency sweep PLUS
+    // master-inbox heartbeat (Item 3 in the company-revamp plan).
+    // Constructed AFTER masterInbox because it depends on it.
+    // Stopped on dispose alongside the watchdog. Lives on `this` so
+    // `abortAll()` can find it.
+    const reconciler = new RuntimeReconciler({
+      ctx: this.ctx,
+      master,
+      subordinates,
+      masterInbox,
+      publisher: this.publisher,
+    });
+    reconciler.start();
+    (this as unknown as { reconciler: RuntimeReconciler }).reconciler = reconciler;
   }
 
   // ─── BC: exposed runtime state ──────────────────────────────────
@@ -852,6 +883,11 @@ export class CompanyOrchestrator {
     this.idle.clear();
     const watchdog = (this as unknown as { watchdog?: IdleWatchdog }).watchdog;
     if (watchdog) watchdog.dispose();
+    // Stop the reconciler timer so an evicted orchestrator doesn't keep
+    // querying the DB. Lookups via `this.reconciler` because we stashed
+    // the instance on `this` for exactly this teardown path.
+    const reconciler = (this as unknown as { reconciler?: RuntimeReconciler }).reconciler;
+    if (reconciler) reconciler.stop();
     this.subordinates.abortAll();
     this.master.abort();
     try {
