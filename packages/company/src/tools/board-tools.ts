@@ -15,7 +15,7 @@ export function buildBoardTools(
 ): CoderTool[] {
   return [
     postToBoard(orchestrator, agentRole, agentRunId),
-    readBoard(orchestrator, agentRole),
+    readBoard(orchestrator, agentRole, agentRunId),
     setAgentStatus(orchestrator, agentRole, agentRunId),
     kanbanReadMyCard(orchestrator, agentRunId),
   ];
@@ -70,6 +70,7 @@ function postToBoard(
 function readBoard(
   orchestrator: CompanyOrchestrator,
   agentRole: string,
+  agentRunId: number | null,
 ): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
@@ -77,27 +78,45 @@ function readBoard(
       since_id: { type: 'number', description: 'Only return entries after this ID (for incremental reads). Start with 0 to read from the beginning.' },
       limit: { type: 'number', description: 'Max entries to return (default: 50)' },
       mentions_me: { type: 'boolean', description: 'If true, only show entries that mention your role' },
+      from_watermark: {
+        type: 'boolean',
+        description: 'If true and since_id is omitted, read from your last persisted watermark. Lets you skip the bookkeeping — only newer entries come back.',
+      },
+      mark_seen: {
+        type: 'boolean',
+        description: 'If true, advance your watermark after this read so the next `from_watermark` call skips entries returned here.',
+      },
     },
   };
 
   return {
     name: 'read_board',
-    description: 'Read messages from the shared company board. Use since_id for incremental reads to avoid re-reading old messages.',
+    description:
+      'Read messages from the shared company board. Use `from_watermark: true` + `mark_seen: true` to do incremental reads without keeping `since_id` in your own context.',
     parameters,
     source: 'native',
     handler: async (args) => {
       const sinceId = args.since_id as number | undefined;
       const limit = args.limit as number | undefined;
       const mentionsMe = args.mentions_me as boolean | undefined;
+      const fromWatermark = args.from_watermark as boolean | undefined;
+      const markSeen = args.mark_seen as boolean | undefined;
 
       const entries = orchestrator.readBoard({
         sinceId,
         limit,
         mentionsRole: mentionsMe ? agentRole : undefined,
+        // Only honour the watermark-based reads when we know the
+        // agent's run id; otherwise fall through to the explicit
+        // sinceId path.
+        fromWatermarkAgentRunId:
+          fromWatermark && agentRunId !== null ? agentRunId : undefined,
+        markSeenForAgentRunId:
+          markSeen && agentRunId !== null ? agentRunId : undefined,
       });
 
       if (entries.length === 0) {
-        return ok(sinceId ? 'No new board entries.' : 'Board is empty.');
+        return ok(sinceId || fromWatermark ? 'No new board entries.' : 'Board is empty.');
       }
 
       const lines = entries.map((e) => {

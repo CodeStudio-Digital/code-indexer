@@ -139,6 +139,43 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     });
   });
 
+  /**
+   * Wake the master — dashboard "Acordar Master" button. Pokes the
+   * master inbox router so any pending messages get delivered with a
+   * fresh resurrect attempt. Used when the operator sees the
+   * "idle_pending" phase and wants to nudge progress without typing
+   * a new message.
+   *
+   * Returns `{ revived, reason? }`:
+   *   - `revived: true`   — pool was alive, tryDeliverNow fired.
+   *   - `revived: false, reason: 'no_pending_inbox'` — nothing to
+   *     deliver; the master just hasn't been re-pinged.
+   *   - `revived: false, reason: 'orchestrator_idle'` — no live
+   *     orchestrator for this session; the dashboard should fall
+   *     through to /resume with a regular user message instead.
+   */
+  app.post('/api/company/sessions/:id/wake-master', async (c) => {
+    const id = parseIdParam(c);
+    if (!companyStore.getCompanySession(id)) return notFound(c);
+    const orchestrator = orchestratorRegistry.get(id);
+    if (!orchestrator) {
+      return c.json({ revived: false, reason: 'orchestrator_idle' });
+    }
+    const pending = companyStore.listInboxMessages({
+      companySessionId: id,
+      toRole: '__master__',
+      status: 'pending',
+      limit: 1,
+    });
+    if (pending.length === 0) {
+      return c.json({ revived: false, reason: 'no_pending_inbox' });
+    }
+    // Forward to the in-process inbox router. The router is idempotent
+    // + uses an atomic claim, so spamming this endpoint is safe.
+    await orchestrator.tryDeliverMasterInboxNow();
+    return c.json({ revived: true });
+  });
+
   app.post('/api/company/sessions/:id/duplicate', (c) => {
     const id = parseIdParam(c);
     const source = companyStore.getCompanySession(id);

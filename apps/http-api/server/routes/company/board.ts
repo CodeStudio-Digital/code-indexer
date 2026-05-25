@@ -14,4 +14,16 @@ export function mountCompanyBoardRoutes(app: Hono, deps: ServerDeps): void {
     const entries = companyStore.readBoard(id, { sinceId, limit, kind });
     return c.json(entries);
   });
+
+  /**
+   * Per-agent unread board counts. The dashboard agent panel uses this
+   * to render a "X unread" badge next to each agent so the operator can
+   * spot when a subordinate has board context it hasn't acknowledged
+   * yet. Backed by migration 106 `agent_board_watermarks` — agents that
+   * never watermarked yet show the FULL post count.
+   */
+  app.get('/api/company/sessions/:id/board/unread', (c) => {
+    const id = parseIdParam(c);
+    return c.json({ counts: companyStore.listUnreadBoardCounts(id) });
+  });
 }

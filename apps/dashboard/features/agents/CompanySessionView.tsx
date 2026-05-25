@@ -18,6 +18,7 @@ import type { RoleConfig, SkillDef } from './RoleEditModal.js';
 import { ConnectionPhaseStrip } from './ConnectionPhaseStrip.js';
 import { MasterStatusBanner } from './MasterStatusBanner.js';
 import { SessionStalledBanner } from './SessionStalledBanner.js';
+import { MasterPhaseIndicator } from './session-view/MasterPhaseIndicator.js';
 import { ZoneLayout } from './zones/ZoneLayout.js';
 import { DEFAULT_TAB_FOR_ZONE, type Zone } from './zones/types.js';
 import { buildAgentsUrl, parseAgentsParams } from './routing.js';
@@ -310,12 +311,15 @@ export function CompanySessionView({
             }
           />
 
-          {stream.started && !stream.masterState && !stream.error && (
-            <div className="flex items-center justify-center py-8">
-              <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
-              <span className="ml-2 text-sm text-muted-foreground">{t('company.startingMaster')}</span>
-            </div>
-          )}
+          <MasterPhaseIndicator
+            started={stream.started}
+            masterState={stream.masterState}
+            error={stream.error}
+            masterAlive={stream.masterAlive}
+            pendingMasterInboxCount={stream.pendingMasterInboxCount}
+            onWakeMaster={() => void stream.wakeMaster()}
+            t={t}
+          />
 
           {/* Front tabs — visible across every zone so the user always
               has a way to switch between Main and child fronts. */}

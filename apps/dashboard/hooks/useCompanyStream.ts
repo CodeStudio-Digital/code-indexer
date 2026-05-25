@@ -11,7 +11,7 @@
  * per session managed by `state/company/sseConnection.ts`) and replace
  * the `kanban_*` REST refetch fallbacks with pure SSE invalidation.
  */
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
 import type { SSEEvent } from '@mcp/shared/sse/SSEFramer.js';
 import type { MasterPrompt } from '@mcp/company-contracts';
@@ -35,6 +35,16 @@ export type { AgentStreamState, BoardMessage, FallbackNotice } from '../state/co
 export function useCompanyStream(companySessionId: number | null) {
   // ─── Selectors ───────────────────────────────────────────────
   const stream = useCompanyStore((s) => selectStream(s, companySessionId));
+
+  // Snapshot of liveness + pending master inbox count. Refreshed on
+  // every `reattach()` call from /state-snapshot. The dashboard's
+  // phase indicator + "Acordar Master" button read from here so the
+  // UI can tell apart "starting" vs "standby" vs "pending — wake me".
+  const [masterLiveness, setMasterLiveness] = useState<{
+    masterAlive: boolean;
+    pendingMasterInboxCount: number;
+    liveOrchestrator: boolean;
+  }>({ masterAlive: true, pendingMasterInboxCount: 0, liveOrchestrator: true });
 
   // ─── Action dispatchers (stable refs from zustand) ───────────
   const streamReset = useCompanyStore((s) => s.streamReset);
@@ -418,12 +428,25 @@ export function useCompanyStream(companySessionId: number | null) {
     // (which used to be a no-op when masterState was null).
     streamSetError(companySessionId, null);
     await loadKanbanFromDB();
-    let snapshot: { liveOrchestrator?: boolean; masterAlive?: boolean } | null = null;
+    let snapshot: {
+      liveOrchestrator?: boolean;
+      masterAlive?: boolean;
+      pendingMasterInboxCount?: number;
+    } | null = null;
     try {
       const r = await fetch(`/api/company/sessions/${companySessionId}/state-snapshot`);
       if (r.ok) snapshot = (await r.json()) as typeof snapshot;
     } catch {
       /* fall through to /attach optimistic path */
+    }
+    // Latch the liveness flags so the UI can read them while deciding
+    // whether to show a spinner, the standby badge, or the wake CTA.
+    if (snapshot) {
+      setMasterLiveness({
+        masterAlive: !!snapshot.masterAlive,
+        liveOrchestrator: !!snapshot.liveOrchestrator,
+        pendingMasterInboxCount: snapshot.pendingMasterInboxCount ?? 0,
+      });
     }
     // No orchestrator OR master finished: hydrate from DB and stop.
     // The UI renders the master-idle/standby pill via the phase
@@ -597,6 +620,38 @@ export function useCompanyStream(companySessionId: number | null) {
     streamReset(companySessionId);
   }, [companySessionId, streamReset]);
 
+  /**
+   * Manual "Acordar Master" trigger. POSTs the wake-master endpoint
+   * which forwards to the inbox router's idempotent delivery path.
+   * Updates local liveness on success so the badge/button flips
+   * immediately without waiting for the next reattach.
+   */
+  const wakeMaster = useCallback(async (): Promise<
+    { revived: boolean; reason?: string } | null
+  > => {
+    if (companySessionId == null) return null;
+    try {
+      const r = await fetch(`/api/company/sessions/${companySessionId}/wake-master`, {
+        method: 'POST',
+      });
+      if (!r.ok) return null;
+      const body = (await r.json()) as { revived: boolean; reason?: string };
+      if (body.revived) {
+        // Optimistically clear pending so the badge disappears while
+        // the master spins up. The next reattach / SSE update will
+        // reconcile if delivery surfaced more messages mid-flight.
+        setMasterLiveness((prev) => ({
+          ...prev,
+          masterAlive: true,
+          pendingMasterInboxCount: 0,
+        }));
+      }
+      return body;
+    } catch {
+      return null;
+    }
+  }, [companySessionId]);
+
   return {
     connected: stream.connected,
     started: stream.started,
@@ -612,6 +667,13 @@ export function useCompanyStream(companySessionId: number | null) {
     masterEndedUnexpected: stream.masterEndedUnexpected,
     sessionStalledSinceMs: stream.sessionStalledSinceMs,
     connectionPhase: stream.connectionPhase,
+    // Item 8: phase-indicator-friendly liveness flags. Fetched on
+    // reattach + updated optimistically by `wakeMaster`. Default values
+    // (`alive=true`, `pending=0`) keep first render quiet — the
+    // snapshot fetch flips them when relevant.
+    masterAlive: masterLiveness.masterAlive,
+    pendingMasterInboxCount: masterLiveness.pendingMasterInboxCount,
+    liveOrchestrator: masterLiveness.liveOrchestrator,
     start,
     resume,
     reattach,
@@ -622,6 +684,7 @@ export function useCompanyStream(companySessionId: number | null) {
     respondToMasterPlan,
     respondToMasterQuestion,
     hydrateMasterPrompts,
+    wakeMaster,
   };
 }
 

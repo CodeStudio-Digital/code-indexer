@@ -140,6 +140,18 @@ export class CompanyOrchestrator {
 
   /** Forwarded for the same dashboard surface — explains why the loader bails. */
   get masterEndedAt(): string | null { return this.master?.endedAt ?? null; }
+
+  /**
+   * Dashboard "Acordar Master" entry point. Forwards to the inbox
+   * router's idempotent delivery path. Returns the same promise so
+   * callers can await delivery completion if they want to (the HTTP
+   * route does, so the response only fires after the delivery
+   * attempt — gives the operator a meaningful loading state).
+   */
+  async tryDeliverMasterInboxNow(): Promise<void> {
+    if (!this.masterInbox) return;
+    await this.masterInbox.tryDeliverNow();
+  }
   // Pipelines depend on `subordinates` so they're constructed below.
   private readonly pipelines!: PipelineService;
   private readonly pipelineExecutor!: PipelineExecutor;
@@ -684,8 +696,48 @@ export class CompanyOrchestrator {
     this.board.post(authorRole, agentRunId, kind, content, mentions);
   }
 
-  readBoard(opts?: { sinceId?: number; limit?: number; mentionsRole?: string }): BoardEntry[] {
-    return this.board.read(opts);
+  readBoard(opts?: {
+    sinceId?: number;
+    limit?: number;
+    mentionsRole?: string;
+    /**
+     * When provided WITHOUT `sinceId`, the orchestrator looks up the
+     * agent's persisted watermark and uses it as the lower bound.
+     * Lets subordinates do `read_board({from_watermark: true})` without
+     * remembering offsets across turns.
+     */
+    fromWatermarkAgentRunId?: number;
+    /**
+     * After reading, advance the agent's watermark to the MAX board id
+     * returned. Opt-in — non-mutating reads (e.g., the master's enrich
+     * path) leave this off so the watermark only moves when the agent
+     * acknowledges consumption.
+     */
+    markSeenForAgentRunId?: number;
+  }): BoardEntry[] {
+    let sinceId = opts?.sinceId;
+    if (sinceId === undefined && opts?.fromWatermarkAgentRunId !== undefined) {
+      sinceId = this.ctx.companyStore.getAgentBoardWatermark(
+        this.companySessionId,
+        opts.fromWatermarkAgentRunId,
+      );
+    }
+    const entries = this.board.read({
+      sinceId,
+      limit: opts?.limit,
+      mentionsRole: opts?.mentionsRole,
+    });
+    if (opts?.markSeenForAgentRunId !== undefined && entries.length > 0) {
+      const maxId = entries.reduce((m, e) => (e.id > m ? e.id : m), 0);
+      if (maxId > 0) {
+        this.ctx.companyStore.setAgentBoardWatermark(
+          this.companySessionId,
+          opts.markSeenForAgentRunId,
+          maxId,
+        );
+      }
+    }
+    return entries;
   }
 
   // ─── Kanban ─────────────────────────────────────────────────────

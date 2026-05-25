@@ -1639,6 +1639,85 @@ export class CompanyStore {
     if (r.changes === 0) return null;
     return this.getInboxMessage(id);
   }
+
+  // ─── Board watermarks (migration 106) ───────────────────────────
+  // Per-agent "last read board ID" markers so subordinate agents can
+  // do incremental reads of the company board without keeping
+  // `since_id` in their own token-eating context. Used by
+  // `read_board({mark_seen: true, from_watermark: true})`.
+
+  /**
+   * Persist the latest board ID `agentRunId` has consumed. Idempotent
+   * UPSERT; the conflict clause keeps the higher of the two values so
+   * concurrent calls can't accidentally roll the watermark backwards.
+   */
+  setAgentBoardWatermark(
+    companySessionId: number,
+    agentRunId: number,
+    lastSeenBoardId: number,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO agent_board_watermarks (company_session_id, agent_run_id, last_seen_board_id, updated_at)
+         VALUES (?, ?, ?, datetime('now'))
+         ON CONFLICT(company_session_id, agent_run_id) DO UPDATE SET
+           last_seen_board_id = MAX(last_seen_board_id, excluded.last_seen_board_id),
+           updated_at = excluded.updated_at`,
+      )
+      .run(companySessionId, agentRunId, lastSeenBoardId);
+  }
+
+  /**
+   * Get the watermark for an agent. Returns 0 when no row exists so
+   * `> watermark` queries naturally read from the beginning.
+   */
+  getAgentBoardWatermark(companySessionId: number, agentRunId: number): number {
+    const row = this.db
+      .prepare<[number, number], { last_seen_board_id: number }>(
+        `SELECT last_seen_board_id FROM agent_board_watermarks
+         WHERE company_session_id = ? AND agent_run_id = ?`,
+      )
+      .get(companySessionId, agentRunId);
+    return row?.last_seen_board_id ?? 0;
+  }
+
+  /**
+   * Per-agent unread counts for this session. Drives the dashboard
+   * `/board/unread` endpoint + the optional "X unread" badge per agent
+   * in the company panel.
+   *
+   * We left-join `agent_board_watermarks` so agents that never
+   * watermarked yet show the FULL count (their watermark is treated as
+   * 0). Excludes the agent's own posts via `author_run_id != run_id`
+   * so the master doesn't count its own messages as "unread".
+   */
+  listUnreadBoardCounts(
+    companySessionId: number,
+  ): Array<{ agentRunId: number; role: string; unreadCount: number }> {
+    const rows = this.db
+      .prepare<[number], { agent_run_id: number; role: string; unread_count: number }>(
+        `SELECT
+           r.id  AS agent_run_id,
+           r.role,
+           COUNT(b.id) AS unread_count
+         FROM company_agent_runs r
+         LEFT JOIN agent_board_watermarks w
+           ON w.company_session_id = r.company_session_id
+          AND w.agent_run_id = r.id
+         LEFT JOIN company_board b
+           ON b.company_session_id = r.company_session_id
+          AND b.id > COALESCE(w.last_seen_board_id, 0)
+          AND (b.agent_run_id IS NULL OR b.agent_run_id != r.id)
+         WHERE r.company_session_id = ?
+         GROUP BY r.id, r.role`,
+      )
+      .all(companySessionId);
+    return rows.map((r) => ({
+      agentRunId: r.agent_run_id,
+      role: r.role,
+      unreadCount: r.unread_count ?? 0,
+    }));
+  }
 }
 
 interface PipelineRow {
