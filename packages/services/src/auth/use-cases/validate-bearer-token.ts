@@ -68,6 +68,7 @@ export class ValidateBearerToken {
       expiresAt: token.expiresAt,
       requestId: input.requestId,
       requestHeaders: input.requestHeaders,
+      tier: token.tier,
     });
   }
 }

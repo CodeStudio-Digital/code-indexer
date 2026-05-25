@@ -61,7 +61,9 @@ import { makeQualityAlertObserver } from './server/quality-observer.js';
 import { createMcpHttpApp } from '../mcp-server/http/mcp-http-transport.js';
 import { composeAuth } from './auth/composition.js';
 import { bearerMiddleware, getAuthCtx } from './auth/bearer-middleware.js';
+import { localhostOnlyMiddleware } from './server/middleware/localhost-only.js';
 import { createApiTokensRouter } from './admin/api-tokens.routes.js';
+import { createMcpHttpStatusRouter } from './admin/mcp-http-status.routes.js';
 import { createOAuthClientsRouter } from './admin/oauth-clients.routes.js';
 import { createAuditLogRouter } from './admin/audit-log.routes.js';
 import { createWellKnownRouter } from './oauth/well-known.routes.js';
@@ -471,6 +473,7 @@ export function createApp() {
   const auth = composeAuth(deps.config);
 
   app.route('/api/admin', createApiTokensRouter(auth));
+  app.route('/api/admin', createMcpHttpStatusRouter(deps.config));
   app.route('/api/admin', createOAuthClientsRouter(auth));
   app.route('/api/admin', createAuditLogRouter(deps.config));
 
@@ -500,8 +503,19 @@ export function createApp() {
         })
       : undefined;
 
+    // Stack the localhost guard first, then auth. The guard refuses
+    // off-loopback peers BEFORE we hash + look up a token, so a leaked
+    // token outside the box still can't reach the tool catalogue.
+    // (Operator can opt-in to LAN access via the admin section later.)
+    const composed: import('hono').MiddlewareHandler = middleware
+      ? async (c, next) =>
+          localhostOnlyMiddleware()(c, async () => {
+            await middleware(c, next);
+          })
+      : localhostOnlyMiddleware();
+
     const mcpApp = createMcpHttpApp(deps.config, {
-      beforeTransport: middleware,
+      beforeTransport: composed,
       resolveAuthContext: getAuthCtx,
       enforceScope: authEnabled ? auth.enforceScope : undefined,
       audit: auth.audit,

@@ -1,3 +1,10 @@
+/**
+ * MCP tier — mirrors the agent's static tool tiers
+ * (bootstrap < navigate < admin). When set on a token, the MCP HTTP
+ * endpoint filters/gates tools by tier (read more in migration 104).
+ */
+export type McpTier = 'bootstrap' | 'navigate' | 'admin';
+
 export interface ApiTokenRow {
   id: string;
   name: string;
@@ -6,6 +13,29 @@ export interface ApiTokenRow {
   created_at: number;
   last_used_at: number | null;
   revoked_at: number | null;
+  tier: McpTier | null;
+}
+
+export interface McpHttpToolRow {
+  name: string;
+  tier: string;
+  description: string;
+}
+
+export interface McpHttpStatus {
+  enabled: boolean;
+  authEnabled: boolean;
+  stateful: boolean;
+  endpoint: string;
+  port: number;
+  path: string;
+  tools: McpHttpToolRow[];
+  counts: {
+    total: number;
+    bootstrap: number;
+    navigate: number;
+    admin: number;
+  };
 }
 
 export interface OAuthClientRow {
@@ -39,14 +69,21 @@ export async function createApiToken(input: {
   name: string;
   scopes?: string[];
   expiresInDays?: number;
-}): Promise<{ id: string; rawToken: string }> {
+  tier?: McpTier | null;
+}): Promise<{ id: string; rawToken: string; tier: McpTier | null }> {
   const r = await fetch('/api/admin/api-tokens', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
   if (!r.ok) throw new Error((await r.json().catch(() => ({ error: 'unknown' }))).error);
-  return (await r.json()) as { id: string; rawToken: string };
+  return (await r.json()) as { id: string; rawToken: string; tier: McpTier | null };
+}
+
+export async function fetchMcpHttpStatus(): Promise<McpHttpStatus> {
+  const r = await fetch('/api/admin/mcp-http/status');
+  if (!r.ok) throw new Error(`mcp-http/status failed: ${r.status}`);
+  return (await r.json()) as McpHttpStatus;
 }
 
 export async function revokeApiToken(id: string): Promise<void> {

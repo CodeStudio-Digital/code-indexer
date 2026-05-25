@@ -22,10 +22,12 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { AuthContext } from '@mcp/services/auth/domain/auth-context.js';
+import type { McpTier } from '@mcp/services/auth/domain/api-token.js';
 import type { EnforceScope } from '@mcp/services/auth/use-cases/enforce-scope.js';
 import type { RecordAudit } from '@mcp/services/auth/use-cases/record-audit.js';
 import { PACKAGE_NAME, VERSION } from '@mcp/shared/version.js';
 import type { IndexerConfig } from '@mcp/shared/utils/config.js';
+import { getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { buildContext, type ToolContext } from '../context.js';
 import { allTools, buildToolRegistry } from '../tools/index.js';
 import {
@@ -38,6 +40,56 @@ import { coerceArgs } from '../utils.js';
 import { SessionManager } from './session-manager.js';
 
 const DEFAULT_TOOL_SCOPE = 'mcp:write';
+
+/**
+ * Numeric rank for tier comparison. A token at tier N can see tools at
+ * any tier ≤ N. Order mirrors the agent's expand_toolset promotion
+ * sequence: bootstrap is the minimal read/search set, navigate adds
+ * write/git read, admin adds mutations.
+ *
+ * Unknown tool tiers (from the catch-all fallback in `getToolTier`)
+ * default to bootstrap, which is the most permissive — same policy as
+ * the agent uses for its own catalog.
+ */
+const TIER_RANK: Record<string, number> = {
+  bootstrap: 0,
+  navigate: 1,
+  admin: 2,
+};
+
+function tierRank(tier: string): number {
+  return TIER_RANK[tier] ?? 0;
+}
+
+/**
+ * The tier registry in `@mcp/code-agent/tools/tiers.ts` keys MCP tools
+ * with the `mcp__` prefix the agent uses internally (e.g.
+ * `mcp__find_references`). Our HTTP server's catalogue strips that
+ * prefix for cleaner external tool names (`find_references`). Probe the
+ * prefixed name first so navigate/admin tools land in the right tier;
+ * fall back to the bare name so legitimately-prefixed natives (none
+ * today, but future-proof) still resolve.
+ */
+function resolveTierForTool(toolName: string): string {
+  const prefixedTier = getToolTier(`mcp__${toolName}`);
+  if (prefixedTier !== 'bootstrap') return prefixedTier;
+  // Bare-name lookup catches tools the agent registers without the
+  // `mcp__` prefix (e.g. `rag_search_docs`). Anything still unknown
+  // falls into bootstrap, matching the agent's permissive default for
+  // newly added tools.
+  return getToolTier(toolName);
+}
+
+/**
+ * Returns true when `toolName` is at or below the caller's tier. When
+ * the caller has no tier (legacy scope-only tokens, or unauthenticated
+ * requests in dev), tier filtering is skipped — scope enforcement still
+ * applies further down.
+ */
+function isToolAllowedForTier(toolName: string, callerTier: McpTier | null | undefined): boolean {
+  if (!callerTier) return true; // no tier binding → no tier filter
+  return tierRank(resolveTierForTool(toolName)) <= tierRank(callerTier);
+}
 
 export interface McpHttpDeps {
   /** Resolves a request-bound AuthContext from Hono's variable bag. */
@@ -156,11 +208,21 @@ function buildServer(
     { capabilities: { tools: {}, resources: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: allTools.map(({ name, description, inputSchema }) => ({
-      name, description, inputSchema,
-    })),
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const authCtx = currentAuthCtx();
+    const callerTier = authCtx?.tier ?? null;
+    // Tier filtering happens here (not in CallTool) so the listing the
+    // client sees matches what it can actually invoke — prevents the
+    // "tool advertised but rejected" UX problem in MCP clients.
+    const visible = callerTier
+      ? allTools.filter((t) => isToolAllowedForTier(t.name, callerTier))
+      : allTools;
+    return {
+      tools: visible.map(({ name, description, inputSchema }) => ({
+        name, description, inputSchema,
+      })),
+    };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: rawArgs } = request.params;
@@ -169,6 +231,31 @@ function buildServer(
       return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
     }
     const authCtx = currentAuthCtx();
+
+    // Tier gate runs BEFORE scope enforcement so the audit log carries
+    // a tier-specific reason ("Tool 'x' requires tier 'navigate', token
+    // has 'bootstrap'") rather than a generic scope_denied.
+    const callerTier = authCtx?.tier ?? null;
+    if (callerTier && !isToolAllowedForTier(name, callerTier)) {
+      const required = resolveTierForTool(name);
+      deps.audit?.execute({
+        principal: authCtx?.principal ?? null,
+        tokenType: authCtx?.tokenType ?? null,
+        event: 'scope_denied',
+        status: 403,
+        toolName: name,
+        meta: { tierRequired: required, tierGranted: callerTier },
+      });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Tool '${name}' requires tier '${required}', token has '${callerTier}'. Issue a higher-tier token or expand the tier in admin.`,
+          },
+        ],
+        isError: true,
+      };
+    }
 
     // Scope enforcement — only applies when auth is enabled (authCtx defined)
     // AND the deployment wired an EnforceScope use-case. Fail-safe default

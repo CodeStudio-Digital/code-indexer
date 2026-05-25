@@ -39,8 +39,8 @@ export class SqliteApiTokenRepo implements ApiTokenReaderRepo, ApiTokenAdminRepo
   insert(token: ApiToken): void {
     this.db
       .prepare(
-        `INSERT INTO api_tokens (id, token_hash, name, scopes, expires_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO api_tokens (id, token_hash, name, scopes, expires_at, created_at, tier)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         token.id,
@@ -49,6 +49,7 @@ export class SqliteApiTokenRepo implements ApiTokenReaderRepo, ApiTokenAdminRepo
         token.scopes.toJson(),
         token.expiresAt,
         new Date(token.createdAt).toISOString(),
+        token.tier,
       );
   }
 

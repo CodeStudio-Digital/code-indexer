@@ -1,4 +1,4 @@
-import { ApiToken } from '../domain/api-token.js';
+import { ApiToken, type McpTier } from '../domain/api-token.js';
 import { ScopeSet } from '../domain/scope.js';
 import type { ApiTokenAdminRepo } from '../ports/api-token-repository.js';
 import type { Clock } from '../ports/clock.js';
@@ -9,6 +9,13 @@ export interface IssueInput {
   name: string;
   scopes: readonly string[];
   expiresInDays?: number;
+  /**
+   * Optional tier binding. When set, the MCP HTTP transport filters the
+   * tool catalog (tools/list) and gates execution (tools/call) so this
+   * token only sees / runs tools at this tier or below. Omit to fall
+   * back to plain scope-based RBAC.
+   */
+  tier?: McpTier | null;
 }
 
 export interface IssueOutput {
@@ -44,6 +51,7 @@ export class IssueApiToken {
       scopes: ScopeSet.of(input.scopes),
       expiresAt,
       now,
+      tier: input.tier ?? null,
     });
 
     this.repo.insert(token);
