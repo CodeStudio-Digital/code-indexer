@@ -7,6 +7,7 @@ import {
   RefreshCw,
   RotateCcw,
   StopCircle,
+  TerminalSquare,
   Users,
 } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
@@ -34,6 +35,13 @@ interface SessionHeaderProps {
   sessionsListOpen?: boolean;
   onToggleSessionsList?: () => void;
   /**
+   * Bottom-terminal toggle — opens/closes the resizable terminal panel
+   * mounted below the zone content. Mirrors Workspace's
+   * `bottomPanelOpen` knob.
+   */
+  terminalOpen?: boolean;
+  onToggleTerminal?: () => void;
+  /**
    * P15c — ISO timestamp set by the boot-time recovery sweep when the
    * server restart caught this session in `running` status. Renders a
    * "Recovered" pill so the user understands why the session is paused.
@@ -58,6 +66,8 @@ export function SessionHeader({
   stream,
   siblings,
   sessionsListOpen,
+  terminalOpen,
+  onToggleTerminal,
   onToggleSessionsList,
   recoveredAt,
   recoveredReason,
@@ -144,6 +154,25 @@ export function SessionHeader({
           className="h-7 px-2 text-muted-foreground"
         >
           <RefreshCw className="h-3.5 w-3.5 mr-1" /> {t('company.reconnect')}
+        </Button>
+      )}
+      {/* Terminal toggle — opens/closes the resizable bottom panel. */}
+      {onToggleTerminal && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggleTerminal}
+          className={cn(
+            'h-7 px-2',
+            terminalOpen ? 'text-foreground bg-muted' : 'text-muted-foreground',
+          )}
+          title={
+            terminalOpen
+              ? 'Fechar terminal embutido (Ctrl+J)'
+              : 'Abrir terminal embutido (Ctrl+J)'
+          }
+        >
+          <TerminalSquare className="h-3.5 w-3.5 mr-1" /> Terminal
         </Button>
       )}
       {/* Reset: archives the current conversation state and flips the session

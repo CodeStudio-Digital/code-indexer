@@ -1,4 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { CompanyTerminalPanel } from './terminal/CompanyTerminalPanel.js';
+import { useSandboxStatus } from '../builder/useSandboxStatus.js';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AlertCircle, RefreshCw } from 'lucide-react';
@@ -127,6 +130,34 @@ export function CompanySessionView({
   // visit shows roles + projects + agents in context — same affordance
   // the old left-rail AgentsSidebar gave for free, now on the right.
   const [sidePanel, setSidePanel] = useState<SidePanel | null>('company-config');
+  // Bottom terminal panel — workspace-style, resizable via
+  // `react-resizable-panels` (which persists the size on its own via
+  // `autoSaveId`). The boolean below is the open/closed flag; we
+  // persist it manually so the panel state survives reloads. Default
+  // closed — first visit gets a clean board; the operator opens it
+  // via the toggle in `SessionHeader` (Ctrl+J shortcut TODO).
+  const TERMINAL_OPEN_KEY = `mcp-ide:agents.terminalOpen.${sessionId}`;
+  const [terminalOpen, setTerminalOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(TERMINAL_OPEN_KEY) === '1';
+  });
+  // Sandbox status — drives the "Sandbox" target option in the
+  // terminal spawn menu. Hook is cached per sessionId so cost is
+  // amortised even when the terminal stays closed.
+  const sandboxStatus = useSandboxStatus(sessionId);
+  const hasSandboxForTerminal = !!sandboxStatus.data?.containerId;
+
+  const toggleTerminal = useCallback(() => {
+    setTerminalOpen((v) => {
+      const next = !v;
+      try {
+        window.localStorage.setItem(TERMINAL_OPEN_KEY, next ? '1' : '0');
+      } catch {
+        /* localStorage disabled — silent */
+      }
+      return next;
+    });
+  }, [TERMINAL_OPEN_KEY]);
   // Drag-resizable width for whichever right panel is mounted. Width
   // is persisted globally — switching between Preview and Inbox keeps
   // the user's chosen size.
@@ -148,6 +179,20 @@ export function CompanySessionView({
   const { data: allProjects } = useApi<AvailableProject[]>('/projects');
   const { data: skillsList } = useApi<{ skills: SkillDef[] }>('/admin/skills');
   const { providerOptions, getModelsForProvider, getDefaultModel } = useProviders();
+
+  // Ctrl+J toggles the bottom terminal — same shortcut as the
+  // Workspace. We listen at the window level so the binding works
+  // regardless of which tab inside ZoneLayout has focus.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'j') {
+        e.preventDefault();
+        toggleTerminal();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleTerminal]);
 
   // Reset stream state when the active sub-session changes (tab switch
   // or explicit session change). Each sub-session has its own metaBus
@@ -257,6 +302,8 @@ export function CompanySessionView({
         siblings={siblings}
         sessionsListOpen={sessionsListOpen}
         onToggleSessionsList={onToggleSessionsList}
+        terminalOpen={terminalOpen}
+        onToggleTerminal={toggleTerminal}
         recoveredAt={sessionData?.session.recovered_at ?? null}
         recoveredReason={sessionData?.session.recovered_reason ?? null}
         onResetClick={() => setResetDialogOpen(true)}
@@ -302,18 +349,41 @@ export function CompanySessionView({
             />
           )}
 
-          {/* Zone-based content area. Replaces the flat 12-tab strip; the
-              outer zone selector (Work/Build/Data) plus each zone's inner
-              tab strip live inside `<ZoneLayout>`. */}
-          <ZoneLayout
-            sessionId={sessionId}
-            sessionName={sessionName}
-            zone={zone}
-            tab={tab}
-            onZoneTabChange={handleZoneTabChange}
-            stream={stream}
-            boardMessages={boardMessages}
-          />
+          {/* Zone content + optional bottom terminal, wrapped in a
+              vertical PanelGroup. When the terminal is closed the upper
+              Panel takes all the space; opening it splits with a
+              resize handle (size persisted via autoSaveId). Mirrors
+              the Workspace's BottomPanel UX. */}
+          <div className="flex-1 min-h-0">
+            <PanelGroup
+              direction="vertical"
+              autoSaveId={`mcp-agents-terminal-${sessionId}`}
+            >
+              <Panel minSize={20}>
+                <ZoneLayout
+                  sessionId={sessionId}
+                  sessionName={sessionName}
+                  zone={zone}
+                  tab={tab}
+                  onZoneTabChange={handleZoneTabChange}
+                  stream={stream}
+                  boardMessages={boardMessages}
+                />
+              </Panel>
+              {terminalOpen && (
+                <>
+                  <PanelResizeHandle className="h-px bg-border hover:bg-primary/40 transition-colors" />
+                  <Panel defaultSize={32} minSize={12} maxSize={70}>
+                    <CompanyTerminalPanel
+                      companySessionId={sessionId}
+                      projects={sessionData?.projects ?? []}
+                      hasSandbox={hasSandboxForTerminal}
+                    />
+                  </Panel>
+                </>
+              )}
+            </PanelGroup>
+          </div>
 
           <div className="border-t p-3">
             <MasterComposer

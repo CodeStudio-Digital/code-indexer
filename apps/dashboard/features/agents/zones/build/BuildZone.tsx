@@ -15,8 +15,9 @@ import { TestsTab } from '../../tests/TestsTab.js';
 import { FilesTab as BuilderFilesTab } from '../../../builder/preview/files/FilesTab.js';
 import { GitTab as BuilderGitTab } from '../../../builder/preview/git/GitTab.js';
 import { CompanyApiReferenceTab } from '../../CompanyApiReferenceTab.js';
-import { TerminalPanel } from '../../terminal/TerminalPanel.js';
+import { CompanyTerminalPanel } from '../../terminal/CompanyTerminalPanel.js';
 import { useSessionProjects } from '../../../builder/preview/useSessionProjects.js';
+import { useSandboxStatus } from '../../../builder/useSandboxStatus.js';
 import type { BuildTab } from '../types.js';
 
 interface BuildZoneProps {
@@ -26,11 +27,26 @@ interface BuildZoneProps {
 
 export function BuildZone({ sessionId, tab }: BuildZoneProps) {
   const { projects, loading, error } = useSessionProjects(sessionId);
+  // Sandbox status is the source of truth for whether the "Sandbox"
+  // spawn option appears in the terminal target menu. Tab content only
+  // pays for the fetch when we render the terminal — cheap enough to
+  // run unconditionally since useSandboxStatus is the same hook the
+  // preview panel uses (cached per sessionId).
+  const sandbox = useSandboxStatus(sessionId);
+  const hasSandbox = !!sandbox.data?.containerId;
 
   if (tab === 'docs') return <DocsTab companySessionId={sessionId} />;
   if (tab === 'tests') return <TestsTab sessionId={sessionId} />;
   if (tab === 'api') return <CompanyApiReferenceTab sessionId={sessionId} />;
-  if (tab === 'terminal') return <TerminalPanel sessionId={sessionId} />;
+  if (tab === 'terminal') {
+    return (
+      <CompanyTerminalPanel
+        companySessionId={sessionId}
+        projects={projects}
+        hasSandbox={hasSandbox}
+      />
+    );
+  }
 
   // Files + Git need the project list. Render lightweight states while
   // the fetch settles so the tab doesn't flash empty.

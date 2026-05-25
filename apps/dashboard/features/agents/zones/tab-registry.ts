@@ -52,7 +52,9 @@ export const TAB_REGISTRY: readonly TabDef[] = [
   { zone: 'build', tab: 'files', Icon: FolderTree, labelKey: 'company.files', fallbackLabel: 'Files' },
   { zone: 'build', tab: 'git', Icon: GitBranch, labelKey: 'company.git', fallbackLabel: 'Git' },
   { zone: 'build', tab: 'api', Icon: BookOpen, labelKey: 'company.apiReference', fallbackLabel: 'API' },
-  { zone: 'build', tab: 'terminal', Icon: TerminalSquare, labelKey: 'company.terminal', fallbackLabel: 'Terminal' },
+  // Terminal moved out of the build zone — it's now a global bottom
+  // panel toggled from SessionHeader (Ctrl+J), so it's always
+  // reachable regardless of which zone/tab is active.
   // Data — persistence
   { zone: 'data', tab: 'drive', Icon: FolderOpen, labelKey: 'company.drive', fallbackLabel: 'Drive' },
   { zone: 'data', tab: 'snapshots', Icon: GitCompare, labelKey: 'company.snapshots', fallbackLabel: 'Snapshots' },

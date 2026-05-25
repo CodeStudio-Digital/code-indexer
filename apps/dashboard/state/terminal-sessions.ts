@@ -1,22 +1,37 @@
 /**
  * Persistent terminal session registry — survives bottom-panel toggles,
- * tab switches, renderer reloads, project switches.
+ * tab switches, renderer reloads, project / company-session switches.
  *
- * Each project owns an ORDERED list of terminal sessions plus a pointer
- * to the active one. The user can:
- *   - open multiple terminals per project (VS Code-style tabs)
- *   - close any single terminal (kills the PTY in backend)
- *   - switch between them (re-attach replays the buffer)
- *   - close the BottomPanel entirely (PTYs stay alive in backend)
- *   - reload the Electron window (localStorage restores the list;
- *     dead PTYs get pruned by WorkspaceTerminal's probe on mount)
+ * Each "scope" owns an ORDERED list of terminal sessions plus a pointer
+ * to the active one. A scope is just a stable string key the caller
+ * decides:
+ *
+ *   - workspace terminal:        `project:42`
+ *   - company-session terminal:  `company:7`
+ *   - future ad-hoc terminals:   anything sensible (e.g. `tool:debug-x`)
+ *
+ * Each session also carries the spawn target so the prune+restore path
+ * on reload can re-attach to the same kind of PTY (host shell vs. the
+ * project's container vs. the company sandbox).
  *
  * The PTY lifetime lives in the main process's PtyManager
  * (packages/api-handlers/src/terminal). This store is just the
- * project↔terminal mapping — the bytes/scrollback live there.
+ * scope↔terminal mapping — the bytes/scrollback live there.
  */
 
 import { create } from 'zustand';
+
+/**
+ * Mirror of the api-bus `TerminalTarget` shape
+ * (`packages/api-bus/src/terminal.ts`). Duplicated here (instead of
+ * imported) to avoid pulling the api-bus into the renderer store; the
+ * wire shape is small and stable enough that this trade-off pays for
+ * itself in build-graph simplicity.
+ */
+export type TerminalSpawnTarget =
+  | { kind: 'host' }
+  | { kind: 'project'; projectId: number }
+  | { kind: 'sandbox'; sessionId: number };
 
 export interface TerminalSession {
   /** Backend `terminalId` from `terminal.spawn`. */
@@ -25,59 +40,100 @@ export interface TerminalSession {
   name: string;
   /** Spawn timestamp (Date.now()). For sort + future "newest" hints. */
   createdAt: number;
+  /**
+   * Spawn target used to create this PTY. Persisted so the mount-time
+   * "prune dead entries" probe knows what to respawn when the user
+   * explicitly asks for "+ same again". Older persisted rows may lack
+   * this field — treat as host.
+   */
+  target?: TerminalSpawnTarget;
 }
 
 interface TerminalSessionsState {
-  /** projectId → ordered list of sessions. Missing = empty list. */
-  byProject: Record<number, TerminalSession[]>;
-  /** projectId → active terminalId. Missing = no active (or list empty). */
-  activeByProject: Record<number, string>;
-  /** projectId → next sequence number to assign as a label. Cheap monotonic
-   *  counter so closing tabs doesn't reuse numbers (less confusing). */
-  nextSeqByProject: Record<number, number>;
+  /** scope → ordered list of sessions. Missing = empty list. */
+  byScope: Record<string, TerminalSession[]>;
+  /** scope → active terminalId. Missing = no active (or list empty). */
+  activeByScope: Record<string, string>;
+  /**
+   * scope → next sequence number to assign as a label. Cheap monotonic
+   * counter so closing tabs doesn't reuse numbers (less confusing).
+   */
+  nextSeqByScope: Record<string, number>;
 
-  /** Append a new session and make it active. Returns the seq used for naming. */
-  addSession: (projectId: number, terminalId: string) => TerminalSession;
-  /** Drop a session from the list (does NOT call the backend kill — the
-   *  caller is responsible for that). Updates active if it pointed at this id. */
-  removeSession: (projectId: number, terminalId: string) => void;
-  /** Switch the active session. No-op if the id isn't in the project's list. */
-  setActive: (projectId: number, terminalId: string) => void;
-  /** Replace the entire list (used by the WorkspaceTerminal mount probe
-   *  to prune entries pointing at dead PTYs). */
-  replaceSessions: (projectId: number, sessions: TerminalSession[]) => void;
+  /** Append a new session and make it active. Returns the session. */
+  addSession: (
+    scope: string,
+    terminalId: string,
+    target?: TerminalSpawnTarget,
+  ) => TerminalSession;
+  /**
+   * Drop a session from the list (does NOT call the backend kill — the
+   * caller is responsible for that). Updates active if it pointed at
+   * this id.
+   */
+  removeSession: (scope: string, terminalId: string) => void;
+  /** Switch the active session. No-op if the id isn't in the scope's list. */
+  setActive: (scope: string, terminalId: string) => void;
+  /**
+   * Replace the entire list (used by the panel's mount probe to prune
+   * entries pointing at dead PTYs).
+   */
+  replaceSessions: (scope: string, sessions: TerminalSession[]) => void;
+}
+
+/** Convenience helpers — keep call sites readable. */
+export function projectScope(projectId: number): string {
+  return `project:${projectId}`;
+}
+
+export function companyScope(companySessionId: number): string {
+  return `company:${companySessionId}`;
 }
 
 const STORAGE_KEY = 'mcp-ide:terminal-sessions';
+/** Legacy key prefix used before the scope rename — drained on first load. */
+const LEGACY_PROJECT_PREFIX = 'project:';
 
 interface PersistedSnapshot {
-  byProject: Record<number, TerminalSession[]>;
-  activeByProject: Record<number, string>;
-  nextSeqByProject: Record<number, number>;
+  byScope: Record<string, TerminalSession[]>;
+  activeByScope: Record<string, string>;
+  nextSeqByScope: Record<string, number>;
+}
+
+interface LegacySnapshot {
+  byProject?: Record<string, TerminalSession[]>;
+  activeByProject?: Record<string, string>;
+  nextSeqByProject?: Record<string, number>;
 }
 
 function loadPersisted(): PersistedSnapshot {
-  const empty: PersistedSnapshot = { byProject: {}, activeByProject: {}, nextSeqByProject: {} };
+  const empty: PersistedSnapshot = { byScope: {}, activeByScope: {}, nextSeqByScope: {} };
   if (typeof window === 'undefined') return empty;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return empty;
-    const parsed = JSON.parse(raw) as Partial<PersistedSnapshot>;
-    // Coerce numeric keys (JSON.stringify turns them into strings).
-    const coerce = <T>(src: Record<string, T> | undefined): Record<number, T> => {
-      if (!src) return {};
-      const out: Record<number, T> = {};
-      for (const [k, v] of Object.entries(src)) {
-        const n = Number(k);
-        if (Number.isFinite(n)) out[n] = v;
-      }
-      return out;
-    };
-    return {
-      byProject: coerce(parsed.byProject as Record<string, TerminalSession[]> | undefined),
-      activeByProject: coerce(parsed.activeByProject as Record<string, string> | undefined),
-      nextSeqByProject: coerce(parsed.nextSeqByProject as Record<string, number> | undefined),
-    };
+    const parsed = JSON.parse(raw) as Partial<PersistedSnapshot> & LegacySnapshot;
+    // New shape wins when present.
+    if (parsed.byScope || parsed.activeByScope || parsed.nextSeqByScope) {
+      return {
+        byScope: parsed.byScope ?? {},
+        activeByScope: parsed.activeByScope ?? {},
+        nextSeqByScope: parsed.nextSeqByScope ?? {},
+      };
+    }
+    // Migration: convert the legacy `byProject` map (numeric keys) into
+    // `byScope` (`project:<id>`). One-shot, transparent to call sites.
+    const next: PersistedSnapshot = { byScope: {}, activeByScope: {}, nextSeqByScope: {} };
+    for (const [k, v] of Object.entries(parsed.byProject ?? {})) {
+      next.byScope[`${LEGACY_PROJECT_PREFIX}${k}`] = v;
+    }
+    for (const [k, v] of Object.entries(parsed.activeByProject ?? {})) {
+      next.activeByScope[`${LEGACY_PROJECT_PREFIX}${k}`] = v;
+    }
+    for (const [k, v] of Object.entries(parsed.nextSeqByProject ?? {})) {
+      next.nextSeqByScope[`${LEGACY_PROJECT_PREFIX}${k}`] = v;
+    }
+    return next;
   } catch {
     return empty;
   }
@@ -95,19 +151,20 @@ function persist(snap: PersistedSnapshot): void {
 export const useTerminalSessions = create<TerminalSessionsState>((set, get) => ({
   ...loadPersisted(),
 
-  addSession: (projectId, terminalId) => {
-    const existingList = get().byProject[projectId] ?? [];
-    const seq = (get().nextSeqByProject[projectId] ?? 0) + 1;
+  addSession: (scope, terminalId, target) => {
+    const existingList = get().byScope[scope] ?? [];
+    const seq = (get().nextSeqByScope[scope] ?? 0) + 1;
     const session: TerminalSession = {
       id: terminalId,
       name: `Terminal ${seq}`,
       createdAt: Date.now(),
+      target,
     };
     set((s) => {
       const next: PersistedSnapshot = {
-        byProject: { ...s.byProject, [projectId]: [...existingList, session] },
-        activeByProject: { ...s.activeByProject, [projectId]: terminalId },
-        nextSeqByProject: { ...s.nextSeqByProject, [projectId]: seq },
+        byScope: { ...s.byScope, [scope]: [...existingList, session] },
+        activeByScope: { ...s.activeByScope, [scope]: terminalId },
+        nextSeqByScope: { ...s.nextSeqByScope, [scope]: seq },
       };
       persist(next);
       return next;
@@ -115,56 +172,54 @@ export const useTerminalSessions = create<TerminalSessionsState>((set, get) => (
     return session;
   },
 
-  removeSession: (projectId, terminalId) =>
+  removeSession: (scope, terminalId) =>
     set((s) => {
-      const list = s.byProject[projectId];
+      const list = s.byScope[scope];
       if (!list) return s;
       const filtered = list.filter((t) => t.id !== terminalId);
-      const wasActive = s.activeByProject[projectId] === terminalId;
+      const wasActive = s.activeByScope[scope] === terminalId;
       // When closing the active tab, fall back to the last remaining
       // session (matches VS Code: focus jumps to the most recent
       // sibling). Empty list → no active.
       const nextActive = wasActive
         ? filtered[filtered.length - 1]?.id
-        : s.activeByProject[projectId];
+        : s.activeByScope[scope];
       const next: PersistedSnapshot = {
-        byProject: { ...s.byProject, [projectId]: filtered },
-        activeByProject: { ...s.activeByProject },
-        nextSeqByProject: s.nextSeqByProject,
+        byScope: { ...s.byScope, [scope]: filtered },
+        activeByScope: { ...s.activeByScope },
+        nextSeqByScope: s.nextSeqByScope,
       };
-      if (nextActive) next.activeByProject[projectId] = nextActive;
-      else delete next.activeByProject[projectId];
+      if (nextActive) next.activeByScope[scope] = nextActive;
+      else delete next.activeByScope[scope];
       persist(next);
       return next;
     }),
 
-  setActive: (projectId, terminalId) =>
+  setActive: (scope, terminalId) =>
     set((s) => {
-      const list = s.byProject[projectId] ?? [];
+      const list = s.byScope[scope] ?? [];
       if (!list.some((t) => t.id === terminalId)) return s;
       const next: PersistedSnapshot = {
-        byProject: s.byProject,
-        activeByProject: { ...s.activeByProject, [projectId]: terminalId },
-        nextSeqByProject: s.nextSeqByProject,
+        byScope: s.byScope,
+        activeByScope: { ...s.activeByScope, [scope]: terminalId },
+        nextSeqByScope: s.nextSeqByScope,
       };
       persist(next);
       return next;
     }),
 
-  replaceSessions: (projectId, sessions) =>
+  replaceSessions: (scope, sessions) =>
     set((s) => {
-      // Preserve activeByProject if the active id is still in the new list,
-      // otherwise fall back to the last session (or clear if empty).
-      const currentActive = s.activeByProject[projectId];
+      const currentActive = s.activeByScope[scope];
       const stillThere = sessions.some((t) => t.id === currentActive);
       const nextActive = stillThere ? currentActive : sessions[sessions.length - 1]?.id;
-      const nextActiveMap = { ...s.activeByProject };
-      if (nextActive) nextActiveMap[projectId] = nextActive;
-      else delete nextActiveMap[projectId];
+      const nextActiveMap = { ...s.activeByScope };
+      if (nextActive) nextActiveMap[scope] = nextActive;
+      else delete nextActiveMap[scope];
       const next: PersistedSnapshot = {
-        byProject: { ...s.byProject, [projectId]: sessions },
-        activeByProject: nextActiveMap,
-        nextSeqByProject: s.nextSeqByProject,
+        byScope: { ...s.byScope, [scope]: sessions },
+        activeByScope: nextActiveMap,
+        nextSeqByScope: s.nextSeqByScope,
       };
       persist(next);
       return next;
