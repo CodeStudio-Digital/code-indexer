@@ -97,7 +97,7 @@ import {
   setGlobalDocsResearcher,
 } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { setCoderWorkerDocDeps, setCoderWorkerMcpPool } from './sse/coderWorkerPoolSingleton.js';
-import { McpExternalPool } from './sse/McpExternalPool.js';
+import { McpExternalPool, setGlobalMcpExternalPool } from './sse/McpExternalPool.js';
 import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
 
@@ -628,6 +628,10 @@ export function createApp() {
     bearerResolver: deps.mcpBearerResolver ?? null,
   });
   setCoderWorkerMcpPool(mcpPool);
+  // Also publish via the in-process singleton so stream.ts (the
+  // MCP_CODER_WORKER=off path) and `coder.stream.*` IPC handlers can
+  // hand the pool to runCoder() too.
+  setGlobalMcpExternalPool(mcpPool);
   void mcpPool
     .boot()
     .catch((e) => {

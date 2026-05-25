@@ -29,6 +29,7 @@ import { McpServerStore, type McpServerConfig } from '@mcp/store/mcp-server-stor
 import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
+import type { IMcpServerManager } from '@mcp/code-agent/tools/mcp-server-manager-interface.js';
 
 /**
  * Wire-shape that crosses the worker bridge. Plain JSON only — no
@@ -75,7 +76,18 @@ export interface McpExternalSnapshot {
  */
 const HEALTH_CHECK_INTERVAL_MS = 60_000;
 
-export class McpExternalPool {
+/**
+ * The pool itself implements `IMcpServerManager` so the in-process
+ * stream path (`apps/http-api/server/routes/coder/stream.ts`, used
+ * when `MCP_CODER_WORKER` is OFF) can hand the pool straight to
+ * `runCoder()`. The interface methods all delegate to the underlying
+ * `McpServerManager`, so the pool is essentially a long-lived wrapper.
+ *
+ * Worker-thread callers (where worker_threads can't share heap) talk
+ * through `RemoteMcpServerManager` over the bridge instead — same
+ * interface, RPC-backed implementation.
+ */
+export class McpExternalPool implements IMcpServerManager {
   private readonly manager: McpServerManager;
   private readonly dbPath: string;
   private readonly bearerResolver: ResolveMcpBearer | null;
@@ -105,15 +117,21 @@ export class McpExternalPool {
       if (enabled.length === 0) {
         this.snapshot = this.emptySnapshot();
         this.booted = true;
+        console.log('[mcp-ext-pool] no external MCP servers enabled — skipping boot');
         return;
       }
+      console.log(
+        `[mcp-ext-pool] booting pool with ${enabled.length} server(s): ${enabled
+          .map((s) => s.id)
+          .join(', ')}`,
+      );
       await this.manager.connectAll(enabled);
       this.snapshot = await this.buildSnapshot(enabled);
       this.booted = true;
       this.scheduleHealthCheck();
       console.log(
         `[mcp-ext-pool] boot complete: ${this.manager.connectedCount}/${enabled.length} servers, ` +
-          `${this.snapshot.tools.length} external tools cached`,
+          `${this.snapshot.tools.length} external tools cached (shared across all sessions)`,
       );
     } finally {
       store.close();
@@ -177,6 +195,79 @@ export class McpExternalPool {
       ok: !result.isError,
       text: result.content,
     };
+  }
+
+  // ── IMcpServerManager surface ─────────────────────────────────────
+  // These let the in-process stream.ts hand the pool straight to
+  // runCoder() so MCP_CODER_WORKER=0 reuses the same warm transports
+  // worker-mode does. Workers continue to go through the RPC proxy.
+
+  /**
+   * No-op in pool mode — boot() already connected everything during
+   * server startup. Logging here makes it visible in the dashboard
+   * console that we're skipping the per-session reconnect that the
+   * pre-pool code path used to do.
+   *
+   * If boot() hasn't finished yet (race: first session arrives during
+   * boot), wait up to 15s — that covers a worst-case ~6 Cloudflare
+   * servers × handshake. After that, fall through with whatever's in
+   * the snapshot; the runner uses external tools when present and
+   * proceeds without them otherwise.
+   */
+  async connectAll(_configs: McpServerConfig[]): Promise<void> {
+    if (!this.booted && this.snapshot === null) {
+      await this.waitForBoot(15_000);
+    }
+    if (this.booted) {
+      console.log(
+        `[mcp-ext-pool] reusing ${this.manager.connectedCount} live connection(s) ` +
+          '(per-session reconnect avoided)',
+      );
+    }
+  }
+
+  /**
+   * Rebuild the catalogue from the manager. Cheap (in-memory) once
+   * the pool is booted; the manager already keeps live `Client`
+   * instances, so this is just a `listTools()` per connected server.
+   * Workers use the cached snapshot via `getSnapshot()` instead.
+   */
+  async listAllTools(): Promise<{ tools: CoderTool[]; tierMap: Map<string, ToolTier> }> {
+    return this.manager.listAllTools();
+  }
+
+  /** Delegates to the inner manager — non-core tiers from connected servers. */
+  getCustomTierSummary(): Map<string, { displayName: string; toolCount: number }> {
+    return this.manager.getCustomTierSummary();
+  }
+
+  /**
+   * In-process callers use `shutdown()` to tear down the pool at
+   * process exit. Implementing `closeAll()` as a no-op here is
+   * critical: runCoder calls it in its `.finally()` block, and we
+   * MUST NOT actually close the shared transports — every other
+   * concurrent / future session needs them.
+   */
+  async closeAll(): Promise<void> {
+    // intentional no-op — shared pool, lifecycle owned by server.ts
+  }
+
+  /** Pass-through to the inner manager so runCoder's status log is honest. */
+  get connectedCount(): number {
+    return this.manager.connectedCount;
+  }
+
+  /**
+   * Short polling helper for the connectAll() race. Boots are usually
+   * <2s but the very first session can land before that — we'd rather
+   * pay a tiny wait than silently fall through to "0 external tools".
+   */
+  private async waitForBoot(maxWaitMs: number): Promise<void> {
+    const deadline = Date.now() + maxWaitMs;
+    while (Date.now() < deadline) {
+      if (this.booted) return;
+      await new Promise((r) => setTimeout(r, 25));
+    }
   }
 
   /**

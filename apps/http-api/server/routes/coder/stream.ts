@@ -19,6 +19,7 @@ import {
 import { parseIdParam, notFound } from '../_helpers.js';
 import { withSessionLock } from './sessionLock.js';
 import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
+import { getGlobalMcpExternalPool } from '../../../sse/McpExternalPool.js';
 
 interface SendMessageBody {
   content: string;
@@ -425,6 +426,12 @@ export function mountCoderStreamRoutes(
           selectedSkillIds,
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
+          // Reuse the long-lived McpExternalPool from server boot so we
+          // don't reconnect every external MCP server per chat turn.
+          // The pool implements IMcpServerManager directly; runCoder
+          // detects the injection and skips the legacy
+          // `new McpServerManager()` path.
+          externalMcpManager: getGlobalMcpExternalPool() ?? undefined,
           onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
           // Wire the ToolSelectionPipeline filter. Returns `undefined` when
           // MCP_PIPELINES_TOOL_SELECTION is off, so the runner skips the
@@ -515,6 +522,10 @@ export function mountCoderStreamRoutes(
           resume: true,
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
+          // Same pool reuse as the fresh-run path — `continue` resumes
+          // an existing session, but we still spin a fresh runCoder()
+          // call which would otherwise rebuild McpServerManager.
+          externalMcpManager: getGlobalMcpExternalPool() ?? undefined,
           onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
           // Same docs_deep_research wiring as the fresh-run path so resumed
           // sessions get the escalation tool on turn 1.
