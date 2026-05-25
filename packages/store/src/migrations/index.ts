@@ -118,6 +118,7 @@ import { docSourcesBrowserSeedOnly101 } from './101_doc_sources_browser_seed_onl
 import { docSourcesFolder103 } from './103_doc_sources_folder.js';
 import { coderToolCallsOutputCharsShaped102 } from './102_coder_tool_calls_output_chars_shaped.js';
 import { apiTokensTier104 } from './104_api_tokens_tier.js';
+import { appSettings105 } from './105_app_settings.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -252,6 +253,7 @@ export const MIGRATIONS: Migration[] = [
   coderToolCallsOutputCharsShaped102,
   docSourcesFolder103,
   apiTokensTier104,
+  appSettings105,
 ];
 
 /**

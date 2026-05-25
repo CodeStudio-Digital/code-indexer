@@ -13,6 +13,7 @@ import {
   Plug,
   Plus,
   Search,
+  Settings2,
   Sparkles,
   Wand2,
   Wrench,
@@ -30,6 +31,7 @@ import { EditDialog } from './EditDialog.js';
 import { ProviderCard } from './ProviderCard.js';
 import { McpServersPanel } from './McpServersPanel.js';
 import { McpHttpStatusPanel } from './McpHttpStatusPanel.js';
+import { AppSettingsPanel } from './AppSettingsPanel.js';
 import { SkillsPanel } from './SkillsPanel.js';
 import { StoragePanel } from './StoragePanel.js';
 import { HydePanel } from './HydePanel.js';
@@ -49,6 +51,7 @@ import type { AdminProvider } from './types.js';
 
 type SectionId =
   | 'providers'
+  | 'app-settings'
   | 'storage'
   | 'hygiene'
   | 'search'
@@ -121,6 +124,8 @@ export default function Admin() {
   const sections: SectionDef[] = [
     { id: 'providers',         label: t('admin:tabs.providers'),  icon: Plug,
       hint: 'Conexões com modelos (OpenAI, Anthropic, …)' },
+    { id: 'app-settings',      label: 'Configurações',            icon: Settings2,
+      hint: 'Env vars persistidas: limites, flags, tuning' },
     { id: 'storage',           label: t('admin:tabs.embeddings'), icon: Database,
       hint: 'Embeddings, vector store, índices' },
     { id: 'hygiene',           label: 'Higiene',                  icon: Wand2,
@@ -324,6 +329,7 @@ export default function Admin() {
             </div>
           )}
 
+          {section === 'app-settings'      && <AppSettingsPanel />}
           {section === 'storage'           && <StoragePanel />}
           {section === 'hygiene'           && <HygienePanel />}
           {section === 'search'            && <HydePanel />}

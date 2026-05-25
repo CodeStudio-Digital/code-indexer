@@ -78,6 +78,18 @@ async function bootstrap() {
   const { app: honoApp, deps } = createApp();
   await startOptionalDevHttp(honoApp);
 
+  // Wire the admin "Restart backend" button to Electron's relaunch
+  // primitives — without this, `process.exit(75)` would kill the main
+  // process directly and the user would see the window vanish without
+  // it ever coming back (no supervisor in the Electron deployment).
+  // `app.relaunch()` schedules a fresh launch with the same argv; the
+  // immediate `app.exit(0)` cleanly tears down the current instance.
+  const { setSettingsRestartHook } = await import('../http-api/admin/app-settings.routes.js');
+  setSettingsRestartHook(() => {
+    app.relaunch();
+    app.exit(0);
+  });
+
   await app.whenReady();
 
   // Pass the Hono app so handlers-mount can register a fallback for

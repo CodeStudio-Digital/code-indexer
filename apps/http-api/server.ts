@@ -64,6 +64,7 @@ import { bearerMiddleware, getAuthCtx } from './auth/bearer-middleware.js';
 import { localhostOnlyMiddleware } from './server/middleware/localhost-only.js';
 import { createApiTokensRouter } from './admin/api-tokens.routes.js';
 import { createMcpHttpStatusRouter } from './admin/mcp-http-status.routes.js';
+import { createAppSettingsRouter } from './admin/app-settings.routes.js';
 import { createOAuthClientsRouter } from './admin/oauth-clients.routes.js';
 import { createAuditLogRouter } from './admin/audit-log.routes.js';
 import { createWellKnownRouter } from './oauth/well-known.routes.js';
@@ -98,6 +99,7 @@ import {
 } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { setCoderWorkerDocDeps, setCoderWorkerMcpPool } from './sse/coderWorkerPoolSingleton.js';
 import { McpExternalPool, setGlobalMcpExternalPool } from './sse/McpExternalPool.js';
+import { AppSettingsStore } from '@mcp/store/app-settings-store.js';
 import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
 
@@ -162,6 +164,28 @@ async function wireQualityWatchdog(): Promise<void> {
 }
 
 export function createApp() {
+  // Settings bootstrap MUST run before anything else reads
+  // `process.env.*`. The store reads every saved row from the DB and
+  // copies it into `process.env`, so a `Number(process.env.MCP_API_PORT)`
+  // read 200ms later sees the admin-chosen value instead of falling
+  // through to the env / default chain. Safe to fail-open: a corrupt
+  // settings table is logged + ignored so the http-api still boots.
+  try {
+    const { dbPath } = loadConfig();
+    const settings = new AppSettingsStore(dbPath);
+    const { applied } = settings.applyToProcessEnv();
+    settings.close();
+    if (applied > 0) {
+      console.log(`[app-settings] applied ${applied} setting(s) from DB to process.env`);
+    }
+  } catch (e) {
+    console.warn(
+      `[app-settings] bootstrap failed (continuing with .env / defaults): ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+  }
+
   const deps = createDeps();
 
   // Wire the sandbox persistence store into the SandboxManager module
@@ -475,6 +499,7 @@ export function createApp() {
 
   app.route('/api/admin', createApiTokensRouter(auth));
   app.route('/api/admin', createMcpHttpStatusRouter(deps.config));
+  app.route('/api/admin', createAppSettingsRouter(deps.config.dbPath));
   app.route('/api/admin', createOAuthClientsRouter(auth));
   app.route('/api/admin', createAuditLogRouter(deps.config));
 
