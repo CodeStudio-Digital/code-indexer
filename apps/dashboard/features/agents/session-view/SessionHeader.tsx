@@ -26,14 +26,10 @@ interface SessionHeaderProps {
   projects?: SessionProject[];
   stream: ReturnType<typeof useCompanyStream>;
   siblings: ReturnType<typeof useCompanySiblings>;
-  agentPanelOpen: boolean;
-  onToggleAgentPanel: () => void;
   /**
    * Outer-app toggle: shows/hides the sessions-list sidebar owned by
    * `AgentsTab`. When omitted (e.g. on routes that don't sit inside
-   * AgentsTab) the button is hidden. Same icon as the agent-panel
-   * toggle on purpose — both are panel toggles, but they operate on
-   * different sidebars.
+   * AgentsTab) the button is hidden.
    */
   sessionsListOpen?: boolean;
   onToggleSessionsList?: () => void;
@@ -61,8 +57,6 @@ export function SessionHeader({
   projects,
   stream,
   siblings,
-  agentPanelOpen,
-  onToggleAgentPanel,
   sessionsListOpen,
   onToggleSessionsList,
   recoveredAt,
@@ -93,19 +87,10 @@ export function SessionHeader({
           {sessionsListOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
         </button>
       )}
-      <button
-        type="button"
-        className={cn(
-          'p-1.5 rounded-md transition-colors shrink-0',
-          agentPanelOpen
-            ? 'bg-muted text-foreground'
-            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-        )}
-        onClick={onToggleAgentPanel}
-        title={t('company.toggleAgents')}
-      >
-        {agentPanelOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
-      </button>
+      {/* Agents-panel toggle removed — the same affordance now lives in
+          the right-side icon rail (Building2 icon for 'company-config'),
+          where the panel itself was moved. Keeping the button here too
+          duplicated the action and confused the navigation. */}
       <Users className="h-4 w-4 text-muted-foreground" />
       <h2 className="text-sm font-semibold">{sessionName}</h2>
       <Badge variant={stream.connected ? 'default' : 'outline'} className="text-[10px]">

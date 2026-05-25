@@ -255,8 +255,6 @@ export function CompanySessionView({
         projects={sessionData?.projects}
         stream={stream}
         siblings={siblings}
-        agentPanelOpen={sidePanel === 'company-config'}
-        onToggleAgentPanel={() => togglePanel('company-config')}
         sessionsListOpen={sessionsListOpen}
         onToggleSessionsList={onToggleSessionsList}
         recoveredAt={sessionData?.session.recovered_at ?? null}
