@@ -34,6 +34,12 @@ interface ZoneLayoutProps {
   onZoneTabChange: (zone: Zone, tab: string) => void;
   stream: ReturnType<typeof useCompanyStream>;
   boardMessages: BoardMessage[];
+  /**
+   * Master composer slot — rendered inside WorkZone's Board tab only.
+   * Passed through here so CompanySessionView can keep ownership of
+   * the composer's closures without WorkZone re-wiring them.
+   */
+  composer?: React.ReactNode;
 }
 
 export function ZoneLayout({
@@ -44,6 +50,7 @@ export function ZoneLayout({
   onZoneTabChange,
   stream,
   boardMessages,
+  composer,
 }: ZoneLayoutProps) {
   const handleChange = useCallback(
     (nextZone: Zone, nextTab: string) => {
@@ -70,6 +77,7 @@ export function ZoneLayout({
             tab={(isValidTab('work', tab) ? tab : DEFAULT_TAB_FOR_ZONE.work) as WorkTab}
             stream={stream}
             boardMessages={boardMessages}
+            composer={composer}
           />
         )}
         {zone === 'build' && (

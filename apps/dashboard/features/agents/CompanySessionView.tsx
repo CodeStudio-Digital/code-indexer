@@ -360,8 +360,11 @@ export function CompanySessionView({
             />
           )}
 
-          {/* Zone content keeps its natural flex-1 — fills the space
-              left by the composer + (optional) terminal panel below. */}
+          {/* Zone content keeps its natural flex-1. The MasterComposer
+              is passed as a slot so WorkZone can render it INSIDE the
+              Board tab only — there's no point in showing it on
+              Kanban/Pipelines/Transcript/Files/Git/etc surfaces where
+              the operator isn't talking to the master. */}
           <ZoneLayout
             sessionId={sessionId}
             sessionName={sessionName}
@@ -370,19 +373,18 @@ export function CompanySessionView({
             onZoneTabChange={handleZoneTabChange}
             stream={stream}
             boardMessages={boardMessages}
+            composer={
+              <MasterComposer
+                onSend={handleSend}
+                placeholder={
+                  !stream.started && !sessionAlreadyRan
+                    ? t('company.inputPlaceholder')
+                    : t('company.inputPlaceholderMaster')
+                }
+                supportsThinking={masterSupportsThinking}
+              />
+            }
           />
-
-          <div className="border-t p-3">
-            <MasterComposer
-              onSend={handleSend}
-              placeholder={
-                !stream.started && !sessionAlreadyRan
-                  ? t('company.inputPlaceholder')
-                  : t('company.inputPlaceholderMaster')
-              }
-              supportsThinking={masterSupportsThinking}
-            />
-          </div>
 
           {/* Bottom terminal lives BELOW the composer — operator
               feedback: the composer should stay glued to the
