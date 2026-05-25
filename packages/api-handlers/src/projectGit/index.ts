@@ -553,17 +553,19 @@ async function generateAiPlan(
   if (modelId.includes('::')) {
     [modelId, modelMode] = modelId.split('::', 2);
   }
-  // Z.AI: only route to the Coding Plan endpoint when the user
-  // explicitly asked for it via `::coding`. The general endpoint
-  // accepts every supported GLM model with a standard API key; the
-  // coding endpoint requires the paid Coding Plan and 401s otherwise.
+  // Z.AI routing precedence — same order as generate-title:
+  //   1. ZAI_BASE_URL env  2. ::coding/::general suffix  3. cfg.base_url  4. general default
   let baseUrl: string | undefined = cfg.base_url ?? undefined;
   if (cfg.kind === 'zai') {
-    baseUrl =
-      process.env.ZAI_BASE_URL ??
-      (modelMode === 'coding'
-        ? 'https://api.z.ai/api/coding/paas/v4/'
-        : 'https://api.z.ai/api/paas/v4/');
+    if (process.env.ZAI_BASE_URL) {
+      baseUrl = process.env.ZAI_BASE_URL;
+    } else if (modelMode === 'coding') {
+      baseUrl = 'https://api.z.ai/api/coding/paas/v4/';
+    } else if (modelMode === 'general') {
+      baseUrl = 'https://api.z.ai/api/paas/v4/';
+    } else if (!baseUrl) {
+      baseUrl = 'https://api.z.ai/api/paas/v4/';
+    }
   }
 
   const system = `You are a git expert wired into an IDE. The user describes what they want; you produce a JSON plan of git commands to execute. NEVER execute or assume — your sole job is to plan.

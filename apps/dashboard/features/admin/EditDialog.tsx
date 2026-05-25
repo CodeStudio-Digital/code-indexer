@@ -109,6 +109,12 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
               onChange={(e) => update('base_url', e.target.value)}
               placeholder={t('admin:editProvider.baseUrlPlaceholder')}
             />
+            {form.kind === 'zai' && (
+              <ZaiEndpointHint
+                baseUrl={form.base_url ?? ''}
+                onSet={(url) => update('base_url', url)}
+              />
+            )}
           </div>
           <div>
             <label className="text-xs font-medium">{t('admin:editProvider.apiKey')} {!isNew && t('admin:editProvider.apiKeyKeep')}</label>
@@ -168,4 +174,65 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
 function readAccountId(extra: Record<string, unknown> | undefined): string {
   const raw = extra?.account_id;
   return typeof raw === 'string' ? raw : '';
+}
+
+/**
+ * Z.AI ships two inference endpoints — a free-tier general PaaS one
+ * and a paid Coding Plan one. Both serve the same model ids but use
+ * different API key namespaces, so picking the wrong endpoint 401s
+ * every request.
+ *
+ * Rather than make the operator memorise the two URLs, this helper
+ * surfaces them as one-click chips under the base_url field. The
+ * `base_url` itself stays a normal Input so dev / staging URLs still
+ * work. Empty base_url is shown as "general (default)".
+ */
+function ZaiEndpointHint({
+  baseUrl,
+  onSet,
+}: {
+  baseUrl: string;
+  onSet: (url: string) => void;
+}) {
+  const ZAI_GENERAL = 'https://api.z.ai/api/paas/v4/';
+  const ZAI_CODING = 'https://api.z.ai/api/coding/paas/v4/';
+  const trimmed = baseUrl.trim().replace(/\/?$/, '/');
+  const isCoding = trimmed === ZAI_CODING;
+  const isGeneral = trimmed === '' || trimmed === ZAI_GENERAL;
+  return (
+    <div className="mt-1.5 flex items-center gap-2 flex-wrap text-[11px]">
+      <span className="text-muted-foreground">Endpoint:</span>
+      <button
+        type="button"
+        onClick={() => onSet('')}
+        className={
+          'px-2 py-0.5 rounded border transition-colors ' +
+          (isGeneral
+            ? 'bg-primary/10 border-primary text-foreground'
+            : 'border-input text-muted-foreground hover:bg-muted/40')
+        }
+        title="Standard API key. Works for every supported GLM model."
+      >
+        General (free tier)
+      </button>
+      <button
+        type="button"
+        onClick={() => onSet(ZAI_CODING)}
+        className={
+          'px-2 py-0.5 rounded border transition-colors ' +
+          (isCoding
+            ? 'bg-primary/10 border-primary text-foreground'
+            : 'border-input text-muted-foreground hover:bg-muted/40')
+        }
+        title="Requires the paid GLM Coding Plan subscription. Same model ids, different API key."
+      >
+        GLM Coding Plan
+      </button>
+      <span className="text-muted-foreground/70">
+        Per-message override:{' '}
+        <code className="font-mono">model::coding</code> /{' '}
+        <code className="font-mono">model::general</code>
+      </span>
+    </div>
+  );
 }

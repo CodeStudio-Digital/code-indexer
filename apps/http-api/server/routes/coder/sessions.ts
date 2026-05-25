@@ -266,19 +266,24 @@ export function mountCoderSessionsRoutes(
       modelMode = mode;
     }
 
-    // Z.AI ships two inference clusters: the general PaaS endpoint and
-    // a dedicated "Coding Plan" endpoint that's gated by a separate
-    // subscription. Both accept the same model ids, but the coding
-    // endpoint rejects standard API keys with 401/403. Only honour the
-    // coding URL when the session explicitly opted in via `::coding`
-    // — otherwise the safe general endpoint covers everyone. Keeps
-    // generate-title working for users without the Coding Plan.
+    // Z.AI routing precedence:
+    //   1. ZAI_BASE_URL env (test / dev override)
+    //   2. `::coding` / `::general` per-request override from the picker
+    //   3. cfg.base_url from the admin (set once by Coding-Plan users)
+    //   4. General URL fallback for fresh installs
     let baseUrl: string | undefined = cfg.base_url ?? undefined;
     if (cfg.kind === 'zai') {
-      baseUrl = process.env.ZAI_BASE_URL
-        ?? (modelMode === 'coding'
-          ? 'https://api.z.ai/api/coding/paas/v4/'
-          : 'https://api.z.ai/api/paas/v4/');
+      if (process.env.ZAI_BASE_URL) {
+        baseUrl = process.env.ZAI_BASE_URL;
+      } else if (modelMode === 'coding') {
+        baseUrl = 'https://api.z.ai/api/coding/paas/v4/';
+      } else if (modelMode === 'general') {
+        baseUrl = 'https://api.z.ai/api/paas/v4/';
+      } else if (!baseUrl) {
+        baseUrl = 'https://api.z.ai/api/paas/v4/';
+      }
+      // else: keep cfg.base_url — the admin-configured URL is correct
+      // for this caller (Coding-Plan users put the coding URL here).
     }
 
     const prompt =

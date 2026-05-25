@@ -10,19 +10,16 @@ import { parseModelWithMode } from '../shared/model-mode.js';
  * dedicated "GLM Coding Plan" endpoint — only the latter is gated by a
  * separate paid plan.
  *
- * Mode encoding: the dashboard sends `model` as `"glm-5.1::coding"` when
- * the user explicitly opts into the coding endpoint via the model
- * picker. `createCoder` parses that suffix and picks between the two
- * base URLs.
+ * Per-request mode (model-picker `::coding` / `::general` suffix) wins
+ * over the persisted admin setting, so users can flip per-message
+ * without reconfiguring. With no suffix we honour `cfg.base_url` from
+ * the admin (so Coding-Plan users set it once and forget it), then
+ * fall back to the general URL.
  *
- * Why no auto-routing anymore: previously this file maintained a set of
- * "coding models" (glm-5.1, glm-5-turbo, …) and forced them through the
- * coding URL even when the user didn't pass `::coding`. That worked
- * fine for accounts with the Coding Plan; for everyone else, every
- * request to those models returned an auth error from the coding edge
- * because the standard API key isn't valid there. The general endpoint
- * accepts all of these models with a regular API key, so it's the safe
- * default. Users on the Coding Plan opt-in via the `::coding` suffix.
+ * The previous heuristic auto-routed glm-5.1 / glm-5-turbo / glm-4-plus
+ * / codegeex-4* through the coding URL based on model name. That broke
+ * for non-Coding-Plan users (401/403 on every request) — we now leave
+ * the choice to admin config + `::mode` suffix instead.
  */
 const ZAI_GENERAL_URL = 'https://api.z.ai/api/paas/v4/';
 const ZAI_CODING_URL = 'https://api.z.ai/api/coding/paas/v4/';
@@ -30,16 +27,22 @@ const ZAI_CODING_URL = 'https://api.z.ai/api/coding/paas/v4/';
 /**
  * Resolve the coder baseURL.
  *   1. `process.env.ZAI_BASE_URL` always wins (test/dev override).
- *   2. Explicit `::coding` suffix → coding endpoint.
- *   3. Anything else → general endpoint (the safe default that works
- *      with the standard API key).
- *
- * Intentionally ignores `creds.baseURL` — admin overrides go through
- * `ZAI_BASE_URL` so the runtime resolution stays predictable.
+ *   2. Explicit `::coding` / `::general` suffix from the model picker
+ *      overrides admin config for that one request.
+ *   3. `adminBaseURL` (from `cfg.base_url`) — operator preference, set
+ *      once in the admin. Coding-Plan users put the coding URL here.
+ *   4. General URL — safe default for fresh installs.
  */
-function resolveZaiCoderBaseURL(_model: string | undefined, mode: string | undefined): string {
+function resolveZaiCoderBaseURL(
+  _model: string | undefined,
+  mode: string | undefined,
+  adminBaseURL: string | undefined,
+): string {
   if (process.env.ZAI_BASE_URL) return process.env.ZAI_BASE_URL;
-  return mode === 'coding' ? ZAI_CODING_URL : ZAI_GENERAL_URL;
+  if (mode === 'coding') return ZAI_CODING_URL;
+  if (mode === 'general') return ZAI_GENERAL_URL;
+  if (adminBaseURL && adminBaseURL.trim()) return adminBaseURL;
+  return ZAI_GENERAL_URL;
 }
 
 export const zai = defineProvider({
@@ -99,7 +102,7 @@ export const zai = defineProvider({
   createCoder: (creds, model) => {
     const parsed = parseModelWithMode(model);
     const effectiveModel = parsed.model ?? 'glm-5.1';
-    const baseURL = resolveZaiCoderBaseURL(effectiveModel, parsed.mode);
+    const baseURL = resolveZaiCoderBaseURL(effectiveModel, parsed.mode, creds.baseURL);
     return new OpenAIChatProvider({
       name: 'zai',
       apiKey: creds.apiKey,
