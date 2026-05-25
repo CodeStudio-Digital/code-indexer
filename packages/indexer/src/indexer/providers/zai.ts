@@ -2,22 +2,23 @@ import { OpenAIProvider } from '@mcp/indexer/indexer/providers/openai.js';
 import type { LLMProvider } from '@mcp/indexer/indexer/providers/base.js';
 import type { AnalysisResult } from '@mcp/shared/types.js';
 
-// Coding models use a dedicated endpoint
-const ZAI_CODING_MODELS = new Set([
-  'glm-5.1',
-  'glm-5-turbo',
-  'glm-4-plus',
-  'codegeex-4',
-  'codegeex-4-flash',
-]);
-
+/**
+ * Z.AI offers two endpoints (`paas/v4` general vs `coding/paas/v4`
+ * Coding Plan). The coding endpoint is paid and rejects standard API
+ * keys, so the safe default is the general one — every supported model
+ * works there. Operators on the Coding Plan can override via
+ * `ZAI_BASE_URL` or by setting `base_url` on the provider config.
+ *
+ * The previous heuristic auto-routed glm-5.1/turbo/codegeex through the
+ * coding URL, which broke every indexer run for users without the
+ * Coding Plan. We removed it; explicit opt-in is the right knob.
+ */
 const ZAI_GENERAL_URL = 'https://api.z.ai/api/paas/v4/';
-const ZAI_CODING_URL = 'https://api.z.ai/api/coding/paas/v4/';
 
-function resolveBaseURL(model: string, baseURL?: string): string {
+function resolveBaseURL(_model: string, baseURL?: string): string {
   if (baseURL) return baseURL;
   if (process.env.ZAI_BASE_URL) return process.env.ZAI_BASE_URL;
-  return ZAI_CODING_MODELS.has(model) ? ZAI_CODING_URL : ZAI_GENERAL_URL;
+  return ZAI_GENERAL_URL;
 }
 
 export class ZAIProvider implements LLMProvider {
