@@ -56,11 +56,11 @@ export function ZoneLayout({
   );
 
   return (
-    // h-full (not flex-1) — this component now runs INSIDE a
-    // `react-resizable-panels` `<Panel>` which is a plain block, not a
-    // flex parent. flex-1 there collapses to 0 height, taking the left
-    // rail + scroll with it. h-full fills whatever the Panel allocates.
-    <div className="h-full flex overflow-hidden">
+    // flex-1 inside the company-session view's flex-column center
+    // (CompanySessionView). The bottom terminal panel lives below the
+    // composer now (not wrapping ZoneLayout in a PanelGroup), so this
+    // is the natural flex layout again.
+    <div className="flex-1 flex overflow-hidden">
       <LeftTabRail activeZone={zone} activeTab={tab} onChange={handleChange} />
       <div className="flex-1 flex flex-col overflow-hidden">
         {zone === 'work' && (

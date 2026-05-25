@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { CompanyTerminalPanel } from './terminal/CompanyTerminalPanel.js';
 import { useSandboxStatus } from '../builder/useSandboxStatus.js';
+import { useResizableHeight } from '../../hooks/useResizableHeight.js';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AlertCircle, RefreshCw } from 'lucide-react';
@@ -146,6 +146,17 @@ export function CompanySessionView({
   // amortised even when the terminal stays closed.
   const sandboxStatus = useSandboxStatus(sessionId);
   const hasSandboxForTerminal = !!sandboxStatus.data?.containerId;
+
+  // Drag-to-resize for the bottom terminal. Height is persisted per
+  // session so the user's preferred size survives reloads. We anchor
+  // 'bottom' so dragging the top handle UP grows the panel.
+  const terminalSizer = useResizableHeight({
+    defaultHeight: 280,
+    minHeight: 120,
+    maxHeight: 720,
+    storageKey: `mcp-ide:agents.terminalHeight.${sessionId}`,
+    anchor: 'bottom',
+  });
 
   const toggleTerminal = useCallback(() => {
     setTerminalOpen((v) => {
@@ -349,41 +360,17 @@ export function CompanySessionView({
             />
           )}
 
-          {/* Zone content + optional bottom terminal, wrapped in a
-              vertical PanelGroup. When the terminal is closed the upper
-              Panel takes all the space; opening it splits with a
-              resize handle (size persisted via autoSaveId). Mirrors
-              the Workspace's BottomPanel UX. */}
-          <div className="flex-1 min-h-0">
-            <PanelGroup
-              direction="vertical"
-              autoSaveId={`mcp-agents-terminal-${sessionId}`}
-            >
-              <Panel minSize={20}>
-                <ZoneLayout
-                  sessionId={sessionId}
-                  sessionName={sessionName}
-                  zone={zone}
-                  tab={tab}
-                  onZoneTabChange={handleZoneTabChange}
-                  stream={stream}
-                  boardMessages={boardMessages}
-                />
-              </Panel>
-              {terminalOpen && (
-                <>
-                  <PanelResizeHandle className="h-px bg-border hover:bg-primary/40 transition-colors" />
-                  <Panel defaultSize={32} minSize={12} maxSize={70}>
-                    <CompanyTerminalPanel
-                      companySessionId={sessionId}
-                      projects={sessionData?.projects ?? []}
-                      hasSandbox={hasSandboxForTerminal}
-                    />
-                  </Panel>
-                </>
-              )}
-            </PanelGroup>
-          </div>
+          {/* Zone content keeps its natural flex-1 — fills the space
+              left by the composer + (optional) terminal panel below. */}
+          <ZoneLayout
+            sessionId={sessionId}
+            sessionName={sessionName}
+            zone={zone}
+            tab={tab}
+            onZoneTabChange={handleZoneTabChange}
+            stream={stream}
+            boardMessages={boardMessages}
+          />
 
           <div className="border-t p-3">
             <MasterComposer
@@ -396,6 +383,38 @@ export function CompanySessionView({
               supportsThinking={masterSupportsThinking}
             />
           </div>
+
+          {/* Bottom terminal lives BELOW the composer — operator
+              feedback: the composer should stay glued to the
+              transcript above it, with terminals appearing as a
+              "tools" surface beneath. Handle on the top edge for
+              drag-to-resize; height is persisted per session. */}
+          {terminalOpen && (
+            <>
+              <div
+                role="separator"
+                aria-orientation="horizontal"
+                onMouseDown={terminalSizer.startResize}
+                className={cn(
+                  'h-1 cursor-row-resize shrink-0 transition-colors',
+                  terminalSizer.resizing
+                    ? 'bg-primary/60'
+                    : 'bg-border hover:bg-primary/40',
+                )}
+                title="Arraste para redimensionar"
+              />
+              <div
+                style={{ height: terminalSizer.height }}
+                className="shrink-0 overflow-hidden"
+              >
+                <CompanyTerminalPanel
+                  companySessionId={sessionId}
+                  projects={sessionData?.projects ?? []}
+                  hasSandbox={hasSandboxForTerminal}
+                />
+              </div>
+            </>
+          )}
         </div>
 
         {/* Right drawer: drag-resizable content panel + always-on icon
