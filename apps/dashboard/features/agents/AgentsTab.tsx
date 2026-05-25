@@ -71,7 +71,10 @@ export function AgentsTab() {
   }
 
   return (
-    <div className="flex h-[100dvh]">
+    // h-full (not 100dvh) because AppShell's <main> already gives us
+    // viewport height minus the 36px topbar. Using 100dvh here pushed
+    // the inner SessionHeader off-screen behind the global header.
+    <div className="flex h-full">
       {/* Sidebar — full-width on mobile when open, hidden otherwise */}
       <div className={cn(
         'border-r flex flex-col bg-card flex-shrink-0',

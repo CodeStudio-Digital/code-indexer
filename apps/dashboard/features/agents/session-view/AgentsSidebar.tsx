@@ -154,7 +154,11 @@ export function AgentsSidebar({
   return (
     <div
       className={cn(
-        'w-64 border-r flex-shrink-0 overflow-y-auto bg-muted/10 flex-col',
+        // Flex column that fills its parent (the right-rail drawer).
+        // Previously had `w-64 border-r` because it lived as a fixed
+        // left-rail; now the drawer owns width/borders so we strip
+        // those and just let it expand.
+        'h-full w-full overflow-y-auto bg-muted/10 flex-col',
         open ? 'flex' : 'hidden',
       )}
     >

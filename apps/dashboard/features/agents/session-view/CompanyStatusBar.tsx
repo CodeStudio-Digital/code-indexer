@@ -104,7 +104,7 @@ export function CompanyStatusBar(props: Props) {
     props.pendingMasterInboxCount > 0;
 
   return (
-    <div className="shrink-0 h-7 border-t border-b bg-muted/30 px-3 flex items-center gap-3 text-[11.5px]">
+    <div className="shrink-0 h-7 border-t bg-card/60 px-3 flex items-center gap-3 text-[11.5px]">
       {/* Left — phase pill */}
       <div className={cn('flex items-center gap-1.5 shrink-0', style.className)}>
         <Icon className={cn('h-3.5 w-3.5 shrink-0', style.iconClassName)} />

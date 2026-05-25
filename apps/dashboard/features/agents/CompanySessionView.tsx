@@ -120,14 +120,13 @@ export function CompanySessionView({
     navigate(buildAgentsUrl(sessionId, activeFrontId, nextZone, nextTab));
   };
 
-  // Local UI state — only the bits that the shell coordinates across
-  // its children (modal open/close, agent panel collapsed flag).
-  const [agentPanelOpen, setAgentPanelOpen] = useState(true);
   // Right-rail panel selection: `null` collapses the panel and shows
   // only the icon rail. The rail itself is always mounted; Preview is
-  // gated on `builderMode` but Inbox / Env / Databases work for every
-  // session.
-  const [sidePanel, setSidePanel] = useState<SidePanel | null>('preview');
+  // gated on `builderMode` but Inbox / Env / Databases / Company-Config
+  // work for every session. We default to `company-config` so the first
+  // visit shows roles + projects + agents in context — same affordance
+  // the old left-rail AgentsSidebar gave for free, now on the right.
+  const [sidePanel, setSidePanel] = useState<SidePanel | null>('company-config');
   // Drag-resizable width for whichever right panel is mounted. Width
   // is persisted globally — switching between Preview and Inbox keeps
   // the user's chosen size.
@@ -256,8 +255,8 @@ export function CompanySessionView({
         projects={sessionData?.projects}
         stream={stream}
         siblings={siblings}
-        agentPanelOpen={agentPanelOpen}
-        onToggleAgentPanel={() => setAgentPanelOpen((v) => !v)}
+        agentPanelOpen={sidePanel === 'company-config'}
+        onToggleAgentPanel={() => togglePanel('company-config')}
         sessionsListOpen={sessionsListOpen}
         onToggleSessionsList={onToggleSessionsList}
         recoveredAt={sessionData?.session.recovered_at ?? null}
@@ -266,26 +265,6 @@ export function CompanySessionView({
       />
 
       <div className="flex-1 flex overflow-hidden">
-        <AgentsSidebar
-          sessionId={sessionId}
-          open={agentPanelOpen}
-          config={config}
-          projects={sessionData?.projects ?? []}
-          allProjects={allProjects ?? null}
-          persistedAgentRuns={sessionData?.agentRuns ?? []}
-          subordinates={subordinates}
-          stream={stream}
-          providerOptions={providerOptions}
-          getModelsForProvider={getModelsForProvider}
-          getDefaultModel={getDefaultModel}
-          refetch={refetch}
-          onOpenAgentRun={openAgentRun}
-          onOpenPersistedRun={openPersistedRun}
-          onOpenNewRoleDialog={({ provider, model }) =>
-            setNewRoleDraft({ role: '', provider, model, tier: 'navigate' })
-          }
-        />
-
         <div className="flex-1 flex flex-col overflow-hidden">
           <ConnectionPhaseStrip phase={stream.connectionPhase} />
           {stream.error && (
@@ -338,22 +317,6 @@ export function CompanySessionView({
             boardMessages={boardMessages}
           />
 
-          {/* IDE-style status strip sitting between the transcript and
-              the composer. Replaces the bulky MasterPhaseIndicator
-              block — same info (master phase, pending inbox, wake CTA)
-              in 28px instead of a full hero-style section. */}
-          <CompanyStatusBar
-            started={stream.started}
-            masterState={stream.masterState}
-            error={stream.error}
-            masterAlive={stream.masterAlive}
-            pendingMasterInboxCount={stream.pendingMasterInboxCount}
-            subordinateCount={subordinates.length}
-            activeSubordinateCount={subordinates.filter((s) => s.status === 'running' || s.status === 'waiting_plan' || s.status === 'waiting_question' || s.status === 'waiting_tasks').length}
-            onWakeMaster={() => void stream.wakeMaster()}
-            t={t}
-          />
-
           <div className="border-t p-3">
             <MasterComposer
               onSend={handleSend}
@@ -391,7 +354,37 @@ export function CompanySessionView({
               style={{ width: sidePanelSizer.width }}
               className="border-l flex-shrink-0 overflow-hidden flex flex-col"
             >
-              <SidebarPanels sessionId={sessionId} active={sidePanelEffective} />
+              <SidebarPanels
+                sessionId={sessionId}
+                active={sidePanelEffective}
+                companyConfigSlot={
+                  // AgentsSidebar moved from a permanent left rail to
+                  // a right-drawer panel (item from the UI feedback
+                  // round). Same 14 closures, same behaviour — only
+                  // the chrome changed. `open=true` because if the
+                  // user opens this panel they want the content
+                  // expanded; the rail icon handles the toggle.
+                  <AgentsSidebar
+                    sessionId={sessionId}
+                    open={true}
+                    config={config}
+                    projects={sessionData?.projects ?? []}
+                    allProjects={allProjects ?? null}
+                    persistedAgentRuns={sessionData?.agentRuns ?? []}
+                    subordinates={subordinates}
+                    stream={stream}
+                    providerOptions={providerOptions}
+                    getModelsForProvider={getModelsForProvider}
+                    getDefaultModel={getDefaultModel}
+                    refetch={refetch}
+                    onOpenAgentRun={openAgentRun}
+                    onOpenPersistedRun={openPersistedRun}
+                    onOpenNewRoleDialog={({ provider, model }) =>
+                      setNewRoleDraft({ role: '', provider, model, tier: 'navigate' })
+                    }
+                  />
+                }
+              />
             </div>
           </>
         )}
@@ -401,6 +394,29 @@ export function CompanySessionView({
           showPreview={builderMode}
         />
       </div>
+
+      {/* IDE-style status strip — the very last row of the view, just
+          like ProjectView's <StatusBar/>. Spans full width below the
+          left sidebar, central column AND right rail/drawer. */}
+      <CompanyStatusBar
+        started={stream.started}
+        masterState={stream.masterState}
+        error={stream.error}
+        masterAlive={stream.masterAlive}
+        pendingMasterInboxCount={stream.pendingMasterInboxCount}
+        subordinateCount={subordinates.length}
+        activeSubordinateCount={
+          subordinates.filter(
+            (s) =>
+              s.status === 'running' ||
+              s.status === 'waiting_plan' ||
+              s.status === 'waiting_question' ||
+              s.status === 'waiting_tasks',
+          ).length
+        }
+        onWakeMaster={() => void stream.wakeMaster()}
+        t={t}
+      />
 
       {modalSession && (
         <AgentSessionModal

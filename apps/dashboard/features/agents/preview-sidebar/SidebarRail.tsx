@@ -12,10 +12,10 @@
  * Preview is the only icon gated on `builderMode` — the others work
  * against per-session data regardless of sandbox state.
  */
-import { Database, Inbox, KeyRound, Monitor } from 'lucide-react';
+import { Building2, Database, Inbox, KeyRound, Monitor } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 
-export type SidePanel = 'preview' | 'inbox' | 'env' | 'databases';
+export type SidePanel = 'preview' | 'inbox' | 'env' | 'databases' | 'company-config';
 
 interface SidebarRailProps {
   active: SidePanel | null;
@@ -30,7 +30,11 @@ interface RailIcon {
   title: string;
 }
 
+// `company-config` lives at the top because it's the highest-level
+// context (roles + projects + agents) — operators glance here first
+// when joining a session. Inbox/Env/Databases are operational peeks.
 const BASE_ICONS: RailIcon[] = [
+  { id: 'company-config', Icon: Building2, title: 'Configuração da Empresa' },
   { id: 'inbox', Icon: Inbox, title: 'Inbox' },
   { id: 'env', Icon: KeyRound, title: 'Env' },
   { id: 'databases', Icon: Database, title: 'Databases' },

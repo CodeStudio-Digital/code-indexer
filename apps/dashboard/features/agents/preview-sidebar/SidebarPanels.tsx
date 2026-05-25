@@ -20,15 +20,32 @@ import type { SidePanel } from './SidebarRail.js';
 interface SidebarPanelsProps {
   sessionId: number;
   active: SidePanel;
+  /**
+   * Pre-built `<AgentsSidebar />` element passed down from
+   * `CompanySessionView`. We do prop-drilling instead of letting this
+   * panel construct its own AgentsSidebar because the agents sidebar
+   * needs 12+ closures (refetch, openAgentRun, providerOptions, etc)
+   * that the parent already has in scope. Treating it as a slot keeps
+   * the dependency graph one-way and avoids a context for a single
+   * caller.
+   */
+  companyConfigSlot?: React.ReactNode;
 }
 
-export function SidebarPanels({ sessionId, active }: SidebarPanelsProps) {
+export function SidebarPanels({ sessionId, active, companyConfigSlot }: SidebarPanelsProps) {
   const { data, refresh, retry, restartDev } = useSandboxStatus(sessionId);
   const extraServices = useExtraServices(sessionId);
 
   const fileChangeTick = useCompanyStore(
     (s) => selectSandbox(s, sessionId).lastFileChange?.seq ?? 0,
   );
+
+  if (active === 'company-config') {
+    // Slot is non-null in normal use; the guard keeps the panel from
+    // crashing if a caller somehow opens the rail entry without
+    // wiring the slot.
+    return <>{companyConfigSlot ?? null}</>;
+  }
 
   if (active === 'preview') {
     return (
