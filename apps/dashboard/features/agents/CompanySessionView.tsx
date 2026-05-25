@@ -18,7 +18,7 @@ import type { RoleConfig, SkillDef } from './RoleEditModal.js';
 import { ConnectionPhaseStrip } from './ConnectionPhaseStrip.js';
 import { MasterStatusBanner } from './MasterStatusBanner.js';
 import { SessionStalledBanner } from './SessionStalledBanner.js';
-import { MasterPhaseIndicator } from './session-view/MasterPhaseIndicator.js';
+import { CompanyStatusBar } from './session-view/CompanyStatusBar.js';
 import { ZoneLayout } from './zones/ZoneLayout.js';
 import { DEFAULT_TAB_FOR_ZONE, type Zone } from './zones/types.js';
 import { buildAgentsUrl, parseAgentsParams } from './routing.js';
@@ -311,16 +311,6 @@ export function CompanySessionView({
             }
           />
 
-          <MasterPhaseIndicator
-            started={stream.started}
-            masterState={stream.masterState}
-            error={stream.error}
-            masterAlive={stream.masterAlive}
-            pendingMasterInboxCount={stream.pendingMasterInboxCount}
-            onWakeMaster={() => void stream.wakeMaster()}
-            t={t}
-          />
-
           {/* Front tabs — visible across every zone so the user always
               has a way to switch between Main and child fronts. */}
           {siblings.parent && (
@@ -346,6 +336,22 @@ export function CompanySessionView({
             onZoneTabChange={handleZoneTabChange}
             stream={stream}
             boardMessages={boardMessages}
+          />
+
+          {/* IDE-style status strip sitting between the transcript and
+              the composer. Replaces the bulky MasterPhaseIndicator
+              block — same info (master phase, pending inbox, wake CTA)
+              in 28px instead of a full hero-style section. */}
+          <CompanyStatusBar
+            started={stream.started}
+            masterState={stream.masterState}
+            error={stream.error}
+            masterAlive={stream.masterAlive}
+            pendingMasterInboxCount={stream.pendingMasterInboxCount}
+            subordinateCount={subordinates.length}
+            activeSubordinateCount={subordinates.filter((s) => s.status === 'running' || s.status === 'waiting_plan' || s.status === 'waiting_question' || s.status === 'waiting_tasks').length}
+            onWakeMaster={() => void stream.wakeMaster()}
+            t={t}
           />
 
           <div className="border-t p-3">
