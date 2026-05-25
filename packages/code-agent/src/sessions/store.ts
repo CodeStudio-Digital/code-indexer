@@ -1812,11 +1812,17 @@ export class SessionStore {
     };
   }
 
-  /** Read all telemetry rows for a session, ordered by turn ascending. */
+  /**
+   * Read all telemetry rows for a session in chronological (insertion)
+   * order. We sort by `id` instead of `turn` because each user message
+   * spawns its own run with `turn` resetting to 1; sorting by `turn`
+   * would interleave rows from different rounds (T1-A, T1-B, T2-A, T2-B…).
+   * The dashboard groups by `run_id` and relies on this stable order.
+   */
   getTurnTelemetry(sessionId: number): Array<Record<string, unknown>> {
     return this.db
       .prepare(
-        `SELECT * FROM coder_turn_telemetry WHERE session_id = ? ORDER BY turn ASC, id ASC`,
+        `SELECT * FROM coder_turn_telemetry WHERE session_id = ? ORDER BY id ASC`,
       )
       .all(sessionId) as Array<Record<string, unknown>>;
   }

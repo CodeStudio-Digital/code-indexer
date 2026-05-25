@@ -52,9 +52,17 @@ const GROUPS: ToolbarItem[][] = [
 interface MarkdownToolbarProps {
   onAction: (action: MarkdownAction) => void;
   disabled?: boolean;
+  /**
+   * Optional content rendered after a separator on the right side of the
+   * toolbar. Used by the composer to tuck the "session-level" controls
+   * (attachment, pipeline, think, deepthink, cap) into the same horizontal
+   * strip as the markdown formatting buttons — keeps the busier toolbar
+   * on the bottom for picker controls (agent, provider, model, send).
+   */
+  rightSlot?: React.ReactNode;
 }
 
-export const MarkdownToolbar = React.memo(function MarkdownToolbar({ onAction, disabled }: MarkdownToolbarProps) {
+export const MarkdownToolbar = React.memo(function MarkdownToolbar({ onAction, disabled, rightSlot }: MarkdownToolbarProps) {
   const { t } = useTranslation('chat');
   return (
     <div className="flex items-center gap-0.5 px-2 py-1 border-t border-dashed border-border/40">
@@ -89,6 +97,13 @@ export const MarkdownToolbar = React.memo(function MarkdownToolbar({ onAction, d
           })}
         </div>
       ))}
+      {rightSlot && (
+        <>
+          <div className="flex-1" />
+          <Separator orientation="vertical" className="mx-1 h-4" />
+          <div className="flex items-center gap-0.5">{rightSlot}</div>
+        </>
+      )}
     </div>
   );
 });

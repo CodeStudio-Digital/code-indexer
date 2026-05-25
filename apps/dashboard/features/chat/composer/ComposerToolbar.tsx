@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Maximize2, Network, Paperclip, Repeat, Send, Settings2, Shield, Sparkles, Square, Thermometer } from 'lucide-react';
+import { Brain, Network, Repeat, Send, Settings2, Shield, Sparkles, Square, Thermometer } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -9,7 +9,6 @@ import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
 import { FallbackPicker } from '../../../components/FallbackPicker.js';
-import { PipelinePicker } from './PipelinePicker.js';
 
 type AgentId = 'explore' | 'plan' | 'build' | 'admin';
 
@@ -110,33 +109,17 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   setDeepThink,
 }: ComposerToolbarProps) {
   const { t } = useTranslation(['chat', 'common']);
+  // Note: the Paperclip (attach), PipelinePicker, think, deepthink, and
+  // cap/full icons now live in the markdown toolbar row above (passed
+  // as `rightSlot` to MarkdownToolbar). This row is reserved for the
+  // pickers + send button so the bottom of the composer is calmer.
+  // `handleFiles` is still threaded through because the mobile popover
+  // (and a future drag/drop overlay) may want it.
+  void handleFiles; void selectedPipelineId; void setSelectedPipelineId; void sessionId;
+
   return (
     <div className="flex items-center gap-2 px-2 pb-2 flex-wrap sm:flex-wrap">
-      <label className="cursor-pointer">
-        <input
-          type="file"
-          multiple
-          accept="image/*,.pdf,.txt,.md,.json,.csv,.yaml,.yml,.xml,.html,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.sh,.sql,.toml,.ini,.log"
-          className="hidden"
-          onChange={(e) => {
-            handleFiles(e.target.files);
-            e.target.value = '';
-          }}
-        />
-        <span className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors">
-          <Paperclip className="h-4 w-4" />
-        </span>
-      </label>
-
       <AgentPicker value={agent} onChange={setAgent} autoSuggestFor={autoSuggestText} />
-
-      {setSelectedPipelineId && (
-        <PipelinePicker
-          sessionId={sessionId}
-          selectedPipelineId={selectedPipelineId}
-          onChange={setSelectedPipelineId}
-        />
-      )}
 
       <div className="hidden sm:block w-[110px]">
         <Combobox
@@ -220,75 +203,11 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
         />
       </div>
 
-      {/* Extended-thinking toggle. Only shown when the active provider/model
-          declares `supportsThinking` (provider-caps.ts). Mirrors the chip
-          styling of the `cap`/`full` button below for visual consistency. */}
-      {(
-        <button
-          type="button"
-          onClick={() => setThinking && setThinking(!thinking)}
-          className={`hidden sm:inline-flex items-center gap-1 h-7 px-2 rounded-md text-xs font-mono transition-colors ${
-            thinking
-              ? 'bg-purple-500/15 text-purple-600 hover:bg-purple-500/25 dark:text-purple-300'
-              : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-          }`}
-          title={t('chat:toolbar.thinking', {
-            defaultValue:
-              'Extended thinking: the model reasons step-by-step before answering. Slower and pricier on Pro/Opus tiers; quality bump on hard problems. Capped at 8K thinking tokens to avoid runaway loops.',
-          })}
-          aria-pressed={thinking ?? false}
-        >
-          <Brain className="h-3.5 w-3.5" />
-          <span>{thinking ? 'think+' : 'think'}</span>
-        </button>
-      )}
-
-      {/* Simulated deepThink toggle. Orthogonal to extended-thinking — when
-          on, an auxiliary cheap model writes a brief pre-thought that the
-          runner prefills as a <thinking> block before each main turn. */}
-      {setDeepThink && (
-        <button
-          type="button"
-          onClick={() => setDeepThink(!deepThink)}
-          className={`hidden sm:inline-flex items-center gap-1 h-7 px-2 rounded-md text-xs font-mono transition-colors ${
-            deepThink
-              ? 'bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/25 dark:text-emerald-300'
-              : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-          }`}
-          title={t('chat:toolbar.deepThink', {
-            defaultValue:
-              'deepThink (simulated): an auxiliary cheap model (Haiku) writes a brief pre-thought before each main-model turn. Orthogonal to "think+". Adds latency and a small extra cost, but more reasoning per dollar without switching the main model.',
-          })}
-          aria-pressed={deepThink ?? false}
-        >
-          <Sparkles className="h-3.5 w-3.5" />
-          <span>{deepThink ? 'deepthink+' : 'deepthink'}</span>
-        </button>
-      )}
-
-      {/* Unrestricted-tool-output toggle (migration 078). When on, lifts the
-          per-tool-call truncation cap from ~24 KB to ~1 MB so verbose MCP
-          tools (Unity, large file reads, batched code_exec) arrive intact.
-          Auto-compaction in the runner still runs. */}
-      {setUnrestrictedOutput && (
-        <button
-          type="button"
-          onClick={() => setUnrestrictedOutput(!unrestrictedOutput)}
-          className={`hidden sm:inline-flex items-center gap-1 h-7 px-2 rounded-md text-xs font-mono transition-colors ${
-            unrestrictedOutput
-              ? 'bg-amber-500/15 text-amber-600 hover:bg-amber-500/25'
-              : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-          }`}
-          title={t('chat:toolbar.unrestrictedOutput', {
-            defaultValue:
-              'Tool output: full. Raises per-tool-call truncation cap to ~1 MB (default ~24 KB). Useful for Unity / large file reads. Auto-compaction still runs. Applied on the next message.',
-          })}
-          aria-pressed={unrestrictedOutput}
-        >
-          <Maximize2 className="h-3.5 w-3.5" />
-          <span>{unrestrictedOutput ? 'full' : 'cap'}</span>
-        </button>
-      )}
+      {/* Think / deepthink / cap toggles moved to the markdown toolbar
+          row above (rendered by MarkdownToolbar's `rightSlot`). We keep
+          the props flowing through so the mobile popover below — which
+          condenses every control into one sheet on narrow viewports —
+          still exposes the toggles. */}
 
       {/* Desktop fallback popover */}
       <div className="hidden sm:block">

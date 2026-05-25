@@ -50,19 +50,55 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
   return { data, loading, error, refetch, update };
 }
 
+/**
+ * Read the failure body and synthesise an Error whose `.message`
+ * carries whatever the server sent (`{error: "..."}` JSON, plain text,
+ * or just the status). Callers that want a structured failure read
+ * `.status` and `.body` off the thrown error. Without this every
+ * `apiPost` failure was a flat "HTTP 400" — the actual reason was in
+ * the response body but got thrown away.
+ */
+async function failure(res: Response, fallback: string): Promise<Error> {
+  let body: unknown = null;
+  let message = fallback;
+  const ct = res.headers.get('content-type') ?? '';
+  try {
+    if (ct.includes('application/json')) {
+      body = await res.json();
+      const errField = (body as Record<string, unknown> | null)?.error;
+      if (typeof errField === 'string') message = errField;
+    } else {
+      const text = await res.text();
+      if (text) {
+        body = text;
+        message = text.slice(0, 200);
+      }
+    }
+  } catch {
+    /* body unreadable — keep the fallback */
+  }
+  const err = new Error(`HTTP ${res.status}: ${message}`) as Error & {
+    status?: number;
+    body?: unknown;
+  };
+  err.status = res.status;
+  err.body = body;
+  return err;
+}
+
 export async function apiPost<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(`${apiBaseUrl()}/api${url}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await failure(res, `POST ${url} failed`);
   return res.json() as Promise<T>;
 }
 
 export async function apiDelete(url: string): Promise<void> {
   const res = await fetch(`${apiBaseUrl()}/api${url}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await failure(res, `DELETE ${url} failed`);
 }
 
 export async function apiPatch<T>(url: string, body: unknown): Promise<T> {
@@ -71,7 +107,7 @@ export async function apiPatch<T>(url: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await failure(res, `PATCH ${url} failed`);
   return res.json() as Promise<T>;
 }
 
@@ -81,6 +117,6 @@ export async function apiPut<T>(url: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await failure(res, `PUT ${url} failed`);
   return res.json() as Promise<T>;
 }

@@ -1,13 +1,19 @@
 /**
  * /general-ai — operator-pinned model for utility AI tasks.
  *
- * GET  /general-ai      — current selection + eligible providers/models.
+ * GET  /general-ai      — current selection + ALL enabled providers/models.
  * PUT  /general-ai      — persist `{ providerId, modelId }` as the default.
  *
- * Selection scope is app-wide. The provider must be flagged
- * `use_for_general=1` (toggled on the Providers panel) and the model must be
- * enabled for that provider. The store enforces both conditions again at read
- * time so a later toggle can't leave a dangling pointer.
+ * History: earlier iterations filtered by an extra `use_for_general=1`
+ * flag toggled from the Provider edit dialog. The flag wasn't
+ * discoverable — the Configurações → IA Geral dropdown would silently
+ * list one or zero providers and the user had no idea why. We dropped
+ * the curation in favour of "every provider you've enabled is a
+ * candidate" — the GUI gets ALL of them, the user picks, end of
+ * story. If a particular provider can't actually be used for utility
+ * tasks (OAuth-only kinds, no api_key, etc.), the utility caller
+ * (e.g. coder generate-title) still falls through to its own
+ * fallback chain.
  */
 import { Hono } from 'hono';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
@@ -18,7 +24,7 @@ export function generalAiRouter(store: ProviderStore): Hono {
   app.get('/general-ai', (c) => {
     const current = store.getGeneralDefault();
     const providers = store
-      .listProviders({ enabled: true, use_for_general: true })
+      .listProviders({ enabled: true })
       .map((p) => ({
         id: p.id,
         name: p.name,
@@ -46,11 +52,8 @@ export function generalAiRouter(store: ProviderStore): Hono {
     }
     const provider = store.getProvider(providerId);
     if (!provider) return c.json({ error: 'provider not found' }, 404);
-    if (!provider.use_for_general) {
-      return c.json(
-        { error: "provider is not flagged 'use_for_general'" },
-        400,
-      );
+    if (!provider.enabled) {
+      return c.json({ error: 'provider is disabled — enable it first' }, 400);
     }
     const hasModel = store.listModels(providerId, true).some((m) => m.model_id === modelId);
     if (!hasModel) return c.json({ error: 'model not enabled for provider' }, 400);

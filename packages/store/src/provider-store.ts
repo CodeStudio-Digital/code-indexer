@@ -454,6 +454,15 @@ export class ProviderStore {
    *      enabled.
    *   2. First provider flagged `use_for_general` + its first enabled model.
    *   3. `null` when no provider is eligible.
+   *
+   * Note: the legacy `use_for_general` flag is no longer consulted —
+   * earlier iterations required it to gate which providers showed up
+   * in the IA Geral settings dropdown, but the flag wasn't
+   * discoverable in the UI (buried inside the per-provider edit
+   * dialog). Now we accept any enabled provider with an enabled
+   * model. Callers that need finer filtering (e.g. only
+   * Anthropic/OpenAI-compatible kinds) should still do their own
+   * isUsable() check at the call site.
    */
   getGeneralDefault(): { providerId: string; modelId: string } | null {
     const pinned = this.getAppSetting('general_default_model');
@@ -462,7 +471,7 @@ export class ProviderStore {
         const parsed = JSON.parse(pinned) as { providerId?: string; modelId?: string };
         if (parsed.providerId && parsed.modelId) {
           const prov = this.getProvider(parsed.providerId);
-          if (prov && prov.enabled && prov.use_for_general) {
+          if (prov && prov.enabled) {
             const model = this.listModels(prov.id, true).find((m) => m.model_id === parsed.modelId);
             if (model) return { providerId: prov.id, modelId: model.model_id };
           }
@@ -471,7 +480,10 @@ export class ProviderStore {
         /* fall through to heuristic */
       }
     }
-    const candidates = this.listProviders({ enabled: true, use_for_general: true });
+    // Heuristic fallback — first enabled provider with at least one
+    // enabled model. Used when the operator hasn't pinned a selection
+    // yet (or the pinned one became invalid after a config edit).
+    const candidates = this.listProviders({ enabled: true });
     for (const p of candidates) {
       const m = this.listModels(p.id, true)[0];
       if (m) return { providerId: p.id, modelId: m.model_id };

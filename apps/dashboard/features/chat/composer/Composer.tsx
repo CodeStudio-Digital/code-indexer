@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileText, Paperclip, Sparkles, X } from 'lucide-react';
+import { Brain, FileText, Maximize2, Paperclip, Sparkles, X } from 'lucide-react';
 import { Textarea } from '../../../components/ui/textarea.js';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { useConfirm } from '../../../components/ui/dialog-provider.js';
 import type { AgentAttachment, EnrichedProviderModel, ProviderOption } from '../types.js';
 import { fileToAttachment } from '../utils.js';
 import { ComposerToolbar } from './ComposerToolbar.js';
 import { MarkdownToolbar } from './MarkdownToolbar.js';
+import { PipelinePicker } from './PipelinePicker.js';
 import { useMarkdownShortcuts } from './useMarkdownShortcuts.js';
 
 interface SlashCommand {
@@ -429,8 +431,153 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             disabled={streaming}
             className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent text-sm min-h-0"
           />
+          {/*
+            Markdown formatting toolbar + a slot on the right for the
+            "session-level" icons (attachment / pipeline / think /
+            deepthink / cap). Tucking them up here keeps the busier
+            bottom row focused on pickers (agent / provider / model)
+            and the Send button.
+          */}
           <div className="flex items-center">
-            <MarkdownToolbar onAction={applyAction} disabled={streaming} />
+            <MarkdownToolbar
+              onAction={applyAction}
+              disabled={streaming}
+              rightSlot={
+                <>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <label className="cursor-pointer">
+                        <input
+                          type="file"
+                          multiple
+                          accept="image/*,.pdf,.txt,.md,.json,.csv,.yaml,.yml,.xml,.html,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.sh,.sql,.toml,.ini,.log"
+                          className="hidden"
+                          onChange={(e) => {
+                            handleFiles(e.target.files);
+                            e.target.value = '';
+                          }}
+                          disabled={streaming}
+                        />
+                        <span
+                          className={`inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
+                            streaming
+                              ? 'text-muted-foreground/40 cursor-not-allowed'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                          }`}
+                        >
+                          <Paperclip className="h-3.5 w-3.5" />
+                        </span>
+                      </label>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">{t('composer.attach', { defaultValue: 'Anexar arquivos' })}</TooltipContent>
+                  </Tooltip>
+
+                  {props.setSelectedPipelineId && (
+                    <PipelinePicker
+                      sessionId={props.sessionId ?? null}
+                      selectedPipelineId={props.selectedPipelineId ?? null}
+                      onChange={props.setSelectedPipelineId}
+                      compact
+                    />
+                  )}
+
+                  {/* Thinking icon. Active when the toggle is on. Only
+                      enabled when the active provider/model supports it
+                      (provider-caps.ts); rendered greyed out otherwise so
+                      the user knows the feature exists. */}
+                  {props.setThinking && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => props.setThinking?.(!props.thinking)}
+                          disabled={!props.supportsThinking}
+                          aria-pressed={props.thinking ?? false}
+                          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                            props.thinking
+                              ? 'bg-purple-500/15 text-purple-500 hover:bg-purple-500/25'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                          }`}
+                        >
+                          <Brain className="h-3.5 w-3.5" />
+                          {props.thinking && (
+                            <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-purple-500" />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[260px]">
+                        {props.supportsThinking
+                          ? t('toolbar.thinking', {
+                              defaultValue:
+                                'Extended thinking: o modelo raciocina passo-a-passo antes de responder. Mais lento e mais caro nos tiers Pro/Opus; ganho em problemas difíceis.',
+                            })
+                          : t('toolbar.thinkingUnsupported', {
+                              defaultValue: 'O modelo atual não suporta extended thinking.',
+                            })}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+
+                  {/* deepThink (simulated) — orthogonal to thinking */}
+                  {props.setDeepThink && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => props.setDeepThink?.(!props.deepThink)}
+                          aria-pressed={props.deepThink ?? false}
+                          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
+                            props.deepThink
+                              ? 'bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                          }`}
+                        >
+                          <Sparkles className="h-3.5 w-3.5" />
+                          {props.deepThink && (
+                            <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[260px]">
+                        {t('toolbar.deepThink', {
+                          defaultValue:
+                            'deepThink (simulado): um modelo auxiliar barato (Haiku) escreve um pré-pensamento antes de cada turno do modelo principal. Ortogonal a "think". Custo extra pequeno, ganho em raciocínio.',
+                        })}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+
+                  {/* Unrestricted-tool-output (cap / full) */}
+                  {props.setUnrestrictedOutput && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => props.setUnrestrictedOutput?.(!props.unrestrictedOutput)}
+                          aria-pressed={props.unrestrictedOutput ?? false}
+                          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
+                            props.unrestrictedOutput
+                              ? 'bg-amber-500/15 text-amber-500 hover:bg-amber-500/25'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                          }`}
+                        >
+                          <Maximize2 className="h-3.5 w-3.5" />
+                          {props.unrestrictedOutput && (
+                            <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-amber-500" />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[260px]">
+                        {t('toolbar.unrestrictedOutput', {
+                          defaultValue:
+                            'Tool output: full. Eleva o cap de truncação por tool-call de ~24 KB para ~1 MB. Útil para Unity / leituras grandes. Auto-compactação continua. Aplica na próxima mensagem.',
+                        })}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </>
+              }
+            />
           </div>
           <ComposerToolbar
             hasInput={hasInput}

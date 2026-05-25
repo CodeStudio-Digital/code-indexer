@@ -32,6 +32,10 @@ interface FirstTurnPayload {
 
 interface TurnRow {
   id: number;
+  /** Stable per-round identifier. All turns of one user message share the
+   *  same `run_id`; we group the timeline by it so each round renders as
+   *  one collapsible block. */
+  run_id: string;
   turn: number;
   is_subagent: number;
   provider: string | null;
@@ -49,6 +53,22 @@ interface TurnRow {
   summarizer_ran: number;
   paginate_count: number;
   created_at: string;
+}
+
+/** One "round" = all the assistant turns triggered by a single user
+ *  message. Built client-side from a flat `TurnRow[]` ordered by insertion. */
+interface TurnRound {
+  runId: string;
+  /** 1-based index, in order of appearance in the session. */
+  index: number;
+  turns: TurnRow[];
+  totals: {
+    input: number;
+    output: number;
+    cacheRead: number;
+  };
+  /** ISO of the earliest turn in the round — used as the round header timestamp. */
+  startedAt: string | null;
 }
 
 interface SessionTelemetrySummary {
@@ -439,6 +459,40 @@ function PayloadBreakdownItem({
   );
 }
 
+/**
+ * Group a flat list of turn rows into rounds (one per `run_id`) in the
+ * order they first appeared. Each user message starts a new run, so the
+ * resulting list reads "Round 1: first message's turns…", "Round 2: …",
+ * matching how the user perceives the conversation.
+ *
+ * Falls back gracefully if `run_id` is missing on legacy rows by treating
+ * the row as its own one-off round (keyed by id).
+ */
+function groupTurnsByRound(turns: TurnRow[]): TurnRound[] {
+  const byRun = new Map<string, TurnRound>();
+  const order: string[] = [];
+  for (const t of turns) {
+    const key = t.run_id || `legacy-${t.id}`;
+    let bucket = byRun.get(key);
+    if (!bucket) {
+      bucket = {
+        runId: key,
+        index: order.length + 1,
+        turns: [],
+        totals: { input: 0, output: 0, cacheRead: 0 },
+        startedAt: t.created_at ?? null,
+      };
+      byRun.set(key, bucket);
+      order.push(key);
+    }
+    bucket.turns.push(t);
+    bucket.totals.input += t.input_tokens ?? 0;
+    bucket.totals.output += t.output_tokens ?? 0;
+    bucket.totals.cacheRead += t.cache_read_input_tokens ?? 0;
+  }
+  return order.map((k) => byRun.get(k)!);
+}
+
 function TurnsTimeline({
   turns,
   t,
@@ -448,15 +502,29 @@ function TurnsTimeline({
   t: any;
 }) {
   const [allOpen, setAllOpen] = useState(false);
-  // Compute max input across all turns so per-turn bars share a scale.
+  // Compute max input across ALL turns (not per-round) so the bar scale
+  // stays consistent across rounds — easier to eyeball which round was
+  // the heavy one.
   const maxInput = turns.reduce((m, r) => Math.max(m, r.input_tokens ?? 0), 0);
+  const rounds = groupTurnsByRound(turns);
+
+  // Pluralisation suffixes for the header. i18n's count interpolation is
+  // ICU-style and we're using plain {{var}}; cheap workaround is to pass
+  // the "s" as a separate var.
+  const roundsPlural = rounds.length === 1 ? '' : 's';
+  const turnsPlural = turns.length === 1 ? '' : 's';
 
   return (
     <div className="rounded-md border bg-card/50 p-3">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
           <History className="h-3.5 w-3.5" />
-          {t('chat:metrics.timeline.title', { count: turns.length })}
+          {t('chat:metrics.timeline.title', {
+            rounds: rounds.length,
+            roundsPlural,
+            count: turns.length,
+            turnsPlural,
+          })}
         </div>
         <button
           type="button"
@@ -466,11 +534,101 @@ function TurnsTimeline({
           {allOpen ? t('chat:metrics.timeline.collapseAll') : t('chat:metrics.timeline.expandAll')}
         </button>
       </div>
-      <div className="space-y-1">
-        {turns.map((row) => (
-          <TurnRowView key={row.id} row={row} maxInput={maxInput} forceOpen={allOpen} t={t} />
+      <div className="space-y-2">
+        {rounds.map((round) => (
+          <RoundGroup
+            key={round.runId}
+            round={round}
+            maxInput={maxInput}
+            forceOpen={allOpen}
+            // Newest round (last in array) is most relevant; default it
+            // open. Older rounds collapsed by default to keep the modal
+            // scrollable when sessions get long.
+            defaultOpen={round.index === rounds.length}
+            t={t}
+          />
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * One collapsible block per round. Header shows the round number, turn
+ * count, and aggregated in/out/cache so the user can scan rounds without
+ * expanding. Cache % uses cache_read / input across the whole round —
+ * matches the per-turn semantics so the numbers compose naturally.
+ */
+function RoundGroup({
+  round,
+  maxInput,
+  forceOpen,
+  defaultOpen,
+  t,
+}: {
+  round: TurnRound;
+  maxInput: number;
+  forceOpen: boolean;
+  defaultOpen: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  t: any;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const isOpen = forceOpen || open;
+  const { input, output, cacheRead } = round.totals;
+  const cachePct = input > 0 ? Math.round((cacheRead / input) * 100) : 0;
+  const turnsLabel =
+    round.turns.length === 1
+      ? t('chat:metrics.timeline.roundTurnsOne')
+      : t('chat:metrics.timeline.roundTurnsMany', { count: round.turns.length });
+
+  return (
+    <div className="rounded-md border bg-background/30">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full px-2.5 py-1.5 flex items-center gap-2 text-xs hover:bg-muted/30 transition-colors text-left"
+      >
+        {isOpen ? (
+          <ChevronDown className="h-3 w-3 shrink-0" />
+        ) : (
+          <ChevronRight className="h-3 w-3 shrink-0" />
+        )}
+        <span className="font-semibold text-[11px] shrink-0">
+          {t('chat:metrics.timeline.round', { n: round.index })}
+        </span>
+        <span className="text-[10px] text-muted-foreground shrink-0">
+          · {turnsLabel}
+        </span>
+        <span className="flex-1" />
+        <span className="tabular-nums text-muted-foreground shrink-0 text-[11px]">
+          {formatK(input)} in · {formatK(output)} out
+        </span>
+        <span
+          className={`tabular-nums shrink-0 text-[11px] w-16 text-right ${
+            cachePct >= 60
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : cachePct < 30 && round.turns.length > 1
+                ? 'text-amber-600 dark:text-amber-400'
+                : 'text-muted-foreground'
+          }`}
+        >
+          {cachePct}% cache
+        </span>
+      </button>
+      {isOpen && (
+        <div className="px-2 pb-2 pt-1 space-y-1 border-t bg-card/20">
+          {round.turns.map((row) => (
+            <TurnRowView
+              key={row.id}
+              row={row}
+              maxInput={maxInput}
+              forceOpen={forceOpen}
+              t={t}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

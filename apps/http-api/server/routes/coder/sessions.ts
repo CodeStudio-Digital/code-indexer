@@ -176,18 +176,38 @@ export function mountCoderSessionsRoutes(
     if (!src) return notFound(c);
 
     const firstUser = src.message_rows.find((r) => r.role === 'user');
-    if (!firstUser) return c.json({ error: 'no messages yet' }, 400);
+    if (!firstUser) {
+      console.warn(`[generate-title] session=${id}: no user messages yet`);
+      return c.json({ error: 'no messages yet' }, 400);
+    }
 
     // Extract plain text from the first user message's content blocks.
+    // Defensive: wrap the JSON.parse so a malformed row doesn't 500 the
+    // route — we'd rather return 400 with a clear reason.
     type Block = { type: string; text?: string };
-    const blocks = JSON.parse(firstUser.content_json) as Block[];
+    let blocks: Block[];
+    try {
+      blocks = JSON.parse(firstUser.content_json) as Block[];
+    } catch (e) {
+      console.warn(`[generate-title] session=${id}: malformed content_json:`, e);
+      return c.json({ error: 'first message content is malformed JSON' }, 400);
+    }
+    // Strip the `<file_refs>…</file_refs>` block the composer prepends when
+    // the user picks files in the sidebar — those are noise for a title,
+    // and a message that's ONLY file refs (no prose) would otherwise feed
+    // an empty prompt to the LLM and produce a useless title.
     const text = blocks
       .filter((b) => b.type === 'text' && b.text)
       .map((b) => b.text!)
       .join(' ')
+      .replace(/<file_refs>[\s\S]*?<\/file_refs>/g, '')
+      .replace(/<active_skills>[\s\S]*?<\/active_skills>/g, '')
       .trim()
       .slice(0, 500);
-    if (!text) return c.json({ error: 'no text content in first message' }, 400);
+    if (!text) {
+      console.warn(`[generate-title] session=${id}: no text content in first message`);
+      return c.json({ error: 'no text content in first message' }, 400);
+    }
 
     // Pick a provider usable by a one-shot SDK call. OAuth-only kinds
     // (copilot/chatgpt/claude-code) and non-OpenAI-compatible kinds
@@ -214,15 +234,52 @@ export function mountCoderSessionsRoutes(
         const fallback = providerStore.listProviders({ enabled: true })
           .find((p) => isUsable(p));
         if (!fallback) {
-          return c.json({ error: 'no usable AI provider (need api_key + anthropic/openai-compatible kind)' }, 400);
+          console.warn(
+            `[generate-title] session=${id}: no usable provider. ` +
+            `session.provider=${src.session.provider} kind=${cfg?.kind ?? '?'} ` +
+            `enabled=${cfg?.enabled} hasKey=${!!cfg?.api_key}`,
+          );
+          return c.json({
+            error: 'no usable AI provider — set an API key for an Anthropic / OpenAI / Z.AI / DeepSeek provider in Configurações',
+          }, 400);
         }
         cfg = fallback;
         const firstModel = providerStore.listModels(fallback.id, true)[0];
         modelId = firstModel?.model_id ?? '';
-        if (!modelId) return c.json({ error: 'fallback provider has no models configured' }, 400);
+        if (!modelId) {
+          console.warn(`[generate-title] session=${id}: fallback provider ${fallback.id} has no enabled models`);
+          return c.json({ error: 'fallback provider has no models configured' }, 400);
+        }
       }
     }
     if (!cfg) return c.json({ error: 'provider config missing after selection' }, 500);
+
+    // Strip the `::mode` suffix the dashboard appends when a model has
+    // multiple modes (e.g. `glm-5::coding`). The upstream APIs only
+    // understand the bare model id — the mode is our internal routing
+    // signal (used by the Z.AI base-URL selector below). Without this,
+    // every Z.AI / GLM session generates a 400 from the vendor.
+    let modelMode: string | undefined;
+    if (modelId.includes('::')) {
+      const [bareModel, mode] = modelId.split('::', 2);
+      modelId = bareModel;
+      modelMode = mode;
+    }
+
+    // Z.AI ships two inference clusters: the general PaaS endpoint and
+    // a dedicated "Coding Plan" endpoint that's gated by a separate
+    // subscription. Both accept the same model ids, but the coding
+    // endpoint rejects standard API keys with 401/403. Only honour the
+    // coding URL when the session explicitly opted in via `::coding`
+    // — otherwise the safe general endpoint covers everyone. Keeps
+    // generate-title working for users without the Coding Plan.
+    let baseUrl: string | undefined = cfg.base_url ?? undefined;
+    if (cfg.kind === 'zai') {
+      baseUrl = process.env.ZAI_BASE_URL
+        ?? (modelMode === 'coding'
+          ? 'https://api.z.ai/api/coding/paas/v4/'
+          : 'https://api.z.ai/api/paas/v4/');
+    }
 
     const prompt =
       `Generate a concise title (3-7 words, no quotes, no trailing punctuation) for a chat session that starts with this user message:\n\n${text}\n\nRespond with only the title.`;
@@ -233,7 +290,7 @@ export function mountCoderSessionsRoutes(
         const { default: Anthropic } = await import('@anthropic-ai/sdk');
         const client = new Anthropic({
           apiKey: cfg.api_key ?? '',
-          ...(cfg.base_url ? { baseURL: cfg.base_url } : {}),
+          ...(baseUrl ? { baseURL: baseUrl } : {}),
         });
         const resp = await client.messages.create({
           model: modelId,
@@ -248,7 +305,7 @@ export function mountCoderSessionsRoutes(
         const { default: OpenAI } = await import('openai');
         const client = new OpenAI({
           apiKey: cfg.api_key ?? '',
-          ...(cfg.base_url ? { baseURL: cfg.base_url } : {}),
+          ...(baseUrl ? { baseURL: baseUrl } : {}),
         });
         const resp = await client.chat.completions.create({
           model: modelId,
@@ -259,6 +316,10 @@ export function mountCoderSessionsRoutes(
         title = resp.choices[0]?.message?.content ?? '';
       }
     } catch (e) {
+      console.warn(
+        `[generate-title] session=${id}: AI call failed (provider=${cfg.kind} model=${modelId} baseUrl=${baseUrl ?? '(default)'}):`,
+        e,
+      );
       return c.json({ error: `AI call failed: ${e instanceof Error ? e.message : String(e)}` }, 500);
     }
 
