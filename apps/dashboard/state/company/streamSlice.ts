@@ -187,13 +187,20 @@ export const createStreamSlice: StateCreator<StreamSlice, [], [], StreamSlice> =
   streamHydrateFromInitialFetch: (sessionId, snapshot) =>
     set((state) => ({
       streams: withSlot(state.streams, sessionId, (slot) => {
-        const next: StreamState = { ...slot, started: true };
+        // Don't force started:true here — the caller decides. When the
+        // reattach pre-flight saw masterAlive=false it explicitly sets
+        // started=false right before this call; forcing true would
+        // resurrect the "Iniciando Master..." loader for paused/idle
+        // sessions even when there's no live runner to wait for.
+        const next: StreamState = { ...slot };
         if (snapshot.boardMessages && snapshot.boardMessages.length > 0) {
           next.boardMessages = snapshot.boardMessages;
         }
-        if (snapshot.masterState) {
-          next.masterState = snapshot.masterState;
-        }
+        // Always copy masterState — including null. If the backend
+        // says there's no master agent_run yet (e.g., a fresh sub-
+        // session), we want the slot to mirror that, not retain a
+        // stale instance from a previous mount.
+        next.masterState = snapshot.masterState;
         if (snapshot.subordinateStates && snapshot.subordinateStates.size > 0) {
           next.subordinateStates = snapshot.subordinateStates as StreamState['subordinateStates'];
         }
