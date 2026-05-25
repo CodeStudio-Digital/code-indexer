@@ -99,14 +99,11 @@ export function TerminalTabBar({
       <div className="inline-flex items-center">
         <button
           type="button"
-          onClick={() => {
-            if (hasMenu) setMenuOpen((v) => !v);
-            else onAdd?.();
-          }}
+          onClick={() => onAdd?.()}
           disabled={addDisabled}
           className="h-6 w-6 rounded-sm grid place-items-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-50"
           aria-label="New terminal"
-          title="New terminal"
+          title={hasMenu ? 'Novo terminal (último target). Use o ▾ para escolher.' : 'New terminal'}
         >
           <Plus className="h-3 w-3" />
         </button>
@@ -115,8 +112,9 @@ export function TerminalTabBar({
             type="button"
             onClick={() => setMenuOpen((v) => !v)}
             disabled={addDisabled}
-            className="h-6 w-3 rounded-sm grid place-items-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-50"
-            aria-label="Pick spawn target"
+            className="h-6 w-4 rounded-sm grid place-items-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-50"
+            aria-label="Escolher target do terminal"
+            title="Escolher Host / Sandbox / projeto"
           >
             <ChevronDown className="h-3 w-3" />
           </button>

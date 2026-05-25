@@ -56,7 +56,11 @@ export function ZoneLayout({
   );
 
   return (
-    <div className="flex-1 flex overflow-hidden">
+    // h-full (not flex-1) — this component now runs INSIDE a
+    // `react-resizable-panels` `<Panel>` which is a plain block, not a
+    // flex parent. flex-1 there collapses to 0 height, taking the left
+    // rail + scroll with it. h-full fills whatever the Panel allocates.
+    <div className="h-full flex overflow-hidden">
       <LeftTabRail activeZone={zone} activeTab={tab} onChange={handleChange} />
       <div className="flex-1 flex flex-col overflow-hidden">
         {zone === 'work' && (
