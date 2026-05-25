@@ -46,31 +46,63 @@ export interface DiagnosticItem {
   code?: string | number;
 }
 
+/**
+ * All position-based LSP calls accept an optional `content` carrying the
+ * EDITOR'S live model text. When present, the backend snapshots it into
+ * the TS Compiler API's host BEFORE computing — without this, completion
+ * / hover / diagnostics read the on-disk version and miss whatever the
+ * user just typed (the canonical bug: typing `this.router.` produced no
+ * suggestions because the dot wasn't saved yet). The renderer should
+ * pass `model.getValue()` for the file it's querying. Other files'
+ * snapshots stay disk-backed and only refresh when their tab is active
+ * and queried.
+ */
 export interface LspApi {
   completion(
-    input: { projectId: number; file: string; position: Position },
+    input: { projectId: number; file: string; position: Position; content?: string },
     ctx: ApiContext,
   ): Promise<CompletionItem[]>;
 
   hover(
-    input: { projectId: number; file: string; position: Position },
+    input: { projectId: number; file: string; position: Position; content?: string },
     ctx: ApiContext,
   ): Promise<HoverInfo | null>;
 
   definition(
-    input: { projectId: number; file: string; position: Position },
+    input: { projectId: number; file: string; position: Position; content?: string },
     ctx: ApiContext,
   ): Promise<LspLocation[]>;
 
   references(
-    input: { projectId: number; file: string; position: Position },
+    input: { projectId: number; file: string; position: Position; content?: string },
     ctx: ApiContext,
   ): Promise<LspLocation[]>;
 
   diagnostics(
-    input: { projectId: number; file?: string },
+    input: { projectId: number; file?: string; content?: string },
     ctx: ApiContext,
   ): Promise<DiagnosticItem[]>;
+
+  /**
+   * Semantic-token classifications for syntax highlighting. The TS
+   * Compiler API tags every identifier in the file as class /
+   * interface / property / method / parameter / etc. — the renderer
+   * maps those to Monaco's semantic-token registry so themes can colour
+   * them distinctly (e.g. `this.router` reads as a property, not as
+   * a plain identifier).
+   *
+   * Returned `data` is the LSP-style delta-encoded array Monaco
+   * consumes via `registerDocumentSemanticTokensProvider`:
+   *   [ deltaLine, deltaStart, length, tokenType, tokenModifiers,
+   *     deltaLine, deltaStart, length, tokenType, tokenModifiers, … ]
+   *
+   * Token type / modifier indices reference the legend the renderer
+   * declares on registration — see `lspProvider.ts`.
+   */
+  semanticTokens(
+    input: { projectId: number; file: string; content?: string },
+    ctx: ApiContext,
+  ): Promise<{ data: number[]; resultId?: string }>;
 
   rename(
     input: { projectId: number; file: string; position: Position; newName: string },

@@ -35,6 +35,9 @@ interface NodePtyModule {
       rows?: number;
       cwd?: string;
       env?: NodeJS.ProcessEnv;
+      /** Windows-only — force WinPTY when inside Electron (ConPTY's
+       *  agent helper crashes on AttachConsole under GUI subsystem). */
+      useConpty?: boolean;
     },
   ) => NodePtyProcess;
 }
@@ -148,12 +151,28 @@ export const runCommandPty: CoderTool = {
       };
 
       try {
+        // Force WinPTY in Electron — see NodePtyModule's `useConpty`
+        // comment. Plain Node deployments stay on ConPTY (the default).
+        const inElectron = !!process.versions.electron;
+        const isWindows = process.platform === 'win32';
+        // Strip dev-only env vars before spawning the user's command.
+        // NODE_OPTIONS in our parent has `--import tsx/esm` which the
+        // user's project node_modules doesn't ship; ELECTRON_RUN_AS_NODE
+        // is meaningless once we're spawning a plain shell command.
+        // Without this strip, `npm run dev` / `node …` crash with
+        // ERR_MODULE_NOT_FOUND: 'tsx' on the user's project.
+        const cleanEnv: NodeJS.ProcessEnv = { ...process.env };
+        delete cleanEnv.NODE_OPTIONS;
+        delete cleanEnv.ELECTRON_RUN_AS_NODE;
+        delete cleanEnv.MCP_DEV_HTTP;
+        delete cleanEnv.MCP_ELECTRON_DEV_URL;
         proc = pty.spawn(command, argv, {
           name: 'xterm-color',
           cols,
           rows,
           cwd: ctx.cwd,
-          env: process.env,
+          env: cleanEnv,
+          ...(isWindows && inElectron ? { useConpty: false } : {}),
         });
       } catch (e) {
         resolve(err(`run_command_pty failed to spawn: ${e instanceof Error ? e.message : String(e)}`));

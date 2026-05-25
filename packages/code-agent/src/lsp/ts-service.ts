@@ -173,23 +173,170 @@ export class TsLanguageService {
 
     // Prefer the first non-empty options set (typically tsconfig.app.json).
     // Fall back to a permissive default that won't reject every import.
-    if (candidateOptions.length > 0) {
-      return candidateOptions[0];
+    const base = candidateOptions.length > 0
+      ? candidateOptions[0]
+      : {
+          target: ts.ScriptTarget.ES2022,
+          module: ts.ModuleKind.ESNext,
+          moduleResolution: ts.ModuleResolutionKind.Bundler,
+          allowJs: true,
+          checkJs: false,
+          esModuleInterop: true,
+          skipLibCheck: true,
+          jsx: ts.JsxEmit.Preserve,
+        };
+
+    // Critical safety net: if the chosen tsconfig didn't set
+    // `moduleResolution` explicitly, the TS Compiler API silently
+    // falls back to `Classic`, which does NOT look in node_modules.
+    // The user's error — "Cannot find module '@angular/core'" — is
+    // a textbook symptom of that. Pick a sensible default based on
+    // the module setting so the project at least RESOLVES even if
+    // its tsconfig was written for the bundler to override later.
+    if (base.moduleResolution === undefined) {
+      const mod = base.module;
+      base.moduleResolution =
+        mod === ts.ModuleKind.CommonJS
+          ? ts.ModuleResolutionKind.Node10
+          : ts.ModuleResolutionKind.Bundler;
     }
+    // Defaults Angular/Vite/Next users always want — flipping these
+    // here is forgiving: if a project deliberately disabled them,
+    // they can flip back via their own tsconfig because we never
+    // OVERRIDE explicit `false`, only fill in `undefined`.
+    if (base.esModuleInterop === undefined) base.esModuleInterop = true;
+    if (base.allowSyntheticDefaultImports === undefined) base.allowSyntheticDefaultImports = true;
+    if (base.skipLibCheck === undefined) base.skipLibCheck = true;
+
+    return base;
+  }
+
+  /**
+   * Public diagnose helper — returns enough info to debug "Cannot find
+   * module" errors without recompiling the backend. Callable via the
+   * `lsp.diagnose` IPC handler (or directly from tests). Output is
+   * intentionally JSON-serialisable.
+   */
+  diagnose(file?: string): {
+    projectRoot: string;
+    tsconfigPath: string | null;
+    compilerOptions: Record<string, unknown>;
+    rootFilesCount: number;
+    rootFilesSample: string[];
+    nodeModulesPresent: boolean;
+    angularCorePresent: boolean;
+    resolveAngularCore: {
+      resolvedFileName: string | null;
+      isExternalLibraryImport: boolean | null;
+      failedLookupLocationsSample: string[];
+    } | null;
+  } {
+    const configPath = ts.findConfigFile(this.projectRoot, ts.sys.fileExists, 'tsconfig.json');
+    const nodeModules = `${this.projectRoot}/node_modules`;
+    const angularCore = `${nodeModules}/@angular/core`;
+    const sampleFile = file
+      ? this.toAbs(file)
+      : this.rootFiles[0] ?? `${this.projectRoot}/index.ts`;
+
+    let resolveAngularCore: ReturnType<typeof this.diagnose>['resolveAngularCore'] = null;
+    try {
+      const resolved = ts.resolveModuleName(
+        '@angular/core',
+        sampleFile,
+        this.compilerOptions,
+        {
+          fileExists: ts.sys.fileExists,
+          readFile: ts.sys.readFile,
+          directoryExists: ts.sys.directoryExists,
+          getCurrentDirectory: () => this.projectRoot,
+          getDirectories: ts.sys.getDirectories,
+          realpath: ts.sys.realpath,
+          useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+        },
+      );
+      // failedLookupLocations is internal to the TS compiler but
+      // documented in source — typed `unknown` to avoid the d.ts
+      // surface being out of step.
+      const failed =
+        (resolved as unknown as { failedLookupLocations?: string[] }).failedLookupLocations ?? [];
+      resolveAngularCore = {
+        resolvedFileName: resolved.resolvedModule?.resolvedFileName ?? null,
+        isExternalLibraryImport: resolved.resolvedModule?.isExternalLibraryImport ?? null,
+        failedLookupLocationsSample: failed.slice(0, 8),
+      };
+    } catch (e) {
+      resolveAngularCore = {
+        resolvedFileName: null,
+        isExternalLibraryImport: null,
+        failedLookupLocationsSample: [`<resolveModuleName threw: ${e instanceof Error ? e.message : String(e)}>`],
+      };
+    }
+
     return {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      allowJs: true,
-      checkJs: false,
-      esModuleInterop: true,
-      skipLibCheck: true,
-      jsx: ts.JsxEmit.Preserve,
+      projectRoot: this.projectRoot,
+      tsconfigPath: configPath ?? null,
+      compilerOptions: {
+        target: this.compilerOptions.target,
+        module: this.compilerOptions.module,
+        moduleResolution: this.compilerOptions.moduleResolution,
+        baseUrl: this.compilerOptions.baseUrl,
+        paths: this.compilerOptions.paths,
+        esModuleInterop: this.compilerOptions.esModuleInterop,
+        allowSyntheticDefaultImports: this.compilerOptions.allowSyntheticDefaultImports,
+        skipLibCheck: this.compilerOptions.skipLibCheck,
+        jsx: this.compilerOptions.jsx,
+        types: this.compilerOptions.types,
+        typeRoots: this.compilerOptions.typeRoots,
+      },
+      rootFilesCount: this.rootFiles.length,
+      rootFilesSample: this.rootFiles.slice(0, 5),
+      nodeModulesPresent: existsSync(nodeModules),
+      angularCorePresent: existsSync(angularCore),
+      resolveAngularCore,
     };
   }
 
   private ensureService(): ts.LanguageService {
-    if (this.service) return this.service;
+    if (this.service) {
+      return this.service;
+    }
+    // One-shot debug log per project. The "ignored node_modules" class
+    // of bugs almost always traces back to either (a) the chosen
+    // tsconfig didn't have node_modules in its resolver path, (b) the
+    // user has no node_modules on disk, or (c) a paths/baseUrl mapping
+    // is shadowing the real package. This block surfaces all three at
+    // a glance the first time the service is built.
+    try {
+      const diag = this.diagnose();
+      console.log(
+        '[lsp] service init',
+        JSON.stringify(
+          {
+            projectRoot: diag.projectRoot,
+            tsconfigPath: diag.tsconfigPath,
+            moduleResolution: diag.compilerOptions.moduleResolution,
+            module: diag.compilerOptions.module,
+            baseUrl: diag.compilerOptions.baseUrl,
+            pathsKeys: diag.compilerOptions.paths
+              ? Object.keys(diag.compilerOptions.paths as object)
+              : null,
+            rootFilesCount: diag.rootFilesCount,
+            nodeModulesPresent: diag.nodeModulesPresent,
+            angularCorePresent: diag.angularCorePresent,
+            resolvedAngularCore: diag.resolveAngularCore?.resolvedFileName,
+            failedLookupsSample:
+              diag.resolveAngularCore?.resolvedFileName === null
+                ? diag.resolveAngularCore.failedLookupLocationsSample
+                : undefined,
+          },
+          null,
+          2,
+        ),
+      );
+    } catch (e) {
+      console.warn('[lsp] diagnose failed:', e);
+    }
+
     const host: ts.LanguageServiceHost = {
       getScriptFileNames: () => {
         const set = new Set([...this.rootFiles, ...this.files.keys()]);
@@ -205,14 +352,24 @@ export class TsLanguageService {
         }
       },
       getScriptSnapshot: (fileName) => {
-        const cached = this.files.get(fileName);
+        // TS may call with the path it received from getScriptFileNames
+        // OR with a slightly different shape after its own canonicalization
+        // (mixed case on Windows, etc.). Try the canonical form too.
+        const canonical = tsCanonical(fileName);
+        const cached = this.files.get(fileName) ?? this.files.get(canonical);
         if (cached) return ts.ScriptSnapshot.fromString(cached.content);
-        if (!existsSync(fileName)) return undefined;
+        // Don't gate on existsSync — readFileSync throws cleanly when the
+        // file's missing and gives the content for free when present.
         try {
           const content = readFileSync(fileName, 'utf-8');
           return ts.ScriptSnapshot.fromString(content);
         } catch {
-          return undefined;
+          try {
+            const content = readFileSync(canonical, 'utf-8');
+            return ts.ScriptSnapshot.fromString(content);
+          } catch {
+            return undefined;
+          }
         }
       },
       getCurrentDirectory: () => this.projectRoot,
@@ -223,6 +380,20 @@ export class TsLanguageService {
       readDirectory: ts.sys.readDirectory,
       directoryExists: ts.sys.directoryExists,
       getDirectories: ts.sys.getDirectories,
+      // Case-sensitivity: the default behaviour of `ts.sys` is what
+      // every other TS consumer (tsc, vscode) uses on the same OS.
+      // Explicitly forwarding it stops the LanguageService from
+      // defaulting to true on Windows, which would cause case-mismatch
+      // lookups against the on-disk drive letter.
+      useCaseSensitiveFileNames: () => ts.sys.useCaseSensitiveFileNames,
+      // CRITICAL for pnpm: `node_modules/@angular/core` is a symlink
+      // pointing into `node_modules/.pnpm/@angular+core@…/node_modules/`.
+      // Without realpath, TypeScript walks the literal symlink and
+      // can't follow nested imports inside the package's own bundle,
+      // which surfaces as "Cannot find module '@angular/core'" even
+      // when the file physically exists. `ts.sys.realpath` uses
+      // fs.realpathSync.native and is the same one tsc relies on.
+      realpath: ts.sys.realpath,
     };
     this.service = ts.createLanguageService(host, ts.createDocumentRegistry());
     return this.service;
@@ -259,23 +430,88 @@ export class TsLanguageService {
    * rebuilds with the file included. Cost: ~200ms on first hit, free
    * thereafter (the registry caches).
    */
+  /**
+   * Push the live editor buffer into the language-service host so
+   * subsequent calls see the unsaved text. Used by the IDE editor on
+   * every keystroke (debounced via the LSP request itself, not here).
+   *
+   * Behaviour:
+   *   - First call for a file: adds to rootFiles AND files snapshot map.
+   *   - Subsequent calls: only updates content + bumps version so the TS
+   *     LanguageService incrementally re-parses the file. No service
+   *     teardown — that would force a full Program rebuild on every
+   *     keystroke and kill latency.
+   *   - No-op when content matches the cached version (cheap dedupe).
+   */
+  setFileSnapshot(file: string, content: string): void {
+    const abs = this.toAbs(file);
+    const cached = this.files.get(abs);
+    if (cached && cached.content === content) return;
+    const nextVersion = String((cached ? Number(cached.version) : 0) + 1);
+    this.files.set(abs, { version: nextVersion, content });
+    // Make sure the program knows about this file as a root if it
+    // wasn't already; otherwise getCompletionsAtPosition will throw
+    // "Could not find source file".
+    if (!this.rootFiles.includes(abs)) {
+      this.rootFiles = [...this.rootFiles, abs];
+      this.service?.dispose();
+      this.service = null;
+    }
+  }
+
   private ensureFileTracked(absCanonical: string): void {
     if (this.rootFiles.includes(absCanonical)) return;
     if (this.files.has(absCanonical)) return;
-    if (!existsSync(absCanonical)) return;
+    // Use readFileSync (not existsSync) as the existence probe — it
+    // gives us the content for free AND defeats any case-sensitivity
+    // quirk in stat/exists calls. If the read fails the file is
+    // genuinely missing (deleted/permission denied) and there's
+    // nothing useful we can do.
+    let content: string;
+    try {
+      content = readFileSync(absCanonical, 'utf-8');
+    } catch (e) {
+      console.warn(
+        `[lsp] ensureFileTracked: cannot read ${absCanonical} (${e instanceof Error ? e.message : String(e)}). Skipping.`,
+      );
+      return;
+    }
+    // Pre-populate BOTH rootFiles AND the `files` snapshot map. Having
+    // a fresh snapshot in the map means the LanguageServiceHost's
+    // getScriptSnapshot returns content immediately without re-reading
+    // disk on every call — and shields us from races where the disk
+    // copy is mid-write when the program is built.
     this.rootFiles = [...this.rootFiles, absCanonical];
+    this.files.set(absCanonical, {
+      version: String(Date.now()),
+      content,
+    });
     // Tear down so the next ensureService() rebuilds with the new root.
     this.service?.dispose();
     this.service = null;
   }
 
-  /** Convert (line, col) → absolute character offset using live file content. */
+  /**
+   * Convert (line, col) → absolute character offset.
+   *
+   * Critical: prefer the in-memory snapshot from `this.files` over the
+   * on-disk copy. When the editor pushes live content via
+   * `setFileSnapshot`, that map holds the user's current buffer (with
+   * unsaved keystrokes). Reading from disk would give a stale version
+   * and produce off-by-N offsets right after the user types a `.`,
+   * which is exactly when completion needs to fire.
+   */
   private positionToOffset(fileAbs: string, line: number, column: number): number | null {
+    const cached = this.files.get(fileAbs);
     let content: string;
-    try {
-      content = readFileSync(fileAbs, 'utf-8');
-    } catch {
-      return null;
+    if (cached) {
+      content = cached.content;
+    } else {
+      try {
+        content = readFileSync(fileAbs, 'utf-8');
+      } catch {
+        return null;
+      }
     }
     // 1-based line/col → 0-based offset.
     const lines = content.split('\n');
@@ -286,13 +522,20 @@ export class TsLanguageService {
     return offset;
   }
 
-  /** Convert absolute offset → (line, col). */
+  /** Convert absolute offset → (line, col). Mirrors positionToOffset's
+   *  cache-first lookup so error-location math stays consistent with
+   *  the buffer the user actually sees. */
   private offsetToPosition(fileAbs: string, offset: number): { line: number; column: number } {
+    const cached = this.files.get(fileAbs);
     let content: string;
-    try {
-      content = readFileSync(fileAbs, 'utf-8');
-    } catch {
-      return { line: 1, column: 1 };
+    if (cached) {
+      content = cached.content;
+    } else {
+      try {
+        content = readFileSync(fileAbs, 'utf-8');
+      } catch {
+        return { line: 1, column: 1 };
+      }
     }
     let line = 1;
     let col = 1;
@@ -315,7 +558,15 @@ export class TsLanguageService {
     const service = this.ensureService();
     const offset = this.positionToOffset(abs, line, column);
     if (offset === null) return { targets: [] };
-    const defs = service.getDefinitionAtPosition(abs, offset) ?? [];
+    let defs: readonly ts.DefinitionInfo[];
+    try {
+      defs = service.getDefinitionAtPosition(abs, offset) ?? [];
+    } catch (e) {
+      console.warn(
+        `[lsp] getDefinition: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return { targets: [] };
+    }
     const targets: TsPosition[] = [];
     for (const d of defs) {
       const pos = this.offsetToPosition(d.fileName, d.textSpan.start);
@@ -330,7 +581,15 @@ export class TsLanguageService {
     const service = this.ensureService();
     const offset = this.positionToOffset(abs, line, column);
     if (offset === null) return { references: [] };
-    const refs = service.getReferencesAtPosition(abs, offset) ?? [];
+    let refs: readonly ts.ReferenceEntry[];
+    try {
+      refs = service.getReferencesAtPosition(abs, offset) ?? [];
+    } catch (e) {
+      console.warn(
+        `[lsp] getReferences: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return { references: [] };
+    }
     const references = refs.map((r) => {
       const pos = this.offsetToPosition(r.fileName, r.textSpan.start);
       return {
@@ -349,7 +608,15 @@ export class TsLanguageService {
     const service = this.ensureService();
     const offset = this.positionToOffset(abs, line, column);
     if (offset === null) return null;
-    const info = service.getQuickInfoAtPosition(abs, offset);
+    let info: ts.QuickInfo | undefined;
+    try {
+      info = service.getQuickInfoAtPosition(abs, offset);
+    } catch (e) {
+      console.warn(
+        `[lsp] getHover: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return null;
+    }
     if (!info) return null;
     const displayString = ts.displayPartsToString(info.displayParts);
     const documentation = ts.displayPartsToString(info.documentation);
@@ -364,8 +631,22 @@ export class TsLanguageService {
     const abs = this.toAbs(file);
     this.ensureFileTracked(abs);
     const service = this.ensureService();
-    const syntactic = service.getSyntacticDiagnostics(abs);
-    const semantic = service.getSemanticDiagnostics(abs);
+    // The TS LanguageService will throw `Could not find source file: <path>`
+    // when the path we pass isn't in the current Program. That can happen
+    // when the user edits a file the indexer hasn't yet observed, when
+    // the project rebuilds mid-call, or when paths drift after a rename.
+    // Surface it as zero diagnostics instead of a spammy crash trace.
+    let syntactic: readonly ts.Diagnostic[];
+    let semantic: readonly ts.Diagnostic[];
+    try {
+      syntactic = service.getSyntacticDiagnostics(abs);
+      semantic = service.getSemanticDiagnostics(abs);
+    } catch (e) {
+      console.warn(
+        `[lsp] getDiagnostics: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return [];
+    }
     const all: DiagnosticResult[] = [];
     for (const d of [...syntactic, ...semantic]) {
       let fileOut = abs;
@@ -408,11 +689,19 @@ export class TsLanguageService {
     const service = this.ensureService();
     const offset = this.positionToOffset(abs, line, column);
     if (offset === null) return [];
-    const result = service.getCompletionsAtPosition(abs, offset, {
-      includeCompletionsWithInsertText: true,
-      includeCompletionsForModuleExports: true,
-      triggerKind: ts.CompletionTriggerKind.Invoked,
-    });
+    let result: ts.CompletionInfo | undefined;
+    try {
+      result = service.getCompletionsAtPosition(abs, offset, {
+        includeCompletionsWithInsertText: true,
+        includeCompletionsForModuleExports: true,
+        triggerKind: ts.CompletionTriggerKind.Invoked,
+      });
+    } catch (e) {
+      console.warn(
+        `[lsp] getCompletions: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return [];
+    }
     if (!result) return [];
     return result.entries.map((e) => ({
       name: e.name,
@@ -426,12 +715,174 @@ export class TsLanguageService {
     }));
   }
 
+  /**
+   * Semantic-token classifications for an entire file. Drives the
+   * Monaco semantic-token provider — Monaco's own TS worker doesn't
+   * know about node_modules / tsconfig, so we own this.
+   *
+   * Returns LSP-style delta-encoded numbers in groups of 5:
+   *   [ deltaLine, deltaStartChar, length, tokenType, tokenModifiers ]
+   *
+   * The legend the renderer declares must match the indices we emit
+   * here. See SEMANTIC_TOKEN_TYPES / SEMANTIC_TOKEN_MODIFIERS below.
+   */
+  getSemanticTokens(file: string): number[] {
+    const abs = this.toAbs(file);
+    this.ensureFileTracked(abs);
+    const service = this.ensureService();
+
+    // Read the file content from our cached snapshot (live editor buffer
+    // when present) so the offset → line/char math matches what the
+    // user sees on screen.
+    const cached = this.files.get(abs);
+    let content: string;
+    if (cached) content = cached.content;
+    else {
+      try { content = readFileSync(abs, 'utf-8'); }
+      catch { return []; }
+    }
+
+    // Precompute line-start offsets so offsetToLineChar() is O(log n)
+    // per span instead of O(n) — files with thousands of tokens would
+    // otherwise spend visible time here.
+    const lineStarts: number[] = [0];
+    for (let i = 0; i < content.length; i++) {
+      if (content[i] === '\n') lineStarts.push(i + 1);
+    }
+    const offsetToLineChar = (offset: number): [number, number] => {
+      // Binary search for the line whose start is the greatest value ≤ offset.
+      let lo = 0;
+      let hi = lineStarts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >>> 1;
+        if (lineStarts[mid] <= offset) lo = mid;
+        else hi = mid - 1;
+      }
+      return [lo, offset - lineStarts[lo]];
+    };
+
+    let classifications: ts.Classifications;
+    try {
+      classifications = service.getEncodedSemanticClassifications(
+        abs,
+        { start: 0, length: content.length },
+        ts.SemanticClassificationFormat.TwentyTwenty,
+      );
+    } catch (e) {
+      console.warn(
+        `[lsp] getSemanticTokens: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
+      );
+      return [];
+    }
+
+    // `spans` is a flat number[] in triples [start, length, classification].
+    // `classification` packs (tokenType << TokenEncodingConsts.typeOffset) |
+    // tokenModifierSet — we mirror the same shift to recover the type.
+    // The TS source defines TokenEncodingConsts.typeOffset = 8 — we
+    // hardcode it (the const isn't exported on the public type surface).
+    const TS_TYPE_OFFSET = 8;
+    const TS_MOD_MASK = (1 << TS_TYPE_OFFSET) - 1;
+
+    const spans = classifications.spans;
+    const out: number[] = [];
+    let prevLine = 0;
+    let prevChar = 0;
+    for (let i = 0; i < spans.length; i += 3) {
+      const start = spans[i];
+      const length = spans[i + 1];
+      const cls = spans[i + 2];
+      const tsType = cls >> TS_TYPE_OFFSET;
+      const tsMods = cls & TS_MOD_MASK;
+      const lspType = TS_TYPE_TO_LSP_INDEX[tsType];
+      if (lspType === undefined) continue;
+      const lspMods = mapTsModifiersToLsp(tsMods);
+      const [line, char] = offsetToLineChar(start);
+      // Delta-encode against previous emitted token (LSP spec).
+      const deltaLine = line - prevLine;
+      const deltaChar = deltaLine === 0 ? char - prevChar : char;
+      out.push(deltaLine, deltaChar, length, lspType, lspMods);
+      prevLine = line;
+      prevChar = char;
+    }
+    return out;
+  }
+
   /** Drop internal caches. Called when the process shuts down or project root changes. */
   dispose(): void {
     this.service?.dispose();
     this.service = null;
     this.files.clear();
   }
+}
+
+// ── Semantic-token legend ────────────────────────────────────────
+//
+// The frontend declares the EXACT same legend when registering the
+// Monaco provider. Order matters — these arrays are indexed by the
+// numbers we emit in `getSemanticTokens`.
+
+/**
+ * LSP semantic token types we publish. Matches the standard names
+ * VS Code's default themes already have rules for, so colours appear
+ * out of the box.
+ */
+export const SEMANTIC_TOKEN_TYPES = [
+  'class',         // 0
+  'enum',          // 1
+  'interface',     // 2
+  'namespace',     // 3
+  'typeParameter', // 4
+  'type',          // 5
+  'parameter',     // 6
+  'variable',      // 7
+  'enumMember',    // 8
+  'property',      // 9
+  'function',      // 10
+  'method',        // 11
+] as const;
+
+export const SEMANTIC_TOKEN_MODIFIERS = [
+  'declaration',    // 0  bit 1
+  'static',         // 1  bit 2
+  'async',          // 2  bit 4
+  'readonly',       // 3  bit 8
+  'defaultLibrary', // 4  bit 16
+  'local',          // 5  bit 32
+] as const;
+
+/**
+ * Map TypeScript's ClassificationType (2020 format) → LSP type index.
+ * The TS enum values (in `ts.ClassificationType`) line up 0..11 with
+ * the legend above. Anything outside that range is dropped (returns
+ * undefined → the for-loop skips it).
+ *
+ * Numeric values come from the TypeScript source — they're stable
+ * across versions because the encoded classification protocol is
+ * public API surface.
+ */
+const TS_TYPE_TO_LSP_INDEX: Record<number, number | undefined> = {
+  0: 0,  // class
+  1: 1,  // enum
+  2: 2,  // interface
+  3: 3,  // namespace (module)
+  4: 4,  // typeParameter
+  5: 5,  // type
+  6: 6,  // parameter
+  7: 7,  // variable
+  8: 8,  // enumMember
+  9: 9,  // property
+  10: 10, // function
+  11: 11, // method
+};
+
+/**
+ * Map TS modifier bitset → LSP modifier bitset. TS bits (per the
+ * TokenModifier enum) line up 1:1 with our legend's bit positions,
+ * so it's an identity copy. Kept as a function for clarity and so
+ * we can adjust if TS shifts bits between versions.
+ */
+function mapTsModifiersToLsp(tsMods: number): number {
+  return tsMods;
 }
 
 export interface CompletionEntry {

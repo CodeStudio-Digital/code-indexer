@@ -123,7 +123,14 @@ function startDiagnosticsLoop(monaco: Monaco, projectId: number): MonacoNs.IDisp
     const path = model.uri.path.replace(/^\//, '');
     inflight += 1;
     try {
-      const diags = await apiCall<DiagnosticDTO[]>('lsp.diagnostics', { projectId, file: path });
+      const diags = await apiCall<DiagnosticDTO[]>('lsp.diagnostics', {
+        projectId,
+        file: path,
+        // Diagnostics run on a 1s poll — passing the live model text
+        // every tick is what keeps red squigglies in sync with what
+        // the user actually typed (vs the last-saved disk content).
+        content: model.getValue(),
+      });
       if (stopped) return;
       monaco.editor.setModelMarkers(
         model,
@@ -173,6 +180,62 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
 
   const disposers: MonacoNs.IDisposable[] = [];
 
+  // ─── Semantic token provider ────────────────────────────────────
+  //
+  // Monaco's built-in TS worker can't classify symbols correctly
+  // because it doesn't know the user's project (no tsconfig, no
+  // node_modules). Without semantic tokens, `this.router` is just
+  // a plain identifier — same colour as a local variable.
+  //
+  // Our LSP HAS the project context (real tsconfig, real
+  // node_modules walk via the TS Compiler API). It returns proper
+  // classifications (`property` for `.router`, `type` for `Router`,
+  // `method` for `.navigate`, etc.) which Monaco's default themes
+  // already have colour rules for — we get correct colours for free.
+  //
+  // The legend below MUST match the indices emitted by the backend's
+  // `getSemanticTokens` (see SEMANTIC_TOKEN_TYPES / MODIFIERS in
+  // ts-service.ts).
+  const SEMANTIC_TOKEN_LEGEND: MonacoNs.languages.SemanticTokensLegend = {
+    tokenTypes: [
+      'class', 'enum', 'interface', 'namespace', 'typeParameter',
+      'type', 'parameter', 'variable', 'enumMember', 'property',
+      'function', 'method',
+    ],
+    tokenModifiers: [
+      'declaration', 'static', 'async', 'readonly', 'defaultLibrary', 'local',
+    ],
+  };
+  for (const lang of SUPPORTED_LANGUAGES) {
+    disposers.push(
+      monaco.languages.registerDocumentSemanticTokensProvider(lang, {
+        getLegend: () => SEMANTIC_TOKEN_LEGEND,
+        async provideDocumentSemanticTokens(model) {
+          const path = model.uri.path;
+          try {
+            const result = await apiCall<{ data: number[]; resultId?: string }>(
+              'lsp.semanticTokens',
+              {
+                projectId,
+                file: path,
+                content: model.getValue(),
+              },
+            );
+            return {
+              data: new Uint32Array(result.data),
+              resultId: result.resultId,
+            };
+          } catch {
+            return { data: new Uint32Array(0) };
+          }
+        },
+        releaseDocumentSemanticTokens() {
+          /* no-op — backend doesn't keep cached results yet */
+        },
+      }),
+    );
+  }
+
   for (const lang of SUPPORTED_LANGUAGES) {
     disposers.push(
       monaco.languages.registerCompletionItemProvider(lang, {
@@ -185,6 +248,10 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
               projectId,
               file: path,
               position: { line: position.lineNumber, column: position.column },
+              // Live buffer — without this the backend reads the file
+              // from disk and misses unsaved keystrokes (e.g. the `.`
+              // that triggered this very completion).
+              content: model.getValue(),
             });
             return {
               suggestions: entries.map((e) => ({
@@ -216,6 +283,7 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
               projectId,
               file: path,
               position: { line: position.lineNumber, column: position.column },
+              content: model.getValue(),
             });
             if (!hover) return null;
             return {
@@ -240,6 +308,7 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
               projectId,
               file: path,
               position: { line: position.lineNumber, column: position.column },
+              content: model.getValue(),
             });
             return locs.map((loc) => ({
               // monaco.Uri.file expects an absolute filesystem path. The
@@ -266,6 +335,7 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
               projectId,
               file: path,
               position: { line: position.lineNumber, column: position.column },
+              content: model.getValue(),
             });
             return locs.map((loc) => ({
               uri: monaco.Uri.file(loc.file),

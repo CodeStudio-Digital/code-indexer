@@ -49,17 +49,27 @@ export function apiBaseUrl(): string {
   return '';
 }
 
-/** Resolve a dotted method path to the function on `electronAPI.api`. */
-function resolveElectronMethod(path: DotPath): ((input: unknown) => unknown) | null {
+/**
+ * Detect Electron via the contextBridge primitive. Previously we walked
+ * `window.electronAPI.api.foo.bar` to resolve a method — that relied on
+ * a Proxy surviving contextBridge, which it does NOT (Electron serialises
+ * exposed objects and Proxies have no own enumerable properties to walk).
+ * Effect: every IPC call silently fell through to `dottedToHttp`, and any
+ * method without an HTTP mapping (e.g. `terminal.spawn`) threw.
+ *
+ * Now we just check whether the primitive `invoke` is present — that's
+ * exposed as a plain function in preload, which DOES cross the bridge.
+ */
+function electronInvoke(): ((methodPath: string, payload: unknown) => Promise<unknown>) | null {
   const electron = typeof window !== 'undefined' ? window.electronAPI : undefined;
-  if (!electron) return null;
-  const parts = path.split('.');
-  let cur: unknown = electron.api;
-  for (const part of parts) {
-    if (cur == null) return null;
-    cur = (cur as Record<string, unknown>)[part];
-  }
-  return typeof cur === 'function' ? (cur as (input: unknown) => unknown) : null;
+  if (!electron || typeof electron.invoke !== 'function') return null;
+  return electron.invoke.bind(electron);
+}
+
+function electronOpenStream(): (<T>(methodPath: string, payload: unknown) => AsyncIterable<T>) | null {
+  const electron = typeof window !== 'undefined' ? window.electronAPI : undefined;
+  if (!electron || typeof electron.openStream !== 'function') return null;
+  return electron.openStream.bind(electron) as <T>(p: string, payload: unknown) => AsyncIterable<T>;
 }
 
 /**
@@ -185,13 +195,13 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
 }
 
 /**
- * One-shot RPC call. Prefers Electron IPC; falls back to HTTP for the
- * methods we've mapped in `dottedToHttp`.
+ * One-shot RPC call. Prefers Electron IPC (full coverage of api-bus);
+ * falls back to HTTP via `dottedToHttp` for the browser-dev path only.
  */
 export async function apiCall<T>(path: DotPath, input?: unknown): Promise<T> {
-  const electronFn = resolveElectronMethod(path);
-  if (electronFn) {
-    const wrapped = (await electronFn(input)) as { ok: boolean; value?: T; error?: { message: string; code?: string; status?: number } };
+  const invoke = electronInvoke();
+  if (invoke) {
+    const wrapped = (await invoke(path, input)) as { ok: boolean; value?: T; error?: { message: string; code?: string; status?: number } };
     if (!wrapped.ok) {
       const err = wrapped.error ?? { message: 'unknown ipc error' };
       const e = new Error(err.message) as Error & { code?: string; status?: number };
@@ -201,7 +211,7 @@ export async function apiCall<T>(path: DotPath, input?: unknown): Promise<T> {
     }
     return wrapped.value as T;
   }
-  // HTTP fallback
+  // HTTP fallback (browser dev only — Electron always has `invoke`).
   const mapped = dottedToHttp(path, input);
   if (!mapped) {
     throw new Error(`apiCall("${path}"): no HTTP fallback mapped — this method is Electron-only or needs a mapping entry`);
@@ -220,9 +230,9 @@ export async function apiCall<T>(path: DotPath, input?: unknown): Promise<T> {
  * with the same surface. Both end naturally when the producer closes.
  */
 export function apiStream<T>(path: DotPath, input?: unknown): AsyncIterable<T> {
-  const electronFn = resolveElectronMethod(path);
-  if (electronFn) {
-    return electronFn(input) as AsyncIterable<T>;
+  const stream = electronOpenStream();
+  if (stream) {
+    return stream<T>(path, input);
   }
   // Browser fallback — only the streams we explicitly handle today.
   // Returns an iterable that throws on first iteration if unmapped, so
@@ -240,7 +250,25 @@ export function apiStream<T>(path: DotPath, input?: unknown): AsyncIterable<T> {
   };
 }
 
-/** Type-safe alias when callers want the full Api shape (Electron-only). */
-export function electronApi(): Api | null {
-  return (typeof window !== 'undefined' && window.electronAPI?.api) || null;
+/**
+ * Quick boolean: are we in Electron with the IPC primitives wired?
+ *
+ * Replaces the old `electronApi()` helper that returned the (now-gone)
+ * Proxy object — `electronAPI.api` no longer exists since the Proxy
+ * approach didn't survive contextBridge. Callers that want the full
+ * type surface should use the `Api` type from `@mcp/api-bus` plus
+ * `apiCall(path, input)` for typed dispatch.
+ *
+ * Returns truthy in any Electron renderer where the preload loaded
+ * successfully; null when running in a browser dev tab or if the
+ * preload bridge failed to expose primitives.
+ */
+export function electronApi(): { invoke: ElectronAPI['invoke']; openStream: ElectronAPI['openStream'] } | null {
+  if (typeof window === 'undefined') return null;
+  const electron = window.electronAPI;
+  if (!electron || typeof electron.invoke !== 'function') return null;
+  return {
+    invoke: electron.invoke.bind(electron),
+    openStream: electron.openStream.bind(electron),
+  };
 }

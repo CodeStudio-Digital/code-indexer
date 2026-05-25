@@ -10,7 +10,20 @@ declare const __APP_VERSION__: string;
  */
 declare global {
   interface ElectronAPI {
-    api: Record<string, unknown>;
+    /**
+     * One-shot IPC call. `methodPath` is dotted (`coder.sessions.list`);
+     * the bridge translates to the colon channel internally. Returns the
+     * `{ok, value, error}` envelope produced by handlers-mount.ts.
+     */
+    invoke: (methodPath: string, payload: unknown) => Promise<unknown>;
+    /**
+     * AsyncIterable-backed stream call. Same path format as `invoke`.
+     * Returns immediately; iteration waits on a MessagePort transferred
+     * from main.
+     */
+    openStream: <T = unknown>(methodPath: string, payload: unknown) => AsyncIterable<T>;
+    /** Quick check: is the given dotted path registered as a stream endpoint? */
+    isStreamingPath: (methodPath: string) => boolean;
     /** Open a duplex MessagePort against an IPC stream channel. Used by terminal. */
     openDuplexStream?: (channel: string, payload: unknown) => {
       port: MessagePort;

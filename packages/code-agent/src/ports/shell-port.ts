@@ -103,6 +103,25 @@ export interface IShellPort {
 }
 
 /**
+ * Strip dev-only env vars from `process.env` before handing it to a
+ * spawned process. Without this, the parent process's NODE_OPTIONS
+ * (`--import tsx/esm` in our dev mode) leaks into every shelled-out
+ * command — `npm run dev` / `node script.js` in the user's project
+ * then crashes with ERR_MODULE_NOT_FOUND 'tsx' because their
+ * node_modules doesn't have tsx. Same with ELECTRON_RUN_AS_NODE
+ * (flags electron.exe as Node interpreter — only valid for our own
+ * subprocesses like the MCP bridge, never for user code).
+ */
+function cleanProcessEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.NODE_OPTIONS;
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.MCP_DEV_HTTP;
+  delete env.MCP_ELECTRON_DEV_URL;
+  return env;
+}
+
+/**
  * Default implementation: delegates to `child_process.spawn` / `spawnSync`.
  * Behavior MUST be identical to the pre-refactor `runCommand()` in shell.ts
  * and `git()` helper in git.ts.
@@ -114,7 +133,7 @@ export class LocalShellAdapter implements IShellPort {
     const child = spawn(command, {
       cwd,
       shell: isWin ? true : '/bin/bash',
-      env: env ?? process.env,
+      env: env ?? cleanProcessEnv(),
     });
     writeStdin(child, options.stdin);
     return this.collectStreaming(child, options);
@@ -128,7 +147,7 @@ export class LocalShellAdapter implements IShellPort {
     const { cwd, env } = options;
     const child = spawn(program, args, {
       cwd,
-      env: env ?? process.env,
+      env: env ?? cleanProcessEnv(),
     });
     writeStdin(child, options.stdin);
     return this.collectStreaming(child, options);
@@ -185,7 +204,7 @@ export class LocalShellAdapter implements IShellPort {
 
   async run(program: string, args: string[], options: ShellRunOptions): Promise<ShellExecResult> {
     const { cwd, env, encoding = 'utf-8' } = options;
-    const r = spawnSync(program, args, { cwd, encoding, env: env ?? process.env });
+    const r = spawnSync(program, args, { cwd, encoding, env: env ?? cleanProcessEnv() });
     if (r.error) {
       return {
         stdout: '',

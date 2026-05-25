@@ -43,6 +43,17 @@ interface NodePtyModule {
       cwd?: string;
       env?: Record<string, string | undefined>;
       encoding?: string;
+      /**
+       * Windows-only — force WinPTY backend when running inside
+       * Electron. ConPTY's `conpty_console_list_agent` helper spawns
+       * a child of `process.execPath` and calls AttachConsole on the
+       * parent's console; Electron is GUI-subsystem and has no
+       * console attached, so the helper crashes with "AttachConsole
+       * failed" and tears down the entire renderer. WinPTY uses a
+       * dedicated agent binary and works without console attachment.
+       * Non-Windows platforms ignore this flag.
+       */
+      useConpty?: boolean;
     },
   ): IPty;
 }
@@ -93,7 +104,25 @@ class PtyManager {
     const pty = loadPty();
     const file = opts.shell ?? defaultShell();
     const args = defaultShellArgs(file);
-    const env = { ...process.env, ...(opts.env ?? {}) };
+    // Build a CLEAN env for the user's terminal — strip the dev-only
+    // vars our parent process sets (NODE_OPTIONS injects tsx/esm,
+    // ELECTRON_RUN_AS_NODE flags the electron binary as a Node interpreter,
+    // MCP_* are internal flags). Leaking these into the shell breaks
+    // every `npm run dev` / `node script.js` the user runs because their
+    // project's node_modules doesn't have tsx, and the shell's `node`
+    // doesn't expect ELECTRON_RUN_AS_NODE.
+    const baseEnv: Record<string, string | undefined> = { ...process.env };
+    delete baseEnv.NODE_OPTIONS;
+    delete baseEnv.ELECTRON_RUN_AS_NODE;
+    delete baseEnv.MCP_DEV_HTTP;
+    delete baseEnv.MCP_ELECTRON_DEV_URL;
+    const env = { ...baseEnv, ...(opts.env ?? {}) };
+    // Force WinPTY backend on Windows-under-Electron — see the
+    // `useConpty` comment on NodePtyModule above. Detected via
+    // `process.versions.electron` so plain-Node deploys (CLI / standalone
+    // server) still get the faster ConPTY default.
+    const inElectron = !!process.versions.electron;
+    const isWindows = process.platform === 'win32';
     const child = pty.spawn(file, args, {
       name: 'xterm-color',
       cols: opts.cols,
@@ -101,6 +130,7 @@ class PtyManager {
       cwd: opts.cwd,
       env,
       encoding: 'utf8',
+      ...(isWindows && inElectron ? { useConpty: false } : {}),
     });
 
     const entry: PtyEntry = {

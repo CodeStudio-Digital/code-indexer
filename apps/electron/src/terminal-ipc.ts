@@ -61,6 +61,23 @@ interface NodePtyModule {
       cwd?: string;
       env?: Record<string, string | undefined>;
       encoding?: string;
+      /**
+       * Windows-only — controls which backend node-pty uses.
+       *   true (default)  → ConPTY (modern, fast). Spawns a helper
+       *                     `conpty_console_list_agent` as a child of
+       *                     `process.execPath` to enumerate the console
+       *                     process list. In Electron, process.execPath
+       *                     is `electron.exe` which runs under the
+       *                     Windows GUI subsystem — it has NO console
+       *                     attached, so the helper's AttachConsole call
+       *                     throws and the whole renderer crashes.
+       *   false          → falls back to WinPTY (legacy). Skips the
+       *                     console-list agent entirely. Slightly slower
+       *                     and uses the bundled `winpty-agent.exe`
+       *                     binary, but works under Electron without
+       *                     console attachment hacks.
+       */
+      useConpty?: boolean;
     },
   ): IPty;
 }
@@ -172,6 +189,21 @@ export function mountTerminalIpc(deps: ServerDeps): void {
       : (process.env.SHELL ?? '/bin/bash');
     const args: string[] = isWindows ? [] : ['-l'];
 
+    // Build a CLEAN env for the user's terminal. Our parent process
+    // sets NODE_OPTIONS=--import tsx/esm so dev.ts can run TS files;
+    // if we let that leak into the spawned shell, every `node`/`npm`
+    // command the user runs in THEIR project tries to import tsx from
+    // THEIR node_modules (which doesn't have it) and crashes with
+    // ERR_MODULE_NOT_FOUND. Same story for ELECTRON_RUN_AS_NODE (set
+    // for the MCP server subprocess in mcp-bridge.ts) — don't want
+    // that leaking either. Strip both and any other dev-only vars
+    // the IDE injects.
+    const cleanEnv: Record<string, string | undefined> = { ...process.env };
+    delete cleanEnv.NODE_OPTIONS;
+    delete cleanEnv.ELECTRON_RUN_AS_NODE;
+    delete cleanEnv.MCP_DEV_HTTP;
+    delete cleanEnv.MCP_ELECTRON_DEV_URL;
+
     let term: IPty;
     try {
       term = pty.spawn(shell, args, {
@@ -179,8 +211,16 @@ export function mountTerminalIpc(deps: ServerDeps): void {
         cols: payload.cols ?? 80,
         rows: payload.rows ?? 24,
         cwd,
-        env: process.env as Record<string, string | undefined>,
+        env: cleanEnv,
         encoding: 'utf-8',
+        // Windows: force WinPTY backend inside Electron. ConPTY's
+        // helper agent calls AttachConsole on the parent's console
+        // handle; Electron is a GUI-subsystem app and has no console,
+        // so the helper crashes with "AttachConsole failed" and the
+        // whole renderer's terminal pipeline tears down. See node-pty
+        // issue #437 / Microsoft/terminal#3070 for the rationale.
+        // Non-Windows platforms ignore this flag entirely.
+        ...(isWindows ? { useConpty: false } : {}),
       });
     } catch (e) {
       fail(`failed to spawn shell: ${e instanceof Error ? e.message : String(e)}`);

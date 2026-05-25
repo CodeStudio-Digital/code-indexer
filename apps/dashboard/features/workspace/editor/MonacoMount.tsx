@@ -190,6 +190,33 @@ export function MonacoMount({ file }: MonacoMountProps) {
         suggest: { showStatusBar: true },
         wordBasedSuggestions: 'matchingDocuments',
         inlayHints: { enabled: 'onUnlessPressed' },
+        // Navigation behaviour for Ctrl+Click on a symbol.
+        //   - definitions:        goto first result immediately. The
+        //                         default `'peek'` shows an inline popup
+        //                         and double-click on a row is supposed
+        //                         to open the file — that round-trip
+        //                         through Monaco's reference search
+        //                         widget doesn't fire our editor opener
+        //                         consistently, so the user perceives
+        //                         the navigation as broken. `'goto'`
+        //                         skips the popup entirely and our
+        //                         opener fires every time.
+        //   - type definitions:   same reasoning.
+        //   - implementations:    keep `'gotoAndPeek'` — usually 1, but
+        //                         when N>1 the peek list is useful.
+        //   - references:         `'view'` opens the references view
+        //                         instead of inline peek (still a popup
+        //                         but a more reliable widget on
+        //                         double-click). If we wire a dedicated
+        //                         References pane later, switch to a
+        //                         custom action.
+        gotoLocation: {
+          multipleDefinitions: 'goto',
+          multipleTypeDefinitions: 'goto',
+          multipleImplementations: 'gotoAndPeek',
+          multipleReferences: 'gotoAndPeek',
+          multipleDeclarations: 'goto',
+        },
       }}
     />
   );

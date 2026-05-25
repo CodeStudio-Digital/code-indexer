@@ -90,10 +90,25 @@ export class McpToolBridge {
     const { command, args } = isTypeScript
       ? { command: process.execPath, args: ['--import', 'tsx/esm', scriptPath] }
       : { command: process.execPath, args: [scriptPath] };
+
+    // Inside Electron, `process.execPath` is the electron binary — NOT a
+    // Node interpreter. Spawning it without the magic env var below tries
+    // to launch a new Electron app (full Chromium boot, never speaks the
+    // MCP stdio handshake), which surfaces as the bridge timing out
+    // ("MCP error -32001: Request timed out"). `ELECTRON_RUN_AS_NODE=1`
+    // tells the electron binary to skip its app initialisation and behave
+    // as a plain Node executable, which is what every other tool that
+    // shells out from Electron uses. No-op in regular Node (the var is
+    // ignored).
+    const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+    if (process.versions.electron) {
+      env.ELECTRON_RUN_AS_NODE = '1';
+    }
+
     this.transport = new StdioClientTransport({
       command,
       args,
-      env: process.env as Record<string, string>,
+      env,
     });
     this.client = new Client({ name: 'coder-agent', version: '0.1.0' }, { capabilities: {} });
     await this.client.connect(this.transport);

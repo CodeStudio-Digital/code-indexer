@@ -63,4 +63,35 @@ export function setupMonaco(): void {
   // Hand the bundled `monaco` to @monaco-editor/react so it skips the
   // CDN fetch + cdn-side instantiation that was disposing under us.
   loader.config({ monaco });
+
+  // ─── Disable Monaco's built-in TS validator entirely ────────────
+  //
+  // The Monaco TS worker runs in a project-agnostic sandbox — no
+  // tsconfig, no node_modules, no paths/baseUrl awareness. ANY signal
+  // it produces about the user's project is wrong in some direction:
+  //   - Diagnostics: floods the editor with "Cannot find module
+  //     '@angular/core'" (it can't see node_modules).
+  //   - Semantic tokens: can't classify `this.router` as a property of
+  //     type `Router` because it doesn't know the symbol exists.
+  //
+  // Our LSP (packages/code-agent/src/lsp/ts-service.ts) IS project-
+  // aware — it parses the real tsconfig, walks node_modules, resolves
+  // paths/baseUrl. So we let the LSP be authoritative for BOTH
+  // diagnostics (via `lsp.diagnostics`) AND semantic tokens (via
+  // `lsp.semanticTokens`, wired through `registerDocumentSemanticTokensProvider`
+  // in lspProvider.ts). Monaco's built-in stays off entirely; we
+  // don't mask error codes or guess at compilerOptions.
+  //
+  // Syntax validation stays ON — that's pure parse-level work, doesn't
+  // need project context, catches genuine `;` / `{` typos for free.
+  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+    noSemanticValidation: true,
+    noSyntaxValidation: false,
+    noSuggestionDiagnostics: true,
+  });
+  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+    noSemanticValidation: true,
+    noSyntaxValidation: false,
+    noSuggestionDiagnostics: true,
+  });
 }

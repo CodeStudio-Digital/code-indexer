@@ -12,7 +12,6 @@
 import {
   ApiError,
   type LspApi,
-  type Position,
   type LspLocation,
   type CompletionItem,
   type HoverInfo,
@@ -34,11 +33,27 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
     return isTsFile(file) ? null : fallback;
   }
 
+  // When the renderer ships its current model text in `content`, push
+  // it into the TS service BEFORE computing. Without this, all
+  // position-based queries see the on-disk file and miss unsaved
+  // keystrokes — the textbook symptom is autocomplete returning no
+  // suggestions right after the user types `.`, because the dot
+  // hasn't been written to disk yet.
+  function syncContent(root: string, file: string, content?: string): void {
+    if (content === undefined) return;
+    try {
+      getTsService(root).setFileSnapshot(file, content);
+    } catch {
+      /* setFileSnapshot is best-effort; if it fails we still try the call */
+    }
+  }
+
   return {
-    async completion({ projectId, file, position }) {
+    async completion({ projectId, file, position, content }) {
       const empty = emptyIfUnsupported(file, [] as CompletionItem[]);
       if (empty) return empty;
       const root = requireProjectRoot(projectId);
+      syncContent(root, file, content);
       const svc = getTsService(root);
       const entries = svc.getCompletions(file, position.line, position.column);
       return entries.map<CompletionItem>((e) => ({
@@ -49,9 +64,10 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       }));
     },
 
-    async hover({ projectId, file, position }) {
+    async hover({ projectId, file, position, content }) {
       if (!isTsFile(file)) return null;
       const root = requireProjectRoot(projectId);
+      syncContent(root, file, content);
       const info = getTsService(root).getHover(file, position.line, position.column);
       if (!info) return null;
       const lines: string[] = [];
@@ -61,10 +77,11 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       return hover;
     },
 
-    async definition({ projectId, file, position }) {
+    async definition({ projectId, file, position, content }) {
       const empty = emptyIfUnsupported(file, [] as LspLocation[]);
       if (empty) return empty;
       const root = requireProjectRoot(projectId);
+      syncContent(root, file, content);
       const { targets } = getTsService(root).getDefinition(file, position.line, position.column);
       return targets.map<LspLocation>((t) => ({
         file: t.file,
@@ -72,10 +89,11 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       }));
     },
 
-    async references({ projectId, file, position }) {
+    async references({ projectId, file, position, content }) {
       const empty = emptyIfUnsupported(file, [] as LspLocation[]);
       if (empty) return empty;
       const root = requireProjectRoot(projectId);
+      syncContent(root, file, content);
       const { references } = getTsService(root).getReferences(file, position.line, position.column);
       return references.map<LspLocation>((r) => ({
         file: r.file,
@@ -83,10 +101,11 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       }));
     },
 
-    async diagnostics({ projectId, file }) {
+    async diagnostics({ projectId, file, content }) {
       if (!file) return [];
       if (!isTsFile(file)) return [];
       const root = requireProjectRoot(projectId);
+      syncContent(root, file, content);
       const diags = getTsService(root).getDiagnostics(file);
       return diags.map<DiagnosticItem>((d) => ({
         file: d.file,
@@ -101,6 +120,16 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       }));
     },
 
+    async semanticTokens({ projectId, file, content }) {
+      // TS-only — JS gets the same TS service so it still works, but
+      // non-script files (md, css, etc.) skip entirely.
+      if (!isTsFile(file)) return { data: [] };
+      const root = requireProjectRoot(projectId);
+      syncContent(root, file, content);
+      const data = getTsService(root).getSemanticTokens(file);
+      return { data };
+    },
+
     async rename(_input) {
       // The TS service doesn't expose a rename surface yet — `getEditsForRefactor`
       // can do it but plumbing is non-trivial. Throw 501 until the IDE actually
@@ -111,7 +140,5 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
     async codeActions(_input) {
       throw new ApiError('not_implemented', 501, 'lsp.codeActions lands post-MVP');
     },
-  } satisfies LspApi & {
-    completion: (input: { projectId: number; file: string; position: Position }, ctx: never) => Promise<CompletionItem[]>;
-  };
+  } satisfies LspApi;
 }

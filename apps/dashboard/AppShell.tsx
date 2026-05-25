@@ -129,15 +129,13 @@ export function AppShell() {
     localStorage.setItem('theme', dark ? 'dark' : 'light');
   }, [dark]);
 
-  // Workspace mode opts out of the AppShell chrome entirely — the IDE
-  // owns 100dvh. Outlet renders directly.
-  if (view.page === 'project') {
-    return (
-      <div className="h-[100dvh] w-full bg-background text-foreground overflow-hidden">
-        <Outlet />
-      </div>
-    );
-  }
+  // NOTE: ProjectView (the unified project IDE at /projects/:id) lives
+  // INSIDE AppShell now — chrome stays visible so the user can jump to
+  // Agentes / Configurações / etc. without leaving the project. Earlier
+  // iterations short-circuited here to give the workspace 100dvh; that
+  // mode was retired when the rail + bottom panel + status bar moved
+  // INTO the project view itself. If a future surface needs full-bleed,
+  // gate on a dedicated page id (e.g. 'fullscreen') instead of 'project'.
 
   const nav: NavItem[] = [
     { id: 'home', label: t('nav.projects'), icon: Home, href: '/' },
@@ -216,10 +214,21 @@ export function AppShell() {
           content doesn't slam against the viewport. */}
       <main
         className={cn(
-          'flex-1 min-h-0 overflow-auto',
-          view.page === 'agents' || view.page === 'design-systems' || view.page === 'project-analytics'
-            ? ''
-            : 'px-6 py-5',
+          'flex-1 min-h-0',
+          // Full-bleed surfaces — these own their own padding and (for
+          // ProjectView / AgentsTab / DesignSystems) their own
+          // resize-panel layout, so AppShell mustn't inject overflow
+          // or padding. We also flip `<main>` to flex-column so the
+          // route root (which uses h-full internally) gets a proper
+          // flex parent; without this the route can collapse to its
+          // intrinsic content height and leak the background through
+          // the bottom of the viewport.
+          view.page === 'project' ||
+          view.page === 'agents' ||
+          view.page === 'design-systems' ||
+          view.page === 'project-analytics'
+            ? 'flex flex-col overflow-hidden'
+            : 'overflow-auto px-6 py-5',
         )}
       >
         <Outlet />

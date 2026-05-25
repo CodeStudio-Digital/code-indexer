@@ -114,18 +114,31 @@ function openStream<T>(channel: string, payload: unknown): AsyncIterable<T> {
   };
 }
 
-// ─── Proxy builder for the Api surface ────────────────────────
+// ─── IPC primitives exposed via contextBridge ─────────────────
 //
-// We build a deeply-nested Proxy. Property accesses walk the namespace
-// chain (`api.coder.sessions.list`) without instantiating intermediates
-// until the call site invokes `(input)`. The leaf invocation maps to
-// `ipcRenderer.invoke('api:coder:sessions:list', input)`.
+// Earlier iterations of this file exposed a deeply-nested Proxy as
+// `electronAPI.api` so the renderer could write
+// `await window.electronAPI.api.coder.sessions.list(input)`. That
+// looked elegant but didn't survive contextBridge: Electron's bridge
+// serialises the exposed value at expose time, and Proxies have no
+// own enumerable properties to walk — so the renderer received
+// either an empty object (Electron 26+) or a stripped function
+// (older versions). Effect: every IPC call that didn't have an
+// HTTP fallback in `dottedToHttp` silently broke (e.g. `terminal.spawn`
+// → "no HTTP fallback mapped" thrown by the dashboard).
 //
-// Streaming methods are detected by suffix convention — they all live
-// under `coder.stream.*` and have known names. Anything else is a
-// regular promise call. This avoids tagging methods at the bus level.
+// Fix: expose two PRIMITIVES — `invoke(channel, payload)` and
+// `openStream(channel, payload)`. The renderer builds the
+// `api.coder.sessions.list` Proxy LOCALLY using these, where Proxy
+// semantics work natively. The channel-name → method-path mapping
+// is now the renderer's job (it composes `api:<path-joined-by-colons>`
+// from the dotted call).
+//
+// STREAMING_METHOD_PATHS still lives here because the choice of
+// invoke-vs-stream has to be made by the caller (and the IPC
+// channel name encodes both flavours via the `stream:` prefix).
 
-const STREAMING_METHOD_PATHS = new Set<string>([
+const STREAMING_METHOD_PATHS: ReadonlySet<string> = new Set([
   'coder:stream:sendMessage',
   'coder:stream:continueSession',
   'coder:stream:attach',
@@ -145,25 +158,34 @@ const STREAMING_METHOD_PATHS = new Set<string>([
   'company:stream',
 ]);
 
-function buildApiProxy(prefix: string[]): unknown {
-  const target = function (..._args: unknown[]) {
-    /* placeholder body for typeof check */
-  };
-  return new Proxy(target, {
-    get(_t, prop: string) {
-      if (typeof prop !== 'string') return undefined;
-      return buildApiProxy([...prefix, prop]);
-    },
-    apply(_t, _thisArg, args) {
-      const channel = `api:${prefix.join(':')}`;
-      const isStream = STREAMING_METHOD_PATHS.has(prefix.join(':'));
-      const input = args[0];
-      if (isStream) {
-        return openStream(channel, input);
-      }
-      return ipcRenderer.invoke(channel, input);
-    },
-  });
+/**
+ * Invoke a one-shot IPC method. `methodPath` is the dotted form
+ * the renderer composes (e.g. `coder.sessions.list`). We translate
+ * to the colon-channel here so the renderer doesn't need to know
+ * the wire format.
+ */
+function invokeApi(methodPath: string, payload: unknown): Promise<unknown> {
+  const channel = `api:${methodPath.split('.').join(':')}`;
+  return ipcRenderer.invoke(channel, payload);
+}
+
+/**
+ * Open an AsyncIterable-backed stream. Returns immediately; the iterable
+ * waits on the MessagePort transferred from main. Same channel-name
+ * conversion as invokeApi.
+ */
+function openApiStream<T>(methodPath: string, payload: unknown): AsyncIterable<T> {
+  const colonPath = methodPath.split('.').join(':');
+  return openStream<T>(`api:${colonPath}`, payload);
+}
+
+/**
+ * Check whether a given dotted method path is a streaming endpoint.
+ * The renderer uses this to decide between invokeApi and openApiStream
+ * without having to import the catalogue.
+ */
+function isStreamingPath(methodPath: string): boolean {
+  return STREAMING_METHOD_PATHS.has(methodPath.split('.').join(':'));
 }
 
 /**
@@ -213,7 +235,11 @@ function openDuplex(channel: string, payload: unknown): { port: MessagePort; rea
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  api: buildApiProxy([]),
+  // Primitives — see the IPC primitives section above. The renderer
+  // builds a Proxy on top of these (Proxies don't cross contextBridge).
+  invoke: invokeApi,
+  openStream: openApiStream,
+  isStreamingPath,
   /** Open a bidirectional MessagePort stream. See openDuplex above. */
   openDuplexStream: (channel: string, payload: unknown) => openDuplex(`api:${channel}`, payload),
   openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),

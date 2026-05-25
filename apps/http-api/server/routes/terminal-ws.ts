@@ -83,6 +83,9 @@ interface NodePtyModule {
       cwd?: string;
       env?: Record<string, string | undefined>;
       encoding?: string;
+      /** Windows-only — force WinPTY when inside Electron (ConPTY's
+       *  agent helper crashes on AttachConsole under GUI subsystem). */
+      useConpty?: boolean;
     },
   ): IPty;
 }
@@ -373,6 +376,11 @@ function handleConnection(
   spec: SpawnSpec,
 ): void {
   let proc: IPty;
+  // Force WinPTY backend in Electron — see NodePtyModule's `useConpty`
+  // comment. Plain Node deployments (CLI / standalone server) keep
+  // ConPTY for the perf win.
+  const inElectron = !!process.versions.electron;
+  const isWindows = process.platform === 'win32';
   try {
     proc = pty.spawn(spec.file, spec.args, {
       name: 'xterm-256color',
@@ -381,6 +389,7 @@ function handleConnection(
       cwd: spec.cwd,
       env: spec.env,
       encoding: 'utf8',
+      ...(isWindows && inElectron ? { useConpty: false } : {}),
     });
   } catch (e) {
     safeSend(ws, { type: 'error', message: `spawn failed: ${e instanceof Error ? e.message : String(e)}` });

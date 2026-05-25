@@ -15,8 +15,7 @@ import {
   ToastHost,
 } from './components/ui/prompt-dialog.js';
 import Admin from './features/admin/index.js';
-import { ProjectDetail, ProjectList } from './features/project/index.js';
-import { Workspace } from './features/workspace/Workspace.js';
+import { ProjectDetail, ProjectList, ProjectView } from './features/project/index.js';
 import { AgentsTab } from './features/agents/AgentsTab.js';
 import { DesignSystemsTab } from './features/design-systems/DesignSystemsTab.js';
 import { TelemetryDashboard } from './features/telemetry/TelemetryDashboard.js';
@@ -28,6 +27,55 @@ import { buildAgentsDefaultUrl } from './features/agents/routing.js';
 import { OnboardingWizard, isOnboarded, resetOnboarding } from './features/onboarding/OnboardingWizard.js';
 
 // ─── Route components ────────────────────────────────────────
+
+/**
+ * Element for the root `/` route. Owns the AppShell chrome AND the
+ * onboarding wizard overlay.
+ *
+ * Why this exists instead of just using `<AppShell />` as the route:
+ * the wizard's ProjectStep calls `useNavigate()` to jump to the new
+ * project's Workspace after creation. `useNavigate` is a hook that
+ * MUST be evaluated inside the React Router tree (i.e. somewhere
+ * under `<RouterProvider>`). When the wizard sat as a sibling of
+ * `<RouterProvider>` in App(), the hook threw an `invariant` on the
+ * first render of ProjectStep and tore the whole tree down → blank
+ * screen colored by the theme background.
+ *
+ * Putting the wizard inside an AppRoot that itself is the element of
+ * the `/` route fixes that — the wizard is now inside the Router
+ * tree and `useNavigate` resolves correctly.
+ */
+function AppRoot() {
+  const [showOnboarding, setShowOnboarding] = useState(() => !isOnboarded());
+
+  // Dev helpers — surfaced via DevTools console so QA can re-run the
+  // wizard, inspect Electron bridge state, etc. without rebuilding.
+  //   window.mcp.resetOnboarding()  → clears the flag + shows the wizard
+  //   window.mcp.transport          → 'electron' | 'browser' (sanity check)
+  //   window.mcp.hasBridge          → was the preload able to expose electronAPI?
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const isElectron =
+      typeof navigator !== 'undefined' && /\bElectron\//i.test(navigator.userAgent);
+    (window as unknown as { mcp?: object }).mcp = {
+      transport: isElectron ? 'electron' : 'browser',
+      hasBridge: !!window.electronAPI,
+      resetOnboarding: () => {
+        resetOnboarding();
+        setShowOnboarding(true);
+      },
+    };
+  }, []);
+
+  return (
+    <>
+      <AppShell />
+      {showOnboarding && (
+        <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+      )}
+    </>
+  );
+}
 
 function HomeRoute() {
   const navigate = useNavigate();
@@ -59,10 +107,23 @@ function ProjectRoute() {
   );
 }
 
-function WorkspaceRoute() {
+/**
+ * `/projects/:id` — the unified project IDE surface (ProjectView).
+ *
+ * Replaces the standalone JetBrains-style Workspace AND the old
+ * analytics-only ProjectDetail tab list. Renders inside the AppShell
+ * chrome (the topbar nav stays visible) so users can jump between
+ * Projetos / Agentes / Admin / etc. without leaving the project they
+ * just opened.
+ *
+ * The legacy `/projects/:id/analytics` route still works for the
+ * chart-heavy slice — ProjectView exposes a button on its topbar to
+ * open it. We may consolidate further once analytics graduates into
+ * its own tab in the rail.
+ */
+function ProjectViewRoute() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
   const projectId = Number(id);
   const project = useApi<{ id: number; name: string }>(
     Number.isFinite(projectId) ? `/projects/${projectId}` : '',
@@ -77,11 +138,10 @@ function WorkspaceRoute() {
   const initialSessionId = sessionIdRaw ? Number(sessionIdRaw) : undefined;
 
   return (
-    <Workspace
+    <ProjectView
       projectId={projectId}
       projectName={project.data.name}
       initialSessionId={Number.isFinite(initialSessionId) ? initialSessionId : undefined}
-      onExit={() => navigate(`/projects/${projectId}/analytics`)}
     />
   );
 }
@@ -104,10 +164,14 @@ function DesignSystemsRoute() {
 const router = createBrowserRouter([
   {
     path: '/',
-    element: <AppShell />,
+    // AppRoot wraps AppShell + the onboarding wizard overlay so the
+    // wizard renders inside the Router context (useNavigate works).
+    // AppShell itself renders <Outlet />, so the children below still
+    // mount exactly where they did before.
+    element: <AppRoot />,
     children: [
       { index: true, element: <HomeRoute /> },
-      { path: 'projects/:id', element: <WorkspaceRoute /> },
+      { path: 'projects/:id', element: <ProjectViewRoute /> },
       { path: 'projects/:id/analytics', element: <ProjectRoute /> },
       { path: 'agents', element: <AgentsTab /> },
       { path: 'company/sessions/:rootId', element: <CompanyRedirectRoute /> },
@@ -122,42 +186,19 @@ const router = createBrowserRouter([
 ]);
 
 export default function App() {
-  // First-run gate. The wizard sets `mcp-ide:onboarded` in localStorage;
-  // subsequent loads skip it. Setting `showOnboarding` to false lets the
-  // user finish the wizard mid-session without forcing a reload.
-  const [showOnboarding, setShowOnboarding] = useState(() => !isOnboarded());
-
-  // Dev helpers — surfaced via DevTools console so QA can re-run the
-  // wizard, inspect Electron bridge state, etc. without rebuilding.
-  //   window.mcp.resetOnboarding()  → clears the flag + shows the wizard
-  //   window.mcp.transport          → 'electron' | 'browser' (sanity check)
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const isElectron =
-      typeof navigator !== 'undefined' && /\bElectron\//i.test(navigator.userAgent);
-    (window as unknown as { mcp?: object }).mcp = {
-      transport: isElectron ? 'electron' : 'browser',
-      hasBridge: !!window.electronAPI,
-      resetOnboarding: () => {
-        resetOnboarding();
-        setShowOnboarding(true);
-      },
-    };
-  }, []);
-
   return (
     <TooltipProvider delayDuration={300}>
       <DialogProvider>
         <RouterProvider router={router} />
         {/* Global hosts — replace Electron-blocked window.prompt/confirm/alert
             with promise-based dialogs + a toast surface. Mounted once near
-            the React root so any component can call prompt()/confirm()/toast.* */}
+            the React root so any component can call prompt()/confirm()/toast.*
+            These DO sit outside the Router on purpose: they don't use any
+            Router hooks (they have their own Zustand stores). The
+            onboarding wizard moved INSIDE the Router via AppRoot above. */}
         <PromptDialogHost />
         <ConfirmDialogHost />
         <ToastHost />
-        {showOnboarding && (
-          <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
-        )}
       </DialogProvider>
     </TooltipProvider>
   );
