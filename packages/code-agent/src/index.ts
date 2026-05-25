@@ -195,6 +195,15 @@ export interface RunCoderOptions {
    */
   mcpBearerResolver?: import('@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js').ResolveMcpBearer | null;
   /**
+   * Inject a pre-existing external-MCP manager instead of opening a fresh
+   * connection set per run. The http-api wires this to a process-wide
+   * `McpExternalPool` so every coder worker reuses one set of transports;
+   * standalone runs (CLI, tests) leave it undefined and get the legacy
+   * "connect on demand" path. The implementation is responsible for
+   * matching `IMcpServerManager` semantics.
+   */
+  externalMcpManager?: import('@mcp/code-agent/tools/mcp-server-manager-interface.js').IMcpServerManager;
+  /**
    * Phase 2 hardening: explicit escape hatch the policy module consults
    * when running in strict mode (Phase 5). Today this flag is reserved —
    * the runner builds its policy context with `strict: false` so the
@@ -448,7 +457,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // External MCP servers — configured via admin panel (migration 015).
   // Connected AFTER internal bridge so external tools are at the tail of the
   // registry, meaning they are trimmed first when the model tool cap kicks in.
-  const mcpServerManager = new McpServerManager(opts.mcpBearerResolver ?? null);
+  //
+  // Prefer the caller-provided manager (typically the http-api's pool-backed
+  // `RemoteMcpServerManager`) so we don't reopen transports per run. Fall back
+  // to a local `McpServerManager` for CLI / test usage where there's no pool.
+  const mcpServerManager: import('@mcp/code-agent/tools/mcp-server-manager-interface.js').IMcpServerManager =
+    opts.externalMcpManager ?? new McpServerManager(opts.mcpBearerResolver ?? null);
   let externalToolTiers: ReadonlyMap<string, import('@mcp/code-agent/tools/tiers.js').ToolTier> | undefined;
   // Subordinate-only override: turns each connected MCP server into its own
   // expandable custom tier (named by server id) so the agent sees the pack

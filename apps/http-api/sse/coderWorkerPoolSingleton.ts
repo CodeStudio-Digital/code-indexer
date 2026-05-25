@@ -11,6 +11,7 @@ import {
   CoderWorkerPool,
   type CoderWorkerDocDeps,
 } from './CoderWorkerPool.js';
+import type { McpExternalPool } from './McpExternalPool.js';
 import { resolveWorkerFile, type ResolvedWorker } from './workerFileResolution.js';
 
 let cachedPool: CoderWorkerPool | null = null;
@@ -21,6 +22,15 @@ let cachedPool: CoderWorkerPool | null = null;
  * the first call also propagate to subsequently-spawned workers.
  */
 const docDeps: CoderWorkerDocDeps = {};
+/**
+ * Mutable box for the shared external-MCP pool. Set during boot via
+ * `setCoderWorkerMcpPool(pool)` after `pool.boot()` resolves. The
+ * `CoderWorkerPool` reads this reference each time it spawns a worker
+ * (via `this.opts.mcpExternalPool`), so workers spawned BEFORE the
+ * pool finishes booting fall back gracefully to the legacy
+ * per-worker manager.
+ */
+const mcpPoolBox: { pool: McpExternalPool | null } = { pool: null };
 
 function tryResolve(): ResolvedWorker | null {
   return resolveWorkerFile(import.meta.url, 'coder-worker');
@@ -87,6 +97,11 @@ export function getCoderWorkerPool(): CoderWorkerPool {
     // inside `ensureEntry`, so adding deps after the first spawn still
     // benefits later worker spawns.
     docDeps,
+    // Late-bound getter so the pool can be wired AFTER the http-api
+    // starts serving requests; the first worker that spawns before
+    // `setMcpExternalPool` runs simply sees `null` and falls back to
+    // the legacy per-worker manager.
+    getMcpExternalPool: () => mcpPoolBox.pool,
   });
   return cachedPool;
 }
@@ -108,6 +123,18 @@ export function setCoderWorkerDocDeps(
 ): void {
   if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
   if (deps.docsResearch !== undefined) docDeps.docsResearch = deps.docsResearch;
+}
+
+/**
+ * Wire the shared external-MCP pool into the coder worker pool. The
+ * pool boot can take a few seconds (each external MCP server does a
+ * TLS handshake + listTools call), so server.ts calls this AFTER
+ * `pool.boot()` resolves. Workers spawned before this point harmless
+ * — `getMcpExternalPool` returns null until set, and the worker-side
+ * snapshot RPC simply gets an empty list and skips external tools.
+ */
+export function setCoderWorkerMcpPool(pool: McpExternalPool | null): void {
+  mcpPoolBox.pool = pool;
 }
 
 export function coderWorkerEnabled(): boolean {

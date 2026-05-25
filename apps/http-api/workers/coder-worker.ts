@@ -55,6 +55,7 @@ import {
 import type { DocsResearchResult } from '../../../packages/docs-agent/src/types.js';
 import { createBus, publish, markEnded, setBusRunner, subscribe } from '../coder-bus.js';
 import { wireRunnerEventsToBus } from '../sse/runnerWiring.js';
+import { RemoteMcpServerManager } from './RemoteMcpServerManager.js';
 
 interface CoderWorkerData {
   sessionId: number;
@@ -117,6 +118,10 @@ const docsResearcherShim = {
     bridge.request<DocsResearchResult>('docsResearch', input, { timeoutMs: 10 * 60_000 }),
 } as unknown as DocsResearchBridge;
 setGlobalDocsResearcher(docsResearcherShim);
+
+// External-MCP proxy. Constructed once per worker; reuses the main
+// process's `McpExternalPool` for every run inside this worker.
+const remoteMcpManager = new RemoteMcpServerManager(bridge);
 
 // Worker-local state for the active run. Re-set on every `runFresh`.
 const ctrl = new AbortController();
@@ -395,6 +400,13 @@ bridge.handle('runFresh', async (payload) => {
       onRunnerReady: (innerRunner) => {
         installDocsDeepResearch(innerRunner);
       },
+      // RemoteMcpServerManager fronts the main-process McpExternalPool
+      // so we don't redial every external MCP server per session boot.
+      // The pool serializes a snapshot once per worker; tool invocations
+      // round-trip through `mcpExt.callTool`. When the http-api wasn't
+      // wired with a pool (legacy / tests), the snapshot comes back
+      // empty and runCoder falls through its "no external tools" path.
+      externalMcpManager: remoteMcpManager,
     } as Parameters<typeof runCoder>[0]);
     handle = result;
     runner = result.runner;

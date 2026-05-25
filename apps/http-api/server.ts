@@ -96,7 +96,8 @@ import {
   DocsResearchBridge,
   setGlobalDocsResearcher,
 } from '@mcp/docs-agent/bridges/docs-bridge.js';
-import { setCoderWorkerDocDeps } from './sse/coderWorkerPoolSingleton.js';
+import { setCoderWorkerDocDeps, setCoderWorkerMcpPool } from './sse/coderWorkerPoolSingleton.js';
+import { McpExternalPool } from './sse/McpExternalPool.js';
 import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
 
@@ -615,7 +616,27 @@ export function createApp() {
   setCoderWorkerDocDeps({ docSearch: docSearchBackend, docsResearch: docsResearchBridge });
   mountDocsAgentRoutes(app, deps, docsResearchBridge);
 
-  return { app, db: deps.db, chromeService, deps };
+  // External-MCP connection pool. Boots async so the dashboard
+  // starts serving immediately; the first chat session may pay a
+  // small "no external tools" penalty if the boot hasn't finished,
+  // but every subsequent session benefits from the pre-warmed
+  // connections. Failures here don't bring the http-api down — we
+  // log + continue. Coder worker pool picks the live reference via
+  // `getMcpExternalPool` on each spawn.
+  const mcpPool = new McpExternalPool({
+    dbPath: deps.config.dbPath,
+    bearerResolver: deps.mcpBearerResolver ?? null,
+  });
+  setCoderWorkerMcpPool(mcpPool);
+  void mcpPool
+    .boot()
+    .catch((e) => {
+      console.warn(
+        `[mcp-ext-pool] boot failed (continuing without pool): ${e instanceof Error ? e.message : String(e)}`,
+      );
+    });
+
+  return { app, db: deps.db, chromeService, deps, mcpPool };
 }
 
 export async function startServer(port: number, host: string) {

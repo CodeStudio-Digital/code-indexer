@@ -36,6 +36,7 @@ import {
 import type { CoderAttachment } from '@mcp/code-agent/index.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
+import type { McpExternalPool } from './McpExternalPool.js';
 
 /**
  * Optional doc-corpus deps the host wires AFTER `boot/createApp` has built
@@ -87,6 +88,15 @@ export interface CoderWorkerPoolOpts {
    * to the NEXT worker spawned.
    */
   docDeps?: CoderWorkerDocDeps;
+  /**
+   * Optional getter for the shared external-MCP pool. We use a getter
+   * (instead of a direct reference) so server.ts can spawn the pool
+   * asynchronously AFTER the dashboard starts serving requests, and
+   * the very first worker spawned still picks up the pool once it's
+   * ready. Returning `null` keeps the legacy per-worker
+   * `McpServerManager` path alive (covers boot-race + tests).
+   */
+  getMcpExternalPool?: () => McpExternalPool | null;
 }
 
 interface PoolEntry {
@@ -426,6 +436,37 @@ export class CoderWorkerPool {
       return researcher.runResearch(payload as Parameters<DocsResearchBridge['runResearch']>[0]);
     });
 
+    // ─── External-MCP pool bridge ─────────────────────────────────────
+    // Worker's `RemoteMcpServerManager` requests a snapshot once per run
+    // (in `connectAll()`) and routes every tool invocation through
+    // `mcpExt.callTool`. The pool field is mutable on `opts` because
+    // the singleton wire-up sets it after the pool finishes booting
+    // (server.ts boots Hono synchronously, then awaits pool.boot()).
+    const offMcpSnapshot = bridge.handle('mcpExt.snapshot', async () => {
+      const pool = this.opts.getMcpExternalPool?.() ?? null;
+      if (!pool) {
+        // Empty snapshot keeps the worker happy — `extTools.length > 0`
+        // gate in runCoder simply skips external registration.
+        return {
+          tools: [],
+          tierMap: [],
+          states: [],
+          customTierSummary: [],
+          enabledServers: [],
+          connectedCount: 0,
+        };
+      }
+      return pool.getSnapshot();
+    });
+    const offMcpCallTool = bridge.handle('mcpExt.callTool', async (payload) => {
+      const pool = this.opts.getMcpExternalPool?.() ?? null;
+      if (!pool) {
+        return { ok: false, text: 'External MCP pool not configured in this http-api process.' };
+      }
+      const p = payload as { serverId: string; toolName: string; args: Record<string, unknown> };
+      return pool.callTool(p.serverId, p.toolName, p.args);
+    });
+
     const offEvent = bridge.on('bus.event', (payload) => {
       const env = payload as { event: string; data: unknown };
       publish(bus, env.event, env.data);
@@ -470,6 +511,8 @@ export class CoderWorkerPool {
         try { offEnd(); } catch { /* best-effort */ }
         try { offDocSearch(); } catch { /* best-effort */ }
         try { offDocsResearch(); } catch { /* best-effort */ }
+        try { offMcpSnapshot(); } catch { /* best-effort */ }
+        try { offMcpCallTool(); } catch { /* best-effort */ }
       },
     };
     this.entries.set(sessionId, entry);
