@@ -1,18 +1,18 @@
 /**
- * Git tool window — local working-tree status for the project's
- * `root_path`. Replaces the Day-6 placeholder.
+ * Git tool window — full IDE-style git surface for the project's
+ * `root_path`. Sub-tabs split responsibilities so each view stays
+ * focused:
  *
- * UI:
- *   - Header: current branch · ahead/behind · refresh + commit buttons
- *   - Staged section (collapsible)  — toggle stage with the icon button
- *   - Unstaged section (collapsible) — stage / discard per file
- *   - Untracked section (collapsible) — stage adds them, discard deletes
- *   - Empty state when the working tree is clean
- *   - Friendly notice when root_path isn't a git repo
+ *   - Changes  → working-tree status (stage / unstage / commit / discard)
+ *   - Branches → list locals + remotes, checkout, create, delete, merge
+ *   - History  → linear commit log per branch, context menu for
+ *                cherry-pick / revert / reset
+ *   - AI       → natural-language → plan of git commands → user confirm
+ *                → executed sequentially, per-step results inline
  *
- * Diffs aren't rendered inline yet — click a file to copy its unified
- * diff to the clipboard. Side-by-side diff in the editor pane lands in
- * a follow-up commit once a tab-style "diff: src/foo.ts" surface exists.
+ * Diffs render in editor tabs (`openDiff` from workspace store). The
+ * shared `notARepo` notice + branch header live in this container so
+ * sub-views start with the assumption that we ARE in a git repo.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -22,10 +22,12 @@ import {
   ChevronRight,
   GitBranch,
   GitCommit as GitCommitIcon,
+  History,
   Loader2,
   Minus,
   Plus,
   RefreshCw,
+  Sparkles,
   Trash2,
   Undo2,
 } from 'lucide-react';
@@ -42,6 +44,11 @@ import {
 } from '../../../../components/ui/dialog.js';
 import { ToolWindowFrame } from '../ToolWindowFrame.js';
 import { cn } from '../../../../lib/utils.js';
+import { BranchesView } from './git/BranchesView.js';
+import { HistoryView } from './git/HistoryView.js';
+import { GitPromptView } from './git/GitPromptView.js';
+
+type GitTab = 'changes' | 'branches' | 'history' | 'ai';
 
 interface GitStatusFile {
   path: string;
@@ -83,6 +90,7 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
   const [error, setError] = useState<string | null>(null);
   const [commitOpen, setCommitOpen] = useState(false);
   const [openSections, setOpenSections] = useState({ staged: true, unstaged: true, untracked: false });
+  const [tab, setTab] = useState<GitTab>('changes');
   const openDiff = useWorkspaceStore((s) => s.openDiff);
 
   const showDiff = useCallback(
@@ -229,6 +237,10 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
         }
       >
         <div className="h-full flex flex-col min-h-0">
+          {/* Branch header — always visible regardless of active tab.
+              Anchors the panel to the current repo state so the user
+              never wonders "which branch is the History/AI tab
+              talking about?". */}
           {status && (
             <div className="shrink-0 px-2.5 py-1.5 border-b text-[11px] flex items-center gap-2">
               <GitBranch className="h-3 w-3 text-primary" />
@@ -242,123 +254,38 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
               </span>
             </div>
           )}
-          {error && <div className="px-3 py-2 text-[11px] text-destructive">{error}</div>}
-          {status && !error && status.files.length === 0 && (
-            <div className="flex-1 grid place-items-center text-center text-muted-foreground gap-2 px-4">
-              <Check className="h-5 w-5 text-emerald-500 opacity-70" />
-              <p className="text-[11.5px]">Working tree clean — nothing to commit.</p>
-            </div>
+
+          {/* Sub-tab nav — narrow, icon+label. The selected tab gets a
+              top accent stripe + filled chip to match the IDE-rail
+              convention elsewhere in the workspace. */}
+          <GitTabNav active={tab} onChange={setTab} />
+
+          {error && tab === 'changes' && (
+            <div className="px-3 py-2 text-[11px] text-destructive shrink-0">{error}</div>
           )}
-          <div className="flex-1 min-h-0 overflow-y-auto">
-            {groups.staged.length > 0 && (
-              <Section
-                title={`Staged (${groups.staged.length})`}
-                open={openSections.staged}
-                onToggle={() => setOpenSections((s) => ({ ...s, staged: !s.staged }))}
-                bulkAction={
-                  <button
-                    type="button"
-                    className="text-[10px] text-muted-foreground hover:text-foreground"
-                    onClick={() => void onUnstage(groups.staged.map((f) => f.path))}
-                  >
-                    Unstage all
-                  </button>
-                }
-              >
-                {groups.staged.map((f) => (
-                  <FileRow
-                    key={`s-${f.path}`}
-                    file={f}
-                    onClick={() => void showDiff(f)}
-                    actions={
-                      <RowButton
-                        icon={Minus}
-                        title="Unstage"
-                        onClick={() => void onUnstage([f.path])}
-                      />
-                    }
-                  />
-                ))}
-              </Section>
-            )}
-            {groups.unstaged.length > 0 && (
-              <Section
-                title={`Changes (${groups.unstaged.length})`}
-                open={openSections.unstaged}
-                onToggle={() => setOpenSections((s) => ({ ...s, unstaged: !s.unstaged }))}
-                bulkAction={
-                  <button
-                    type="button"
-                    className="text-[10px] text-muted-foreground hover:text-foreground"
-                    onClick={() => void onStage(groups.unstaged.map((f) => f.path))}
-                  >
-                    Stage all
-                  </button>
-                }
-              >
-                {groups.unstaged.map((f) => (
-                  <FileRow
-                    key={`u-${f.path}`}
-                    file={f}
-                    onClick={() => void showDiff(f)}
-                    actions={
-                      <>
-                        <RowButton
-                          icon={Plus}
-                          title="Stage"
-                          onClick={() => void onStage([f.path])}
-                        />
-                        <RowButton
-                          icon={Undo2}
-                          title="Discard"
-                          destructive
-                          onClick={() => void onDiscard([f.path])}
-                        />
-                      </>
-                    }
-                  />
-                ))}
-              </Section>
-            )}
-            {groups.untracked.length > 0 && (
-              <Section
-                title={`Untracked (${groups.untracked.length})`}
-                open={openSections.untracked}
-                onToggle={() => setOpenSections((s) => ({ ...s, untracked: !s.untracked }))}
-                bulkAction={
-                  <button
-                    type="button"
-                    className="text-[10px] text-muted-foreground hover:text-foreground"
-                    onClick={() => void onStage(groups.untracked.map((f) => f.path))}
-                  >
-                    Stage all
-                  </button>
-                }
-              >
-                {groups.untracked.map((f) => (
-                  <FileRow
-                    key={`x-${f.path}`}
-                    file={f}
-                    actions={
-                      <>
-                        <RowButton
-                          icon={Plus}
-                          title="Stage"
-                          onClick={() => void onStage([f.path])}
-                        />
-                        <RowButton
-                          icon={Trash2}
-                          title="Delete (untracked only)"
-                          destructive
-                          onClick={() => void onDiscard([f.path])}
-                        />
-                      </>
-                    }
-                  />
-                ))}
-              </Section>
-            )}
-          </div>
+
+          {tab === 'changes' && (
+            <ChangesPane
+              status={status}
+              error={error}
+              groups={groups}
+              openSections={openSections}
+              setOpenSections={setOpenSections}
+              showDiff={showDiff}
+              onStage={onStage}
+              onUnstage={onUnstage}
+              onDiscard={onDiscard}
+            />
+          )}
+          {tab === 'branches' && (
+            <BranchesView projectId={projectId} onMutated={() => void reload()} />
+          )}
+          {tab === 'history' && (
+            <HistoryView projectId={projectId} onMutated={() => void reload()} />
+          )}
+          {tab === 'ai' && (
+            <GitPromptView projectId={projectId} onMutated={() => void reload()} />
+          )}
         </div>
       </ToolWindowFrame>
       {commitOpen && (
@@ -373,6 +300,250 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
         />
       )}
     </>
+  );
+}
+
+interface GitTabNavProps {
+  active: GitTab;
+  onChange: (t: GitTab) => void;
+}
+
+/**
+ * Narrow sub-tab strip. Each tab is icon + short label. Active tab
+ * gets a top accent stripe (matches the rail / IDE convention).
+ *
+ * Order matters: Changes first because that's the most common
+ * action (stage + commit), Branches second (switch/checkout is
+ * second-most), History for archeology, AI last because it's the
+ * "I don't know the git command" escape hatch.
+ */
+function GitTabNav({ active, onChange }: GitTabNavProps) {
+  const tabs: { id: GitTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+    { id: 'changes', label: 'Changes', icon: GitCommitIcon },
+    { id: 'branches', label: 'Branches', icon: GitBranch },
+    { id: 'history', label: 'History', icon: History },
+    { id: 'ai', label: 'AI', icon: Sparkles },
+  ];
+  return (
+    <div className="shrink-0 flex items-stretch border-b bg-card/30">
+      {tabs.map(({ id, label, icon: Icon }) => {
+        const isActive = active === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            onClick={() => onChange(id)}
+            className={cn(
+              'relative flex items-center gap-1.5 px-3 py-1.5 text-[11px] transition-colors',
+              isActive
+                ? 'text-foreground'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+            )}
+          >
+            <Icon className={cn('h-3 w-3', isActive && id === 'ai' && 'text-primary')} />
+            <span className="font-medium">{label}</span>
+            {isActive && (
+              <span className="absolute inset-x-1 top-0 h-[2px] bg-primary rounded-full" />
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+interface ChangesPaneProps {
+  status: GitStatus | null;
+  error: string | null;
+  groups: {
+    staged: GitStatusFile[];
+    unstaged: GitStatusFile[];
+    untracked: GitStatusFile[];
+  };
+  openSections: { staged: boolean; unstaged: boolean; untracked: boolean };
+  setOpenSections: React.Dispatch<
+    React.SetStateAction<{ staged: boolean; unstaged: boolean; untracked: boolean }>
+  >;
+  showDiff: (file: GitStatusFile) => void | Promise<void>;
+  onStage: (paths: string[]) => void | Promise<void>;
+  onUnstage: (paths: string[]) => void | Promise<void>;
+  onDiscard: (paths: string[]) => void | Promise<void>;
+}
+
+/**
+ * Working-tree pane: three collapsible sections (staged / unstaged /
+ * untracked) with row-level + bulk actions. The empty state asks the
+ * user to make some changes; the inverse (everything committed) shows
+ * a friendly "clean tree" message instead.
+ */
+function ChangesPane({
+  status,
+  error,
+  groups,
+  openSections,
+  setOpenSections,
+  showDiff,
+  onStage,
+  onUnstage,
+  onDiscard,
+}: ChangesPaneProps) {
+  const total =
+    groups.staged.length + groups.unstaged.length + groups.untracked.length;
+
+  if (!status && !error) {
+    return (
+      <div className="flex-1 grid place-items-center text-[11px] text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin opacity-60" />
+      </div>
+    );
+  }
+  if (status && total === 0) {
+    return (
+      <div className="flex-1 grid place-items-center px-6 text-center text-muted-foreground gap-2">
+        <Check className="h-5 w-5 opacity-50" />
+        <p className="text-[11.5px]">Working tree is clean.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto">
+      {groups.staged.length > 0 && (
+        <Section
+          title={`Staged (${groups.staged.length})`}
+          open={openSections.staged}
+          onToggle={() => setOpenSections((s) => ({ ...s, staged: !s.staged }))}
+          bulkAction={
+            <button
+              type="button"
+              onClick={() => void onUnstage(groups.staged.map((f) => f.path))}
+              className="text-[10px] text-muted-foreground hover:text-foreground"
+              title="Unstage all"
+            >
+              Unstage all
+            </button>
+          }
+        >
+          {groups.staged.map((f) => (
+            <FileRow
+              key={`s-${f.path}`}
+              file={f}
+              onClick={() => void showDiff(f)}
+              actions={
+                <RowButton
+                  icon={Minus}
+                  title="Unstage"
+                  onClick={() => void onUnstage([f.path])}
+                />
+              }
+            />
+          ))}
+        </Section>
+      )}
+
+      {groups.unstaged.length > 0 && (
+        <Section
+          title={`Changes (${groups.unstaged.length})`}
+          open={openSections.unstaged}
+          onToggle={() => setOpenSections((s) => ({ ...s, unstaged: !s.unstaged }))}
+          bulkAction={
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void onDiscard(groups.unstaged.map((f) => f.path))}
+                className="text-[10px] text-muted-foreground hover:text-destructive"
+                title="Discard all unstaged changes"
+              >
+                Discard all
+              </button>
+              <button
+                type="button"
+                onClick={() => void onStage(groups.unstaged.map((f) => f.path))}
+                className="text-[10px] text-muted-foreground hover:text-foreground"
+                title="Stage all"
+              >
+                Stage all
+              </button>
+            </div>
+          }
+        >
+          {groups.unstaged.map((f) => (
+            <FileRow
+              key={`u-${f.path}`}
+              file={f}
+              onClick={() => void showDiff(f)}
+              actions={
+                <>
+                  <RowButton
+                    icon={Undo2}
+                    title="Discard"
+                    destructive
+                    onClick={() => void onDiscard([f.path])}
+                  />
+                  <RowButton
+                    icon={Plus}
+                    title="Stage"
+                    onClick={() => void onStage([f.path])}
+                  />
+                </>
+              }
+            />
+          ))}
+        </Section>
+      )}
+
+      {groups.untracked.length > 0 && (
+        <Section
+          title={`Untracked (${groups.untracked.length})`}
+          open={openSections.untracked}
+          onToggle={() =>
+            setOpenSections((s) => ({ ...s, untracked: !s.untracked }))
+          }
+          bulkAction={
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void onDiscard(groups.untracked.map((f) => f.path))}
+                className="text-[10px] text-muted-foreground hover:text-destructive"
+                title="Delete all untracked files"
+              >
+                Delete all
+              </button>
+              <button
+                type="button"
+                onClick={() => void onStage(groups.untracked.map((f) => f.path))}
+                className="text-[10px] text-muted-foreground hover:text-foreground"
+                title="Stage all untracked"
+              >
+                Stage all
+              </button>
+            </div>
+          }
+        >
+          {groups.untracked.map((f) => (
+            <FileRow
+              key={`?-${f.path}`}
+              file={f}
+              actions={
+                <>
+                  <RowButton
+                    icon={Trash2}
+                    title="Delete file"
+                    destructive
+                    onClick={() => void onDiscard([f.path])}
+                  />
+                  <RowButton
+                    icon={Plus}
+                    title="Stage"
+                    onClick={() => void onStage([f.path])}
+                  />
+                </>
+              }
+            />
+          ))}
+        </Section>
+      )}
+    </div>
   );
 }
 

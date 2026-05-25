@@ -12,7 +12,15 @@
  */
 
 import { spawn } from 'node:child_process';
-import { ApiError, type ProjectGitApi, type GitStatusFile } from '@mcp/api-bus';
+import {
+  ApiError,
+  type ProjectGitApi,
+  type GitStatusFile,
+  type GitBranch,
+  type GitRunResult,
+  type GitPlan,
+  type GitPlanStep,
+} from '@mcp/api-bus';
 import type { HandlerDeps } from '../types.js';
 
 interface GitResult {
@@ -187,10 +195,15 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { patch: r.stdout };
     },
 
-    async log({ projectId, limit = 30, path }) {
+    async log({ projectId, limit = 30, path, branch }) {
       const root = requireRoot(projectId);
       const fmt = '%H%x1f%h%x1f%an%x1f%ad%x1f%s';
       const args = ['log', `--pretty=format:${fmt}`, '--date=iso-strict', `-n${limit}`];
+      // Branch filter ALWAYS goes BEFORE the `--` separator. Treating
+      // it as a single ref is intentional — the renderer drives a
+      // dropdown that emits exact branch names, so we don't need glob
+      // expansion (which would also let users `git log --all` here).
+      if (branch) args.push(branch);
       if (path) args.push('--', path);
       const r = await runGit(root, args);
       if (r.code !== 0) {
@@ -268,5 +281,383 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       }
       return { ok: true as const };
     },
+
+    // ─── Branches (rich) ─────────────────────────────────────────
+    async branchesDetailed({ projectId, includeRemote }) {
+      const root = requireRoot(projectId);
+      // `git for-each-ref` with a tab-separated format is the cheap
+      // single-call alternative to running `git branch -vv` and parsing
+      // its column-oriented output. We pull both refs/heads and
+      // refs/remotes when requested.
+      const fmt = [
+        '%(refname:short)',                  // 0
+        '%(HEAD)',                           // 1 ('*' for current)
+        '%(refname)',                        // 2 (full ref for is-remote test)
+        '%(upstream:short)',                 // 3
+        '%(upstream:track,nobracket)',       // 4 (e.g. "ahead 2, behind 1" or empty)
+        '%(contents:subject)',               // 5
+      ].join('%09');
+      const refs = ['refs/heads'];
+      if (includeRemote !== false) refs.push('refs/remotes');
+      const r = await runGit(root, ['for-each-ref', `--format=${fmt}`, ...refs]);
+      if (r.code !== 0) {
+        throw new ApiError('git_branch_list_failed', 500, r.stderr.trim() || 'for-each-ref failed');
+      }
+      const cur = (await runGit(root, ['branch', '--show-current'])).stdout.trim();
+      const branches: GitBranch[] = [];
+      for (const line of r.stdout.split('\n').filter(Boolean)) {
+        const [name, head, refname, upstream, track, subject] = line.split('\t');
+        if (!name) continue;
+        // Skip the special HEAD pointer of remotes (e.g. origin/HEAD).
+        if (refname?.startsWith('refs/remotes/') && name.endsWith('/HEAD')) continue;
+        let ahead = 0;
+        let behind = 0;
+        if (track) {
+          const m1 = track.match(/ahead (\d+)/);
+          const m2 = track.match(/behind (\d+)/);
+          if (m1) ahead = Number(m1[1]);
+          if (m2) behind = Number(m2[1]);
+        }
+        branches.push({
+          name,
+          isCurrent: name === cur || head === '*',
+          isRemote: !!refname?.startsWith('refs/remotes/'),
+          upstream: upstream || null,
+          ahead,
+          behind,
+          tipSubject: subject ?? '',
+        });
+      }
+      // Sort: current first, then locals (alpha), then remotes (alpha).
+      branches.sort((a, b) => {
+        if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+        if (a.isRemote !== b.isRemote) return a.isRemote ? 1 : -1;
+        return a.name.localeCompare(b.name);
+      });
+      return branches;
+    },
+
+    async branchCreate({ projectId, name, from, checkout }) {
+      const root = requireRoot(projectId);
+      const args = checkout ? ['checkout', '-b', name] : ['branch', name];
+      if (from) args.push(from);
+      const r = await runGit(root, args);
+      if (r.code !== 0) {
+        throw new ApiError('git_branch_create_failed', 500, r.stderr.trim() || 'git branch failed');
+      }
+      return { ok: true as const };
+    },
+
+    async branchDelete({ projectId, name, force }) {
+      const root = requireRoot(projectId);
+      // -D (force) merges -d's safety check + force-delete; -d alone
+      // refuses to delete branches not fully merged into HEAD.
+      const args = ['branch', force ? '-D' : '-d', name];
+      const r = await runGit(root, args);
+      if (r.code !== 0) {
+        throw new ApiError('git_branch_delete_failed', 500, r.stderr.trim() || 'git branch -d failed');
+      }
+      return { ok: true as const };
+    },
+
+    // ─── Merge / reset / revert / cherry-pick ────────────────────
+    async merge({ projectId, branch, ffOnly, noFf, message }) {
+      const root = requireRoot(projectId);
+      const args = ['merge'];
+      if (ffOnly) args.push('--ff-only');
+      if (noFf) args.push('--no-ff');
+      if (message) args.push('-m', message);
+      args.push(branch);
+      return runAsResult(root, 'git', args);
+    },
+
+    async reset({ projectId, target, mode }) {
+      const root = requireRoot(projectId);
+      // Whitelist mode — never trust raw input as a git CLI flag.
+      const flag =
+        mode === 'soft' ? '--soft' : mode === 'hard' ? '--hard' : '--mixed';
+      return runAsResult(root, 'git', ['reset', flag, target]);
+    },
+
+    async revert({ projectId, commit, noCommit }) {
+      const root = requireRoot(projectId);
+      const args = ['revert'];
+      if (noCommit) args.push('--no-commit');
+      args.push(commit);
+      return runAsResult(root, 'git', args);
+    },
+
+    async cherryPick({ projectId, commits, noCommit }) {
+      const root = requireRoot(projectId);
+      if (commits.length === 0) {
+        throw new ApiError('bad_input', 400, 'cherryPick requires at least one commit');
+      }
+      const args = ['cherry-pick'];
+      if (noCommit) args.push('--no-commit');
+      for (const c of commits) args.push(c);
+      return runAsResult(root, 'git', args);
+    },
+
+    // ─── AI-assisted git ─────────────────────────────────────────
+    async aiPlan({ projectId, intent }) {
+      const root = requireRoot(projectId);
+      const cleaned = intent.trim().slice(0, 2000);
+      if (!cleaned) {
+        throw new ApiError('bad_input', 400, 'intent text required');
+      }
+      // Gather lightweight context so the AI can plan against the real
+      // repo state (current branch, recent branches, last few commits).
+      const [curRes, branchRes, logRes] = await Promise.all([
+        runGit(root, ['branch', '--show-current']),
+        runGit(root, ['for-each-ref', '--count=20', '--sort=-committerdate',
+                       '--format=%(refname:short)', 'refs/heads', 'refs/remotes']),
+        runGit(root, ['log', '-n8', '--pretty=format:%h %s']),
+      ]);
+      const ctx = {
+        currentBranch: curRes.stdout.trim(),
+        recentBranches: branchRes.stdout.split('\n').filter(Boolean).slice(0, 20),
+        recentCommits: logRes.stdout.split('\n').filter(Boolean).slice(0, 8),
+      };
+      const { plan } = await generateAiPlan(deps, intent, ctx);
+      return plan;
+    },
+
+    async aiExecute({ projectId, steps }) {
+      const root = requireRoot(projectId);
+      const results: GitRunResult[] = [];
+      let aborted = false;
+      for (const step of steps) {
+        // Hard-validate the command on every step — the steps come
+        // from the renderer (which got them from the AI), so we must
+        // never trust the field at face value. ONLY allow `git`.
+        if (step.command !== 'git') {
+          results.push({
+            command: step.command,
+            args: step.args,
+            ok: false,
+            code: -1,
+            stdout: '',
+            stderr: `refused: only \`git\` commands are allowed (got \`${step.command}\`)`,
+          });
+          aborted = true;
+          break;
+        }
+        const safeArgs = Array.isArray(step.args) ? step.args.filter((a) => typeof a === 'string') : [];
+        const r = await runGit(root, safeArgs);
+        results.push({
+          command: 'git',
+          args: safeArgs,
+          ok: r.code === 0,
+          code: r.code,
+          stdout: r.stdout,
+          stderr: r.stderr,
+        });
+        if (r.code !== 0) {
+          aborted = true;
+          break;
+        }
+      }
+      return { results, aborted };
+    },
   };
+}
+
+/**
+ * Helper — execute a git command and shape it as GitRunResult instead
+ * of throwing. Used by merge/reset/revert/cherry-pick so the UI can
+ * surface "non-zero exit but here's what stderr says" without losing
+ * information (the failure path in git is rich — conflict markers,
+ * suggested next steps, etc.).
+ */
+async function runAsResult(cwd: string, _cmd: 'git', args: string[]): Promise<GitRunResult> {
+  return new Promise((resolve) => {
+    const child = spawn('git', args, { cwd, windowsHide: true });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => err.push(chunk));
+    child.on('error', (e) => {
+      resolve({
+        command: 'git', args, ok: false, code: -1, stdout: '',
+        stderr: (e as Error).message,
+      });
+    });
+    child.on('close', (code) => {
+      resolve({
+        command: 'git',
+        args,
+        ok: code === 0,
+        code: code ?? -1,
+        stdout: Buffer.concat(out).toString('utf8'),
+        stderr: Buffer.concat(err).toString('utf8'),
+      });
+    });
+    child.stdin.end();
+  });
+}
+
+/**
+ * Drive the project's "general AI" provider to produce a git plan.
+ *
+ * The prompt asks for STRICT JSON to keep parsing robust — temperature
+ * is 0 to minimise drift. On parse failure we surface a refusal in the
+ * plan so the user gets an actionable message instead of a 500.
+ *
+ * Provider selection mirrors the generate-title route: prefer
+ * `getGeneralDefault()`, then fall through to any anthropic/openai/zai/
+ * deepseek provider with an api_key. OAuth-only kinds aren't usable
+ * by the SDKs here.
+ */
+async function generateAiPlan(
+  deps: HandlerDeps,
+  intent: string,
+  ctx: { currentBranch: string; recentBranches: string[]; recentCommits: string[] },
+): Promise<{ plan: GitPlan }> {
+  const { providerStore } = deps;
+  const isUsable = (p: { kind?: string; api_key?: string | null; enabled?: boolean } | null) => {
+    if (!p?.enabled || !p.api_key) return false;
+    const k = p.kind ?? '';
+    return k === 'anthropic' || k === 'openai' || k === 'zai' || k === 'deepseek';
+  };
+
+  const def = providerStore.getGeneralDefault();
+  let cfg = def ? providerStore.getProvider(def.providerId) : null;
+  let modelId = def?.modelId ?? '';
+  if (!isUsable(cfg) || !modelId) {
+    const fallback = providerStore.listProviders({ enabled: true }).find(isUsable);
+    if (!fallback) {
+      return {
+        plan: {
+          intent,
+          steps: [],
+          summary: '',
+          refusal: 'No usable AI provider — set an API key for Anthropic / OpenAI / Z.AI / DeepSeek in Configurações → Providers.',
+        },
+      };
+    }
+    cfg = fallback;
+    const first = providerStore.listModels(fallback.id, true)[0];
+    modelId = first?.model_id ?? '';
+    if (!modelId) {
+      return {
+        plan: { intent, steps: [], summary: '', refusal: 'Fallback provider has no enabled models.' },
+      };
+    }
+  }
+  if (!cfg) {
+    return { plan: { intent, steps: [], summary: '', refusal: 'Provider config missing after selection.' } };
+  }
+
+  // Strip ::mode the dashboard appends so the SDK sees a bare model id.
+  let modelMode: string | undefined;
+  if (modelId.includes('::')) {
+    [modelId, modelMode] = modelId.split('::', 2);
+  }
+  // Z.AI: only route to the Coding Plan endpoint when the user
+  // explicitly asked for it via `::coding`. The general endpoint
+  // accepts every supported GLM model with a standard API key; the
+  // coding endpoint requires the paid Coding Plan and 401s otherwise.
+  let baseUrl: string | undefined = cfg.base_url ?? undefined;
+  if (cfg.kind === 'zai') {
+    baseUrl =
+      process.env.ZAI_BASE_URL ??
+      (modelMode === 'coding'
+        ? 'https://api.z.ai/api/coding/paas/v4/'
+        : 'https://api.z.ai/api/paas/v4/');
+  }
+
+  const system = `You are a git expert wired into an IDE. The user describes what they want; you produce a JSON plan of git commands to execute. NEVER execute or assume — your sole job is to plan.
+
+Rules:
+- ALWAYS return a single JSON object matching this TypeScript shape:
+  { summary: string; steps: { command: 'git'; args: string[]; description: string; dangerous: boolean }[]; refusal?: string }
+- Every step's "command" is literally the string "git". Put the subcommand and flags into "args".
+- Mark a step "dangerous": true when it could destroy work (reset --hard, branch -D, push --force, clean -fd, filter-branch, rebase -i).
+- If the intent is unclear, ambiguous, or unsafe, return { summary: "", steps: [], refusal: "<why>" }.
+- Keep step descriptions short, in the user's language when possible.
+- Never include shell metacharacters (|, &, ;, $(...)); each arg must be a literal string.
+- Prefer fast-forward merges when the user just says "merge X into Y" without specifics.
+- For "switch to / change branch", use \`switch\` (or \`checkout\` if the user said it).
+
+Output ONLY the JSON object. No markdown, no prose.`;
+
+  const userMsg = `Repo context:
+  current branch: ${ctx.currentBranch || '(detached)'}
+  recent branches: ${ctx.recentBranches.join(', ') || '(none)'}
+  recent commits:
+${ctx.recentCommits.map((l) => `    ${l}`).join('\n') || '    (no commits)'}
+
+User intent:
+${intent}`;
+
+  let raw = '';
+  try {
+    if (cfg.kind === 'anthropic') {
+      const { default: Anthropic } = await import('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: cfg.api_key ?? '', ...(baseUrl ? { baseURL: baseUrl } : {}) });
+      const resp = await client.messages.create({
+        model: modelId,
+        max_tokens: 800,
+        system,
+        messages: [{ role: 'user', content: userMsg }],
+      });
+      raw = resp.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('');
+    } else {
+      const { default: OpenAI } = await import('openai');
+      const client = new OpenAI({ apiKey: cfg.api_key ?? '', ...(baseUrl ? { baseURL: baseUrl } : {}) });
+      const resp = await client.chat.completions.create({
+        model: modelId,
+        max_tokens: 800,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userMsg },
+        ],
+      });
+      raw = resp.choices[0]?.message?.content ?? '';
+    }
+  } catch (e) {
+    console.warn(`[git-aiPlan] provider=${cfg.kind} model=${modelId} failed:`, e);
+    return {
+      plan: { intent, steps: [], summary: '', refusal: `AI call failed: ${e instanceof Error ? e.message : String(e)}` },
+    };
+  }
+
+  // Models sometimes wrap JSON in ```json fences despite our "no
+  // markdown" instruction. Strip them defensively before parsing.
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  try {
+    const parsed = JSON.parse(cleaned) as {
+      summary?: string;
+      refusal?: string;
+      steps?: Array<{ command?: string; args?: string[]; description?: string; dangerous?: boolean }>;
+    };
+    const steps: GitPlanStep[] = Array.isArray(parsed.steps)
+      ? parsed.steps
+          .filter((s) => s && s.command === 'git' && Array.isArray(s.args))
+          .map((s) => ({
+            command: 'git',
+            args: (s.args ?? []).filter((a): a is string => typeof a === 'string'),
+            description: typeof s.description === 'string' ? s.description : '',
+            dangerous: !!s.dangerous,
+          }))
+      : [];
+    return {
+      plan: {
+        intent,
+        summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+        steps,
+        refusal: typeof parsed.refusal === 'string' && parsed.refusal ? parsed.refusal : undefined,
+      },
+    };
+  } catch {
+    return {
+      plan: {
+        intent,
+        steps: [],
+        summary: '',
+        refusal: `AI returned unparseable JSON. Raw response: ${cleaned.slice(0, 200)}`,
+      },
+    };
+  }
 }
