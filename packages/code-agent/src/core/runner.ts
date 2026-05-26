@@ -41,12 +41,14 @@ import {
   allPriorReadsElided,
   lastMutationTurn,
   findToolResultByUseId,
+  isElidedReadContent,
   extractReadPreview,
   buildSimpleLineDiff,
   buildRichRefusal,
   buildAutoDowngradeResponse,
 } from "@mcp/code-agent/core/compaction.js";
 import { evaluateToolInvocation, findScopeViolations, isIrreversibleTool, type PolicyContext } from '@mcp/code-agent/core/policy.js';
+import { type CoderTunables, envTunables } from '@mcp/code-agent/core/tunables.js';
 import { AGENTS } from '@mcp/code-agent/agents/index.js';
 import { isSummarizerEnabled, summarizeSpan, summarizeSpanV2, renderSummary, renderSummaryV2, isStructuredSummaryEnabled, overlayLiveState } from '@mcp/code-agent/core/summarizer.js';
 import { computeSnapshot, type TokenSnapshot } from '@mcp/code-agent/core/token-accounting.js';
@@ -146,6 +148,16 @@ export interface RunnerOptions {
   planMode?: boolean;
   /** Override the per-tool-result push-time cap. Subagents pass a tighter value. */
   pushTimeCap?: number;
+  /**
+   * Per-session resolved tunables (push caps, turn budget, intervention cooldown).
+   * When omitted, the runner falls back to `envTunables()` — i.e. `process.env.CODER_*`
+   * with hardcoded defaults — preserving bit-identical behavior with prior versions.
+   *
+   * Hosts build this from the Decider (`config_json.pipelines.runner_tunables.*`)
+   * via `mergeTunables(envTunables(), { …decider values… })` so admins can tune
+   * limits per session/tier without restarting the process.
+   */
+  tunables?: CoderTunables;
   /**
    * Per-session "unrestricted tool output" toggle. When true, the
    * `effectivePushTimeCap` member is bumped to the high safety ceiling
@@ -550,6 +562,134 @@ const RESULT_DUP_WINDOW = Number(process.env.CODER_RESULT_DUP_WINDOW ?? 15);
 const RESULT_DUP_MIN_CHARS = Number(process.env.CODER_RESULT_DUP_MIN_CHARS ?? 50);
 
 /**
+ * Marker vs Refuse — controls what happens when the result-dup threshold
+ * fires. Default `'marker'` (the new behaviour): the runner DELIVERS the
+ * content prefixed with an informational `[dup-result: ...]` marker so
+ * the agent can continue working without a follow-up tool call. The
+ * legacy `'refuse'` mode (replaces content with an error message and
+ * marks `is_error: true`) is preserved for one-line rollback if a
+ * downstream consumer regresses on the new shape.
+ *
+ * Reasoning for the new default: the refuse text averaged ~400 chars of
+ * unhelpful prose AND blocked legitimate re-reads (the agent often
+ * "forgot" the prior content via compaction). Marker mode costs more
+ * tokens per duplicate but eliminates the cycle "refused → agent
+ * thinks → tries different args → refused again", which is typically
+ * net cheaper across a session.
+ */
+const RESULT_DUP_MODE = (process.env.CODER_RESULT_DUP_MODE ?? 'marker').toLowerCase() === 'refuse'
+  ? 'refuse'
+  : 'marker';
+
+/**
+ * Above this character count, the marker switches to "medium" mode:
+ * keeps a short head excerpt + a pointer to the persisted output_id
+ * instead of inlining the full duplicate. Default 8000 chars — covers
+ * most read_file / mcp__read_file responses without medium fallback,
+ * but caps the worst-case token spike when a tool legitimately
+ * returns ~12k+ bytes of duplicate content.
+ */
+const RESULT_DUP_LARGE_THRESHOLD = Number(
+  process.env.CODER_RESULT_DUP_LARGE_THRESHOLD ?? 8000,
+);
+
+/**
+ * Length of the head excerpt embedded in the medium marker. Small
+ * enough that "duplicate, here's the start, fetch the rest if you
+ * need it" stays cheap; large enough that the agent can re-orient
+ * without `get_tool_output` 80% of the time.
+ */
+const RESULT_DUP_HEAD_CHARS = Number(
+  process.env.CODER_RESULT_DUP_HEAD_CHARS ?? 400,
+);
+
+/**
+ * Build the informational header that prefixes a duplicate tool result.
+ *
+ * Deterministic by design: every input is a primitive (no Date, no
+ * UUIDs, no `Math.random()`) so the same args always yield the same
+ * bytes. That matters because the prefix becomes part of the assistant
+ * transcript and any non-determinism would invalidate the provider's
+ * prompt-prefix cache on every turn.
+ *
+ * The two variants:
+ *   - `priorIsCompacted=false`: "identical to your `X` at turn N
+ *     (use_id Y, args Z); content below unchanged" — gives the agent
+ *     enough breadcrumbs to find the earlier read in its scrollback if
+ *     it needs to.
+ *   - `priorIsCompacted=true`: omits the use_id (which would be stale
+ *     since the block was elided by post-compact cleanup) and instead
+ *     reassures the agent that the content delivered below is fresh —
+ *     "matches a `X` call earlier, content below is current". This is
+ *     the common case after long sessions.
+ *
+ * Either way, the marker ends with the same guidance: continue working,
+ * or pass `force_reread: true` if the source likely changed.
+ */
+function buildDupLightMarker(args: {
+  toolName: string;
+  originalTurn: number;
+  originalUseIdShort: string;
+  window: number;
+  priorIsCompacted: boolean;
+  argsPreview: string;
+}): string {
+  if (args.priorIsCompacted) {
+    return (
+      `[dup-result: matches a \`${args.toolName}\` call earlier in this ` +
+      `conversation (now compacted out of your context); content below is ` +
+      `current. Continue without re-reading.]`
+    );
+  }
+  return (
+    `[dup-result: identical to \`${args.toolName}\` at turn ${args.originalTurn} ` +
+    `(use_id ${args.originalUseIdShort}, args ${args.argsPreview}); content below ` +
+    `unchanged in last ${args.window} turns. To force-fetch fresh data, retry ` +
+    `with \`force_reread: true\` or a different region. Otherwise continue — ` +
+    `you have what you need.]`
+  );
+}
+
+/**
+ * Medium-mode marker — content was too big to inline twice, so we send
+ * a head excerpt + the `output_id` of the cached full body. Agent calls
+ * `get_tool_output(<id>)` only if it actually needs the tail. The
+ * pointer pattern is the same one `buildToolResultBlock` uses for
+ * "truncated" results, just dressed in dup-result framing.
+ */
+function buildDupMediumMarker(args: {
+  toolName: string;
+  originalTurn: number;
+  totalChars: number;
+  outputId: string;
+}): string {
+  return (
+    `[dup-result: identical to \`${args.toolName}\` at turn ${args.originalTurn}; ` +
+    `full content (${args.totalChars} chars) cached as output_id=${args.outputId}. ` +
+    `Head excerpt below — call get_tool_output("${args.outputId}") only if you ` +
+    `need the elided body. To force-fetch: \`force_reread: true\`.]`
+  );
+}
+
+/**
+ * Compact preview of a tool call's input — first 80 chars of the
+ * JSON-serialised args, with control chars stripped. Embedded in the
+ * dup-result marker so the agent can recognise which earlier call
+ * this duplicates without scanning the transcript.
+ */
+function previewToolArgs(input: unknown): string {
+  try {
+    const raw = JSON.stringify(input ?? {});
+    // Strip newlines + tabs so the marker stays a single line.
+    const flat = raw.replace(/[\r\n\t]+/g, ' ');
+    if (flat.length <= 80) return flat;
+    return flat.slice(0, 77) + '...';
+  } catch {
+    return '<unserialisable>';
+  }
+}
+
+/**
  * PR-5 (Row 32 from docs/agent-research/COMPARISON.md): pre-read enforcement.
  * Refuses BEFORE dispatch when a read-family tool (read_file, mcp__read_file,
  * mcp__get_file_skeleton, mcp__get_file_structure) is called with the SAME
@@ -946,7 +1086,15 @@ export function normalizeMessageForCache(m: AgentMessage, cap: number = PUSH_TIM
 export function compactHistoryForLLM(
   messages: AgentMessage[],
   limits?: { minimum: number; protect: number },
+  /**
+   * Optional tunables snapshot. When omitted, defaults to `envTunables()` —
+   * env-driven behavior identical to the legacy module-level constants.
+   * Runner instances pass `this.tunables` so per-session/per-tier overrides
+   * flow through to the turn-budget warning threshold.
+   */
+  tunables?: CoderTunables,
 ): AgentMessage[] {
+  const effectiveTunables = tunables ?? envTunables();
   // Camada 5 — rolling reduction runs FIRST and is cheap (linear scan,
   // pure function, deterministic). It retires stale repeated reads/searches
   // before the size-based compaction even sees them, so sessions grow
@@ -970,9 +1118,9 @@ export function compactHistoryForLLM(
     );
   }
   const total = approxChars(result.messages);
-  if (total > TURN_BUDGET_CHARS) {
+  if (total > effectiveTunables.turnBudgetChars) {
     console.warn(
-      `[coder] turn payload ${total} chars exceeds budget ${TURN_BUDGET_CHARS}. ` +
+      `[coder] turn payload ${total} chars exceeds budget ${effectiveTunables.turnBudgetChars}. ` +
       `Lower CODER_PUSH_TIME_CAP or increase CODER_TURN_BUDGET_CHARS.`,
     );
   }
@@ -1372,31 +1520,57 @@ export interface RunnerEvents {
    * to enable `CODER_DOOM_LOOP_DEBUG`. Phase 3 of the "living company"
    * restructure (Apêndice 3).
    */
-  tool_loop_intervention: (payload: {
-    /** Which guard tripped. */
-    kind: 'dup-call-cap' | 'doom-loop-strict' | 'doom-loop-fuzzy' | 'dominance';
-    turn: number;
-    /** Tool name (single) for dup-call/dominance; comma-joined for strict/fuzzy. */
-    toolName: string;
-    /** Count that triggered the guard (e.g. 5 for dup-call, 6 for fuzzy). */
-    count: number;
-    /** Threshold the count crossed. */
-    threshold: number;
-    /** Sliding window size (turns). */
-    window: number;
-    /** Whether this fired in "refused" mode (just blocked the call) or
-     *  "aborted" mode (terminated the whole run). */
-    severity: 'refused' | 'aborted';
-    /** Snapshot of the three guard arrays so the dashboard can show
-     *  WHY the other guards didn't fire. */
-    snapshot: {
-      strict: string[];
-      fuzzy: string[];
-      dominance: Array<{ name: string; hadText: boolean }>;
-    };
-    /** Short human reason for UI. */
-    reason: string;
-  }) => void;
+  tool_loop_intervention: (payload:
+    | {
+        /**
+         * Loop-guard refusal — agent is cycling and the runner stopped
+         * (refused) or terminated (aborted) the call.
+         */
+        kind: 'dup-call-cap' | 'doom-loop-strict' | 'doom-loop-fuzzy' | 'dominance';
+        turn: number;
+        /** Tool name (single) for dup-call/dominance; comma-joined for strict/fuzzy. */
+        toolName: string;
+        /** Count that triggered the guard (e.g. 5 for dup-call, 6 for fuzzy). */
+        count: number;
+        /** Threshold the count crossed. */
+        threshold: number;
+        /** Sliding window size (turns). */
+        window: number;
+        /** Whether this fired in "refused" mode (just blocked the call) or
+         *  "aborted" mode (terminated the whole run). */
+        severity: 'refused' | 'aborted';
+        /** Snapshot of the three guard arrays so the dashboard can show
+         *  WHY the other guards didn't fire. */
+        snapshot: {
+          strict: string[];
+          fuzzy: string[];
+          dominance: Array<{ name: string; hadText: boolean }>;
+        };
+        /** Short human reason for UI. */
+        reason: string;
+      }
+    | {
+        /**
+         * Dup-result marker — agent re-fetched identical content, the
+         * runner prefixed the result with an informational header but
+         * DELIVERED the content (no refusal). Distinct from the
+         * loop-guard variants both semantically and in the dashboard's
+         * counts; `severity: 'informational'` should never be styled
+         * as an error.
+         */
+        kind: 'dup-result-marker';
+        severity: 'informational';
+        toolName: string;
+        /** Turn where the original duplicate content was first seen. */
+        originalTurn: number;
+        currentTurn: number;
+        /** `'light'` = full content delivered, `'medium'` = head excerpt + output_id. */
+        mode: 'light' | 'medium';
+        /** True when the original tool_result block was elided by
+         *  post-compact cleanup. Drives the marker text variant. */
+        priorIsCompacted: boolean;
+      }
+  ) => void;
   /**
    * deepThink — emitted right before the auxiliary (cheap) model is asked
    * to produce a pre-thought for the upcoming main-model turn. Only fires
@@ -1520,7 +1694,28 @@ export class CoderRunner extends EventEmitter {
    * dedup-key misses it because it uses raw args, not the resolved slice.
    * Hashing the raw `result.content` catches it post-resolution.
    */
-  private recentResultHashes: Map<string, Array<{ hash: string; turn: number }>> = new Map();
+  private recentResultHashes: Map<
+    string,
+    Array<{
+      hash: string;
+      turn: number;
+      /** tool_use_id of the original call — lets the dup-result marker
+       *  point at the historical block ("identical to your call at turn N,
+       *  use_id X"). Also used to detect compaction via
+       *  `findToolResultByUseId` — if the original block is gone we mark
+       *  the prior as compacted in the marker text. */
+      useId: string;
+      /** ToolOutputStore id when the original content was spilled. Used
+       *  by the medium-marker path to surface a pointer the agent can
+       *  resolve via `get_tool_output` without re-fetching. `null` when
+       *  the content was small enough to live inline. */
+      outputId: string | null;
+      /** Short JSON preview of the original call's input (≤80 chars).
+       *  Helps the agent re-orient inside its own transcript without
+       *  scrolling — appears verbatim inside the marker text. */
+      argsPreview: string;
+    }>
+  > = new Map();
 
   /**
    * PR-5 (Row 32) — pre-read enforcement. Tracks recent read-family tool
@@ -2123,6 +2318,13 @@ export class CoderRunner extends EventEmitter {
   public readonly effectivePushTimeCap: number;
 
   /**
+   * Resolved tunables for this run. Defaults to `envTunables()` when
+   * `opts.tunables` is absent — i.e. legacy env-driven behavior. Hosts that
+   * want per-session/per-tier control pass a snapshot built from the Decider.
+   */
+  public readonly tunables: CoderTunables;
+
+  /**
    * Best-effort mirror of a runtime system-reminder injection into
    * `coder_session_inputs` so the dashboard's Input tab shows what was
    * pushed under the hood. No-op when sessionStore/sessionId are absent
@@ -2414,7 +2616,7 @@ export class CoderRunner extends EventEmitter {
 
       // Wire #2 first — if the streak triggers, it takes precedence over
       // the soft nudge (the soft nudge text would dilute the intervention).
-      const cooldown = INTERVENTION_COOLDOWN_TURNS;
+      const cooldown = this.tunables.interventionCooldownTurns;
       const lastIv = this.lastToolMisuseInterventionTurn;
       const cooldownOk = lastIv == null || this.turn - lastIv >= cooldown;
       if (cooldownOk) {
@@ -2557,17 +2759,20 @@ export class CoderRunner extends EventEmitter {
     this.sessionId = opts.sessionId;
     this.isSubagent = opts.isSubagent ?? false;
     this.sessionStore = opts.sessionStore;
+    // Resolve tunables once. When opts.tunables is omitted, envTunables()
+    // reproduces the legacy CODER_*-from-env behavior bit-identically.
+    this.tunables = opts.tunables ?? envTunables();
     // Resolve the per-block tool-result cap once. Order of precedence:
     //   1. unrestricted toggle on → high safety ceiling (per main/subagent)
     //   2. explicit opts.pushTimeCap (set by subagent factories etc.)
-    //   3. default constant (PUSH_TIME_CAP / SUBAGENT_PUSH_TIME_CAP)
+    //   3. per-session tunables (this.tunables — built from Decider or env)
     if (opts.unrestrictedToolOutput) {
       this.effectivePushTimeCap = this.isSubagent
-        ? UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP
-        : UNRESTRICTED_PUSH_TIME_CAP;
+        ? this.tunables.unrestrictedSubagentPushTimeCap
+        : this.tunables.unrestrictedPushTimeCap;
     } else {
       this.effectivePushTimeCap =
-        opts.pushTimeCap ?? (this.isSubagent ? SUBAGENT_PUSH_TIME_CAP : PUSH_TIME_CAP);
+        opts.pushTimeCap ?? (this.isSubagent ? this.tunables.subagentPushTimeCap : this.tunables.pushTimeCap);
     }
     this.messages = (opts.initialMessages ?? []).map((m) =>
       normalizeMessageForCache(m, this.effectivePushTimeCap),
@@ -2710,7 +2915,7 @@ export class CoderRunner extends EventEmitter {
     const messagesAfterPreThinkCap = this.opts.persistPreThoughts === false
       ? this.messages
       : reducePreThinkInHistory(this.messages, windowK);
-    const compacted = compactHistoryForLLM(messagesAfterPreThinkCap, compactionLimits);
+    const compacted = compactHistoryForLLM(messagesAfterPreThinkCap, compactionLimits, this.tunables);
 
     const activeSkillsBlock = this.buildActiveSkillsBlockForLastUser(compacted);
     const activeContextBlock = this.opts.agentLoopV2
@@ -4854,10 +5059,18 @@ export class CoderRunner extends EventEmitter {
           // state signal ("compile still clean", "agents still running"),
           // not a stuck-loop artifact. `isRepeatable` was computed before
           // the dispatch above and is still in scope here.
+          // `force_reread: true` is the explicit escape hatch (Item 6).
+          // The agent sets it when it KNOWS the underlying source changed
+          // (file edited, snapshot refreshed). We skip the marker path
+          // entirely AND skip the hash recording — otherwise the next
+          // organic re-read would trip the cap immediately.
+          const forceReread =
+            (block.input as Record<string, unknown> | undefined)?.force_reread === true;
           if (
             this.opts.agentLoopV2 &&
             !result.isError &&
             !isRepeatable &&
+            !forceReread &&
             typeof result.content === 'string' &&
             result.content.length >= RESULT_DUP_MIN_CHARS
           ) {
@@ -4865,30 +5078,99 @@ export class CoderRunner extends EventEmitter {
             const prior = this.recentResultHashes.get(block.name) ?? [];
             const minTurn = turn - RESULT_DUP_WINDOW;
             const filtered = prior.filter((e) => e.turn > minTurn);
-            const matches = filtered.filter((e) => e.hash === resultHash).length;
-            filtered.push({ hash: resultHash, turn });
-            // Cap entries per tool to keep the map small.
+            const matches = filtered.filter((e) => e.hash === resultHash);
+            const oldest = matches[0] ?? null;
+            const argsPreview = previewToolArgs(block.input);
+            // Record FIRST so the loop guards downstream see this call
+            // count whether or not we end up marking it as dup.
+            filtered.push({
+              hash: resultHash,
+              turn,
+              useId: block.id,
+              outputId: persistedId,
+              argsPreview,
+            });
             while (filtered.length > RESULT_DUP_WINDOW * 2) filtered.shift();
             this.recentResultHashes.set(block.name, filtered);
-            if (matches >= RESULT_DUP_THRESHOLD) {
-              const refusal =
-                `Refused: \`${block.name}\` returned the IDENTICAL content (${result.content.length} chars) ` +
-                `that you already received earlier in this conversation (seen ${matches} time${matches === 1 ? '' : 's'} ` +
-                `in the last ${RESULT_DUP_WINDOW} turns). The slice resolver mapped your args to the same body ` +
-                `as a previous call. Stop re-reading and change strategy: ` +
-                `(a) quote the content from the earlier read, ` +
-                `(b) request a DIFFERENT region (use start_line/end_line or a different symbol), ` +
-                `(c) try a different tool (mcp__get_file_skeleton, mcp__find_references, mcp__search), or ` +
-                `(d) make the edit you came here to make.`;
-              shapedContent = refusal;
-              shapedIsError = true;
-              console.warn(
-                `[coder] result-dup-cap fired: ${block.name} returned same hash ${matches}× — refused at turn ${turn}`,
-              );
-              this.emit('tool_call_result', block.id, block.name, {
-                content: refusal,
-                isError: true,
-              }, 0);
+
+            if (matches.length >= RESULT_DUP_THRESHOLD && oldest) {
+              const priorBlock = findToolResultByUseId(oldest.useId, this.messages);
+              const priorIsCompacted =
+                !priorBlock || isElidedReadContent(priorBlock.content);
+
+              if (RESULT_DUP_MODE === 'refuse') {
+                // Legacy rollback path — kept verbatim so a one-line env
+                // change reverts the new behaviour if production regresses.
+                const refusal =
+                  `Refused: \`${block.name}\` returned the IDENTICAL content (${result.content.length} chars) ` +
+                  `that you already received earlier in this conversation (seen ${matches.length} time${matches.length === 1 ? '' : 's'} ` +
+                  `in the last ${RESULT_DUP_WINDOW} turns). The slice resolver mapped your args to the same body ` +
+                  `as a previous call. Stop re-reading and change strategy: ` +
+                  `(a) quote the content from the earlier read, ` +
+                  `(b) request a DIFFERENT region (use start_line/end_line or a different symbol), ` +
+                  `(c) try a different tool (mcp__get_file_skeleton, mcp__find_references, mcp__search), or ` +
+                  `(d) make the edit you came here to make.`;
+                shapedContent = refusal;
+                shapedIsError = true;
+                console.warn(
+                  `[coder] result-dup-cap fired (legacy refuse): ${block.name} same hash ${matches.length}× — refused at turn ${turn}`,
+                );
+                this.emit('tool_call_result', block.id, block.name, {
+                  content: refusal,
+                  isError: true,
+                }, 0);
+              } else {
+                // Marker mode — deliver content prefixed with a short
+                // informational header. Two flavours:
+                //   * medium: large content + an output_id available →
+                //     head excerpt + pointer, agent calls get_tool_output
+                //     only if it actually needs the tail.
+                //   * light: deliver the smart-reduced content as-is,
+                //     prefixed with the breadcrumb header.
+                const outputIdForMedium = oldest.outputId ?? persistedId;
+                const useMedium =
+                  result.content.length > RESULT_DUP_LARGE_THRESHOLD &&
+                  outputIdForMedium !== null;
+                if (useMedium) {
+                  const head = result.content.slice(0, RESULT_DUP_HEAD_CHARS);
+                  const header = buildDupMediumMarker({
+                    toolName: block.name,
+                    originalTurn: oldest.turn,
+                    totalChars: result.content.length,
+                    outputId: outputIdForMedium!,
+                  });
+                  shapedContent = `${header}\n\n${head}\n...`;
+                } else {
+                  const header = buildDupLightMarker({
+                    toolName: block.name,
+                    originalTurn: oldest.turn,
+                    originalUseIdShort: oldest.useId.slice(0, 12),
+                    window: RESULT_DUP_WINDOW,
+                    priorIsCompacted,
+                    argsPreview: oldest.argsPreview || argsPreview,
+                  });
+                  shapedContent = `${header}\n\n${shapedContent}`;
+                }
+                shapedIsError = false;
+                console.log(
+                  `[coder] dup-result-marker emitted: ${block.name} identical vs turn ${oldest.turn} ` +
+                    `(use_id ${oldest.useId.slice(0, 12)}); mode=${useMedium ? 'medium' : 'light'}, ` +
+                    `compacted=${priorIsCompacted}`,
+                );
+                // Telemetry: distinguish from the loop-guard refusals so
+                // the dashboard / future analyzers can count these as
+                // informational, not failures. Reusing the existing
+                // event channel keeps the wire surface stable.
+                this.emit('tool_loop_intervention', {
+                  kind: 'dup-result-marker',
+                  severity: 'informational',
+                  toolName: block.name,
+                  originalTurn: oldest.turn,
+                  currentTurn: turn,
+                  mode: useMedium ? 'medium' : 'light',
+                  priorIsCompacted,
+                });
+              }
             }
           }
 

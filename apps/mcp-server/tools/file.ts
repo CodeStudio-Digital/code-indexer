@@ -75,10 +75,14 @@ const get_file_structure = defineTool({
   description: 'Get file details and symbols. Hard-capped to max_symbols (default 50) to protect context limits. Use get_file_skeleton if you just need a broad outline.',
   inputSchema: {
     type: 'object',
-    properties: { 
-        project_name: { type: 'string' }, 
+    properties: {
+        project_name: { type: 'string' },
         file_path: { type: 'string' },
-        max_symbols: { type: 'number', description: 'Max symbols to list. Default 50.' }
+        max_symbols: { type: 'number', description: 'Max symbols to list. Default 50.' },
+        force_reread: {
+          type: 'boolean',
+          description: 'Bypass the duplicate-result marker. Set true if you believe the file changed since a previous call. Default false.',
+        },
     },
     required: ['project_name', 'file_path'],
   },
@@ -177,6 +181,11 @@ const get_file_skeleton = defineTool({
       filter: { type: 'string', description: 'Regex on symbol name' },
       max_symbols: { type: 'number', description: 'Max symbols listed (default 100)' },
       format: { type: 'string', enum: ['text', 'json'] },
+      force_reread: {
+        type: 'boolean',
+        description:
+          'Bypass the duplicate-result marker. Set true if you believe the file changed since a previous call. Default false.',
+      },
     },
     required: ['project_name', 'file_path'],
   },
@@ -337,6 +346,11 @@ const read_file = defineTool({
       end_line: { type: 'number' },
       max_lines: { type: 'number', description: 'Default 400.' },
       force: { type: 'boolean', description: 'Return the full file in one call. Use for files >800 lines when you need everything.' },
+      force_reread: {
+        type: 'boolean',
+        description:
+          'Bypass the duplicate-result marker. Set true ONLY when you believe the file changed since a previous read. Orthogonal to `force` — `force` controls truncation (size), `force_reread` controls cache (skip the dup-content marker). Default false.',
+      },
     },
     required: ['project_name', 'file_path'],
   },

@@ -6,6 +6,7 @@ import {
   defaultLocalFilesystemPort,
   type IFilesystemPort,
 } from '@mcp/code-agent/ports/filesystem-port.js';
+import { emitRecentFileTouched } from '@mcp/code-agent/tools/global-recent-files.js';
 
 /**
  * Resolve the filesystem port for a tool invocation. Falls back to the
@@ -65,6 +66,7 @@ const writeFile: CoderTool = {
     await fs.mkdir(pathFor(ctx.cwd).dirname(abs), { recursive: true });
     await fs.writeFile(abs, content);
     ctx.overlay?.mark(path);
+    emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
     const lines = content.split('\n').length;
     return ok(`Wrote ${path} (${lines} lines, ${content.length} bytes)`);
   },
@@ -98,6 +100,7 @@ const createFile: CoderTool = {
     await fs.mkdir(pathFor(ctx.cwd).dirname(abs), { recursive: true });
     await fs.writeFile(abs, content);
     ctx.overlay?.mark(path);
+    emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
     return ok(`Created ${path} (${content.length} bytes)`);
   },
 };
@@ -329,6 +332,7 @@ const editFile: CoderTool = {
       if (r.applied && r.content !== undefined) {
         await fs.writeFile(abs, r.content);
         ctx.overlay?.mark(path);
+        emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
         const suffix = r.strategy === 'exact' ? '' : ` [matched via: ${r.strategy}]`;
         return ok(`Edited ${path} (${r.occurrences} replacement${r.occurrences === 1 ? '' : 's'})${suffix}`);
       }
@@ -361,6 +365,7 @@ const editFile: CoderTool = {
       const updated = applyHits(content, hits, newStr, replaceAll);
       await fs.writeFile(abs, updated);
       ctx.overlay?.mark(path);
+      emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
       return ok(`Edited ${path} (${hits.length} replacement${hits.length === 1 ? '' : 's'}) [matched via: ${label}]`);
     }
 
@@ -425,6 +430,11 @@ const readFile: CoderTool = {
         type: 'boolean',
         description: 'Return the full file in one call regardless of size. Use for files >800 lines when you need everything.',
       },
+      force_reread: {
+        type: 'boolean',
+        description:
+          'Bypass the duplicate-result check. Use ONLY when you legitimately believe the underlying file changed since a previous read (file edited, snapshot refreshed). Different from `force`: `force` controls truncation policy (size), `force_reread` controls cache policy (skip the dup-content marker). Default false.',
+      },
     },
     required: ['path'],
     additionalProperties: false,
@@ -441,6 +451,10 @@ const readFile: CoderTool = {
     } catch (e) {
       return err(`File ${path} not found: ${e instanceof Error ? e.message : String(e)}`);
     }
+    // I2 — feed the recently-touched files cache so subsequent hybrid
+    // searches can favor what the agent just looked at. Sub-ms, never
+    // throws (sink wraps its own errors).
+    emitRecentFileTouched({ absolutePath: abs, kind: 'view' });
 
     const lines = content.split('\n');
     const total = lines.length;
@@ -719,6 +733,7 @@ const multiEdit: CoderTool = {
 
     await fs.writeFile(abs, current);
     ctx.overlay?.mark(path);
+    emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
 
     const summary = applied
       .map((a) => `  #${a.index + 1}: ${a.occurrences} replacement${a.occurrences === 1 ? '' : 's'} [${a.strategy}]`)
