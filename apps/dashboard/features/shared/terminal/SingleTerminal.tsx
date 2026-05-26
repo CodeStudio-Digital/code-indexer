@@ -46,6 +46,100 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
     term.open(containerRef.current);
     fit.fit();
 
+    // ── Clipboard wiring ───────────────────────────────────────────
+    // xterm.js doesn't bind clipboard shortcuts by design — Ctrl+C is
+    // SIGINT in a real shell, so the lib leaves the policy to the
+    // host app. We follow the IDE-terminal conventions:
+    //
+    //   - Ctrl+Shift+C → copy selection (Linux/JetBrains style)
+    //   - Ctrl+Shift+V → paste clipboard
+    //   - Ctrl+C       → copy ONLY when there's a selection AND no
+    //                    process is reading stdin (matches VS Code).
+    //                    Otherwise the keystroke flows through to
+    //                    the PTY as SIGINT, which is the user's
+    //                    Ctrl+C-cancels-the-running-command muscle
+    //                    memory.
+    //   - Ctrl+V       → paste (Windows muscle memory; harmless
+    //                    everywhere else because terminals never
+    //                    receive 0x16 from a paste)
+    //   - Shift+Insert → paste (X11 muscle memory)
+    //   - right-click  → paste (PowerShell/Windows Terminal default)
+    //
+    // `attachCustomKeyEventHandler` runs BEFORE `onData`; returning
+    // `false` swallows the keystroke. Returning `true` lets xterm
+    // handle it normally and forward to the PTY.
+    async function copySelection(): Promise<boolean> {
+      const sel = term.getSelection();
+      if (!sel) return false;
+      try {
+        await navigator.clipboard.writeText(sel);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    async function pasteClipboard(): Promise<void> {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          // term.paste handles bracketed-paste mode correctly when the
+          // running shell has it enabled (bash/zsh by default since 4.4).
+          term.paste(text);
+        }
+      } catch {
+        /* clipboard read denied — silent. Electron grants this in our
+         *  webPreferences, browser fallback may not. */
+      }
+    }
+
+    term.attachCustomKeyEventHandler((e) => {
+      // Only intercept on keydown — xterm fires both down + up.
+      if (e.type !== 'keydown') return true;
+
+      const ctrl = e.ctrlKey || e.metaKey;
+      const shift = e.shiftKey;
+      const key = e.key.toLowerCase();
+
+      // Ctrl+Shift+C — copy
+      if (ctrl && shift && key === 'c') {
+        void copySelection();
+        return false;
+      }
+      // Ctrl+Shift+V — paste
+      if (ctrl && shift && key === 'v') {
+        void pasteClipboard();
+        return false;
+      }
+      // Ctrl+C with selection → copy + clear selection. No selection
+      // → fall through (SIGINT).
+      if (ctrl && !shift && key === 'c' && term.hasSelection()) {
+        void copySelection().then((ok) => {
+          if (ok) term.clearSelection();
+        });
+        return false;
+      }
+      // Ctrl+V — paste (Windows convention)
+      if (ctrl && !shift && key === 'v') {
+        void pasteClipboard();
+        return false;
+      }
+      // Shift+Insert — X11 paste
+      if (shift && e.key === 'Insert') {
+        void pasteClipboard();
+        return false;
+      }
+      return true;
+    });
+
+    // Right-click → paste. Stops the browser context menu (which we
+    // don't have a useful set of items for anyway in a PTY surface)
+    // and pastes the clipboard verbatim.
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      void pasteClipboard();
+    };
+    containerRef.current.addEventListener('contextmenu', onContextMenu);
+
     // Resize observer — fires when BottomPanel is dragged or the
     // window is resized. rAF-debounced so we don't slam the PTY with
     // resize calls during a drag.
@@ -92,10 +186,12 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
       }
     })();
 
+    const cleanupContextMenu = containerRef.current;
     return () => {
       disposed = true;
       if (rafId) cancelAnimationFrame(rafId);
       ro.disconnect();
+      cleanupContextMenu?.removeEventListener('contextmenu', onContextMenu);
       // Cancel local subscription but DO NOT kill the PTY. The
       // container's closeTab handler is the only path that kills.
       void iterator.return?.();
