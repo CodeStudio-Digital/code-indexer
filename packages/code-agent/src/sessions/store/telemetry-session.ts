@@ -1,0 +1,168 @@
+import type { Database as DB } from 'better-sqlite3';
+
+export interface SessionTelemetrySummary {
+  turn_count: number;
+  subagent_turn_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_creation_tokens: number;
+  total_thinking_tokens: number;
+  cache_hit_ratio: number | null;
+  total_tool_calls: number;
+  compaction_turns: number;
+  summarizer_turns: number;
+  paginate_total: number;
+  largest_tool_result_chars: number | null;
+  last_history_chars: number | null;
+  last_turn_at: string | null;
+  tools_breakdown: Array<{
+    name: string;
+    calls: number;
+    total_output_chars: number;
+    avg_duration_ms: number;
+    truncated_count: number;
+  }>;
+  /** Migration 072 — total USD cost for this session (estimated). */
+  estimated_cost_usd: number;
+  /** Migration 072 — average system prompt size on assistant turns. */
+  system_prompt_avg_chars: number | null;
+  /** Migration 072 — average tools array size on assistant turns. */
+  tools_def_avg_chars: number | null;
+  /** Migration 072 — fraction of tool calls that hit a truncation cap. */
+  truncation_rate: number | null;
+  /** Migration 072 — token+cost breakdown per phase (Camada 2). */
+  phase_breakdown: Array<{
+    phase: string;
+    tool_calls: number;
+    total_output_chars: number;
+    total_duration_ms: number;
+  }>;
+}
+
+/**
+ * Aggregate per-session telemetry for the metrics modal in the chat view.
+ * Returns totals across every turn (including subagent turns) plus a few
+ * derived ratios. All values may be null when the session has no telemetry
+ * rows yet (e.g. fresh session before turn 1).
+ */
+export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTelemetrySummary {
+  const totals = db
+    .prepare(
+      `SELECT
+         COUNT(*)                                   AS turn_count,
+         COALESCE(SUM(is_subagent), 0)              AS subagent_turn_count,
+         COALESCE(SUM(input_tokens), 0)             AS total_input_tokens,
+         COALESCE(SUM(output_tokens), 0)            AS total_output_tokens,
+         COALESCE(SUM(cache_read_input_tokens), 0)  AS total_cache_read_tokens,
+         COALESCE(SUM(cache_creation_input_tokens), 0) AS total_cache_creation_tokens,
+         COALESCE(SUM(thinking_tokens), 0)          AS total_thinking_tokens,
+         COALESCE(SUM(tool_count), 0)               AS total_tool_calls,
+         COALESCE(SUM(compaction_triggered), 0)     AS compaction_turns,
+         COALESCE(SUM(summarizer_ran), 0)           AS summarizer_turns,
+         COALESCE(SUM(paginate_count), 0)           AS paginate_total,
+         MAX(largest_tool_result_chars)             AS largest_tool_result_chars,
+         MAX(history_chars)                         AS last_history_chars,
+         MAX(created_at)                            AS last_turn_at,
+         COALESCE(SUM(estimated_cost_usd), 0)       AS estimated_cost_usd,
+         AVG(system_prompt_chars)                   AS system_prompt_avg_chars,
+         AVG(tools_def_chars)                       AS tools_def_avg_chars
+       FROM coder_turn_telemetry
+       WHERE session_id = ?`,
+    )
+    .get(sessionId) as Omit<SessionTelemetrySummary, 'tools_breakdown' | 'phase_breakdown' | 'cache_hit_ratio' | 'truncation_rate'>;
+
+  // Migration 072: tools breakdown JOINs coder_tool_calls for richer metrics
+  // (output_chars, duration, truncation). Falls back to the legacy
+  // tools_called_json count-only path for sessions older than migration 072.
+  const toolStats = db
+    .prepare(
+      `SELECT
+          tc.tool_name                              AS name,
+          COUNT(*)                                  AS calls,
+          COALESCE(SUM(tc.output_chars), 0)         AS total_output_chars,
+          COALESCE(AVG(tc.duration_ms), 0)          AS avg_duration_ms,
+          COALESCE(SUM(tc.truncated), 0)            AS truncated_count
+       FROM coder_tool_calls tc
+       JOIN coder_messages m ON m.id = tc.message_id
+       WHERE m.session_id = ?
+       GROUP BY tc.tool_name
+       ORDER BY total_output_chars DESC, calls DESC`,
+    )
+    .all(sessionId) as Array<{
+      name: string;
+      calls: number;
+      total_output_chars: number;
+      avg_duration_ms: number;
+      truncated_count: number;
+    }>;
+
+  let tools_breakdown: SessionTelemetrySummary['tools_breakdown'];
+  if (toolStats.length > 0) {
+    tools_breakdown = toolStats.map((r) => ({ ...r, avg_duration_ms: Math.round(r.avg_duration_ms) }));
+  } else {
+    // Legacy fallback — only call counts.
+    const rows = db
+      .prepare(`SELECT tools_called_json FROM coder_turn_telemetry WHERE session_id = ?`)
+      .all(sessionId) as Array<{ tools_called_json: string | null }>;
+    const breakdown = new Map<string, number>();
+    for (const r of rows) {
+      if (!r.tools_called_json) continue;
+      try {
+        const names = JSON.parse(r.tools_called_json) as unknown;
+        if (Array.isArray(names)) {
+          for (const n of names) {
+            if (typeof n === 'string') breakdown.set(n, (breakdown.get(n) ?? 0) + 1);
+          }
+        }
+      } catch { /* malformed row */ }
+    }
+    tools_breakdown = [...breakdown.entries()]
+      .map(([name, calls]) => ({
+        name, calls, total_output_chars: 0, avg_duration_ms: 0, truncated_count: 0,
+      }))
+      .sort((a, b) => b.calls - a.calls);
+  }
+
+  // Migration 072: phase breakdown. NULL phase rows bucket as 'unknown' until
+  // PhaseRouter (Camada 2) populates it. Useful day-1 because it makes the
+  // empty-state visible (dashboard renders the panel and says
+  // "phase routing not active yet").
+  const phaseRows = db
+    .prepare(
+      `SELECT
+          COALESCE(tc.phase, 'unknown')             AS phase,
+          COUNT(*)                                  AS tool_calls,
+          COALESCE(SUM(tc.output_chars), 0)         AS total_output_chars,
+          COALESCE(SUM(tc.duration_ms), 0)          AS total_duration_ms
+       FROM coder_tool_calls tc
+       JOIN coder_messages m ON m.id = tc.message_id
+       WHERE m.session_id = ?
+       GROUP BY phase
+       ORDER BY tool_calls DESC`,
+    )
+    .all(sessionId) as SessionTelemetrySummary['phase_breakdown'];
+
+  // Truncation rate across all tool calls (NULL when no rows).
+  const truncRow = db
+    .prepare(
+      `SELECT COUNT(*) AS total, COALESCE(SUM(truncated), 0) AS trunc
+       FROM coder_tool_calls tc
+       JOIN coder_messages m ON m.id = tc.message_id
+       WHERE m.session_id = ?`,
+    )
+    .get(sessionId) as { total: number; trunc: number };
+  const truncation_rate = truncRow.total > 0 ? truncRow.trunc / truncRow.total : null;
+
+  const inputTotal = totals.total_input_tokens;
+  const cacheRead = totals.total_cache_read_tokens;
+  const cache_hit_ratio = inputTotal > 0 ? cacheRead / inputTotal : null;
+
+  return {
+    ...totals,
+    cache_hit_ratio,
+    tools_breakdown,
+    phase_breakdown: phaseRows,
+    truncation_rate,
+  };
+}

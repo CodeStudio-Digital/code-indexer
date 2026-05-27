@@ -91,203 +91,19 @@ import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
 import { attachmentsToBlocks, type AgentMessage, type ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
-export interface CoderAttachment {
-  name: string;
-  mediaType: string;
-  /** Base64-encoded payload (for images and binary docs like PDF). */
-  base64?: string;
-  /** Pre-decoded UTF-8 text (for plain-text-like files). */
-  text?: string;
-}
+// Public types live in ./index/types.ts (extracted to keep this file under
+// the LOC cap). Re-exported below so external consumers of @mcp/code-agent
+// continue to see them on the package root.
+import type {
+  CoderAttachment,
+  IndexStatus,
+  RunCoderHandle,
+  RunCoderOptions,
+} from './index/types.js';
+export type { CoderAttachment, IndexStatus, RunCoderHandle, RunCoderOptions };
+import { extractFilePathsFromText, defaultModelFor } from './index/helpers.js';
 
-export interface RunCoderOptions {
-  /** Numeric session id (existing) or "new" to create one */
-  session: { id: number } | { create: { project_id: number; title: string; provider: CoderProviderName; model?: string } };
-  /** User message to append before running */
-  userMessage: string;
-  /** Optional attachments (images, documents) for the user message */
-  attachments?: CoderAttachment[];
-  /** Optional max turns (default 50) */
-  maxTurns?: number;
-  /** Abort signal */
-  signal?: AbortSignal;
-  /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
-  planMode?: boolean;
-  /**
-   * Spec mode: agent must call `submit_spec` and get human approval before
-   * mutating tools. Set automatically when `agent === 'spec'`; explicit values
-   * win for tests and edge cases.
-   */
-  specMode?: boolean;
-  /**
-   * Agent preset — bundles profile + planMode + maxTurns for a common usage
-   * pattern. Takes precedence over explicit `profile` / `planMode` when set.
-   * See src/core/coder/agents/index.ts for the four built-in presets
-   * (explore / plan / build / admin).
-   */
-  agent?: AgentId;
-  /**
-   * Tool tier profile. Restricts the tools array sent to the LLM on each turn.
-   * - 'bootstrap' (~13 tools): read/search/pulse only — default for new sessions.
-   * - 'navigate' (~33 tools): adds write/edit/git-read/deep nav. Default when
-   *   the user message contains implement/refactor/fix/etc. keywords.
-   * - 'full' (all 57 tools): legacy behaviour. Default for resumed sessions.
-   * - 'auto': inferred from the first user message via a simple regex classifier.
-   * The agent can unlock higher tiers mid-session via `expand_toolset`.
-   */
-  profile?: CoderProfile | 'auto';
-  /**
-   * Create and enter an isolated git worktree at session start. When set
-   * on a fresh session (no prior `worktree_path` persisted), runCoder
-   * creates `.mcp-indexer/worktrees/<name>/` and scopes the runner into
-   * it BEFORE the first turn — so the agent sees the worktree as its cwd
-   * from the very first tool call.
-   *
-   * - `name` (optional): worktree directory name. Auto-generated if omitted.
-   * - `branch` (optional): branch to check out. Defaults to `coder/<name>`.
-   *   Created from HEAD when it does not exist yet.
-   *
-   * The existing `enter_worktree` / `exit_worktree` admin-tier tools remain
-   * available for mid-session pivots, but the primary path is to decide
-   * "this session runs in a worktree" once at creation time.
-   */
-  worktree?: { name?: string; branch?: string };
-  /**
-   * Resume mode: do NOT push a new user message. Used when the dashboard
-   * answered a pending submit_plan/ask_user after a server restart — the
-   * tool_result was already appended to the DB by the API handler, and the
-   * runner should pick up from existing history and run the next turn.
-   */
-  resume?: boolean;
-  /** Enable thinking/reasoning mode for providers that support it. */
-  thinking?: boolean;
-  /**
-   * Per-request thinking budget (in tokens). Forwarded to the runner via
-   * `runner.opts.thinkingBudgetTokens` and from there into every
-   * `ChatRequest`. Anthropic honours this as `thinking.budget_tokens`;
-   * other providers ignore it. When undefined the provider falls back to
-   * its `defaultThinking` config.
-   */
-  thinkingBudgetTokens?: number;
-  /**
-   * Simulated deepThink mode — orthogonal to `thinking`. When true, the
-   * runner asks a cheap auxiliary model (default Haiku) to write a few
-   * sentences of reasoning before each main-model turn and prefills them
-   * as a `<thinking data-source="aux">` block. See RunnerOptions.deepThink.
-   */
-  deepThink?: boolean;
-  /** Auxiliary model id. Default 'claude-haiku-4-5-20251001'. */
-  deepThinkModel?: string;
-  /** Auxiliary provider name. Default 'anthropic'. */
-  deepThinkProvider?: string;
-  /** When false (default), skip pre-think on tool_result turns. */
-  preThinkOnToolResults?: boolean;
-  /**
-   * Per-session resolved tunables (push caps, turn budget, intervention
-   * cooldown). When omitted, the runner falls back to `envTunables()`
-   * → `process.env.CODER_*` with hardcoded defaults — bit-identical to
-   * pre-A1 behavior. Hosts build this via
-   * `tunablesFromDecider(decider, deciderContext)` from
-   * `@mcp/services/pipelines/coder-tunables-adapter` so admins can tune
-   * limits per session/tier without restarting the process.
-   */
-  tunables?: import('@mcp/code-agent/core/tunables.js').CoderTunables;
-  /** Company orchestrator context — when present, company tools are registered. */
-  companyContext?: import('@mcp/company/types.js').CompanyContext;
-  /** Extra system prompt block for company agents (master/subordinate). Appended to the base prompt. */
-  companyPromptBlock?: string;
-  /** Role identity text (from template systemPromptOverride) re-injected after compaction. */
-  companyRoleOverride?: string;
-  /**
-   * Per-role sampling temperature override (`CompanyRoleConfig.temperature`).
-   * Forwarded to `CoderRunner` and consumed by `resolveTemperature`. Lower
-   * precedence than the per-session value but higher than the agent preset
-   * default. Only meaningful for company subordinates.
-   */
-  roleTemperature?: number;
-  /**
-   * Resolver for OAuth bearer tokens of external MCP servers. When provided,
-   * external servers with `auth_type='oauth2'` automatically receive
-   * `Authorization: Bearer <access>` (with auto-refresh). When null/omitted,
-   * OAuth servers connect unauthenticated — the dashboard then prompts the
-   * user to complete the OAuth flow.
-   */
-  mcpBearerResolver?: import('@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js').ResolveMcpBearer | null;
-  /**
-   * Inject a pre-existing external-MCP manager instead of opening a fresh
-   * connection set per run. The http-api wires this to a process-wide
-   * `McpExternalPool` so every coder worker reuses one set of transports;
-   * standalone runs (CLI, tests) leave it undefined and get the legacy
-   * "connect on demand" path. The implementation is responsible for
-   * matching `IMcpServerManager` semantics.
-   */
-  externalMcpManager?: import('@mcp/code-agent/tools/mcp-server-manager-interface.js').IMcpServerManager;
-  /**
-   * Phase 2 hardening: explicit escape hatch the policy module consults
-   * when running in strict mode (Phase 5). Today this flag is reserved —
-   * the runner builds its policy context with `strict: false` so the
-   * adminOverride value has no observable effect on behaviour. Wired in
-   * advance so the API surface is stable when strict mode is enabled.
-   */
-  adminOverride?: boolean;
-  /**
-   * Synchronous hook fired right after the `CoderRunner` is constructed
-   * and all internal listeners are attached, but BEFORE `runner.run()`
-   * is called. Callers register listeners that must observe the very
-   * first turn — e.g. company HumanInTheLoop's `question_posted` /
-   * `plan_posted` / `tasks_posted` capture, which would otherwise miss
-   * an `ask_user` made on turn 1 because `runCoder` returns the handle
-   * after the run loop has already started emitting.
-   *
-   * Multiple listeners can be wired here: this fires once. Errors thrown
-   * here propagate (refuse to start the run with a broken wire-up).
-   */
-  onRunnerReady?: (runner: CoderRunner) => void;
-
-  /**
-   * Notification callback fired whenever the SnapshotRecorder captures
-   * (or appends to) a baseline for a file the agent just mutated. Lets the
-   * HTTP layer publish a `session_snapshot_changed` SSE event so the
-   * dashboard can refresh the Snapshots tab live, without polling.
-   *
-   * Optional — when undefined, snapshot recording still happens, the
-   * dashboard just has to pull on its own cadence.
-   */
-  onSnapshotRecorded?: (info: { baselineId: number; filePath: string }) => void;
-
-  /**
-   * Optional per-turn tool-list filter (ToolSelectionPipeline runtime
-   * hook). Built by `deps.buildToolSelectionFilter()` in the host; when
-   * undefined, the runner falls back to the unfiltered tool list.
-   *
-   * Forwarded verbatim to the underlying `RunnerOptions.toolSelectionFilter`.
-   * The host typically wires it as `toolSelectionFilter: deps.buildToolSelectionFilter()`.
-   */
-  toolSelectionFilter?: import('./core/runner.js').RunnerOptions['toolSelectionFilter'];
-  /**
-   * Skill IDs the user pre-selected in the chat sidebar. Persisted on the
-   * first user message of this run (migration 095 column
-   * `selected_skill_ids_json`) and re-resolved by the runner into an
-   * `<active_skills>` block on every turn that message is the trailing
-   * one. Empty / undefined means no picks for this turn — the runner skips
-   * the block entirely.
-   */
-  selectedSkillIds?: string[];
-}
-
-export interface IndexStatus {
-  isIndexed: boolean;
-  mcpAvailable: boolean;
-}
-
-export interface RunCoderHandle {
-  session: CoderSession;
-  runner: CoderRunner;
-  /** Awaits completion. Resolves with the run reason, usage, and optional error detail. */
-  done: Promise<{ reason: string; usage: ChatUsage; error?: string }>;
-  /** Whether the project is indexed and MCP tools were registered. */
-  indexStatus: IndexStatus;
-}
+// (Type bodies moved to './index/types.ts'.)
 
 /**
  * Build a fully-wired runner for a coder session and start it.
@@ -1672,38 +1488,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
  * Pure heuristic; misses are fine — when the matcher returns empty, we
  * degrade to the lazy section instead of dumping every skill.
  */
-function extractFilePathsFromText(text: string): string[] {
-  if (!text) return [];
-  const paths = new Set<string>();
-  // Tokens that look like a file path (with at least one slash or a dotted
-  // extension) — non-greedy to avoid swallowing surrounding prose.
-  const re = /(?:[a-zA-Z0-9_\-./@]+\/)?[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]{1,8}\b/g;
-  for (const m of text.matchAll(re)) {
-    paths.add(m[0]);
-    if (paths.size >= 20) break;
-  }
-  return [...paths];
-}
-
-function defaultModelFor(provider: CoderProviderName): string {
-  switch (provider) {
-    case 'anthropic':
-    case 'claude-code':
-      return 'claude-sonnet-4-6';
-    case 'openai':
-      return 'gpt-4o-mini';
-    case 'zai':
-      return 'glm-5.1';
-    case 'deepseek':
-      return 'deepseek-chat';
-    case 'kimi-code':
-      return 'kimi-k2.6';
-    case 'gemini':
-      // 2.5-flash is the current free-tier model; 2.0-flash has its free
-      // quota set to 0 as of April 2026 and returns 429 immediately.
-      return 'gemini-2.5-flash';
-  }
-}
+// Helpers moved to './index/helpers.ts': extractFilePathsFromText, defaultModelFor
 
 // Re-export key types for consumers
 export { SessionStore } from '@mcp/code-agent/sessions/store.js';
