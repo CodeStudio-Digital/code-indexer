@@ -22,7 +22,7 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import { getCompanyOrchestrator, deleteCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 
 interface ResetBody {
@@ -47,7 +47,7 @@ export function mountCompanyArchiveRoutes(app: Hono, deps: ServerDeps): void {
     // `finalStatus:'idle'` so the abort path doesn't leave the session
     // in `error` — the subsequent DB archive step then flips it to idle
     // officially (abortAll's DB update is best-effort and may race).
-    const orchestrator = orchestratorRegistry.get(id);
+    const orchestrator = getCompanyOrchestrator(id);
     if (orchestrator) {
       try {
         orchestrator.abortAll({ teardownSandbox, finalStatus: 'idle' });
@@ -57,7 +57,7 @@ export function mountCompanyArchiveRoutes(app: Hono, deps: ServerDeps): void {
           e instanceof Error ? e.message : String(e),
         );
       }
-      orchestratorRegistry.delete(id);
+      deleteCompanyOrchestrator(id);
     }
 
     // Step 2 — archive active conversation state + idle the session.

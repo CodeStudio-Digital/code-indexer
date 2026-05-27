@@ -61,8 +61,6 @@ export interface SupervisorSessionStatus {
 
 export interface StatusResponse {
   enabled: boolean;
-  mode?: 'worker' | 'legacy';
-  reason?: string;
   sessions: SupervisorSessionStatus[];
 }
 

@@ -224,19 +224,6 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
               disabled
             </Badge>
           )}
-          {status?.mode && (
-            <Badge
-              variant="outline"
-              className="ml-1 text-[10px]"
-              title={
-                status.mode === 'legacy'
-                  ? 'Main-process supervisor (MCP_ORCHESTRATOR_WORKER=0). Per-worker supervisors aren\'t aggregated here yet.'
-                  : 'Worker-per-session mode — supervisor lives inside each company-worker'
-              }
-            >
-              {status.mode}
-            </Badge>
-          )}
         </div>
         <Button variant="outline" size="sm" onClick={() => void loadStatus()} disabled={loading}>
           <RefreshCcw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -254,7 +241,7 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
 
       {/* Sessions — flexible: empty state when nothing tracked */}
       {!hasSessions ? (
-        <EmptySessionsHint mode={status?.mode} reason={status?.reason} />
+        <EmptySessionsHint />
       ) : (
         <div className="space-y-2 flex-shrink-0">
           {status!.sessions.map((s) => (
@@ -321,13 +308,7 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
   );
 }
 
-function EmptySessionsHint({
-  mode,
-  reason,
-}: {
-  mode?: 'worker' | 'legacy';
-  reason?: string;
-}): JSX.Element {
+function EmptySessionsHint(): JSX.Element {
   return (
     <div className="rounded-md border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground space-y-2 flex-shrink-0">
       <div className="flex items-center gap-2">
@@ -338,18 +319,6 @@ function EmptySessionsHint({
         No agents are currently being tracked. The supervisor starts watching as soon as a
         subordinate spawns or a master session boots.
       </p>
-      {mode === 'legacy' && (
-        <p className="text-amber-500/90">
-          You're seeing the main-process supervisor (legacy mode). In worker mode each
-          company-session worker runs its own supervisor — their counters aren't aggregated
-          here yet (cross-worker aggregation is on the roadmap).
-        </p>
-      )}
-      {reason && (
-        <p className="text-[10px] text-muted-foreground/80 font-mono">
-          worker resolution: {reason}
-        </p>
-      )}
     </div>
   );
 }

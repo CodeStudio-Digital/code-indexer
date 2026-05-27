@@ -38,7 +38,7 @@ import type {
   QualityResult,
   QualityResultObserver,
 } from '@mcp/services/quality/index.js';
-import { orchestratorRegistry } from '../sse/OrchestratorRegistry.js';
+import { getCompanyOrchestrator } from '../sse/companyOrchestrator.js';
 
 /**
  * Classifiers we DO post alerts for. Each gets an independent bucket per
@@ -139,7 +139,7 @@ function ensureState(emit?: AlertEmitter): BufferState {
 }
 
 function defaultEmitToOrchestrator(sessionId: number, body: string): void {
-  const orch = orchestratorRegistry.get(sessionId);
+  const orch = getCompanyOrchestrator(sessionId);
   if (!orch) return; // session evicted — silently skip
   try {
     orch.postToBoard('quality-gate', null, 'message', body, ['master']);

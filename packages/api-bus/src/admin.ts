@@ -31,7 +31,9 @@ export interface AdminApi {
   // Worker pool diagnostics
   workers: {
     status(input: void, ctx: ApiContext): Promise<{
-      orchestrator: { enabled: boolean; envFlag: boolean; reason: string | null };
+      // Company orchestrator: workers-only architecture, no env gate
+      orchestrator: { enabled: boolean; reason: string | null };
+      // Coder runner pool: still env-gated via MCP_CODER_WORKER
       coder: { enabled: boolean; envFlag: boolean; reason: string | null };
       pool?: { active: number; idle: number; peak: number; created: number; terminated: number };
     }>;

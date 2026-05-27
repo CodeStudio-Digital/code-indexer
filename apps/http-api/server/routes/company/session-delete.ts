@@ -30,7 +30,7 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import { cleanupSessionPersistence, getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { sandboxArchivePath } from '@mcp/company/services/SandboxService.js';
-import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import { getCompanyOrchestrator, deleteCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 
 /**
  * Names a dependency cache volume mirroring the convention used by
@@ -167,10 +167,10 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
     //    the manager map (TTL-alive after the user left the tab),
     //    destroy it directly.
     try {
-      const orch = orchestratorRegistry.get(id);
+      const orch = getCompanyOrchestrator(id);
       if (orch) {
         orch.abortAll();
-        orchestratorRegistry.delete(id);
+        deleteCompanyOrchestrator(id);
       }
     } catch (e) {
       console.warn(

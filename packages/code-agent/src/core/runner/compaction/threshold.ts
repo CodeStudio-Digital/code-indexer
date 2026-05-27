@@ -1,0 +1,73 @@
+/**
+ * Single-source compaction threshold. Replaces the multi-branch
+ * `computeCompactionTrigger` in `compaction/limits.ts` with one rule:
+ * fire compaction when the last known prompt-token count crosses
+ * `triggerRatio` (default 90%) of the model's effective context window.
+ *
+ * Effective window comes from `deriveTokenLimits(model)` — the same helper
+ * the legacy path uses, so the new and old paths agree on what "effective"
+ * means while both still exist.
+ */
+import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
+
+export interface CompactionThresholdInputs {
+  /** Last known prompt-token count from the provider response. */
+  promptTokens: number;
+  /** Model id — used to look up the effective context window. */
+  model: string;
+  /**
+   * Ratio at which compaction fires, expressed as a fraction of the
+   * effective context window. Default 0.90.
+   */
+  triggerRatio?: number;
+}
+
+export interface CompactionThresholdDecision {
+  shouldCompact: boolean;
+  /** Fraction `promptTokens / effective`. Useful for telemetry. */
+  ratio: number;
+  promptTokens: number;
+  effective: number;
+}
+
+export const DEFAULT_TRIGGER_RATIO = 0.9;
+
+export function shouldCompact90(inp: CompactionThresholdInputs): CompactionThresholdDecision {
+  const limits = deriveTokenLimits(inp.model);
+  const triggerRatio = inp.triggerRatio ?? DEFAULT_TRIGGER_RATIO;
+  if (limits.effective <= 0 || inp.promptTokens <= 0) {
+    return {
+      shouldCompact: false,
+      ratio: 0,
+      promptTokens: inp.promptTokens,
+      effective: limits.effective,
+    };
+  }
+  const ratio = inp.promptTokens / limits.effective;
+  return {
+    shouldCompact: ratio >= triggerRatio,
+    ratio,
+    promptTokens: inp.promptTokens,
+    effective: limits.effective,
+  };
+}
+
+/**
+ * Tokens to protect verbatim at the tail. By construction, when compaction
+ * fires the protected tail receives `(1 - triggerRatio)` of the window plus
+ * a slack proportional to the protectRatio. Default 40% — caller can
+ * override for tighter tails on tight context windows.
+ */
+export interface ProtectTokensInputs {
+  model: string;
+  /** Fraction of effective window kept verbatim as the tail. Default 0.40. */
+  protectRatio?: number;
+}
+
+export const DEFAULT_PROTECT_RATIO = 0.4;
+
+export function computeProtectTokens(inp: ProtectTokensInputs): number {
+  const limits = deriveTokenLimits(inp.model);
+  const ratio = inp.protectRatio ?? DEFAULT_PROTECT_RATIO;
+  return Math.max(1, Math.floor(limits.effective * ratio));
+}

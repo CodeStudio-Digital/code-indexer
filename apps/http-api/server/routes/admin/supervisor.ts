@@ -1,38 +1,27 @@
 /**
- * Admin endpoints for the AgentSupervisor (Sprint 4 Phase 3.1).
+ * Admin endpoints for the AgentSupervisor.
  *
  * Routes:
- *   GET  /api/admin/supervisor/status         — aggregated across all active sessions
+ *   GET  /api/admin/supervisor/status         — aggregated across all active workers
  *   GET  /api/admin/supervisor/status/:sessionId — live status of one session
  *   GET  /api/admin/supervisor/incidents?sessionId=X&limit=N — persisted log
  *   POST /api/admin/supervisor/release-quarantine — body {sessionId, role}
  *   POST /api/admin/supervisor/release-read-only  — body {sessionId}
+ *   GET  /api/admin/supervisor/stream          — SSE of live incidents
  *
- * Live status comes from the worker-local supervisor via `supervisor.rpc`
- * bridge. Persisted incidents come from `agent_supervision_incidents`
- * via a direct read — works even when the worker isn't running (idle/
- * evicted/process restarted), because incidents are persisted with the
- * supervisor's write-through pattern.
- *
- * Legacy in-process mode (`MCP_ORCHESTRATOR_WORKER !== '1'`): the
- * supervisor singleton lives in main; resolve via `getGlobalAgentSupervisor`.
+ * Architecture: each company-worker owns its supervisor instance.
+ * Live status flows via `supervisor.rpc` MessageBridge to the worker.
+ * Persisted incidents read direct from `agent_supervision_incidents`
+ * (survive worker eviction / process restart).
  */
 import type { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import {
-  getGlobalAgentSupervisor,
-  isStuckState,
   SqliteSupervisionPersistence,
-  type AgentSupervisionRecord,
-  type AgentSupervisor,
   type IncidentQueryRow,
   type SupervisorStatus,
 } from '@mcp/company/services/supervisor/index.js';
-import {
-  workerOrchestratorEnabled,
-  getWorkerOrchestratorPool,
-  describeWorkerOrchestratorStatus,
-} from '../../../sse/workerPoolSingleton.js';
+import { getWorkerOrchestratorPool } from '../../../sse/workerPoolSingleton.js';
 import {
   recentSupervisorIncidents,
   subscribeToSupervisorIncidents,
@@ -69,114 +58,36 @@ class IncidentReader {
   }
 }
 
-/**
- * Build a per-session SupervisorStatus snapshot from a subset of records
- * that share the same `companySessionId`. Used by the legacy-mode status
- * response so the dashboard's per-session filter (matches `sessionId`)
- * sees the real session id instead of a fake 0.
- *
- * Breakers stay global (process-wide) — per-session breaker split is
- * future work. Aggregate counts (trackedCount, byState, stuckCount,
- * totalIncidents) are computed from the slice; ticks + lastTickAtMs +
- * isRunning come from the global state (they're not per-session
- * concepts).
- */
-function buildPerSessionStatus(
-  sup: AgentSupervisor,
-  records: ReadonlyArray<AgentSupervisionRecord>,
-): SupervisorStatus {
-  const byState: Record<string, number> = {};
-  let stuck = 0;
-  let totalIncidents = 0;
-  for (const r of records) {
-    byState[r.state] = (byState[r.state] ?? 0) + 1;
-    if (isStuckState(r.state)) stuck++;
-    totalIncidents += r.incidentCount;
-  }
-  const global = sup.getStatus();
-  return {
-    isRunning: global.isRunning,
-    trackedCount: records.length,
-    byState,
-    stuckCount: stuck,
-    totalIncidents,
-    lastTickAtMs: global.lastTickAtMs,
-    tickCount: global.tickCount,
-    breakers: global.breakers,
-  };
-}
-
 export function mountSupervisorAdminRoutes(app: Hono, deps: SupervisorAdminDeps): void {
   const incidentReader = new IncidentReader(deps.dbPath);
 
   // GET /status — aggregated across all active workers
   app.get('/api/admin/supervisor/status', async (c) => {
-    if (!workerOrchestratorEnabled()) {
-      const sup = getGlobalAgentSupervisor();
-      const workerReason = describeWorkerOrchestratorStatus().reason;
-      if (!sup) {
-        return c.json({
-          enabled: false,
-          sessions: [],
-          reason: workerReason ?? 'supervisor disabled',
-        });
-      }
-      // Group tracker records by companySessionId so the per-session
-      // SupervisorPanel filter matches against the real id (the legacy
-      // path used to emit sessionId=0 which the rail filter dropped).
-      const records = sup.listRecords();
-      const bySession = new Map<number, AgentSupervisionRecord[]>();
-      for (const r of records) {
-        const list = bySession.get(r.companySessionId) ?? [];
-        list.push(r);
-        bySession.set(r.companySessionId, list);
-      }
-      const sessions = Array.from(bySession.entries()).map(([sessionId, list]) => ({
-        sessionId,
-        status: buildPerSessionStatus(sup, list),
-      }));
-      return c.json({
-        enabled: true,
-        mode: 'legacy',
-        sessions,
-        reason: workerReason,
-      });
-    }
-    let pool;
-    try {
-      pool = getWorkerOrchestratorPool();
-    } catch {
-      return c.json({ enabled: true, mode: 'worker', sessions: [], reason: 'pool not init' });
-    }
+    const pool = getWorkerOrchestratorPool();
     const ids = pool.activeSessionIds();
     const results = await Promise.allSettled(
       ids.map(async (id) => ({
         sessionId: id,
-        status: await pool.supervisorRpc(id, 'getStatus'),
+        status: (await pool.supervisorRpc(id, 'getStatus')) as SupervisorStatus | null,
       })),
     );
     const sessions = results
       .filter(
-        (r): r is PromiseFulfilledResult<{ sessionId: number; status: unknown }> =>
+        (r): r is PromiseFulfilledResult<{ sessionId: number; status: SupervisorStatus | null }> =>
           r.status === 'fulfilled',
       )
       .map((r) => r.value)
-      .filter((s) => s.status !== null);
-    return c.json({ enabled: true, mode: 'worker', sessions });
+      .filter((s): s is { sessionId: number; status: SupervisorStatus } => s.status !== null);
+    return c.json({ enabled: true, sessions });
   });
 
   // GET /status/:sessionId — single session
   app.get('/api/admin/supervisor/status/:sessionId', async (c) => {
     const sessionId = Number(c.req.param('sessionId'));
     if (!Number.isFinite(sessionId)) return c.json({ error: 'invalid sessionId' }, 400);
-    if (workerOrchestratorEnabled()) {
-      const status = await pumpSupervisorRpc(sessionId, 'getStatus');
-      if (status === null) return c.json({ error: 'session not active' }, 404);
-      return c.json({ sessionId, status });
-    }
-    const sup = getGlobalAgentSupervisor();
-    if (!sup) return c.json({ error: 'supervisor disabled' }, 404);
-    return c.json({ sessionId, status: sup.getStatus() });
+    const status = await pumpSupervisorRpc(sessionId, 'getStatus');
+    if (status === null) return c.json({ error: 'session not active' }, 404);
+    return c.json({ sessionId, status });
   });
 
   // GET /incidents?sessionId=X&limit=N — DB-backed, survives worker eviction
@@ -277,29 +188,19 @@ export function mountSupervisorAdminRoutes(app: Hono, deps: SupervisorAdminDeps)
 }
 
 /**
- * Worker-or-legacy fallback. Routes everything through the worker pool
- * when worker mode is on; otherwise calls the main supervisor singleton.
- * Returns null when neither path can satisfy.
+ * Bridge a supervisor method call to the worker that owns this session.
+ * Returns null when no worker is active for the session id (idle /
+ * evicted / never spawned).
  */
 async function pumpSupervisorRpc<R = unknown>(
   sessionId: number,
   method: string,
   args: unknown[] = [],
 ): Promise<R | null> {
-  if (workerOrchestratorEnabled()) {
-    try {
-      const pool = getWorkerOrchestratorPool();
-      return await pool.supervisorRpc<R>(sessionId, method, args);
-    } catch {
-      return null;
-    }
+  try {
+    const pool = getWorkerOrchestratorPool();
+    return await pool.supervisorRpc<R>(sessionId, method, args);
+  } catch {
+    return null;
   }
-  const sup = getGlobalAgentSupervisor();
-  if (!sup) return null;
-  // Legacy mode — supervisor in main. The methods used by admin are
-  // synchronous; we wrap as a typed dispatcher.
-  const dispatcher = sup as unknown as Record<string, (...args: unknown[]) => unknown>;
-  const fn = dispatcher[method];
-  if (typeof fn !== 'function') return null;
-  return fn.apply(sup, args) as R;
 }

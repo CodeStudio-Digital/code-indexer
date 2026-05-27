@@ -7,6 +7,12 @@ interface ProjectRolesBindingProps {
   projects: Array<Pick<SessionProject, 'project_id' | 'project_name' | 'label'>>;
   roleAssignments: RoleAssignmentRaw[];
   onUpdate: (updated: RoleAssignmentRaw[]) => void | Promise<void>;
+  /**
+   * When true, drop the inner "Agents per project" title because the
+   * parent `SidebarSection` already provides the section header. Used
+   * by `AgentsSidebar` to avoid duplicate labels.
+   */
+  embedded?: boolean;
 }
 
 /**
@@ -16,7 +22,7 @@ interface ProjectRolesBindingProps {
  * projects does this role touch?". The master's prompt mirrors this
  * view, and `spawn_subordinate_agent` enforces the binding.
  */
-export function ProjectRolesBinding({ projects, roleAssignments, onUpdate }: ProjectRolesBindingProps) {
+export function ProjectRolesBinding({ projects, roleAssignments, onUpdate, embedded }: ProjectRolesBindingProps) {
   const { t } = useTranslation('agents');
   const nonMasterRoles = roleAssignments.filter((r) => r.role !== 'master');
 
@@ -59,9 +65,11 @@ export function ProjectRolesBinding({ projects, roleAssignments, onUpdate }: Pro
 
   return (
     <div>
-      <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5">
-        {t('projectAgents.title', 'Agents per project')}
-      </p>
+      {!embedded && (
+        <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5">
+          {t('projectAgents.title', 'Agents per project')}
+        </p>
+      )}
       <div className="space-y-1.5">
         {projects.map((p) => {
           const bound = rolesBoundTo(p.project_id);

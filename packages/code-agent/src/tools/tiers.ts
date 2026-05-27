@@ -25,7 +25,7 @@
  * unlocks on-demand via `expand_toolset`. ToolTier is widened to `string` so
  * the runner, filter, and promotion logic work generically with any tier name.
  */
-export type CoreTier = 'bootstrap' | 'navigate' | 'admin';
+export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master';
 export type ToolTier = string;
 
 /** The set of built-in core tier names. Custom tiers must not collide. */
@@ -33,6 +33,7 @@ export const CORE_TIER_NAMES: ReadonlySet<string> = new Set<CoreTier>([
   'bootstrap',
   'navigate',
   'admin',
+  'master',
 ]);
 
 /**
@@ -172,6 +173,55 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'mcp__list_snapshots',
 ]);
 
+/**
+ * Tier 3 — master / orchestration. Surfaces ONLY for company-master
+ * sessions. Auto-activated by the runner when `companyContext.isMaster
+ * === true`; also unlockable explicitly via `expand_toolset('master')`.
+ *
+ * These tools were previously visible to masters by default because they
+ * fell through `getToolTier`'s `return 'bootstrap'` fallback. Moving them
+ * into a dedicated tier makes the orchestration surface discoverable
+ * (find_tools / expand_toolset list it explicitly) and lets the recovery
+ * briefing call `expand_toolset('master')` upfront to guarantee
+ * loading — closing the "Recovery blocked — required master tools
+ * unavailable" failure mode observed on session 100.
+ *
+ * Subordinate sessions never have these tools in their registry (they
+ * are only `registry.registerAll`'d in the `if (isMaster) {...}` branch
+ * of runCoder), so adding the tier label is a no-op for non-masters.
+ */
+const MASTER_TOOLS: ReadonlySet<string> = new Set([
+  // Subordinate orchestration
+  'spawn_subordinate_agent',
+  'wait_for_subordinates',
+  'resume_subordinate',
+  'approve_subordinate_plan',
+  'approve_subordinate_tasks',
+  'answer_subordinate_question',
+  'abort_subordinate_agent',
+  'list_subordinates',
+  'list_company_projects',
+  'forward_to_agent',
+  'finalize_subordinates',
+  'list_containers',
+  'read_container_logs',
+  'respond_to_inbox',
+  // Master-only kanban management. The unified `kanban_post_comment`
+  // and `kanban_update_objectives` stay in bootstrap because they're
+  // shared with subordinates.
+  'kanban_create_card',
+  'kanban_move_card',
+  'kanban_update_meta',
+  'kanban_update_card',
+  'kanban_add_comment',
+  'kanban_update_checklist',
+  'kanban_add_dependency',
+  'kanban_remove_dependency',
+  'kanban_assign_agent',
+  'kanban_list_cards',
+  'kanban_get_card',
+]);
+
 /** Tier 2 — admin. Never auto-promoted. */
 const ADMIN_TOOLS: ReadonlySet<string> = new Set([
   // Native — git mutations
@@ -210,6 +260,7 @@ export function getToolTier(
   if (overrides?.has(name)) return overrides.get(name)!;
   if (NAVIGATE_TOOLS.has(name)) return 'navigate';
   if (ADMIN_TOOLS.has(name)) return 'admin';
+  if (MASTER_TOOLS.has(name)) return 'master';
   return 'bootstrap';
 }
 

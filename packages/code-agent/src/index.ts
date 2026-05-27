@@ -894,6 +894,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const initialMessages: AgentMessage[] = initialMessagesEarly;
 
   const activeTiers = profileToTiers(preResolvedProfile);
+  // Auto-activate the `master` tier for company-master sessions. Master
+  // orchestration tools (spawn_subordinate_agent, list_subordinates,
+  // kanban_list_cards, kanban_get_card, etc.) live in their own tier so
+  // they're discoverable via `find_tools` / `expand_toolset` and don't
+  // pollute non-master sessions. The tier is opt-in for everyone else
+  // via `expand_toolset('master')`.
+  if (opts.companyContext?.isMaster) {
+    activeTiers.add('master');
+  }
   if (process.env.CODER_LOG_TOOLS_COUNT === '1') {
     console.log(
       `[coder] agent=${effectiveAgentId ?? 'none'} profile=${preResolvedProfile} planMode=${opts.planMode ?? false} active_tiers=${Array.from(activeTiers).sort().join(',')}`,

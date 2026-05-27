@@ -38,7 +38,7 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Hono } from 'hono';
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
-import { orchestratorRegistry } from '../../sse/OrchestratorRegistry.js';
+import { getCompanyOrchestrator } from '../../sse/companyOrchestrator.js';
 
 // ─── ws + node-pty surface (typed locally — no @types installed) ──
 
@@ -241,7 +241,7 @@ interface SpawnSpec {
 }
 
 function resolveSandboxSpec(sessionId: number): SpawnSpec | { error: string; status: number } {
-  const orchestrator = orchestratorRegistry.get(sessionId);
+  const orchestrator = getCompanyOrchestrator(sessionId);
   if (!orchestrator) {
     return { error: `session ${sessionId} has no live orchestrator (open it in the dashboard first)`, status: 404 };
   }

@@ -1,10 +1,11 @@
 /**
- * Diagnostic endpoint for the worker pools (P13/P17).
+ * Diagnostic endpoint for the worker pools.
  *
  * `GET /api/admin/workers` returns a snapshot of every spawned
- * worker_thread alongside its lifecycle state. Used by operators to
- * confirm `MCP_ORCHESTRATOR_WORKER=1` / `MCP_CODER_WORKER=1` are
- * actually taking effect — without grep'ing logs.
+ * worker_thread alongside its lifecycle state. The company orchestrator
+ * is workers-only (no env gate); the coder pool stays env-gated via
+ * `MCP_CODER_WORKER=1`. Use this endpoint to confirm both are taking
+ * effect — without grep'ing logs.
  *
  * Response shape:
  * ```json
@@ -36,7 +37,6 @@ import type { Hono } from 'hono';
 import {
   describeWorkerOrchestratorStatus,
   getWorkerOrchestratorPool,
-  workerOrchestratorEnabled,
 } from '../../../sse/workerPoolSingleton.js';
 import {
   coderWorkerEnabled,
@@ -52,15 +52,15 @@ interface WorkerRow {
 }
 
 interface WorkersResponse {
+  // Company orchestrator: workers-only architecture, no env gate.
+  // `enabled` reflects whether the worker file resolved.
   company: {
     enabled: boolean;
-    envFlag: boolean;
-    /** Free-form explanation of `enabled` — useful for "ON but file missing" diagnoses. */
     reason: string | null;
-    /** Resolved worker file the pool would load (null when not resolvable). */
     workerFile: string | null;
     workers: WorkerRow[];
   };
+  // Coder runner pool: still env-gated via MCP_CODER_WORKER.
   coder: {
     enabled: boolean;
     envFlag: boolean;
@@ -76,14 +76,11 @@ export function mountWorkersDiagnosticRoute(app: Hono): void {
     const company: WorkerRow[] = [];
     const coder: WorkerRow[] = [];
 
-    // Each pool is lazy — only construct if the flag was on AND the
-    // worker file exists. We check via `*Enabled()` so a misconfigured
-    // dev environment doesn't accidentally trip the existsSync probe.
-    if (workerOrchestratorEnabled()) {
-      try {
-        company.push(...getWorkerOrchestratorPool().snapshot());
-      } catch { /* pool not initialized yet */ }
-    }
+    // Company pool: always available when the worker file resolves.
+    // The server refuses to boot otherwise (see startServer).
+    try {
+      company.push(...getWorkerOrchestratorPool().snapshot());
+    } catch { /* pool not initialized yet */ }
     if (coderWorkerEnabled()) {
       try {
         coder.push(...getCoderWorkerPool().snapshot());
@@ -96,7 +93,6 @@ export function mountWorkersDiagnosticRoute(app: Hono): void {
     const body: WorkersResponse = {
       company: {
         enabled: companyStatus.enabled,
-        envFlag: companyStatus.envFlag,
         reason: companyStatus.reason,
         workerFile: companyStatus.resolved?.file ?? null,
         workers: company,

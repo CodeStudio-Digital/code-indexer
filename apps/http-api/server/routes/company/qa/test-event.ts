@@ -28,7 +28,7 @@ import type { Hono } from 'hono';
 import type { ServerDeps } from '../../../deps.js';
 import { parseIdParam, parseJsonBody } from '../../_helpers.js';
 import type { QaTestStatus } from '@mcp/services/qa/types.js';
-import { orchestratorRegistry } from '../../../../sse/OrchestratorRegistry.js';
+import { getCompanyOrchestrator } from '../../../../sse/companyOrchestrator.js';
 import { publish as busPublish } from '../../../../coder-bus.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { persistAndStamp } from '@mcp/services/qa/report-persistence.js';
@@ -95,7 +95,7 @@ export function mountQaTestEventRoute(app: Hono, deps: ServerDeps): void {
     // bus so the dashboard can update without polling. When the
     // orchestrator has been evicted we silently degrade to persistence
     // only; the polling fallback in `useLiveRun` still keeps the UI fresh.
-    const orchestrator = orchestratorRegistry.get(sessionId);
+    const orchestrator = getCompanyOrchestrator(sessionId);
 
     switch (body.kind) {
       case 'started':

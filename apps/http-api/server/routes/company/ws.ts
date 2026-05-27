@@ -32,7 +32,7 @@ import { createRequire } from 'node:module';
 import type { Duplex } from 'node:stream';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import { subscribe, waitEnded } from '../../../coder-bus.js';
-import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 
 // Narrow `ws` surface — typed locally because `@types/ws` is not a
 // project dependency. The runtime module is the published `ws`
@@ -86,7 +86,7 @@ export function attachCompanyStreamUpgrade(server: HttpServer): void {
   server.on('upgrade', (req, socket, head) => {
     const ctx = parseUpgradeRequest(req);
     if (!ctx) return; // not ours — let other listeners handle it
-    const orchestrator = orchestratorRegistry.get(ctx.sessionId);
+    const orchestrator = getCompanyOrchestrator(ctx.sessionId);
     if (!orchestrator) {
       writeUpgradeFailure(socket, 404, 'session not found');
       return;

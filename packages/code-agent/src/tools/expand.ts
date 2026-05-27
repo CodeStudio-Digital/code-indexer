@@ -31,8 +31,12 @@ export interface CustomTierInfo {
 export function buildExpandTools(
   customTiers?: ReadonlyMap<string, CustomTierInfo>,
 ): CoderTool[] {
-  // Build dynamic enum: core expandable tiers + custom tiers
-  const coreExpandable = ['navigate', 'admin'];
+  // Build dynamic enum: core expandable tiers + custom tiers. `master`
+  // is included so company-master agents (and recovery agents) can
+  // explicitly load orchestration tools — though the runner already
+  // auto-activates it whenever `companyContext.isMaster === true`, so
+  // most masters never need to call it themselves.
+  const coreExpandable = ['navigate', 'admin', 'master'];
   const customNames = customTiers ? [...customTiers.keys()].sort() : [];
   const allTiers = [...coreExpandable, ...customNames];
 
@@ -48,7 +52,12 @@ export function buildExpandTools(
     'get_dependencies, prepare_edit, get_symbol_body, etc.). Unlock this BEFORE editing code ' +
     'or running shell commands.\n' +
     '- "admin": git_add/commit/branch, mcp__add_snapshot, mcp__index_project, mcp__get_costs, ' +
-    'and other rarely-needed admin tools. Unlock ONLY when the user explicitly asks for them.';
+    'and other rarely-needed admin tools. Unlock ONLY when the user explicitly asks for them.\n' +
+    '- "master": company orchestration surface — spawn_subordinate_agent, ' +
+    'wait_for_subordinates, list_subordinates, forward_to_agent, kanban_list_cards, ' +
+    'kanban_get_card, kanban_create_card, kanban_move_card, kanban_assign_agent, and ' +
+    'related delegation tools. Auto-activated for company-master sessions; call this ' +
+    'explicitly if the master surface looks missing (e.g. after recovery agent boot).';
 
   if (customTiers && customTiers.size > 0) {
     description += '\n\nExternal tool groups (on-demand):';

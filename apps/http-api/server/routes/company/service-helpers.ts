@@ -21,7 +21,7 @@ import type {
   BuilderStack,
   ProvisionableStack,
 } from '@mcp/services/sandbox/types.js';
-import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import {
   isProvisionableStack,
   resolveExternalProjectSpec,
@@ -174,7 +174,7 @@ export async function removeServiceAndProject(
     return;
   }
 
-  const orch = orchestratorRegistry.get(id);
+  const orch = getCompanyOrchestrator(id);
   if (orch) {
     await orch.sandboxService.removeService(serviceId);
   } else {

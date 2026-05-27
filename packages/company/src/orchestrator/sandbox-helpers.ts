@@ -1,4 +1,4 @@
-import { orchestratorRegistry } from '@apps/http-api/sse/OrchestratorRegistry.js';
+import { getCompanyOrchestrator } from '@apps/http-api/sse/companyOrchestrator.js';
 import type { SandboxBinding } from '@mcp/company/types.js';
 import type { SandboxService } from '../services/SandboxService.js';
 
@@ -21,7 +21,7 @@ export function getSandboxBinding(
   const own = sandboxService.getBinding();
   if (own) return own;
   if (parentSessionId != null) {
-    return orchestratorRegistry.get(parentSessionId)?.getSandboxBinding() ?? null;
+    return getCompanyOrchestrator(parentSessionId)?.getSandboxBinding() ?? null;
   }
   return null;
 }
@@ -40,7 +40,7 @@ export function getSandboxServiceBinding(
   const own = sandboxService.getServiceBinding(serviceId);
   if (own) return own;
   if (parentSessionId != null) {
-    return orchestratorRegistry.get(parentSessionId)?.getSandboxServiceBinding(serviceId) ?? null;
+    return getCompanyOrchestrator(parentSessionId)?.getSandboxServiceBinding(serviceId) ?? null;
   }
   return null;
 }
@@ -60,7 +60,7 @@ export function listSandboxPeers(
   selfServiceId?: string | null,
 ): SandboxPeer[] {
   if (parentSessionId != null) {
-    const parent = orchestratorRegistry.get(parentSessionId);
+    const parent = getCompanyOrchestrator(parentSessionId);
     if (parent) return parent.listSandboxPeers(selfServiceId);
     return [];
   }
@@ -103,7 +103,7 @@ export async function provisionSandboxIfNeeded(
   signal?: AbortSignal,
 ): Promise<SandboxBinding | null> {
   if (parentSessionId != null) {
-    const parent = orchestratorRegistry.get(parentSessionId);
+    const parent = getCompanyOrchestrator(parentSessionId);
     if (!parent) return null;
     return await parent.provisionSandboxIfNeeded(signal);
   }

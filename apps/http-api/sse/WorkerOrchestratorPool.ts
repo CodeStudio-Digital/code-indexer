@@ -1,11 +1,12 @@
 /**
- * Pool of worker-backed CompanyOrchestrators (P13).
+ * Pool of worker-backed CompanyOrchestrators.
  *
- * The legacy `orchestratorRegistry` holds in-process orchestrator
- * instances. This pool replaces the spawn path: each session id maps
- * to a `WorkerHost` that runs `apps/http-api/workers/company-worker.ts`.
- * The main thread interacts with the orchestrator via a typed JS
- * Proxy that forwards method calls over `MessageBridge`.
+ * Each company session id maps to a `WorkerHost` running
+ * `apps/http-api/workers/company-worker.ts`. The main thread interacts
+ * with the orchestrator via a typed JS Proxy that forwards method calls
+ * over `MessageBridge`. Workers are the ONLY path — there's no
+ * in-process fallback. Consumers reach the pool via the small helper
+ * in `companyOrchestrator.ts` (which most routes use directly).
  *
  * Two facing surfaces:
  *
@@ -20,11 +21,10 @@
  *      `pumpBusToSSE(c, orchestrator.metaBus, ...)` continue to work
  *      unchanged when they receive the bus from this pool.
  *
- * Eviction: TTL-based, same semantics as `OrchestratorRegistry`.
- * `evict()` sends a `stop` RPC for a graceful shutdown, then waits
- * for the worker to exit. Restart-on-crash is delegated to the
- * underlying `WorkerHost` (default 3 retries with exponential
- * backoff).
+ * Eviction: TTL-based. `evict()` sends a `stop` RPC for a graceful
+ * shutdown, then waits for the worker to exit. Restart-on-crash is
+ * delegated to the underlying `WorkerHost` (default 3 retries with
+ * exponential backoff).
  */
 import { WorkerHost } from '@mcp/orchestrator-host';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';

@@ -19,8 +19,11 @@
  * company session model (long-lived, human-in-loop).
  */
 import type { Hono } from 'hono';
-import { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
-import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import {
+  deleteCompanyOrchestrator,
+  getCompanyOrchestrator,
+  getOrSpawnCompanyOrchestrator,
+} from '../../../sse/companyOrchestrator.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
@@ -51,10 +54,12 @@ export function mountDesignSystemRoundRoutes(app: Hono, deps: ServerDeps): void 
     const maxTurns = body.max_turns ?? 200;
 
     // 1. Abort any active orchestrator on the parent company session.
-    const existing = orchestratorRegistry.get(companySession.id);
+    //    deleteCompanyOrchestrator triggers pool.evict which gracefully
+    //    stops the worker (sends `stop` RPC, waits for exit).
+    const existing = getCompanyOrchestrator(companySession.id);
     if (existing) {
       try { existing.abortAll(); } catch { /* swallow */ }
-      orchestratorRegistry.delete(companySession.id);
+      deleteCompanyOrchestrator(companySession.id);
     }
 
     // 2. Parse role configs persisted in config_json.
@@ -78,13 +83,8 @@ export function mountDesignSystemRoundRoutes(app: Hono, deps: ServerDeps): void 
       extraInstructions,
     });
 
-    // 4. Construct fresh orchestrator + start master. Mirrors company stream.ts /start.
-    const orchestrator = new CompanyOrchestrator({
-      companySessionId: companySession.id,
-      companyStore,
-      db,
-    });
-    orchestratorRegistry.set(companySession.id, orchestrator);
+    // 4. Spawn worker + start master. Mirrors company stream.ts /start.
+    const { orchestrator, bus } = await getOrSpawnCompanyOrchestrator(companySession.id);
 
     try {
       await orchestrator.startMaster({
@@ -97,16 +97,17 @@ export function mountDesignSystemRoundRoutes(app: Hono, deps: ServerDeps): void 
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[design-system] Master start failed for session ${id}:`, msg);
-      orchestratorRegistry.delete(companySession.id);
+      deleteCompanyOrchestrator(companySession.id);
       companyStore.updateCompanySessionStatus(companySession.id, 'error');
       return c.json({ error: `Master start failed: ${msg}` }, 500);
     }
 
     companyStore.setLastUserMessage(companySession.id, userMessage);
 
-    return pumpBusToSSE(c, orchestrator.metaBus, {
+    return pumpBusToSSE(c, bus, {
       since: -1,
-      onDone: () => orchestratorRegistry.scheduleEviction(companySession.id),
+      // Worker pool handles eviction via TTL sweep.
+      onDone: () => undefined,
     });
   });
 
@@ -114,10 +115,10 @@ export function mountDesignSystemRoundRoutes(app: Hono, deps: ServerDeps): void 
     const id = parseIdParam(c);
     const dsSession = designSystemStore.getSession(id);
     if (!dsSession) return notFound(c);
-    const orch = orchestratorRegistry.get(dsSession.company_session_id);
+    const orch = getCompanyOrchestrator(dsSession.company_session_id);
     if (!orch) return c.json({ ok: true, was_running: false });
     orch.abortAll();
-    orchestratorRegistry.delete(dsSession.company_session_id);
+    deleteCompanyOrchestrator(dsSession.company_session_id);
     companyStore.updateCompanySessionStatus(dsSession.company_session_id, 'paused');
     return c.json({ ok: true, was_running: true });
   });
@@ -126,7 +127,7 @@ export function mountDesignSystemRoundRoutes(app: Hono, deps: ServerDeps): void 
     const id = parseIdParam(c);
     const dsSession = designSystemStore.getSession(id);
     if (!dsSession) return notFound(c);
-    const orch = orchestratorRegistry.get(dsSession.company_session_id);
+    const orch = getCompanyOrchestrator(dsSession.company_session_id);
     if (!orch) return c.json({ error: 'Round not running. POST /start-round to start.' }, 404);
     return pumpBusToSSE(c, orch.metaBus, { since: parseLastEventId(c) });
   });

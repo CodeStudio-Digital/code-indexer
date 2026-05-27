@@ -22,7 +22,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
-import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import { getCompanyOrchestrator, deleteCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import { publish as busPublish } from '../../../coder-bus.js';
 
 interface CreateChildBody { name: string }
@@ -58,7 +58,7 @@ export function mountCompanyChildRoutes(app: Hono, deps: ServerDeps): void {
 
     // Prefer the live orchestrator so the metaBus event is published to
     // any open SSE consumers; fall back to direct store when dormant.
-    const orch = orchestratorRegistry.get(id);
+    const orch = getCompanyOrchestrator(id);
     const child = orch
       ? orch.createChildSession(name)
       : companyStore.createChildSession({ parent_session_id: id, name });
@@ -77,7 +77,7 @@ export function mountCompanyChildRoutes(app: Hono, deps: ServerDeps): void {
     const name = (body?.name ?? '').trim();
     if (!name) return c.json({ error: 'name is required' }, 400);
 
-    const orch = orchestratorRegistry.get(id);
+    const orch = getCompanyOrchestrator(id);
     if (orch) orch.renameChildSession(childId, name);
     else companyStore.renameCompanySession(childId, name);
 
@@ -97,14 +97,14 @@ export function mountCompanyChildRoutes(app: Hono, deps: ServerDeps): void {
     // includeKanban/includeSandbox stay false to avoid touching shared
     // state. Same archive path /sessions/:id/reset uses, scoped to the
     // child's own rows.
-    const childOrch = orchestratorRegistry.get(childId);
+    const childOrch = getCompanyOrchestrator(childId);
     if (childOrch) {
       try {
         childOrch.abortAll({ teardownSandbox: false, finalStatus: 'idle' });
       } catch (e) {
         console.warn(`[company/children] abortAll failed for ${childId}:`, e instanceof Error ? e.message : String(e));
       }
-      orchestratorRegistry.delete(childId);
+      deleteCompanyOrchestrator(childId);
     }
     try {
       companyStore.archiveCompanySession(childId, {
@@ -117,7 +117,7 @@ export function mountCompanyChildRoutes(app: Hono, deps: ServerDeps): void {
     }
 
     // Notify the parent's metaBus so dashboard tabs update in real time.
-    const parentOrch = orchestratorRegistry.get(id);
+    const parentOrch = getCompanyOrchestrator(id);
     if (parentOrch) {
       busPublish(parentOrch.metaBus, 'subsession_archived', { session_id: childId });
     }

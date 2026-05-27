@@ -6,7 +6,7 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import type { BuilderStack } from '@mcp/services/sandbox/types.js';
 import { StackSnapshotSeeder } from '@mcp/company/services/stack-snapshot-seeder.js';
-import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import {
   isBuilderStack,
   isExternalProjectRuntime,
@@ -114,7 +114,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       };
     });
 
-    const orchestrator = orchestratorRegistry.get(id);
+    const orchestrator = getCompanyOrchestrator(id);
     const liveOrchestrator = !!orchestrator;
     // `isMasterAlive` is a thin getter on CompanyOrchestrator that
     // forwards `master.isAlive`. False when the master has either never
@@ -157,7 +157,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/company/sessions/:id/wake-master', async (c) => {
     const id = parseIdParam(c);
     if (!companyStore.getCompanySession(id)) return notFound(c);
-    const orchestrator = orchestratorRegistry.get(id);
+    const orchestrator = getCompanyOrchestrator(id);
     if (!orchestrator) {
       return c.json({ revived: false, reason: 'orchestrator_idle' });
     }
@@ -525,7 +525,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       }
     }
 
-    const orch = orchestratorRegistry.get(id);
+    const orch = getCompanyOrchestrator(id);
     if (orch) {
       try {
         orch.applyConfigPatch({

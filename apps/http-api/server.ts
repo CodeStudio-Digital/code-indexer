@@ -60,13 +60,8 @@ import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relev
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
 import { startInboxWatchdogIfEnabled, type InboxMessageWatchdog } from '@mcp/company/services/inbox-message-watchdog.js';
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
-import {
-  startAgentSupervisorIfEnabled,
-  setGlobalAgentSupervisor,
-  type AgentSupervisor,
-} from '@mcp/company/services/supervisor/index.js';
-import { publishSupervisorIncident } from './sse/supervisor-incident-bus.js';
-import { CompanyEventBus } from '@mcp/company/services/CompanyEventBus.js';
+// AgentSupervisor: workers-only architecture — each company-worker
+// owns its own supervisor instance. Main process holds nothing.
 import { subordinateCompletionBus } from '@mcp/company/services/subordinate/completion-events.js';
 import { makeQualityAlertObserver } from './server/quality-observer.js';
 import { createMcpHttpApp } from '../mcp-server/http/mcp-http-transport.js';
@@ -289,49 +284,11 @@ export function createApp() {
     console.log('[inbox-watchdog] started (MCP_COMPANY_INBOX_WATCHDOG_ENABLED=1)');
   }
 
-  // Sprint 4 Phase 1.5 — AgentSupervisor boot. Gated by
-  // MCP_SUPERVISOR_ENABLED=1. Phase 1 wiring:
-  //   - subordinateCompletionBus singleton → completion events flow in
-  //   - SubordinateLifecycle.spawn calls registerSubordinate via the
-  //     global getter (see packages/company/.../subordinate/spawn.ts)
-  //   - companyEventBus passed here is an ORPHAN — per-session bus
-  //     wiring is Phase 2 (multi-session aggregator). For now master
-  //     lifecycle events aren't observed by the supervisor.
-  // Even with the orphan bus, the supervisor's value is:
-  //   - Periodic stuck-detection tick (every 15s) → incidents logged
-  //   - Subordinate completion → state transitions to TERMINAL
-  //   - Manual registerSubordinate from spawn → tracking starts
-  const supervisorCompanyEventBus = new CompanyEventBus();
-  const agentSupervisor: AgentSupervisor | null = startAgentSupervisorIfEnabled({
-    companyEventBus: supervisorCompanyEventBus,
-    completionBus: subordinateCompletionBus,
-    // Phase 3.2 — legacy in-process mode also feeds the SSE bus. In
-    // worker mode this main supervisor stays orphan (no agents
-    // registered), but the wiring is cheap and future-proofs a hybrid
-    // setup where main + workers co-exist.
-    emitIncident: (incident): void => {
-      console.warn(
-        `[supervisor] incident ${incident.kind}: agent=${incident.agentRunId ?? 'n/a'} ${incident.detail}`,
-      );
-      try {
-        publishSupervisorIncident({
-          sessionId: 0,
-          kind: incident.kind,
-          agentRunId: incident.agentRunId,
-          fromState: incident.fromState,
-          attemptedTo: incident.attemptedTo,
-          detail: incident.detail,
-          detectedAtMs: incident.detectedAtMs,
-        });
-      } catch {
-        /* best-effort */
-      }
-    },
-  });
-  setGlobalAgentSupervisor(agentSupervisor);
-  if (agentSupervisor) {
-    console.log('[agent-supervisor] started (MCP_SUPERVISOR_ENABLED=1)');
-  }
+  // AgentSupervisor: workers-only architecture means each company-worker
+  // boots its own per-session supervisor inside the worker_thread (see
+  // `apps/http-api/workers/company-worker.ts`). The main process holds
+  // no supervisor instance — incidents flow from workers to main via
+  // MessageBridge → SupervisorIncidentBus → SSE.
   // SubAgent result cache — installed unconditionally so even when the
   // flag is off, future toggles take effect immediately. Enable bit is
   // separate so the spawn handler can short-circuit before the lookup.
@@ -747,24 +704,33 @@ export function createApp() {
 }
 
 export async function startServer(port: number, host: string) {
-  const { app, chromeService, deps } = createApp();
-  console.log(`MCP Code Indexer API running at http://${host}:${port}`);
-  // Honest worker status — DOES the flag actually take effect, or is
-  // the worker file missing? The legacy log just echoed the env var,
-  // which lied silently when running under tsx without a build.
   const [{ describeWorkerOrchestratorStatus }, { describeCoderWorkerStatus }] = await Promise.all([
     import('./sse/workerPoolSingleton.js'),
     import('./sse/coderWorkerPoolSingleton.js'),
   ]);
+  // Workers-only architecture: company orchestrator MUST run in worker
+  // threads. Refuse to boot if the worker file can't be resolved —
+  // there's no in-process fallback path anymore.
   const company = describeWorkerOrchestratorStatus();
+  if (!company.enabled) {
+    console.error(
+      `[fatal] Company worker pool unavailable: ${company.reason ?? 'unknown'}\n` +
+      `Fix: run \`npm run build\` for production, or \`npm run dev:server\` / \`npm run electron:dev\` in development.`,
+    );
+    process.exit(1);
+  }
+  const { app, chromeService, deps } = createApp();
+  console.log(`MCP Code Indexer API running at http://${host}:${port}`);
   const coder = describeCoderWorkerStatus();
-  const fmt = (s: { enabled: boolean; envFlag: boolean; reason: string | null }): string => {
+  const fmtCompany = (s: { enabled: boolean; reason: string | null }): string =>
+    s.enabled ? `ON (${s.reason ?? ''})` : `OFF — ${s.reason}`;
+  const fmtCoder = (s: { enabled: boolean; envFlag: boolean; reason: string | null }): string => {
     if (s.enabled) return `ON (${s.reason ?? ''})`;
     if (s.envFlag) return `OFF — ${s.reason}`;
     return 'off';
   };
-  console.log(`[workers] company orchestrator: ${fmt(company)}`);
-  console.log(`[workers] coder runs: ${fmt(coder)}`);
+  console.log(`[workers] company orchestrator: ${fmtCompany(company)}`);
+  console.log(`[workers] coder runs: ${fmtCoder(coder)}`);
   console.log(
     `[workers] diagnostics: GET ${host === '0.0.0.0' ? 'localhost' : host}:${port}/api/admin/workers`,
   );

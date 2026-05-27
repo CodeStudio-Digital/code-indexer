@@ -1,24 +1,25 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
-import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import {
-  getWorkerOrchestratorPool,
-  workerOrchestratorEnabled,
-} from '../../../sse/workerPoolSingleton.js';
+  getCompanyOrchestrator,
+  hasCompanyOrchestrator,
+  deleteCompanyOrchestrator,
+  getOrSpawnCompanyOrchestrator,
+} from '../../../sse/companyOrchestrator.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { withSessionLock } from '../coder/sessionLock.js';
 
 /**
  * Backwards-compatible accessor used by sibling routes (kanban.ts).
- * Prefer importing `orchestratorRegistry` directly in new code.
+ * Reads delegate to the worker pool via `companyOrchestrator`; writes
+ * are not supported — all orchestrators are spawned via `getOrSpawn`.
  */
 export const activeOrchestrators = {
-  get: (id: number) => orchestratorRegistry.get(id),
-  has: (id: number) => orchestratorRegistry.has(id),
-  delete: (id: number) => orchestratorRegistry.delete(id),
-  set: (id: number, o: CompanyOrchestrator) => orchestratorRegistry.set(id, o),
+  get: (id: number) => getCompanyOrchestrator(id),
+  has: (id: number) => hasCompanyOrchestrator(id),
+  delete: (id: number) => deleteCompanyOrchestrator(id),
 };
 
 interface AttachmentBody {
@@ -110,26 +111,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const attachments = attachmentsCheck.value;
 
     // Serialize the "is there already a master for this id?" decision so two
-    // concurrent POSTs cannot both pass the status check and each call
-    // orchestratorRegistry.set() — the second would silently overwrite the
-    // first orchestrator and a second runCoder loop would race the first.
+    // concurrent POSTs cannot both pass the status check.
     const decision = await withSessionLock(id, async (): Promise<
       | {
           kind: 'success';
           orchestrator: CompanyOrchestrator;
           bus: CompanyOrchestrator['metaBus'];
-          workerEnabled: boolean;
         }
       | { kind: 'reject'; status: 404 | 409 | 500; body: { error: string } }
     > => {
       const cur = companyStore.getCompanySession(id);
       if (!cur) return { kind: 'reject', status: 404, body: { error: 'Not found' } };
-      const workerEnabled = workerOrchestratorEnabled();
-      if (
-        cur.status === 'running' ||
-        orchestratorRegistry.has(id) ||
-        (workerEnabled && getWorkerOrchestratorPool().has(id))
-      ) {
+      if (cur.status === 'running' || hasCompanyOrchestrator(id)) {
         return { kind: 'reject', status: 409, body: { error: 'Already running' } };
       }
 
@@ -145,29 +138,13 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string;
       }>;
 
-      // P13: When the worker flag is set AND the built worker file
-      // exists, the orchestrator lives in a dedicated worker_thread.
-      // The main-side proxy mimics the same surface (`startMaster`,
-      // `metaBus`, etc.) so the rest of this handler is identical.
-      // When the flag is off, falls back to the legacy in-process
-      // instance — same behavior as before P13 landed.
-      let orchestrator: CompanyOrchestrator;
-      let busForPump: CompanyOrchestrator['metaBus'];
-      if (workerEnabled) {
-        const pool = getWorkerOrchestratorPool();
-        const spawned = await pool.getOrSpawn(id);
-        orchestrator = spawned.orchestrator;
-        busForPump = spawned.bus;
-      } else {
-        const local = new CompanyOrchestrator({
-          companySessionId: id,
-          companyStore,
-          db,
-        });
-        orchestratorRegistry.set(id, local);
-        orchestrator = local;
-        busForPump = local.metaBus;
-      }
+      // Workers-only architecture: orchestrator lives in a dedicated
+      // worker_thread via WorkerOrchestratorPool. Main-side proxy
+      // mimics the CompanyOrchestrator surface (`startMaster`,
+      // `metaBus`, etc.) via MessageBridge.
+      const spawned = await getOrSpawnCompanyOrchestrator(id);
+      const orchestrator = spawned.orchestrator;
+      const busForPump = spawned.bus;
 
       // Pause any pipeline executions that were 'running' before the
       // server restart. The dashboard will surface a Resume button.
@@ -190,20 +167,16 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[company s=${id}] Master start failed:`, msg);
-        if (workerEnabled) {
-          // The worker still exists — evict so the next /start gets a
-          // fresh worker rather than a half-initialized one.
-          void getWorkerOrchestratorPool().evict(id);
-        } else {
-          orchestratorRegistry.delete(id);
-        }
+        // Evict the worker so the next /start gets a fresh one rather
+        // than a half-initialized instance.
+        deleteCompanyOrchestrator(id);
         companyStore.updateCompanySessionStatus(id, 'error');
         return { kind: 'reject', status: 500, body: { error: `Master start failed: ${msg}` } };
       }
 
       // Persist the user message so it survives page reload
       companyStore.setLastUserMessage(id, userMessage);
-      return { kind: 'success', orchestrator, bus: busForPump, workerEnabled };
+      return { kind: 'success', orchestrator, bus: busForPump };
     });
 
     if (decision.kind === 'reject') {
@@ -212,14 +185,9 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
     return pumpBusToSSE(c, decision.bus, {
       since: -1,
-      onDone: () => {
-        if (decision.workerEnabled) {
-          // Worker pool handles eviction via its own TTL sweep — no
-          // explicit `scheduleEviction` needed.
-          return;
-        }
-        orchestratorRegistry.scheduleEviction(id);
-      },
+      // Worker pool handles eviction via its own TTL sweep — no
+      // explicit scheduling needed here.
+      onDone: () => undefined,
     });
   });
 
@@ -229,7 +197,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.get('/api/company/sessions/:id/attach', (c) => {
     const id = parseIdParam(c);
-    const orchestrator = orchestratorRegistry.get(id);
+    const orchestrator = getCompanyOrchestrator(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
     return pumpBusToSSE(c, orchestrator.metaBus, {
@@ -255,14 +223,14 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     // concurrent /resume calls can't both observe registry-empty and each
     // create a fresh CompanyOrchestrator + start its own runCoder loop.
     const decision = await withSessionLock(id, async (): Promise<
-      | { kind: 'attach'; orchestrator: CompanyOrchestrator; since: number }
-      | { kind: 'fresh'; orchestrator: CompanyOrchestrator }
+      | { kind: 'attach'; orchestrator: CompanyOrchestrator; since: number; bus: CompanyOrchestrator['metaBus'] }
+      | { kind: 'fresh'; orchestrator: CompanyOrchestrator; bus: CompanyOrchestrator['metaBus'] }
       | { kind: 'reject'; status: 400 | 404 | 500; body: { error: string } }
     > => {
-      const existing = orchestratorRegistry.get(id);
+      const existing = getCompanyOrchestrator(id);
       if (existing) {
         if (body.message) existing.sendMessageToMaster(body.message, { attachments, thinking: body.thinking });
-        return { kind: 'attach', orchestrator: existing, since: parseLastEventId(c) };
+        return { kind: 'attach', orchestrator: existing, since: parseLastEventId(c), bus: existing.metaBus };
       }
 
       const session = companyStore.getCompanySession(id);
@@ -283,8 +251,9 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       try { config = JSON.parse(session.config_json); } catch { /* defaults */ }
       const roleConfigs = config.role_assignments ?? [];
 
-      const orchestrator = new CompanyOrchestrator({ companySessionId: id, companyStore, db });
-      orchestratorRegistry.set(id, orchestrator);
+      // Workers-only: spawn the orchestrator inside its worker_thread.
+      const spawned = await getOrSpawnCompanyOrchestrator(id);
+      const orchestrator = spawned.orchestrator;
 
       // Same recovery path as the start branch — see /start above.
       void orchestrator.pipelineRecoverRunning().catch((err) => {
@@ -316,24 +285,25 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[company s=${id}] Resume failed:`, msg);
-        orchestratorRegistry.delete(id);
+        deleteCompanyOrchestrator(id);
         return { kind: 'reject', status: 500, body: { error: `Resume failed: ${msg}` } };
       }
 
-      return { kind: 'fresh', orchestrator };
+      return { kind: 'fresh', orchestrator, bus: spawned.bus };
     });
 
     if (decision.kind === 'reject') {
       return c.json(decision.body, decision.status);
     }
     if (decision.kind === 'attach') {
-      return pumpBusToSSE(c, decision.orchestrator.metaBus, {
+      return pumpBusToSSE(c, decision.bus, {
         since: decision.since,
       });
     }
-    return pumpBusToSSE(c, decision.orchestrator.metaBus, {
+    return pumpBusToSSE(c, decision.bus, {
       since: -1,
-      onDone: () => orchestratorRegistry.scheduleEviction(id),
+      // Worker pool handles eviction via TTL sweep.
+      onDone: () => undefined,
     });
   });
 
@@ -342,10 +312,10 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/abort', (c) => {
     const id = parseIdParam(c);
-    const orchestrator = orchestratorRegistry.get(id);
+    const orchestrator = getCompanyOrchestrator(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
     orchestrator.abortAll();
-    orchestratorRegistry.delete(id);
+    deleteCompanyOrchestrator(id);
     return c.json({ ok: true });
   });
 
@@ -379,7 +349,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     let resolvedModel = body.model ?? '';
 
     // Live swap if orchestrator is active
-    const orchestrator = orchestratorRegistry.get(id);
+    const orchestrator = getCompanyOrchestrator(id);
     if (orchestrator) {
       try {
         const result = await orchestrator.swapMasterProvider(body.provider, body.model);
@@ -410,7 +380,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/plan-response', async (c) => {
     const id = parseIdParam(c);
-    const orchestrator = orchestratorRegistry.get(id);
+    const orchestrator = getCompanyOrchestrator(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
     const body = await parseJsonBody<PlanResponseBody>(c);
@@ -443,7 +413,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/message', async (c) => {
     const id = parseIdParam(c);
-    const orchestrator = orchestratorRegistry.get(id);
+    const orchestrator = getCompanyOrchestrator(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
     if (orchestrator.metaBus.ended) {
@@ -482,7 +452,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/answer', async (c) => {
     const id = parseIdParam(c);
-    const orchestrator = orchestratorRegistry.get(id);
+    const orchestrator = getCompanyOrchestrator(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
     const body = await parseJsonBody<{ answer: string; prompt_id?: number }>(c);
@@ -507,7 +477,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/company/sessions/:id/status', (c) => {
     const id = parseIdParam(c);
     return c.json({
-      active: orchestratorRegistry.has(id),
+      active: hasCompanyOrchestrator(id),
       company_session_id: id,
     });
   });

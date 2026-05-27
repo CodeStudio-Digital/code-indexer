@@ -17,7 +17,7 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import type { BuilderStack } from '@mcp/services/sandbox/types.js';
-import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import {
   isExternalProjectRuntime,
   resolveExternalProjectSpec,
@@ -124,7 +124,7 @@ export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): v
       );
     }
 
-    const orch = orchestratorRegistry.get(id);
+    const orch = getCompanyOrchestrator(id);
     try {
       if (orch) {
         const binding = await orch.sandboxService.addService({

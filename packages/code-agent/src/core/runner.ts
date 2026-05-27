@@ -179,6 +179,16 @@ import { hashShort, rowToVerdictSnapshot } from './runner/dup-utils.js';
 import { envInt, doomLoopThreshold } from './runner/constants.js';
 import { isEssentialCompanyTool } from './runner/company-essentials.js';
 
+// Assembly modules — extracted in Commit 2 of the BT refactor. The legacy
+// closures/methods below delegate to these so the BT's Executing node can
+// reuse them once Commit 3 lands. Byte-identical to the legacy bodies.
+import {
+  buildTools as buildToolsImpl,
+  buildToolsCacheKey as buildToolsCacheKeyImpl,
+  fingerprintTools,
+} from './runner/assembly/tools.js';
+import { assembleMessagesForChat as assembleMessagesForChatImpl } from './runner/assembly/messages.js';
+
 // (RESULT_DUP_ESCALATION_*, REPEATABLE_*, POLLING_STUCK_*, DUP_CALL_REMINDER_*,
 // SUMMARIZER_*, RESULT_DUP_LARGE_THRESHOLD, RESULT_DUP_HEAD_CHARS, canRunSummarizer —
 // all moved to './runner/constants.ts'. Doc-blocks live alongside them in that file.)
@@ -1893,40 +1903,19 @@ export class CoderRunner extends EventEmitter {
   private assembleMessagesForChat(
     compactionLimits: import('@mcp/code-agent/core/compaction.js').CompactionLimits | undefined,
   ): AgentMessage[] {
-    // deepThink: cap accumulated pre-thoughts BEFORE compaction so the
-    // compactor never sees the stale ones.
-    const windowK = this.opts.preThinkHistoryWindow ?? 3;
-    const messagesAfterPreThinkCap = this.opts.persistPreThoughts === false
-      ? this.messages
-      : reducePreThinkInHistory(this.messages, windowK);
-    const compacted = compactHistoryForLLM(messagesAfterPreThinkCap, compactionLimits, this.tunables);
-
-    const activeSkillsBlock = this.buildActiveSkillsBlockForLastUser(compacted);
-    const activeContextBlock = this.opts.agentLoopV2
-      ? this.buildActiveContextBlockForTurn()
-      : null;
-
-    if (!activeSkillsBlock && !activeContextBlock) return compacted;
-
-    const extras: ContentBlock[] = [];
-    // Skills go BEFORE active-context so the model treats them as fresh
-    // user-authored instructions framing the current goal, instead of
-    // reading the live goal first and then second-guessing it.
-    if (activeSkillsBlock) extras.push({ type: 'text', text: activeSkillsBlock });
-    if (activeContextBlock) extras.push({ type: 'text', text: activeContextBlock });
-
-    const cloned = compacted.slice();
-    const lastIdx = cloned.length - 1;
-    if (lastIdx >= 0 && cloned[lastIdx].role === 'user') {
-      const last = cloned[lastIdx];
-      cloned[lastIdx] = {
-        role: 'user',
-        content: [...last.content, ...extras],
-      };
-    } else {
-      cloned.push({ role: 'user', content: extras });
-    }
-    return cloned;
+    // Body extracted to `./runner/assembly/messages.ts` in Commit 2. This
+    // wrapper threads the `this`-bound helpers as callbacks so behavior is
+    // byte-identical to the pre-refactor closure.
+    return assembleMessagesForChatImpl({
+      messages: this.messages,
+      tunables: this.tunables,
+      compactionLimits,
+      preThinkHistoryWindow: this.opts.preThinkHistoryWindow ?? 3,
+      persistPreThoughts: this.opts.persistPreThoughts !== false,
+      agentLoopV2: !!this.opts.agentLoopV2,
+      buildActiveSkillsBlock: (compacted) => this.buildActiveSkillsBlockForLastUser(compacted),
+      buildActiveContextBlock: () => this.buildActiveContextBlockForTurn(),
+    });
   }
 
   /**
@@ -2433,117 +2422,23 @@ export class CoderRunner extends EventEmitter {
     // `expand_toolset` calls take effect on the very next turn without any
     // extra plumbing. When `activeTiers` is null (subagents, tests) we
     // compute it once and reuse — identical to the legacy behaviour.
+    // Body extracted to `./runner/assembly/tools.ts` in Commit 2. The closure
+    // threads the `this.goalToolHiddenLogged` flag through args/result so the
+    // once-per-session log discipline survives. Byte-identical to the legacy
+    // body — verified against session-snapshot fixtures.
     const buildTools = () => {
-      let filtered = this.opts.registry.list();
-      // Global disabled (admin panel)
-      if (this.opts.globalDisabledTools?.size) {
-        filtered = filtered.filter((t) => !this.opts.globalDisabledTools!.has(t.name));
-      }
-      // Session disabled (per-session config)
-      if (this.opts.sessionDisabledTools?.size) {
-        filtered = filtered.filter((t) => !this.opts.sessionDisabledTools!.has(t.name));
-      }
-      // Tier filtering (with optional runtime overrides for external MCP tools)
-      filtered = this.activeTiers
-        ? filterByTiers(filtered, this.activeTiers, this.opts.externalToolTiers)
-        : filtered;
-      // Plugin hook: projects can drop `.mcp-indexer/hooks/tool-filter.js`
-      // to return an allowlist of tool names. Runs in vm sandbox with 200ms
-      // timeout; on failure or non-array return, no filtering is applied.
-      const hookAllow = runToolFilterHook(
-        this.opts.toolContext.cwd,
-        filtered.map((t) => ({ name: t.name, source: t.source })),
-        {
-          projectName: this.opts.toolContext.projectName,
-          providerName: this.opts.provider.name,
-          model: this.opts.provider.model,
-          profile: this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : undefined,
-        },
-      );
-      if (hookAllow && hookAllow.size > 0) {
-        const before = filtered.length;
-        filtered = filtered.filter((t) => hookAllow.has(t.name));
-        if (filtered.length < before) {
-          console.log(`[coder] tool-filter hook removed ${before - filtered.length} tool(s)`);
-        }
-      }
-      // Hide `create_goal` when an in-progress goal exists. Eliminates the
-      // loop seen in sessions 656/658 where the model kept calling
-      // create_goal instead of executing real work. Read fresh each turn
-      // — `update_goal` flipping status to 'complete' re-exposes the tool
-      // automatically on the next turn, preserving legitimate pivots.
-      const activeGoal = this.opts.toolContext.getGoalState?.();
-      if (activeGoal && activeGoal.status === 'in_progress') {
-        const before = filtered.length;
-        filtered = filterGoalToolsByState(filtered, activeGoal);
-        if (filtered.length < before && !this.goalToolHiddenLogged) {
-          this.goalToolHiddenLogged = true;
-          const preview = activeGoal.text.length > 80
-            ? `${activeGoal.text.slice(0, 80)}…`
-            : activeGoal.text;
-          console.log(`[coder] hiding create_goal — active goal: "${preview}"`);
-        }
-      } else {
-        this.goalToolHiddenLogged = false;
-      }
-      // Stable alphabetical sort. The provider sees the tools array in
-      // every request; any reordering between turns invalidates server-side
-      // prompt caches (Anthropic ephemeral, OpenAI/ZAI auto-cache). Sorting
-      // by name eliminates the dependency on registry insertion order, hot-
-      // reload sequencing of MCP tools, or filter pass ordering.
-      //
-      // Priority partition BEFORE truncation: orchestration tools that
-      // are existentially required (master can't delegate without
-      // `spawn_subordinate_agent` / `forward_to_agent` / `resume_subordinate`;
-      // subs can't escalate without `ask_master` / `submit_plan_to_master`)
-      // must NEVER be cut by `maxTools`. The previous unconditional
-      // alphabetical-cut sliced these out for masters with many MCP tools
-      // + projects, leaving the agent narrating "I have no way to delegate"
-      // in a loop. Essentials always survive; truncation only eats the
-      // tail of the non-essential bucket.
-      const isMasterRunner = !!this.opts.toolContext.companyContext?.isMaster;
-      const isCompanyRunner = !!this.opts.toolContext.companyContext;
-      const essentials: typeof filtered = [];
-      const others: typeof filtered = [];
-      for (const t of filtered) {
-        if (isCompanyRunner && isEssentialCompanyTool(t.name, isMasterRunner)) {
-          essentials.push(t);
-        } else {
-          others.push(t);
-        }
-      }
-      essentials.sort((a, b) => a.name.localeCompare(b.name));
-      others.sort((a, b) => a.name.localeCompare(b.name));
-      const maxTools = getModelMaxTools(this.opts.provider.model ?? '');
-      const totalBefore = essentials.length + others.length;
-      if (totalBefore > maxTools) {
-        const room = Math.max(0, maxTools - essentials.length);
-        const cutCount = others.length - room;
-        // Log enough to debug "where did my tool go?" — the prior log
-        // just showed the totals. Now we also list the names that got
-        // cut so operators see exactly which prefixes the agent lost.
-        const cutNames = others.slice(room).map((t) => t.name);
-        console.log(
-          `[coder] tool cap: ${totalBefore} → ${maxTools} (model limit for ${this.opts.provider.model}) — ` +
-            `${essentials.length} essential kept, ${room}/${others.length} others kept, ${cutCount} dropped. ` +
-            `Dropped: ${cutNames.slice(0, 20).join(', ')}${cutNames.length > 20 ? `, … (+${cutNames.length - 20})` : ''}`,
-        );
-        filtered = [...essentials, ...others.slice(0, room)];
-      } else {
-        filtered = [...essentials, ...others];
-      }
-      // Bootstrap-only profile: aggressively shorten descriptions to their
-      // first sentence. The bootstrap turn is the most expensive (no cache
-      // warmth yet) and the agent only needs to know which tool routes
-      // where — full USE/DON'T text becomes useful only after promotion.
-      const bootstrapOnly = !!this.activeTiers
-        && !this.activeTiers.has('navigate')
-        && !this.activeTiers.has('admin');
-      return filtered.map((t) => ({
-        name: t.name,
-        description: bootstrapOnly ? terseDescription(t.description) : t.description,
-        parameters: t.parameters,
-      }));
+      const result = buildToolsImpl({
+        registry: this.opts.registry,
+        globalDisabledTools: this.opts.globalDisabledTools,
+        sessionDisabledTools: this.opts.sessionDisabledTools,
+        externalToolTiers: this.opts.externalToolTiers,
+        activeTiers: this.activeTiers,
+        toolContext: this.opts.toolContext,
+        provider: this.opts.provider,
+        goalToolAlreadyLogged: this.goalToolHiddenLogged,
+      });
+      this.goalToolHiddenLogged = result.goalToolHiddenLogged;
+      return result.tools;
     };
     let tools = buildTools();
 
@@ -2616,7 +2511,7 @@ export class CoderRunner extends EventEmitter {
     if (this.sessionStore && this.sessionId != null) {
       try {
         const toolsJson = JSON.stringify(tools);
-        const fingerprint = createHash('sha1').update(toolsJson).digest('hex');
+        const fingerprint = fingerprintTools(tools);
         this.sessionStore.recordSessionInput({
           session_id: this.sessionId,
           kind: 'tools_snapshot',
@@ -2651,11 +2546,12 @@ export class CoderRunner extends EventEmitter {
      * session (when create_goal/update_goal fires), so cache thrash is
      * bounded.
      */
-    const buildToolsCacheKey = (): string => {
-      const tierKey = this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : '*';
-      const goalStatus = this.opts.toolContext.getGoalState?.()?.status ?? 'none';
-      return `${tierKey}|goal=${goalStatus}`;
-    };
+    // Body extracted to `./runner/assembly/tools.ts` in Commit 2.
+    const buildToolsCacheKey = (): string =>
+      buildToolsCacheKeyImpl({
+        activeTiers: this.activeTiers,
+        getGoalState: this.opts.toolContext.getGoalState,
+      });
     let lastTiersKey = buildToolsCacheKey();
 
     let turn = 0;

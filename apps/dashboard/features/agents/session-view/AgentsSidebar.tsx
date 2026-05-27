@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Check, Crown, Plus } from 'lucide-react';
+import { Bot, Check, Crown, Folder, GitBranch, Plus, Server, Users } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
 import { cn } from '../../../lib/utils.js';
 import { apiPost } from '../../../hooks/useApi.js';
@@ -9,6 +9,7 @@ import ServicesSidebar from '../ServicesSidebar.js';
 import { ProjectBadge } from './ProjectBadge.js';
 import { ProjectRolesBinding } from './ProjectRolesBinding.js';
 import { RoleModelEditor } from './RoleModelEditor.js';
+import { SidebarSection } from './SidebarSection.js';
 import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
 import type { AgentStreamState } from '../../../state/company/types.js';
 import type {
@@ -167,142 +168,164 @@ export function AgentsSidebar({
         <span className="text-xs font-medium">{t('company.config')}</span>
       </div>
 
-      <div className="p-2 space-y-2">
-        {/* Projects */}
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wide">
-              {t('company.projects')}
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                setAddingProject((v) => !v);
-                setNewProjectId('');
-              }}
-              className="text-muted-foreground hover:text-foreground transition-colors"
-              title="Add project"
-            >
-              <Plus className="h-3 w-3" />
-            </button>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {projects.map((p) => (
-              <ProjectBadge
-                key={p.project_id}
-                projectId={p.project_id}
-                name={p.project_name}
-                label={p.label}
-                onRenamed={refetch}
-                canDelete={projects.length > 1}
-                onDelete={() => deleteProject(p)}
-              />
-            ))}
-          </div>
-          {addingProject && (
-            availableProjects.length > 0 ? (
-              <div className="flex gap-1 mt-1.5">
-                <select
-                  value={newProjectId}
-                  onChange={(e) => setNewProjectId(e.target.value)}
-                  className="flex-1 rounded border bg-background px-1 py-0.5 text-[10px]"
-                >
-                  <option value="">Select...</option>
-                  {availableProjects.map((p) => (
-                    <option key={p.id} value={String(p.id)}>{p.name}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  disabled={!newProjectId}
-                  className="disabled:opacity-40 text-muted-foreground hover:text-foreground transition-colors"
-                  onClick={() => void addProject()}
-                >
-                  <Check className="h-3 w-3" />
-                </button>
-              </div>
-            ) : (
-              <p className="text-[10px] text-muted-foreground mt-1">
-                {t('company.noMoreProjects', 'No more projects available')}
-              </p>
-            )
-          )}
+      {/* ── Projetos ── */}
+      <SidebarSection
+        storageKey="projects"
+        icon={Folder}
+        title={t('company.projects')}
+        count={projects.length}
+        action={
+          <button
+            type="button"
+            onClick={() => {
+              setAddingProject((v) => !v);
+              setNewProjectId('');
+            }}
+            className="text-muted-foreground hover:text-foreground transition-colors"
+            title="Add project"
+          >
+            <Plus className="h-3 w-3" />
+          </button>
+        }
+      >
+        <div className="flex flex-wrap gap-1.5">
+          {projects.map((p) => (
+            <ProjectBadge
+              key={p.project_id}
+              projectId={p.project_id}
+              name={p.project_name}
+              label={p.label}
+              onRenamed={refetch}
+              canDelete={projects.length > 1}
+              onDelete={() => deleteProject(p)}
+            />
+          ))}
         </div>
+        {addingProject && (
+          availableProjects.length > 0 ? (
+            <div className="flex gap-1 mt-1.5">
+              <select
+                value={newProjectId}
+                onChange={(e) => setNewProjectId(e.target.value)}
+                className="flex-1 rounded border bg-background px-1 py-0.5 text-[10px]"
+              >
+                <option value="">Select...</option>
+                {availableProjects.map((p) => (
+                  <option key={p.id} value={String(p.id)}>{p.name}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={!newProjectId}
+                className="disabled:opacity-40 text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => void addProject()}
+              >
+                <Check className="h-3 w-3" />
+              </button>
+            </div>
+          ) : (
+            <p className="text-[10px] text-muted-foreground mt-1">
+              {t('company.noMoreProjects', 'No more projects available')}
+            </p>
+          )
+        )}
+      </SidebarSection>
 
-        {/* Agents per project */}
-        {hasProjects && hasRoles && (
+      {/* ── Agentes por projeto (bindings) ── */}
+      {hasProjects && hasRoles && (
+        <SidebarSection
+          storageKey="projectRoles"
+          icon={GitBranch}
+          title={t('company.projectRoles', 'Agentes por projeto')}
+        >
           <ProjectRolesBinding
             projects={projects}
             roleAssignments={roleAssignments}
             onUpdate={patchRoleAssignments}
+            embedded
           />
-        )}
+        </SidebarSection>
+      )}
 
-        {/* Roles — editable provider/model */}
-        {hasRoles && (
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wide">
-                {t('company.configuredRoles')}
-              </p>
-              <button
-                type="button"
-                onClick={openNewRoleDialog}
-                className="text-muted-foreground hover:text-foreground transition-colors"
-                title={t('company.addRole')}
-              >
-                <Plus className="h-3 w-3" />
-              </button>
-            </div>
-            <div className="space-y-1">
-              {roleAssignments.map((r, i) => (
-                <div key={i} className="rounded border p-1.5 space-y-1">
-                  <div
-                    className="flex items-center gap-2 text-[10px] cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5"
-                    onClick={() => setEditingRoleIdx(editingRoleIdx === i ? null : i)}
-                  >
-                    {r.role === 'master' ? (
-                      <Crown className="h-3 w-3 text-yellow-400 shrink-0" />
-                    ) : (
-                      <Bot className="h-3 w-3 text-muted-foreground shrink-0" />
-                    )}
-                    <span className="capitalize font-medium truncate flex-1">{r.role}</span>
-                    <span className="text-muted-foreground text-[9px] truncate max-w-[100px]">
-                      {r.provider}/{r.model}
-                    </span>
-                    {r.tier && (
-                      <Badge variant="outline" className="text-[9px] px-1">
-                        {r.tier}
-                      </Badge>
-                    )}
-                  </div>
-                  {editingRoleIdx === i && (
-                    <RoleModelEditor
-                      role={r as unknown as Record<string, string>}
-                      providerOptions={providerOptions}
-                      getModelsForProvider={getModelsForProvider}
-                      getDefaultModel={getDefaultModel}
-                      onApply={(provider, model) => void applyRoleProviderChange(i, provider, model)}
-                    />
+      {/* ── Papéis Configurados (editable provider/model) ── */}
+      {hasRoles && (
+        <SidebarSection
+          storageKey="configuredRoles"
+          icon={Users}
+          title={t('company.configuredRoles')}
+          count={roleAssignments.length}
+          action={
+            <button
+              type="button"
+              onClick={openNewRoleDialog}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              title={t('company.addRole')}
+            >
+              <Plus className="h-3 w-3" />
+            </button>
+          }
+        >
+          <div className="space-y-1">
+            {roleAssignments.map((r, i) => (
+              <div key={i} className="rounded border p-1.5 space-y-1">
+                <div
+                  className="flex items-center gap-2 text-[10px] cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5"
+                  onClick={() => setEditingRoleIdx(editingRoleIdx === i ? null : i)}
+                >
+                  {r.role === 'master' ? (
+                    <Crown className="h-3 w-3 text-yellow-400 shrink-0" />
+                  ) : (
+                    <Bot className="h-3 w-3 text-muted-foreground shrink-0" />
+                  )}
+                  <span className="capitalize font-medium truncate flex-1">{r.role}</span>
+                  <span className="text-muted-foreground text-[9px] truncate max-w-[100px]">
+                    {r.provider}/{r.model}
+                  </span>
+                  {r.tier && (
+                    <Badge variant="outline" className="text-[9px] px-1">
+                      {r.tier}
+                    </Badge>
                   )}
                 </div>
-              ))}
-            </div>
+                {editingRoleIdx === i && (
+                  <RoleModelEditor
+                    role={r as unknown as Record<string, string>}
+                    providerOptions={providerOptions}
+                    getModelsForProvider={getModelsForProvider}
+                    getDefaultModel={getDefaultModel}
+                    onApply={(provider, model) => void applyRoleProviderChange(i, provider, model)}
+                  />
+                )}
+              </div>
+            ))}
           </div>
-        )}
-      </div>
+        </SidebarSection>
+      )}
 
-      <ServicesSidebar sessionId={sessionId} />
+      {/* ── Microservices ── */}
+      <SidebarSection
+        storageKey="microservices"
+        icon={Server}
+        title="Microservices"
+      >
+        <ServicesSidebar sessionId={sessionId} embedded />
+      </SidebarSection>
 
-      <div className="px-2.5 py-2 border-b border-t flex items-center gap-1.5">
-        <Bot className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs font-medium">{t('company.agentsLabel')}</span>
-        <Badge variant="outline" className="text-[9px] ml-auto">
-          {(stream.masterState ? 1 : 0) + subordinates.length}
-        </Badge>
-      </div>
-
-      <div className="p-2 space-y-2">
+      {/* ── Agentes (live state) ── */}
+      {/*
+        Footer "Papéis do Template" list was REMOVED as duplicate of
+        "Papéis Configurados" above. The persistedAgentRuns fallback
+        was ALSO removed (rendered when !stream.started) — the live
+        stream subscription (masterState + subordinates) is the single
+        source of truth, no double-list. When the stream isn't started
+        yet, the empty-state message handles it.
+      */}
+      <SidebarSection
+        storageKey="agents"
+        icon={Bot}
+        title={t('company.agentsLabel')}
+        count={(stream.masterState ? 1 : 0) + subordinates.length}
+      >
         {stream.masterState && (
           <AgentPane
             agent={stream.masterState}
@@ -321,50 +344,12 @@ export function AgentsSidebar({
           />
         ))}
 
-        {!stream.started && persistedAgentRuns.map((run) => (
-          <div
-            key={run.id}
-            role="button"
-            tabIndex={0}
-            onClick={() => onOpenPersistedRun(run.coder_session_id, run.role, run.status)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') onOpenPersistedRun(run.coder_session_id, run.role, run.status);
-            }}
-            className="flex items-center gap-1.5 text-[10px] p-2 rounded border cursor-pointer hover:bg-muted/50"
-          >
-            {run.role === 'master' ? (
-              <Crown className="h-3 w-3 text-yellow-400" />
-            ) : (
-              <Bot className="h-3 w-3 text-muted-foreground" />
-            )}
-            <span className="font-medium capitalize truncate">{run.role}</span>
-            <Badge variant="outline" className="text-[8px] ml-auto capitalize">
-              {run.status}
-            </Badge>
-          </div>
-        ))}
-
-        {!stream.masterState && !subordinates.length && persistedAgentRuns.length === 0 && (
+        {!stream.masterState && !subordinates.length && (
           <p className="text-[10px] text-muted-foreground text-center py-3">
             {t('company.noAgents')}
           </p>
         )}
-
-        {hasRoles && (
-          <div className="border-t pt-2 mt-2">
-            <p className="text-[9px] text-muted-foreground uppercase tracking-wide mb-1">
-              {t('company.templateRoles')}
-            </p>
-            {roleAssignments.map((r, i) => (
-              <div key={i} className="text-[10px] text-muted-foreground flex items-center gap-1 py-0.5">
-                <Bot className="h-2.5 w-2.5" />
-                <span className="capitalize">{r.role}</span>
-                <span className="ml-auto text-[9px]">{r.provider}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      </SidebarSection>
     </div>
   );
 }

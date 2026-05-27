@@ -17,6 +17,7 @@ import { AgentSessionModal } from './AgentSessionModal.js';
 import { MasterComposer } from './MasterComposer.js';
 import { FrontTabsBar } from './FrontTabsBar.js';
 import { ResetSessionDialog } from './ResetSessionDialog.js';
+import { ReestablishMasterDialog } from './ReestablishMasterDialog.js';
 import type { RoleConfig, SkillDef } from './RoleEditModal.js';
 import { ConnectionPhaseStrip } from './ConnectionPhaseStrip.js';
 import { MasterStatusBanner } from './MasterStatusBanner.js';
@@ -122,6 +123,22 @@ export function CompanySessionView({
   const handleZoneTabChange = (nextZone: Zone, nextTab: string) => {
     navigate(buildAgentsUrl(sessionId, activeFrontId, nextZone, nextTab));
   };
+
+  // Phase H — Reestabelecer Master. The dialog (mounted at the bottom of
+  // this view, like ResetSessionDialog) handles the API call + error
+  // surface. We just open it here and react to onSpawned by navigating
+  // to the new recovery session's front.
+  const [reestablishMasterOpen, setReestablishMasterOpen] = useState(false);
+  const handleReestablishSpawned = useCallback(
+    ({ masterCoderSessionId: _id }: { masterCoderSessionId: number }) => {
+      // The new master is the master of THIS company session — its tab is
+      // the Main tab (frontId = 'main' / company sessionId). Navigate
+      // there so the user lands on the new master view; the SSE stream
+      // for that session id picks up the newly-running master.
+      navigate(buildAgentsUrl(sessionId, 'main', 'work', 'chat'));
+    },
+    [sessionId, navigate],
+  );
 
   // Right-rail panel selection: `null` collapses the panel and shows
   // only the icon rail. The rail itself is always mounted; Preview is
@@ -318,6 +335,7 @@ export function CompanySessionView({
         recoveredAt={sessionData?.session.recovered_at ?? null}
         recoveredReason={sessionData?.session.recovered_reason ?? null}
         onResetClick={() => setResetDialogOpen(true)}
+        onReestablishMasterClick={() => setReestablishMasterOpen(true)}
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -540,6 +558,15 @@ export function CompanySessionView({
             stream.reset();
             refetch();
           }}
+        />
+      )}
+
+      {reestablishMasterOpen && (
+        <ReestablishMasterDialog
+          sessionId={sessionId}
+          sessionName={sessionName}
+          onClose={() => setReestablishMasterOpen(false)}
+          onSpawned={handleReestablishSpawned}
         />
       )}
 

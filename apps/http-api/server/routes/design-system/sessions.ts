@@ -25,7 +25,7 @@ import { writeSourceInventory } from '@mcp/design-system/source-inventory.js';
 import type { DsStack, DsBumpHint } from '@mcp/store/design-system-store.js';
 import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import { runNpm } from '@mcp/design-system/run-npm.js';
-import { orchestratorRegistry } from '../../../sse/OrchestratorRegistry.js';
+import { hasCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import { tryGetVerdaccioService } from '@mcp/services/verdaccio/verdaccio-service.js';
 
 /**
@@ -190,7 +190,7 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       return {
         ...s,
         company_session_status: cs?.status ?? 'unknown',
-        is_running: orchestratorRegistry.has(s.company_session_id),
+        is_running: hasCompanyOrchestrator(s.company_session_id),
         latest_published_semver: latest?.semver ?? null,
         latest_published_at: latest?.published_at ?? null,
       };
@@ -209,7 +209,7 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       session,
       versions,
       latest_published: latestPublished,
-      is_running: orchestratorRegistry.has(session.company_session_id),
+      is_running: hasCompanyOrchestrator(session.company_session_id),
       company_session_status: cs?.status ?? 'unknown',
     });
   });
