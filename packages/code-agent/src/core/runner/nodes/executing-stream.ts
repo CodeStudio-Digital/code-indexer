@@ -41,7 +41,23 @@ export interface ConsumeStreamArgs {
   onTextDelta?: (text: string) => void;
   onThinkingDelta?: (text: string) => void;
   onToolCallStart?: (id: string, name: string) => void;
+  /**
+   * Maximum ms to wait between consecutive deltas. When the provider stalls
+   * past this threshold the consumer throws — Executing turns it into a
+   * retryable ProviderError so Recovering can back off and try again.
+   * Default 90s; override via `CODER_STREAM_IDLE_TIMEOUT_MS`.
+   */
+  idleTimeoutMs?: number;
 }
+
+const DEFAULT_IDLE_TIMEOUT_MS = (() => {
+  const v = process.env.CODER_STREAM_IDLE_TIMEOUT_MS;
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 90_000;
+})();
 
 export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResult> {
   const textBlocks: string[] = [];
@@ -55,8 +71,25 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
   let responseId: string | null = null;
   let responseMessageCount: number | null = null;
 
-  for await (const delta of args.stream) {
+  const idleMs = args.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const iterator = args.stream[Symbol.asyncIterator]();
+
+  while (true) {
     if (args.signal?.aborted) break;
+    let next: IteratorResult<ChatDelta>;
+    try {
+      next = await raceWithTimeout(iterator.next(), idleMs);
+    } catch (e) {
+      // Cooperatively cancel the iterator if it supports return().
+      try {
+        await iterator.return?.();
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    }
+    if (next.done) break;
+    const delta = next.value;
 
     switch (delta.type) {
       case 'text_delta':
@@ -126,4 +159,29 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
   if (currentThinking) thinkingBlocks.push(currentThinking);
 
   return { textBlocks, toolUses, thinkingBlocks, usage, stopReason, responseId, responseMessageCount };
+}
+
+/**
+ * Race a promise against an idle-timeout. Resolves with the original value
+ * or throws `StreamIdleTimeout` after `ms` of silence. Rejections from the
+ * source promise are forwarded unchanged.
+ */
+async function raceWithTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race<T>([
+      p,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          const err = new Error(
+            `provider stream idle ${ms}ms — aborting turn. Tune CODER_STREAM_IDLE_TIMEOUT_MS.`,
+          );
+          (err as { status?: number }).status = 504; // gateway-timeout-ish so Recovering treats as retryable
+          reject(err);
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

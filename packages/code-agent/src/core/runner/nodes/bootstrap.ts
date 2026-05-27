@@ -16,6 +16,7 @@ export class BootstrapNode implements BehaviorNode {
   readonly state = 'Bootstrap' as const;
 
   async execute(ctx: RunContext, _lastEvent: BehaviorEvent | null): Promise<BehaviorEvent> {
+    console.log(`[coder/bt] Bootstrap emitting run_started runId=${ctx.runId}`);
     ctx.emit('run_started', {
       runId: ctx.runId,
       provider: ctx.opts.provider.name,
@@ -25,11 +26,12 @@ export class BootstrapNode implements BehaviorNode {
       maxTurns: ctx.opts.maxTurns ?? 50,
     });
 
-    // Invariant defence: even if a caller passed an empty tier set, the BT
-    // never enters Executing without `bootstrap` available. `createRunContext`
-    // enforces this via `ensureBootstrap`, but a future code path could
-    // mutate `activeTiers` — keep the check loud rather than silent.
-    if (!ctx.activeTiers.has('bootstrap')) {
+    // Invariant defence: when tier filtering is active the BT never enters
+    // Executing without `bootstrap` available. `createRunContext` enforces
+    // this via `ensureBootstrap`, but a future code path could mutate
+    // `activeTiers` — keep the check loud rather than silent. When
+    // `activeTiers === null` filtering is disabled entirely (subagents).
+    if (ctx.activeTiers !== null && !ctx.activeTiers.has('bootstrap')) {
       ctx.activeTiers.add('bootstrap');
     }
 

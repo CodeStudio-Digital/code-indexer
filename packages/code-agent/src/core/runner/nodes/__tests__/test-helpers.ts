@@ -9,6 +9,8 @@ import type { RunContext } from '../../machine/types.js';
 import type { RunnerEvents } from '../../events.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { CoderProfile, ToolTier } from '@mcp/code-agent/tools/tiers.js';
+import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 export interface RecordedEvent<E extends keyof RunnerEvents = keyof RunnerEvents> {
   event: E;
@@ -33,6 +35,10 @@ export interface MakeCtxOverrides {
    * path (e.g. the LLM compactor).
    */
   provider?: ChatProvider;
+  /** Inject a ToolRegistry — overrides the default no-op stub. */
+  registry?: ToolRegistry;
+  /** Inject a ToolContext — overrides the default empty stub. */
+  toolContext?: ToolContext;
 }
 
 function makeMockProvider(name: string, model: string): ChatProvider {
@@ -64,9 +70,9 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
       maxTurns: overrides.maxTurns ?? 50,
       planMode: overrides.planMode ?? false,
       profile: overrides.profile ?? null,
-      registry: {} as never,
+      registry: overrides.registry ?? ({} as never),
       systemPrompt: 'sys',
-      toolContext: {} as never,
+      toolContext: overrides.toolContext ?? ({} as never),
     } as never,
     emit,
     messages: [],

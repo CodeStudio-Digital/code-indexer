@@ -17,7 +17,7 @@ describe('ReviewingNode', () => {
     const { ctx } = makeTestContext({ tiers: new Set([]) });
     ctx.messages = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }];
     await new ReviewingNode().execute(ctx, null);
-    expect(ctx.activeTiers.has('bootstrap')).toBe(true);
+    expect(ctx.activeTiers?.has('bootstrap') ?? null).toBe(true);
   });
 
   it('emits CleanFinish when the history is empty', async () => {

@@ -189,6 +189,14 @@ import {
 } from './runner/assembly/tools.js';
 import { assembleMessagesForChat as assembleMessagesForChatImpl } from './runner/assembly/messages.js';
 
+// Behavior Tree orchestrator — Commit 7 made it the default code path.
+// `runViaBehaviorTree` below delegates to this; the legacy while-loop in
+// `run()` is retained as an automatic safety net for features the BT does
+// not yet cover (plan/spec gates, deep-think, polling caps, quality
+// watchdog, pre-read). Set `CODER_LEGACY_RUNNER=1` to force the legacy
+// path unconditionally.
+import { isBehaviorTreeEnabled, runBehaviorTree } from './runner/orchestrator.js';
+
 // (RESULT_DUP_ESCALATION_*, REPEATABLE_*, POLLING_STUCK_*, DUP_CALL_REMINDER_*,
 // SUMMARIZER_*, RESULT_DUP_LARGE_THRESHOLD, RESULT_DUP_HEAD_CHARS, canRunSummarizer —
 // all moved to './runner/constants.ts'. Doc-blocks live alongside them in that file.)
@@ -2398,11 +2406,121 @@ export class CoderRunner extends EventEmitter {
   }
 
   /**
+   * Delegate to the Behavior Tree orchestrator. Bridges the legacy
+   * `EventEmitter` interface to the BT's typed `emit` callback so listeners
+   * attached to this runner (CLI/SSE) continue to receive every event
+   * (`turn_start`, `text_delta`, `tool_call_result`, …) regardless of which
+   * runtime executed the turn.
+   *
+   * Also wires the `BridgeCallbacks` so the BT delegates features still
+   * owned by this class: skills, active-context, quality-feedback suffix,
+   * temperature resolution, Responses-API state, plan/spec gates.
+   */
+  private async runViaBehaviorTree(): Promise<RunResult> {
+    console.log(
+      `[coder/bt] runViaBehaviorTree session=${this.sessionId ?? '-'} ` +
+      `provider=${this.opts.provider.name} model=${this.opts.provider.model} ` +
+      `tiers=${this.activeTiers ? Array.from(this.activeTiers).sort().join(',') : '*'} ` +
+      `messages=${this.messages.length}`,
+    );
+    // Pass tiers through unchanged — null means "no filter" so MCP-external
+    // tools and subagent registries don't get accidentally pruned.
+    const initialTiers = this.activeTiers ?? null;
+    return runBehaviorTree({
+      opts: this.opts,
+      emit: ((event: string, ...args: unknown[]) => {
+        (this as unknown as { emit: (e: string, ...a: unknown[]) => boolean }).emit(event, ...args);
+      }) as never,
+      initialTiers,
+      // Share the live messages array so `pushUserContent` / system reminders
+      // / BT pushes all see the same backing store.
+      initialMessages: this.messages,
+      bridge: {
+        buildActiveSkillsBlock: (history) => this.buildActiveSkillsBlockForLastUser(history),
+        buildActiveContextBlock: () =>
+          this.opts.agentLoopV2 ? this.buildActiveContextBlockForTurn() : null,
+        buildQualityFeedbackSuffix: () => this.buildQualityFeedbackSuffix(),
+        resolveTemperature: () => {
+          const r = resolveTemperature({
+            agent: this.opts.agentId ?? null,
+            providerName: this.opts.provider.name,
+            model: this.opts.provider.model,
+            thinking: !!this.opts.thinking,
+            sessionOverride: this.opts.sessionTemperature ?? null,
+            roleOverride: this.opts.roleTemperature ?? null,
+          });
+          if (typeof r.temperature !== 'number') return null;
+          return { temperature: r.temperature, source: r.source };
+        },
+        getPreviousResponseId: () =>
+          this.previousResponseId
+            ? { id: this.previousResponseId, messageCount: this.previousResponseMessageCount ?? 0 }
+            : null,
+        onResponseId: (id, messageCount) => {
+          this.previousResponseId = id;
+          this.previousResponseMessageCount = messageCount;
+          this.opts.onResponseId?.(id, messageCount);
+        },
+        toolGate: (toolName, _input) => {
+          // Plan/spec gates: mutating tools blocked until the user approves
+          // the plan/spec. The detailed wording mirrors the legacy refusal
+          // shape — `runner.ts` legacy path has richer rejection text; the
+          // BT minimal path here keeps it short and explicit.
+          const tool = this.findTool(toolName);
+          if (!tool) return null;
+          const mutates = tool.mutates ?? (tool.source === 'mcp_external');
+          if (this.opts.planMode && mutates) {
+            return '[plan-mode: mutating tool blocked. Call `submit_plan` first; tools unlock after approval.]';
+          }
+          if (this.opts.specMode && mutates) {
+            return '[spec-mode: mutating tool blocked. Call `submit_spec` first; tools unlock after approval.]';
+          }
+          return null;
+        },
+      },
+    });
+  }
+
+  /** Lookup helper for the toolGate bridge. */
+  private findTool(name: string): import('@mcp/code-agent/core/tool.js').CoderTool | null {
+    try {
+      for (const t of this.opts.registry.list()) {
+        if (t.name === name) return t;
+      }
+    } catch {
+      /* defensive */
+    }
+    return null;
+  }
+
+  /**
    * Run the loop until completion or max_turns. Resolves with the final usage
    * total. The runner emits events along the way; consumers (CLI / SSE) attach
    * listeners before calling run().
+   *
+   * Commit 7 made the Behavior Tree the default code path. When it is
+   * enabled (`CODER_LEGACY_RUNNER!=1`), `run()` delegates to the BT first
+   * and only falls through to the legacy while-loop when the BT throws.
+   * The features the BT's Executing node does NOT yet cover (plan/spec
+   * gating, deep-think, polling-stuck cap, quality watchdog, pre-read
+   * enforcement, smart-reducer) are still implemented in the legacy
+   * loop — set `CODER_LEGACY_RUNNER=1` when running sessions that
+   * depend on them.
    */
   async run(): Promise<RunResult> {
+    if (isBehaviorTreeEnabled()) {
+      try {
+        return await this.runViaBehaviorTree();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(
+          `[coder] BT runner threw (${msg}); falling back to legacy while-loop. ` +
+            `Set CODER_LEGACY_RUNNER=1 to skip the BT entirely.`,
+        );
+        // Continue into the legacy body below.
+      }
+    }
+
     const totalUsage: ChatUsage = {
       input_tokens: 0,
       output_tokens: 0,

@@ -58,8 +58,8 @@ describe('BootstrapNode', () => {
 
   it('defensively re-adds "bootstrap" to activeTiers if missing', async () => {
     const { ctx } = makeTestContext({ tiers: new Set([]) });
-    expect(ctx.activeTiers.has('bootstrap')).toBe(false);
+    expect(ctx.activeTiers?.has('bootstrap') ?? null).toBe(false);
     await new BootstrapNode().execute(ctx, null);
-    expect(ctx.activeTiers.has('bootstrap')).toBe(true);
+    expect(ctx.activeTiers?.has('bootstrap') ?? null).toBe(true);
   });
 });

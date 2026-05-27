@@ -37,6 +37,14 @@ export interface DispatchArgs {
   toolContext: ToolContext;
   turn: number;
   dupCalls: Map<string, DupCallEntry>;
+  /**
+   * Optional pre-dispatch gate. Returning a non-null string blocks the
+   * invocation and synthesises an error tool_result carrying that text
+   * (plan/spec mode + mutating tool, sandbox required, etc.). Runs
+   * BEFORE the tuple-hash check so a blocked call doesn't pollute the
+   * dedup counter.
+   */
+  toolGate?: (toolName: string, input: unknown) => string | null;
 }
 
 export interface DispatchResult {
@@ -52,6 +60,22 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
   for (const tu of args.toolUses) {
     const tool = lookupTool(args.registry, tu.name);
     const isRepeatable = !!tool?.repeatable;
+
+    // Pre-dispatch gate (plan/spec/policy refusal). Synthesises an error
+    // tool_result without touching the dedup counter — the call never
+    // happened from the agent's POV.
+    const gateRefusal = args.toolGate?.(tu.name, tu.input) ?? null;
+    if (gateRefusal !== null) {
+      results.push({
+        toolUseId: tu.id,
+        name: tu.name,
+        content: gateRefusal,
+        isError: true,
+        durationMs: 0,
+        wasRefusedByDedup: false,
+      });
+      continue;
+    }
 
     const verdict = checkDupCall({
       name: tu.name,

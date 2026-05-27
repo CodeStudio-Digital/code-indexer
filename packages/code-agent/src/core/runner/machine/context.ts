@@ -9,23 +9,46 @@
  *   3. `runId` is a fresh uuid per run (telemetry correlation).
  */
 import { randomUUID } from 'node:crypto';
-import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { RunnerOptions } from '../types.js';
 import type { RecoveryKind } from '../recovery-config.js';
-import type { RunContext } from './types.js';
+import type { BridgeCallbacks, RunContext } from './types.js';
 
 export interface CreateRunContextArgs {
   opts: RunnerOptions;
   emit: RunContext['emit'];
-  initialTiers: Set<ToolTier>;
+  /**
+   * Initial tier filter — null disables filtering (the BT sees every tool
+   * the registry has). Otherwise `ensureBootstrap` adds `'bootstrap'`
+   * before storing on the context.
+   */
+  initialTiers: Set<ToolTier> | null;
+  /**
+   * Live messages reference shared with the host (e.g. `CoderRunner.this.messages`).
+   * Passed BY REFERENCE — the BT pushes assistant/tool blocks onto this array
+   * so external mutators (e.g. `runner.pushUserContent`, `appendSystemReminder`)
+   * stay in sync.
+   *
+   * When omitted, falls back to copying `opts.initialMessages` (subagent /
+   * fresh-construction paths where there is no host array to share).
+   */
+  initialMessages?: AgentMessage[];
+  /** Optional callbacks bridging BT to features still owned by CoderRunner. */
+  bridge?: BridgeCallbacks;
 }
 
 export function createRunContext(args: CreateRunContextArgs): RunContext {
+  // Prefer the shared reference (`args.initialMessages`) when provided so
+  // the BT and host observe the same array. Fall back to copying
+  // `opts.initialMessages` when no shared reference exists.
+  const messages: AgentMessage[] =
+    args.initialMessages ??
+    (args.opts.initialMessages ? [...args.opts.initialMessages] : []);
   return {
     opts: args.opts,
     emit: args.emit,
-    messages: args.opts.initialMessages ? [...args.opts.initialMessages] : [],
+    messages,
     turn: 0,
     totalUsage: zeroUsage(),
     activeTiers: ensureBootstrap(args.initialTiers),
@@ -37,6 +60,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     transition: null,
     stopReason: null,
     error: null,
+    bridge: args.bridge,
   };
 }
 
@@ -50,10 +74,13 @@ function zeroUsage(): ChatUsage {
 }
 
 /**
- * Bootstrap tier is non-negotiable. Compaction / recovery / tier promotion
- * never touch this — the agent always sees the bootstrap tools.
+ * Bootstrap tier is non-negotiable. When tiers are non-null, the bootstrap
+ * tier is added before returning; when tiers are null the caller has
+ * disabled filtering entirely (subagents/tests) and bootstrap survives
+ * trivially since every tool is exposed.
  */
-export function ensureBootstrap(tiers: Set<ToolTier>): Set<ToolTier> {
+export function ensureBootstrap(tiers: Set<ToolTier> | null): Set<ToolTier> | null {
+  if (tiers === null) return null;
   const out = new Set(tiers);
   out.add('bootstrap');
   return out;

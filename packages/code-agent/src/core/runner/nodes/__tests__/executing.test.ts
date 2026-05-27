@@ -61,8 +61,9 @@ describe('ExecutingNode', () => {
         { type: 'usage', usage: { input_tokens: 100, output_tokens: 10 } as ChatUsage },
         { type: 'done', stop_reason: 'end_turn' },
       ]),
+      registry: makeRegistry({}),
+      toolContext: emptyToolContext(),
     });
-    ctx.opts = { ...ctx.opts, registry: makeRegistry({}), toolContext: emptyToolContext() } as never;
 
     const event = await new ExecutingNode().execute(ctx, null);
 
@@ -81,12 +82,9 @@ describe('ExecutingNode', () => {
         { type: 'usage', usage: { input_tokens: 100, output_tokens: 5 } as ChatUsage },
         { type: 'done', stop_reason: 'tool_use' },
       ]),
-    });
-    ctx.opts = {
-      ...ctx.opts,
       registry: makeRegistry({ echo: (input) => `echo: ${input.msg}` }),
       toolContext: emptyToolContext(),
-    } as never;
+    });
 
     const event = await new ExecutingNode().execute(ctx, null);
 
@@ -111,12 +109,11 @@ describe('ExecutingNode', () => {
       { type: 'usage', usage: { input_tokens: 50, output_tokens: 5 } as ChatUsage },
       { type: 'done', stop_reason: 'tool_use' },
     ];
-    const { ctx } = makeTestContext({ provider: makeStreamingProvider(repeatDeltas) });
-    ctx.opts = {
-      ...ctx.opts,
+    const { ctx } = makeTestContext({
+      provider: makeStreamingProvider(repeatDeltas),
       registry: makeRegistry({ echo: () => 'pong' }),
       toolContext: emptyToolContext(),
-    } as never;
+    });
 
     // Pre-seed two prior identical calls so the next is the 3rd.
     ctx.dupCalls.set('echo|{"msg":"x"}', { count: 2, firstTurn: 1, lastUseId: 'prev' });
@@ -142,8 +139,11 @@ describe('ExecutingNode', () => {
         throw Object.assign(new Error('rate limited'), { status: 429 });
       },
     };
-    const { ctx } = makeTestContext({ provider: brokenProvider });
-    ctx.opts = { ...ctx.opts, registry: makeRegistry({}), toolContext: emptyToolContext() } as never;
+    const { ctx } = makeTestContext({
+      provider: brokenProvider,
+      registry: makeRegistry({}),
+      toolContext: emptyToolContext(),
+    });
 
     const event = await new ExecutingNode().execute(ctx, null);
 

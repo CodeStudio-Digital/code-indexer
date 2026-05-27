@@ -3,25 +3,27 @@
  *
  * Pipeline:
  *   1. bump `ctx.turn` and emit `turn_start`.
- *   2. assemble messages + tools via the modules from Commit 2.
- *   3. stream `provider.chat()` and accumulate text + tool_use blocks.
- *   4. push the assistant message into `ctx.messages`.
- *   5. if the assistant emitted no tool calls → CleanFinish.
- *   6. otherwise dispatch each tool_use via the tuple-hash guard.
- *   7. push the tool-role message with the results.
- *   8. emit per-tool telemetry, then decide the next event:
+ *   2. assemble messages (via assembly + bridge callbacks for skills /
+ *      active-context).
+ *   3. build tools (via assembly).
+ *   4. assemble the system prompt (base + quality-feedback suffix from
+ *      bridge).
+ *   5. stream `provider.chat()` with every parameter the legacy passes
+ *      (thinking, sessionId, previousResponseId, inference.temperature).
+ *   6. push the assistant message.
+ *   7. dispatch tools via tuple-hash guard + bridge.toolGate.
+ *   8. push tool-role message, decide next event:
  *        - any dedup refusal     → ToolLoopDetected (→ Planning)
  *        - token usage ≥ 90% eff → TokenThresholdHit (→ Compacting)
- *        - otherwise             → TurnSucceeded (→ Executing again)
+ *        - assistant text only   → CleanFinish
+ *        - otherwise             → TurnSucceeded
  *
- * Out of scope (deferred to Commit 7):
- *   - Plan/spec gating, polling-stuck caps, dominance guard, quality
- *     watchdog, deep-think pre-think, pre-read enforcement, smart-reducer
- *     post-result, push-time truncation. The legacy `runner.ts` while-loop
- *     keeps doing all of that while CODER_BT_ENABLED is opt-in.
+ * The bridge (`ctx.bridge`) is how the BT inherits behavior still owned
+ * by the legacy `CoderRunner`: skills, active-context, plan/spec gates,
+ * Responses-API state, temperature resolution, quality-feedback suffix.
  */
 import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.js';
-import type { ContentBlock } from '@mcp/code-agent/core/messages.js';
+import type { ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import { events } from '../machine/events.js';
 import { accumulateUsage } from '../machine/context.js';
 import { envTunables } from '@mcp/code-agent/core/tunables.js';
@@ -31,12 +33,22 @@ import { shouldCompact90 } from '../compaction/threshold.js';
 import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
 
+// Until the BT migration stabilises in production, log key checkpoints
+// unconditionally so a hang in `provider.chat()` or `consumeStream` is
+// visible in the worker terminal without enabling `CODER_BT_DEBUG`.
+const QUIET = process.env.CODER_BT_QUIET === '1';
+function dbg(...args: unknown[]): void {
+  if (QUIET) return;
+  console.log('[coder/bt]', ...args);
+}
+
 export class ExecutingNode implements BehaviorNode {
   readonly state = 'Executing' as const;
 
   async execute(ctx: RunContext, _lastEvent: BehaviorEvent | null): Promise<BehaviorEvent> {
     ctx.turn++;
     ctx.emit('turn_start', ctx.turn);
+    dbg(`Executing turn=${ctx.turn} messages=${ctx.messages.length}`);
 
     const tunables = ctx.opts.tunables ?? envTunables();
     const messagesForChat = assembleMessagesForChat({
@@ -46,8 +58,8 @@ export class ExecutingNode implements BehaviorNode {
       preThinkHistoryWindow: ctx.opts.preThinkHistoryWindow ?? 3,
       persistPreThoughts: ctx.opts.persistPreThoughts !== false,
       agentLoopV2: !!ctx.opts.agentLoopV2,
-      buildActiveSkillsBlock: () => null,
-      buildActiveContextBlock: () => null,
+      buildActiveSkillsBlock: ctx.bridge?.buildActiveSkillsBlock ?? (() => null),
+      buildActiveContextBlock: ctx.bridge?.buildActiveContextBlock ?? (() => null),
     });
 
     const toolsBuilt = buildTools({
@@ -60,15 +72,37 @@ export class ExecutingNode implements BehaviorNode {
       provider: ctx.opts.provider,
       goalToolAlreadyLogged: false,
     });
+    dbg(`tools=${toolsBuilt.tools.length} tiers=${ctx.activeTiers === null ? '*' : Array.from(ctx.activeTiers).join(',')}`);
 
-    let stream: AsyncIterable<import('@mcp/code-agent/core/messages.js').ChatDelta>;
+    const qualitySuffix = ctx.bridge?.buildQualityFeedbackSuffix?.() ?? '';
+    const systemPrompt = qualitySuffix ? `${ctx.opts.systemPrompt}${qualitySuffix}` : ctx.opts.systemPrompt;
+
+    const tempResolution = ctx.bridge?.resolveTemperature?.();
+    const prevResponse = ctx.bridge?.getPreviousResponseId?.();
+
+    let stream: AsyncIterable<ChatDelta>;
     try {
+      dbg(`calling provider.chat() model=${ctx.opts.provider.model}`);
       stream = ctx.opts.provider.chat({
-        system: ctx.opts.systemPrompt,
+        system: systemPrompt,
         messages: messagesForChat,
         tools: toolsBuilt.tools,
+        thinking: ctx.opts.thinking,
+        thinkingBudgetTokens: ctx.opts.thinkingBudgetTokens,
+        sessionId: ctx.opts.sessionId,
+        signal: ctx.opts.toolContext.signal,
+        ...(tempResolution && typeof tempResolution.temperature === 'number'
+          ? { inference: { temperature: tempResolution.temperature } }
+          : {}),
+        ...(prevResponse
+          ? {
+              previousResponseId: prevResponse.id,
+              previousResponseMessageCount: prevResponse.messageCount,
+            }
+          : {}),
       });
     } catch (e) {
+      dbg(`provider.chat() threw`, e);
       return providerErrorEvent(e);
     }
 
@@ -76,14 +110,21 @@ export class ExecutingNode implements BehaviorNode {
     try {
       result = await consumeStream({
         stream,
+        signal: ctx.opts.toolContext.signal,
         onTextDelta: (text) => ctx.emit('text_delta', text),
         onThinkingDelta: (text) => ctx.emit('thinking_delta', text),
       });
     } catch (e) {
+      dbg(`consumeStream threw`, e);
       return providerErrorEvent(e);
     }
+    dbg(`stream done text=${result.textBlocks.length}b tools=${result.toolUses.length} usage_in=${result.usage?.input_tokens ?? '?'}`);
 
     accumulateUsage(ctx, result.usage);
+
+    if (result.responseId !== null && result.responseMessageCount !== null) {
+      ctx.bridge?.onResponseId?.(result.responseId, result.responseMessageCount);
+    }
 
     const assistantContent: ContentBlock[] = [];
     for (const text of result.textBlocks) {
@@ -108,6 +149,7 @@ export class ExecutingNode implements BehaviorNode {
       toolContext: ctx.opts.toolContext,
       turn: ctx.turn,
       dupCalls: ctx.dupCalls,
+      toolGate: ctx.bridge?.toolGate,
     });
 
     ctx.messages.push(buildToolMessage(dispatch.results));

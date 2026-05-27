@@ -21,7 +21,13 @@
  */
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { RunnerOptions, RunResult } from './types.js';
-import type { BehaviorEvent, BehaviorNode, NodeState, RunContext } from './machine/types.js';
+import type {
+  BehaviorEvent,
+  BehaviorNode,
+  BridgeCallbacks,
+  NodeState,
+  RunContext,
+} from './machine/types.js';
 import { createRunContext } from './machine/context.js';
 import { nextState } from './machine/transitions.js';
 import { BootstrapNode } from './nodes/bootstrap.js';
@@ -35,15 +41,34 @@ import { DoneNode } from './nodes/done.js';
 export interface OrchestratorArgs {
   opts: RunnerOptions;
   emit: RunContext['emit'];
-  initialTiers: Set<ToolTier>;
+  /**
+   * Tier filter for `buildTools`. Pass null to disable filtering (the
+   * agent sees every registered tool — used by subagents and tests where
+   * the parent has already pre-filtered the registry).
+   */
+  initialTiers: Set<ToolTier> | null;
+  /**
+   * Live message array shared with the host (`CoderRunner.this.messages`).
+   * Passed BY REFERENCE so external mutators (`pushUserContent`,
+   * `appendSystemReminder`) stay in sync with what the BT pushes.
+   */
+  initialMessages?: import('@mcp/code-agent/core/messages.js').AgentMessage[];
+  /** Optional bridge to legacy CoderRunner state (skills, gates, etc.). */
+  bridge?: BridgeCallbacks;
 }
 
 /**
- * Routing predicate consumed by `runner.ts`. When this returns true the
- * caller delegates to `runBehaviorTree`; otherwise the legacy loop runs.
+ * Routing predicate consumed by `runner.ts`. **Default-on** since Commit 7:
+ *   - returns true unless `CODER_LEGACY_RUNNER=1` (explicit opt-out).
+ *
+ * The legacy while-loop in `runner.ts` is kept as a safety net for cases
+ * the BT's Executing node doesn't cover yet (plan/spec mode gating, deep-
+ * think, polling caps, quality watchdog, pre-read enforcement). If the
+ * BT throws, `runner.ts` catches and falls through to the legacy path
+ * automatically — `CODER_LEGACY_RUNNER=1` is for forcing the bypass.
  */
 export function isBehaviorTreeEnabled(): boolean {
-  return process.env.CODER_BT_ENABLED === '1';
+  return process.env.CODER_LEGACY_RUNNER !== '1';
 }
 
 /**
@@ -78,20 +103,47 @@ export async function runBehaviorTree(
     opts: args.opts,
     emit: args.emit,
     initialTiers: args.initialTiers,
+    initialMessages: args.initialMessages,
+    bridge: args.bridge,
   });
+  console.log(`[coder/bt] starting runId=${ctx.runId} provider=${ctx.opts.provider.name} model=${ctx.opts.provider.model}`);
+
+  // Yield one microtask + one macrotask before the first node executes.
+  // The host (coder-worker / SSE route) calls `wireRunnerEventsToBus`
+  // SYNCHRONOUSLY after `await runCoder(...)` resolves; without this
+  // breath the `run_started` event Bootstrap emits would land before
+  // those listeners exist and disappear into the void.
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
   let state: NodeState = 'Bootstrap';
   let lastEvent: BehaviorEvent | null = null;
   while (state !== 'Done') {
     const node = nodes[state];
-    const event = await node.execute(ctx, lastEvent);
+    console.log(`[coder/bt] node=${state} turn=${ctx.turn}`);
+    let event: BehaviorEvent;
+    try {
+      event = await node.execute(ctx, lastEvent);
+    } catch (e) {
+      console.error(`[coder/bt] node=${state} threw:`, e);
+      throw e;
+    }
+    console.log(`[coder/bt] node=${state} → event=${event.kind}`);
     lastEvent = event;
     state = nextState(state, event);
   }
 
+  const reason = ctx.stopReason ?? 'completed';
+  const transition = ctx.transition;
+  console.log(`[coder/bt] done runId=${ctx.runId} reason=${reason}`);
+
+  // Mirror the legacy `finishWith()` — emit the terminal `done` event so
+  // listeners (SSE, CLI, dashboard) can dismiss their "streaming…" state.
+  // Without this the UI sees text deltas but never the lifecycle close.
+  ctx.emit('done', reason, ctx.error ?? undefined, transition);
+
   return {
     totalUsage: ctx.totalUsage,
-    reason: ctx.stopReason ?? 'completed',
-    transition: ctx.transition,
+    reason,
+    transition,
   };
 }

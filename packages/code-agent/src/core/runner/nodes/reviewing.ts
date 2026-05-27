@@ -20,7 +20,7 @@ export class ReviewingNode implements BehaviorNode {
   readonly state = 'Reviewing' as const;
 
   async execute(ctx: RunContext, _lastEvent: BehaviorEvent | null): Promise<BehaviorEvent> {
-    if (!ctx.activeTiers.has('bootstrap')) {
+    if (ctx.activeTiers !== null && !ctx.activeTiers.has('bootstrap')) {
       ctx.activeTiers.add('bootstrap');
     }
 

@@ -58,8 +58,13 @@ export interface RunContext {
   messages: AgentMessage[];
   turn: number;
   totalUsage: ChatUsage;
-  /** Always contains 'bootstrap'. Invariant enforced by `ensureBootstrap`. */
-  activeTiers: Set<ToolTier>;
+  /**
+   * Tier filter applied by `buildTools`. When non-null, always contains
+   * `'bootstrap'` (invariant enforced by `ensureBootstrap`). When null,
+   * tier filtering is disabled — every registered tool is exposed
+   * (subagents/tests rely on this so MCP-external tools survive).
+   */
+  activeTiers: Set<ToolTier> | null;
   /**
    * Per-recovery-kind circuit breaker counters. Each kind has its own cap
    * resolved by `recoveryCap()`; the orchestrator aborts when a kind goes
@@ -78,6 +83,12 @@ export interface RunContext {
   stopReason: StopReason | null;
   /** Underlying error for failure modes. */
   error: Error | null;
+  /**
+   * Optional bridge to features still owned by the legacy `CoderRunner`.
+   * When unset the BT uses safe defaults (no skills, no quality suffix,
+   * no plan-mode gate, etc.).
+   */
+  bridge?: BridgeCallbacks;
 }
 
 export interface BehaviorNode {
@@ -90,6 +101,40 @@ export interface BehaviorNode {
    *                  (e.g. Recovering inspects the `ProviderError` status).
    */
   execute(ctx: RunContext, lastEvent: BehaviorEvent | null): Promise<BehaviorEvent>;
+}
+
+/**
+ * Bridge callbacks injected by the legacy `CoderRunner` into the BT so the
+ * Executing node can delegate features it doesn't reimplement (skills,
+ * active-context, quality feedback, plan-mode gate, …) back to methods
+ * that already exist on the runner. Keeps the BT slim while preserving
+ * production behavior.
+ *
+ * Every field is optional — a node that doesn't see a callback falls
+ * through to its default (e.g. no skills block, allow all tool calls).
+ */
+export interface BridgeCallbacks {
+  /** Build the `<active_skills>` block from the trailing user message. */
+  buildActiveSkillsBlock?: (compactedHistory: AgentMessage[]) => string | null;
+  /** Build the `<active-context>` block (goal + todos + scope). */
+  buildActiveContextBlock?: () => string | null;
+  /** Build the quality-feedback suffix appended to the system prompt. */
+  buildQualityFeedbackSuffix?: () => string;
+  /**
+   * Resolve the temperature for this turn. Returns null when the model
+   * rejects sampling (e.g. OpenAI o-series with reasoning).
+   */
+  resolveTemperature?: () => { temperature: number; source: string } | null;
+  /** Read the current Responses-API state (Codex/ChatGPT only). */
+  getPreviousResponseId?: () => { id: string; messageCount: number } | null;
+  /** Callback fired when the provider returns a new response.id. */
+  onResponseId?: (id: string, messageCount: number) => void;
+  /**
+   * Pre-dispatch tool gate — returns a refuse string when the call should
+   * be blocked (plan/spec mode + mutating tool, sandbox required, …),
+   * null when allowed.
+   */
+  toolGate?: (toolName: string, input: unknown) => string | null;
 }
 
 /** Transition table shape: `TRANSITIONS[state][event.kind] = nextState`. */
