@@ -129,6 +129,10 @@ const find_references = defineTool({
       symbol_name: { type: 'string' },
       file_path: { type: 'string', description: 'Optional, for disambiguation when symbol_name is defined in multiple files' },
       format: { type: 'string', enum: ['text', 'json'] },
+      force_reread: {
+        type: 'boolean',
+        description: 'Bypass the duplicate-result check. Use ONLY when you legitimately believe the underlying data changed since a previous fetch (file edited, index re-built). Default false.',
+      },
     },
     required: ['project_name', 'symbol_name'],
   },
@@ -210,7 +214,14 @@ const get_hierarchy = defineTool({
   description: 'Get class/interface hierarchy (extends, implements, subclasses)',
   inputSchema: {
     type: 'object',
-    properties: { project_name: { type: 'string' }, symbol_name: { type: 'string' } },
+    properties: {
+      project_name: { type: 'string' },
+      symbol_name: { type: 'string' },
+      force_reread: {
+        type: 'boolean',
+        description: 'Bypass the duplicate-result check. Use ONLY when you legitimately believe the underlying data changed since a previous fetch (file edited, index re-built). Default false.',
+      },
+    },
     required: ['project_name', 'symbol_name'],
   },
   handler: withProject((args, { db }, project) => {
@@ -229,7 +240,14 @@ const find_implementations = defineTool({
   description: 'Find implementations of an interface',
   inputSchema: {
     type: 'object',
-    properties: { project_name: { type: 'string' }, interface_name: { type: 'string' } },
+    properties: {
+      project_name: { type: 'string' },
+      interface_name: { type: 'string' },
+      force_reread: {
+        type: 'boolean',
+        description: 'Bypass the duplicate-result check. Use ONLY when you legitimately believe the underlying data changed since a previous fetch (file edited, index re-built). Default false.',
+      },
+    },
     required: ['project_name', 'interface_name'],
   },
   handler: withProject((args, { db }, project) => {
@@ -247,6 +265,10 @@ const trace_usage = defineTool({
       project_name: { type: 'string' },
       symbol_name: { type: 'string' },
       depth: { type: 'number', description: 'Max depth (default 3)' },
+      force_reread: {
+        type: 'boolean',
+        description: 'Bypass the duplicate-result check. Use ONLY when you legitimately believe the underlying data changed since a previous fetch (file edited, index re-built). Default false.',
+      },
     },
     required: ['project_name', 'symbol_name'],
   },
@@ -335,6 +357,10 @@ const get_symbol_body = defineTool({
       symbol_name: { type: 'string' },
       file_path: { type: 'string', description: 'Optional, for disambiguation' },
       format: { type: 'string', enum: ['text', 'json'] },
+      force_reread: {
+        type: 'boolean',
+        description: 'Bypass the duplicate-result check. Use ONLY when you legitimately believe the underlying data changed since a previous fetch (file edited, index re-built). Default false.',
+      },
     },
     required: ['project_name', 'symbol_name'],
   },
@@ -422,6 +448,10 @@ const prepare_edit = defineTool({
       file_path: { type: 'string', description: 'Optional, for disambiguation when symbol_name is not unique' },
       max_callers: { type: 'number', description: 'Max callers listed (default 10)' },
       format: { type: 'string', enum: ['text', 'json'], description: 'Response format (default text)' },
+      force_reread: {
+        type: 'boolean',
+        description: 'Bypass the duplicate-result check. Use ONLY when you legitimately believe the underlying data changed since a previous fetch (file edited, index re-built). Default false.',
+      },
     },
     required: ['project_name', 'symbol_name'],
   },
@@ -629,6 +659,10 @@ const semantic_neighbors = defineTool({
     properties: {
       symbol_id: { type: 'number', description: 'Seed symbol id. Use search_by_kind or get_file_skeleton to discover ids.' },
       limit: { type: 'number', description: 'Max neighbors to return (default 10)' },
+      force_reread: {
+        type: 'boolean',
+        description: 'Bypass the duplicate-result check. Use ONLY when you legitimately believe the vector index changed since a previous fetch. Default false.',
+      },
     },
     required: ['symbol_id'],
   },

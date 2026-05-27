@@ -13,6 +13,7 @@ import type {
   ContentBlock,
   ToolUseBlock,
   PlanBlock,
+  SpecBlock,
   QuestionBlock,
   ToolResultBlock,
 } from '@mcp/code-agent/core/messages.js';
@@ -32,6 +33,10 @@ import {
   deriveTokenLimits,
   shouldCompact as shouldCompactTokens,
   isNewCompactionEnabled,
+  computeCompactionTrigger,
+  COMPACT_CUMULATIVE_RATIO,
+  COMPACT_POLLING_TRIGGER_RATIO,
+  COMPACT_STUCK_TURN_CAP,
   postCompactCleanup,
   applyRollingReduction,
   REDUCIBLE_READ_TOOLS,
@@ -105,6 +110,7 @@ export type TransitionKind =
   | 'pre-read-allowed-elided'
   | 'pre-read-allowed-mutation'
   | 'pre-read-auto-downgraded'
+  | 'pre-read-force-reread'
   | 'stop-guard-nudge'
   | 'tool-timeout';
 
@@ -146,6 +152,13 @@ export interface RunnerOptions {
   isSubagent?: boolean;
   /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
   planMode?: boolean;
+  /**
+   * Spec mode: agent must call `submit_spec` and get human approval before
+   * mutating tools. Dedicated gate (not a flavor of planMode) so the two
+   * approval flows never conflict — a session can be in plan OR spec mode,
+   * not both. Set by `runCoder` when `agentId === 'spec'`.
+   */
+  specMode?: boolean;
   /** Override the per-tool-result push-time cap. Subagents pass a tighter value. */
   pushTimeCap?: number;
   /**
@@ -536,18 +549,98 @@ const DUP_CALL_THRESHOLD = Number(process.env.CODER_DUP_CALL_THRESHOLD ?? 5);
 const DUP_CALL_WINDOW = Number(process.env.CODER_DUP_CALL_WINDOW ?? 20);
 
 /**
- * Polling-tool name pattern. Matches `wait_for_*`, `await_*`, `poll_*`,
- * `tail_*`, `monitor_*` either at the start of the name OR after the
- * `__` separator that mcp-server-manager injects (so e.g.
- * `ext_unity__wait_for_compile_clean` matches). Tools whose names match
- * this pattern OR whose `CoderTool.repeatable` is `true` are exempt from:
+ * Polling-tool name pattern — convention-based auto-detection of tools
+ * where repeated identical-args calls are the LEGITIMATE workflow, not
+ * a stuck-loop signal. Two flavours:
+ *
+ *   - **Prefix** matches at start-of-name or after the `__` separator
+ *     that `mcp-server-manager` injects (so `ext_unity__wait_for_clean`
+ *     matches the same as `wait_for_clean`):
+ *       `wait_for_*` · `await_*` · `poll_*` · `tail_*` · `monitor_*` ·
+ *       `list_*`   — list/enumerate tools poll state by definition;
+ *                    same result across turns = "no changes", not a
+ *                    loop. Covers `list_subordinates`, `list_pipelines`,
+ *                    `list_containers`, `list_services`, etc.
+ *
+ *   - **Suffix** matches at end-of-name. Reserved for the canonical
+ *     polling-output names that LLMs hit repeatedly while waiting for
+ *     status changes:
+ *       `*_status` · `*_logs` · `*_pulse` · `*_stats`
+ *
+ * Tools whose name matches OR whose `CoderTool.repeatable` is `true`
+ * are exempt from:
  *   - the per-arg dup-call cap (Fix F)
  *   - the strict and fuzzy doom-loop guards
  *   - the dominance guard
- *   - the post-call result-content dedup
- * Repeated identical calls are the legitimate workflow for these tools.
+ *   - the post-call result-content dedup (dup-result-marker)
+ *
+ * Why NOT include `read_*` or `get_*` broadly: those are too generic —
+ * `read_file` and `get_symbol_body` SHOULD dedup (re-reading the same
+ * file slice is wasteful, that's the whole reason the marker exists).
+ * Tools that look like polling but don't match this convention (e.g.
+ * `read_board`, `read_my_inbox`) still flag explicitly via
+ * `repeatable: true`.
  */
-const REPEATABLE_NAME_PATTERN = /(?:^|__)(?:wait_for|await|poll|tail|monitor)_/;
+const REPEATABLE_NAME_PATTERN =
+  /(?:^|__)(?:wait_for|await|poll|tail|monitor|list)_|_(?:status|logs|pulse|stats)$/;
+
+/**
+ * Tools that must NEVER be dropped by the `maxTools` truncation in
+ * `buildTools`. Company sessions register ~80–150 tools (board, kanban,
+ * shared drive, master/sub orchestration, DS, MCP per project) and on
+ * busy sessions can exceed a model's max-tools cap. Without this set
+ * the truncation slices alphabetically from the tail, taking out the
+ * `s`-prefix orchestration (`spawn_subordinate_agent`, `submit_*`,
+ * `set_agent_status`) and leaving the master narrating "I can't
+ * delegate" in a loop — the exact bug reported by the user.
+ *
+ * The list is short on purpose: only the tools an agent absolutely
+ * cannot function without. Discoverable / nice-to-have tools fall in
+ * the truncation bucket and can be re-enumerated via `find_tools` or
+ * `expand_toolset` later.
+ *
+ * Master essentials cover delegation primitives (spawn / forward /
+ * resume / list_subordinates / wait / abort / approve / answer / finalize),
+ * the inbox response, and the board read/write surface.
+ *
+ * Subordinate essentials cover the escalation primitives back to the
+ * master (`ask_master`, `submit_plan_to_master`, `submit_tasks_to_master`)
+ * plus the board read/write surface (so subs can post + scan).
+ */
+function isEssentialCompanyTool(name: string, isMaster: boolean): boolean {
+  // Shared across master + subordinate: the board is the canonical
+  // communication channel; without it the agent has no way to talk
+  // to siblings.
+  if (
+    name === 'post_to_board' ||
+    name === 'read_board' ||
+    name === 'set_agent_status'
+  ) {
+    return true;
+  }
+  if (isMaster) {
+    return (
+      name === 'spawn_subordinate_agent' ||
+      name === 'forward_to_agent' ||
+      name === 'resume_subordinate' ||
+      name === 'list_subordinates' ||
+      name === 'list_company_projects' ||
+      name === 'wait_for_subordinates' ||
+      name === 'abort_subordinate_agent' ||
+      name === 'finalize_subordinates' ||
+      name === 'approve_subordinate_plan' ||
+      name === 'approve_subordinate_tasks' ||
+      name === 'answer_subordinate_question' ||
+      name === 'respond_to_inbox'
+    );
+  }
+  // Subordinate path
+  return (
+    name === 'ask_master' ||
+    name === 'submit_plan_to_master' ||
+    name === 'submit_tasks_to_master'
+  );
+}
 
 /**
  * Agent Loop v2 result-content dedup. Refuses a tool result that has the
@@ -562,24 +655,148 @@ const RESULT_DUP_WINDOW = Number(process.env.CODER_RESULT_DUP_WINDOW ?? 15);
 const RESULT_DUP_MIN_CHARS = Number(process.env.CODER_RESULT_DUP_MIN_CHARS ?? 50);
 
 /**
- * Marker vs Refuse — controls what happens when the result-dup threshold
- * fires. Default `'marker'` (the new behaviour): the runner DELIVERS the
- * content prefixed with an informational `[dup-result: ...]` marker so
- * the agent can continue working without a follow-up tool call. The
- * legacy `'refuse'` mode (replaces content with an error message and
- * marks `is_error: true`) is preserved for one-line rollback if a
- * downstream consumer regresses on the new shape.
+ * Mode selector — three behaviours when the dup-result threshold fires:
  *
- * Reasoning for the new default: the refuse text averaged ~400 chars of
- * unhelpful prose AND blocked legitimate re-reads (the agent often
- * "forgot" the prior content via compaction). Marker mode costs more
- * tokens per duplicate but eliminates the cycle "refused → agent
- * thinks → tries different args → refused again", which is typically
- * net cheaper across a session.
+ *   - `'escalate'` (NEW DEFAULT): three-tier escalation based on how
+ *     many identical hits we've seen in the window. 1st duplicate →
+ *     light marker, content delivered. `_WARN`-th duplicate → warn
+ *     marker (stronger language). `_REFUSE`-th duplicate → hard refuse.
+ *     This restores the brake against runaway loops while keeping
+ *     room for legitimate "agent forgot the content" re-reads.
+ *   - `'marker'`: legacy behaviour from the prior PR — every duplicate
+ *     gets the light/medium marker, never refuses. Kept as a one-line
+ *     rollback for the prior fix in case escalation regresses real
+ *     workflows.
+ *   - `'refuse'`: oldest behaviour — refuses content from the very
+ *     first duplicate. Kept for completeness; not recommended.
+ *
+ * Why escalate is the new default: under pure `marker` mode the agent
+ * read "you have what you need" as permission to keep calling the
+ * same tool (`find_references` loops were the trigger). Without a
+ * growing cost the agent has no signal to switch strategy. The warn
+ * tier (3rd hit) tells it "next one refuses"; the refuse tier (4th)
+ * actually stops it. `force_reread: true` remains the escape hatch.
  */
-const RESULT_DUP_MODE = (process.env.CODER_RESULT_DUP_MODE ?? 'marker').toLowerCase() === 'refuse'
-  ? 'refuse'
-  : 'marker';
+const RESULT_DUP_MODE: 'escalate' | 'marker' | 'refuse' = (() => {
+  const v = (process.env.CODER_RESULT_DUP_MODE ?? 'escalate').toLowerCase();
+  if (v === 'refuse') return 'refuse';
+  if (v === 'marker') return 'marker';
+  return 'escalate';
+})();
+
+/**
+ * Escalation thresholds — matches.length values (NOT hit counts) at
+ * which the next tier kicks in. `matches.length === 0` is the first
+ * call (no entry seen yet → no marker). `matches.length === 1` means
+ * we've seen ONE prior identical hit, so the current call is the 2nd
+ * fetch — light marker. `matches.length === RESULT_DUP_ESCALATION_WARN`
+ * (default 2 → this is the 3rd fetch) → warn marker. `>= _REFUSE`
+ * (default 3 → 4th+ fetch) → hard refuse.
+ *
+ * Tunable per-deployment via env vars. Setting `_REFUSE=999` keeps
+ * the warn tier but effectively disables hard refuse, which is the
+ * fastest way to relax the brake without going all the way back to
+ * `mode=marker`.
+ */
+const RESULT_DUP_ESCALATION_WARN = Number(
+  process.env.CODER_RESULT_DUP_ESCALATION_WARN ?? 2,
+);
+const RESULT_DUP_ESCALATION_REFUSE = Number(
+  process.env.CODER_RESULT_DUP_ESCALATION_REFUSE ?? 3,
+);
+
+/**
+ * Polling-tool caps (Phase C — session 763 root cause). Polling tools
+ * (`wait_for_*`, `list_*`, `*_status`, etc.) are exempt from the strict,
+ * fuzzy, dominance, and dup-call guards via `turnAllRepeatable`. Without
+ * any ceiling, a misbehaving model can call `list_subordinates` 273 times
+ * in a single session (real case: 58M input tokens burned). These caps
+ * give polling tools their own brake: a soft tier injects a reminder
+ * into the result content, a hard tier refuses the call.
+ *
+ * The window is intentionally wider than `DUP_CALL_WINDOW`: polling is
+ * legitimately repeated across long stretches, so we measure over a
+ * larger horizon before flagging.
+ */
+const REPEATABLE_SOFT_CAP = Number(process.env.CODER_REPEATABLE_SOFT_CAP ?? 20);
+const REPEATABLE_HARD_CAP = Number(process.env.CODER_REPEATABLE_HARD_CAP ?? 60);
+const REPEATABLE_WINDOW = Number(process.env.CODER_REPEATABLE_WINDOW ?? 30);
+
+/**
+ * Polling-result stuck cap. Even legitimate polling SHOULD see the
+ * observed state evolve — `wait_for_clean` returns "compiling" then
+ * "clean", `list_subordinates` returns ever-growing logs. When the
+ * RESULT content is byte-identical for N polls in a row, the polling
+ * is stuck and the agent is wasting tokens. Refuse with a synthetic
+ * error so the model is forced to change strategy.
+ *
+ * Catches the session 763 pattern: `list_subordinates` returned the
+ * same 8eaed653 result 131 consecutive times.
+ */
+const POLLING_STUCK_CAP = Number(process.env.CODER_POLLING_STUCK_CAP ?? 10);
+const POLLING_STUCK_MIN_CHARS = Number(process.env.CODER_POLLING_STUCK_MIN_CHARS ?? 50);
+
+/**
+ * Reminder tier for the standard dup-call-cap (non-polling tools).
+ * Currently calls 5+ refuse hard. Add a softer tier at calls 3-4 that
+ * delivers the result normally but appends a `<system-reminder>` to
+ * the content, nudging the model to change strategy — kimi-cli pattern.
+ *
+ * Default 3: calls 3 and 4 get the reminder, call 5+ refuses (existing
+ * behaviour preserved).
+ */
+const DUP_CALL_REMINDER_THRESHOLD = Number(
+  process.env.CODER_DUP_CALL_REMINDER_THRESHOLD ?? 3,
+);
+
+/**
+ * Phase B — summarizer pass cap + cooldown. The LLM summarizer
+ * (`summarizer.ts`) used to run AT MOST ONCE per session via the
+ * `summarizedOnce` boolean lock — subsequent compactions fell back
+ * to the deterministic `[compacted: original_size=N]` marker, which
+ * tells the model NOTHING about what was elided. In long loops the
+ * model can't see "I tried X 50 times without progress" because the
+ * narrative is silenced.
+ *
+ * Allow up to `MAX_RUNS` summarizer passes per session, with at least
+ * `COOLDOWN_TURNS` turns between consecutive passes. Each pass costs
+ * one extra LLM call (~$0.01–0.05) but in a session that's burning
+ * thousands of dollars on a tool loop, the ROI is overwhelming —
+ * matches Codex's compaction philosophy (the summary surfaces the
+ * loop pattern to the model, which then self-corrects).
+ *
+ * Setting MAX_RUNS=1 restores the legacy lock-once behaviour for
+ * rollback. Setting MAX_RUNS=0 disables the summarizer entirely.
+ */
+const SUMMARIZER_MAX_RUNS = Number(process.env.CODER_SUMMARIZER_MAX_RUNS ?? 6);
+const SUMMARIZER_COOLDOWN_TURNS = Number(
+  process.env.CODER_SUMMARIZER_COOLDOWN_TURNS ?? 8,
+);
+
+/**
+ * Pure helper exported for testability. Returns true when the LLM
+ * summarizer is allowed to run on this turn given the per-session
+ * count + cooldown budget. The runner's gating site at runner.ts:4211
+ * mirrors this exact predicate.
+ *
+ * Rules:
+ *   - `maxRuns <= 0` disables the summarizer entirely (returns false).
+ *   - The first eligible run (runCount === 0) always passes the
+ *     cooldown — `lastTurn` is `-Infinity` initially.
+ *   - Subsequent runs require `turn - lastTurn >= cooldownTurns`.
+ */
+export function canRunSummarizer(args: {
+  runCount: number;
+  lastTurn: number;
+  currentTurn: number;
+  maxRuns: number;
+  cooldownTurns: number;
+}): boolean {
+  if (args.maxRuns <= 0) return false;
+  if (args.runCount >= args.maxRuns) return false;
+  if (args.runCount === 0) return true;
+  return args.currentTurn - args.lastTurn >= args.cooldownTurns;
+}
 
 /**
  * Above this character count, the marker switches to "medium" mode:
@@ -626,7 +843,7 @@ const RESULT_DUP_HEAD_CHARS = Number(
  * Either way, the marker ends with the same guidance: continue working,
  * or pass `force_reread: true` if the source likely changed.
  */
-function buildDupLightMarker(args: {
+export function buildDupLightMarker(args: {
   toolName: string;
   originalTurn: number;
   originalUseIdShort: string;
@@ -644,9 +861,124 @@ function buildDupLightMarker(args: {
   return (
     `[dup-result: identical to \`${args.toolName}\` at turn ${args.originalTurn} ` +
     `(use_id ${args.originalUseIdShort}, args ${args.argsPreview}); content below ` +
-    `unchanged in last ${args.window} turns. To force-fetch fresh data, retry ` +
-    `with \`force_reread: true\` or a different region. Otherwise continue — ` +
-    `you have what you need.]`
+    `unchanged in last ${args.window} turns. Repeating this call will escalate to ` +
+    `a hard refuse on the next hit. Act on what you have, or pass ` +
+    `\`force_reread: true\` if you genuinely need a fresh fetch.]`
+  );
+}
+
+/**
+ * Warn-mode marker — fires on the 3rd identical hit in the window
+ * (configurable via `CODER_RESULT_DUP_ESCALATION_WARN`). One step
+ * before the hard refuse; the language is sharper than the light
+ * marker but content is STILL delivered so the agent isn't blocked
+ * yet. Mentions `hitCount` explicitly so the agent has a concrete
+ * sense of how close it is to the cliff edge.
+ *
+ * Stays deterministic (no timestamps, no UUIDs) — same prefix-cache
+ * stability constraint as the light marker.
+ */
+export function buildDupWarnMarker(args: {
+  toolName: string;
+  originalTurn: number;
+  hitCount: number;
+  window: number;
+  priorIsCompacted: boolean;
+  argsPreview: string;
+}): string {
+  const ord = ordinal(args.hitCount);
+  if (args.priorIsCompacted) {
+    return (
+      `[dup-result: WARNING — ${ord} identical fetch of \`${args.toolName}\` ` +
+      `(prior call now compacted out of context). The system will REFUSE the ` +
+      `next call. Content below is current; act on it or pass ` +
+      `\`force_reread: true\` if data genuinely changed.]`
+    );
+  }
+  return (
+    `[dup-result: WARNING — ${ord} identical fetch of \`${args.toolName}\` ` +
+    `in last ${args.window} turns (first seen turn ${args.originalTurn}, args ${args.argsPreview}). ` +
+    `The system will REFUSE the next call. Your context already has this content. ` +
+    `Stop re-fetching: act on what you have, or pass \`force_reread: true\` if ` +
+    `data genuinely changed.]`
+  );
+}
+
+/** "2nd" / "3rd" / "4th" — small helper so the warn marker reads naturally. */
+export function ordinal(n: number): string {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
+}
+
+/**
+ * Phase C — dup-call reminder marker. Appended to the tool result content
+ * at calls `DUP_CALL_REMINDER_THRESHOLD`..`DUP_CALL_THRESHOLD - 1`. The
+ * result is delivered normally; the reminder is a softer nudge before
+ * the next call would refuse. Kimi-cli pattern.
+ */
+export function buildDupCallReminderMarker(args: {
+  toolName: string;
+  count: number;
+  window: number;
+  hardCap: number;
+}): string {
+  return (
+    `\n\n<system-reminder>\n` +
+    `You have called \`${args.toolName}\` with these exact arguments ` +
+    `${args.count} times in the last ${args.window} turns. The next ` +
+    `${args.hardCap - args.count} identical call(s) will be REFUSED. ` +
+    `Reconsider: act on the result you already have, try a different tool, ` +
+    `or change the arguments. Repeating this call will not produce new info.\n` +
+    `</system-reminder>`
+  );
+}
+
+/**
+ * Phase C — polling-tool soft-cap reminder. Appended to a polling-tool
+ * result when the per-session call count crosses `REPEATABLE_SOFT_CAP`.
+ * Polling tools are exempt from the 4 main guards (turnAllRepeatable)
+ * so this is their dedicated brake. Hard cap follows.
+ */
+export function buildPollingSoftCapMarker(args: {
+  toolName: string;
+  count: number;
+  window: number;
+  softCap: number;
+  hardCap: number;
+}): string {
+  return (
+    `\n\n<system-reminder>\n` +
+    `You have called the polling tool \`${args.toolName}\` ${args.count} times ` +
+    `in the last ${args.window} turns (soft cap ${args.softCap}). Polling tools ` +
+    `are normally exempt from loop guards, but unbounded polling burns tokens. ` +
+    `The hard cap is ${args.hardCap} — beyond that the runner will REFUSE further ` +
+    `calls. If the state you're waiting for isn't changing, change strategy: ` +
+    `escalate to the user, abort the operation, or progress on a different task.\n` +
+    `</system-reminder>`
+  );
+}
+
+/**
+ * Phase C — polling-tool stuck-result refusal. Emitted when a polling
+ * tool returns the byte-identical content `POLLING_STUCK_CAP` times in
+ * a row. The observed state isn't changing; further polls produce no
+ * new info. Catches the session 763 pattern (`list_subordinates`
+ * returned the same 8eaed653 content 131 consecutive times).
+ */
+export function buildPollingStuckRefusal(args: {
+  toolName: string;
+  count: number;
+  firstTurn: number;
+}): string {
+  return (
+    `Refused: \`${args.toolName}\` returned the IDENTICAL result ${args.count} ` +
+    `consecutive times (first seen turn ${args.firstTurn}). The state you're ` +
+    `polling is not changing — further calls produce no new info. Change strategy: ` +
+    `(a) escalate to the user describing what you observed, ` +
+    `(b) abort the operation that's not making progress, or ` +
+    `(c) work on a different task and return later. ` +
+    `Pass distinctly DIFFERENT arguments if you genuinely need to poll something else.`
   );
 }
 
@@ -687,6 +1019,38 @@ function previewToolArgs(input: unknown): string {
   } catch {
     return '<unserialisable>';
   }
+}
+
+/**
+ * Canonical, key-sorted serialisation of a tool's input — used as the
+ * args portion of the dup-result hash. Same logical input always
+ * produces identical bytes regardless of JS engine key-iteration
+ * order; that matters because the hash IS the equality predicate for
+ * "have I seen this call before".
+ *
+ * Why not `JSON.stringify` directly: V8 preserves insertion order for
+ * non-integer string keys, but model-generated tool args may serialise
+ * with different key order across turns (`{path, line}` vs `{line, path}`).
+ * Without sorting, semantically identical calls would hash differently
+ * and the dup-check would miss legitimate duplicates.
+ *
+ * Why a hand-rolled walker instead of a dep: ~15 LOC, no transitive
+ * surface, output is internal-only (never sent to the model) so
+ * prefix-cache stability isn't a concern.
+ */
+export function stableArgsKey(input: unknown): string {
+  if (input === null || input === undefined) return 'null';
+  if (typeof input !== 'object') return JSON.stringify(input);
+  if (Array.isArray(input)) {
+    return '[' + input.map(stableArgsKey).join(',') + ']';
+  }
+  const obj = input as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return (
+    '{' +
+    keys.map((k) => `${JSON.stringify(k)}:${stableArgsKey(obj[k])}`).join(',') +
+    '}'
+  );
 }
 
 /**
@@ -1308,6 +1672,8 @@ export interface RunnerEvents {
   done: (reason: StopReason, error?: Error, transition?: TransitionKind | null) => void;
   /** Emitted when the agent calls submit_plan; payload waits for /plan-response. */
   plan_posted: (block: PlanBlock) => void;
+  /** Emitted when the agent calls submit_spec; payload waits for /spec-response. */
+  spec_posted: (block: SpecBlock) => void;
   /** Emitted when the agent calls ask_user; payload waits for /answer. */
   question_posted: (block: QuestionBlock) => void;
   /** Emitted when provider/model is swapped mid-session. */
@@ -1478,6 +1844,7 @@ export interface RunnerEvents {
     tool: string;
     reason:
     | 'plan_mode'
+    | 'spec_mode'
     | 'task_scope'
     | 'shell_allowlist'
     | 'sandbox_required'
@@ -1551,20 +1918,31 @@ export interface RunnerEvents {
       }
     | {
         /**
-         * Dup-result marker — agent re-fetched identical content, the
-         * runner prefixed the result with an informational header but
-         * DELIVERED the content (no refusal). Distinct from the
-         * loop-guard variants both semantically and in the dashboard's
-         * counts; `severity: 'informational'` should never be styled
-         * as an error.
+         * Dup-result marker — agent re-fetched identical content. The
+         * runner reacts in one of three tiers depending on how many
+         * prior identical hits exist in the window:
+         *
+         *   - `escalationLevel: 'light'`   → light marker prefixed; full content delivered.
+         *   - `escalationLevel: 'medium'`  → warn marker prefixed (sharper language); full content still delivered.
+         *   - `escalationLevel: 'refused'` → hard refuse; content REPLACED with refusal message and `is_error=true`. Dashboard should render this in the banner.
+         *
+         * Distinct from the loop-guard variants both semantically and
+         * in the dashboard's counts. When `severity: 'informational'`
+         * the runner did NOT block the call; when `'refused'`, it did.
          */
         kind: 'dup-result-marker';
-        severity: 'informational';
+        severity: 'informational' | 'refused';
+        /** Three-tier escalation indicator — drives dashboard render. */
+        escalationLevel: 'light' | 'medium' | 'refused';
+        /** Human-readable hit number for this content (1 = first fetch,
+         *  marker never emits for 1; 2 = first duplicate; etc). */
+        hitCount: number;
         toolName: string;
         /** Turn where the original duplicate content was first seen. */
         originalTurn: number;
         currentTurn: number;
-        /** `'light'` = full content delivered, `'medium'` = head excerpt + output_id. */
+        /** `'light'` = full content delivered, `'medium'` = head excerpt + output_id.
+         *  Only meaningful when `escalationLevel !== 'refused'`. */
         mode: 'light' | 'medium';
         /** True when the original tool_result block was elided by
          *  post-compact cleanup. Drives the marker text variant. */
@@ -1631,6 +2009,10 @@ export class CoderRunner extends EventEmitter {
   private pendingResolve: ((value: string) => void) | null = null;
   private pendingUserMessages: Array<{ text: string; selectedSkillIds?: string[] }> = [];
   private planApproved = false;
+  /** Set by `approveSpec()` after the user accepts a `submit_spec` submission. */
+  private specApproved = false;
+  /** Repo-relative path of the most recently approved spec (`.mcp/specs/<slug>-<unix>.md`). */
+  private specPath: string | null = null;
   /**
    * Plan-mode enforcement: when the model finishes a turn (no tool calls)
    * without ever calling submit_plan, the runner injects ONE explicit nudge
@@ -1821,10 +2203,42 @@ export class CoderRunner extends EventEmitter {
   public originalCwd: string | null = null;
   public worktreePath: string | null = null;
 
-  /** Set to true after the LLM summarizer has run once in this session.
-   *  Prevents re-summarizing every turn — one pass replaces the old span,
-   *  and subsequent growth is handled by deterministic compaction. */
-  private summarizedOnce = false;
+  /**
+   * Phase B — summarizer pass tracking. Replaces the legacy boolean
+   * `summarizedOnce` lock. Allows up to `SUMMARIZER_MAX_RUNS` passes
+   * per session with `SUMMARIZER_COOLDOWN_TURNS` minimum spacing.
+   * `lastSummarizerTurn` is `-Infinity` initially so the very first
+   * eligible compaction always passes the cooldown check.
+   */
+  private summarizerRunCount = 0;
+  private lastSummarizerTurn = -Infinity;
+
+  /**
+   * Phase C — polling-tool call frequency. Tracks turn numbers per tool
+   * name (regardless of args, since polling tools are designed to be
+   * called repeatedly with identical args). When a tool's count in the
+   * `REPEATABLE_WINDOW` rolling window crosses SOFT/HARD caps, the
+   * pre-dispatch branch injects a reminder or refuses the call.
+   */
+  private repeatableToolFreq: Map<string, number[]> = new Map();
+
+  /**
+   * Phase C — polling-result stuck detection. Tracks the most recent
+   * consecutive run of identical result content per polling tool. When
+   * a run reaches `POLLING_STUCK_CAP`, the next call's result is
+   * replaced with a refusal so the agent stops polling stuck state.
+   */
+  private pollingResultRun: Map<string, { hash: string; count: number; firstTurn: number }>
+    = new Map();
+
+  /**
+   * Phase D — consecutive turns where the assistant produced ONLY tool
+   * calls with no text. Resets to 0 when any turn includes assistant text.
+   * Feeds the `stuck-progress` compaction trigger so a model that has
+   * stopped reasoning gets force-compacted with a summary that surfaces
+   * the lack of progress.
+   */
+  private consecutiveNoTextTurns = 0;
 
   /** Agent Loop v2 stop-guard: ensures we nudge at most once per session
    *  when the model tries to stop with `pending`/`in_progress` todos. */
@@ -2863,6 +3277,30 @@ export class CoderRunner extends EventEmitter {
   }
 
   /**
+   * Phase D — polling-loop early warning, derived from Phase C state.
+   * Returns true when ANY polling tool has crossed half its soft cap
+   * (call-frequency) OR half its stuck-result cap. Used by the
+   * compaction trigger to lower the threshold in suspected loops —
+   * the summary then surfaces "tool X called N× with no progress"
+   * to the model so it can self-correct.
+   *
+   * Pure read of mutable state; safe to call any number of times.
+   */
+  private detectPollingLoopTendency(currentTurn: number): boolean {
+    const freqThreshold = Math.max(2, Math.floor(REPEATABLE_SOFT_CAP / 2));
+    const minTurn = currentTurn - REPEATABLE_WINDOW;
+    for (const [, turns] of this.repeatableToolFreq) {
+      const recent = turns.filter((t) => t > minTurn);
+      if (recent.length >= freqThreshold) return true;
+    }
+    const stuckThreshold = Math.max(2, Math.floor(POLLING_STUCK_CAP / 2));
+    for (const [, state] of this.pollingResultRun) {
+      if (state.count >= stuckThreshold) return true;
+    }
+    return false;
+  }
+
+  /**
    * Build the recap pushed back when the stop-guard fires. Lists every
    * unfinished todo and tells the model what its options are. Mirrors the
    * "all items completed or explicitly canceled/deferred before ending the
@@ -3166,6 +3604,28 @@ export class CoderRunner extends EventEmitter {
   /** Whether mutating tools should be allowed right now. */
   isPlanApproved(): boolean {
     return this.planApproved;
+  }
+
+  /** Marks the latest spec as approved so mutating tools become unblocked.
+   *  `path` is the repo-relative location the runner persisted the body at. */
+  approveSpec(path: string): void {
+    this.specApproved = true;
+    this.specPath = path;
+  }
+
+  /** Whether the current spec has been approved. Mirror of `isPlanApproved` for spec mode. */
+  isSpecApproved(): boolean {
+    return this.specApproved;
+  }
+
+  /** Repo-relative path of the most recently approved spec, or null. */
+  currentSpecPath(): string | null {
+    return this.specPath;
+  }
+
+  /** True while the runner is operating under spec-mode discipline. */
+  get specMode(): boolean {
+    return Boolean(this.opts.specMode);
   }
 
   // ─── Tasks scope (Phase 1: inline mode) ─────────────────────
@@ -3485,11 +3945,46 @@ export class CoderRunner extends EventEmitter {
       // prompt caches (Anthropic ephemeral, OpenAI/ZAI auto-cache). Sorting
       // by name eliminates the dependency on registry insertion order, hot-
       // reload sequencing of MCP tools, or filter pass ordering.
-      filtered = filtered.slice().sort((a, b) => a.name.localeCompare(b.name));
+      //
+      // Priority partition BEFORE truncation: orchestration tools that
+      // are existentially required (master can't delegate without
+      // `spawn_subordinate_agent` / `forward_to_agent` / `resume_subordinate`;
+      // subs can't escalate without `ask_master` / `submit_plan_to_master`)
+      // must NEVER be cut by `maxTools`. The previous unconditional
+      // alphabetical-cut sliced these out for masters with many MCP tools
+      // + projects, leaving the agent narrating "I have no way to delegate"
+      // in a loop. Essentials always survive; truncation only eats the
+      // tail of the non-essential bucket.
+      const isMasterRunner = !!this.opts.toolContext.companyContext?.isMaster;
+      const isCompanyRunner = !!this.opts.toolContext.companyContext;
+      const essentials: typeof filtered = [];
+      const others: typeof filtered = [];
+      for (const t of filtered) {
+        if (isCompanyRunner && isEssentialCompanyTool(t.name, isMasterRunner)) {
+          essentials.push(t);
+        } else {
+          others.push(t);
+        }
+      }
+      essentials.sort((a, b) => a.name.localeCompare(b.name));
+      others.sort((a, b) => a.name.localeCompare(b.name));
       const maxTools = getModelMaxTools(this.opts.provider.model ?? '');
-      if (filtered.length > maxTools) {
-        console.log(`[coder] tool cap: ${filtered.length} → ${maxTools} (model limit for ${this.opts.provider.model})`);
-        filtered = filtered.slice(0, maxTools);
+      const totalBefore = essentials.length + others.length;
+      if (totalBefore > maxTools) {
+        const room = Math.max(0, maxTools - essentials.length);
+        const cutCount = others.length - room;
+        // Log enough to debug "where did my tool go?" — the prior log
+        // just showed the totals. Now we also list the names that got
+        // cut so operators see exactly which prefixes the agent lost.
+        const cutNames = others.slice(room).map((t) => t.name);
+        console.log(
+          `[coder] tool cap: ${totalBefore} → ${maxTools} (model limit for ${this.opts.provider.model}) — ` +
+            `${essentials.length} essential kept, ${room}/${others.length} others kept, ${cutCount} dropped. ` +
+            `Dropped: ${cutNames.slice(0, 20).join(', ')}${cutNames.length > 20 ? `, … (+${cutNames.length - 20})` : ''}`,
+        );
+        filtered = [...essentials, ...others.slice(0, room)];
+      } else {
+        filtered = [...essentials, ...others];
       }
       // Bootstrap-only profile: aggressively shorten descriptions to their
       // first sentence. The bootstrap turn is the most expensive (no cache
@@ -3775,24 +4270,47 @@ export class CoderRunner extends EventEmitter {
         // failure (LLM error, bad JSON, timeout) falls back to the
         // deterministic compactMessages path below — the summarizer never
         // breaks a turn.
-        if (isSummarizerEnabled() && !this.summarizedOnce) {
-          // Token-mode (new): use the hybrid TokenSnapshot vs effective window.
-          // Char-mode (legacy): keep the original char-threshold path so we
-          // can A/B with CODER_NEW_COMPACTION=0.
-          let shouldCompactNow = false;
-          let triggerLog = '';
-          if (tokenLimits) {
-            const snap = computeTokenSnapshot();
-            shouldCompactNow = snap.total >= tokenLimits.trigger;
-            triggerLog = `tokens=${snap.total} (${snap.source}, conf=${snap.confirmed} est=${snap.pendingEstimate}) trigger=${tokenLimits.trigger}`;
-          } else {
-            const total = totalChars(this.messages);
-            shouldCompactNow =
-              compactionLimits.triggerTokens !== null && lastKnownInputTokens !== null
-                ? lastKnownInputTokens >= compactionLimits.triggerTokens
-                : total > compactionLimits.minimum;
-            triggerLog = `chars=${total} (legacy)`;
-          }
+        // Phase B — replaced the boolean `summarizedOnce` lock with a
+        // counter + cooldown so the summarizer can run multiple times
+        // per session. Without this, long loops silenced the narrative
+        // after the first compaction (subsequent passes used the mute
+        // `[compacted: N chars]` markers instead of an LLM summary).
+        if (
+          isSummarizerEnabled()
+          && canRunSummarizer({
+            runCount: this.summarizerRunCount,
+            lastTurn: this.lastSummarizerTurn,
+            currentTurn: turn,
+            maxRuns: SUMMARIZER_MAX_RUNS,
+            cooldownTurns: SUMMARIZER_COOLDOWN_TURNS,
+          })
+        ) {
+          // Phase D — multidimensional compaction trigger. The pure helper
+          // evaluates the primary token-budget path plus three additional
+          // triggers (cumulative spend, polling-loop detection, stuck
+          // progress) and returns the first matching reason. Replaces the
+          // legacy "snap.total >= trigger || chars > minimum" inline check.
+          const snap = tokenLimits ? computeTokenSnapshot() : null;
+          const pollingLoopDetected = this.detectPollingLoopTendency(turn);
+          const decision = computeCompactionTrigger({
+            snapshotTotal: snap?.total ?? null,
+            trigger: tokenLimits?.trigger ?? null,
+            effective: tokenLimits?.effective ?? null,
+            charTotal: totalChars(this.messages),
+            charMinimum: compactionLimits.minimum,
+            legacyTriggerTokens: compactionLimits.triggerTokens,
+            lastKnownInputTokens,
+            cumulativeInputTokens: totalUsage.input_tokens,
+            pollingLoopDetected,
+            consecutiveNoTextTurns: this.consecutiveNoTextTurns,
+            cumulativeRatio: COMPACT_CUMULATIVE_RATIO,
+            pollingTriggerRatio: COMPACT_POLLING_TRIGGER_RATIO,
+            stuckTurnCap: COMPACT_STUCK_TURN_CAP,
+          });
+          const shouldCompactNow = decision.shouldCompact;
+          const triggerLog = snap
+            ? `[${decision.reason}] tokens=${snap.total} (${snap.source}, conf=${snap.confirmed} est=${snap.pendingEstimate}) ${decision.detail}`
+            : `[${decision.reason}] ${decision.detail}`;
           if (shouldCompactNow) {
             compactionTriggeredThisTurn = true;
             const protectArg = tokenLimits ? tokenLimits.protect : compactionLimits.protect;
@@ -3852,18 +4370,24 @@ export class CoderRunner extends EventEmitter {
                     console.log(`[coder] post-compact dedup elided ${cleaned.elidedReads} read(s) (~${cleaned.freedChars} chars freed)`);
                   }
                 }
-                this.summarizedOnce = true;
+                this.summarizerRunCount++;
+                this.lastSummarizerTurn = turn;
                 summarizerRanThisTurn = true;
                 consecutiveCompactFailures = 0;
                 // Confirmed token count is no longer authoritative — we just
                 // rewrote the prefix. Force a re-measurement on next turn.
                 lastKnownInputTokens = null;
                 lastUsageMessageCount = 0;
-                console.log(`[coder] summarizer collapsed ${cutoff} messages into 1 synthetic summary`);
+                console.log(
+                  `[coder] summarizer collapsed ${cutoff} messages into 1 synthetic summary ` +
+                  `(run ${this.summarizerRunCount}/${SUMMARIZER_MAX_RUNS} this session)`,
+                );
               } else {
-                // Mark as attempted so we don't retry every turn on a broken
-                // summarizer — deterministic compaction takes over.
-                this.summarizedOnce = true;
+                // Failed pass — count it as a run and stamp turn so the
+                // cooldown still applies. Prevents retry-storm on a
+                // broken summarizer. Deterministic compaction takes over.
+                this.summarizerRunCount++;
+                this.lastSummarizerTurn = turn;
                 consecutiveCompactFailures++;
                 console.warn(`[coder] summarizer returned null; using deterministic compaction (failures=${consecutiveCompactFailures})`);
                 if (consecutiveCompactFailures >= MAX_CONSECUTIVE_COMPACT_FAILURES) {
@@ -4525,6 +5049,18 @@ export class CoderRunner extends EventEmitter {
         // some builds may have higher thresholds in env. This guard is the
         // last-line backstop: in a window of N turns, if a single tool
         // name dominates ≥80% AND zero turns produced text, abort.
+        // Phase D — update the consecutive-no-text counter that feeds
+        // the stuck-progress compaction trigger. Runs unconditionally
+        // (NOT gated on turnAllRepeatable like the dominance guard
+        // below) so polling-only loops still increment the counter.
+        // Only counts tool-only turns: turns that end naturally with
+        // text are the legitimate session boundary.
+        if (pendingText.trim().length > 0) {
+          this.consecutiveNoTextTurns = 0;
+        } else if (toolUseBlocks.length > 0) {
+          this.consecutiveNoTextTurns++;
+        }
+
         if (DOMINANCE_WINDOW >= 4 && !turnAllRepeatable) {
           const primaryName = toolUseBlocks[0]?.name ?? '';
           const hadText = pendingText.trim().length > 0;
@@ -4653,7 +5189,20 @@ export class CoderRunner extends EventEmitter {
               // window expiry still holds).
               prior.push({ turn, useId: block.id });
               this.recentReadKeys.set(readKey, prior);
-              if (threshold >= 1 && prior.length >= threshold) {
+              // Escape hatch — same as the post-dispatch dup-result-marker:
+              // when the agent explicitly believes the file changed, it can
+              // pass `force_reread: true` to bypass the pre-dispatch cap.
+              // The schema is already declared on read_file (fs.ts) and the
+              // four mcp__ read-family tools (file.ts), so the model has a
+              // documented escape from the rich-refusal path.
+              const forceReread = inp?.force_reread === true;
+              if (forceReread) {
+                this.setTransition('pre-read-force-reread');
+                console.warn(
+                  `[coder] pre-read force_reread bypass: ${block.name} for "${path}" at turn ${turn}`,
+                );
+                // Fall through to normal dispatch.
+              } else if (threshold >= 1 && prior.length >= threshold) {
                 const oldestPrior = prior[0];
                 // Layer 1: mutation since oldest prior read → ALLOW + diff.
                 const mutationTurn = lastMutationTurn(
@@ -4779,6 +5328,11 @@ export class CoderRunner extends EventEmitter {
           } catch {
             /* unhashable args (cyclic / native handle) — skip the cap */
           }
+          // Phase C — reminder text appended to result content post-dispatch
+          // when the call is in a soft-tier window (non-polling: 3-4 of 5
+          // for dup-call-cap; polling: REPEATABLE_SOFT_CAP..HARD_CAP-1).
+          // Set inside the branches below; consumed after dispatch.
+          let pendingReminderText = '';
           if (argHash && DUP_CALL_THRESHOLD >= 2 && !isRepeatable) {
             const prior = this.toolCallFreq.get(argHash) ?? [];
             const minTurn = turn - DUP_CALL_WINDOW;
@@ -4827,10 +5381,82 @@ export class CoderRunner extends EventEmitter {
               });
               continue; // skip the dispatch below
             }
-          } else if (DEBUG_DOOM_LOOP && isRepeatable) {
-            console.debug(
-              `[doom-loop-debug] turn=${turn} dupCall.SKIPPED tool=${block.name} reason=repeatable`,
-            );
+            // Phase C — softer reminder tier at calls 3-4 (configurable).
+            // Result is delivered normally; reminder is appended post-dispatch.
+            if (filtered.length >= DUP_CALL_REMINDER_THRESHOLD) {
+              pendingReminderText = buildDupCallReminderMarker({
+                toolName: block.name,
+                count: filtered.length,
+                window: DUP_CALL_WINDOW,
+                hardCap: DUP_CALL_THRESHOLD,
+              });
+              console.log(
+                `[coder] dup-call reminder: ${block.name} ${filtered.length}× in window — appending reminder at turn ${turn}`,
+              );
+            }
+          } else if (isRepeatable && REPEATABLE_HARD_CAP >= 2) {
+            // Phase C — polling/repeatable tool cap (session 763 root
+            // cause). Track by tool name (args mostly identical by design
+            // for polling). Soft cap = reminder appended; hard cap = refuse.
+            const key = `repeatable:${block.name}`;
+            const prior = this.repeatableToolFreq.get(key) ?? [];
+            const minTurn = turn - REPEATABLE_WINDOW;
+            const filtered = prior.filter((t) => t > minTurn);
+            filtered.push(turn);
+            this.repeatableToolFreq.set(key, filtered);
+            if (DEBUG_DOOM_LOOP) {
+              console.debug(
+                `[doom-loop-debug] turn=${turn} repeatable.push tool=${block.name} ` +
+                  `count=${filtered.length}/${REPEATABLE_HARD_CAP} window=${REPEATABLE_WINDOW}`,
+              );
+            }
+            if (filtered.length >= REPEATABLE_HARD_CAP) {
+              const refusal =
+                `Refused: polling tool \`${block.name}\` has been called ${filtered.length} ` +
+                `times in the last ${REPEATABLE_WINDOW} turns. Even polling has a ceiling — ` +
+                `the state you're watching is either stuck or you're polling instead of progressing. ` +
+                `Change strategy: (a) escalate to the user describing what you observed, ` +
+                `(b) abort the operation that's not making progress, or ` +
+                `(c) work on a different task. Calling this tool again will keep being refused.`;
+              const synth = buildToolResultBlock(
+                block.id,
+                refusal,
+                true,
+                this.effectivePushTimeCap,
+              );
+              toolResultBlocks.push(synth);
+              console.warn(
+                `[coder] repeatable-tool HARD cap fired: ${block.name} ${filtered.length}× — refused at turn ${turn}`,
+              );
+              this.emit('tool_call_result', block.id, block.name, {
+                content: refusal,
+                isError: true,
+              }, 0);
+              emittedFallback = true;
+              this.emitToolLoopIntervention({
+                kind: 'dup-call-cap',
+                turn,
+                toolName: block.name,
+                count: filtered.length,
+                threshold: REPEATABLE_HARD_CAP,
+                window: REPEATABLE_WINDOW,
+                severity: 'refused',
+                reason: `Polling tool \`${block.name}\` called ${filtered.length}× in last ${REPEATABLE_WINDOW} turns — exceeded HARD cap.`,
+              });
+              continue; // skip the dispatch
+            }
+            if (filtered.length >= REPEATABLE_SOFT_CAP) {
+              pendingReminderText = buildPollingSoftCapMarker({
+                toolName: block.name,
+                count: filtered.length,
+                window: REPEATABLE_WINDOW,
+                softCap: REPEATABLE_SOFT_CAP,
+                hardCap: REPEATABLE_HARD_CAP,
+              });
+              console.log(
+                `[coder] repeatable-tool SOFT cap: ${block.name} ${filtered.length}× — appending reminder at turn ${turn}`,
+              );
+            }
           }
 
           // Wire #5 (Nível 2) — Policy hard-block. Runs BEFORE the
@@ -4892,6 +5518,8 @@ export class CoderRunner extends EventEmitter {
             const policyCtx: PolicyContext = {
               planMode: !!this.opts.planMode,
               planApproved: this.planApproved,
+              specMode: !!this.opts.specMode,
+              specApproved: this.specApproved,
               taskScope: this.currentTaskScope
                 ? { id: this.currentTaskScope.id, files: [...this.currentTaskScope.files] }
                 : null,
@@ -5048,6 +5676,62 @@ export class CoderRunner extends EventEmitter {
           let shapedContent = applySmartReducer(block.name, result.content, cap);
           let shapedIsError = result.isError;
 
+          // Phase C — polling-tool stuck-result detection. When a polling
+          // tool returns BYTE-IDENTICAL content N times in a row, the
+          // state isn't changing — further polls produce no new info.
+          // Catches session 763 (`list_subordinates` returned the same
+          // result 131 consecutive times). Pre-call frequency cap above
+          // also helps, but stuck-result triggers EARLIER on patterns
+          // where args vary slightly but result is constant.
+          if (
+            isRepeatable &&
+            !result.isError &&
+            POLLING_STUCK_CAP >= 2 &&
+            typeof result.content === 'string' &&
+            result.content.length >= POLLING_STUCK_MIN_CHARS
+          ) {
+            const rHash = createHash('sha1').update(result.content).digest('hex');
+            const prev = this.pollingResultRun.get(block.name);
+            const next = prev && prev.hash === rHash
+              ? { hash: rHash, count: prev.count + 1, firstTurn: prev.firstTurn }
+              : { hash: rHash, count: 1, firstTurn: turn };
+            this.pollingResultRun.set(block.name, next);
+            if (next.count >= POLLING_STUCK_CAP) {
+              const refusal = buildPollingStuckRefusal({
+                toolName: block.name,
+                count: next.count,
+                firstTurn: next.firstTurn,
+              });
+              shapedContent = refusal;
+              shapedIsError = true;
+              pendingReminderText = ''; // suppress soft-cap reminder — refusal supersedes
+              console.warn(
+                `[coder] polling-stuck refusal: ${block.name} same result ${next.count}× — refused at turn ${turn}`,
+              );
+              this.emitToolLoopIntervention({
+                kind: 'dup-call-cap',
+                turn,
+                toolName: block.name,
+                count: next.count,
+                threshold: POLLING_STUCK_CAP,
+                window: POLLING_STUCK_CAP,
+                severity: 'refused',
+                reason: `Polling tool \`${block.name}\` returned identical result ${next.count}× consecutively — refused.`,
+              });
+              // Reset run so a fresh poll after the refusal can succeed once
+              // (if state finally changed, the model can recover).
+              this.pollingResultRun.delete(block.name);
+            }
+          }
+
+          // Phase C — append the pending reminder to deliverable result
+          // content. Set by the pre-dispatch soft tiers (dup-call 3-4,
+          // polling soft cap). Skipped when dispatch already produced an
+          // error or when stuck-result above replaced the content.
+          if (pendingReminderText && !shapedIsError) {
+            shapedContent = `${shapedContent}${pendingReminderText}`;
+          }
+
           // Agent Loop v2: post-result content dedup. Hash the RAW result and
           // refuse on the second identical content for the same tool within
           // RESULT_DUP_WINDOW turns. Catches arg-shift loops the strict and
@@ -5074,7 +5758,21 @@ export class CoderRunner extends EventEmitter {
             typeof result.content === 'string' &&
             result.content.length >= RESULT_DUP_MIN_CHARS
           ) {
-            const resultHash = createHash('sha1').update(result.content).digest('hex');
+            // Hash binds INPUT + OUTPUT, not just output. Without the
+            // input portion, two distinct `edit_file` calls on the same
+            // file that both succeed with "Edited path (1 replacement)"
+            // hash identically and the 2nd is falsely flagged as a
+            // duplicate. `\x1f` (unit separator) prevents string
+            // concatenation collisions (`{x:"a"}` + `foo` vs
+            // `{x:"af"}` + `oo`). Args are sorted via `stableArgsKey`
+            // so semantically identical calls with different JS key
+            // orders STILL hash the same (legitimate duplicate case).
+            const argsKey = stableArgsKey(block.input);
+            const resultHash = createHash('sha1')
+              .update(argsKey)
+              .update('\x1f')
+              .update(result.content)
+              .digest('hex');
             const prior = this.recentResultHashes.get(block.name) ?? [];
             const minTurn = turn - RESULT_DUP_WINDOW;
             const filtered = prior.filter((e) => e.turn > minTurn);
@@ -5097,10 +5795,13 @@ export class CoderRunner extends EventEmitter {
               const priorBlock = findToolResultByUseId(oldest.useId, this.messages);
               const priorIsCompacted =
                 !priorBlock || isElidedReadContent(priorBlock.content);
+              // `hitCount` is the 1-based human number: matches.length=1
+              // means we've seen ONE prior identical hit, so the CURRENT
+              // call is the 2nd fetch. Used in markers + telemetry.
+              const hitCount = matches.length + 1;
 
+              // ── Legacy refuse path (rollback via env) ──────────────
               if (RESULT_DUP_MODE === 'refuse') {
-                // Legacy rollback path — kept verbatim so a one-line env
-                // change reverts the new behaviour if production regresses.
                 const refusal =
                   `Refused: \`${block.name}\` returned the IDENTICAL content (${result.content.length} chars) ` +
                   `that you already received earlier in this conversation (seen ${matches.length} time${matches.length === 1 ? '' : 's'} ` +
@@ -5119,9 +5820,83 @@ export class CoderRunner extends EventEmitter {
                   content: refusal,
                   isError: true,
                 }, 0);
-              } else {
-                // Marker mode — deliver content prefixed with a short
-                // informational header. Two flavours:
+                this.emit('tool_loop_intervention', {
+                  kind: 'dup-result-marker',
+                  severity: 'refused',
+                  escalationLevel: 'refused',
+                  hitCount,
+                  toolName: block.name,
+                  originalTurn: oldest.turn,
+                  currentTurn: turn,
+                  mode: 'light',
+                  priorIsCompacted,
+                });
+              }
+              // ── Escalate path (new default) — hard refuse tier ─────
+              else if (
+                RESULT_DUP_MODE === 'escalate' &&
+                matches.length >= RESULT_DUP_ESCALATION_REFUSE
+              ) {
+                const refusal =
+                  `Refused: ${ordinal(hitCount)} identical fetch of \`${block.name}\` ` +
+                  `in last ${RESULT_DUP_WINDOW} turns. Content already in your context ` +
+                  `(first seen turn ${oldest.turn}, use_id ${oldest.useId.slice(0, 12)}, args ${oldest.argsPreview}). ` +
+                  `Pass \`force_reread: true\` if you NEED a fresh fetch. ` +
+                  `Alternatives: quote the earlier read, request a DIFFERENT region, or make the edit.`;
+                shapedContent = refusal;
+                shapedIsError = true;
+                console.warn(
+                  `[coder] dup-result escalation REFUSE: ${block.name} hit ${hitCount}× since turn ${oldest.turn}`,
+                );
+                this.emit('tool_call_result', block.id, block.name, {
+                  content: refusal,
+                  isError: true,
+                }, 0);
+                this.emit('tool_loop_intervention', {
+                  kind: 'dup-result-marker',
+                  severity: 'refused',
+                  escalationLevel: 'refused',
+                  hitCount,
+                  toolName: block.name,
+                  originalTurn: oldest.turn,
+                  currentTurn: turn,
+                  mode: 'light',
+                  priorIsCompacted,
+                });
+              }
+              // ── Escalate path — warn tier (medium escalation) ──────
+              else if (
+                RESULT_DUP_MODE === 'escalate' &&
+                matches.length >= RESULT_DUP_ESCALATION_WARN
+              ) {
+                const header = buildDupWarnMarker({
+                  toolName: block.name,
+                  originalTurn: oldest.turn,
+                  hitCount,
+                  window: RESULT_DUP_WINDOW,
+                  priorIsCompacted,
+                  argsPreview: oldest.argsPreview || argsPreview,
+                });
+                shapedContent = `${header}\n\n${shapedContent}`;
+                shapedIsError = false;
+                console.log(
+                  `[coder] dup-result escalation WARN: ${block.name} hit ${hitCount}× since turn ${oldest.turn} — next fires refuse`,
+                );
+                this.emit('tool_loop_intervention', {
+                  kind: 'dup-result-marker',
+                  severity: 'informational',
+                  escalationLevel: 'medium',
+                  hitCount,
+                  toolName: block.name,
+                  originalTurn: oldest.turn,
+                  currentTurn: turn,
+                  mode: 'light',
+                  priorIsCompacted,
+                });
+              }
+              // ── Marker / escalate-light path — first duplicate ─────
+              else {
+                // Two flavours of light delivery:
                 //   * medium: large content + an output_id available →
                 //     head excerpt + pointer, agent calls get_tool_output
                 //     only if it actually needs the tail.
@@ -5155,15 +5930,13 @@ export class CoderRunner extends EventEmitter {
                 console.log(
                   `[coder] dup-result-marker emitted: ${block.name} identical vs turn ${oldest.turn} ` +
                     `(use_id ${oldest.useId.slice(0, 12)}); mode=${useMedium ? 'medium' : 'light'}, ` +
-                    `compacted=${priorIsCompacted}`,
+                    `compacted=${priorIsCompacted}, hit=${hitCount}`,
                 );
-                // Telemetry: distinguish from the loop-guard refusals so
-                // the dashboard / future analyzers can count these as
-                // informational, not failures. Reusing the existing
-                // event channel keeps the wire surface stable.
                 this.emit('tool_loop_intervention', {
                   kind: 'dup-result-marker',
                   severity: 'informational',
+                  escalationLevel: 'light',
+                  hitCount,
                   toolName: block.name,
                   originalTurn: oldest.turn,
                   currentTurn: turn,
@@ -5398,7 +6171,11 @@ export class CoderRunner extends EventEmitter {
               `context OK (${lastKnownInputTokens ?? '?'}/${compactionLimits.triggerTokens ?? '?'} tokens), skipping compaction`,
             );
           }
-          this.summarizedOnce = false;
+          // Auto-continue starts a fresh sub-session — reset the
+          // summarizer budget so the next window can summarize again
+          // (matches the legacy summarizedOnce=false reset).
+          this.summarizerRunCount = 0;
+          this.lastSummarizerTurn = -Infinity;
           lastKnownInputTokens = null;
           lastUsageMessageCount = 0;
           turn = 0;
@@ -5536,7 +6313,8 @@ export class CoderRunner extends EventEmitter {
           }
         }
         // Allow the summarizer to run again in the next continuation window.
-        this.summarizedOnce = false;
+        this.summarizerRunCount = 0;
+        this.lastSummarizerTurn = -Infinity;
         // Reset token baseline so the next window re-evaluates compaction from scratch.
         lastKnownInputTokens = null;
         lastUsageMessageCount = 0;

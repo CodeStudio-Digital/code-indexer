@@ -71,10 +71,20 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'read_board',
   'set_agent_status',
   'kanban_read_my_card',
-  // Subordinate kanban tools (company mode — self-service card updates)
+  // Unified kanban tools (company mode — master + subordinate use these).
+  // Sub omits card_id and auto-resolves to assigned card; master passes
+  // card_id explicitly. Replaces the prior split `kanban_my_*` (sub) +
+  // `kanban_add_comment`/`kanban_update_checklist` (master) which
+  // confused agents about which variant to call.
+  'kanban_post_comment',
+  'kanban_update_objectives',
+  // Subordinate-only column transition (in_progress → review with
+  // constraint). Distinct from master's generic `kanban_move_card`.
+  'kanban_move_to_review',
+  // Deprecated aliases — kept in bootstrap so mid-session agents that
+  // learned the old names don't break. Remove after one release.
   'kanban_my_comment',
   'kanban_my_checklist',
-  'kanban_move_to_review',
   // Design System Creator tools (company mode — DS sessions). All four
   // were previously visible only via the `'bootstrap'` fallback in
   // `getToolTier`; registering them here makes the contract grep-able
@@ -305,9 +315,13 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   read_board: 'Read shared company board messages',
   set_agent_status: 'Update company agent status',
   kanban_read_my_card: 'Read assigned Kanban card details',
-  kanban_my_comment: 'Add a comment to your assigned Kanban card',
-  kanban_my_checklist: 'Check off or add objectives on your card',
+  // Unified surface (master + subordinate). Sub omits card_id.
+  kanban_post_comment: 'Add a comment to a Kanban card (omit card_id as sub)',
+  kanban_update_objectives: 'Add or check off objectives (omit card_id as sub)',
   kanban_move_to_review: 'Move your card to Review (done working)',
+  // Deprecated terse descriptions kept synced with deprecated tools.
+  kanban_my_comment: '[deprecated] use kanban_post_comment',
+  kanban_my_checklist: '[deprecated] use kanban_update_objectives',
   // ─── Bootstrap MCP ────────────────────────────────────────────
   mcp__get_project_pulse: 'Ultra-compact project overview (~100 tokens)',
   mcp__query_snapshots: 'Full-text search over project snapshots',

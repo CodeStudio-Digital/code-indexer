@@ -1,6 +1,6 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MessageSquare, Zap, HelpCircle, Package, ArrowRightLeft, Check, Copy } from 'lucide-react';
+import { MessageSquare, Zap, HelpCircle, Package, ArrowRightLeft, AlertOctagon, Check, Copy } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { copyText } from '../../lib/clipboard.js';
@@ -16,6 +16,9 @@ const KIND_ICONS: Record<string, React.FC<{ className?: string }>> = {
   question: HelpCircle,
   deliverable: Package,
   handoff: ArrowRightLeft,
+  // Blocker = the agent reported an impediment and its session ended.
+  // Visually distinct icon + the row gets red border (see render below).
+  blocker: AlertOctagon,
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -211,14 +214,32 @@ export const BoardPanel = memo(function BoardPanel({
           }
           const msg = item.message;
           const Icon = KIND_ICONS[msg.kind] ?? MessageSquare;
+          const isBlocker = msg.kind === 'blocker';
           return (
-            <div key={item.key} className="rounded-lg border p-3 text-xs space-y-1.5 bg-card">
+            <div
+              key={item.key}
+              className={cn(
+                'rounded-lg border p-3 text-xs space-y-1.5',
+                // Blocker stands out — red border + tinted bg so the
+                // user can spot the impediment in a long board feed
+                // without scrolling text. Matches the "session ended"
+                // signal the runner.abort() produces server-side.
+                isBlocker
+                  ? 'border-destructive/40 bg-destructive/[0.06]'
+                  : 'border bg-card',
+              )}
+            >
               <div className="flex items-center gap-1.5">
                 <Badge variant="outline" className={cn('text-[10px] px-1.5', getRoleColor(msg.author_role))}>
                   @{msg.author_role}
                 </Badge>
-                <Icon className="h-3 w-3 text-muted-foreground" />
-                <Badge variant="outline" className="text-[9px] px-1 text-muted-foreground">{msg.kind}</Badge>
+                <Icon className={cn('h-3 w-3', isBlocker ? 'text-destructive' : 'text-muted-foreground')} />
+                <Badge
+                  variant={isBlocker ? 'destructive' : 'outline'}
+                  className={cn('text-[9px] px-1', !isBlocker && 'text-muted-foreground')}
+                >
+                  {isBlocker ? 'BLOCKER' : msg.kind}
+                </Badge>
                 <span className="text-[10px] text-muted-foreground ml-auto">
                   {new Date(msg.created_at).toLocaleTimeString()}
                 </span>

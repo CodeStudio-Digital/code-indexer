@@ -25,6 +25,7 @@ import {
 import { Input } from '../../components/ui/input.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
 import { Switch } from '../../components/ui/switch.js';
+import { Textarea } from '../../components/ui/textarea.js';
 import {
   indexFolderStream,
   indexPdfStream,
@@ -61,6 +62,15 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
   const { t } = useTranslation('docs');
   const [open, setOpen] = useState(false);
   const [running, setRunning] = useState<{ kind: 'pdf' | 'url' | 'folder' } | null>(null);
+  /**
+   * Sinalizado pelo `IndexProgressStream.onFinished` quando a stream
+   * concluiu (done OU error). Distinto de `running`: o painel ainda
+   * aparece (com summary final), mas o operador já pode fechar via X
+   * do Dialog OU via "Fechar" interno — ambos convergem em
+   * `onStreamClosed`. Sem essa flag, o X ficava bloqueado pra sempre
+   * porque `running` só virava `null` no clique do botão interno.
+   */
+  const [streamFinished, setStreamFinished] = useState(false);
 
   // URL form state
   const [url, setUrl] = useState('');
@@ -68,8 +78,11 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
   const [maxPages, setMaxPages] = useState(50);
   const [maxDepth, setMaxDepth] = useState(2);
   const [sameOrigin, setSameOrigin] = useState(true);
-  // Substring URL must contain (e.g. "/6000.3/Documentation/Manual/").
-  // Empty = off. The server treats whitespace-only as off.
+  // Substring(s) the URL must contain — 1 path por linha (PR 13). Vazio
+  // = off. Server lê como newline-separated e dá OR (URL passa se contém
+  // QUALQUER linha). Caso de uso típico: indexar Manual + ScriptReference
+  // da mesma versão Unity em UMA source só. Backward compat: single-line
+  // continua válido (vira lista de 1 elemento).
   const [requiredPath, setRequiredPath] = useState('');
   // When on, the crawler runs an LLM on the seed page to surface URLs
   // the static HTML parser missed (JS-rendered nav trees, data
@@ -108,7 +121,11 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
   const [folderExcludeGlob, setFolderExcludeGlob] = useState(
     '**/{node_modules,.git,dist,build,.next,target,vendor,.cache}/**',
   );
-  const [folderMaxFiles, setFolderMaxFiles] = useState(5000);
+  // PR 11: default 5000→50000. Unity 6000.3 ScriptReference tem ~5-8k
+  // arquivos; .NET 8 reference tem ~30k; defaults grandes evitam o user
+  // ter que mexer no Avançado pra cobrir cenários comuns. Hard cap
+  // server-side é 500.000 (input `max` reflete isso).
+  const [folderMaxFiles, setFolderMaxFiles] = useState(50000);
   const [folderBypassGate, setFolderBypassGate] = useState(true);
   const [folderAdvancedOpen, setFolderAdvancedOpen] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -135,18 +152,26 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
     setFolderTitle('');
     setFolderIncludeGlob('**/*.{html,htm,md,markdown,pdf,txt}');
     setFolderExcludeGlob('**/{node_modules,.git,dist,build,.next,target,vendor,.cache}/**');
-    setFolderMaxFiles(5000);
+    setFolderMaxFiles(50000);
     setFolderBypassGate(true);
     setFolderAdvancedOpen(false);
     setFolderError(null);
     setRunning(null);
+    setStreamFinished(false);
   }
 
   function handleOpenChange(next: boolean) {
     if (!next) {
-      // Don't allow closing while ingestion is mid-stream — the user can
-      // hit the dialog X again after `done` lands.
-      if (running) return;
+      // Mid-stream: bloqueia o close pra evitar abortar uma indexação
+      // que pode estar a meio caminho (especialmente embedding, que é
+      // caro). Quando a stream conclui, `streamFinished` fica true e o
+      // X passa a funcionar — converge no mesmo `onStreamClosed` que o
+      // botão "Fechar" interno chama.
+      if (running && !streamFinished) return;
+      if (streamFinished) {
+        void onStreamClosed();
+        return;
+      }
       reset();
     }
     setOpen(next);
@@ -196,6 +221,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
 
   async function onStreamClosed() {
     setRunning(null);
+    setStreamFinished(false);
     await onAdded();
     setOpen(false);
     reset();
@@ -289,12 +315,13 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                     </div>
                     <div className="col-span-2 space-y-1">
                       <Label htmlFor="docs-required-path">{t('addSource.requiredPath')}</Label>
-                      <Input
+                      <Textarea
                         id="docs-required-path"
-                        type="text"
+                        rows={3}
                         placeholder={t('addSource.requiredPathPlaceholder')}
                         value={requiredPath}
                         onChange={(e) => setRequiredPath(e.target.value)}
+                        className="font-mono text-xs"
                       />
                       <p className="text-[11px] text-muted-foreground">
                         {t('addSource.requiredPathHelp')}
@@ -500,10 +527,13 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                         id="docs-folder-max-files"
                         type="number"
                         min={1}
-                        max={50000}
+                        max={500000}
                         value={folderMaxFiles}
                         onChange={(e) => setFolderMaxFiles(Number(e.target.value))}
                       />
+                      <p className="text-[11px] text-muted-foreground">
+                        {t('addSource.folderMaxFilesHelp')}
+                      </p>
                     </div>
                     <div className="flex items-start justify-between gap-3 pt-1">
                       <div className="flex-1">
@@ -563,6 +593,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
               )
             }
             onClose={onStreamClosed}
+            onFinished={() => setStreamFinished(true)}
           />
         )}
 
@@ -570,6 +601,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
           <IndexProgressStream
             start={(cb) => indexPdfStream(collection.id, pdfFile, cb, pdfTitle.trim() || undefined)}
             onClose={onStreamClosed}
+            onFinished={() => setStreamFinished(true)}
           />
         )}
 
@@ -592,6 +624,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
               )
             }
             onClose={onStreamClosed}
+            onFinished={() => setStreamFinished(true)}
           />
         )}
       </DialogContent>

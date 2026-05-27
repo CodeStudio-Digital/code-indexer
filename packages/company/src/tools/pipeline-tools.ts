@@ -35,6 +35,7 @@ function listPipelines(orchestrator: CompanyOrchestrator): CoderTool {
 
   return {
     name: 'list_pipelines',
+    // Auto-repeatable via `list_*` prefix.
     description:
       'List the pipelines available for this session. A pipeline is a stored graph of stages (role + task template) the master can execute via start_pipeline. Each entry returns id, name, description, scope (session-bound or global), node count, and the version number.',
     parameters,
@@ -122,6 +123,7 @@ function getPipelineStatus(orchestrator: CompanyOrchestrator): CoderTool {
 
   return {
     name: 'get_pipeline_status',
+    // Auto-repeatable via `_status` suffix.
     description:
       'Inspect a running or finished pipeline execution. Returns the execution row plus all node executions with status, attempt, kanban_card_id and a short output preview. Useful while a long pipeline is in flight.',
     parameters,

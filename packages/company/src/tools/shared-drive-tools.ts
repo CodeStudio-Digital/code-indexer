@@ -131,6 +131,7 @@ export const readSharedFile: CoderTool = {
 
 export const listSharedFiles: CoderTool = {
   name: 'list_shared_files',
+  // Auto-repeatable via `list_*` prefix.
   description: LIST_DESC,
   source: 'native',
   parameters: {

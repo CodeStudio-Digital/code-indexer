@@ -20,6 +20,10 @@ import { FileScanner } from '@mcp/indexer/indexer/scanner.js';
 import { TreeSitterExtractor, type TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js';
 import { getIndexJobPool, isIndexWorkersEnabled } from '@mcp/indexer/workers/indexJob/client.js';
 import { NullLshIndexingSink, type LshIndexingSink } from '@mcp/indexer/indexer/lsh-indexing-sink.js';
+import type {
+  IndexerFilesUpdatedEvent,
+  IndexerFilesUpdatedListener,
+} from '@mcp/indexer/indexer/indexer-events.js';
 
 /**
  * Enriches LLM-extracted symbol references with line numbers and snippets.
@@ -116,6 +120,14 @@ export class IndexAgent {
    */
   private lshSink: LshIndexingSink;
 
+  /**
+   * Fire-and-forget listeners notified after each `indexProject()` run
+   * completes (I3 — Sprint 1). See `./indexer-events.ts`. Listener
+   * throws are caught — they cannot affect the indexer's return value
+   * or other listeners. Default empty list = bit-identical to pre-I3.
+   */
+  private fileUpdatedListeners: IndexerFilesUpdatedListener[] = [];
+
   constructor(
     private db: CodeIndexDB,
     private provider: LLMProvider,
@@ -127,6 +139,35 @@ export class IndexAgent {
     lshSink?: LshIndexingSink,
   ) {
     this.lshSink = lshSink ?? new NullLshIndexingSink();
+  }
+
+  /**
+   * Register a listener for `files_updated` events. Returns an unsubscribe
+   * function. Listeners fire AFTER the run completes (and after webhooks),
+   * sequentially in registration order. Errors are caught and logged.
+   *
+   * Typical wiring (in `apps/http-api/server/deps.ts`):
+   *   `indexAgent.onFilesUpdated(makeHybridSearchCacheInvalidator(hybridSearch))`
+   */
+  onFilesUpdated(listener: IndexerFilesUpdatedListener): () => void {
+    this.fileUpdatedListeners.push(listener);
+    return () => {
+      const idx = this.fileUpdatedListeners.indexOf(listener);
+      if (idx >= 0) this.fileUpdatedListeners.splice(idx, 1);
+    };
+  }
+
+  /** Fire all listeners; swallow errors so one bad listener can't break others. */
+  private async emitFilesUpdated(event: IndexerFilesUpdatedEvent): Promise<void> {
+    for (const listener of this.fileUpdatedListeners) {
+      try {
+        await listener(event);
+      } catch (e) {
+        console.warn(
+          `[indexer] files_updated listener threw: ${(e as Error).message}`,
+        );
+      }
+    }
   }
 
   async indexProject(projectNameOrPath: string, options?: IndexOptions): Promise<IndexResult> {
@@ -465,6 +506,19 @@ export class IndexAgent {
         });
       } catch { /* ignore webhook errors */ }
     }
+
+    // 14b. Fire files_updated listeners (I3 — Sprint 1). Used by the
+    // search-cache invalidator so the LRU clears when files actually
+    // change. Errors are swallowed inside emitFilesUpdated.
+    await this.emitFilesUpdated({
+      projectId: project.id,
+      projectName: project.name,
+      runId,
+      indexedCount: indexedFiles.length,
+      removedCount: scanResult.toRemove?.length ?? 0,
+      status: status as 'completed' | 'failed',
+      finishedAtMs: Date.now(),
+    });
 
     // 15. Auto-snapshots (uses ALL files from DB, not just newly indexed)
     await this.generateAutoSnapshots(project);

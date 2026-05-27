@@ -205,6 +205,7 @@ export async function retrySourceEmbeddingsStream(
   sourceId: number,
   callbacks: {
     onStart?: (p: unknown) => void;
+    onScan?: (p: DocIngestScanFrame) => void;
     onProgress?: (p: DocIngestProgressFrame) => void;
     onDone?: (r: DocIngestDoneFrame) => void;
     onError?: (msg: string) => void;
@@ -225,6 +226,7 @@ export async function retryCollectionEmbeddingsStream(
   collectionId: number,
   callbacks: {
     onStart?: (p: unknown) => void;
+    onScan?: (p: DocIngestScanFrame) => void;
     onProgress?: (p: DocIngestProgressFrame) => void;
     onDone?: (r: DocIngestDoneFrame) => void;
     onError?: (msg: string) => void;
@@ -262,6 +264,7 @@ export async function indexUrlStream(
   input: { url: string; title?: string; crawl?: DocCrawlConfig },
   callbacks: {
     onStart?: (p: unknown) => void;
+    onScan?: (p: DocIngestScanFrame) => void;
     onProgress?: (p: DocIngestProgressFrame) => void;
     onDone?: (r: DocIngestDoneFrame) => void;
     onError?: (msg: string) => void;
@@ -286,6 +289,7 @@ export async function indexPdfStream(
   file: File,
   callbacks: {
     onStart?: (p: unknown) => void;
+    onScan?: (p: DocIngestScanFrame) => void;
     onProgress?: (p: DocIngestProgressFrame) => void;
     onDone?: (r: DocIngestDoneFrame) => void;
     onError?: (msg: string) => void;
@@ -329,6 +333,7 @@ export async function indexFolderStream(
   input: { path: string; title?: string; folder?: DocFolderConfig },
   callbacks: {
     onStart?: (p: unknown) => void;
+    onScan?: (p: DocIngestScanFrame) => void;
     onProgress?: (p: DocIngestProgressFrame) => void;
     onDone?: (r: DocIngestDoneFrame) => void;
     onError?: (msg: string) => void;
@@ -351,6 +356,7 @@ export async function reindexSourceStream(
   sourceId: number,
   callbacks: {
     onStart?: (p: unknown) => void;
+    onScan?: (p: DocIngestScanFrame) => void;
     onProgress?: (p: DocIngestProgressFrame) => void;
     onDone?: (r: DocIngestDoneFrame) => void;
     onError?: (msg: string) => void;
@@ -440,6 +446,18 @@ export interface DocIngestDoneFrame {
 }
 
 /**
+ * Pre-flight summary emitido por `indexFolder` apenas (não vem em
+ * URL/PDF). Mapeia 1:1 com `DocIngestScanSummary` no server. Permite
+ * a UI mostrar "Encontrados N · vou processar M (cap K)" antes do
+ * progress bar começar a se mexer.
+ */
+export interface DocIngestScanFrame {
+  totalMatches: number;
+  willProcess: number;
+  cap: number;
+}
+
+/**
  * Drain a `text/event-stream` body, dispatching each event to the matching
  * callback. Resolves on `done`, rejects on `error`. The Response is
  * expected to be a successful (`ok`) response — the caller already checked.
@@ -448,6 +466,7 @@ async function consumeEventStream(
   response: Response,
   callbacks: {
     onStart?: (p: unknown) => void;
+    onScan?: (p: DocIngestScanFrame) => void;
     onProgress?: (p: DocIngestProgressFrame) => void;
     onDone?: (r: DocIngestDoneFrame) => void;
     onError?: (msg: string) => void;
@@ -511,6 +530,7 @@ function dispatch(
   evt: { event: string; data: string },
   cb: {
     onStart?: (p: unknown) => void;
+    onScan?: (p: DocIngestScanFrame) => void;
     onProgress?: (p: DocIngestProgressFrame) => void;
     onDone?: (r: DocIngestDoneFrame) => void;
     onError?: (msg: string) => void;
@@ -525,6 +545,12 @@ function dispatch(
   switch (evt.event) {
     case 'start':
       cb.onStart?.(payload);
+      break;
+    case 'scan':
+      // Apenas folder sources emitem `scan`. URL/PDF não disparam — o
+      // case existe pra evitar warning "unhandled event" + permitir a
+      // UI mostrar pre-flight summary.
+      cb.onScan?.(payload as DocIngestScanFrame);
       break;
     case 'progress':
       cb.onProgress?.(payload as DocIngestProgressFrame);

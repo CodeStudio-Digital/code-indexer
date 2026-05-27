@@ -108,7 +108,7 @@ export function register(program: Command): void {
         userMessage: task,
         maxTurns: opts.maxTurns,
         planMode: opts.plan,
-        agent: opts.agent as 'explore' | 'plan' | 'build' | 'admin' | undefined,
+        agent: opts.agent as 'explore' | 'plan' | 'build' | 'admin' | 'spec' | undefined,
         profile: opts.profile as 'bootstrap' | 'navigate' | 'full' | 'auto' | undefined,
         worktree: worktreeOpt,
       });

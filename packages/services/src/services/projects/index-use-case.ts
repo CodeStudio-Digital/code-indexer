@@ -10,6 +10,7 @@ import { createProviderAsync } from '../../providers/factory.js';
 import type { LLMProvider } from '@mcp/indexer/indexer/providers/base.js';
 import { IndexAgent, type EmbeddingProgress } from '@mcp/indexer/indexer/indexer.js';
 import type { LshIndexingSink } from '@mcp/indexer/indexer/lsh-indexing-sink.js';
+import type { IndexerFilesUpdatedListener } from '@mcp/indexer/indexer/indexer-events.js';
 import { ProjectError } from './errors.js';
 
 export interface IndexProjectInput {
@@ -34,6 +35,14 @@ export interface IndexUseCaseDeps {
    * the vector store. Undefined → `NullLshIndexingSink` (no-op).
    */
   lshIndexingSink?: LshIndexingSink;
+  /**
+   * Optional listener fired after `indexProject()` completes (I3 — Sprint 1).
+   * Typically a `makeHybridSearchCacheInvalidator(hybridSearch)` from
+   * `@mcp/indexer/search/cache-invalidator.js` so search caches don't
+   * serve stale results after a re-index. Undefined → no listener
+   * registered → bit-identical to pre-I3.
+   */
+  filesUpdatedListener?: IndexerFilesUpdatedListener;
 }
 
 /** Payload passed to `onStart` before any work begins. Shape kept stable so SSE clients don't regress. */
@@ -242,7 +251,7 @@ export class IndexProjectUseCase {
 
   private buildAgent(provider: LLMProvider, configOverride?: IndexerConfig): IndexAgent {
     const { db, embeddingService, vectorStore, costTracker, webhookDispatcher, config, lshIndexingSink } = this.deps;
-    return new IndexAgent(
+    const agent = new IndexAgent(
       db,
       provider,
       embeddingService,
@@ -252,5 +261,11 @@ export class IndexProjectUseCase {
       configOverride ?? config,
       lshIndexingSink,
     );
+    // I3 — register the files_updated listener (HybridSearch cache
+    // invalidator in production). Skipped when not configured.
+    if (this.deps.filesUpdatedListener) {
+      agent.onFilesUpdated(this.deps.filesUpdatedListener);
+    }
+    return agent;
   }
 }

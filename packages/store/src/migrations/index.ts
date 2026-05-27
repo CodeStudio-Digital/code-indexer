@@ -120,6 +120,7 @@ import { coderToolCallsOutputCharsShaped102 } from './102_coder_tool_calls_outpu
 import { apiTokensTier104 } from './104_api_tokens_tier.js';
 import { appSettings105 } from './105_app_settings.js';
 import { agentBoardWatermarks106 } from './106_agent_board_watermarks.js';
+import { agentSupervision107 } from './107_agent_supervision.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -256,6 +257,7 @@ export const MIGRATIONS: Migration[] = [
   apiTokensTier104,
   appSettings105,
   agentBoardWatermarks106,
+  agentSupervision107,
 ];
 
 /**

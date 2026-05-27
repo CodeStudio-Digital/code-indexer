@@ -1177,13 +1177,31 @@ export class DocStore {
  * cryptic FTS errors instead of zero results.
  */
 /**
- * Trim + reject all-whitespace / empty. UI sends `''` for "not set", but
- * we want NULL in the DB so `IS NULL` checks elsewhere stay clean.
+ * Normaliza o input do operador antes de gravar em `crawl_required_path`.
+ *
+ * Histórico:
+ *   v1 (PR 5 / migration 089): single substring. `trim()` + null se vazio.
+ *   v2 (PR 13): multi-line. Cada linha é um path independente (semântica
+ *               OR no crawler). Reusa a mesma coluna TEXT — backend só
+ *               re-interpreta o conteúdo como newline-separated.
+ *
+ * Comportamento:
+ *   - null/undefined → null.
+ *   - Split por `\r?\n`, trim em cada linha, descarta blanks.
+ *   - Re-junta com `\n` (forma canônica no DB — fácil de inspecionar).
+ *   - Retorna null se NADA sobrou (UI passou whitespace-only).
+ *
+ * Backward compat: input single-line antigo continua single-line no DB
+ * (uma só linha, sem `\n`). O crawler usa `parseRequiredPaths` que lida
+ * com ambos os formatos.
  */
 function normalizeRequiredPath(raw: string | null | undefined): string | null {
   if (raw == null) return null;
-  const trimmed = String(raw).trim();
-  return trimmed.length > 0 ? trimmed : null;
+  const lines = String(raw)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return lines.length > 0 ? lines.join('\n') : null;
 }
 
 function sanitizeFtsQuery(raw: string): string {

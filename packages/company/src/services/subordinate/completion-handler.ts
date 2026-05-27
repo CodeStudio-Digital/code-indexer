@@ -38,6 +38,7 @@ import {
   readFinalAssistantText,
 } from '@mcp/company/services/subordinate/runner-wiring.js';
 import { logSkillOutcome } from '@mcp/company/services/subordinate/skill-telemetry.js';
+import { subordinateCompletionBus } from '@mcp/company/services/subordinate/completion-events.js';
 
 /**
  * Resume signature the completion handler invokes for auto-retry. Same
@@ -257,6 +258,27 @@ export function attachSubordinateCompletionHandler(
           }
         } catch { /* best-effort */ }
         logSkillOutcome(handle.session.id, agentRunId, 'success');
+        // C5 — fire-and-forget broadcast to any listeners that want to
+        // react to completions OFF the response path (telemetry, role
+        // history, kanban-sync extensions). Existing kanban/master
+        // notifiers above ran SYNC; this bus is purely additive.
+        try {
+          const finalTextForBus = readFinalAssistantText(handle.session.id) ?? undefined;
+          subordinateCompletionBus.emit({
+            agentRunId,
+            role,
+            outcome: 'completed',
+            finalText: finalTextForBus
+              ? finalTextForBus.length > 2000
+                ? finalTextForBus.slice(0, 2000) + '\n\n[…truncated]'
+                : finalTextForBus
+              : undefined,
+            kanbanCardId: deps.kanban.findCardForAgent(agentRunId) ?? null,
+            emittedAtMs: Date.now(),
+          });
+        } catch (e) {
+          console.warn('[company] completion-bus emit (success) threw:', e);
+        }
         // Inbox drain: any pending inter-agent message targeted at
         // this run (or its role) is injected as the next prompt.
         // Best-effort — failures here must not break the completion
@@ -270,11 +292,38 @@ export function attachSubordinateCompletionHandler(
         const detail = error ? ` — ${error}` : '';
         handleSubordinateFailure(agentRunId, role, `${reason}${detail}`, error ?? null, deps);
         logSkillOutcome(handle.session.id, agentRunId, 'failed', error ?? undefined);
+        // C5 — broadcast the failure event too. Listeners differentiate
+        // via `outcome: 'failed'` + `failureReason`.
+        try {
+          subordinateCompletionBus.emit({
+            agentRunId,
+            role,
+            outcome: 'failed',
+            failureReason: `${reason}${detail}`,
+            kanbanCardId: deps.kanban.findCardForAgent(agentRunId) ?? null,
+            emittedAtMs: Date.now(),
+          });
+        } catch (e) {
+          console.warn('[company] completion-bus emit (failed) threw:', e);
+        }
       }
     })
     .catch((err: unknown) => {
       const detail = err instanceof Error ? err.message : String(err);
       handleSubordinateFailure(agentRunId, role, `FAILED: ${detail}`, detail, deps);
+      // C5 — broadcast the synchronous-throw failure path too.
+      try {
+        subordinateCompletionBus.emit({
+          agentRunId,
+          role,
+          outcome: 'failed',
+          failureReason: `FAILED: ${detail}`,
+          kanbanCardId: deps.kanban.findCardForAgent(agentRunId) ?? null,
+          emittedAtMs: Date.now(),
+        });
+      } catch (e) {
+        console.warn('[company] completion-bus emit (caught) threw:', e);
+      }
     })
     .finally(() => {
       deps.runningIds.delete(agentRunId);

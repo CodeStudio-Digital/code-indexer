@@ -32,6 +32,21 @@ export interface PlanPrompt {
   kind?: 'informational' | 'mutating';
 }
 
+/**
+ * SDD mode artifact emitted by `submit_spec` (or
+ * `submit_specification_to_master`). `body` is the full markdown spec; the
+ * runner persisted it to `spec_path` (`.mcp/specs/<slug>-<unix>.md`).
+ */
+export interface SpecPrompt {
+  id: string;
+  name: string;
+  body: string;
+  spec_path: string;
+  parent_id?: string;
+  drive_path?: string;
+  resolved?: 'approved' | 'rejected';
+}
+
 export interface QuestionPrompt {
   id: string;
   question: string;
@@ -131,6 +146,7 @@ export type StreamBlock =
   | PreThinkStreamBlock
   | { type: 'tool'; call: ToolCallEvent }
   | { type: 'plan'; plan: PlanPrompt }
+  | { type: 'spec'; spec: SpecPrompt }
   | { type: 'question'; question: QuestionPrompt }
   | { type: 'tasks'; tasks: TasksPrompt }
   | { type: 'agents'; group: AgentsGroup };
@@ -201,13 +217,24 @@ export interface InteractionPending {
 }
 
 /**
- * Bus event payload emitted whenever one of the four loop-detection
- * guards (dup-call cap, strict / fuzzy doom-loop, dominance) fires.
- * Dashboard renders a banner so the user sees the intervention live
- * instead of having to scrape the server log. Apêndice 3 — silent-
- * failure work.
+ * Bus event payload emitted whenever a loop-detection guard
+ * (`dup-call-cap`, `doom-loop-strict`, `doom-loop-fuzzy`, `dominance`)
+ * fires OR the dup-result marker triggers (informational — content was
+ * prefixed but still delivered). Dashboard renders a banner so the user
+ * sees the intervention live instead of having to scrape the server
+ * log. Apêndice 3 — silent-failure work.
+ *
+ * Discriminated by `kind`: the four guard variants carry the full
+ * count/threshold/snapshot shape; `dup-result-marker` carries only
+ * the originalTurn/mode metadata (no snapshot — it's not a guard,
+ * it's a content-delivery hint and `severity` is `'informational'`,
+ * NOT a failure mode).
  */
-export interface ToolLoopIntervention {
+export type ToolLoopIntervention =
+  | (ToolLoopGuardIntervention & { receivedAt: number })
+  | (DupResultMarkerIntervention & { receivedAt: number });
+
+export interface ToolLoopGuardIntervention {
   kind: 'dup-call-cap' | 'doom-loop-strict' | 'doom-loop-fuzzy' | 'dominance';
   turn: number;
   toolName: string;
@@ -224,9 +251,44 @@ export interface ToolLoopIntervention {
     fuzzy: string[];
     dominance: Array<{ name: string; hadText: boolean }>;
   };
-  /** Wall-clock when the dashboard received the event — useful for
-   *  auto-dismiss / sorting when multiple alerts stack. */
-  receivedAt: number;
+}
+
+export interface DupResultMarkerIntervention {
+  kind: 'dup-result-marker';
+  /**
+   * `'informational'` for the light + medium tiers (content delivered
+   * with a marker prefix, no error). `'refused'` for the hard-refuse
+   * tier (content REPLACED with refusal text, `is_error` set on the
+   * tool result). The dashboard banner only renders the latter — the
+   * light/medium tiers don't deserve a permanent visual interrupt.
+   */
+  severity: 'informational' | 'refused';
+  /**
+   * Three-tier escalation indicator, derived from the runner's
+   * `matches.length` count against `RESULT_DUP_ESCALATION_{WARN,REFUSE}`:
+   *   - `'light'`   → 2nd identical hit (`matches.length === 1`),
+   *                   light marker prefixed, content delivered.
+   *   - `'medium'`  → WARN tier reached (`matches.length >= _WARN`),
+   *                   sharper marker prefixed, content still delivered.
+   *   - `'refused'` → REFUSE tier reached (`matches.length >= _REFUSE`),
+   *                   content replaced with refusal text.
+   */
+  escalationLevel: 'light' | 'medium' | 'refused';
+  /** Human-readable hit number for this identical content (1 = first
+   *  fetch; markers never fire on 1; 2 = first duplicate; 3 = warn tier;
+   *  4+ = refuse tier with default thresholds). */
+  hitCount: number;
+  toolName: string;
+  /** Turn where the original duplicate content was first seen. */
+  originalTurn: number;
+  currentTurn: number;
+  /** `'light'` = full content delivered with marker prefix.
+   *  `'medium'` = head excerpt + output_id pointer (large outputs).
+   *  Only meaningful when `escalationLevel !== 'refused'`. */
+  mode: 'light' | 'medium';
+  /** True when the original tool_result block was elided by
+   *  post-compact cleanup. Drives the marker text variant. */
+  priorIsCompacted: boolean;
 }
 
 /**

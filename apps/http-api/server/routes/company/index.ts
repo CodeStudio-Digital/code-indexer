@@ -22,6 +22,7 @@ import { mountCompanySandboxRoutes } from './sandbox.js';
 import { mountCompanyServicesRoutes } from './services.js';
 import { mountQaRoutes } from './qa/index.js';
 import { mountCompanyRecommendationsRoutes } from './recommendations.js';
+import { mountReestablishMasterRoute } from './reestablish-master.js';
 
 export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyTemplateRoutes(app, deps);
@@ -49,4 +50,6 @@ export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountQaRoutes(app, deps);
   // Pipeline-backed recommendations (RolePipeline + KanbanPriorityPipeline).
   mountCompanyRecommendationsRoutes(app, deps);
+  // Phase H — on-demand recovery agent (audits kanban + state, repairs).
+  mountReestablishMasterRoute(app, deps);
 }

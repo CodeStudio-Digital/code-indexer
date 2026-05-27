@@ -34,6 +34,10 @@ import {
   markEnded,
   type CoderRunBus,
 } from '../coder-bus.js';
+import {
+  publishSupervisorIncident,
+  type SupervisorIncidentEnvelope,
+} from './supervisor-incident-bus.js';
 
 interface PoolEntry {
   host: WorkerHost;
@@ -119,6 +123,28 @@ export class WorkerOrchestratorPool {
 
   has(sessionId: number): boolean {
     return this.entries.has(sessionId);
+  }
+
+  /**
+   * Phase 3.1 — call a supervisor method on the worker for a session.
+   * Returns null when the session has no active worker (didn't spawn or
+   * already evicted). Caller is responsible for catching timeouts.
+   */
+  async supervisorRpc<R = unknown>(
+    sessionId: number,
+    method: string,
+    args: unknown[] = [],
+  ): Promise<R | null> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return null;
+    entry.lastTouchedAt = Date.now();
+    const bridge = entry.host.requireBridge();
+    return (await bridge.request('supervisor.rpc', { method, args }, { timeoutMs: 10_000 })) as R;
+  }
+
+  /** Iterate session ids of currently-active workers. */
+  activeSessionIds(): number[] {
+    return Array.from(this.entries.keys());
   }
 
   /**
@@ -230,9 +256,37 @@ export class WorkerOrchestratorPool {
       markEnded(bus, env.event, env.data);
     });
 
+    // ─── Supervisor wire-back (Sprint 4 Phase 1.6) ───────────────
+    //
+    // Each company-worker boots its own AgentSupervisor (see
+    // `apps/http-api/workers/company-worker.ts`). Incidents detected
+    // there fire `supervisor.incident`; boot ack fires
+    // `supervisor.boot`. Main side just logs — Phase 3 will pipe
+    // these into a structured SSE topic for the dashboard.
+    const offSupervisorBoot = bridge.on('supervisor.boot', (payload) => {
+      const env = payload as { sessionId: number };
+      console.log(`[supervisor:worker-${env.sessionId}] started (MCP_SUPERVISOR_ENABLED=1)`);
+    });
+    const offSupervisorIncident = bridge.on('supervisor.incident', (payload) => {
+      const incident = payload as SupervisorIncidentEnvelope;
+      const agentTag = incident.agentRunId == null ? 'n/a' : String(incident.agentRunId);
+      console.warn(
+        `[supervisor:worker-${incident.sessionId}] incident ${incident.kind}: agent=${agentTag} ${incident.detail}`,
+      );
+      // Phase 3.2 — fan-out to the process-wide incident bus so SSE
+      // subscribers (dashboard) see the event live.
+      try {
+        publishSupervisorIncident(incident);
+      } catch {
+        /* best-effort */
+      }
+    });
+
     const detachBusMirror = (): void => {
       try { offEvent(); } catch { /* best-effort */ }
       try { offEnd(); } catch { /* best-effort */ }
+      try { offSupervisorBoot(); } catch { /* best-effort */ }
+      try { offSupervisorIncident(); } catch { /* best-effort */ }
     };
 
     const orchestrator = createOrchestratorProxy(host, sessionId, bus);

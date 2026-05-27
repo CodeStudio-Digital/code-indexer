@@ -67,6 +67,26 @@ export interface GitBranch {
 }
 
 /**
+ * Single entry from `git stash list`. The frontend renders these in the
+ * Stash tab with pop/apply/drop/diff actions. `index` is the stable
+ * position from `stash list --format=%gd` (e.g. `stash@{0}`) — used as
+ * the ref for subsequent stash sub-commands. `name` is the short label
+ * extracted from the description ("WIP on branch: ..." → "WIP on branch").
+ */
+export interface GitStashEntry {
+  /** Stash ref — exact string passed to pop/apply/drop (e.g. `stash@{0}`). */
+  index: string;
+  /** Short SHA of the stash commit. */
+  shortSha: string;
+  /** Branch the stash was created on (parsed from the auto-generated message). */
+  branch: string | null;
+  /** User-provided message, or the auto "WIP on <branch>: <sha> <subject>". */
+  message: string;
+  /** ISO-strict date when the stash was created. */
+  date: string;
+}
+
+/**
  * Output of a single git operation run via aiExecute. The frontend
  * uses `ok` to color the row and `output`/`stderr` to surface output.
  */
@@ -172,6 +192,78 @@ export interface ProjectGitApi {
     input: { projectId: number; commits: string[]; noCommit?: boolean },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
+
+  // ── Remote sync ────────────────────────────────────────────
+  /**
+   * Push the current (or given) branch to remote. `setUpstream: true`
+   * publishes the local branch when it doesn't yet track a remote ref
+   * (equivalent to `git push -u`). Forced pushes use `--force-with-lease`
+   * defensively — never `--force` — so a stale ref errors out instead
+   * of silently overwriting someone else's commits.
+   */
+  push(
+    input: {
+      projectId: number;
+      remote?: string;
+      branch?: string;
+      force?: boolean;
+      setUpstream?: boolean;
+    },
+    ctx: ApiContext,
+  ): Promise<GitRunResult>;
+
+  /** Fetch refs from a remote. `prune: true` removes stale tracking refs. */
+  fetch(
+    input: { projectId: number; remote?: string; prune?: boolean },
+    ctx: ApiContext,
+  ): Promise<GitRunResult>;
+
+  /**
+   * Pull from a remote into the current branch. `rebase: true` runs
+   * `git pull --rebase` (the JetBrains "Update Project" default) which
+   * keeps history linear when there's nothing local to merge.
+   */
+  pull(
+    input: { projectId: number; remote?: string; branch?: string; rebase?: boolean },
+    ctx: ApiContext,
+  ): Promise<GitRunResult>;
+
+  // ── Stash ──────────────────────────────────────────────────
+  /** List all stashes in the repo (newest first). Empty array when none. */
+  stashList(input: { projectId: number }, ctx: ApiContext): Promise<GitStashEntry[]>;
+
+  /**
+   * Create a new stash from the current working tree.
+   *
+   *   - `message`: optional human label (`git stash push -m <message>`).
+   *   - `includeUntracked`: when true, includes untracked files
+   *     (`--include-untracked` / `-u`). Defaults to false; matches `git
+   *     stash` CLI default to avoid surprising the user with files they
+   *     didn't think to track.
+   *   - `keepIndex`: when true, leaves the index intact (`--keep-index`),
+   *     useful for "stash everything except what I'm about to commit".
+   */
+  stashSave(
+    input: {
+      projectId: number;
+      message?: string;
+      includeUntracked?: boolean;
+      keepIndex?: boolean;
+    },
+    ctx: ApiContext,
+  ): Promise<GitRunResult>;
+
+  /** Apply `ref` and remove it from the stash list (`git stash pop`). */
+  stashPop(input: { projectId: number; ref: string }, ctx: ApiContext): Promise<GitRunResult>;
+
+  /** Apply `ref` without removing it (`git stash apply`). */
+  stashApply(input: { projectId: number; ref: string }, ctx: ApiContext): Promise<GitRunResult>;
+
+  /** Delete `ref` from the stash list (`git stash drop`). */
+  stashDrop(input: { projectId: number; ref: string }, ctx: ApiContext): Promise<GitRunResult>;
+
+  /** Unified diff of `ref` against its parent — for the "view" action. */
+  stashShow(input: { projectId: number; ref: string }, ctx: ApiContext): Promise<GitDiffResult>;
 
   // ── AI-assisted git ────────────────────────────────────────
   /**

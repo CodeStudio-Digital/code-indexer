@@ -212,6 +212,19 @@ export class AnthropicChatProvider implements ChatProvider {
       const helper = this.client.beta.messages.stream(
         params as Parameters<typeof this.client.beta.messages.stream>[0],
       );
+      // Prevent the SDK's "unhandled rejection on stream error" behaviour
+      // (see @anthropic-ai/sdk MessageStream.ts:382-394 — when neither
+      // `.done()` nor `.finalMessage()` was awaited AND no 'error'
+      // listener is registered, the SDK synthesises `Promise.reject(error)`
+      // on the next tick). Real errors still propagate through the
+      // `for await (const event of stream)` consumer below — the listener
+      // exists ONLY to flip the helper's internal `#catchingPromiseCreated`
+      // flag so we don't pollute the log with `UnhandledPromiseRejection`
+      // when the consumer breaks out of iteration on `this.aborted` and
+      // `finalMessage()` never runs.
+      helper.on('error', () => {
+        /* swallowed — iterator path owns the real error handling */
+      });
       const wrapped = await helper.withResponse();
       stream = wrapped.data as AsyncIterable<AnthropicStreamEvent>;
       finalMessage = () => helper.finalMessage() as Promise<{ usage?: Partial<AnthropicStreamUsage> }>;
@@ -224,6 +237,11 @@ export class AnthropicChatProvider implements ChatProvider {
       });
     } else {
       const helper = this.client.messages.stream(params as Anthropic.MessageStreamParams);
+      // Same rationale as the beta branch above — see MessageStream.ts
+      // :382-394 in the SDK for why this listener is required.
+      helper.on('error', () => {
+        /* swallowed — iterator path owns the real error handling */
+      });
       const wrapped = await helper.withResponse();
       stream = wrapped.data as AsyncIterable<AnthropicStreamEvent>;
       finalMessage = () => helper.finalMessage() as Promise<{ usage?: Partial<AnthropicStreamUsage> }>;

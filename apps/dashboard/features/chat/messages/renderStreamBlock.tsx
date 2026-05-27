@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { AlertCircle, Brain, ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
 import type { PreThinkStreamBlock, StreamBlock } from '../../../hooks/agent-stream/types.js';
 import { PlanPromptView } from '../prompts/PlanPromptView.js';
+import { SpecPromptView } from '../prompts/SpecPromptView.js';
 import { QuestionPromptView } from '../prompts/QuestionPromptView.js';
 import { TaskListReview } from '../prompts/TaskListReview.js';
 import type { PromptHandlers } from '../types.js';
@@ -111,6 +112,20 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
   }
   if (block.type === 'plan') {
     return <PlanPromptView key={`pl-${block.plan.id}`} plan={block.plan} onResponse={handlers.onPlanResponse} />;
+  }
+  if (block.type === 'spec') {
+    return (
+      <SpecPromptView
+        key={`sp-${block.spec.id}`}
+        spec={block.spec}
+        onResponse={
+          handlers.onSpecResponse ??
+          (async () => {
+            /* no-op when the host did not wire onSpecResponse — keeps UI tolerant */
+          })
+        }
+      />
+    );
   }
   if (block.type === 'tasks') {
     return (

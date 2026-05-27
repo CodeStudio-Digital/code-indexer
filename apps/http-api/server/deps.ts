@@ -98,6 +98,10 @@ import {
   createSearchBundle,
   deriveKindLabel,
 } from '@mcp/indexer/bootstrap/index.js';
+import { createReranker } from '@mcp/indexer/search/reranker.js';
+import { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
+import { setGlobalRecentFilesTouchSink } from '@mcp/code-agent/tools/global-recent-files.js';
+import { resolve as pathResolveNode, sep as pathSep } from 'node:path';
 import type { ChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 
 /**
@@ -134,6 +138,14 @@ export interface SearchDeps {
   embeddingService: EmbeddingService;
   vectorStore: VectorStore;
   hybridSearch: HybridSearch;
+  /**
+   * I2 — process-wide hot cache of recently-touched files. Always
+   * constructed (so tools can `touch()` regardless of feature flag), but
+   * `HybridSearch` only consults it when `MCP_PIPELINES_RECENT_FILES_SOURCE=1`.
+   * Tools wiring the touch() calls live elsewhere; this exposure makes
+   * the source reachable for them.
+   */
+  recentFilesSource: RecentFilesSource;
   /** Resolved kind names for diagnostics (avoid importing concrete classes). */
   embeddingKind: string;
   vectorStoreKind: string;
@@ -432,8 +444,82 @@ export function createDeps(): ServerDeps {
   // is the fallback when no row is marked default.
   const providerStore = createAndSeedProviderStore(config.dbPath);
 
+  // Reranker is wired here for parity with mcp-server (apps/mcp-server/context.ts:43)
+  // and CLI snapshots (apps/cli/commands/snapshots.ts:67). Without this, the
+  // HybridSearch instance served to the Electron renderer via IPC has a
+  // NullReranker, which makes mode='hybrid' worse than 'fts' on code queries
+  // (measured: hybrid R@5 0.64 vs fts R@5 0.80 in bench/results/search-baseline-2026-05-25).
+  // `createReranker()` returns NullReranker when COHERE_API_KEY and
+  // MCP_RERANK_WORKER_URL are both unset — zero behavior change in that case.
+  //
+  // I2 — `RecentFilesSource` is constructed unconditionally but only
+  // consulted by HybridSearch when `MCP_PIPELINES_RECENT_FILES_SOURCE=1`
+  // is set. The source starts empty; downstream code is expected to call
+  // `recentFilesSource.touch(...)` whenever a file is read/edited via
+  // the agent (TODO: wire touches from `Read`/`Edit` tool dispatchers in
+  // a follow-up PR). Without touches the source stays empty → recent
+  // stream contributes 0 results → legacy 2-stream RRF path runs unchanged.
+  const recentFilesSource = new RecentFilesSource();
+  // I1 — pipeline telemetry store is constructed early so the V2
+  // search pipeline (gated by MCP_PIPELINES_INDEXER_SEARCH_V2=1) can
+  // emit per-stage rows from inside HybridSearch. The same instance is
+  // reused below as the SearchDeps `pipelineTelemetryStore` so the
+  // admin panel sees a unified view.
+  const pipelineTelemetryStore = new PipelineTelemetryStore(db.raw());
+  const pipelineTelemetrySink = new SqliteTelemetrySink(pipelineTelemetryStore);
   const { embeddingService, vectorStore, searchableVectorStore, hybridSearch } =
-    createSearchBundle(db, providerStore);
+    createSearchBundle(
+      db,
+      providerStore,
+      createReranker(),
+      recentFilesSource,
+      pipelineTelemetrySink,
+    );
+
+  // I2 follow-up wiring — the fs tools (read_file/edit_file/write_file/
+  // create_file/multi_edit) call `emitRecentFileTouched({ absolutePath, kind })`
+  // after a successful op. We resolve the abs path to (projectId, fileId)
+  // by matching the longest project root prefix, then query the files
+  // table. Sub-ms; failures are swallowed (touch is best-effort). Without
+  // this sink the cache stays empty — even with MCP_PIPELINES_RECENT_FILES_SOURCE=1
+  // the source would contribute nothing.
+  const findFileStmt = db
+    .raw()
+    .prepare(`SELECT id FROM files WHERE project_id = ? AND path = ? LIMIT 1`);
+  setGlobalRecentFilesTouchSink((event) => {
+    try {
+      const absolutePath = pathResolveNode(event.absolutePath);
+      // Match the project whose root_path is the longest prefix of absolutePath.
+      // listProjects() is small (typically <20 entries) — O(N) scan is fine.
+      const projects = db.listProjects();
+      let bestProject: { id: number; root: string } | null = null;
+      for (const p of projects) {
+        if (!p.root_path) continue;
+        const rootResolved = pathResolveNode(p.root_path);
+        const rootWithSep = rootResolved.endsWith(pathSep) ? rootResolved : rootResolved + pathSep;
+        const isUnder = absolutePath === rootResolved || absolutePath.startsWith(rootWithSep);
+        if (!isUnder) continue;
+        if (!bestProject || rootResolved.length > bestProject.root.length) {
+          bestProject = { id: p.id, root: rootResolved };
+        }
+      }
+      if (!bestProject) return;
+      // Project-relative path uses forward slashes in the DB (indexer
+      // normalizes them); replicate that here so the WHERE matches.
+      const relSep = absolutePath.slice(bestProject.root.length).replace(/^[\\/]+/, '');
+      const relForward = relSep.split(pathSep).join('/');
+      const row = findFileStmt.get(bestProject.id, relForward) as { id?: number } | undefined;
+      if (!row?.id) return; // file not indexed yet — touch() needs a fileId
+      recentFilesSource.touch({
+        projectId: bestProject.id,
+        fileId: row.id,
+        filePath: relForward,
+        kind: event.kind,
+      });
+    } catch {
+      // Best-effort: a misbehaving touch must never break a tool call.
+    }
+  });
 
   const snapshotService = new SnapshotService(db, embeddingService, searchableVectorStore);
   const sessionStore = new SessionStore(config.dbPath);
@@ -451,10 +537,11 @@ export function createDeps(): ServerDeps {
   const chromeServiceStore = new ChromeServiceStore(db.raw());
   const designSystemStore = new DesignSystemStore(db.raw());
   const verdaccioStore = new VerdaccioStore(db.raw());
-  const pipelineTelemetryStore = new PipelineTelemetryStore(db.raw());
+  // I1 — pipelineTelemetryStore + pipelineTelemetrySink are declared
+  // EARLIER (before createSearchBundle) so the V2 search path can emit
+  // per-stage telemetry. The references here are the same instances.
   const pipelineBindingsStore = new PipelineProviderBindingsStore(db.raw());
   const pipelineProviderResolver = new PipelineProviderResolver(pipelineBindingsStore, providerStore);
-  const pipelineTelemetrySink = new SqliteTelemetrySink(pipelineTelemetryStore);
 
   // Tool-selection plumbing. The embed adapter wraps the existing indexer
   // EmbeddingService into a single-text `EmbeddingFn`. ToolEmbeddingStore is
@@ -744,6 +831,7 @@ export function createDeps(): ServerDeps {
     embeddingService,
     vectorStore,
     hybridSearch,
+    recentFilesSource,
     sessionStore,
     companyStore,
     companySandboxStore,

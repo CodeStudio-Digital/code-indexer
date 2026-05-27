@@ -25,7 +25,7 @@
  */
 import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 
-export type AgentId = 'explore' | 'plan' | 'build' | 'admin';
+export type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec';
 
 export interface AgentDefinition {
   id: AgentId;
@@ -90,10 +90,19 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     defaultTemperature: 0.1,
     confirmBeforeIrreversible: true,
   },
+  spec: {
+    id: 'spec',
+    description:
+      'Spec-driven authoring. Navigate tier with dedicated spec gate — must submit_spec and get human approval before mutating the workspace. One spec → N tasks/PRs.',
+    profile: 'navigate',
+    planMode: false,
+    maxTurns: 120,
+    defaultTemperature: 0.3,
+  },
 };
 
 export function isAgentId(v: string): v is AgentId {
-  return v === 'explore' || v === 'plan' || v === 'build' || v === 'admin';
+  return v === 'explore' || v === 'plan' || v === 'build' || v === 'admin' || v === 'spec';
 }
 
 export function getAgent(id: AgentId): AgentDefinition {

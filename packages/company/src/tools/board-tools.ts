@@ -31,11 +31,64 @@ function postToBoard(
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      content: { type: 'string', description: 'Message content. Use @role to mention other agents (e.g. @master, @frontend, @qa).' },
+      content: {
+        type: 'string',
+        description: 'Message content. Use @role to mention other agents (e.g. @master, @frontend, @qa).',
+      },
       kind: {
         type: 'string',
-        enum: ['message', 'decision', 'question', 'deliverable', 'handoff'],
-        description: 'Type of post (default: message). Use "decision" for important choices, "question" for queries, "deliverable" for completed work, "handoff" for passing work to another agent.',
+        enum: ['message', 'decision', 'question', 'deliverable', 'handoff', 'blocker'],
+        description:
+          'Type of post (default: message). Use "decision" for important choices, "question" for queries, ' +
+          '"deliverable" for completed work, "handoff" for passing work to another agent. ' +
+          '"blocker" = IMPEDIMENT — use ONLY when you genuinely cannot proceed without human ' +
+          'intervention (missing tool/permission, ambiguous external state, contradictory instructions). ' +
+          'Calling with kind="blocker" posts the message AND ENDS YOUR SESSION; the user will see the ' +
+          'impediment, decide how to intervene, and their next message will resurrect you with full ' +
+          'history. Reserve this for true dead-ends — for normal questions use awaits_response instead.',
+      },
+      // ── Interactive mode ──
+      // When set, the post BLOCKS the runner and renders a card with
+      // buttons / freeform input. The runner resumes once the user
+      // responds via the existing /respond-plan or /answer endpoint.
+      // This unifies the prior dichotomy of "post_to_board (fire and
+      // forget)" vs "submit_plan / ask_user (blocking with UI)" into
+      // a single tool — the agent decides per-call whether it needs
+      // a structured response.
+      awaits_response: {
+        type: 'object',
+        description:
+          'Optional. When set, BLOCKS this agent until the user responds via an interactive card ' +
+          '(approve/reject buttons, choice buttons, or freeform text). Use this when your message ' +
+          'requires explicit acknowledgement — never post a plain message and loop waiting for the ' +
+          "user to type a reply, the user has no structured way to do that.",
+        properties: {
+          mode: {
+            type: 'string',
+            enum: ['approval', 'choice', 'freeform'],
+            description:
+              '"approval" — Approve/Reject buttons + optional feedback (like submit_plan). ' +
+              '"choice"   — N labeled buttons; pass `options`. May coexist with `allow_freeform`. ' +
+              '"freeform" — open text input only (like ask_user without options).',
+          },
+          options: {
+            type: 'array',
+            description: 'For mode="choice". Array of {label, value} button definitions.',
+            items: {
+              type: 'object',
+              properties: {
+                label: { type: 'string' },
+                value: { type: 'string' },
+              },
+              required: ['label', 'value'],
+            },
+          },
+          allow_freeform: {
+            type: 'boolean',
+            description: 'For mode="choice". When true, the user can also type a custom answer.',
+          },
+        },
+        required: ['mode'],
       },
     },
     required: ['content'],
@@ -43,24 +96,151 @@ function postToBoard(
 
   return {
     name: 'post_to_board',
-    description: 'Post a message to the shared company board. All agents can read it. Use @role to mention specific agents.',
+    description:
+      'Post a message to the shared company board.\n\n' +
+      'Two modes:\n' +
+      '  - Plain (default): fire-and-forget — your post appears in the feed; no response expected.\n' +
+      "  - Interactive (`awaits_response: { mode }`): your post becomes a card with buttons; " +
+      'YOUR RUNNER BLOCKS until the user responds. Use this when your message requires explicit ' +
+      'approval/decision/answer (e.g. "may I start coding card #316?", "which strategy?", ' +
+      '"what name should I use?").\n\n' +
+      'Prefer interactive mode over a plain post + waiting in a loop — the loop wastes turns and ' +
+      'the user has no structured way to reply.\n\n' +
+      'Mention agents via @role.',
     parameters,
     source: 'native',
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const content = args.content as string;
       const kind = (args.kind as string) ?? 'message';
+      const awaits = args.awaits_response as
+        | {
+            mode: 'approval' | 'choice' | 'freeform';
+            options?: Array<{ label: string; value: string }>;
+            allow_freeform?: boolean;
+          }
+        | undefined;
 
-      try {
-        orchestrator.postToBoard(
-          agentRole,
-          agentRunId,
-          kind as 'message' | 'decision' | 'question' | 'deliverable' | 'handoff',
-          content,
-        );
-        return ok(`Posted to board as ${agentRole} [${kind}]`);
-      } catch (e) {
-        return err(`Failed to post: ${e instanceof Error ? e.message : String(e)}`);
+      // ── Fire-and-forget path (current behaviour, byte-identical) ──
+      if (!awaits) {
+        try {
+          orchestrator.postToBoard(
+            agentRole,
+            agentRunId,
+            kind as 'message' | 'decision' | 'question' | 'deliverable' | 'handoff' | 'blocker',
+            content,
+          );
+          // ── Blocker variant ──
+          // Posts THEN aborts the runner. The agent is reporting an
+          // impediment it can't resolve; the master ends gracefully
+          // and the user sees the board entry. When the user later
+          // sends a new message, `MasterLifecycle.sendUserMessage`
+          // detects the master is ended and resurrects it with full
+          // history. This is the "the runner stops here, human takes
+          // over" path — distinct from `awaits_response` which
+          // expects a structured reply mid-run.
+          if (kind === 'blocker') {
+            if (ctx.runner) {
+              // Schedule the abort on the next microtask so the
+              // tool_result still gets queued through the normal
+              // dispatch path. Aborting synchronously here would
+              // race with the runner's own "result emitted" book-
+              // keeping and risk dropping the post from history.
+              queueMicrotask(() => ctx.runner?.abort());
+            }
+            return ok(
+              `Posted blocker to board as ${agentRole}. Session is ending — the user will see the ` +
+                `impediment and decide how to intervene. Their next message will resurrect you with ` +
+                `full history preserved.`,
+            );
+          }
+          return ok(`Posted to board as ${agentRole} [${kind}]`);
+        } catch (e) {
+          return err(`Failed to post: ${e instanceof Error ? e.message : String(e)}`);
+        }
       }
+
+      // ── Interactive path ──
+      // Reuses the existing `plan_posted` / `question_posted` event
+      // channels so the dashboard's BoardPanel + PlanPromptView /
+      // QuestionPromptView render the card with no UI changes.
+      const runner = ctx.runner;
+      if (!runner) {
+        // Fail-loud rather than silently degrade to a plain post:
+        // the agent explicitly asked for a structured reply, so
+        // returning ok() without one would defeat the whole point.
+        return err(
+          'post_to_board: awaits_response requires runner context (not available in this dispatch path). ' +
+            'Either retry without awaits_response, or use submit_plan / ask_user.',
+        );
+      }
+
+      const id = `board_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+      if (awaits.mode === 'approval') {
+        ctx.recordPlan?.(id, content);
+        runner.emit('plan_posted', {
+          type: 'plan',
+          id,
+          plan: content,
+          kind: 'mutating',
+        });
+        const raw = await runner.waitForUserInput();
+        let parsed: { approved?: boolean; feedback?: string; aborted?: boolean; interrupted?: boolean };
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          parsed = { feedback: raw };
+        }
+        if (parsed.aborted) return err('User aborted before responding to post.');
+        if (parsed.interrupted) {
+          return err(`post_to_board interrupted: ${parsed.feedback ?? '(no details)'}`);
+        }
+        return ok(
+          parsed.approved
+            ? `Post approved by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''}`
+            : `Post rejected by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''} Revise and post again if needed.`,
+        );
+      }
+
+      // mode === 'choice' | 'freeform'
+      const options = awaits.mode === 'choice' ? awaits.options ?? [] : [];
+      const allowFreeform = awaits.mode === 'freeform' || !!awaits.allow_freeform;
+      // Validate choice options to fail loud on bad input from the
+      // model (duplicate values would confuse the radio state on the
+      // dashboard).
+      if (awaits.mode === 'choice') {
+        if (options.length < 1) {
+          return err('post_to_board: mode="choice" requires at least 1 option.');
+        }
+        const seen = new Set<string>();
+        for (const o of options) {
+          if (typeof o.label !== 'string' || typeof o.value !== 'string') {
+            return err('post_to_board: each option must have string `label` and `value`.');
+          }
+          if (seen.has(o.value)) return err(`post_to_board: duplicate option value "${o.value}".`);
+          seen.add(o.value);
+        }
+      }
+      runner.emit('question_posted', {
+        type: 'question',
+        id,
+        question: content,
+        options,
+        allowFreeform,
+        header: kind === 'decision' ? 'Decision' : 'Question',
+      });
+      const raw = await runner.waitForUserInput();
+      let parsed: { answer?: string; aborted?: boolean; interrupted?: boolean };
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = { answer: raw };
+      }
+      if (parsed.aborted) return err('User aborted before responding to post.');
+      if (parsed.interrupted) {
+        return err(`post_to_board interrupted: ${parsed.answer ?? '(no details)'}`);
+      }
+      return ok(`User responded: ${parsed.answer ?? '(empty)'}`);
     },
   };
 }
@@ -91,6 +271,11 @@ function readBoard(
 
   return {
     name: 'read_board',
+    // Board polling is canonical — master/subs re-read repeatedly to
+    // discover new posts. With `from_watermark: true` results change
+    // each call; without it, identical content returns are normal
+    // "no new messages" signal. Either way, no dedup-marker.
+    repeatable: true,
     description:
       'Read messages from the shared company board. Use `from_watermark: true` + `mark_seen: true` to do incremental reads without keeping `since_id` in your own context.',
     parameters,

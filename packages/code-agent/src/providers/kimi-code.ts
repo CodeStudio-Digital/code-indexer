@@ -2,6 +2,13 @@ import OpenAI from 'openai';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import type { JsonSchema } from '@mcp/code-agent/core/tool.js';
+import {
+  kimiDebugEnabled,
+  logKimiFinish,
+  logKimiRequest,
+  logKimiToolChunk,
+  logKimiToolFlush,
+} from '@mcp/code-agent/providers/kimi-code-debug.js';
 
 type KimiMsg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 export type KimiCodeThinkingMode = 'auto' | 'enabled' | 'disabled';
@@ -34,14 +41,7 @@ export class KimiCodeChatProvider implements ChatProvider {
 
   async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
     const messages = toKimiMessages(req.system, req.messages);
-    const tools = req.tools.map((tool) => ({
-      type: 'function' as const,
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: normalizeKimiToolParameters(tool.parameters),
-      },
-    }));
+    const tools = req.tools.map((tool) => toKimiToolParam(tool));
 
     const params: Record<string, unknown> = {
       model: this.model,
@@ -64,6 +64,19 @@ export class KimiCodeChatProvider implements ChatProvider {
       params.thinking = thinking;
     }
 
+    if (kimiDebugEnabled()) {
+      logKimiRequest({
+        model: this.model,
+        messageRoles: messages.map((m) => m.role),
+        messageCount: messages.length,
+        toolCount: tools.length,
+        hasThinking: !!params.thinking,
+        promptCacheKey:
+          req.sessionId != null ? `coder-session-${req.sessionId}` : undefined,
+        assistantContentTypes: summarizeAssistantContentTypes(messages),
+      });
+    }
+
     const stream = await this.client.chat.completions.create(
       params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
     );
@@ -77,10 +90,21 @@ export class KimiCodeChatProvider implements ChatProvider {
     const flushToolCalls = function* (): Iterable<ChatDelta> {
       for (const acc of toolAcc.values()) {
         let input: Record<string, unknown> = {};
+        let parseOk = true;
         try {
           input = acc.argsAcc ? JSON.parse(acc.argsAcc) as Record<string, unknown> : {};
         } catch {
+          parseOk = false;
           input = { _raw: acc.argsAcc };
+        }
+        if (kimiDebugEnabled()) {
+          logKimiToolFlush({
+            id: acc.id,
+            name: acc.name,
+            argsAccLen: acc.argsAcc.length,
+            parseOk,
+            argsPreview: acc.argsAcc,
+          });
         }
         yield { type: 'tool_call_end', id: acc.id, name: acc.name, input };
       }
@@ -101,6 +125,13 @@ export class KimiCodeChatProvider implements ChatProvider {
 
       if (delta?.tool_calls) {
         for (const tc of delta.tool_calls) {
+          // H6 fix: skip wholly-empty tool_call deltas (no id, name, or
+          // arguments). Mirrors kosong's `skip empty tool calls` at
+          // `.reference/kimi-cli/packages/kosong/src/kosong/chat_provider/kimi.py:479-481`.
+          // Without this, the accumulator creates a ghost entry with
+          // `name=""` that the runner cannot dispatch, producing a
+          // tool_use_block with no matching tool → retry loop.
+          if (!tc.id && !tc.function?.name && !tc.function?.arguments) continue;
           const idx = tc.index ?? 0;
           let acc = toolAcc.get(idx);
           if (!acc) {
@@ -115,6 +146,16 @@ export class KimiCodeChatProvider implements ChatProvider {
           if (tc.id) acc.id = tc.id;
           if (tc.function?.name) acc.name = tc.function.name;
           if (tc.function?.arguments) acc.argsAcc += tc.function.arguments;
+          if (kimiDebugEnabled()) {
+            logKimiToolChunk({
+              idx,
+              id: tc.id,
+              name: tc.function?.name,
+              argsDelta: tc.function?.arguments,
+              argsAccLen: acc.argsAcc.length,
+              emittedStart: acc.emittedStart,
+            });
+          }
           if (!acc.emittedStart && acc.name) {
             acc.emittedStart = true;
             yield { type: 'tool_call_start', id: acc.id, name: acc.name };
@@ -147,12 +188,18 @@ export class KimiCodeChatProvider implements ChatProvider {
       if (choice?.finish_reason) {
         for (const d of flushToolCalls()) yield d;
         finished = true;
+        if (kimiDebugEnabled()) {
+          logKimiFinish({ stopReason: choice.finish_reason, finishedNormally: true });
+        }
         yield { type: 'done', stop_reason: choice.finish_reason };
       }
     }
 
     if (!finished) {
       for (const d of flushToolCalls()) yield d;
+      if (kimiDebugEnabled()) {
+        logKimiFinish({ finishedNormally: false });
+      }
       yield { type: 'done' };
     }
   }
@@ -205,6 +252,41 @@ function kimiThinkingConfig(
   return { type: thinking ? 'enabled' : 'disabled' };
 }
 
+/**
+ * Convert a runtime Tool into the param shape the Kimi API expects.
+ *
+ * Kimi-for-Coding exposes server-side **builtin functions** whose names
+ * start with `$` (e.g. `$web_search`, `$crawl`). These must be declared
+ * with `type: 'builtin_function'` and carry only the name — the server
+ * already knows the description and schema. Sending them as a regular
+ * `type: 'function'` works (Kimi tolerates it) but the server invokes
+ * a local round-trip instead of running the native builtin, wasting a
+ * turn and money. Mirrors kosong's `_convert_tool`
+ * (`.reference/kimi-cli/packages/kosong/src/kosong/chat_provider/kimi.py:344-356`).
+ *
+ * Exported for unit tests.
+ */
+export function toKimiToolParam(tool: {
+  name: string;
+  description?: string;
+  parameters?: JsonSchema | unknown;
+}): Record<string, unknown> {
+  if (tool.name.startsWith('$')) {
+    return {
+      type: 'builtin_function',
+      function: { name: tool.name },
+    };
+  }
+  return {
+    type: 'function',
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: normalizeKimiToolParameters(tool.parameters),
+    },
+  };
+}
+
 export function normalizeKimiToolParameters(schema: JsonSchema | unknown): Record<string, unknown> {
   const normalized = normalizeSchema(schema);
   if (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) {
@@ -251,6 +333,51 @@ function inferScalarType(value: unknown): string {
     default:
       return 'string';
   }
+}
+
+/**
+ * True when `text` is empty or made only of whitespace characters. Mirrors
+ * kosong's `_is_effectively_empty_content_parts` helper
+ * (`.reference/kimi-cli/packages/kosong/src/kosong/chat_provider/kimi.py:335-341`).
+ *
+ * The Kimi-for-Coding API rejects assistant messages whose `content` is
+ * `""` or whitespace-only when `tool_calls` is also present
+ * (HTTP 400 "text content is empty"). Dropping the field entirely is
+ * always accepted, so callers use this predicate to decide.
+ *
+ * Exported for unit tests.
+ */
+export function isEffectivelyEmptyText(text: string): boolean {
+  return text.trim().length === 0;
+}
+
+/**
+ * Diagnostic helper: summarize assistant-message `content` shape for debug
+ * logging. Confirms H2 (Kimi rejects `content: ""` / whitespace-only when
+ * tool_calls is present — observed in `kosong/kimi.py:318-329`).
+ *
+ * Returns one descriptor per assistant message, in order. Values:
+ *   - 'omitted'   — content field absent (correct for tool_calls + empty).
+ *   - 'empty'     — string '' (suspect with tool_calls).
+ *   - 'whitespace' — string of only \s (suspect with tool_calls).
+ *   - 'text'      — non-empty string.
+ *   - 'array:N'   — content is an array of N parts.
+ *   - 'other'     — anything else.
+ */
+function summarizeAssistantContentTypes(messages: KimiMsg[]): string[] {
+  const out: string[] = [];
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    const c = (m as { content?: unknown }).content;
+    if (c === undefined) out.push('omitted');
+    else if (typeof c === 'string') {
+      if (c === '') out.push('empty');
+      else if (c.trim() === '') out.push('whitespace');
+      else out.push('text');
+    } else if (Array.isArray(c)) out.push(`array:${c.length}`);
+    else out.push('other');
+  }
+  return out;
 }
 
 export function toKimiMessages(system: string, messages: AgentMessage[]): KimiMsg[] {
@@ -344,7 +471,13 @@ function appendAssistantMessage(out: KimiMsg[], blocks: ContentBlock[]): void {
   );
 
   const msg: Record<string, unknown> = { role: 'assistant' };
-  if (text || toolUses.length === 0) msg.content = text;
+  // H2 fix: Kimi-for-Coding rejects assistant messages whose `content` is
+  // empty or whitespace-only when `tool_calls` is also present (400 "text
+  // content is empty"). Omit `content` entirely in that case — accepted
+  // by all OpenAI-compatible APIs. Retains old behavior when there are no
+  // tool_uses, so non-Kimi-specific code paths see `content: ''` like before.
+  const dropContent = toolUses.length > 0 && isEffectivelyEmptyText(text);
+  if (!dropContent) msg.content = text;
   if (reasoning) msg.reasoning_content = reasoning;
   if (toolUses.length > 0) {
     msg.tool_calls = toolUses.map((tu) => ({

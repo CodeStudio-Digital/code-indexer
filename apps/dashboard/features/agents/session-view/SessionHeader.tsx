@@ -1,3 +1,4 @@
+import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Crown,
@@ -9,6 +10,7 @@ import {
   StopCircle,
   TerminalSquare,
   Users,
+  Wrench,
 } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
 import { Button } from '../../../components/ui/button.js';
@@ -49,6 +51,13 @@ interface SessionHeaderProps {
   recoveredAt?: string | null;
   recoveredReason?: string | null;
   onResetClick: () => void;
+  /**
+   * Phase H — when set, the header shows a "Reestabelecer Master" button
+   * that spawns the master-recovery agent. Provided by the parent only
+   * when this is a master view (companyContext.isMaster === true).
+   * Click invokes the callback, which navigates to the new session.
+   */
+  onReestablishMasterClick?: () => void | Promise<void>;
 }
 
 /**
@@ -72,8 +81,24 @@ export function SessionHeader({
   recoveredAt,
   recoveredReason,
   onResetClick,
+  onReestablishMasterClick,
 }: SessionHeaderProps) {
   const { t } = useTranslation('agents');
+  const [reestablishing, setReestablishing] = useState(false);
+  const handleReestablish = useCallback(async () => {
+    if (!onReestablishMasterClick || reestablishing) return;
+    const ok = window.confirm(
+      'Spawn um agente de Recovery que vai auditar o kanban + master state e reparar inconsistências. ' +
+      'O agente roda em uma session NOVA (a atual fica intocada). Continuar?',
+    );
+    if (!ok) return;
+    setReestablishing(true);
+    try {
+      await onReestablishMasterClick();
+    } finally {
+      setReestablishing(false);
+    }
+  }, [onReestablishMasterClick, reestablishing]);
 
   const totalFronts = siblings.children.length + (siblings.parent ? 1 : 0);
   const runningFronts =
@@ -173,6 +198,26 @@ export function SessionHeader({
           }
         >
           <TerminalSquare className="h-3.5 w-3.5 mr-1" /> Terminal
+        </Button>
+      )}
+      {/* Phase H — Master Recovery: spawns a one-shot agent that audits
+          the kanban + state and repairs inconsistencies. Visible only when
+          this view is a company master (parent passes the callback). */}
+      {onReestablishMasterClick && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void handleReestablish()}
+          disabled={reestablishing}
+          className="h-7 px-2 text-amber-700 dark:text-amber-300"
+          title="Reestabelecer Master — spawn um agent de recovery que audita kanban + state e repara cards/goal"
+        >
+          {reestablishing ? (
+            <RefreshCw className="h-3.5 w-3.5 mr-1 animate-spin" />
+          ) : (
+            <Wrench className="h-3.5 w-3.5 mr-1" />
+          )}
+          {reestablishing ? 'Spawning…' : 'Reestabelecer Master'}
         </Button>
       )}
       {/* Reset: archives the current conversation state and flips the session

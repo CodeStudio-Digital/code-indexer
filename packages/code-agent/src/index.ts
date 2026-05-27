@@ -25,6 +25,7 @@ import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store
 import { SandboxFilesystemAdapter } from '@mcp/services/sandbox/adapters/sandbox-filesystem-adapter.js';
 import { SandboxShellAdapter } from '@mcp/services/sandbox/adapters/sandbox-shell-adapter.js';
 import { planTools } from '@mcp/code-agent/tools/plan.js';
+import { specTools } from '@mcp/code-agent/tools/spec/index.js';
 import { tasksTools, executeTask, taskComplete } from '@mcp/code-agent/tools/tasks.js';
 import { interactionTools } from '@mcp/code-agent/tools/interaction.js';
 import { buildExpandTools } from '@mcp/code-agent/tools/expand.js';
@@ -59,6 +60,7 @@ import { toolOutputTools } from '@mcp/code-agent/tools/tool-output.js';
 import { diagnosticsTools } from '@mcp/code-agent/tools/diagnostics.js';
 import { lspTools } from '@mcp/code-agent/tools/lsp.js';
 import { ptyTools } from '@mcp/code-agent/tools/pty.js';
+import { execCommandTools } from '@mcp/code-agent/tools/exec-command.js';
 import { webTools } from '@mcp/code-agent/tools/web.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
@@ -70,6 +72,7 @@ import { listAgentsTools } from '@mcp/code-agent/tools/list-agents.js';
 import { waitAgentsTools } from '@mcp/code-agent/tools/wait-agents.js';
 import { sendMessageTools } from '@mcp/code-agent/tools/send-message.js';
 import { sendInputTools } from '@mcp/code-agent/tools/send-input.js';
+import { followupTaskTools } from '@mcp/code-agent/tools/followup-task.js';
 import { worktreeTools, createProjectWorktree } from '@mcp/code-agent/tools/worktree.js';
 import { SkillStore } from '@mcp/store/skill-store.js';
 import type { ResolvedSkill, SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
@@ -110,6 +113,12 @@ export interface RunCoderOptions {
   signal?: AbortSignal;
   /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
   planMode?: boolean;
+  /**
+   * Spec mode: agent must call `submit_spec` and get human approval before
+   * mutating tools. Set automatically when `agent === 'spec'`; explicit values
+   * win for tests and edge cases.
+   */
+  specMode?: boolean;
   /**
    * Agent preset — bundles profile + planMode + maxTurns for a common usage
    * pattern. Takes precedence over explicit `profile` / `planMode` when set.
@@ -173,6 +182,16 @@ export interface RunCoderOptions {
   deepThinkProvider?: string;
   /** When false (default), skip pre-think on tool_result turns. */
   preThinkOnToolResults?: boolean;
+  /**
+   * Per-session resolved tunables (push caps, turn budget, intervention
+   * cooldown). When omitted, the runner falls back to `envTunables()`
+   * → `process.env.CODER_*` with hardcoded defaults — bit-identical to
+   * pre-A1 behavior. Hosts build this via
+   * `tunablesFromDecider(decider, deciderContext)` from
+   * `@mcp/services/pipelines/coder-tunables-adapter` so admins can tune
+   * limits per session/tier without restarting the process.
+   */
+  tunables?: import('@mcp/code-agent/core/tunables.js').CoderTunables;
   /** Company orchestrator context — when present, company tools are registered. */
   companyContext?: import('@mcp/company/types.js').CompanyContext;
   /** Extra system prompt block for company agents (master/subordinate). Appended to the base prompt. */
@@ -347,13 +366,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(fsTools);
   registry.registerAll(shellTools);
   registry.registerAll(gitTools);
-  // apply_patch is gated to ChatGPT/Codex sessions because it doubles up
-  // with multi_edit/edit_file for other providers (no benefit, more tokens).
-  // The Codex backend signals its preference via apply_patch_tool_type and
-  // the chatgpt provider switches the wire shape to `type: 'custom'`.
-  if (provider.name === 'chatgpt') {
-    registry.register(applyPatchTool);
-  }
+  // apply_patch is registered for ALL providers. For ChatGPT/Codex with
+  // `apply_patch_tool_type === 'freeform'`, the chatgpt provider rewrites
+  // the wire shape to `type: 'custom'` (raw patch text, no JSON escaping).
+  // For everyone else (Claude, Gemini, etc.) it stays a regular function
+  // tool with a single `patch: string` param — the model emits JSON-
+  // escaped patch text and the handler parses it. Costs ~600 extra chars
+  // in the system prompt vs gating, but pays off on multi-file edits where
+  // a single deterministic patch beats N rounds of edit_file/multi_edit.
+  registry.register(applyPatchTool);
 
   // Company subordinates get master-directed communication tools instead of
   // the human-facing ask_user / submit_plan / submit_tasks. The replacement
@@ -364,6 +385,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     registry.register(taskComplete);
   } else {
     registry.registerAll(planTools);
+    registry.registerAll(specTools);
     registry.registerAll(tasksTools);
     registry.registerAll(interactionTools);
   }
@@ -392,6 +414,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(diagnosticsTools);
   registry.registerAll(lspTools);
   registry.registerAll(ptyTools);
+  registry.registerAll(execCommandTools);
   registry.registerAll(webTools);
   registry.registerAll(globTools);
   registry.registerAll(ragSearchDocsTools);
@@ -402,6 +425,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(waitAgentsTools);
   registry.registerAll(sendMessageTools);
   registry.registerAll(sendInputTools);
+  registry.registerAll(followupTaskTools);
   // code_exec — registered last in the native batch so its tools-proxy
   // closes over a registry that already includes fs/git/web/lsp/glob/etc.
   // The proxy itself is rebuilt per invocation (`registry.list()` at call
@@ -1216,6 +1240,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // reads `runnerRef?.turn` lazily, so this assignment closes the loop.
     maxTurns: opts.maxTurns ?? 50,
     planMode: opts.planMode,
+    specMode: opts.specMode ?? (effectiveAgentId === 'spec'),
     thinking: opts.thinking,
     thinkingBudgetTokens: opts.thinkingBudgetTokens,
     deepThink: opts.deepThink,
@@ -1247,6 +1272,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // per-block PUSH_TIME_CAP to the high safety ceiling so verbose MCP tools
     // (Unity, large file reads, batched code_exec) arrive intact.
     unrestrictedToolOutput: !!session.unrestricted_tool_output,
+    // A1 — per-session tunables (push caps, turn budget). Undefined →
+    // runner uses envTunables() = bit-identical to pre-A1 constants.
+    tunables: opts.tunables,
     // Stateful Responses API resume — populated only for ChatGPT/Codex sessions
     // that completed at least one turn with `store: true`. Other providers
     // ignore these fields.

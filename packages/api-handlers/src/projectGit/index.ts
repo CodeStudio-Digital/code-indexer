@@ -18,6 +18,7 @@ import {
   type GitStatusFile,
   type GitBranch,
   type GitRunResult,
+  type GitStashEntry,
   type GitPlan,
   type GitPlanStep,
 } from '@mcp/api-bus';
@@ -396,6 +397,136 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       if (noCommit) args.push('--no-commit');
       for (const c of commits) args.push(c);
       return runAsResult(root, 'git', args);
+    },
+
+    // ─── Remote sync (push / fetch / pull) ───────────────────────
+    // These all surface as GitRunResult instead of throwing so the UI
+    // can render "non-zero exit but here's the helpful stderr" — git's
+    // failure messages on push/pull are rich (rejected fast-forward,
+    // diverged branches, suggested next steps).
+    async push({ projectId, remote, branch, force, setUpstream }) {
+      const root = requireRoot(projectId);
+      const args = ['push'];
+      // --force-with-lease is the safe variant: rejects when the
+      // remote moved since we last fetched. Never expose plain --force
+      // from the UI — that's a footgun behind a button.
+      if (force) args.push('--force-with-lease');
+      if (setUpstream) args.push('-u');
+      if (remote) args.push(remote);
+      if (branch) args.push(branch);
+      return runAsResult(root, 'git', args);
+    },
+
+    async fetch({ projectId, remote, prune }) {
+      const root = requireRoot(projectId);
+      const args = ['fetch'];
+      if (prune) args.push('--prune');
+      if (remote) args.push(remote);
+      // No remote arg → `git fetch` fetches the current branch's upstream
+      // (or all configured remotes when there's no upstream). Matches
+      // JetBrains "Update Project" intuition.
+      return runAsResult(root, 'git', args);
+    },
+
+    async pull({ projectId, remote, branch, rebase }) {
+      const root = requireRoot(projectId);
+      const args = ['pull'];
+      if (rebase) args.push('--rebase');
+      if (remote) args.push(remote);
+      if (branch) args.push(branch);
+      return runAsResult(root, 'git', args);
+    },
+
+    // ─── Stash (list / save / pop / apply / drop / show) ─────────
+    // Parse `stash list` via `--format` so we get tab-separated fields
+    // without scraping the freeform default output. The auto-generated
+    // message follows "WIP on <branch>: <sha> <subject>" — we extract
+    // the branch portion when present.
+    async stashList({ projectId }) {
+      const root = requireRoot(projectId);
+      // %gd = stash ref (stash@{0}), %h = short sha, %gs = full message,
+      // %cI = committer date (iso-strict). \x1f as field separator.
+      const fmt = '%gd%x1f%h%x1f%cI%x1f%gs';
+      const r = await runGit(root, ['stash', 'list', `--format=${fmt}`]);
+      if (r.code !== 0) {
+        throw new ApiError(
+          'git_stash_list_failed',
+          500,
+          r.stderr.trim() || 'git stash list failed',
+        );
+      }
+      const entries: GitStashEntry[] = [];
+      for (const line of r.stdout.split('\n').filter(Boolean)) {
+        const [index, shortSha, date, message] = line.split('\x1f');
+        if (!index) continue;
+        // Auto-generated stash messages start with "WIP on <branch>: ..."
+        // or "On <branch>: <user message>". Strip the prefix for the
+        // branch column so the UI doesn't redundantly show it.
+        let branch: string | null = null;
+        const m = message?.match(/^(?:WIP on|On)\s+([^:]+):/);
+        if (m) branch = m[1].trim();
+        entries.push({
+          index,
+          shortSha: shortSha ?? '',
+          branch,
+          message: message ?? '',
+          date: date ?? '',
+        });
+      }
+      return entries;
+    },
+
+    async stashSave({ projectId, message, includeUntracked, keepIndex }) {
+      const root = requireRoot(projectId);
+      // `stash push` is the modern form; `save` is deprecated. `-u`
+      // includes untracked, `--keep-index` leaves staged changes alone.
+      const args = ['stash', 'push'];
+      if (includeUntracked) args.push('-u');
+      if (keepIndex) args.push('--keep-index');
+      if (message) args.push('-m', message);
+      return runAsResult(root, 'git', args);
+    },
+
+    async stashPop({ projectId, ref }) {
+      if (!ref) {
+        throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
+      }
+      const root = requireRoot(projectId);
+      return runAsResult(root, 'git', ['stash', 'pop', ref]);
+    },
+
+    async stashApply({ projectId, ref }) {
+      if (!ref) {
+        throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
+      }
+      const root = requireRoot(projectId);
+      return runAsResult(root, 'git', ['stash', 'apply', ref]);
+    },
+
+    async stashDrop({ projectId, ref }) {
+      if (!ref) {
+        throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
+      }
+      const root = requireRoot(projectId);
+      return runAsResult(root, 'git', ['stash', 'drop', ref]);
+    },
+
+    async stashShow({ projectId, ref }) {
+      if (!ref) {
+        throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
+      }
+      const root = requireRoot(projectId);
+      // `-p` emits a unified diff. Skips the index-summary at the top
+      // that the default `stash show` produces.
+      const r = await runGit(root, ['stash', 'show', '-p', '--no-color', ref]);
+      if (r.code !== 0 && !r.stdout) {
+        throw new ApiError(
+          'git_stash_show_failed',
+          500,
+          r.stderr.trim() || 'git stash show failed',
+        );
+      }
+      return { patch: r.stdout };
     },
 
     // ─── AI-assisted git ─────────────────────────────────────────

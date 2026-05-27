@@ -175,6 +175,53 @@ export class BlockedRolesFilter implements Filter<RolePipelineQuery, RoleCandida
   }
 }
 
+// ─── DisableRulesFilter (C2 — Sprint 1) ───────────────────────────────
+//
+// Evaluates declarative `RoleDescriptor.disableRules` against the
+// workflow state in `RolePipelineQuery.disableContext`. Candidates whose
+// rules match are dropped (with the first matching rule's reason
+// surfaced in diagnostics). Direct port of grox's DISABLE_RULES.
+//
+// Stays off for legacy callers: when no role has `disableRules` set OR
+// no `disableContext` is provided, the filter contributes zero removals
+// (bit-identical to pre-C2 behavior).
+
+import { evaluateDisableRules, emptyDisableContext } from './disable-rules.js';
+
+export class DisableRulesFilter implements Filter<RolePipelineQuery, RoleCandidate> {
+  readonly name = 'disable_rules';
+  enable(query: RolePipelineQuery): boolean {
+    // Cheap pre-check: at least one role must declare rules. If none do,
+    // skipping the filter saves the per-candidate loop.
+    return query.availableRoles.some((r) => (r.disableRules?.length ?? 0) > 0);
+  }
+  filter(query: RolePipelineQuery, candidates: RoleCandidate[]): FilterResult<RoleCandidate> {
+    const ctx = query.disableContext ?? emptyDisableContext(query.taskText);
+    const kept: RoleCandidate[] = [];
+    const removed: RoleCandidate[] = [];
+    for (const c of candidates) {
+      const result = evaluateDisableRules(c.role.disableRules, ctx);
+      if (result.disabled) {
+        // Annotate the dropped candidate with the rule's diagnostic so
+        // upstream observers (telemetry / shadow logs) can see WHY it
+        // was filtered. Keeps the rest of the candidate untouched.
+        removed.push({
+          ...c,
+          signals: {
+            ...c.signals,
+            disabledByRule: 1,
+            disableReason: result.reason,
+            disableRuleName: result.ruleName,
+          } as RoleCandidate['signals'],
+        });
+      } else {
+        kept.push(c);
+      }
+    }
+    return { kept, removed };
+  }
+}
+
 // ─── Scorers ───────────────────────────────────────────────────────────
 
 export class TwoTowerScorer implements Scorer<RolePipelineQuery, RoleCandidate> {

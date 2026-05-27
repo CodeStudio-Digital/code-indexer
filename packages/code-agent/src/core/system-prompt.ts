@@ -232,8 +232,13 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     mcpSection: mcpSection(ctx.mcpAvailable, ctx.isIndexed),
   });
 
-  // Plan section — optional, only when planMode is true. Loaded from plan.txt.
-  const planSection = ctx.planMode ? `\n\n${loadPrompt('plan')}` : '';
+  // Plan section — optional, only when planMode is true AND the active agent
+  // isn't `spec` (spec mode has its own gate via submit_spec / spec.txt and
+  // should NOT also load plan.txt to avoid contradictory tool-discipline
+  // instructions).
+  const planSection = ctx.planMode && ctx.agentId !== 'spec'
+    ? `\n\n${loadPrompt('plan')}`
+    : '';
 
   // Mode identity section — concrete behavioural prompt for the active built-in
   // agent (`explore` / `build` / `admin`). 'plan' is already covered by
@@ -247,12 +252,14 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // Interactive-tools footer — small enough to keep inline, and the two lines
   // that mention submit_plan/submit_tasks depend on planMode so they'd need
   // a second placeholder dance in the txt file for no real benefit.
+  const isSpec = ctx.agentId === 'spec';
   const interactionSection = `
 
 # Interactive tools
-- \`ask_user\`: when you need a decision/preference/choice from the user, call this. Provide \`options\` for multiple choice (rendered as buttons) or omit them for free-form. Do NOT use for things you can verify yourself.
-- \`submit_plan\`: ${ctx.planMode ? 'REQUIRED before mutating tools when the work is linear/informational (see Plan mode above).' : 'Optional — call when the user explicitly asks for a plan.'}
-- \`submit_tasks\`: ${ctx.planMode ? 'REQUIRED instead of submit_plan when the work decomposes into 2+ independent tasks (see Plan mode above).' : 'Optional — for multi-item work that benefits from per-task context curation and individual user approval.'}
+- \`ask_user\`: when you need a decision/preference/choice from the user, call this. Provide \`options\` for multiple choice (rendered as buttons) or omit them for free-form. Do NOT use for things you can verify yourself.${isSpec ? `
+- \`submit_spec\`: REQUIRED before any mutating tool (see Spec mode above). Pass \`{ name, body, parent_id? }\`. The runner writes the spec to \`.mcp/specs/<slug>-<unix>.md\` and blocks until a human approves or requests changes.` : ''}
+- \`submit_plan\`: ${isSpec ? 'BLOCKED in spec mode — the spec IS the plan.' : ctx.planMode ? 'REQUIRED before mutating tools when the work is linear/informational (see Plan mode above).' : 'Optional — call when the user explicitly asks for a plan.'}
+- \`submit_tasks\`: ${isSpec ? 'BLOCKED before spec approval. After approval, derive tasks from the spec\'s Implementation Plan and call submit_tasks.' : ctx.planMode ? 'REQUIRED instead of submit_plan when the work decomposes into 2+ independent tasks (see Plan mode above).' : 'Optional — for multi-item work that benefits from per-task context curation and individual user approval.'}
 - \`execute_task\` / \`task_complete\`: companions to submit_tasks; call execute_task once per approved task in dependency order, then task_complete to close the inline scope.
 `;
 

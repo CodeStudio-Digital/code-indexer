@@ -85,18 +85,19 @@ export default function EnvTab({ companySessionId }: EnvTabProps) {
   }
 
   return (
-    <div className="p-4 overflow-y-auto h-full">
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h2 className="text-sm font-semibold">{t('env.title')}</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">{t('env.description')}</p>
-        </div>
-        <div className="flex items-center gap-1">
+    <div className="p-3 overflow-y-auto h-full">
+      {/* Header stacks vertically — same fix as DatabasesTab. The
+          sidebar panel is too narrow (~280-450px) to fit
+          title+description+actions side by side without wrapping the
+          description into 1-2-word ribbons. */}
+      <div className="mb-3 space-y-1.5">
+        <div className="flex items-center gap-1.5">
+          <h2 className="text-sm font-semibold truncate flex-1">{t('env.title')}</h2>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="h-7 w-7"
+            className="h-7 w-7 shrink-0"
             onClick={() => setRevealed((v) => !v)}
             title={revealed ? t('env.maskSecrets') : t('env.revealSecrets')}
           >
@@ -106,13 +107,16 @@ export default function EnvTab({ companySessionId }: EnvTabProps) {
             type="button"
             variant="ghost"
             size="icon"
-            className="h-7 w-7"
+            className="h-7 w-7 shrink-0"
             onClick={reload}
             title={t('env.reload')}
           >
             <RefreshCw className={'h-3.5 w-3.5 ' + (loading ? 'animate-spin' : '')} />
           </Button>
         </div>
+        <p className="text-[11px] leading-snug text-muted-foreground">
+          {t('env.description')}
+        </p>
       </div>
 
       {envs.length === 0 ? (
@@ -237,31 +241,37 @@ function AddEnvForm({
   return (
     <form onSubmit={submit} className="mt-4 border rounded p-3 space-y-2">
       <div className="text-xs font-medium">{t('env.addEnvVar')}</div>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          placeholder={t('env.keyPlaceholder')}
-          className="w-56 text-xs bg-background border rounded px-2 py-1 font-mono"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          required
-          pattern="^[A-Za-z_][A-Za-z0-9_]*$"
-          title="Letters, digits, underscore; must not start with a digit"
-        />
-        <input
-          type="text"
-          placeholder={t('env.valuePlaceholder')}
-          className="flex-1 text-xs bg-background border rounded px-2 py-1 font-mono"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-        />
-        <label className="flex items-center gap-1 text-xs">
+      {/* Vertical stack — the sidebar (~280-450px) was too narrow for
+          the prior single-row layout (key `w-56` alone = 224px, then
+          value + secret checkbox + button overflowed). Stacking puts
+          each input at full width regardless of container size; the
+          checkbox + submit share the trailing row. Pattern matches
+          VS Code / JetBrains "add env var" panels. */}
+      <input
+        type="text"
+        placeholder={t('env.keyPlaceholder')}
+        className="w-full text-xs bg-background border rounded px-2 py-1 font-mono"
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+        required
+        pattern="^[A-Za-z_][A-Za-z0-9_]*$"
+        title="Letters, digits, underscore; must not start with a digit"
+      />
+      <input
+        type="text"
+        placeholder={t('env.valuePlaceholder')}
+        className="w-full text-xs bg-background border rounded px-2 py-1 font-mono"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+      />
+      <div className="flex items-center justify-between gap-2">
+        <label className="flex items-center gap-1.5 text-xs cursor-pointer">
           <input
             type="checkbox"
             checked={isSecret}
             onChange={(e) => setIsSecret(e.target.checked)}
           />
-          {t('env.secret')}
+          <span>{t('env.secret')}</span>
         </label>
         <Button type="submit" size="sm" disabled={submitting || !key}>
           <Plus className="h-3 w-3 mr-1" />

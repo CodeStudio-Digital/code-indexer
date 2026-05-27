@@ -1,0 +1,159 @@
+/**
+ * Integration tests for exec_command + write_stdin.
+ *
+ * These spawn real processes (no mocks) — that's the entire point.
+ * They use a small node script written to tmpdir() as the workload
+ * because we can't rely on `cat` (missing on Windows) or `node -e "..."`
+ * inline (shell quoting differs across cmd.exe / sh).
+ */
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { tmpdir } from 'node:os';
+import { writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { execCommand, writeStdin, __testing } from '@mcp/code-agent/tools/exec-command.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+
+const cwd = process.cwd();
+
+function makeCtx(): ToolContext {
+  return { cwd, projectName: 'exec-command-test' };
+}
+
+function extractSessionId(content: string): string {
+  const m = /session_id=(\S+)/.exec(content);
+  if (!m) throw new Error(`no session_id in output:\n${content}`);
+  return m[1];
+}
+
+// stdin echo: reads stdin, writes "echo:<input>" to stdout for every chunk.
+// Unbuffered so the parent sees output without waiting for a newline batch.
+const ECHO_STDIN_SCRIPT = `
+process.stdout.write('ready\\n');
+process.stdin.setEncoding('utf-8');
+process.stdin.on('data', (chunk) => {
+  process.stdout.write('echo:' + chunk);
+});
+process.stdin.resume();
+`;
+
+let scriptPath: string;
+
+beforeAll(() => {
+  scriptPath = join(tmpdir(), `exec-test-echo-${randomUUID()}.js`);
+  writeFileSync(scriptPath, ECHO_STDIN_SCRIPT, 'utf-8');
+});
+
+afterAll(() => {
+  try {
+    unlinkSync(scriptPath);
+  } catch {
+    /* ignore */
+  }
+});
+
+afterEach(() => {
+  __testing.disposeAll();
+});
+
+describe('exec_command + write_stdin', () => {
+  it('rejects empty cmd', async () => {
+    const result = await execCommand.handler({ cmd: '' }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('cmd cannot be empty');
+  });
+
+  it('runs a one-shot command and reports status=exited', async () => {
+    const result = await execCommand.handler(
+      { cmd: process.platform === 'win32' ? 'echo hello-world' : 'echo hello-world', yield_time_ms: 5000 },
+      makeCtx(),
+    );
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hello-world');
+    expect(result.content).toContain('status=exited');
+    expect(result.content).toMatch(/exit=0/);
+    // Exited sessions should be reaped from the registry.
+    expect(__testing.sessions.size).toBe(0);
+  });
+
+  it('keeps a long-running session alive and returns session_id', async () => {
+    const r1 = await execCommand.handler(
+      { cmd: `node ${scriptPath}`, yield_time_ms: 1500 },
+      makeCtx(),
+    );
+    expect(r1.isError).toBeFalsy();
+    expect(r1.content).toContain('status=running');
+    // The script prints `ready\n` on startup — should be captured in the
+    // first yield window.
+    expect(r1.content).toContain('ready');
+    const sid = extractSessionId(r1.content);
+    expect(__testing.sessions.has(sid)).toBe(true);
+  });
+
+  it('write_stdin delivers bytes to the session and yields new output', async () => {
+    const r1 = await execCommand.handler(
+      { cmd: `node ${scriptPath}`, yield_time_ms: 1500 },
+      makeCtx(),
+    );
+    const sid = extractSessionId(r1.content);
+
+    const r2 = await writeStdin.handler(
+      { session_id: sid, chars: 'hi\n', yield_time_ms: 1500 },
+      makeCtx(),
+    );
+    expect(r2.isError).toBeFalsy();
+    expect(r2.content).toContain('echo:hi');
+    expect(r2.content).toContain('status=running');
+
+    // Second write — confirm the same session keeps working.
+    const r3 = await writeStdin.handler(
+      { session_id: sid, chars: 'world\n', yield_time_ms: 1500 },
+      makeCtx(),
+    );
+    expect(r3.isError).toBeFalsy();
+    expect(r3.content).toContain('echo:world');
+  });
+
+  it('empty-chars write_stdin acts as a non-destructive poll', async () => {
+    const r1 = await execCommand.handler(
+      { cmd: `node ${scriptPath}`, yield_time_ms: 1500 },
+      makeCtx(),
+    );
+    const sid = extractSessionId(r1.content);
+
+    const poll = await writeStdin.handler(
+      { session_id: sid, chars: '', yield_time_ms: 300 },
+      makeCtx(),
+    );
+    expect(poll.isError).toBeFalsy();
+    expect(poll.content).toContain('status=running');
+    // No bytes written → no new output expected from the echo script.
+    expect(poll.content).not.toContain('echo:');
+  });
+
+  it('returns an error for unknown session_id', async () => {
+    const result = await writeStdin.handler(
+      { session_id: 'doesnotexist', chars: '' },
+      makeCtx(),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('not active');
+  });
+
+  it('caps output to max_output_tokens and flags truncation', async () => {
+    // A tight cap forces FIFO truncation.
+    const r1 = await execCommand.handler(
+      { cmd: `node ${scriptPath}`, yield_time_ms: 500, max_output_tokens: 1000 },
+      makeCtx(),
+    );
+    const sid = extractSessionId(r1.content);
+    // Push a payload larger than the cap.
+    const big = 'A'.repeat(2_000) + '\n';
+    const r2 = await writeStdin.handler(
+      { session_id: sid, chars: big, yield_time_ms: 1500 },
+      makeCtx(),
+    );
+    expect(r2.isError).toBeFalsy();
+    expect(r2.content).toContain('output_truncated=true');
+  });
+});

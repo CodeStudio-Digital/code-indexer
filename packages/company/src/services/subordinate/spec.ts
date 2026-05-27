@@ -7,6 +7,7 @@
  * `SubordinateLifecycle.ts` re-exports both for backward compatibility
  * with existing callers and tests.
  */
+import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { CoderAttachment } from '@mcp/code-agent/index.js';
 import type { RoleSkills } from '@mcp/company/types.js';
 
@@ -32,6 +33,14 @@ export interface SpawnSubordinateSpec {
    */
   skills?: RoleSkills;
   roleOverride?: string;
+  /**
+   * Built-in agent identity for this spawn. When set, the runner loads the
+   * matching `prompts/<agentId>.txt` and applies its policy gates. The SDD
+   * pipeline passes `'spec'` here for the spec-writer node so the subordinate
+   * runs under spec-mode discipline; left undefined the runner falls through
+   * to the default profile-driven behaviour (no agentId-specific prompt).
+   */
+  agent?: AgentId;
   /**
    * Sampling temperature for this role, taken from `CompanyRoleConfig.temperature`.
    * Forwarded to the runner as `roleTemperature`. The resolver clamps to [0, 1]

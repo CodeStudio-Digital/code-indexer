@@ -14,21 +14,33 @@ import { useTranslation } from 'react-i18next';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Progress } from '../../components/ui/progress.js';
-import type { DocIngestDoneFrame, DocIngestProgressFrame } from './docs-api.js';
+import type { DocIngestDoneFrame, DocIngestProgressFrame, DocIngestScanFrame } from './docs-api.js';
 import { PHASE_LABEL } from './progress-labels.js';
 
 interface Props {
   start: (cb: {
     onStart?: (p: unknown) => void;
+    onScan?: (p: DocIngestScanFrame) => void;
     onProgress?: (p: DocIngestProgressFrame) => void;
     onDone?: (r: DocIngestDoneFrame) => void;
     onError?: (msg: string) => void;
   }) => Promise<void>;
   onClose: () => void | Promise<void>;
+  /**
+   * Fired EXACTLY ONCE when the stream completes — either via `done` or
+   * `error`. Distinct from `onClose` (which is the user's intent to
+   * dismiss the panel). The parent uses this to flip its "can be
+   * closed via Dialog X" flag — without it, the outer X stays blocked
+   * forever because the parent doesn't know the stream is no longer
+   * mid-flight (the only state transition `running → false` was
+   * internal to this component before).
+   */
+  onFinished?: () => void;
 }
 
-export function IndexProgressStream({ start, onClose }: Props) {
+export function IndexProgressStream({ start, onClose, onFinished }: Props) {
   const { t } = useTranslation('docs');
+  const [scan, setScan] = useState<DocIngestScanFrame | null>(null);
   const [progress, setProgress] = useState<DocIngestProgressFrame | null>(null);
   const [done, setDone] = useState<DocIngestDoneFrame | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +49,9 @@ export function IndexProgressStream({ start, onClose }: Props) {
   useEffect(() => {
     let cancelled = false;
     start({
+      onScan: (p) => {
+        if (!cancelled) setScan(p);
+      },
       onProgress: (p) => {
         if (!cancelled) setProgress(p);
       },
@@ -44,18 +59,21 @@ export function IndexProgressStream({ start, onClose }: Props) {
         if (!cancelled) {
           setDone(r);
           setRunning(false);
+          onFinished?.();
         }
       },
       onError: (msg) => {
         if (!cancelled) {
           setError(msg);
           setRunning(false);
+          onFinished?.();
         }
       },
     }).catch((err) => {
       if (!cancelled) {
         setError(err instanceof Error ? err.message : String(err));
         setRunning(false);
+        onFinished?.();
       }
     });
     return () => {
@@ -65,6 +83,22 @@ export function IndexProgressStream({ start, onClose }: Props) {
     // would restart ingestion. The parent controls remount via `key`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Scan summary string — só folder sources emitem. Quando o cap foi
+  // atingido, mostra a variante "capReached" alertando o operador.
+  const scanLine = scan
+    ? scan.totalMatches > scan.willProcess
+      ? t('progress.scan.capReached', {
+        total: scan.totalMatches,
+        willProcess: scan.willProcess,
+        cap: scan.cap,
+      })
+      : t('progress.scan.summary', {
+        total: scan.totalMatches,
+        willProcess: scan.willProcess,
+        cap: scan.cap,
+      })
+    : null;
 
   const percent = progress && progress.total > 0
     ? Math.min(100, Math.round((progress.current / progress.total) * 100))
@@ -96,6 +130,17 @@ export function IndexProgressStream({ start, onClose }: Props) {
         </Button>
       </div>
       <div className="px-4 py-3 space-y-3">
+        {scanLine && !done && !error && (
+          <div
+            className={`text-xs ${
+              scan && scan.totalMatches > scan.willProcess
+                ? 'text-amber-600 dark:text-amber-400'
+                : 'text-muted-foreground'
+            }`}
+          >
+            {scanLine}
+          </div>
+        )}
         {progress && !done && !error && (
           <>
             <Progress value={percent} className="h-1.5" />

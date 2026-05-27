@@ -37,6 +37,7 @@ import {
   PanelRight,
   RefreshCw,
   Save,
+  ScrollText,
   Search,
   TerminalSquare,
   X,
@@ -63,6 +64,7 @@ import { FileTreeWindow } from './jetbrains/tool-windows/FileTreeWindow.js';
 import { SnapshotsWindow } from './jetbrains/tool-windows/SnapshotsWindow.js';
 import { GitWindow } from './jetbrains/tool-windows/GitWindow.js';
 import { SearchWindow } from './jetbrains/tool-windows/SearchWindow.js';
+import { SpecsWindow } from './jetbrains/tool-windows/SpecsWindow.js';
 import { ChatWindow } from './jetbrains/tool-windows/ChatWindow.js';
 import { PlaceholderWindow } from './jetbrains/tool-windows/PlaceholderWindow.js';
 
@@ -77,6 +79,7 @@ const LEFT_ITEMS: RailItem<LeftToolId>[] = [
   { id: 'files', label: 'Project files', icon: FileCode2 },
   { id: 'search', label: 'Search', icon: Search },
   { id: 'snapshots', label: 'Snapshots', icon: History },
+  { id: 'specs', label: 'Specs (SDD)', icon: ScrollText },
   { id: 'git', label: 'Git', icon: GitBranch },
 ];
 
@@ -475,6 +478,9 @@ function LeftToolPanel({ projectId, activeFilePath, onOpen, onClose }: LeftToolP
   }
   if (activeLeft === 'snapshots') {
     return <SnapshotsWindow projectId={projectId} onClose={onClose} />;
+  }
+  if (activeLeft === 'specs') {
+    return <SpecsWindow projectId={projectId} onOpen={onOpen} onClose={onClose} />;
   }
   if (activeLeft === 'git') {
     return <GitWindow projectId={projectId} onClose={onClose} />;

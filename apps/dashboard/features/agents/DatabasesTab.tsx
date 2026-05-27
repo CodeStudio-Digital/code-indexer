@@ -124,18 +124,21 @@ export default function DatabasesTab({ companySessionId }: DatabasesTabProps) {
   }
 
   return (
-    <div className="p-4 overflow-y-auto h-full">
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h2 className="text-sm font-semibold">{t('databases.title')}</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">{t('databases.description')}</p>
-        </div>
-        <div className="flex items-center gap-1">
+    <div className="p-3 overflow-y-auto h-full">
+      {/* Header stacks vertically so the description gets the full panel
+          width — at the sidebar's narrow min (~280px), the prior
+          side-by-side layout squeezed the description into ~80px and
+          wrapped every 2-3 chars. Action row keeps title + 3 icons in
+          one slim strip; the "+ Add" button drops the inline label and
+          falls back to title-tooltip-only to save horizontal space. */}
+      <div className="mb-3 space-y-1.5">
+        <div className="flex items-center gap-1.5">
+          <h2 className="text-sm font-semibold truncate flex-1">{t('databases.title')}</h2>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="h-7 w-7"
+            className="h-7 w-7 shrink-0"
             onClick={() => setRevealed((v) => !v)}
             title={revealed ? t('databases.maskSecrets') : t('databases.revealSecrets')}
           >
@@ -145,16 +148,26 @@ export default function DatabasesTab({ companySessionId }: DatabasesTabProps) {
             type="button"
             variant="ghost"
             size="icon"
-            className="h-7 w-7"
+            className="h-7 w-7 shrink-0"
             onClick={reload}
             title={t('databases.reload')}
           >
             <RefreshCw className={'h-3.5 w-3.5 ' + (loading ? 'animate-spin' : '')} />
           </Button>
-          <Button type="button" size="sm" onClick={() => setAddOpen(true)}>
-            <Plus className="h-3 w-3 mr-1" /> {t('databases.addDatabase')}
+          <Button
+            type="button"
+            size="icon"
+            className="h-7 w-7 shrink-0"
+            onClick={() => setAddOpen(true)}
+            title={t('databases.addDatabase')}
+            aria-label={t('databases.addDatabase')}
+          >
+            <Plus className="h-3.5 w-3.5" />
           </Button>
         </div>
+        <p className="text-[11px] leading-snug text-muted-foreground">
+          {t('databases.description')}
+        </p>
       </div>
 
       {databases.length === 0 ? (

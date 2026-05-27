@@ -1,26 +1,18 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Boxes,
   ChevronRight,
-  Clock,
-  FileCode2,
   FolderGit2,
   Layers,
-  Pencil,
+  LayoutGrid,
+  LayoutList,
   Plus,
   Search,
   X,
 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '../../components/ui/card.js';
+import { Card, CardContent } from '../../components/ui/card.js';
 import {
   Collapsible,
   CollapsibleContent,
@@ -29,86 +21,33 @@ import {
 import { Input } from '../../components/ui/input.js';
 import { Skeleton } from '../../components/ui/skeleton.js';
 import { useApi } from '../../hooks/useApi.js';
-import { cn, formatRelativeTime } from '../../lib/utils.js';
+import { cn } from '../../lib/utils.js';
 import ProjectCreateDialog from './ProjectCreateDialog.js';
 import ProjectEditDialog from './ProjectEditDialog.js';
+import { ProjectCard, type ProjectCardData } from './list/ProjectCard.js';
+import { ProjectRow } from './list/ProjectRow.js';
 
-interface Project {
-  id: number;
-  name: string;
-  root_path: string;
-  description?: string | null;
-  group_name?: string | null;
-  file_count: number;
-  symbol_count: number;
-  last_indexed: string | null;
+/** Persisted in localStorage so the user's layout choice survives reloads. */
+type LayoutMode = 'cards' | 'compact';
+const LAYOUT_STORAGE_KEY = 'projectsList.layout';
+
+function readStoredLayout(): LayoutMode {
+  // Compact é o default — em projetos com 15+ entries, cards forçam
+  // muita rolagem; compact deixa todos os projetos visíveis numa única
+  // tela. User pode alternar pro grid via toggle no header.
+  if (typeof window === 'undefined') return 'compact';
+  try {
+    const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
+    return raw === 'cards' ? 'cards' : 'compact';
+  } catch {
+    return 'compact';
+  }
 }
+
+type Project = ProjectCardData;
 
 interface ProjectListProps {
   onSelectProject: (id: number, name: string) => void;
-}
-
-interface ProjectCardProps {
-  project: Project;
-  onSelect: () => void;
-  onEdit: () => void;
-}
-
-function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) {
-  const { t } = useTranslation(['projects', 'common']);
-  return (
-    <Card
-      onClick={onSelect}
-      className="cursor-pointer transition-all hover:shadow-md hover:border-primary/40 hover:-translate-y-0.5 group"
-    >
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-2">
-          <div className="h-10 w-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
-            <FolderGit2 className="h-5 w-5" />
-          </div>
-          <div className="flex items-center gap-1">
-            <Badge variant={p.last_indexed ? 'success' : 'muted'}>
-              {p.last_indexed ? t('common:status.indexed') : t('common:status.pending')}
-            </Badge>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={(e) => {
-                e.stopPropagation();
-                onEdit();
-              }}
-              aria-label={t('projects:editProject')}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        </div>
-        <CardTitle className="text-base mt-3 truncate">{p.name}</CardTitle>
-        <CardDescription className="text-xs truncate font-mono">{p.root_path}</CardDescription>
-      </CardHeader>
-      <CardContent className="pt-0">
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <FileCode2 className="h-3.5 w-3.5" />
-            <span>
-              <strong className="text-foreground">{p.file_count}</strong> {t('projects:files')}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Boxes className="h-3.5 w-3.5" />
-            <span>
-              <strong className="text-foreground">{p.symbol_count}</strong> {t('projects:symbols')}
-            </span>
-          </div>
-        </div>
-        <div className="mt-3 pt-3 border-t flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Clock className="h-3 w-3" />
-          {p.last_indexed ? formatRelativeTime(p.last_indexed) : t('projects:neverIndexed')}
-        </div>
-      </CardContent>
-    </Card>
-  );
 }
 
 export default function ProjectList({ onSelectProject }: ProjectListProps) {
@@ -118,7 +57,17 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
   const [creating, setCreating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [grouped, setGrouped] = useState(true);
+  const [layout, setLayout] = useState<LayoutMode>(readStoredLayout);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  // Persist layout choice; tiny enough that a debounce would be noise.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LAYOUT_STORAGE_KEY, layout);
+    } catch {
+      /* private mode / quota — best-effort */
+    }
+  }, [layout]);
 
   // All unique group names defined across projects (for the edit dialog picker)
   const existingGroups = useMemo(() => {
@@ -229,6 +178,45 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
     );
   }
 
+  // Shared list renderer — picks card grid or compact row stack based on
+  // the persisted `layout`. Both views share the same data + handlers so
+  // toggling never loses scroll position relative to the same project.
+  const renderProjects = (list: Project[]) => {
+    if (list.length === 0) {
+      return (
+        <p className="col-span-full text-center py-8 text-sm text-muted-foreground">
+          {t('projects:noMatch', { query: searchQuery })}
+        </p>
+      );
+    }
+    if (layout === 'compact') {
+      return (
+        <div className="flex flex-col gap-1.5">
+          {list.map((p) => (
+            <ProjectRow
+              key={p.id}
+              project={p}
+              onSelect={() => onSelectProject(p.id, p.name)}
+              onEdit={() => setEditing(p)}
+            />
+          ))}
+        </div>
+      );
+    }
+    return (
+      <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+        {list.map((p) => (
+          <ProjectCard
+            key={p.id}
+            project={p}
+            onSelect={() => onSelectProject(p.id, p.name)}
+            onEdit={() => setEditing(p)}
+          />
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -268,6 +256,23 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
             <Layers className="h-4 w-4" />
             <span className="hidden sm:inline ml-1">{grouped ? t('projects:grouped') : t('projects:group')}</span>
           </Button>
+          {/* Layout toggle — Cards vs Compact list. Persisted so the
+              user's choice survives reloads. Wide-screen muscle memory
+              ("LayoutGrid for tiles, LayoutList for rows") inherited
+              from VS Code / Finder. */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setLayout((m) => (m === 'cards' ? 'compact' : 'cards'))}
+            title={layout === 'cards' ? t('projects:compactView', { defaultValue: 'Compact list' }) : t('projects:cardsView', { defaultValue: 'Card grid' })}
+            aria-label={layout === 'cards' ? 'Switch to compact list' : 'Switch to card grid'}
+          >
+            {layout === 'cards' ? (
+              <LayoutList className="h-4 w-4" />
+            ) : (
+              <LayoutGrid className="h-4 w-4" />
+            )}
+          </Button>
           <Button size="sm" onClick={() => setCreating(true)}>
             <Plus className="h-4 w-4" />
             <span className="hidden sm:inline ml-1">{t('projects:newProject')}</span>
@@ -275,24 +280,7 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
         </div>
       </div>
 
-      {!grouped && (
-        <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-          {filteredProjects.length === 0 ? (
-            <p className="col-span-full text-center py-12 text-sm text-muted-foreground">
-              {t('projects:noMatch', { query: searchQuery })}
-            </p>
-          ) : (
-            filteredProjects.map((p) => (
-              <ProjectCard
-                key={p.id}
-                project={p}
-                onSelect={() => onSelectProject(p.id, p.name)}
-                onEdit={() => setEditing(p)}
-              />
-            ))
-          )}
-        </div>
-      )}
+      {!grouped && renderProjects(filteredProjects)}
 
       {grouped && groupedProjects && (
         <div className="space-y-6">
@@ -320,18 +308,7 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
                   <Badge variant="muted">{groupProjects.length}</Badge>
                   <div className="flex-1 h-px bg-border" />
                 </div>
-                <CollapsibleContent>
-                  <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-                    {groupProjects.map((p) => (
-                      <ProjectCard
-                        key={p.id}
-                        project={p}
-                        onSelect={() => onSelectProject(p.id, p.name)}
-                        onEdit={() => setEditing(p)}
-                      />
-                    ))}
-                  </div>
-                </CollapsibleContent>
+                <CollapsibleContent>{renderProjects(groupProjects)}</CollapsibleContent>
               </Collapsible>
             );
           })}

@@ -31,7 +31,14 @@
       "Bash(grep -E \"\\\\.ts$|\\\\.test\\\\.ts$\")",
       "Bash(echo \"---EXIT:$?---\")",
       "Bash(pnpm tsc *)",
-      "Bash(pnpm test *)"
+      "Bash(pnpm test *)",
+      "Bash(dir \"D:\\\\MCP\\\\apps\\\\electron\")",
+      "Bash(dir \"D:\\\\MCP\" /B)",
+      "Bash(git ls-tree *)",
+      "WebFetch(domain:theia-ide.org)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "PowerShell(head -20)"
     ]
   }
 }

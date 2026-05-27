@@ -350,7 +350,7 @@ interface RunFreshPayload {
   attachments?: CoderAttachment[];
   maxTurns?: number;
   planMode?: boolean;
-  agent?: 'explore' | 'plan' | 'build' | 'admin';
+  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;

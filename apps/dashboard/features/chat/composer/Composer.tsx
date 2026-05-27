@@ -19,7 +19,7 @@ interface SlashCommand {
   context_mode: string;
 }
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec';
 
 // Visual cue: tints the composer's left border by the active mode so the
 // user sees-at-a-glance which agent is loaded. The functional gates
@@ -29,6 +29,7 @@ const BORDER_TINT: Record<AgentId, string> = {
   plan: 'border-l-violet-500',
   build: 'border-l-emerald-500',
   admin: 'border-l-rose-500',
+  spec: 'border-l-amber-500',
 };
 
 export interface ComposerHandle {
@@ -485,13 +486,15 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
                       enabled when the active provider/model supports it
                       (provider-caps.ts); rendered greyed out otherwise so
                       the user knows the feature exists. */}
+
+                    {/*disabled={!props.supportsThinking}*/}
                   {props.setThinking && (
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
                           type="button"
                           onClick={() => props.setThinking?.(!props.thinking)}
-                          disabled={!props.supportsThinking}
+
                           aria-pressed={props.thinking ?? false}
                           className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                             props.thinking
@@ -505,7 +508,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
                           )}
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-[260px]">
+                      {/*<TooltipContent side="top" className="max-w-[260px]">
                         {props.supportsThinking
                           ? t('toolbar.thinking', {
                               defaultValue:
@@ -514,7 +517,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
                           : t('toolbar.thinkingUnsupported', {
                               defaultValue: 'O modelo atual não suporta extended thinking.',
                             })}
-                      </TooltipContent>
+                      </TooltipContent>*/}
                     </Tooltip>
                   )}
 

@@ -2,13 +2,19 @@
  * applyToolSelectionThin tests — verifies the stripped-tool path works
  * end-to-end without needing the full pipeline + CoderTool[] shape.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyToolSelectionThin,
+  clearTaskEmbeddingCacheForTests,
   InMemoryToolEmbeddingStore,
   type EmbeddingFn,
   type ThinTool,
 } from '../index.js';
+
+beforeEach(() => {
+  // Module-level task embedding cache leaks across tests; reset.
+  clearTaskEmbeddingCacheForTests();
+});
 
 const toyEmbed: EmbeddingFn = async (text: string) => {
   const arr = new Float32Array(4);
@@ -145,5 +151,106 @@ describe('applyToolSelectionThin', () => {
     });
     const names = new Set(out.map((t) => t.name));
     expect(names.has('Kanban')).toBe(true);
+  });
+
+  // ── Task embedding cache (A4) ────────────────────────────────────────
+  describe('task embedding cache', () => {
+    it('first call misses → calls embed for taskText; second call with same text hits', async () => {
+      const store = new InMemoryToolEmbeddingStore();
+      let embedCalls: string[] = [];
+      const trackingEmbed: EmbeddingFn = async (text: string) => {
+        embedCalls.push(text);
+        return toyEmbed(text);
+      };
+      const onResult = vi.fn();
+      const taskText = 'how does the indexer chunk symbols across languages';
+
+      await applyToolSelectionThin({
+        allTools: ALL_TOOLS,
+        taskText,
+        embed: trackingEmbed,
+        embeddingStore: store,
+        k: 10,
+        onResult,
+      });
+      const firstTaskCalls = embedCalls.filter((t) => t === taskText).length;
+      expect(firstTaskCalls).toBe(1);
+      expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ taskEmbeddingCacheHit: false }));
+
+      onResult.mockClear();
+      embedCalls = [];
+
+      await applyToolSelectionThin({
+        allTools: ALL_TOOLS,
+        taskText,
+        embed: trackingEmbed,
+        embeddingStore: store,
+        k: 10,
+        onResult,
+      });
+      // The second call must NOT have embedded the same taskText again.
+      const secondTaskCalls = embedCalls.filter((t) => t === taskText).length;
+      expect(secondTaskCalls).toBe(0);
+      expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ taskEmbeddingCacheHit: true }));
+    });
+
+    it('different taskText misses independently', async () => {
+      const store = new InMemoryToolEmbeddingStore();
+      const taskKeys: string[] = [];
+      const trackingEmbed: EmbeddingFn = async (text: string) => {
+        taskKeys.push(text);
+        return toyEmbed(text);
+      };
+      const onResult = vi.fn();
+
+      await applyToolSelectionThin({
+        allTools: ALL_TOOLS,
+        taskText: 'task one — indexer chunking',
+        embed: trackingEmbed,
+        embeddingStore: store,
+        k: 10,
+        onResult,
+      });
+      expect(onResult).toHaveBeenLastCalledWith(expect.objectContaining({ taskEmbeddingCacheHit: false }));
+
+      await applyToolSelectionThin({
+        allTools: ALL_TOOLS,
+        taskText: 'task two — completely different intent',
+        embed: trackingEmbed,
+        embeddingStore: store,
+        k: 10,
+        onResult,
+      });
+      expect(onResult).toHaveBeenLastCalledWith(expect.objectContaining({ taskEmbeddingCacheHit: false }));
+    });
+
+    it('cache hit returns the same embedding vector', async () => {
+      const store = new InMemoryToolEmbeddingStore();
+      const onFirst = vi.fn();
+      const onSecond = vi.fn();
+      const taskText = 'stable text for cache hit identity check';
+      const cosineProbe: ThinTool = { name: 'CosineProbe', description: 'probe', parameters: { type: 'object', properties: {} } };
+      const toolList = [...ALL_TOOLS, cosineProbe];
+
+      await applyToolSelectionThin({
+        allTools: toolList,
+        taskText,
+        embed: toyEmbed,
+        embeddingStore: store,
+        k: 10,
+        onResult: onFirst,
+      });
+      await applyToolSelectionThin({
+        allTools: toolList,
+        taskText,
+        embed: toyEmbed,
+        embeddingStore: store,
+        k: 10,
+        onResult: onSecond,
+      });
+      // First miss, then hit.
+      expect(onFirst).toHaveBeenCalledWith(expect.objectContaining({ taskEmbeddingCacheHit: false }));
+      expect(onSecond).toHaveBeenCalledWith(expect.objectContaining({ taskEmbeddingCacheHit: true }));
+    });
   });
 });

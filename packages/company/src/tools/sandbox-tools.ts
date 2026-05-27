@@ -31,6 +31,7 @@ const MAX_LINES = 2_000;
  */
 const readSandboxLogs: CoderTool = {
   name: 'read_sandbox_logs',
+  // Auto-repeatable via `_logs` suffix.
   description:
     'Tail the dev-server log from the session\'s builder sandbox (e.g. Vite output from `npm run dev`). Returns the last N lines of stdout+stderr, useful for verifying that a code change compiled, that HMR fired, or that an `npm install` succeeded. Only works in sessions that were created with builder mode. Use this AFTER write_file/edit_file calls to confirm your change had the intended effect before declaring success.',
   source: 'native',
@@ -95,6 +96,7 @@ const readSandboxLogs: CoderTool = {
  */
 const listServices: CoderTool = {
   name: 'list_services',
+  // Auto-repeatable via `list_*` prefix.
   description:
     'List every container (primary + microservices) running in this session. Returns their service_id, stack, internal docker-network URL (for container-to-container calls), and public preview URL. Use this when your code needs to reach a sibling service but you\'re unsure of its hostname, or to confirm a newly-added microservice actually came up. Only available in builder-mode sessions.',
   source: 'native',

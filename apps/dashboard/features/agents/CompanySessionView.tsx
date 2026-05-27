@@ -338,12 +338,26 @@ export function CompanySessionView({
 
           <SessionStalledBanner
             stalledSinceMs={stream.sessionStalledSinceMs}
-            onContinue={() =>
-              stream.sendMessage(
+            onContinue={async () => {
+              // Triple-prong wake-up because a stall can be in any of:
+              //   (a) interactive wait (ask_user/submit_plan) — needs
+              //       interject:true on the sendMessage to break the
+              //       wait before the new message gets queued.
+              //   (b) master ended/paused with pending inbox — needs
+              //       the wake-master endpoint to forward the queued
+              //       inbox row through the in-process router.
+              //   (c) runner alive but hung mid-tool — both above are
+              //       no-ops, but at least the message is recorded for
+              //       when the user manually resets.
+              // Order: send first (so the message is on the board even
+              // if wake fails), then wake (idempotent — safe to spam).
+              await stream.sendMessage(
                 '[SYSTEM] Status check — any blockers? Update the board with current progress and pick up the next task.',
                 [],
-              )
-            }
+                { interject: true },
+              );
+              await stream.wakeMaster();
+            }}
           />
 
           {/* Front tabs — visible across every zone so the user always

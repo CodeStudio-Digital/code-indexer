@@ -30,3 +30,6 @@ export {
   groupCatalogByPipeline,
   findCatalogEntry,
 } from './catalog.js';
+
+// A1 finalization — glue from Decider → CoderTunables.
+export { tunablesFromDecider } from './coder-tunables-adapter.js';

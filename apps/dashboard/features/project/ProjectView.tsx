@@ -10,8 +10,8 @@
  *  │a│  ┌─────────────────────────────────────────────────────┐  │
  *  │i│  │  Active tab content (depends on rail selection)     │  │
  *  │l│  │   - files → FileTreeRail | EditorPane (split)       │  │
+ *  │ │  │   - git   → GitWindow    | EditorPane (split)       │  │
  *  │ │  │   - chat  → AgentChat                               │  │
- *  │ │  │   - git   → GitWindow                               │  │
  *  │ │  │   - search, snapshots, deps, arch, diff, costs, runs│  │
  *  │ │  └─────────────────────────────────────────────────────┘  │
  *  │ │  ─── resize handle (only when bottom panel open) ──────  │
@@ -46,6 +46,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import {
   BookOpen,
+  Database,
   DollarSign,
   FileCode2,
   FolderGit2,
@@ -83,6 +84,7 @@ import SearchPanel from '../search/index.js';
 import SnapshotEditor from '../snapshots/index.js';
 import { ArchitectureTab } from './tabs/ArchitectureTab.js';
 import { DependenciesTab } from './tabs/DependenciesTab.js';
+import { FilesTab as IndexedFilesTab } from './tabs/FilesTab.js';
 import { RunsTab } from './tabs/RunsTab.js';
 import { Button } from '../../components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -91,6 +93,7 @@ import { cn } from '../../lib/utils.js';
 export type ProjectTabId =
   | 'chat'
   | 'files'
+  | 'indexed'
   | 'search'
   | 'git'
   | 'snapshots'
@@ -115,6 +118,11 @@ const TABS: TabDef[] = [
   { id: 'search',       label: 'Search',        icon: Search,            group: 'core' },
   { id: 'git',          label: 'Git',           icon: GitBranch,         group: 'core' },
   { id: 'snapshots',    label: 'Snapshots',     icon: BookOpen,          group: 'core' },
+  // Indexed lives in analytics — it's the per-project file table with
+  // sumarização/complexity/layer/flags, distinct from the IDE-style
+  // file tree (`files`). The Search tab already exposes the vector
+  // debug panel inline, so no separate "Vectors" entry needed.
+  { id: 'indexed',      label: 'Indexed',       icon: Database,          group: 'analytics' },
   { id: 'dependencies', label: 'Dependencies',  icon: Network,           group: 'analytics' },
   { id: 'architecture', label: 'Architecture',  icon: Layers,            group: 'analytics' },
   { id: 'diff',         label: 'Diff',          icon: GitCompare,        group: 'analytics' },
@@ -509,6 +517,31 @@ function TabContent({
     );
   }
 
+  // Git tab mirrors the Files split: GitWindow on the left, editor on
+  // the right. Clicking a file in the Changes pane opens a diff via
+  // `useWorkspaceStore.openDiff` — having EditorPane mounted alongside
+  // means the diff renders inline (instead of forcing the user to flip
+  // to the Files tab to see what they just opened). Default size is
+  // wider than the file tree (28%) because the Changes list shows
+  // path + bulk-action buttons + ahead/behind chips — needs breathing
+  // room. `autoSaveId` is distinct so the persisted size doesn't
+  // collide with the Files tab.
+  if (tab === 'git') {
+    return (
+      <PanelGroup direction="horizontal" autoSaveId="mcp-project-git-horiz">
+        <Panel defaultSize={28} minSize={18} maxSize={50}>
+          <div className="h-full border-r overflow-hidden">
+            <GitWindow projectId={projectId} />
+          </div>
+        </Panel>
+        <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
+        <Panel minSize={30}>
+          <EditorPane />
+        </Panel>
+      </PanelGroup>
+    );
+  }
+
   if (tab === 'chat') {
     return (
       <AgentChat
@@ -546,14 +579,20 @@ function ToolSurface({
           <SearchPanel projectId={projectId} projectName={projectName} />
         </div>
       );
-    case 'git':
-      // GitWindow already paints its own ToolWindowFrame chrome and
-      // handles its loading/empty states, so we pass through full-bleed.
-      return <GitWindow projectId={projectId} />;
+    // 'git' is intercepted by TabContent above (split panel layout with
+    // GitWindow + EditorPane); this case is unreachable but kept off the
+    // switch so we don't render a duplicate GitWindow if TabContent's
+    // branching is ever refactored.
     case 'snapshots':
       return (
         <div className="px-4 py-3">
           <SnapshotEditor projectId={projectId} />
+        </div>
+      );
+    case 'indexed':
+      return (
+        <div className="px-4 py-3">
+          <IndexedFilesTab projectId={projectId} />
         </div>
       );
     case 'dependencies':

@@ -19,7 +19,7 @@ export function formatAskUserResult(answer: string): string {
  */
 export function formatInterruptedResult(
   toolName: string,
-  info: { kind?: 'plan' | 'question' | 'tasks'; agentRunId?: number; role?: string },
+  info: { kind?: 'plan' | 'question' | 'tasks' | 'spec'; agentRunId?: number; role?: string },
 ): string {
   const action =
     info.kind === 'plan'
@@ -28,6 +28,8 @@ export function formatInterruptedResult(
       ? 'approve_subordinate_tasks'
       : info.kind === 'question'
       ? 'answer_subordinate_question'
+      : info.kind === 'spec'
+      ? 'approve_subordinate_spec'
       : null;
   const envelope = JSON.stringify({
     interrupted: true,

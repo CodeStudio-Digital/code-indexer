@@ -177,6 +177,15 @@ export interface PromptHandlers {
     tasks?: StreamTask[];
     execution_mode?: StreamTaskExecutionMode;
   }) => Promise<void>;
+  /**
+   * Verdict on a submit_spec submission (SDD mode). `spec_path` lets the
+   * server log the resolved path even when the runner has been recycled.
+   */
+  onSpecResponse?: (
+    approved: boolean,
+    spec_path: string,
+    requested_changes?: string,
+  ) => Promise<void>;
   /** Fork the session at the given persisted user-message id: create a new
    *  session containing history up to (exclusive) the message, pre-fill the
    *  composer with the message text for editing. */

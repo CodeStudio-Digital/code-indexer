@@ -90,6 +90,179 @@ const CHARS_PER_TOKEN = 4;
 export const AUTOCOMPACT_BUFFER_TOKENS = Number(process.env.CODER_AUTOCOMPACT_BUFFER ?? 50_000);
 export const PROTECT_TOKEN_RATIO = Number(process.env.CODER_PROTECT_RATIO ?? 0.55);
 
+/**
+ * Phase D — multidimensional compaction triggers.
+ *
+ * The primary `trigger` (effective − BUFFER) is per-turn: if THIS turn's
+ * prompt is bigger than the threshold, compact. That works for sessions
+ * that grow steadily, but missed session 763 (`list_subordinates` polling
+ * loop) — each individual turn stayed under 200k tokens (below the 206k
+ * trigger for a 272k-window model) yet 535 turns burned 58M cumulative.
+ *
+ * Three additional triggers, OR-combined:
+ *
+ *  1. CUMULATIVE — `totalInputTokens > effective × CUMULATIVE_RATIO`.
+ *     A session that consumed >N effective-window-worths of input has
+ *     spent enough; compact even if the current turn fits.
+ *
+ *  2. POLLING-AWARE — when Phase C detects polling-loop tendency,
+ *     compaction runs at `trigger × POLLING_TRIGGER_RATIO` instead of
+ *     the full trigger. The loop benefits from compaction *more* than
+ *     a healthy session because the summary surfaces "tool X called
+ *     N× with no progress" to the model.
+ *
+ *  3. STUCK-PROGRESS — N consecutive turns without any assistant text
+ *     (only tool calls) indicates the model has stopped reasoning and
+ *     is mechanically poking tools. Force compact so the summary
+ *     re-anchors intent.
+ */
+export const COMPACT_CUMULATIVE_RATIO = Number(
+  process.env.CODER_COMPACT_CUMULATIVE_RATIO ?? 10,
+);
+export const COMPACT_POLLING_TRIGGER_RATIO = Number(
+  process.env.CODER_COMPACT_POLLING_TRIGGER_RATIO ?? 0.5,
+);
+export const COMPACT_STUCK_TURN_CAP = Number(
+  process.env.CODER_COMPACT_STUCK_TURN_CAP ?? 8,
+);
+
+/**
+ * Pure inputs for the trigger decision. Pass `null` for branches that
+ * don't apply (e.g., `snapshotTotal: null` when on the legacy char path).
+ */
+export interface CompactionTriggerInputs {
+  /** Token-mode primary path (null when legacy / no model). */
+  snapshotTotal: number | null;
+  trigger: number | null;
+  effective: number | null;
+  /** Legacy char-mode fallback. */
+  charTotal: number;
+  charMinimum: number;
+  legacyTriggerTokens: number | null;
+  lastKnownInputTokens: number | null;
+  /** Phase D inputs. */
+  cumulativeInputTokens: number;
+  pollingLoopDetected: boolean;
+  consecutiveNoTextTurns: number;
+  /** Tunables (callable passes these so tests can override). */
+  cumulativeRatio: number;
+  pollingTriggerRatio: number;
+  stuckTurnCap: number;
+}
+
+export interface CompactionTriggerDecision {
+  shouldCompact: boolean;
+  /** Which branch fired, or 'none' when no branch triggered. */
+  reason:
+    | 'token-budget'
+    | 'char-budget'
+    | 'cumulative'
+    | 'polling-loop'
+    | 'stuck-progress'
+    | 'none';
+  /** Human-readable string for the runner's compaction log line. */
+  detail: string;
+}
+
+/**
+ * Multidimensional compaction trigger. Used by the runner to decide
+ * whether to invoke the LLM summarizer before this turn. Pure function —
+ * deterministic given the same inputs, no side effects.
+ *
+ * Evaluation order:
+ *   1. polling-aware (lowest threshold — fires earliest in loops)
+ *   2. stuck-progress (independent of token count — catches no-reasoning)
+ *   3. cumulative (independent of per-turn — catches steady burn)
+ *   4. primary token-budget (existing behaviour)
+ *   5. legacy char-budget (existing fallback)
+ *
+ * The first matching branch wins, but all branches are checked so
+ * future telemetry can report which trigger would've fired even if a
+ * higher-priority one already did.
+ */
+export function computeCompactionTrigger(
+  inp: CompactionTriggerInputs,
+): CompactionTriggerDecision {
+  // Reference token threshold for the cumulative + polling-aware
+  // checks. Prefer the token-mode `trigger`; fall back to a tokenized
+  // estimate of the char minimum (4 chars/token heuristic).
+  const refTrigger =
+    inp.trigger != null
+      ? inp.trigger
+      : inp.legacyTriggerTokens != null
+        ? inp.legacyTriggerTokens
+        : Math.floor(inp.charMinimum / CHARS_PER_TOKEN);
+  const refEffective =
+    inp.effective != null
+      ? inp.effective
+      : refTrigger > 0 ? refTrigger + AUTOCOMPACT_BUFFER_TOKENS : null;
+
+  // 1. polling-aware: when loop tendency detected, lower the threshold.
+  if (inp.pollingLoopDetected && inp.snapshotTotal != null && refTrigger > 0) {
+    const loweredTrigger = Math.floor(refTrigger * inp.pollingTriggerRatio);
+    if (inp.snapshotTotal >= loweredTrigger) {
+      return {
+        shouldCompact: true,
+        reason: 'polling-loop',
+        detail: `polling loop detected; tokens=${inp.snapshotTotal} ≥ ${loweredTrigger} (lowered from ${refTrigger} via ratio ${inp.pollingTriggerRatio})`,
+      };
+    }
+  }
+
+  // 2. stuck-progress: independent of token size. `stuckTurnCap <= 0`
+  // disables this branch (operator escape via env var = 0).
+  if (inp.stuckTurnCap > 0 && inp.consecutiveNoTextTurns >= inp.stuckTurnCap) {
+    return {
+      shouldCompact: true,
+      reason: 'stuck-progress',
+      detail: `${inp.consecutiveNoTextTurns} consecutive turns with zero assistant text (cap ${inp.stuckTurnCap})`,
+    };
+  }
+
+  // 3. cumulative: catches sessions that burn many small contexts.
+  // `cumulativeRatio <= 0` disables this branch (operator escape).
+  if (inp.cumulativeRatio > 0 && refEffective != null && refEffective > 0) {
+    const cumulativeThreshold = refEffective * inp.cumulativeRatio;
+    if (inp.cumulativeInputTokens >= cumulativeThreshold) {
+      return {
+        shouldCompact: true,
+        reason: 'cumulative',
+        detail: `cumulative input tokens ${inp.cumulativeInputTokens} ≥ ${cumulativeThreshold} (${inp.cumulativeRatio}× effective window ${refEffective})`,
+      };
+    }
+  }
+
+  // 4. primary token-budget (existing behaviour).
+  if (inp.snapshotTotal != null && inp.trigger != null) {
+    if (inp.snapshotTotal >= inp.trigger) {
+      return {
+        shouldCompact: true,
+        reason: 'token-budget',
+        detail: `tokens=${inp.snapshotTotal} ≥ trigger ${inp.trigger}`,
+      };
+    }
+  }
+
+  // 5. legacy char-budget fallback.
+  if (inp.snapshotTotal == null) {
+    const fired =
+      inp.legacyTriggerTokens != null && inp.lastKnownInputTokens != null
+        ? inp.lastKnownInputTokens >= inp.legacyTriggerTokens
+        : inp.charTotal > inp.charMinimum;
+    if (fired) {
+      return {
+        shouldCompact: true,
+        reason: 'char-budget',
+        detail: inp.lastKnownInputTokens != null
+          ? `legacy tokens=${inp.lastKnownInputTokens} ≥ ${inp.legacyTriggerTokens}`
+          : `legacy chars=${inp.charTotal} > minimum ${inp.charMinimum}`,
+      };
+    }
+  }
+
+  return { shouldCompact: false, reason: 'none', detail: '' };
+}
+
 /** Feature flag — set to 0 to fall back to the legacy char-based path. */
 export function isNewCompactionEnabled(): boolean {
   return process.env.CODER_NEW_COMPACTION !== '0';
@@ -1039,64 +1212,40 @@ export interface RichRefusalArgs {
 }
 
 /**
- * Build the rich refusal payload returned in place of the legacy refusal
- * string. Deterministic over the input args (no Date.now / randomness)
- * because it becomes part of the tool_result that feeds back into the
- * provider prompt — non-determinism would break prefix caching.
+ * Build the compact refusal payload for the pre-dispatch read-dedup cap.
  *
- * Layout: header + previous reads + current file state + optional preview
- * + optional symbol summary + concrete next-step suggestions.
+ * Deterministic over the input args (no Date.now / randomness) because
+ * it becomes part of the tool_result that feeds back into the provider
+ * prompt — non-determinism would break prefix caching.
+ *
+ * Design note (token budget): the previous revision of this function
+ * emitted ~1500 chars (per-turn `tool_use` ids, mtime line, head/tail
+ * preview, 4-line "what to do next" block). For small reads (e.g. lines
+ * 173–176 of an HTML file ≈ 250 chars), the refusal was 6× larger than
+ * the content it was preventing — the brake cost more tokens than the
+ * loop. This version drops the verbose lists and rebuilds the message
+ * as 2–3 lines (~250 chars). The agent gets the same actionable info:
+ * "you read this N times, content is above, here's the escape".
+ *
+ * `RichRefusalArgs` keeps optional fields (`currentMtimeMs`,
+ * `contextPreview`, `knownSymbols`) for backwards-compat with callers —
+ * we just don't render them. Signature didn't change so callers don't
+ * need updates.
  */
 export function buildRichRefusal(args: RichRefusalArgs): string {
-    const { toolName, path, prior, windowTurns, currentMtimeMs, contextPreview, knownSymbols } = args;
-    const lines: string[] = [];
-    lines.push(
-        `Refused: \`${toolName}\` was called for the same path/slice ${prior.length} time` +
-        `${prior.length === 1 ? '' : 's'} in the last ${windowTurns} turns on \`${path}\`. ` +
-        `The content is still in your context above — re-reading the SAME slice is forbidden by the runner.`,
+    const { toolName, path, prior, windowTurns } = args;
+    // Compact turn list — just the numbers, joined comma-sep. The
+    // tool_use ids are useless to the model (it doesn't navigate by
+    // them) and were costing ~60 chars per prior read.
+    const turns = prior.map((p) => p.turn).join(', ');
+    const plural = prior.length === 1 ? '' : 's';
+
+    return (
+        `Refused: \`${toolName}\` called ${prior.length} time${plural} for \`${path}\` ` +
+        `in last ${windowTurns} turns (turn${plural} ${turns}). ` +
+        `Content is already in your context above — quote it and act on it, ` +
+        `or pass \`force_reread: true\` if the file genuinely changed since the first read.`
     );
-    lines.push('');
-    lines.push('Previous reads:');
-    for (const p of prior) {
-        const mt = p.mtimeMs != null ? `, mtime ${p.mtimeMs}` : '';
-        lines.push(`  - turn ${p.turn} (tool_use ${p.useId}${mt})`);
-    }
-
-    lines.push('');
-    if (currentMtimeMs != null && prior.some((p) => p.mtimeMs != null)) {
-        const firstWithMtime = prior.find((p) => p.mtimeMs != null);
-        const sameMtime = firstWithMtime && firstWithMtime.mtimeMs === currentMtimeMs;
-        lines.push(
-            `File state now: mtime=${currentMtimeMs}` +
-            (sameMtime ? ' (unchanged since first read above)' : ' (changed since at least one prior read)'),
-        );
-    } else if (currentMtimeMs != null) {
-        lines.push(`File state now: mtime=${currentMtimeMs}`);
-    }
-
-    if (knownSymbols && knownSymbols.length > 0) {
-        const top = knownSymbols.slice(0, 6).map((s) => `${s.name} (L${s.line}, ${s.kind})`).join(', ');
-        lines.push(`Symbols seen earlier in this window: ${top}`);
-    }
-
-    if (contextPreview && (contextPreview.headLines.length > 0 || contextPreview.tailLines.length > 0)) {
-        lines.push('');
-        lines.push(`Preview of the first prior read (head + tail of ${contextPreview.totalLines} lines):`);
-        for (const l of contextPreview.headLines) lines.push(`  ${l}`);
-        if (contextPreview.tailLines.length > 0) {
-            lines.push('  ...');
-            for (const l of contextPreview.tailLines) lines.push(`  ${l}`);
-        }
-    }
-
-    lines.push('');
-    lines.push('What to do next:');
-    lines.push('  (a) quote the snippet you already have above and act on it (write code, give the answer);');
-    lines.push('  (b) read a DIFFERENT region — change start_line/end_line or pass another `symbol`;');
-    lines.push('  (c) use mcp__find_references or mcp__search for cross-file context, or mcp__get_file_skeleton for an outline;');
-    lines.push('  (d) make the edit you came here to make — re-reading after edit_file is unnecessary.');
-
-    return lines.join('\n');
 }
 
 /**

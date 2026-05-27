@@ -73,8 +73,28 @@ const EMBED_CONCURRENCY = 4;
  */
 const MAX_TOMBSTONE_RETRIES = 5;
 
+/**
+ * One-shot summary do `folder-reader` pre-flight: quantos arquivos o
+ * glob encontrou (`totalMatches`), quantos serão de fato processados
+ * (`willProcess`, após cap), e qual o cap em vigor. Hoje só `indexFolder`
+ * emite — `indexUrl`/`indexPdf` não chamam onScan. A UI usa pra mostrar
+ * "Encontrados 5800 · vou processar 5800 (cap 50000)" ANTES do progress
+ * bar começar a mexer, evitando o "stuck at 0%" enquanto o glob roda.
+ */
+export interface DocIngestScanSummary {
+  totalMatches: number;
+  willProcess: number;
+  cap: number;
+}
+
 export interface IndexDocStreamCallbacks {
   onStart?: (p: { source_id: number; collection_id: number; started_at: string }) => void | Promise<void>;
+  /**
+   * Optional pre-flight event para folder sources: glob() encontrou X
+   * arquivos, vai processar Y (cap Z). Emite UMA vez, antes do primeiro
+   * `progress`. Em URL/PDF nunca dispara.
+   */
+  onScan?: (p: DocIngestScanSummary) => void | Promise<void>;
   onProgress?: (p: DocIngestProgress) => void | Promise<void>;
   onDone?: (r: DocIngestResult) => void | Promise<void>;
   onError?: (message: string) => void | Promise<void>;
@@ -319,13 +339,32 @@ export class IndexDocumentationUseCase {
                 label: ev.filePath,
                 pages_fetched: ev.index,
               });
-            } else {
-              console.log(
-                `[doc-indexer] folder ${ev.kind}: ${ev.filePath}` +
-                  ('reason' in ev ? ` (${ev.reason})` : '') +
-                  ('message' in ev ? ` — ${ev.message}` : ''),
-              );
+              return;
             }
+            if (ev.kind === 'scan') {
+              // Pre-flight one-shot — UI mostra "Encontrados N · vou
+              // processar M (cap K)" antes do loop começar. Log paralelo
+              // pra ficar visível no terminal do dev server também.
+              console.log(
+                `[doc-indexer] folder scan source=${source.id} totalMatches=${ev.totalMatches} ` +
+                  `willProcess=${ev.willProcess} cap=${ev.cap}` +
+                  (ev.totalMatches > ev.willProcess
+                    ? ` ⚠ cap atingido — ${ev.totalMatches - ev.willProcess} arquivo(s) descartado(s); aumente em Avançado`
+                    : ''),
+              );
+              void callbacks?.onScan?.({
+                totalMatches: ev.totalMatches,
+                willProcess: ev.willProcess,
+                cap: ev.cap,
+              });
+              return;
+            }
+            // skip | error — log only, sem contagem visual.
+            console.log(
+              `[doc-indexer] folder ${ev.kind}: ${ev.filePath}` +
+                ('reason' in ev ? ` (${ev.reason})` : '') +
+                ('message' in ev ? ` — ${ev.message}` : ''),
+            );
           },
         });
         console.log(

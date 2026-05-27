@@ -10,7 +10,7 @@ import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
 import { FallbackPicker } from '../../../components/FallbackPicker.js';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec';
 
 interface ComposerToolbarProps {
   hasInput: boolean;
@@ -241,7 +241,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <span className="text-[10px] text-muted-foreground hidden sm:inline">⌘+Enter</span>
+        {/*<span className="text-[10px] text-muted-foreground hidden sm:inline">⌘+Enter</span>*/}
 
         {/* Mobile-only settings popover */}
         <Popover>

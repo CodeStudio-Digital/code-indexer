@@ -1,20 +1,26 @@
 /**
  * Subordinate-scoped Kanban tools.
  *
- * These tools let subordinate agents self-service their assigned Kanban card:
- * - Add comments (progress, blockers, decisions)
- * - Check off / add checklist items (objectives)
- * - Move their card to Review when done
+ * As of the kanban-unification work: subordinates register the unified
+ * `kanban_post_comment` and `kanban_update_objectives` (from
+ * `kanban-tools.ts`) — same tools the master uses, with optional
+ * `card_id` that auto-resolves to the sub's assigned card when omitted.
  *
- * All tools auto-resolve the card ID from the agent's `agentRunId` —
- * subordinates never need to know or guess card IDs.
+ * What stays subordinate-only:
+ *   - `kanban_move_to_review` — column transition with a hard
+ *     constraint (only in_progress → review). Distinct enough from
+ *     the master's generic `kanban_move_card` to warrant its own
+ *     focused tool — the constraint encoded in the tool name + handler
+ *     prevents the sub from moving cards backwards.
  *
- * These are distinct from the Master's `kanban_add_comment` / `kanban_update_checklist`
- * which operate on ANY card by ID. The `my_` prefix signals self-scoped access.
+ * Deprecated aliases (`kanban_my_comment`, `kanban_my_checklist`) are
+ * registered for one release so mid-session agents don't break.
+ * They delegate to the unified handlers with `card_id` auto-resolved.
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import { buildUnifiedKanbanTools } from './kanban-tools.js';
 
 export function buildSubordinateKanbanTools(
   orchestrator: CompanyOrchestrator,
@@ -22,9 +28,14 @@ export function buildSubordinateKanbanTools(
   agentRunId: number,
 ): CoderTool[] {
   return [
+    // Unified surface — same tools master uses. Card auto-resolves via
+    // ctx.companyContext.agentRunId when card_id is omitted.
+    ...buildUnifiedKanbanTools(orchestrator),
+    // Subordinate-only column transition with built-in constraint.
+    kanbanMoveToReview(orchestrator, agentRole, agentRunId),
+    // Deprecated aliases — kept for one release. Remove next sprint.
     kanbanMyComment(orchestrator, agentRole, agentRunId),
     kanbanMyChecklist(orchestrator, agentRole, agentRunId),
-    kanbanMoveToReview(orchestrator, agentRole, agentRunId),
   ];
 }
 
@@ -51,6 +62,7 @@ function kanbanMyComment(
   return {
     name: 'kanban_my_comment',
     description:
+      '[DEPRECATED — use kanban_post_comment instead, omit card_id] ' +
       'Add a comment to YOUR assigned Kanban card. Use for progress updates, decisions, ' +
       'blockers, or technical context that should survive agent restarts. ' +
       'The Master and future agents will see these comments.',
@@ -107,6 +119,7 @@ function kanbanMyChecklist(
   return {
     name: 'kanban_my_checklist',
     description:
+      '[DEPRECATED — use kanban_update_objectives instead, omit card_id] ' +
       'Check off completed objectives or add new checklist items to YOUR Kanban card. ' +
       'Use kanban_read_my_card first to see current item IDs.',
     parameters,

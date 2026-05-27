@@ -9,6 +9,31 @@ export { IndexAgent } from './indexer/indexer.js';
 export { HybridSearch } from './search/hybrid.js';
 export type { SearchDiagnostics } from './search/hybrid.js';
 export { createReranker } from './search/reranker.js';
+export { RecentFilesSource } from './search/recent-files-source.js';
+export type {
+  RecentFileEntry,
+  RecentFilesMatch,
+  RecentFilesSourceOptions,
+} from './search/recent-files-source.js';
+export { makeHybridSearchCacheInvalidator } from './search/cache-invalidator.js';
+export type {
+  IndexerFilesUpdatedEvent,
+  IndexerFilesUpdatedListener,
+} from './indexer/indexer-events.js';
+
+// I5 — multi-action reranker (Sprint 3)
+export {
+  NullMultiActionReranker,
+  SingleActionAdapter,
+  weightedActionFusion,
+  toRerankResults,
+  DEFAULT_ACTION_WEIGHTS,
+  type MultiActionRerankerService,
+  type MultiActionRerankResult,
+  type RerankerAction,
+  type ActionWeights,
+  type WeightedActionResult,
+} from './search/multi-action-reranker.js';
 export type {
   EmbeddingService,
 } from './search/embeddings.js';

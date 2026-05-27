@@ -402,6 +402,10 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
             },
             {
               onStart: (p) => send('start', p),
+              // Pre-flight: emite ANTES do primeiro `progress` pra UI
+              // mostrar "Encontrados N · vou processar M (cap K)" sem
+              // esperar o glob terminar.
+              onScan: (p) => send('scan', p),
               onProgress: (p) => send('progress', p),
               onDone: (r) => send('done', r),
               onError: (m) => send('error', { message: m }),
@@ -485,6 +489,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
             },
             {
               onStart: (p) => send('start', p),
+              onScan: (p) => send('scan', p),
               onProgress: (p) => send('progress', p),
               onDone: (r) => send('done', r),
               onError: (m) => send('error', { message: m }),

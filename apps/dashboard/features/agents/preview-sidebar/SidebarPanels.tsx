@@ -14,6 +14,7 @@ import { useSandboxStatus } from '../../builder/useSandboxStatus.js';
 import { InboxPanel } from '../InboxPanel.js';
 import EnvTab from '../EnvTab.js';
 import DatabasesTab from '../DatabasesTab.js';
+import { SupervisorPanel } from '../../admin/SupervisorPanel.js';
 import { useExtraServices } from './useExtraServices.js';
 import type { SidePanel } from './SidebarRail.js';
 
@@ -67,6 +68,13 @@ export function SidebarPanels({ sessionId, active, companyConfigSlot }: SidebarP
 
   if (active === 'env') {
     return <EnvTab companySessionId={sessionId} />;
+  }
+
+  if (active === 'supervisor') {
+    // Session-scoped supervisor view — filters status + incidents +
+    // SSE stream to this session only. The same component shows the
+    // global view in `/telemetry` (when no sessionId prop).
+    return <SupervisorPanel sessionId={sessionId} />;
   }
 
   return <DatabasesTab companySessionId={sessionId} />;

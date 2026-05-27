@@ -15,15 +15,36 @@ export function buildKanbanTools(orchestrator: CompanyOrchestrator): CoderTool[]
   return [
     kanbanCreateCard(orchestrator),
     kanbanMoveCard(orchestrator),
-    kanbanUpdateCard(orchestrator),
+    kanbanUpdateMeta(orchestrator),
+    // Unified comment + checklist tools — work for master AND
+    // subordinates (sub auto-resolves card_id via assigned card).
+    // Replace the prior split (kanban_add_comment + kanban_my_comment
+    // and kanban_update_checklist + kanban_my_checklist) that
+    // confused agents about which variant to use.
+    kanbanPostComment(orchestrator),
+    kanbanUpdateObjectives(orchestrator),
+    // Deprecated aliases — kept registered for one release so agents
+    // mid-session that learned the old names don't break. Mark with
+    // [DEPRECATED] in description; remove next sprint.
     kanbanAddComment(orchestrator),
     kanbanUpdateChecklist(orchestrator),
+    kanbanUpdateCard(orchestrator),
     kanbanAddDependency(orchestrator),
     kanbanRemoveDependency(orchestrator),
     kanbanAssignAgent(orchestrator),
     kanbanListCards(orchestrator),
     kanbanGetCard(orchestrator),
   ];
+}
+
+/**
+ * Exported for `buildSubordinateKanbanTools` to register the same
+ * unified tools on the subordinate's runner. The handler reads
+ * `ctx.companyContext.agentRunId` to auto-resolve the card when
+ * `card_id` is omitted — works seamlessly for both master and sub.
+ */
+export function buildUnifiedKanbanTools(orchestrator: CompanyOrchestrator): CoderTool[] {
+  return [kanbanPostComment(orchestrator), kanbanUpdateObjectives(orchestrator)];
 }
 
 // ─── kanban_create_card ───────────────────────────────────────
@@ -110,9 +131,15 @@ function kanbanMoveCard(orchestrator: CompanyOrchestrator): CoderTool {
   };
 }
 
-// ─── kanban_update_card ───────────────────────────────────────
+// ─── kanban_update_meta (renamed from kanban_update_card) ─────
+//
+// Renamed for clarity: `kanban_update_card` was ambiguous — agents
+// confused it with `kanban_update_checklist` ("update card" feels
+// like "update everything on the card, including objectives"). The
+// new name `kanban_update_meta` makes it explicit: this tool ONLY
+// changes title/description/tag, NOT the checklist or comments.
 
-function kanbanUpdateCard(orchestrator: CompanyOrchestrator): CoderTool {
+function kanbanUpdateMeta(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
@@ -125,8 +152,11 @@ function kanbanUpdateCard(orchestrator: CompanyOrchestrator): CoderTool {
   };
 
   return {
-    name: 'kanban_update_card',
-    description: 'Update a Kanban card\'s title, description, or tag.',
+    name: 'kanban_update_meta',
+    description:
+      "Update a Kanban card's metadata (title / description / tag). " +
+      'Does NOT touch checklist objectives or comments — use ' +
+      '`kanban_update_objectives` or `kanban_post_comment` for those.',
     parameters,
     source: 'native',
     handler: async (args) => {
@@ -145,34 +175,93 @@ function kanbanUpdateCard(orchestrator: CompanyOrchestrator): CoderTool {
   };
 }
 
-// ─── kanban_add_comment ───────────────────────────────────────
+// ─── kanban_update_card (deprecated alias for kanban_update_meta) ──
 
-function kanbanAddComment(orchestrator: CompanyOrchestrator): CoderTool {
+function kanbanUpdateCard(orchestrator: CompanyOrchestrator): CoderTool {
+  // Same parameters / handler as `kanban_update_meta` — only the
+  // name + description differs. Reduces duplication while preserving
+  // the old surface for one release cycle.
+  const meta = kanbanUpdateMeta(orchestrator);
+  return {
+    ...meta,
+    name: 'kanban_update_card',
+    description: '[DEPRECATED — use kanban_update_meta] ' + meta.description,
+  };
+}
+
+// ─── kanban_post_comment (unified — replaces add_comment + my_comment) ──
+//
+// Single comment surface for master AND subordinates. `card_id` is
+// optional: when omitted, the handler auto-resolves to the caller's
+// assigned card via `findCardForAgent(agentRunId)`. Master must
+// always pass `card_id` explicitly (they don't have an "assigned"
+// card). Subordinates can omit it and let auto-resolve work.
+//
+// This kills the old split (`kanban_add_comment` for master vs
+// `kanban_my_comment` for subs) that confused agents about which
+// variant applied to their role.
+
+function kanbanPostComment(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      card_id: { type: 'number', description: 'ID of the card' },
-      content: { type: 'string', description: 'Comment content — use this to save context, decisions, progress logs, and variable states that subordinates need to resume work' },
+      card_id: {
+        type: 'number',
+        description:
+          'ID of the card. OMIT when you are a subordinate with an assigned card ' +
+          '(your card is auto-resolved). Required when you are the master.',
+      },
+      content: {
+        type: 'string',
+        description:
+          'Comment content — decisions, progress logs, file paths, technical context, ' +
+          'variable states. Comments are durable and visible to all agents who later ' +
+          'work on this card; treat them as the canonical handoff record.',
+      },
     },
-    required: ['card_id', 'content'],
+    required: ['content'],
   };
 
   return {
-    name: 'kanban_add_comment',
-    description: 'Add a context comment to a Kanban card. THIS IS THE KEY MECHANISM for passing context to subordinates. Comments are injected into the subordinate\'s task briefing when they are assigned to this card. Save: decisions, file paths, function names, technical context, variable states — anything needed to resume work.',
+    name: 'kanban_post_comment',
+    description:
+      'Add a comment to a Kanban card. Master + subordinates both use this. ' +
+      "If you're a subordinate, omit `card_id` and your assigned card is used. " +
+      "If you're the master, pass `card_id` explicitly. " +
+      'Use for: handoff context, blockers, decisions, progress checkpoints — ' +
+      'anything that needs to survive agent restarts.',
     parameters,
     source: 'native',
     handler: async (args, ctx) => {
       try {
         const agentRunId = ctx.companyContext?.agentRunId ?? null;
         const authorRole = ctx.companyContext?.agentRole ?? 'master';
+        // Resolve card_id: explicit > auto-resolve from assigned card.
+        let cardId = args.card_id as number | undefined;
+        if (cardId == null) {
+          if (agentRunId == null) {
+            return err(
+              "kanban_post_comment: card_id is required when you are the master " +
+                '(no card is automatically assigned to you). Pass an explicit card_id ' +
+                'from kanban_list_cards or kanban_get_card.',
+            );
+          }
+          const resolved = orchestrator.findCardForAgent(agentRunId);
+          if (!resolved) {
+            return err(
+              "kanban_post_comment: no card is currently assigned to you. " +
+                'Either pass card_id explicitly, or ask the master to assign one.',
+            );
+          }
+          cardId = resolved;
+        }
         const comment = orchestrator.kanbanAddComment(
-          args.card_id as number,
+          cardId,
           authorRole,
           agentRunId,
           args.content as string,
         );
-        return ok(`Comment #${comment.id} added to card #${args.card_id}`);
+        return ok(`Comment #${comment.id} added to card #${cardId}`);
       } catch (e) {
         return err(`Failed to add comment: ${(e as Error).message}`);
       }
@@ -180,45 +269,118 @@ function kanbanAddComment(orchestrator: CompanyOrchestrator): CoderTool {
   };
 }
 
-// ─── kanban_update_checklist ──────────────────────────────────
+// ─── kanban_update_objectives (unified — replaces update_checklist + my_checklist) ──
+//
+// Same shape as kanban_post_comment: single surface for master and
+// subordinates, optional `card_id` auto-resolves for subs.
 
-function kanbanUpdateChecklist(orchestrator: CompanyOrchestrator): CoderTool {
+function kanbanUpdateObjectives(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      card_id: { type: 'number', description: 'ID of the card' },
+      card_id: {
+        type: 'number',
+        description:
+          'ID of the card. OMIT as a subordinate with an assigned card (auto-resolves). ' +
+          'Required when you are the master.',
+      },
       items: {
         type: 'array',
         items: {
           type: 'object',
           properties: {
-            id: { type: 'number', description: 'Existing item ID (omit to create new)' },
+            id: {
+              type: 'number',
+              description:
+                'Existing item ID (omit to create new). Get IDs from kanban_get_card or kanban_read_my_card.',
+            },
             text: { type: 'string', description: 'Objective text' },
             checked: { type: 'boolean', description: 'Whether this objective is completed' },
           },
           required: ['text', 'checked'],
         },
-        description: 'Checklist items to create or update',
+        description: 'Checklist items to create (omit id) or update (pass id).',
       },
     },
-    required: ['card_id', 'items'],
+    required: ['items'],
   };
 
   return {
-    name: 'kanban_update_checklist',
-    description: 'Add or update checklist items (objectives) on a Kanban card. Provide id to update existing items, omit id to create new ones.',
+    name: 'kanban_update_objectives',
+    description:
+      'Add or update checklist objectives on a Kanban card. Master + subordinates both use this. ' +
+      "If you're a subordinate, omit `card_id` and your assigned card is used. " +
+      "If you're the master, pass `card_id` explicitly. " +
+      'Provide `id` to update an existing item, or omit `id` to create a new one.',
     parameters,
     source: 'native',
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       try {
+        const agentRunId = ctx.companyContext?.agentRunId ?? null;
+        let cardId = args.card_id as number | undefined;
+        if (cardId == null) {
+          if (agentRunId == null) {
+            return err(
+              'kanban_update_objectives: card_id is required when you are the master.',
+            );
+          }
+          const resolved = orchestrator.findCardForAgent(agentRunId);
+          if (!resolved) {
+            return err(
+              'kanban_update_objectives: no card is currently assigned to you. ' +
+                'Pass card_id explicitly, or ask the master to assign one.',
+            );
+          }
+          cardId = resolved;
+        }
         const items = args.items as Array<{ id?: number; text: string; checked: boolean }>;
-        const result = orchestrator.kanbanUpdateChecklist(args.card_id as number, items);
-        const checked = result.filter(i => i.checked).length;
-        return ok(`Checklist updated: ${checked}/${result.length} items completed`);
+        // Defensive validation: when items reference existing IDs, ensure
+        // they belong to THIS card. Prevents accidental cross-card writes.
+        if (items.some((i) => i.id != null)) {
+          const card = orchestrator.kanbanGetCard(cardId);
+          if (card) {
+            const cardItemIds = new Set(card.checklist.map((ci) => ci.id));
+            const invalidIds = items
+              .filter((i) => i.id != null && !cardItemIds.has(i.id))
+              .map((i) => i.id);
+            if (invalidIds.length > 0) {
+              return err(
+                `Checklist item(s) ${invalidIds.join(', ')} do not belong to card #${cardId}.`,
+              );
+            }
+          }
+        }
+        const result = orchestrator.kanbanUpdateChecklist(cardId, items);
+        const checked = result.filter((i) => i.checked).length;
+        return ok(`Checklist updated: ${checked}/${result.length} items completed on card #${cardId}`);
       } catch (e) {
-        return err(`Failed to update checklist: ${(e as Error).message}`);
+        return err(`Failed to update objectives: ${(e as Error).message}`);
       }
     },
+  };
+}
+
+// ─── kanban_add_comment (deprecated alias for kanban_post_comment) ──
+
+function kanbanAddComment(orchestrator: CompanyOrchestrator): CoderTool {
+  const unified = kanbanPostComment(orchestrator);
+  return {
+    ...unified,
+    name: 'kanban_add_comment',
+    description:
+      '[DEPRECATED — use kanban_post_comment instead] ' + unified.description,
+  };
+}
+
+// ─── kanban_update_checklist (deprecated alias for kanban_update_objectives) ──
+
+function kanbanUpdateChecklist(orchestrator: CompanyOrchestrator): CoderTool {
+  const unified = kanbanUpdateObjectives(orchestrator);
+  return {
+    ...unified,
+    name: 'kanban_update_checklist',
+    description:
+      '[DEPRECATED — use kanban_update_objectives instead] ' + unified.description,
   };
 }
 

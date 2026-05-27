@@ -33,6 +33,8 @@ import {
 import type { ConcurrencyPolicy } from '@mcp/company/ConcurrencyPolicy.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { HumanInTheLoop } from '@mcp/company/services/HumanInTheLoop.js';
+import { getGlobalAgentSupervisor } from '@mcp/company/services/supervisor/global.js';
+import { wireSupervisorToRunner } from '@mcp/company/services/supervisor/wire-runner-events.js';
 import type { MasterAttention } from '@mcp/company/services/MasterAttention.js';
 import type {
   IAgentStatusUpdater,
@@ -127,6 +129,26 @@ export async function spawnSubordinate(
     throw new Error(
       `spawnSubordinate refused (${check.current}/${check.max}). Running: ${running}. ${check.message}`,
     );
+  }
+
+  // ── Supervisor role-quarantine check (Phase 2.3) ──────────────────
+  // The supervisor's per-role circuit breaker may have quarantined the
+  // role after N spawn/recovery failures. Refuse spawns until the
+  // cooldown elapses or an operator overrides via releaseRoleQuarantine.
+  // This is intentionally before any IO so we fail fast.
+  const supervisorForQuarantine = getGlobalAgentSupervisor();
+  if (supervisorForQuarantine) {
+    const quarantine = supervisorForQuarantine.isRoleQuarantined(spec.role);
+    if (quarantine) {
+      const remainingMs = Math.max(0, quarantine.quarantinedUntilMs - Date.now());
+      const remainingS = Math.ceil(remainingMs / 1000);
+      throw new Error(
+        `spawnSubordinate refused: role '${spec.role}' is quarantined by supervisor ` +
+          `after ${quarantine.failureTimestamps.length} recent failures. ` +
+          `Available in ${remainingS}s (at ${new Date(quarantine.quarantinedUntilMs).toISOString()}). ` +
+          `Operator override: AgentSupervisor.releaseRoleQuarantine('${spec.role}').`,
+      );
+    }
   }
 
   const config = loadConfig();
@@ -296,12 +318,20 @@ export async function spawnSubordinate(
     overridePrompt: spec.roleOverride,
   });
 
+  // Stored in the outer closure so `attachSubordinateCompletionHandler`
+  // can call it from the `.finally` block after handle.done resolves
+  // — prevents listener leaks. Reassigned inside `onRunnerReady` once
+  // the runner instance exists. Default no-op so the call is safe
+  // even when no supervisor was wired.
+  let supervisorUnsubscribe: () => void = () => { /* no-op */ };
+
   const handle = await runCoder({
     session: { id: subSession.id },
     userMessage: spec.task,
     attachments: spec.attachments,
     maxTurns: 50,
     profile: spec.tier ?? 'navigate',
+    agent: spec.agent,
     companyContext,
     companyPromptBlock: subordinateBlock,
     companyRoleOverride: spec.roleOverride,
@@ -316,13 +346,34 @@ export async function spawnSubordinate(
     // turn 1, so a sub that calls `submit_plan_to_master` or
     // `ask_master` immediately on turn 1 doesn't slip through (same
     // race the master had — see MasterLifecycle.start).
-    onRunnerReady: (runner) =>
-      wireSubordinateInterceptionsForRunner(runner, agentRun.id, spec.role, deps.wireDeps),
+    //
+    // Phase 2.1 — ALSO subscribe the AgentSupervisor to runner events
+    // so it gets fine-grained heartbeats (text_delta, tool_progress,
+    // tool_call_start/result). Without these the supervisor's stuck
+    // detection relies on coarse signals only.
+    onRunnerReady: (runner) => {
+      wireSubordinateInterceptionsForRunner(runner, agentRun.id, spec.role, deps.wireDeps);
+      // Re-assigns the outer `supervisorUnsubscribe` so the
+      // completion handler can fire it when the run ends. Without
+      // this, listeners would leak after handle.done resolves.
+      // Declared before runCoder() so TDZ doesn't bite the closure.
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      supervisorUnsubscribe = wireSupervisorToRunner(runner, agentRun.id);
+    },
   } as RunCoderOptions & { companyPromptBlock: string });
 
   deps.status.setStatus(agentRun.id, 'running');
   deps.runningIds.add(agentRun.id);
   deps.notifyIdleChanged();
+
+  // Sprint 4 (Phase 1.5) — register with the AgentSupervisor so it
+  // starts tracking heartbeat + state. Null-safe: when supervisor is
+  // disabled via env flag, this is a no-op.
+  getGlobalAgentSupervisor()?.registerSubordinate({
+    agentRunId: agentRun.id,
+    companySessionId: deps.ctx.companySessionId,
+    role: spec.role,
+  });
 
   const subordinateHandle: SubordinateHandle = {
     agentRunId: agentRun.id,
@@ -336,6 +387,14 @@ export async function spawnSubordinate(
   deps.subordinates.set(agentRun.id, subordinateHandle);
 
   attachSubordinateCompletionHandler(handle, agentRun.id, spec.role, false, deps.completionDeps);
+
+  // Phase 2.1 — ensure the supervisor's runner-event listeners are
+  // unwired when the run ends. Independent of the completion handler's
+  // own .finally — multiple .finally on the same promise are
+  // dispatched independently.
+  handle.done.finally(() => {
+    try { supervisorUnsubscribe(); } catch { /* best-effort */ }
+  });
 
   store.close();
 

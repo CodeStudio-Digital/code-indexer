@@ -17,6 +17,7 @@ import {
   Archive,
   BookOpen,
   BookText,
+  Database,
   FlaskConical,
   FolderOpen,
   FolderTree,
@@ -26,6 +27,7 @@ import {
   MessageCircle,
   MessageSquare,
   Network,
+  Sparkles,
   TerminalSquare,
   type LucideIcon,
 } from 'lucide-react';
@@ -55,8 +57,12 @@ export const TAB_REGISTRY: readonly TabDef[] = [
   // Terminal moved out of the build zone — it's now a global bottom
   // panel toggled from SessionHeader (Ctrl+J), so it's always
   // reachable regardless of which zone/tab is active.
-  // Data — persistence
+  // Data — persistence + index introspection
   { zone: 'data', tab: 'drive', Icon: FolderOpen, labelKey: 'company.drive', fallbackLabel: 'Drive' },
   { zone: 'data', tab: 'snapshots', Icon: GitCompare, labelKey: 'company.snapshots', fallbackLabel: 'Snapshots' },
   { zone: 'data', tab: 'archived', Icon: Archive, labelKey: 'company.archived', fallbackLabel: 'Archived' },
+  // Browse the indexed-file table (path/lang/complexity + summary modal).
+  { zone: 'data', tab: 'indexed', Icon: Database, labelKey: 'company.indexed', fallbackLabel: 'Indexed' },
+  // Query the embedded corpus (hybrid · vector · FTS) with diagnostics.
+  { zone: 'data', tab: 'vectors', Icon: Sparkles, labelKey: 'company.vectors', fallbackLabel: 'Vectors' },
 ] as const;

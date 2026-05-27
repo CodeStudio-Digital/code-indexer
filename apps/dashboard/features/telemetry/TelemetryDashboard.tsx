@@ -5,6 +5,7 @@ import { useApi } from '../../hooks/useApi.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
 import { PipelineTelemetryPanel } from '../admin/PipelineTelemetryPanel.js';
 import { QualityPanel } from '../admin/QualityPanel.js';
+import { SupervisorPanel } from '../admin/SupervisorPanel.js';
 
 interface ProviderRow {
   provider: string;
@@ -143,6 +144,7 @@ export function TelemetryDashboard() {
           <TabsTrigger value="overview">{t('telemetry:tabs.overview', { defaultValue: 'Overview' })}</TabsTrigger>
           <TabsTrigger value="pipeline">{t('telemetry:tabs.pipeline', { defaultValue: 'Pipeline Telemetry' })}</TabsTrigger>
           <TabsTrigger value="quality">{t('telemetry:tabs.quality', { defaultValue: 'Quality' })}</TabsTrigger>
+          <TabsTrigger value="supervisor">{t('telemetry:tabs.supervisor', { defaultValue: 'Supervisor' })}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
@@ -155,6 +157,10 @@ export function TelemetryDashboard() {
 
         <TabsContent value="quality">
           <QualityPanel />
+        </TabsContent>
+
+        <TabsContent value="supervisor">
+          <SupervisorPanel />
         </TabsContent>
       </Tabs>
     </div>

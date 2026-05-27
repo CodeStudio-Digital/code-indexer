@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Activity,
+  AlertTriangle,
   AppWindow,
   BookOpen,
   Database,
@@ -32,6 +33,7 @@ import { ProviderCard } from './ProviderCard.js';
 import { McpServersPanel } from './McpServersPanel.js';
 import { McpHttpStatusPanel } from './McpHttpStatusPanel.js';
 import { AppSettingsPanel } from './AppSettingsPanel.js';
+import { CapabilityFallbacksPanel } from './CapabilityFallbacksPanel.js';
 import { SkillsPanel } from './SkillsPanel.js';
 import { StoragePanel } from './StoragePanel.js';
 import { HydePanel } from './HydePanel.js';
@@ -51,6 +53,7 @@ import type { AdminProvider } from './types.js';
 
 type SectionId =
   | 'providers'
+  | 'capabilities'
   | 'app-settings'
   | 'storage'
   | 'hygiene'
@@ -124,6 +127,8 @@ export default function Admin() {
   const sections: SectionDef[] = [
     { id: 'providers',         label: t('admin:tabs.providers'),  icon: Plug,
       hint: 'Conexões com modelos (OpenAI, Anthropic, …)' },
+    { id: 'capabilities',      label: 'Capabilities',             icon: AlertTriangle,
+      hint: 'Modelos rodando em fallback de context window' },
     { id: 'app-settings',      label: 'Configurações',            icon: Settings2,
       hint: 'Env vars persistidas: limites, flags, tuning' },
     { id: 'storage',           label: t('admin:tabs.embeddings'), icon: Database,
@@ -329,6 +334,7 @@ export default function Admin() {
             </div>
           )}
 
+          {section === 'capabilities'      && <CapabilityFallbacksPanel />}
           {section === 'app-settings'      && <AppSettingsPanel />}
           {section === 'storage'           && <StoragePanel />}
           {section === 'hygiene'           && <HygienePanel />}

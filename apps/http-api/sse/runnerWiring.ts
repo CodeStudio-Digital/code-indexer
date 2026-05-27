@@ -40,6 +40,9 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
   runner.on('plan_posted', (block) => {
     publish(bus, 'plan', block);
   });
+  runner.on('spec_posted', (block) => {
+    publish(bus, 'spec', block);
+  });
   runner.on('question_posted', (block) => {
     publish(bus, 'question', block);
   });

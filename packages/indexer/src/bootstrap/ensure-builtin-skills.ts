@@ -52,17 +52,40 @@ export interface EnsureBuiltinSkillsResult {
   failed: Array<{ file: string; error: string }>;
 }
 
-/** Locate the `builtin/` directory containing seed `.md` files. */
+/** Locate the `builtin/` directory containing seed `.md` files.
+ *
+ * Two structures are supported:
+ *   1. Legacy single-package layout: `<root>/src/core/coder/skills/builtin`
+ *      and `<dist>/core/coder/skills/builtin` (pre-monorepo).
+ *   2. Current monorepo layout: `<root>/packages/code-agent/src/skills/builtin`
+ *      and the matching `dist/` after `tsc`. Found by walking up looking
+ *      for `pnpm-workspace.yaml`.
+ *
+ * The legacy candidates are kept so old builds keep working; once the
+ * legacy path is fully retired they can be removed.
+ */
 export function resolveBuiltinSkillsDir(moduleUrl: string): string | null {
   const here = dirname(fileURLToPath(moduleUrl));
-  const candidates = [
-    // built mode: dist/core/bootstrap → dist/core/coder/skills/builtin
+  const candidates: string[] = [
+    // Legacy built mode: dist/core/bootstrap → dist/core/coder/skills/builtin
     join(here, '..', 'coder', 'skills', 'builtin'),
-    // dev fallback: walk up to project root, then dive into src/
+    // Legacy dev fallback: walk up, dive into src/core/coder/skills/builtin
     ...projectRootCandidates(here).map((root) =>
       join(root, 'src', 'core', 'coder', 'skills', 'builtin'),
     ),
   ];
+
+  // Monorepo layout: skills now live in @mcp/code-agent. Find the workspace
+  // root by walking up looking for pnpm-workspace.yaml, then point at the
+  // code-agent package (src/ in dev, dist/ in built mode).
+  const workspaceRoot = findMonorepoRoot(here);
+  if (workspaceRoot) {
+    candidates.push(
+      join(workspaceRoot, 'packages', 'code-agent', 'src', 'skills', 'builtin'),
+      join(workspaceRoot, 'packages', 'code-agent', 'dist', 'skills', 'builtin'),
+    );
+  }
+
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
@@ -79,6 +102,18 @@ function projectRootCandidates(start: string): string[] {
     dir = parent;
   }
   return out;
+}
+
+/** Walk up looking for `pnpm-workspace.yaml` to identify the monorepo root. */
+function findMonorepoRoot(start: string): string | null {
+  let dir = start;
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
 }
 
 /** Coerce frontmatter values into the `UpsertSkillInput` shape for builtins. */
@@ -108,11 +143,21 @@ export function frontmatterToBuiltinUpsert(
     ? [...tags, ...triggerTags.map((t) => `trigger:${t}`)]
     : tags;
 
+  // Allow builtin skills to register a slash command via frontmatter
+  // (`slash-command: init`). Mirrors kimi-cli's `/init` UX — letting the
+  // dashboard's existing slash-command intercept (Composer.tsx) drive
+  // built-in flows like AGENTS.md generation without any custom wiring.
+  const slashCommandRaw = fm['slash-command'];
+  const slashCommand =
+    typeof slashCommandRaw === 'string' && slashCommandRaw.trim()
+      ? slashCommandRaw.trim()
+      : null;
+
   return {
     id,
     name: id,
     description: typeof fm.description === 'string' ? fm.description : '',
-    slash_command: null,
+    slash_command: slashCommand,
     prompt_body: body,
     scope: 'global',
     enabled: true,

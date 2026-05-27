@@ -5,6 +5,7 @@ import { mountCoderProvidersRoutes } from './providers.js';
 import { mountCoderSessionsRoutes } from './sessions.js';
 import { mountCoderGroupsRoutes } from './groups.js';
 import { mountCoderInteractionRoutes } from './interaction.js';
+import { mountCoderSpecResponseRoute } from './spec-response.js';
 import { mountCoderStreamRoutes } from './stream.js';
 import { mountCoderSkillsRoutes } from './skills.js';
 import { mountCoderProjectTreeRoutes } from './project-tree.routes.js';
@@ -18,6 +19,7 @@ export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
   mountCoderSessionsRoutes(app, deps, runtime);
   mountCoderGroupsRoutes(app, deps);
   mountCoderInteractionRoutes(app, deps, runtime);
+  mountCoderSpecResponseRoute(app, deps, runtime);
   mountCoderStreamRoutes(app, deps, runtime);
   mountCoderSkillsRoutes(app, deps, runtime);
   mountCoderProjectTreeRoutes(app, deps);

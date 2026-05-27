@@ -353,6 +353,10 @@ export class PipelineExecutor {
         task: renderedTask,
         projectId: node.projectId,
         skills: node.extraSkills,
+        // SDD pipeline: spec-writer nodes run their subordinate under
+        // built-in `spec` agent — loads spec.txt prompt, blocks mutating
+        // tools until `submit_specification_to_master` is approved.
+        agent: node.kind === 'spec' ? 'spec' : undefined,
       };
       spawnResult = await this.deps.subordinates.spawn(spec);
     } catch (e) {

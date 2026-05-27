@@ -18,6 +18,7 @@ import { formatPlanResult } from '@mcp/code-agent/tools/plan.js';
 import { validateTasksInput } from '@mcp/code-agent/tools/tasks.js';
 import type { CoderTask, TaskExecutionMode, TasksState } from '@mcp/code-agent/sessions/types.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
+import { submitSpecificationToMaster } from './subordinate/submit-specification.js';
 
 // ─── ask_master ───────────────────────────────────────────────────
 
@@ -479,6 +480,10 @@ export const respondToInbox: CoderTool = {
 
 export const readMyInbox: CoderTool = {
   name: 'read_my_inbox',
+  // Inbox polling — even though incoming messages are usually injected
+  // as prompts, manual re-reads of the same status filter return the
+  // same set. That's expected "no new mail" behaviour, not a loop.
+  repeatable: true,
   description:
     'List inbox messages addressed to you. Mostly a debug helper — incoming messages are normally injected as a prompt automatically.',
   source: 'native',
@@ -523,6 +528,64 @@ export const readMyInbox: CoderTool = {
   },
 };
 
+// ─── check_inbox_answer ──────────────────────────────────────────
+//
+// C9 (Sprint 3.5) — poll-style status check for a message previously
+// sent with `wait=false`. Returns the current status + answer (if any)
+// without blocking. The sender pattern is:
+//   1. `send_to_agent({ kind: 'question', wait: false })` → returns
+//      a message id immediately.
+//   2. Continue doing other work in subsequent turns.
+//   3. Periodically `check_inbox_answer({ message_id })` to see if
+//      the target has responded.
+//
+// This is the async-friendly counterpart to `wait=true` — caller stays
+// productive instead of blocking until timeout.
+
+const CHECK_INBOX_ANSWER_DESC =
+  'Poll the status of an inbox message you sent with `wait=false`. Returns the current status + answer (if any).\n' +
+  'Status values: `pending` (queued, target busy), `delivered` (target picked it up), `answered` (target replied — see "answer"), `expired` (timed out), `cancelled`.\n' +
+  "USE: after `send_to_agent({ wait: false })` to check if the answer arrived without blocking your session.\n" +
+  "DON'T: poll in a tight loop — give the target time to respond. Once per turn is plenty.";
+
+export const checkInboxAnswer: CoderTool = {
+  name: 'check_inbox_answer',
+  description: maybeTerse(CHECK_INBOX_ANSWER_DESC),
+  source: 'native',
+  parameters: {
+    type: 'object',
+    properties: {
+      message_id: {
+        type: 'number',
+        description: 'The message id returned by `send_to_agent` (printed in the tool result as `Message <id>`).',
+      },
+    },
+    required: ['message_id'],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const messageId = Number(args.message_id);
+    if (!Number.isFinite(messageId) || messageId <= 0) {
+      return err('message_id must be a positive number');
+    }
+    const company = ctx.companyContext;
+    if (!company) return err('check_inbox_answer requires a company orchestrator context');
+
+    const snap = company.orchestrator.inboxStatus(messageId);
+    if (!snap) return err(`Message ${messageId} not found`);
+
+    const lines: string[] = [`message_id: ${messageId}`, `status: ${snap.status}`];
+    if (snap.deliveredAt) lines.push(`delivered_at: ${snap.deliveredAt}`);
+    if (snap.answeredAt) lines.push(`answered_at: ${snap.answeredAt}`);
+    if (snap.answer) {
+      lines.push(`answer: ${snap.answer}`);
+    } else if (snap.status === 'pending' || snap.status === 'delivered') {
+      lines.push('answer: (not yet — check again on a later turn)');
+    }
+    return ok(lines.join('\n'));
+  },
+};
+
 // ─── Export ───────────────────────────────────────────────────────
 
 /**
@@ -533,10 +596,12 @@ export function buildSubordinateTools(): CoderTool[] {
   return [
     askMaster,
     submitPlanToMaster,
+    submitSpecificationToMaster,
     submitTasksToMaster,
     sendToAgent,
     sendToMaster,
     respondToInbox,
     readMyInbox,
+    checkInboxAnswer,
   ];
 }

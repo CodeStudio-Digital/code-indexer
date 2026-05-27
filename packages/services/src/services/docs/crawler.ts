@@ -55,6 +55,30 @@ const HARD_MAX_PAGES = 1000;
 const HARD_MAX_DEPTH = 8;
 
 /**
+ * Parsa o campo `crawl.required_path` (texto livre vindo da UI/DB) em
+ * uma lista de substrings. Cada linha vira um path independente; linhas
+ * em branco e whitespace puro são descartados.
+ *
+ * Semântica final do filtro é OR — a URL passa se contém QUALQUER um
+ * dos paths. Razão: o caso de uso típico é "indexar Manual + ScriptRef
+ * da mesma versão" (`/6000.3/Manual/` + `/6000.3/ScriptReference/`),
+ * onde nenhuma URL contém ambos. AND seria útil só para combinar com
+ * `include_pattern`, que já existe.
+ *
+ * Backward compat: input single-line (sem `\n`) continua funcionando —
+ * vira lista de 1 elemento. Empty / null / whitespace → [].
+ *
+ * Exportada pra tests + pra `parseRequiredPathsFromConfig` consumir.
+ */
+export function parseRequiredPaths(raw: string | null | undefined): string[] {
+  if (raw == null) return [];
+  return String(raw)
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
  * Crawl from `seedUrl`. Returns the list of `RawPage`s for the relevance
  * gate. When `crawl.enabled === false`, only the seed page is fetched.
  */
@@ -72,9 +96,17 @@ export async function crawlUrl(opts: CrawlOptions): Promise<RawPage[]> {
   const sameOriginOnly = crawl.same_origin !== false;
   const includePattern = compilePattern(crawl.include_pattern);
   const excludePattern = compilePattern(crawl.exclude_pattern);
-  // Literal substring the URL must contain. Null = no constraint.
-  // Trimmed empty string also degrades to null (treat blank UI input as "off").
-  const requiredPath = (crawl.required_path ?? '').trim() || null;
+  // Literal substring(s) the URL must contain — 1 path por linha na UI,
+  // armazenado como newline-separated no DB. Vazio/whitespace → []
+  // (sem filtro). Semântica: URL passa se contém QUALQUER um (OR).
+  //
+  // Histórico:
+  //   v1 (PR 5 / migration 089): single string. Caso de uso típico era
+  //       "Manual 6000.3" — uma versão, um path.
+  //   v2 (PR 13): multi-line. Caso de uso "indexar Manual + ScriptRef
+  //       da mesma versão" em uma source só não cabia em single-string.
+  //       Reusa a mesma coluna TEXT — backend só re-interpreta o conteúdo.
+  const requiredPaths = parseRequiredPaths(crawl.required_path);
   // Per-source render-mode flags. Two opt-ins coexist:
   //   * `force_browser`     → every page (depth 0..N) via Chromium. Most
   //                           expensive. Required when the leaves
@@ -102,13 +134,15 @@ export async function crawlUrl(opts: CrawlOptions): Promise<RawPage[]> {
     );
   }
 
-  // If a required_path is set, the seed itself must satisfy it — otherwise
-  // we'd produce a crawl where the seed slips through but every follow-up
-  // gets dropped, which is almost always a user typo (forgot a slash,
-  // wrong manual version, etc.). Fail early with a clear message.
-  if (requiredPath && !opts.seedUrl.includes(requiredPath)) {
+  // If required_paths are set, the seed itself must satisfy at least
+  // one — otherwise the seed slips through but every follow-up gets
+  // dropped (almost always a user typo: forgot a slash, wrong manual
+  // version, etc.). Fail early with a clear message that LISTS what
+  // was expected so the user can see which path they got wrong.
+  if (requiredPaths.length > 0 && !requiredPaths.some((p) => opts.seedUrl.includes(p))) {
+    const expected = requiredPaths.map((p) => `"${p}"`).join(' | ');
     throw new Error(
-      `Seed URL "${opts.seedUrl}" does not contain the required substring "${requiredPath}"`,
+      `Seed URL "${opts.seedUrl}" does not contain any of the required substring(s): ${expected}`,
     );
   }
 
@@ -142,8 +176,10 @@ export async function crawlUrl(opts: CrawlOptions): Promise<RawPage[]> {
 
     if (!matchesPattern(normalized, includePattern, true)) continue;
     if (matchesPattern(normalized, excludePattern, false)) continue;
-    // Literal substring filter — `null` was normalized away above.
-    if (requiredPath && !normalized.includes(requiredPath)) continue;
+    // Literal substring filter — OR across the list. Empty list → no
+    // filter (`some` of an empty array is false, so we short-circuit
+    // on length first).
+    if (requiredPaths.length > 0 && !requiredPaths.some((p) => normalized.includes(p))) continue;
 
     let raw: Awaited<ReturnType<RenderBackend['render']>> | null = null;
     let reason: string | undefined;

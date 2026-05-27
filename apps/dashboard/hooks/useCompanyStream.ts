@@ -503,7 +503,11 @@ export function useCompanyStream(companySessionId: number | null) {
   }, [companySessionId, streamSetConnected]);
 
   const sendMessage = useCallback(
-    async (message: string, attachments?: AgentAttachment[], opts?: { thinking?: boolean }) => {
+    async (
+      message: string,
+      attachments?: AgentAttachment[],
+      opts?: { thinking?: boolean; interject?: boolean },
+    ) => {
       if (companySessionId == null) return;
       try {
         const res = await fetch(`/api/company/sessions/${companySessionId}/message`, {
@@ -513,6 +517,13 @@ export function useCompanyStream(companySessionId: number | null) {
             message,
             attachments: attachments?.length ? attachments : undefined,
             thinking: opts?.thinking || undefined,
+            // `interject: true` instructs the orchestrator to break any
+            // interactive wait (ask_user / submit_plan / etc) before
+            // queuing the message. Used by the SessionStalledBanner so
+            // the "Continue" button actually unblocks the master instead
+            // of just appending another row to pendingUserMessages while
+            // the runner sits hung.
+            interject: opts?.interject || undefined,
           }),
         });
         if (!res.ok) {

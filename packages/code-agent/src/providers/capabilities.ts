@@ -127,8 +127,21 @@ export interface EffectiveContextWindow {
   reservedOutput: number;
   /** window − reservedOutput. The number compaction triggers measure against. */
   effective: number;
-  /** True when we hit the conservative fallback (no registry entry or prefix match). */
+  /**
+   * True when we did NOT find an exact value via env/db/registry/prefix.
+   * Phase E expands this to mean "inferred or hardcoded fallback"; the
+   * specific path is in `source`.
+   */
   isFallback: boolean;
+  /**
+   * Phase E — resolution path. `registry` means env/db/exact/prefix found
+   * a value (high confidence). `inferred` means the family heuristic
+   * filled in based on model-name pattern (medium confidence). `fallback`
+   * means we used the hardcoded 128K (no confidence — model unrecognized).
+   */
+  source?: 'registry' | 'inferred' | 'fallback';
+  /** Human-readable detail of which rule fired (e.g., 'family:anthropic-opus'). */
+  via?: string;
 }
 
 /**
@@ -144,10 +157,30 @@ export interface EffectiveContextWindow {
 export function getEffectiveContextWindow(model: string): EffectiveContextWindow {
   let window = getModelContextWindow(model);
   let isFallback = false;
+  let source: 'registry' | 'inferred' | 'fallback' = 'registry';
+  let via: string | undefined;
   if (window == null) {
-    console.warn(`[coder] no context window known for "${model}", using ${FALLBACK_CONTEXT_WINDOW} fallback`);
-    window = FALLBACK_CONTEXT_WINDOW;
-    isFallback = true;
+    // Phase E — try the family heuristic before falling to hardcoded 128K.
+    const inferred = inferContextWindow(model);
+    if (inferred) {
+      window = inferred.window;
+      isFallback = true;
+      source = 'inferred';
+      via = inferred.via;
+      recordCapabilityFallback({ model, source: 'inferred', via: inferred.via, window });
+      console.warn(
+        `[coder] inferred context window for "${model}" → ${window} via ${inferred.via} (no registry entry; admin can override in /admin/providers)`,
+      );
+    } else {
+      window = FALLBACK_CONTEXT_WINDOW;
+      isFallback = true;
+      source = 'fallback';
+      via = 'hardcoded:128k';
+      recordCapabilityFallback({ model, source: 'fallback', via, window });
+      console.warn(
+        `[coder] no context window known for "${model}", no family-heuristic match — using hardcoded ${FALLBACK_CONTEXT_WINDOW}`,
+      );
+    }
   }
   const reservedOutput = Math.min(getMaxOutputTokens(model), MAX_RESERVED_OUTPUT);
   return {
@@ -155,6 +188,8 @@ export function getEffectiveContextWindow(model: string): EffectiveContextWindow
     reservedOutput,
     effective: Math.max(1, window - reservedOutput),
     isFallback,
+    source,
+    via,
   };
 }
 
@@ -228,4 +263,216 @@ export function getRegistryContextWindow(model: string): number | null {
     if (model.startsWith(prefix)) return cw;
   }
   return null;
+}
+
+// ── Phase F — resolution-with-source for admin backfill tooling ──────────────
+
+export interface ResolvedContextWindow {
+  window: number;
+  /**
+   * Where the value came from. `fallback` means we hit the hardcoded
+   * 128K because nothing else matched — admin tooling should treat this
+   * as low-confidence and avoid baking it into the DB.
+   */
+  source: 'registry-exact' | 'registry-prefix' | 'inferred' | 'fallback';
+  /** Stable identifier for the rule that fired (used by UI + telemetry). */
+  via: string;
+}
+
+/**
+ * Full-chain resolver that reports HOW the window was resolved.
+ *
+ * Unlike `getEffectiveContextWindow` (which is the runtime entry point and
+ * folds env/DB layers in), this looks only at registry + prefix + inferred.
+ * It's the function admin backfill code should use to decide whether to
+ * write a value to the DB: high-confidence sources (exact/prefix/inferred)
+ * are safe to backfill; `fallback` should be left as NULL so the runtime
+ * fallback warning continues to surface the issue.
+ */
+export function resolveContextWindowWithSource(model: string): ResolvedContextWindow {
+  if (!model) {
+    return { window: FALLBACK_CONTEXT_WINDOW, source: 'fallback', via: 'hardcoded:empty-model-id' };
+  }
+  const direct = MODEL_REGISTRY[model]?.contextWindow;
+  if (direct != null) {
+    return { window: direct, source: 'registry-exact', via: `registry:${model}` };
+  }
+  for (const [prefix, cw] of CONTEXT_WINDOW_PREFIX_FALLBACKS) {
+    if (model.startsWith(prefix)) {
+      return { window: cw, source: 'registry-prefix', via: `prefix:${prefix}` };
+    }
+  }
+  const inferred = inferContextWindow(model);
+  if (inferred) {
+    return { window: inferred.window, source: 'inferred', via: inferred.via };
+  }
+  return { window: FALLBACK_CONTEXT_WINDOW, source: 'fallback', via: 'hardcoded:128k' };
+}
+
+// ── Phase E — heuristic family inference ─────────────────────────────────────
+//
+// When the prefix table misses (a custom provider routes through a
+// vendor-qualified name, the user names a model differently, or a new
+// variant ships before the static table is updated), we still want a
+// SENSIBLE context-window number rather than the conservative 128K
+// hardcoded fallback. The heuristic detects provider family by
+// case-insensitive name pattern and picks the most common window for
+// that family.
+//
+// Conservative on purpose: when in doubt between two windows, pick the
+// SMALLER one. Compaction firing slightly early is harmless; never
+// firing because we over-estimated is what burned session 763.
+
+export interface InferredContextWindow {
+  window: number;
+  /** Stable identifier for the rule that fired — used by telemetry. */
+  via: string;
+}
+
+/**
+ * Pure family-heuristic resolver. Returns null when no family pattern
+ * matches; caller falls through to the hardcoded 128K fallback.
+ *
+ * Exported for unit-testing and so admin tools can preview what an
+ * unknown model would resolve to before the admin commits it manually.
+ */
+export function inferContextWindow(model: string): InferredContextWindow | null {
+  if (!model) return null;
+  const m = model.toLowerCase();
+
+  // Anthropic family — Claude 4.x and Opus/Sonnet/Haiku variants all 200K.
+  if (m.includes('claude') || m.startsWith('anthropic')) {
+    if (m.includes('opus')) return { window: 200_000, via: 'family:anthropic-opus' };
+    if (m.includes('sonnet')) return { window: 200_000, via: 'family:anthropic-sonnet' };
+    if (m.includes('haiku')) return { window: 200_000, via: 'family:anthropic-haiku' };
+    return { window: 200_000, via: 'family:anthropic-generic' };
+  }
+
+  // Google Gemini family — 1.5-pro has the largest window, others 1M.
+  if (m.includes('gemini')) {
+    if (m.includes('1.5') && m.includes('pro')) return { window: 2_097_152, via: 'family:gemini-1.5-pro' };
+    if (m.includes('flash')) return { window: 1_048_576, via: 'family:gemini-flash' };
+    if (m.includes('pro')) return { window: 1_048_576, via: 'family:gemini-pro' };
+    return { window: 1_048_576, via: 'family:gemini-generic' };
+  }
+
+  // OpenAI family — GPT-5 line is 272K, GPT-4 line 128K, reasoning 200K.
+  if (m.startsWith('gpt-') || m.startsWith('o1') || m.startsWith('o3') || m.startsWith('chatgpt')) {
+    if (m.includes('gpt-5')) return { window: 272_000, via: 'family:openai-gpt5' };
+    if (m.startsWith('o1-mini') || m.startsWith('o3-mini')) {
+      return { window: 128_000, via: 'family:openai-reasoning-mini' };
+    }
+    if (m.startsWith('o1') || m.startsWith('o3')) {
+      return { window: 200_000, via: 'family:openai-reasoning' };
+    }
+    if (m.includes('gpt-4')) return { window: 128_000, via: 'family:openai-gpt4' };
+    return { window: 128_000, via: 'family:openai-generic' };
+  }
+
+  // Z.AI / GLM family — most variants 128K, GLM-5 line 200K.
+  if (m.startsWith('glm-') || m.startsWith('glm4') || m.startsWith('glm5')) {
+    if (m.includes('5') || m.startsWith('glm5')) return { window: 200_000, via: 'family:zai-glm5' };
+    if (m.includes('4.6')) return { window: 200_000, via: 'family:zai-glm46' };
+    return { window: 128_000, via: 'family:zai-generic' };
+  }
+
+  // DeepSeek — V4 line is 1M, older 128K.
+  if (m.startsWith('deepseek')) {
+    if (m.includes('v4') || m.includes('-4')) return { window: 1_000_000, via: 'family:deepseek-v4' };
+    return { window: 128_000, via: 'family:deepseek-generic' };
+  }
+
+  // Kimi / Moonshot — K2 line is 262K.
+  if (m.startsWith('kimi') || m.startsWith('moonshot')) {
+    return { window: 200_000, via: 'family:moonshot-generic' };
+  }
+
+  // Mistral / Mixtral — historical default.
+  if (m.startsWith('mistral') || m.includes('mixtral')) {
+    return { window: 32_000, via: 'family:mistral-generic' };
+  }
+
+  // Llama / Meta — historical default for instruct variants.
+  if (m.startsWith('llama') || m.startsWith('meta-llama')) {
+    return { window: 128_000, via: 'family:meta-llama-generic' };
+  }
+
+  return null;
+}
+
+// ── Phase E — fallback usage tracker ─────────────────────────────────────────
+//
+// In-memory record of every model that resolved via heuristic OR hardcoded
+// fallback. Admins can query this through an admin route (Phase G) to see
+// "which models are running with imprecise capabilities and need a manual
+// context_window set". Ring-buffer capped at FALLBACK_TRACKER_MAX to avoid
+// growing unbounded on misconfigured deployments.
+
+export interface CapabilityFallbackEvent {
+  model: string;
+  source: 'inferred' | 'fallback';
+  via: string;
+  window: number;
+  /** ms since epoch — first time we saw this model fall back. */
+  firstSeenAt: number;
+  /** Most recent time we saw this model fall back. */
+  lastSeenAt: number;
+  /** How many times we've resolved this model via fallback path. */
+  count: number;
+}
+
+const FALLBACK_TRACKER_MAX = 100;
+const fallbackTracker = new Map<string, CapabilityFallbackEvent>();
+
+/**
+ * Internal — record a fallback resolution. Exported only for tests.
+ * The caller MUST pass the `source` ('inferred' or 'fallback'); pure
+ * registry hits do NOT call this.
+ */
+export function recordCapabilityFallback(args: {
+  model: string;
+  source: 'inferred' | 'fallback';
+  via: string;
+  window: number;
+}): void {
+  const now = Date.now();
+  const existing = fallbackTracker.get(args.model);
+  if (existing) {
+    existing.count++;
+    existing.lastSeenAt = now;
+    // Update the via if the resolution changed (heuristic table update
+    // could shift the same model from one rule to another).
+    existing.via = args.via;
+    existing.window = args.window;
+    existing.source = args.source;
+    return;
+  }
+  if (fallbackTracker.size >= FALLBACK_TRACKER_MAX) {
+    // Evict the oldest (insertion-order) entry. Map iteration order is
+    // insertion order in JS, so the first key is the oldest.
+    const oldestKey = fallbackTracker.keys().next().value;
+    if (oldestKey) fallbackTracker.delete(oldestKey);
+  }
+  fallbackTracker.set(args.model, {
+    model: args.model,
+    source: args.source,
+    via: args.via,
+    window: args.window,
+    firstSeenAt: now,
+    lastSeenAt: now,
+    count: 1,
+  });
+}
+
+/**
+ * Read the recent-fallbacks list. Returns a snapshot, sorted by most
+ * recent first. Used by the admin telemetry route and by tests.
+ */
+export function getRecentCapabilityFallbacks(): CapabilityFallbackEvent[] {
+  return [...fallbackTracker.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+}
+
+/** Test-only — reset the in-memory tracker between cases. */
+export function clearCapabilityFallbacksForTest(): void {
+  fallbackTracker.clear();
 }

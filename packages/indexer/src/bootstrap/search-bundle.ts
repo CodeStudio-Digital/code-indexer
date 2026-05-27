@@ -12,6 +12,8 @@ import {
 import { HyDEService } from '@mcp/indexer/search/hyde.js';
 import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
 import type { RerankerService } from '@mcp/indexer/search/reranker.js';
+import type { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
+import type { TelemetrySink } from '@mcp/candidate-pipeline';
 
 export interface SearchBundle {
   embeddingService: EmbeddingService;
@@ -27,11 +29,16 @@ export interface SearchBundle {
  * http-api/deps.ts, mcp-server/context.ts, and cli/helpers.ts.
  *
  * `reranker` is optional — only the MCP server currently wires it.
+ * `recentFilesSource` is optional (I2 — Sprint 1) — only consulted when
+ * `MCP_PIPELINES_RECENT_FILES_SOURCE=1`; absence leaves the legacy
+ * 2-stream (FTS + Vector) RRF merge bit-identical.
  */
 export function createSearchBundle(
   db: CodeIndexDB,
   providerStore: ProviderStore,
   reranker?: RerankerService,
+  recentFilesSource?: RecentFilesSource,
+  pipelineTelemetry?: TelemetrySink,
 ): SearchBundle {
   const embeddingService = createEmbeddingService(providerStore);
   const vectorStore = createVectorStore(providerStore);
@@ -45,6 +52,8 @@ export function createSearchBundle(
     embeddingService,
     hydeService,
     reranker,
+    recentFilesSource,
+    pipelineTelemetry,
   );
 
   return { embeddingService, vectorStore, searchableVectorStore, hybridSearch };

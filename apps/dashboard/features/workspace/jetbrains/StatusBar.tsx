@@ -6,28 +6,43 @@
  * support indicator). The LSP indicator pulls double duty as a hint:
  * green for TS/JS (full IntelliSense), amber for everything else
  * (syntax highlight only).
+ *
+ * The git-branch chip is interactive — clicking it opens a
+ * JetBrains-style branch popover (`BranchPopover`) with checkout,
+ * update, commit, push, new-branch, etc. The chip's hover tooltip is
+ * preserved for at-a-glance state without committing to opening the
+ * popover.
  */
 
+import { useState } from 'react';
 import { Activity, Circle, GitBranch, Languages } from 'lucide-react';
 import { useApi } from '../../../hooks/useApi.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
 import { inferLanguage } from '../../../lib/language-detect.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
+import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/popover.js';
 import { cn } from '../../../lib/utils.js';
 import { fileIconFor } from '../../../lib/file-icon.js';
+import { BranchPopover } from './status-bar/BranchPopover.js';
+import { CommitDialog } from './tool-windows/git/CommitDialog.js';
 
 interface StatusBarProps {
   projectId: number;
   projectName: string;
 }
 
+interface GitStatusFile {
+  path: string;
+  state: 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'ignored' | 'unmerged';
+  staged: boolean;
+}
+
 interface GitStatusSummary {
   branch?: string | null;
   ahead?: number;
   behind?: number;
-  modified?: number;
-  staged?: number;
-  untracked?: number;
+  files?: GitStatusFile[];
+  notARepo?: boolean;
 }
 
 export function StatusBar({ projectId, projectName }: StatusBarProps) {
@@ -40,13 +55,26 @@ export function StatusBar({ projectId, projectName }: StatusBarProps) {
   );
   // projectGit.status returns the branch + ahead/behind/dirty counters
   // so we can echo what JetBrains shows in the bottom-right corner.
-  // Polled implicitly when projectId changes; manual refresh isn't
-  // critical for a passive status indicator.
-  const { data: git } = useApi<GitStatusSummary>(`/projects/${projectId}/git/status`);
+  // `refetch` lets the branch popover poke this hook after any
+  // operation (checkout / push / pull) so the chip re-syncs immediately
+  // instead of waiting for the next navigation revalidation.
+  const { data: git, refetch: refreshGit } = useApi<GitStatusSummary>(
+    `/projects/${projectId}/git/status`,
+  );
+
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [commitOpen, setCommitOpen] = useState(false);
 
   const lang = inferLanguage(activeFilePath);
   const { Icon: TypeIcon, colorClass: typeColor } = fileIconFor(activeFilePath ?? '');
-  const gitDirty = (git?.modified ?? 0) + (git?.staged ?? 0) + (git?.untracked ?? 0);
+  // Reduce `files` once — gitDirty drives the amber dot, stagedCount
+  // gates the Commit dialog's button. The handler returns one entry
+  // per file per state (staged + working-tree), but for the dirty
+  // indicator we only care if ANY non-staged change exists.
+  const files = git?.files ?? [];
+  const stagedCount = files.filter((f) => f.staged).length;
+  const unstagedCount = files.filter((f) => !f.staged && f.state !== 'ignored').length;
+  const gitDirty = stagedCount + unstagedCount;
 
   return (
     <footer className="h-5 shrink-0 border-t bg-card/60 flex items-center px-2 gap-3 text-[10px] text-muted-foreground select-none">
@@ -57,28 +85,61 @@ export function StatusBar({ projectId, projectName }: StatusBarProps) {
       {git?.branch && (
         <>
           <span className="opacity-40">·</span>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex items-center gap-1 truncate max-w-[220px] cursor-default">
-                <GitBranch className={cn('h-2.5 w-2.5', gitDirty > 0 ? 'text-amber-400' : 'text-muted-foreground')} />
-                <span className="truncate">{git.branch}</span>
-                {gitDirty > 0 && <span className="text-amber-400">●</span>}
-                {git.ahead ? <span className="text-emerald-400">↑{git.ahead}</span> : null}
-                {git.behind ? <span className="text-sky-400">↓{git.behind}</span> : null}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              <div className="text-[11px] leading-snug space-y-0.5">
-                <div>Branch: <span className="font-mono">{git.branch}</span></div>
-                {git.modified ? <div>{git.modified} modified</div> : null}
-                {git.staged ? <div>{git.staged} staged</div> : null}
-                {git.untracked ? <div>{git.untracked} untracked</div> : null}
-                {git.ahead ? <div>{git.ahead} ahead of remote</div> : null}
-                {git.behind ? <div>{git.behind} behind remote</div> : null}
-                {!gitDirty && !git.ahead && !git.behind ? <div>Clean working tree.</div> : null}
-              </div>
-            </TooltipContent>
-          </Tooltip>
+          {/* The chip serves two intents: hover → quick state tooltip,
+              click → full JetBrains-style branch popover. Radix renders
+              both off the same anchor without conflict because Tooltip
+              uses pointer-enter/leave and Popover only opens on click. */}
+          <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      'inline-flex items-center gap-1 truncate max-w-[220px] rounded',
+                      'hover:bg-muted/40 px-1 -mx-1 transition-colors',
+                      popoverOpen && 'bg-muted/60',
+                    )}
+                  >
+                    <GitBranch
+                      className={cn(
+                        'h-2.5 w-2.5',
+                        gitDirty > 0 ? 'text-amber-400' : 'text-muted-foreground',
+                      )}
+                    />
+                    <span className="truncate">{git.branch}</span>
+                    {gitDirty > 0 && <span className="text-amber-400">●</span>}
+                    {git.ahead ? <span className="text-emerald-400">↑{git.ahead}</span> : null}
+                    {git.behind ? <span className="text-sky-400">↓{git.behind}</span> : null}
+                  </button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <div className="text-[11px] leading-snug space-y-0.5">
+                  <div>Branch: <span className="font-mono">{git.branch}</span></div>
+                  {stagedCount > 0 && <div>{stagedCount} staged</div>}
+                  {unstagedCount > 0 && <div>{unstagedCount} unstaged / untracked</div>}
+                  {git.ahead ? <div>{git.ahead} ahead of remote</div> : null}
+                  {git.behind ? <div>{git.behind} behind remote</div> : null}
+                  {!gitDirty && !git.ahead && !git.behind ? <div>Clean working tree.</div> : null}
+                  <div className="text-muted-foreground/70 pt-1">Click for branch actions…</div>
+                </div>
+              </TooltipContent>
+            </Tooltip>
+            <PopoverContent
+              side="top"
+              align="start"
+              sideOffset={6}
+              className="p-0 overflow-hidden"
+            >
+              <BranchPopover
+                projectId={projectId}
+                onMutated={refreshGit}
+                onRequestCommit={() => setCommitOpen(true)}
+                onClose={() => setPopoverOpen(false)}
+              />
+            </PopoverContent>
+          </Popover>
         </>
       )}
       <span className="opacity-40">·</span>
@@ -134,6 +195,18 @@ export function StatusBar({ projectId, projectName }: StatusBarProps) {
           </TooltipContent>
         </Tooltip>
       </span>
+
+      {commitOpen && (
+        <CommitDialog
+          projectId={projectId}
+          stagedCount={stagedCount}
+          onClose={() => setCommitOpen(false)}
+          onCommitted={() => {
+            setCommitOpen(false);
+            refreshGit();
+          }}
+        />
+      )}
     </footer>
   );
 }

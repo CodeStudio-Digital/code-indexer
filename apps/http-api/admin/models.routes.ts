@@ -7,7 +7,11 @@
 import { Hono } from 'hono';
 import type { ProviderStore, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { discoverModels } from './model-discovery/index.js';
-import { getRegistryContextWindow, mergeDBCapabilities } from '@mcp/code-agent/providers/capabilities.js';
+import {
+  getRegistryContextWindow,
+  mergeDBCapabilities,
+  resolveContextWindowWithSource,
+} from '@mcp/code-agent/providers/capabilities.js';
 
 export function modelsRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -29,12 +33,29 @@ export function modelsRouter(store: ProviderStore): Hono {
     if (!body.model_id || !body.name) {
       return c.json({ error: 'model_id, name required' }, 400);
     }
+    // Phase F — auto-backfill context_window when admin omitted it. Saves
+    // the resolved value silently when source is high-confidence (registry
+    // exact/prefix or family-heuristic inferred). The hardcoded 128K
+    // fallback is NOT written to DB — leaving NULL preserves the runtime
+    // warning so the admin notices and overrides explicitly.
+    let resolvedNote: string | null = null;
+    const incomingBody: UpsertModelInput = { ...body, source: 'manual' };
+    if (incomingBody.context_window == null) {
+      const resolved = resolveContextWindowWithSource(incomingBody.model_id);
+      if (resolved.source !== 'fallback') {
+        incomingBody.context_window = resolved.window;
+        resolvedNote = `${resolved.source} (${resolved.via})`;
+        console.log(
+          `[admin] auto-backfilled context_window=${resolved.window} for ${incomingBody.model_id} via ${resolved.via}`,
+        );
+      }
+    }
     store.replaceModelsFromSource(id, 'manual', [
       // listModels then merge: replace only clears rows with source='manual',
       // so existing manual entries are overwritten but live rows survive.
       ...store
         .listModels(id)
-        .filter((m) => m.source === 'manual' && m.model_id !== body.model_id)
+        .filter((m) => m.source === 'manual' && m.model_id !== incomingBody.model_id)
         .map((m) => ({
           model_id: m.model_id,
           mode: m.mode,
@@ -46,9 +67,15 @@ export function modelsRouter(store: ProviderStore): Hono {
           enabled: m.enabled,
           source: 'manual',
         })),
-      { ...body, source: 'manual' },
+      incomingBody,
     ]);
-    return c.json({ ok: true });
+    // If we backfilled a context_window, refresh the in-memory cache so
+    // newly-created sessions pick it up without a server restart (mirrors
+    // the PATCH route's behaviour at the bottom of this file).
+    if (resolvedNote) {
+      try { mergeDBCapabilities(store.listAllModels()); } catch { /* best-effort */ }
+    }
+    return c.json({ ok: true, context_window_resolved_from: resolvedNote });
   });
 
   app.patch('/providers/:id/models/:modelId', async (c) => {
@@ -101,12 +128,24 @@ export function modelsRouter(store: ProviderStore): Hono {
   /**
    * POST /providers/models/backfill-context-windows — walks every row in
    * provider_models that has context_window=NULL and fills it from the
-   * static registry's prefix-aware lookup. Idempotent, no network.
-   * Returns counts so the admin UI can show "X models updated, Y still
-   * unknown — add them manually or via env override".
+   * full resolution chain (registry exact → prefix → family-heuristic).
+   * Phase F adds the inferred layer so custom-named models get a
+   * sensible default instead of the hardcoded 128K fallback at runtime.
+   *
+   * Idempotent, no network. The hardcoded 128K fallback is NOT written
+   * to DB — leaving NULL preserves the runtime warning so the admin sees
+   * it and overrides explicitly. Use `?strict=1` to force the legacy
+   * registry-only behaviour (no inferred backfill).
    */
   app.post('/providers/models/backfill-context-windows', (c) => {
-    const result = store.backfillContextWindowsFromRegistry(getRegistryContextWindow);
+    const strict = c.req.query('strict') === '1';
+    const lookup = strict
+      ? getRegistryContextWindow
+      : (modelId: string): number | null => {
+          const r = resolveContextWindowWithSource(modelId);
+          return r.source === 'fallback' ? null : r.window;
+        };
+    const result = store.backfillContextWindowsFromRegistry(lookup);
     if (result.updated > 0) {
       try {
         mergeDBCapabilities(store.listAllModels());
@@ -114,7 +153,7 @@ export function modelsRouter(store: ProviderStore): Hono {
         /* best-effort */
       }
     }
-    return c.json(result);
+    return c.json({ ...result, strict });
   });
 
   /**

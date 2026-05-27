@@ -23,6 +23,14 @@ export interface ComboboxProps {
   /** Size variant matching existing SelectTrigger heights. */
   size?: 'sm' | 'md';
   className?: string;
+  /**
+   * Optional class applied to the dropdown content (Popover). Lets the
+   * caller widen the panel beyond the default `min-w-[14rem]` when
+   * options carry long descriptions (e.g. the agent picker, where
+   * "Commits, snapshots, ops — asks first" would otherwise force the
+   * label column to truncate to "S…" / "PL…").
+   */
+  contentClassName?: string;
   /** Optional callback when a custom (non-listed) value is entered via free text. */
   allowCustom?: boolean;
 }
@@ -42,6 +50,7 @@ export function Combobox({
   disabled,
   size = 'sm',
   className,
+  contentClassName,
   allowCustom = false,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
@@ -119,7 +128,10 @@ export function Combobox({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="p-0 w-[var(--radix-popover-trigger-width)] min-w-[14rem]"
+        className={cn(
+          'p-0 w-[var(--radix-popover-trigger-width)] min-w-[14rem]',
+          contentClassName,
+        )}
       >
         <div className="flex items-center gap-2 px-2 py-1.5 border-b">
           <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />

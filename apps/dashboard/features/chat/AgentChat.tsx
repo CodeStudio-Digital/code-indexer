@@ -57,7 +57,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [provider, setProvider] = useState('zai');
   const [model, setModel] = useState('');
-  const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin'>('explore');
+  const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin' | 'spec'>('explore');
   const [maxTurns, setMaxTurns] = useState<number | null>(null);
   const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
@@ -138,6 +138,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     answerQuestion,
     respondToPlan,
     respondToTasks,
+    respondToSpec,
     switchProvider,
   } = stream;
 
@@ -659,7 +660,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
               if (
                 s.agent
                 && s.agent !== agent
-                && (s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin')
+                && (s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' || s.agent === 'spec')
               ) {
                 setAgent(s.agent);
               }
@@ -670,11 +671,33 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
         }
       },
       onTasksResponse: (verdict) => respondToTasks(verdict),
+      onSpecResponse: async (approved, spec_path, requested_changes) => {
+        await respondToSpec(approved, spec_path, requested_changes);
+        // After approval the backend transitions agent 'spec' → 'build'. Refresh
+        // the local agent state so the picker reflects the new mode.
+        if (approved && selectedId) {
+          try {
+            const r = await fetch(`/api/coder/sessions/${selectedId}`);
+            if (r.ok) {
+              const s = (await r.json()) as { agent?: string };
+              if (
+                s.agent
+                && s.agent !== agent
+                && (s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' || s.agent === 'spec')
+              ) {
+                setAgent(s.agent);
+              }
+            }
+          } catch {
+            /* non-fatal */
+          }
+        }
+      },
       onFork: handleFork,
     }),
     // handleFork depends on selectedId — re-create when session changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [answerQuestion, respondToPlan, respondToTasks, selectedId, agent],
+    [answerQuestion, respondToPlan, respondToTasks, respondToSpec, selectedId, agent],
   );
 
   return (

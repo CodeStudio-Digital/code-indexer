@@ -74,6 +74,8 @@ export async function buildMasterPromptInputs(
   allowedModels: readonly AllowedModel[],
   orchestratorRef: unknown,
   signal?: AbortSignal,
+  /** Extra flags threaded into the prompt without touching the legacy positional signature. */
+  flags: { sddMode?: boolean } = {},
 ): Promise<MasterPromptInputs> {
   const orchestrator = orchestratorRef as MasterOrchestratorHooks;
   const configuredStack = orchestrator.getSandboxStackForService?.() ?? null;
@@ -127,6 +129,7 @@ export async function buildMasterPromptInputs(
     // Curated pool — when non-empty, the master prompt gains a strict
     // "ALLOWED SUBORDINATE MODELS" section + tool rejection guidance.
     allowedModels: allowedModels.length > 0 ? [...allowedModels] : undefined,
+    sddMode: flags.sddMode,
   });
 
   return { companyContext, promptBlock, sandboxBinding, configuredStack };

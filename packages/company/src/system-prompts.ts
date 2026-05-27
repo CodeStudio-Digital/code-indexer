@@ -4,6 +4,8 @@
  * buildSystemPrompt() — they supplement rather than replace.
  */
 
+import { buildSddMasterBlock } from '@mcp/company/prompts/sdd-master-block.js';
+
 /**
  * Builder-mode context. When present, the prompt gets a dedicated
  * section explaining the sandbox environment and — critically — the
@@ -91,6 +93,12 @@ export interface MasterPromptContext {
     notes?: string;
     is_default?: boolean;
   }>;
+  /**
+   * When true, the master prompt instructs the orchestrator to route
+   * non-trivial work through the SDD pipeline (spec → human approval →
+   * implement → qa). Set per session by `startMaster({ sddMode: true })`.
+   */
+  sddMode?: boolean;
 }
 
 export interface SubordinatePromptContext {
@@ -456,7 +464,7 @@ Tools self-document via their schemas — the short notes here only call out beh
 ## SESSION-KEEPING
 
 You operate in phases (explore → delegate → iterate → close). Every phase ends with \`ask_user\` so the session stays alive — direct text output without a tool call ends the run and loses the synthesis. Synthesis goes to \`post_to_board\`; \`ask_user\` carries a SHORT prompt. Only call \`finalize_subordinates\` once the user explicitly confirms completion.
-${buildQaTeamBlock(ctx.roster)}${ctx.builder ? buildBuilderInstructions(ctx.builder) : ''}${ctx.builder ? buildMasterContainerOversight() : ''}`;
+${buildQaTeamBlock(ctx.roster)}${ctx.sddMode ? buildSddMasterBlock() : ''}${ctx.builder ? buildBuilderInstructions(ctx.builder) : ''}${ctx.builder ? buildMasterContainerOversight() : ''}`;
 
 }
 

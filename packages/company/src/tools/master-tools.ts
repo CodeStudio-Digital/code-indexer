@@ -478,6 +478,8 @@ function abortSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
 function listSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
   return {
     name: 'list_subordinates',
+    // Auto-repeatable via `list_*` prefix (REPEATABLE_NAME_PATTERN in
+    // runner.ts) — polling tool by design.
     description:
       'List all subordinate agents with their status. Shows which agents are available (status="waiting") ' +
       'for reuse via forward_to_agent. ALWAYS call this before spawning to check if an existing agent can be reused.',
@@ -524,6 +526,7 @@ function listSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
 function listCompanyProjects(orchestrator: CompanyOrchestrator): CoderTool {
   return {
     name: 'list_company_projects',
+    // Auto-repeatable via `list_*` prefix.
     description: 'List all projects linked to this company session. Use project IDs when spawning subordinate agents.',
     parameters: { type: 'object', properties: {}, required: [] },
     source: 'native',
@@ -729,6 +732,7 @@ function resumeSubordinate(orchestrator: CompanyOrchestrator): CoderTool {
 function listContainers(orchestrator: CompanyOrchestrator): CoderTool {
   return {
     name: 'list_containers',
+    // Auto-repeatable via `list_*` prefix.
     description:
       'Enumerate every sandbox container in this session (primary + each microservice) with a health snapshot: ' +
       'running state, last exit code, OOM flag, preview URL. Use this right after a subordinate reports completion ' +
@@ -833,6 +837,7 @@ function respondToInbox(orchestrator: CompanyOrchestrator): CoderTool {
 function readContainerLogs(orchestrator: CompanyOrchestrator): CoderTool {
   return {
     name: 'read_container_logs',
+    // Auto-repeatable via `_logs` suffix (REPEATABLE_NAME_PATTERN).
     description:
       'Tail stdout/stderr for one container in this session. Use after list_containers flags a service as ' +
       'stopped, crashed, or with a non-zero exit code. Include the relevant excerpt verbatim in the fix task ' +

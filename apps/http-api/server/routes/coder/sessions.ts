@@ -54,7 +54,7 @@ interface CreateSessionBody {
   provider: CoderProviderName;
   model?: string;
   /** Initial agent preset (explore | plan | build | admin). Persisted on the session row. */
-  agent?: 'explore' | 'plan' | 'build' | 'admin';
+  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
   /** Optional phase profile binding (Camada 2). Null = walk cascade. */
   phase_profile_id?: number | null;
 }
@@ -106,7 +106,7 @@ export function mountCoderSessionsRoutes(
     const profile = inferProfileFromMessage(message);
     // Map profile → recommended agent. navigate without plan mode = build;
     // full = admin (but requires explicit user intent for git commits).
-    let agent: 'explore' | 'plan' | 'build' | 'admin';
+    let agent: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
     switch (profile) {
       case 'bootstrap':
         agent = 'explore';

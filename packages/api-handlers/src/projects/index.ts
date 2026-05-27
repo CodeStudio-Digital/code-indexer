@@ -14,6 +14,7 @@ import {
   type UpdateProjectInput,
   type IndexProjectInput,
 } from '@mcp/services/services/projects/index.js';
+import { makeHybridSearchCacheInvalidator } from '@mcp/indexer/search/cache-invalidator.js';
 import type { HandlerDeps } from '../types.js';
 
 /**
@@ -57,6 +58,13 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     webhookDispatcher: deps.webhookDispatcher,
     config: deps.config,
     lshIndexingSink: deps.lshIndexingSink,
+    // I3 — invalidate HybridSearch query LRU after each re-index. Listener
+    // throws are swallowed inside IndexAgent; absent search instance is
+    // tolerated by makeHybridSearchCacheInvalidator. Safe to wire
+    // unconditionally — the listener no-ops when nothing is cached.
+    filesUpdatedListener: deps.hybridSearch
+      ? makeHybridSearchCacheInvalidator(deps.hybridSearch)
+      : undefined,
   });
 
   return {

@@ -79,6 +79,25 @@ export interface PlanBlock {
   kind?: 'informational' | 'mutating';
 }
 
+/**
+ * Spec-mode artifact — emitted by `submit_spec` while waiting for human
+ * approval. Carries the full markdown body so dashboards can render a
+ * preview without a follow-up read, plus the repo-relative `spec_path`
+ * the runner persisted it at (`.mcp/specs/<slug>-<unix>.md`).
+ */
+export interface SpecBlock {
+  type: 'spec';
+  id: string;
+  name: string;
+  body: string;
+  spec_path: string;
+  parent_id?: string;
+  /** Logical drive path when the spec was mirrored into the company drive. */
+  drive_path?: string;
+  approved?: boolean;
+  requested_changes?: string;
+}
+
 export interface ThinkingBlock {
   type: 'thinking';
   text: string;
@@ -92,6 +111,7 @@ export type ContentBlock =
   | DocumentBlock
   | QuestionBlock
   | PlanBlock
+  | SpecBlock
   | ThinkingBlock;
 
 export interface AgentMessage {

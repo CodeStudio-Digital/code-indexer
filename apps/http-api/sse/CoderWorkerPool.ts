@@ -117,7 +117,7 @@ export interface RunFreshOpts {
   attachments?: CoderAttachment[];
   maxTurns?: number;
   planMode?: boolean;
-  agent?: 'explore' | 'plan' | 'build' | 'admin';
+  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   /** POJO worktree opts — survives structuredClone across MessagePort. */
   worktree?: { name?: string; branch?: string };

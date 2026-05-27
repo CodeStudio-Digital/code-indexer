@@ -24,6 +24,7 @@ import { mountAdminQualityRoutes } from './server/routes/admin/quality.js';
 import { mountAdminLshRoutes } from './server/routes/admin/lsh.js';
 import { mountAdminDriftRoutes } from './server/routes/admin/drift.js';
 import { mountWorkersDiagnosticRoute } from './server/routes/admin/workers.js';
+import { mountSupervisorAdminRoutes } from './server/routes/admin/supervisor.js';
 import { mountCoderRoutes } from './server/routes/coder/index.js';
 import { mountLspRoutes } from './server/routes/lsp/lsp.routes.js';
 import { mountProjectGitRoutes } from './server/routes/project-git.js';
@@ -57,6 +58,16 @@ import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import { setGlobalSubAgentCache } from '@mcp/services/sub-agent-cache/index.js';
 import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relevance/index.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
+import { startInboxWatchdogIfEnabled, type InboxMessageWatchdog } from '@mcp/company/services/inbox-message-watchdog.js';
+import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
+import {
+  startAgentSupervisorIfEnabled,
+  setGlobalAgentSupervisor,
+  type AgentSupervisor,
+} from '@mcp/company/services/supervisor/index.js';
+import { publishSupervisorIncident } from './sse/supervisor-incident-bus.js';
+import { CompanyEventBus } from '@mcp/company/services/CompanyEventBus.js';
+import { subordinateCompletionBus } from '@mcp/company/services/subordinate/completion-events.js';
 import { makeQualityAlertObserver } from './server/quality-observer.js';
 import { createMcpHttpApp } from '../mcp-server/http/mcp-http-transport.js';
 import { composeAuth } from './auth/composition.js';
@@ -255,6 +266,72 @@ export function createApp() {
       `[quality-watchdog] boot wiring failed: ${e instanceof Error ? e.message : String(e)}`,
     );
   });
+  // C8 — Inbox message watchdog (Sprint 3.5). Detects messages stuck
+  // pending/delivered past the threshold and publishes
+  // `inbox_message_stuck` events BEFORE the timeout fires EXPIRED.
+  // Gated by MCP_COMPANY_INBOX_WATCHDOG_ENABLED=1. Publisher here is a
+  // minimal logger — full per-session MetaBus integration is a
+  // follow-up (multi-session bus aggregation isn't built yet).
+  const inboxWatchdogPublisher: IMetaBusPublisher = {
+    bus: undefined as unknown as IMetaBusPublisher['bus'],
+    publish(event, payload): void {
+      // Structured stderr log so external observers (admin dashboard,
+      // ops scripts) can grep / parse.
+      console.warn(`[inbox-watchdog] ${event} ${JSON.stringify(payload)}`);
+    },
+    markEnded(): void { /* watchdog never ends a run */ },
+  };
+  const inboxWatchdog: InboxMessageWatchdog | null = startInboxWatchdogIfEnabled({
+    companyStore: deps.companyStore,
+    publisher: inboxWatchdogPublisher,
+  });
+  if (inboxWatchdog) {
+    console.log('[inbox-watchdog] started (MCP_COMPANY_INBOX_WATCHDOG_ENABLED=1)');
+  }
+
+  // Sprint 4 Phase 1.5 — AgentSupervisor boot. Gated by
+  // MCP_SUPERVISOR_ENABLED=1. Phase 1 wiring:
+  //   - subordinateCompletionBus singleton → completion events flow in
+  //   - SubordinateLifecycle.spawn calls registerSubordinate via the
+  //     global getter (see packages/company/.../subordinate/spawn.ts)
+  //   - companyEventBus passed here is an ORPHAN — per-session bus
+  //     wiring is Phase 2 (multi-session aggregator). For now master
+  //     lifecycle events aren't observed by the supervisor.
+  // Even with the orphan bus, the supervisor's value is:
+  //   - Periodic stuck-detection tick (every 15s) → incidents logged
+  //   - Subordinate completion → state transitions to TERMINAL
+  //   - Manual registerSubordinate from spawn → tracking starts
+  const supervisorCompanyEventBus = new CompanyEventBus();
+  const agentSupervisor: AgentSupervisor | null = startAgentSupervisorIfEnabled({
+    companyEventBus: supervisorCompanyEventBus,
+    completionBus: subordinateCompletionBus,
+    // Phase 3.2 — legacy in-process mode also feeds the SSE bus. In
+    // worker mode this main supervisor stays orphan (no agents
+    // registered), but the wiring is cheap and future-proofs a hybrid
+    // setup where main + workers co-exist.
+    emitIncident: (incident): void => {
+      console.warn(
+        `[supervisor] incident ${incident.kind}: agent=${incident.agentRunId ?? 'n/a'} ${incident.detail}`,
+      );
+      try {
+        publishSupervisorIncident({
+          sessionId: 0,
+          kind: incident.kind,
+          agentRunId: incident.agentRunId,
+          fromState: incident.fromState,
+          attemptedTo: incident.attemptedTo,
+          detail: incident.detail,
+          detectedAtMs: incident.detectedAtMs,
+        });
+      } catch {
+        /* best-effort */
+      }
+    },
+  });
+  setGlobalAgentSupervisor(agentSupervisor);
+  if (agentSupervisor) {
+    console.log('[agent-supervisor] started (MCP_SUPERVISOR_ENABLED=1)');
+  }
   // SubAgent result cache — installed unconditionally so even when the
   // flag is off, future toggles take effect immediately. Enable bit is
   // separate so the spawn handler can short-circuit before the lookup.
@@ -573,6 +650,7 @@ export function createApp() {
   mountAdminLshRoutes(app, deps);
   mountAdminDriftRoutes(app, deps);
   mountWorkersDiagnosticRoute(app);
+  mountSupervisorAdminRoutes(app, { dbPath: deps.config.dbPath });
   app.route('/api/admin', createAdminRouter(deps.providerStore));
   mountCoderRoutes(app, deps);
   mountLspRoutes(app, deps);
@@ -695,6 +773,25 @@ export async function startServer(port: number, host: string) {
   // running inside the sandbox is now reached directly via its
   // loopback port (no MCP-side proxy / HMR upgrade rewriting).
   const server = serve({ fetch: app.fetch, port, hostname: host });
+  // Node's http.Server default `requestTimeout` is 5 minutes (300_000
+  // ms) since Node 18 — it destroys the underlying socket of any HTTP
+  // request that's been open longer. That kills our SSE streams the
+  // moment they cross the 5-min mark, which manifests as the agent
+  // reporting "Os subagentes timed out após 300s" on long
+  // `spawn_agents` runs in big codebases (the SSE connection dies
+  // mid-stream → the worker's runner gets the abort).
+  //
+  // For an Electron-bundled IDE served on loopback we don't need the
+  // slowloris-body protection that motivated Node's default — there's
+  // no external attacker. Extend to 60 min and let power-users with
+  // 10k+ file projects bump further via env. `headersTimeout` (1 min
+  // default) stays — that protects the headers phase regardless of
+  // body duration and the cost of preserving it is zero.
+  const httpRequestTimeoutMs = Number(
+    process.env.MCP_HTTP_REQUEST_TIMEOUT_MS ?? 60 * 60 * 1000,
+  );
+  (server as unknown as import('node:http').Server).requestTimeout =
+    httpRequestTimeoutMs;
   // P14: parallel WebSocket transport for company sessions. Default
   // remains SSE; the dashboard opts in via `?transport=ws`.
   attachCompanyStreamUpgrade(server as unknown as import('node:http').Server);

@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Archive,
   Check,
   ChevronDown,
   ChevronRight,
@@ -35,20 +36,15 @@ import { apiCall } from '../../../../lib/api-client.js';
 import { useWorkspaceStore } from '../../../../state/workspace.js';
 import { Button } from '../../../../components/ui/button.js';
 import { confirm, toast } from '../../../../components/ui/prompt-dialog.js';
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../../../../components/ui/dialog.js';
 import { ToolWindowFrame } from '../ToolWindowFrame.js';
 import { cn } from '../../../../lib/utils.js';
 import { BranchesView } from './git/BranchesView.js';
 import { HistoryView } from './git/HistoryView.js';
 import { GitPromptView } from './git/GitPromptView.js';
+import { StashView } from './git/StashView.js';
+import { CommitDialog } from './git/CommitDialog.js';
 
-type GitTab = 'changes' | 'branches' | 'history' | 'ai';
+type GitTab = 'changes' | 'branches' | 'history' | 'stash' | 'ai';
 
 interface GitStatusFile {
   path: string;
@@ -283,6 +279,9 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
           {tab === 'history' && (
             <HistoryView projectId={projectId} onMutated={() => void reload()} />
           )}
+          {tab === 'stash' && (
+            <StashView projectId={projectId} onMutated={() => void reload()} />
+          )}
           {tab === 'ai' && (
             <GitPromptView projectId={projectId} onMutated={() => void reload()} />
           )}
@@ -322,6 +321,7 @@ function GitTabNav({ active, onChange }: GitTabNavProps) {
     { id: 'changes', label: 'Changes', icon: GitCommitIcon },
     { id: 'branches', label: 'Branches', icon: GitBranch },
     { id: 'history', label: 'History', icon: History },
+    { id: 'stash', label: 'Stash', icon: Archive },
     { id: 'ai', label: 'AI', icon: Sparkles },
   ];
   return (
@@ -635,56 +635,3 @@ function RowButton({
   );
 }
 
-interface CommitDialogProps {
-  projectId: number;
-  stagedCount: number;
-  onClose: () => void;
-  onCommitted: () => void;
-}
-
-function CommitDialog({ projectId, stagedCount, onClose, onCommitted }: CommitDialogProps) {
-  const [message, setMessage] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const commit = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      await apiCall<{ sha: string }>('projectGit.commit', { projectId, message });
-      onCommitted();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle className="text-[14px] flex items-center gap-2">
-            <GitCommitIcon className="h-4 w-4 text-primary" />
-            Commit {stagedCount} file{stagedCount === 1 ? '' : 's'}
-          </DialogTitle>
-        </DialogHeader>
-        <textarea
-          autoFocus
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder="Commit message…"
-          className="w-full min-h-[140px] rounded-md border bg-card px-3 py-2 text-[12.5px] font-mono focus:outline-none focus:ring-2 focus:ring-ring/40"
-        />
-        {err && <div className="text-[11px] text-destructive">{err}</div>}
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button onClick={() => void commit()} disabled={busy || !message.trim()}>
-            {busy ? 'Committing…' : 'Commit'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}

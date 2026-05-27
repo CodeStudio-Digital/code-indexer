@@ -27,7 +27,15 @@ import { fileURLToPath } from 'node:url';
 
 /** True when this process was started via the `tsx` loader. */
 export function isRunningUnderTsx(): boolean {
-  return process.execArgv.some((arg) => arg.includes('tsx'));
+  if (process.execArgv.some((arg) => arg.includes('tsx'))) return true;
+  // Electron + bundlers don't propagate NODE_OPTIONS into `execArgv` —
+  // they only set the env var. tsx itself reads NODE_OPTIONS at boot, so
+  // this is reliable for detecting "tsx loader is active". Matches both
+  // `--import tsx/esm` (modern) and `--loader tsx` (older form).
+  const opts = process.env.NODE_OPTIONS ?? '';
+  if (/(?:^|\s)--import\s+tsx(?:\/esm)?\b/.test(opts)) return true;
+  if (/(?:^|\s)--loader\s+tsx\b/.test(opts)) return true;
+  return false;
 }
 
 export interface ResolvedWorker {

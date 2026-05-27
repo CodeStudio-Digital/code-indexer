@@ -13,6 +13,8 @@
  * The selector blends both sources with a small reuse bonus.
  */
 import type { PipelineCandidate, PipelineQuery } from '@mcp/candidate-pipeline';
+import type { SubordinateDisableContext, SubordinateDisableRule } from './disable-rules.js';
+import type { RoleContextPayload } from './role-context-hydrator.js';
 
 export interface RoleDescriptor {
   /** Stable role name within the template (`frontend`, `qa`, `backend`, …). */
@@ -27,6 +29,13 @@ export interface RoleDescriptor {
   modelCost?: number;
   /** Maximum concurrent runs allowed for this role. */
   concurrencyCap?: number;
+  /**
+   * Optional declarative skip rules (C2 — Sprint 1). Evaluated in order
+   * by `DisableRulesFilter` against `RolePipelineQuery.disableContext`.
+   * Absent → role is never auto-disabled (legacy behavior). See
+   * `./disable-rules.ts` for pre-built rules and the contract.
+   */
+  disableRules?: SubordinateDisableRule[];
 }
 
 export interface IdleRunDescriptor {
@@ -55,6 +64,13 @@ export interface RolePipelineQuery extends PipelineQuery {
   blockedRoles?: string[];
   /** Top-K cap. Defaults to 3 (the plan's "top-3 suggestions" target). */
   k?: number;
+  /**
+   * Optional context for `RoleDescriptor.disableRules` (C2 — Sprint 1).
+   * Pass the workflow state (which roles were skipped, failed, are
+   * running). Absent → rules evaluated against an empty context = never
+   * fire. See `./disable-rules.ts`.
+   */
+  disableContext?: SubordinateDisableContext;
 }
 
 export interface RoleCandidate extends PipelineCandidate {
@@ -66,15 +82,29 @@ export interface RoleCandidate extends PipelineCandidate {
   idleRun?: IdleRunDescriptor;
   /** Pre-computed role-description embedding. */
   roleEmbedding?: Float32Array;
-  /** Cached signals from each scorer. */
+  /** Cached signals from each scorer + diagnostics from filters. */
   signals: {
     taskAffinity?: number;
     historySuccess?: number;
     modelCost?: number;
     reuseBonus?: number;
+    /** C2 — set to 1 by `DisableRulesFilter` when a rule short-circuited the candidate. */
+    disabledByRule?: number;
+    /** C2 — human reason from the rule that fired. */
+    disableReason?: string;
+    /** C2 — rule name for telemetry diff. */
+    disableRuleName?: string;
   };
   /** Final fused score (higher = better). */
   score: number;
+  /**
+   * C4 — post-selection context payload populated by `RoleContextHydrator`
+   * for the top-K candidates only. Absent when the hydrator wasn't
+   * wired or the fetch failed (best-effort). The orchestrator can use
+   * this to seed the role's system prompt with relevant files/cards
+   * BEFORE the subordinate spawns, so its first turn is informed.
+   */
+  roleContext?: RoleContextPayload;
 }
 
 export const DEFAULT_TOP_K = 3;

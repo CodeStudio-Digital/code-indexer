@@ -20,11 +20,44 @@
  */
 import {
   cosineSimilarity,
+  LruCache,
   weightedSum,
 } from '@mcp/candidate-pipeline';
 import { ESSENTIAL_TOOL_NAMES } from './helpers.js';
 import type { EmbeddingFn, ToolEmbeddingStore } from './stages.js';
 import type { JsonSchema } from '../core/tool.js';
+
+/**
+ * Process-wide LRU for task embeddings — keyed by simpleHash(taskText).
+ *
+ * Rationale (A4 — Sprint 1): the thin path already caches TOOL embeddings
+ * via `embeddingStore` (rarely change), but recomputes the TASK embedding
+ * on every turn even when the user's input hasn't changed. Each task
+ * embed() call is a network round-trip to Cloudflare/OpenAI/etc — by far
+ * the dominant cost of this hot path.
+ *
+ * Caching by hash(taskText) catches:
+ *   - User follow-up turns where taskText repeats (very common in chat)
+ *   - Shadow A/B traffic that re-runs the same query
+ *   - Re-evaluation after a tool result lands (taskText = last user message)
+ *
+ * Capacity 64 = generous for a single session. Different text → different
+ * key → no false hits. No TTL: tool descriptions are stable; if a model
+ * upgrade changes embedding semantics the cache is naturally bounded.
+ *
+ * The cache is process-wide because the cost-of-recompute is identical
+ * across sessions and the keys can't collide on different content
+ * (hash collision rate is negligible for short text).
+ */
+const taskEmbeddingCache = new LruCache<string, Float32Array>({ maxSize: 64 });
+
+/**
+ * Test helper — clears the module-level task embedding cache. Production code
+ * should never need this; the cache is bounded and self-evicts.
+ */
+export function clearTaskEmbeddingCacheForTests(): void {
+  taskEmbeddingCache.clear();
+}
 
 export interface ThinTool {
   name: string;
@@ -52,6 +85,8 @@ export interface ApplyToolSelectionThinOptions {
     droppedCount: number;
     estimatedTokensSaved: number;
     durationMs: number;
+    /** True when the task embedding came from the LRU instead of `embed(taskText)`. */
+    taskEmbeddingCacheHit: boolean;
   }) => void;
 }
 
@@ -95,7 +130,14 @@ export async function applyToolSelectionThin(options: ApplyToolSelectionThinOpti
 
   try {
     const startedAt = Date.now();
-    const taskEmbedding = await embed(taskText);
+    // Cache hit/miss on the task embedding — the dominant cost of this path.
+    const taskKey = simpleHash(taskText);
+    let taskEmbedding = taskEmbeddingCache.get(taskKey);
+    const taskEmbeddingCacheHit = taskEmbedding !== undefined;
+    if (!taskEmbedding) {
+      taskEmbedding = await embed(taskText);
+      taskEmbeddingCache.set(taskKey, taskEmbedding);
+    }
 
     const now = Date.now();
     const events = options.recentToolCalls ?? [];
@@ -142,6 +184,7 @@ export async function applyToolSelectionThin(options: ApplyToolSelectionThinOpti
       droppedCount,
       estimatedTokensSaved,
       durationMs: Date.now() - startedAt,
+      taskEmbeddingCacheHit,
     });
 
     return selected;

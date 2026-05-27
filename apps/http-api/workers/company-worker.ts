@@ -38,6 +38,14 @@ import {
 import { CompanyStore } from '../../../packages/store/src/company-store.js';
 import { CodeIndexDB } from '../../../packages/store/src/db.js';
 import { CompanyOrchestrator } from '../../../packages/company/src/orchestrator.js';
+import {
+  startAgentSupervisorIfEnabled,
+  setGlobalAgentSupervisor,
+  SqliteSupervisionPersistence,
+  type AgentSupervisor,
+  type SupervisionPersistence,
+} from '../../../packages/company/src/services/supervisor/index.js';
+import { subordinateCompletionBus } from '../../../packages/company/src/services/subordinate/completion-events.js';
 import { subscribe, publish, markEnded, type CoderRunBus } from '../coder-bus.js';
 
 interface CompanyWorkerData {
@@ -93,6 +101,80 @@ const orchestrator = new CompanyOrchestrator({
   companyStore,
   db,
 });
+
+// ─── AgentSupervisor (Sprint 4 Phase 1.6) ──────────────────────
+//
+// Each company-worker boots its OWN supervisor scoped to this session.
+// Subscribes to:
+//   - `orchestrator.eventBus` (exposed as public readonly in Phase 1.6
+//      so the supervisor can observe master.ended / master.resurrected /
+//      subordinates.changed lifecycle events that fire WITHIN this worker)
+//   - `subordinateCompletionBus` (worker-local singleton — completion-handler
+//      fires it in the same worker, so the supervisor receives it directly)
+//
+// Incidents are forwarded to main via `bridge.emit('supervisor.incident', ...)`
+// where main's listener prints them as `[supervisor:worker-<sessionId>]` logs.
+// This is what the user will see when an agent gets stuck.
+//
+// Gated by MCP_SUPERVISOR_ENABLED=1. setGlobalAgentSupervisor(...) makes the
+// supervisor accessible to `spawn.ts:registerSubordinate` via the global
+// singleton pattern (each worker's module scope has its own copy of `global.ts`
+// — that's why the main-process call doesn't reach here, and why we MUST
+// call it inside the worker too).
+// Phase 2.4 — supervisor persistence is opt-in via env. When enabled,
+// the supervisor reads `agent_supervision` on boot, detects ghost-running
+// rows (process died mid-flight), and mirrors every state transition +
+// incident to disk. The persistence opens its OWN better-sqlite3 handle
+// against the same dbPath — WAL mode allows safe concurrent access.
+let workerSupervisionPersistence: SupervisionPersistence | null = null;
+if (process.env.MCP_SUPERVISOR_PERSISTENCE !== '0') {
+  try {
+    workerSupervisionPersistence = new SqliteSupervisionPersistence(dbPath);
+  } catch (e) {
+    console.warn(
+      `[company-worker ${companySessionId}] failed to open supervisor persistence:`,
+      e,
+    );
+  }
+}
+
+// Phase 2.2 — RecoveryContext bridges the supervisor to the
+// orchestrator's public service methods. Each recovery action picks
+// what it needs (some don't need master, some don't need runners).
+const workerSupervisor: AgentSupervisor | null = startAgentSupervisorIfEnabled({
+  companyEventBus: orchestrator.eventBus,
+  completionBus: subordinateCompletionBus,
+  emitIncident: (incident): void => {
+    bridge.emit('supervisor.incident', {
+      sessionId: companySessionId,
+      ...incident,
+    });
+  },
+  recoveryContext: {
+    master: {
+      isAlive: () => orchestrator.isMasterAlive,
+      resurrect: (reason: string) =>
+        Promise.resolve(orchestrator.notifyMasterAboutSubordinate(`[supervisor] ${reason}`)),
+    },
+    subordinates: {
+      // Async signature on the public method; preserve it through.
+      resume: (agentRunId, message) => orchestrator.resumeSubordinate(agentRunId, message),
+      abort: (agentRunId) => Promise.resolve(orchestrator.abortSubordinate(agentRunId)),
+    },
+    // `runners` map is intentionally absent — Phase 2.3 will plumb
+    // per-agent runner references through SubordinateLifecycle so
+    // abortStuckTool can inject tool_result errors. Until then,
+    // STUCK_TOOL recovery downgrades to the abort path (still
+    // unwedges the run, just terminates it).
+  },
+  persistence: workerSupervisionPersistence ?? undefined,
+});
+setGlobalAgentSupervisor(workerSupervisor);
+if (workerSupervisor) {
+  // Boot ack so the user sees per-worker confirmation in the main log
+  // (the main side's listener for `supervisor.boot` does the printing).
+  bridge.emit('supervisor.boot', { sessionId: companySessionId });
+}
 
 // ─── Bus mirror — worker → main ─────────────────────────────────
 //
@@ -176,6 +258,46 @@ bridge.handle('orchestrator.property', (payload) => {
   return value;
 });
 
+// ─── Supervisor RPC (Phase 3.1) ─────────────────────────────────
+//
+// Admin endpoints route through `bridge.request('supervisor.rpc', ...)`
+// to call methods on the worker-local supervisor. Returns POJO results
+// (already structured-clone-friendly). Supports:
+//   - getStatus()
+//   - listRecentIncidents(sessionId, limit)
+//   - isRoleQuarantined(role)
+//   - releaseRoleQuarantine(role)
+//   - releaseReadOnlyMode()
+//
+// When `workerSupervisor` is null (env flag off), every call returns null.
+type SupervisorRpcMethod =
+  | 'getStatus'
+  | 'listRecentIncidents'
+  | 'isRoleQuarantined'
+  | 'releaseRoleQuarantine'
+  | 'releaseReadOnlyMode';
+
+bridge.handle('supervisor.rpc', (payload) => {
+  const { method, args } = payload as { method: SupervisorRpcMethod; args: unknown[] };
+  if (!workerSupervisor) return null;
+  switch (method) {
+    case 'getStatus':
+      return workerSupervisor.getStatus();
+    case 'listRecentIncidents': {
+      const [sessionId, limit] = args as [number, number?];
+      return workerSupervisor.listRecentIncidents(sessionId, limit ?? 50);
+    }
+    case 'isRoleQuarantined':
+      return workerSupervisor.isRoleQuarantined(args[0] as string);
+    case 'releaseRoleQuarantine':
+      return workerSupervisor.releaseRoleQuarantine(args[0] as string);
+    case 'releaseReadOnlyMode':
+      return workerSupervisor.releaseReadOnlyMode();
+    default:
+      throw new Error(`supervisor.rpc: unknown method ${String(method)}`);
+  }
+});
+
 bridge.handle('stop', async () => {
   // Tear down the orchestrator. `abortAll` aborts any live runners
   // and marks the bus ended. The bus.end mirror above will fire.
@@ -183,6 +305,28 @@ bridge.handle('stop', async () => {
     orchestrator.abortAll({ teardownSandbox: false, finalStatus: 'idle' });
   } catch (err) {
     console.warn(`[company-worker ${companySessionId}] abortAll threw:`, err);
+  }
+  // Phase 1.6 — stop the supervisor's periodic tick + unsubscribe its
+  // observation layer. Order matters: stop AFTER abortAll so terminal
+  // events still flow through; but BEFORE busUnsubscribe so the
+  // supervisor's lifecycle observers tear down cleanly.
+  try {
+    workerSupervisor?.stop();
+    setGlobalAgentSupervisor(null);
+  } catch (err) {
+    console.warn(`[company-worker ${companySessionId}] supervisor stop threw:`, err);
+  }
+  // Phase 2.4 — close the persistence handle. The SQLite driver
+  // is sync; this is a best-effort flush before process exit.
+  try {
+    if (workerSupervisionPersistence && 'close' in workerSupervisionPersistence) {
+      (workerSupervisionPersistence as { close: () => void }).close();
+    }
+  } catch (err) {
+    console.warn(
+      `[company-worker ${companySessionId}] supervisor persistence close threw:`,
+      err,
+    );
   }
   busUnsubscribe();
   try { companyStore.close(); } catch { /* best-effort */ }

@@ -10,7 +10,7 @@
 
 import { create } from 'zustand';
 
-export type LeftToolId = 'files' | 'search' | 'snapshots' | 'git';
+export type LeftToolId = 'files' | 'search' | 'snapshots' | 'git' | 'specs';
 export type RightToolId = 'chat' | 'inbox';
 export type BottomToolId = 'terminal' | 'problems' | 'output' | 'find';
 

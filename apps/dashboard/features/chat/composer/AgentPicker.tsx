@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Compass, ClipboardList, Hammer, ShieldAlert, Sparkles } from 'lucide-react';
+import { Compass, ClipboardList, Hammer, ShieldAlert, Sparkles, ScrollText } from 'lucide-react';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
 
 /**
@@ -17,7 +17,7 @@ import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.j
  */
 
 interface AgentDef {
-  id: 'explore' | 'plan' | 'build' | 'admin';
+  id: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
   description: string;
   profile: string;
   planMode: boolean;
@@ -30,6 +30,7 @@ const ICONS: Record<AgentId, React.ComponentType<{ className?: string }>> = {
   plan: ClipboardList,
   build: Hammer,
   admin: ShieldAlert,
+  spec: ScrollText,
 };
 
 // Positive framing per mode — what it PROMISES, not what it blocks.
@@ -39,6 +40,7 @@ const PROMISE: Record<AgentId, string> = {
   plan: 'Proposes a plan, waits for OK',
   build: 'Edits, verifies, reports',
   admin: 'Commits, snapshots, ops — asks first',
+  spec: 'Writes a spec, waits for approval',
 };
 
 // Tailwind text-color class per mode — applied to the leading icon so the
@@ -48,6 +50,7 @@ const MODE_TINT: Record<AgentId, string> = {
   plan: 'text-violet-500',
   build: 'text-emerald-500',
   admin: 'text-rose-500',
+  spec: 'text-amber-500',
 };
 
 interface AgentPickerProps {
@@ -121,13 +124,17 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
         { id: 'plan', description: t('agentPicker.navigate'), profile: 'navigate', planMode: true },
         { id: 'build', description: t('agentPicker.navigateFull'), profile: 'navigate', planMode: false },
         { id: 'admin', description: t('agentPicker.full'), profile: 'full', planMode: false },
+        { id: 'spec', description: t('agentPicker.spec', { defaultValue: 'Spec-driven authoring — pauses for human approval before code.' }), profile: 'navigate', planMode: false },
       ] satisfies AgentDef[]);
     return source.map((a) => ({
       value: a.id,
       label: capitalise(a.id),
-      // Promise-first hint: what the mode delivers, not what tier it sits in.
-      // Falls back to the legacy first-sentence if the id is unknown.
-      hint: PROMISE[a.id] ?? a.description.split('.')[0],
+      // Promise-first description: what the mode delivers, not what
+      // tier it sits in. Stacks BELOW the label inside Combobox rows so
+      // long copy ("Commits, snapshots, ops — asks first") doesn't
+      // squeeze the label column down to "PL…" / "S…" as it did when
+      // we used `hint` (which competes side-by-side).
+      description: PROMISE[a.id] ?? a.description.split('.')[0],
     }));
   }, [agents]);
 
@@ -150,6 +157,10 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
           placeholder={t('toolbar.agent')}
           searchPlaceholder={t('toolbar.searchAgent')}
           emptyLabel={t('toolbar.noAgent')}
+          // Trigger is narrow (108px) but the dropdown needs room for
+          // promise descriptions like "Commits, snapshots, ops — asks
+          // first". 19rem ≈ 304px fits the longest line at text-[10px].
+          contentClassName="min-w-[19rem]"
         />
       </div>
       {suggestion && SuggestionIcon && (

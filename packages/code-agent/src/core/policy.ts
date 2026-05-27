@@ -167,6 +167,10 @@ export interface PolicyContext {
   planMode: boolean;
   /** A `submit_plan` was approved by the user. */
   planApproved: boolean;
+  /** Spec mode is active for this run (agentId='spec'). */
+  specMode?: boolean;
+  /** A `submit_spec` was approved by the user — unblocks mutating tools the same way `planApproved` does. */
+  specApproved?: boolean;
   /** Inline task scope, when one is open. */
   taskScope: { id: string; files: string[] } | null;
   /**
@@ -189,6 +193,7 @@ export interface PolicyContext {
  */
 export type PolicyReason =
   | 'plan_mode'
+  | 'spec_mode'
   | 'task_scope'
   | 'sandbox_required'
   | 'admin_required';
@@ -310,6 +315,20 @@ export function evaluateToolInvocation(
       allowed: false,
       reason: 'plan_mode',
       detail: `Tool '${tool.name}' is blocked in plan mode. Call 'submit_plan' first and wait for user approval before mutating the workspace.`,
+      metadata,
+    };
+  }
+
+  // 2b. Spec-mode mutating block — parallel to plan mode but driven by
+  //     `submit_spec` approval. The runner unlocks `specApproved` when the
+  //     user approves the written specification; until then, mutating tools
+  //     are refused. Inline task scope still grants per-task unlocks via
+  //     the same scope-aware path the planMode branch uses.
+  if (metadata.mutates && ctx.specMode && !ctx.specApproved) {
+    return {
+      allowed: false,
+      reason: 'spec_mode',
+      detail: `Tool '${tool.name}' is blocked in spec mode. Call 'submit_spec' first and wait for human approval before mutating the workspace.`,
       metadata,
     };
   }

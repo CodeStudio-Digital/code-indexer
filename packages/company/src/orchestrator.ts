@@ -115,8 +115,13 @@ export class CompanyOrchestrator {
    * lifecycle services from `IdleController`. Master and Subordinate
    * publish lifecycle transitions; IdleController subscribes. Distinct
    * from `MetaBusPublisher` — that one is the OUTBOUND SSE channel.
+   *
+   * Exposed as `public readonly` so the AgentSupervisor (Phase 1.6)
+   * can subscribe to the real lifecycle events when constructed
+   * inside a `company-worker` thread. Otherwise the supervisor would
+   * see an orphan bus with no observable transitions.
    */
-  private readonly eventBus: CompanyEventBus;
+  public readonly eventBus: CompanyEventBus;
   // Master ↔ HumanInTheLoop still cross-reference (Master needs HitL
   // for prompt registration; HitL needs Master for runner access). The
   // Subordinate ↔ Idle cycle is gone — both flow through `eventBus`
@@ -382,6 +387,13 @@ export class CompanyOrchestrator {
     roleConfigs?: RoleConfig[];
     attachments?: import('@mcp/code-agent/index.js').CoderAttachment[];
     thinking?: boolean;
+    /**
+     * When true, the master prompt instructs the orchestrator to route
+     * non-trivial work through the built-in SDD pipeline. The flag is
+     * threaded into `MasterPromptContext.sddMode` so the prompt picks up
+     * the SDD MODE block; runtime behaviour is otherwise unchanged.
+     */
+    sddMode?: boolean;
   }): Promise<RunCoderHandle> {
     return this.master.start(opts);
   }
@@ -689,7 +701,7 @@ export class CompanyOrchestrator {
   postToBoard(
     authorRole: string,
     agentRunId: number | null,
-    kind: 'message' | 'decision' | 'question' | 'deliverable' | 'handoff',
+    kind: 'message' | 'decision' | 'question' | 'deliverable' | 'handoff' | 'blocker',
     content: string,
     mentions?: string[],
   ): void {
@@ -1076,6 +1088,20 @@ export class CompanyOrchestrator {
 
   inboxRespond(messageId: number, answer: string): boolean {
     return this.inbox.respond(messageId, answer);
+  }
+
+  /**
+   * C9 — Async send poll. Snapshot the current state of a message
+   * without waiting. Subordinate tool `check_inbox_answer` calls this
+   * to poll an outstanding fire-and-forget message.
+   */
+  inboxStatus(messageId: number): {
+    status: import('@mcp/company/types.js').InboxStatus;
+    answer: string | null;
+    deliveredAt: string | null;
+    answeredAt: string | null;
+  } | null {
+    return this.inbox.getMessageStatus(messageId);
   }
 
   inboxCancel(messageId: number, reason: string): boolean {

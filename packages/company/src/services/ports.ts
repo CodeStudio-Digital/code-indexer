@@ -11,7 +11,15 @@ import type { RunCoderHandle } from '@mcp/code-agent/index.js';
 import type { CoderRunBus } from '@apps/http-api/coder-bus.js';
 import type { AgentRunStatus, KanbanCardFull, KanbanColumn, BoardEntry } from '@mcp/company/types.js';
 
-export type BoardKind = 'message' | 'decision' | 'question' | 'deliverable' | 'handoff';
+// `'blocker'` = the agent reports an impediment it can't resolve on
+// its own (missing tools, missing config, ambiguous external state).
+// When `post_to_board` is called with this kind, the runner aborts
+// after the post — the master ends, the user reads the blocker on
+// the board and decides how to intervene. The next user message
+// resurrects the master with full history preserved. Distinct from
+// `'question'` because the agent isn't asking for a single answer —
+// it's stopping the whole run for human attention.
+export type BoardKind = 'message' | 'decision' | 'question' | 'deliverable' | 'handoff' | 'blocker';
 
 /** Publish events to the per-session meta-bus. */
 export interface IMetaBusPublisher {

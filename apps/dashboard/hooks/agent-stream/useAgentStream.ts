@@ -53,7 +53,7 @@ export function useAgentStream(sessionId: number | null) {
       extras?: {
         attachments?: AgentAttachment[];
         /** Agent preset: explore | plan | build | admin. */
-        agent?: 'explore' | 'plan' | 'build' | 'admin';
+        agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
         /** Tool tier profile override (takes precedence over agent). */
         profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
         /** Override max turns for this run. null/undefined = use default. */
@@ -266,6 +266,23 @@ export function useAgentStream(sessionId: number | null) {
     [sessionId, postAndResume],
   );
 
+  const respondToSpec = useCallback(
+    (
+      approved: boolean,
+      spec_path: string,
+      requested_changes?: string,
+      onMessageComplete?: () => void,
+      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' },
+    ) =>
+      postAndResume(
+        `/api/coder/sessions/${sessionId}/spec-response`,
+        { approved, spec_path, requested_changes },
+        { ...(extras?.agent ? { agent: extras.agent } : {}) },
+        onMessageComplete,
+      ),
+    [sessionId, postAndResume],
+  );
+
   const switchProvider = useCallback(
     async (provider: string, model?: string) => {
       if (!sessionId) return;
@@ -306,6 +323,7 @@ export function useAgentStream(sessionId: number | null) {
     answerQuestion,
     respondToPlan,
     respondToTasks,
+    respondToSpec,
     switchProvider,
   };
 }

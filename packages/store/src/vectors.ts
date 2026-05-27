@@ -21,7 +21,21 @@ export interface VectorStore {
 export class CloudflareVectorStore implements VectorStore {
   private workerUrl: string;
   private authToken: string;
-  private batchSize = 1000;
+  // Vectorize enforces DIFFERENT per-request caps on upsert vs delete:
+  //
+  //   - upsert: ~1000 vectors per call (and a 10 MB body cap — usually
+  //     the body limit hits first for high-dim vectors).
+  //   - deleteByIds: hard cap of 100 ids per call (returns
+  //     `VECTOR_DELETE_ERROR (code = 40007): too many ids in payload;
+  //     max id count is 100`). Reported by the user as a 500 from the
+  //     proxy Worker on a 534-id retry burst.
+  //
+  // Keeping a single `batchSize` for both meant any cleanup pass with
+  // 100+ orphan vectors would crash. Two named constants make the
+  // intent obvious and prevent a future "bump batch size to speed up
+  // upsert" from re-introducing the delete bug.
+  private upsertBatchSize = 1000;
+  private deleteBatchSize = 100;
 
   constructor(workerUrl: string, authToken: string) {
     this.workerUrl = workerUrl.replace(/\/$/, '');
@@ -33,8 +47,8 @@ export class CloudflareVectorStore implements VectorStore {
 
     let totalCount = 0;
 
-    for (let i = 0; i < records.length; i += this.batchSize) {
-      const batch = records.slice(i, i + this.batchSize);
+    for (let i = 0; i < records.length; i += this.upsertBatchSize) {
+      const batch = records.slice(i, i + this.upsertBatchSize);
 
       const response = await fetch(`${this.workerUrl}/upsert`, {
         method: 'POST',
@@ -86,8 +100,8 @@ export class CloudflareVectorStore implements VectorStore {
 
     let totalCount = 0;
 
-    for (let i = 0; i < ids.length; i += this.batchSize) {
-      const batch = ids.slice(i, i + this.batchSize);
+    for (let i = 0; i < ids.length; i += this.deleteBatchSize) {
+      const batch = ids.slice(i, i + this.deleteBatchSize);
 
       const response = await fetch(`${this.workerUrl}/delete`, {
         method: 'POST',

@@ -27,7 +27,9 @@
  * in CI to gate retrieval regressions.
  */
 import { parseArgs } from 'node:util';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
@@ -35,6 +37,7 @@ import { createEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import { createVectorStore, NullVectorStore } from '@mcp/store/vectors.js';
 import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
 import { HyDEService } from '@mcp/indexer/search/hyde.js';
+import { createReranker } from '@mcp/indexer/search/reranker.js';
 import type { HybridSearchResult, SearchMode } from '@mcp/shared/types.js';
 
 interface EvalQuery {
@@ -219,6 +222,10 @@ async function main(): Promise<void> {
       modes: { type: 'string' },
       'no-hyde': { type: 'boolean' },
       'min-recall': { type: 'string' },
+      // Optional: write results JSON to disk for diffing against future runs.
+      // Used by the baseline workflow. Default: do not write a file (legacy behavior).
+      output: { type: 'string' },
+      'save-baseline': { type: 'boolean' },
     },
   });
 
@@ -252,7 +259,10 @@ async function main(): Promise<void> {
   const vectorStore = createVectorStore(providerStore);
   const searchable = vectorStore instanceof NullVectorStore ? null : vectorStore;
   const hyde = values['no-hyde'] ? null : new HyDEService(providerStore);
-  const search = new HybridSearch(db, searchable, embeddingService, hyde);
+  // Reranker matches production wiring (deps.ts, mcp-server, cli/snapshots).
+  // Returns NullReranker when env vars unset → bench reflects what users see.
+  const reranker = createReranker();
+  const search = new HybridSearch(db, searchable, embeddingService, hyde, reranker);
 
   const { queries, source } = loadQueries(values.file);
   console.log(`\n[bench] project=${project.name} queries=${queries.length} source=${source} hyde=${hyde ? 'real' : 'off'}`);
@@ -285,6 +295,30 @@ async function main(): Promise<void> {
         exp.mrr - fts.mrr >= 0 ? '+' : ''
       }${(exp.mrr - fts.mrr).toFixed(3)}`
     );
+  }
+
+  // Optional persistence — only when --output or --save-baseline is set.
+  // Legacy invocations (CI gate without --save-baseline) keep writing nothing.
+  if (values.output || values['save-baseline']) {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    const repoRoot = resolve(__dirname, '..', '..');
+    const outDir = join(repoRoot, 'bench', 'results');
+    if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+    const day = new Date().toISOString().slice(0, 10);
+    const outPath = values.output ?? join(outDir, `search-baseline-${day}.json`);
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      project: project.name,
+      projectId: project.id,
+      querySource: source,
+      queryCount: queries.length,
+      hyde: hyde ? 'real' : 'off',
+      modes,
+      results,
+    };
+    writeFileSync(outPath, JSON.stringify(payload, null, 2));
+    console.log(`[bench] results written to ${outPath}`);
   }
 
   db.close();

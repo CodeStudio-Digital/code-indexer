@@ -26,8 +26,8 @@ interface SendMessageBody {
   max_turns?: number;
   plan_mode?: boolean;
   attachments?: CoderAttachment[];
-  /** Agent preset: explore | plan | build | admin. Takes precedence over profile/plan_mode when unset. */
-  agent?: 'explore' | 'plan' | 'build' | 'admin';
+  /** Agent preset: explore | plan | build | admin | spec. Takes precedence over profile/plan_mode when unset. */
+  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
   /** Tool tier profile: bootstrap | navigate | full | auto. */
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   /**
@@ -84,7 +84,7 @@ const RUNNER_READY_TIMEOUT_MS = 5_000;
 interface ContinueBody {
   plan_mode?: boolean;
   max_turns?: number;
-  agent?: 'explore' | 'plan' | 'build' | 'admin';
+  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
 }
 

@@ -161,6 +161,20 @@ export const APP_SETTINGS: readonly SettingDef[] = [
     advanced: true,
   },
   {
+    key: 'MCP_HTTP_REQUEST_TIMEOUT_MS',
+    label: 'HTTP request timeout (ms)',
+    description:
+      "Wall-clock cap on HTTP requests, including the SSE streams that drive long `spawn_agents` runs. " +
+      "Node's default (300000ms = 5 min) was killing subagent explorations on big codebases. " +
+      'Default 3600000 (60 min). Lower to kill runaway runs faster; raise for 10k+ file projects. Restart required.',
+    type: 'int',
+    category: 'mcp',
+    default: '3600000',
+    min: 60_000,
+    advanced: true,
+    restartNeeded: true,
+  },
+  {
     key: 'CODER_WORKER_POST_RUN_LINGER_MS',
     label: 'Worker post-run linger (ms)',
     description: 'Window the worker waits for a follow-up message before evicting. Default 30s.',

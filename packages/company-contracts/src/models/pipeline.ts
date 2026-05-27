@@ -38,8 +38,13 @@ export interface PipelineNode {
   maxAttempts?: number;
   branchMode?: 'linear' | 'pass-fail' | 'by-tag' | 'by-text-match';
   position?: { x: number; y: number };
-  /** Default 'agent' (subordinate that performs work). 'validate' = verdict-only subagent. */
-  kind?: 'agent' | 'validate';
+  /**
+   * Default 'agent' (subordinate that performs work). 'validate' = verdict-only subagent.
+   * 'spec' = subordinate that authors a specification (agentId='spec') and pauses for human
+   * approval before the next node runs. The SDD built-in template wires a 'spec' node
+   * followed by an 'agent' implementer and a 'validate' qa-validator.
+   */
+  kind?: 'agent' | 'validate' | 'spec';
   /** Per-stage provider/model. When omitted, the executor inherits from the parent session. */
   model_override?: { provider?: string; model?: string } | null;
   /** Required when `kind === 'validate'`. Free-text criteria fed to the validator subagent. */

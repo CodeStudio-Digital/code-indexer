@@ -24,7 +24,7 @@ export interface CoderRuntime {
   wireRunnerToBus(runner: CoderRunner, bus: CoderRunBus): void;
   findPendingInteraction(
     sessionId: number,
-  ): { toolUseId: string; name: 'submit_plan' | 'ask_user' | 'submit_tasks' } | null;
+  ): { toolUseId: string; name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master' } | null;
   coderPipelineRegistry: CoderPipelineRegistry;
 }
 
@@ -96,7 +96,7 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
    */
   function findPendingInteraction(
     sessionId: number,
-  ): { toolUseId: string; name: 'submit_plan' | 'ask_user' | 'submit_tasks' } | null {
+  ): { toolUseId: string; name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master' } | null {
     const data = sessionStore.loadSessionWithMessages(sessionId);
     if (!data) return null;
     const seenResults = new Set<string>();
@@ -114,9 +114,18 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
       if (m.role !== 'assistant') continue;
       for (const b of m.content) {
         if (b.type !== 'tool_use') continue;
-        if (b.name !== 'submit_plan' && b.name !== 'ask_user' && b.name !== 'submit_tasks') continue;
+        if (
+          b.name !== 'submit_plan'
+          && b.name !== 'ask_user'
+          && b.name !== 'submit_tasks'
+          && b.name !== 'submit_spec'
+          && b.name !== 'submit_specification_to_master'
+        ) continue;
         if (seenResults.has(b.id)) continue;
-        return { toolUseId: b.id, name: b.name as 'submit_plan' | 'ask_user' | 'submit_tasks' };
+        return {
+          toolUseId: b.id,
+          name: b.name as 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master',
+        };
       }
     }
     return null;

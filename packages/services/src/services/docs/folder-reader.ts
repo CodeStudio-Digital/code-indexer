@@ -35,9 +35,26 @@ import type { RawPage } from './types.js';
 import { convertHtmlToMarkdown } from './html-to-markdown.js';
 import { parsePdf } from './pdf-parser.js';
 
-/** Hard ceiling no use-case — operador customiza via UI, server clampa. */
-export const FOLDER_HARD_MAX_FILES = 50_000;
-export const FOLDER_DEFAULT_MAX_FILES = 5_000;
+/**
+ * Hard ceiling no use-case — operador customiza via UI, server clampa.
+ *
+ * Histórico dos valores:
+ *   v1 (PR 10): default=5_000,  hard=50_000   — conservador, cobria Unity
+ *               6000.3 (~5-8k) "no limite". Operador reportou que indexação
+ *               parou em ~1000 arquivos (causa raiz: dev server com binário
+ *               antigo cacheado pelo tsx watch); confirmou que defaults
+ *               estavam sufocando frameworks médios e pediu "sem cap prático".
+ *   v2 (PR 11): default=50_000, hard=500_000  — Unity sobra; .NET 8 ref
+ *               (~30k) cabe; só frameworks gigantes (Boost full, full Java
+ *               JDK API) precisam subir até o hard cap. Na prática, antes
+ *               do hard cap o operador já bate no `HARD_MAX_CHUNKS_PER_SOURCE
+ *               = 50_000` em `runIngest` — o que é OK, é uma proteção real
+ *               contra explosão de custo de embedding e fica visível em
+ *               warning. Filesize cap (10 MB) + binary-sniff continuam
+ *               protegendo o cenário "operador apontou pra /usr".
+ */
+export const FOLDER_HARD_MAX_FILES = 500_000;
+export const FOLDER_DEFAULT_MAX_FILES = 50_000;
 /** Limite por arquivo lido. Binários grandes (PDFs de manuais inteiros)
  *  costumam estourar isso — tratar como skip + log antes de cair em OOM. */
 export const FOLDER_FILE_SIZE_CAP_BYTES = 10 * 1024 * 1024;
@@ -55,8 +72,14 @@ export const FOLDER_DEFAULT_EXCLUDE_GLOB =
  * Per-file callback. `index`/`total` são pra renderizar o progress
  * bar do dashboard (SSE event `progress`). `kind` distingue arquivo
  * processado vs. pulado vs. erro pra eventual telemetria.
+ *
+ * `scan` é emitido UMA vez, logo após o `glob` retornar e antes do
+ * loop processar qualquer arquivo. Permite a UI mostrar "Encontrados N
+ * arquivos · vou processar M (cap K)" como pré-flight sem esperar o
+ * primeiro `file` (que pode demorar segundos em pastas grandes).
  */
 export type FolderReaderEvent =
+  | { kind: 'scan'; totalMatches: number; willProcess: number; cap: number }
   | { kind: 'file'; filePath: string; index: number; total: number; bytes: number; pages: number }
   | { kind: 'skip'; filePath: string; reason: string }
   | { kind: 'error'; filePath: string; message: string };
@@ -102,6 +125,19 @@ export async function readFolder(opts: ReadFolderOptions): Promise<ReadFolderRes
     FOLDER_HARD_MAX_FILES,
   );
 
+  // Diagnostic log ANTES do glob — quando uma indexação misteriosamente
+  // "parou em N", o primeiro passo é olhar o log e confirmar qual cap
+  // está em vigor. Distingue 3 fontes: o valor que o caller pediu, o
+  // default da função, e o hard cap. Sem esse log a investigação de
+  // "indexou só 1000" exige adivinhar entre essas três fontes (foi o
+  // que aconteceu no incidente que motivou o PR 11).
+  console.log(
+    `[doc-indexer] folder reading rootPath=${rootPath} ` +
+      `include=${includePattern} exclude=${excludePattern} ` +
+      `cap_effective=${maxFiles} ` +
+      `(request=${opts.maxFiles ?? 'unset'}, default=${FOLDER_DEFAULT_MAX_FILES}, hard=${FOLDER_HARD_MAX_FILES})`,
+  );
+
   // glob v11 resolve em uma única passada. `absolute: true` retorna
   // paths absolutos; `nodir: true` filtra entradas que são diretórios;
   // `dot: false` ignora dotfiles (`.git/`, `.ds_store`); `follow: false`
@@ -119,6 +155,18 @@ export async function readFolder(opts: ReadFolderOptions): Promise<ReadFolderRes
   // Trunca ao cap. O sort dá determinismo entre runs (importante pra
   // testes + pra "re-indexar" produzir mesmo conjunto).
   const ordered = matches.slice().sort().slice(0, maxFiles);
+
+  // Pre-flight `scan` event — UMA emissão, antes de qualquer trabalho
+  // per-file. UI mostra "Encontrados N arquivos · vou processar M (cap
+  // K)" sem esperar o primeiro `file` event. Quando totalMatches >
+  // willProcess o operador sabe imediatamente que bateu no cap e pode
+  // subir o valor em "Avançado".
+  opts.onEvent?.({
+    kind: 'scan',
+    totalMatches: filesScanned,
+    willProcess: ordered.length,
+    cap: maxFiles,
+  });
 
   const pages: RawPage[] = [];
   let filesProcessed = 0;

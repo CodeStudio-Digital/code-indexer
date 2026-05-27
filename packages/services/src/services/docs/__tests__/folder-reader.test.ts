@@ -17,7 +17,7 @@
  * Fixtures vivem num tmp dir criado por `beforeEach` e dropado no
  * `afterEach` — zero state vazado entre testes.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs, mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -25,6 +25,9 @@ import {
   readFolder,
   FOLDER_DEFAULT_INCLUDE_GLOB,
   FOLDER_DEFAULT_EXCLUDE_GLOB,
+  FOLDER_DEFAULT_MAX_FILES,
+  FOLDER_HARD_MAX_FILES,
+  type FolderReaderEvent,
 } from '../folder-reader.js';
 
 let tmpRoot = '';
@@ -82,15 +85,21 @@ describe('readFolder — basic dispatch', () => {
     makeFile('b.md', '# B');
     makeFile('c.md', '# C');
 
-    const events: Array<{ kind: string; filePath: string; index?: number; total?: number }> = [];
+    const events: Array<{ kind: string; filePath?: string; index?: number; total?: number }> = [];
     await readFolder({
       rootPath: tmpRoot,
       sourceId: 1,
       onEvent: (ev) => {
+        // `scan` é o único kind sem `filePath` — narrowing por kind
+        // mantém o test simples sem ifs em cada propriedade.
+        if (ev.kind === 'scan') {
+          events.push({ kind: ev.kind });
+          return;
+        }
         events.push({
           kind: ev.kind,
           filePath: ev.filePath,
-          ...('index' in ev ? { index: ev.index, total: ev.total } : {}),
+          ...(ev.kind === 'file' ? { index: ev.index, total: ev.total } : {}),
         });
       },
     });
@@ -203,6 +212,118 @@ describe('readFolder — defaults exposed', () => {
     expect(FOLDER_DEFAULT_INCLUDE_GLOB).toContain('txt');
     expect(FOLDER_DEFAULT_EXCLUDE_GLOB).toContain('node_modules');
     expect(FOLDER_DEFAULT_EXCLUDE_GLOB).toContain('.git');
+  });
+});
+
+describe('readFolder — cap constants (PR 11: raised to 200k+ tier)', () => {
+  it('pins FOLDER_DEFAULT_MAX_FILES at 50_000 (cobre Unity + .NET sem mexer em Avançado)', () => {
+    expect(FOLDER_DEFAULT_MAX_FILES).toBe(50_000);
+  });
+
+  it('pins FOLDER_HARD_MAX_FILES at 500_000 (cap superior pra frameworks gigantes)', () => {
+    expect(FOLDER_HARD_MAX_FILES).toBe(500_000);
+  });
+});
+
+describe('readFolder — scan event (PR 11: pre-flight)', () => {
+  it('emits a `scan` event ANTES de qualquer `file` event', async () => {
+    makeFile('a.md', '# A');
+    makeFile('b.md', '# B');
+
+    const events: FolderReaderEvent[] = [];
+    await readFolder({
+      rootPath: tmpRoot,
+      sourceId: 1,
+      onEvent: (ev) => events.push(ev),
+    });
+
+    // Primeiro event sempre é scan.
+    expect(events[0]?.kind).toBe('scan');
+    const scan = events[0]!;
+    if (scan.kind !== 'scan') throw new Error('expected scan');
+    expect(scan.totalMatches).toBe(2);
+    expect(scan.willProcess).toBe(2);
+    // cap = default (porque caller não passou maxFiles)
+    expect(scan.cap).toBe(FOLDER_DEFAULT_MAX_FILES);
+
+    // Em seguida os `file` events.
+    const restKinds = events.slice(1).map((e) => e.kind);
+    expect(restKinds).toContain('file');
+    expect(restKinds).not.toContain('scan'); // emitido APENAS uma vez
+  });
+
+  it('reflete o cap clampado quando maxFiles excede o hard cap', async () => {
+    makeFile('a.md', '# A');
+
+    const events: FolderReaderEvent[] = [];
+    await readFolder({
+      rootPath: tmpRoot,
+      sourceId: 1,
+      maxFiles: 99_999_999, // muito acima do hard cap
+      onEvent: (ev) => events.push(ev),
+    });
+
+    const scan = events.find((e) => e.kind === 'scan');
+    if (!scan || scan.kind !== 'scan') throw new Error('expected scan event');
+    // cap reflete o clamp em FOLDER_HARD_MAX_FILES, NÃO o valor que o
+    // caller passou — assim a UI mostra o cap REAL em vigor.
+    expect(scan.cap).toBe(FOLDER_HARD_MAX_FILES);
+  });
+
+  it('sinaliza cap atingido quando totalMatches > willProcess', async () => {
+    makeFile('a.md', '# A');
+    makeFile('b.md', '# B');
+    makeFile('c.md', '# C');
+
+    const events: FolderReaderEvent[] = [];
+    await readFolder({
+      rootPath: tmpRoot,
+      sourceId: 1,
+      maxFiles: 2,
+      onEvent: (ev) => events.push(ev),
+    });
+
+    const scan = events.find((e) => e.kind === 'scan');
+    if (!scan || scan.kind !== 'scan') throw new Error('expected scan event');
+    expect(scan.totalMatches).toBe(3); // glob achou 3
+    expect(scan.willProcess).toBe(2);  // mas cap=2
+    expect(scan.cap).toBe(2);
+  });
+});
+
+describe('readFolder — diagnostic log (PR 11)', () => {
+  it('emite uma linha [doc-indexer] com cap_effective= antes do trabalho', async () => {
+    makeFile('a.md', '# A');
+
+    // Vitest wraps the global `console` object with its own reporter
+    // before tests run, so `console.log` calls go through vitest's
+    // facade. A normal `vi.spyOn(console, 'log')` doesn't intercept
+    // those — readFolder's `console.log` reference is the wrapped one,
+    // but the spy hooks the descriptor on the bare object. Replace the
+    // entire `log` property with a manual wrapper and restore in
+    // `finally`.
+    const captured: unknown[][] = [];
+    const original = console.log.bind(console);
+    console.log = (...args: unknown[]) => {
+      captured.push(args);
+      original(...args);
+    };
+    try {
+      await readFolder({ rootPath: tmpRoot, sourceId: 1 });
+    } finally {
+      console.log = original;
+    }
+
+    const lines = captured.map((args) => args.map(String).join(' '));
+    const found = lines.find(
+      (msg) =>
+        msg.includes('[doc-indexer] folder reading') &&
+        msg.includes('cap_effective='),
+    );
+    expect(found).toBeDefined();
+    // Deve conter as 3 fontes do cap pra debug ficar trivial.
+    expect(found).toContain(`default=${FOLDER_DEFAULT_MAX_FILES}`);
+    expect(found).toContain(`hard=${FOLDER_HARD_MAX_FILES}`);
   });
 });
 

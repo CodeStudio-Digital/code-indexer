@@ -49,6 +49,7 @@ export {
 
 export {
   applyToolSelectionThin,
+  clearTaskEmbeddingCacheForTests,
   type ApplyToolSelectionThinOptions,
   type ThinTool,
 } from './runtime-helper-thin.js';
@@ -60,3 +61,10 @@ export {
   getGlobalToolSelectionOutcomeObserver,
   type ToolSelectionOutcomeObserver,
 } from './global-filter.js';
+
+// A2 — Sprint 3 safety filter
+export {
+  applyToolSelectionSafety,
+  type SafetyContext,
+  type SafetyFilterResult,
+} from './safety-filter.js';

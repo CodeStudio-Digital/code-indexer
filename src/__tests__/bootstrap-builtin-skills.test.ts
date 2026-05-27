@@ -210,7 +210,14 @@ function makeInMemoryStore(seed: SkillDefinition[] = []): InMemoryStore {
         ...existing,
         id: input.id,
         name: input.name,
+        description: input.description ?? existing?.description ?? '',
+        slash_command:
+          input.slash_command !== undefined ? input.slash_command : existing?.slash_command ?? null,
         prompt_body: input.prompt_body,
+        allowed_tools:
+          input.allowed_tools !== undefined ? input.allowed_tools : existing?.allowed_tools ?? null,
+        context_mode: input.context_mode ?? existing?.context_mode ?? 'auto',
+        tags: input.tags ?? existing?.tags ?? [],
         version: input.version ?? '1.0.0',
         source: input.source ?? 'builtin',
       };
@@ -338,5 +345,35 @@ describe('ensureBuiltinSkills', () => {
     });
     expect(result.inspected).toBe(0);
     expect(result.failed).toEqual([]);
+  });
+
+  it('reads `slash-command` from frontmatter (H2 backlog item — /init AGENTS.md)', () => {
+    writeFileSync(
+      join(dir, 'init.md'),
+      [
+        '---',
+        'name: init',
+        'description: Generate AGENTS.md',
+        'slash-command: init',
+        'version: 1.0.0',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const store = makeInMemoryStore();
+    ensureBuiltinSkills(store, { builtinDir: dir, logger: silentLogger() });
+    expect(store.rows.get('init')?.slash_command).toBe('init');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('leaves slash_command null when frontmatter omits it (back-compat)', () => {
+    writeFileSync(
+      join(dir, 'qa.md'),
+      ['---', 'name: qa', 'version: 1.0.0', '---', 'body'].join('\n'),
+    );
+    const store = makeInMemoryStore();
+    ensureBuiltinSkills(store, { builtinDir: dir, logger: silentLogger() });
+    expect(store.rows.get('qa')?.slash_command).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

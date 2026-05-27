@@ -196,6 +196,29 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       flush();
     },
 
+    spec: (data) => {
+      const d = data as {
+        id: string;
+        name: string;
+        body: string;
+        spec_path: string;
+        parent_id?: string;
+        drive_path?: string;
+      };
+      blocks.push({
+        type: 'spec',
+        spec: {
+          id: d.id,
+          name: d.name,
+          body: d.body,
+          spec_path: d.spec_path,
+          parent_id: d.parent_id,
+          drive_path: d.drive_path,
+        },
+      });
+      flush();
+    },
+
     question: (data) => {
       const d = data as {
         id: string;

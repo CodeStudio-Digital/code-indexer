@@ -163,3 +163,47 @@ export async function backfillContextWindows(): Promise<{ updated: number; still
   }
   return r.json() as Promise<{ updated: number; still_null: number; total: number }>;
 }
+
+// ── Phase G — capability fallback visibility ────────────────────────────────
+
+export interface CapabilityFallbackEvent {
+  model: string;
+  source: 'inferred' | 'fallback';
+  via: string;
+  window: number;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  count: number;
+}
+
+export interface ResolveCapabilityResponse {
+  model: string;
+  static: {
+    window: number;
+    source: 'registry-exact' | 'registry-prefix' | 'inferred' | 'fallback';
+    via: string;
+  };
+  runtime: {
+    window: number;
+    effective: number;
+    reservedOutput: number;
+    isFallback: boolean;
+    source: 'registry' | 'inferred' | 'fallback';
+    via?: string;
+  };
+}
+
+export async function fetchCapabilityFallbacks(): Promise<CapabilityFallbackEvent[]> {
+  const r = await fetch('/api/admin/capabilities/fallbacks');
+  const j = (await r.json()) as { fallbacks: CapabilityFallbackEvent[] };
+  return j.fallbacks ?? [];
+}
+
+export async function previewCapabilityResolution(model: string): Promise<ResolveCapabilityResponse> {
+  const r = await fetch(`/api/admin/capabilities/resolve?model=${encodeURIComponent(model)}`);
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+  return r.json() as Promise<ResolveCapabilityResponse>;
+}
