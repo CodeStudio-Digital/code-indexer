@@ -35,7 +35,7 @@ import { McpToolBridge } from '@mcp/code-agent/tools/mcp-bridge.js';
 import { buildMcpResourceTools } from '@mcp/code-agent/tools/mcp-resources.js';
 import { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import { McpServerStore } from '@mcp/store/mcp-server-store.js';
-import { buildSubagentTool, buildSpawnAgentsTool } from '@mcp/code-agent/tools/subagent.js';
+import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
 import { buildSpawnAgentTool } from '@mcp/code-agent/tools/spawn-agent.js';
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
 import { buildKanbanTools } from '@mcp/company/tools/kanban-tools.js';
@@ -399,11 +399,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
   const sessionDisabledTools = store.getSessionDisabledTools(session.id);
 
-  // Subagent tool — registered AFTER MCP tools so it can snapshot the full
-  // tool list for the explore allowlist. Disabled via CODER_DISABLE_SUBAGENTS=1.
-  // Subagent tools — DISABLED for company Master. The Master must use
-  // spawn_subordinate_agent (persistent company sessions) instead of
-  // spawn_agents/spawn_subagent (ephemeral read-only subagents).
+  // Subagent deps — built AFTER MCP tools so it captures the full tool list
+  // for filtering. Disabled via CODER_DISABLE_SUBAGENTS=1. Also DISABLED for
+  // company Master (it must use spawn_subordinate_agent instead — ephemeral
+  // subagents don't fit the orchestration role).
+  let subagentDeps: SubagentDeps | null = null;
   if (process.env.CODER_DISABLE_SUBAGENTS !== '1' && !opts.companyContext?.isMaster) {
     const allDisabled = new Set([...(globalDisabledTools ?? []), ...sessionDisabledTools]);
     const parentTools = allDisabled.size > 0
@@ -419,16 +419,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       const usesDifferentProvider = targetProviderId !== session.provider;
       const usesDifferentModel = !!targetModel && targetModel !== session.model;
       if (usesDifferentProvider || usesDifferentModel) {
-        subagentProvider = await createCoderProvider(targetProviderId, targetModel);
-        console.log(
-          `[coder] subagent provider override: ${targetProviderId}:${subagentProvider.model}`,
-        );
+        const sub = await createCoderProvider(targetProviderId, targetModel);
+        subagentProvider = sub;
+        console.log(`[coder] subagent provider override: ${targetProviderId}:${sub.model}`);
       }
     } catch { /* non-fatal — falls back to parent provider */ }
 
-    const subagentDeps = { provider, parentTools, sessionStore: store, subagentProvider };
-    registry.register(buildSubagentTool(subagentDeps));
-    registry.register(buildSpawnAgentsTool(subagentDeps));
+    subagentDeps = { provider, parentTools, sessionStore: store, subagentProvider };
   }
 
   // Company tools — registered when this runner is part of a company session.
@@ -476,13 +473,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   }
 
-  // Unified spawn dispatcher — registered after BOTH spawn_subagent (always,
-  // when subagents are enabled) and spawn_subordinate_agent (master-only).
-  // Resolution is lazy at call time, so kind="ephemeral" works in any
-  // session that has spawn_subagent registered, and kind="persistent" works
-  // only when spawn_subordinate_agent is in the registry.
-  if (registry.get('spawn_subagent') || registry.get('spawn_subordinate_agent')) {
-    registry.register(buildSpawnAgentTool(registry));
+  // Unified spawn tool — single entry point replacing the deprecated
+  // spawn_subagent/spawn_agents pair. Schema accepts an `agents` array
+  // (1 item → sequential, N → parallel, up to 8). Persistent kind delegates
+  // to spawn_subordinate_agent when in a Company master session.
+  if (subagentDeps || registry.get('spawn_subordinate_agent')) {
+    // Either subagent deps exist (ephemeral path) OR master has the
+    // subordinate path; in the latter we still register so the model has
+    // a single dispatcher even without ephemeral capability.
+    const fallbackDeps: SubagentDeps =
+      subagentDeps
+      ?? { provider, parentTools: [], sessionStore: store };
+    registry.register(buildSpawnAgentTool(fallbackDeps, registry));
   }
 
   // Builder mode: when the company context carries a sandbox binding,

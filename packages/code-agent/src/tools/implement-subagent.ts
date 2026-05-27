@@ -24,15 +24,35 @@ import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner, SUBAGENT_TOOL_RESULT_CAP, extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import type { CoderTask, TaskResult, TaskReference } from '@mcp/code-agent/sessions/types.js';
 
+/**
+ * Tool filter for a subagent. Three shapes:
+ *   - `Set<string>` — legacy allowlist by tool name. Matches the static
+ *     EXPLORE_ALLOWLIST / IMPLEMENT_ALLOWLIST tables below.
+ *   - `(tool) => boolean` — predicate. Lets callers admit dynamic groups
+ *     like "all MCP externos that aren't mutating" without enumerating
+ *     names ahead of time.
+ *   - `null` — full access. Subagent inherits the parent registry as-is.
+ */
+export type SubagentAllowlist =
+  | Set<string>
+  | ((tool: CoderTool) => boolean)
+  | null;
+
 export interface SubagentSpec {
   systemPrompt: string;
-  /** Set of tool names from the parent registry that the subagent may use. */
-  allowlist: Set<string>;
+  allowlist: SubagentAllowlist;
   initialMessages: AgentMessage[];
   maxTurns: number;
   pushTimeCap?: number;
   /** When set, fs/shell tools log (do not block) reads/writes outside this list. */
   pathScope?: string[];
+}
+
+/** Helper: tests whether a tool is admitted by the given allowlist shape. */
+function isAllowed(allowlist: SubagentAllowlist, tool: CoderTool): boolean {
+  if (allowlist === null) return true;
+  if (typeof allowlist === 'function') return allowlist(tool);
+  return allowlist.has(tool.name);
 }
 
 export interface SubagentRunResult {
@@ -84,10 +104,11 @@ export interface SubagentParent {
 export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): Promise<SubagentRunResult> {
   const sandboxViolations: string[] = [];
 
-  // Build the filtered + (optionally) path-wrapped registry.
+  // Build the filtered + (optionally) path-wrapped registry. `allowlist`
+  // accepts Set / predicate / null (full access) — see SubagentAllowlist.
   const subRegistry = new ToolRegistry();
   for (const tool of parent.tools) {
-    if (!spec.allowlist.has(tool.name)) continue;
+    if (!isAllowed(spec.allowlist, tool)) continue;
     subRegistry.register(spec.pathScope ? wrapToolForPathScope(tool, spec.pathScope, sandboxViolations) : tool);
   }
 
@@ -213,6 +234,43 @@ export const EXPLORE_ALLOWLIST = new Set<string>([
 ]);
 
 /**
+ * Read-only filter — admits every name in `EXPLORE_ALLOWLIST` PLUS every
+ * external MCP tool that doesn't mutate. The static allowlist alone misses
+ * the user's installed MCP servers (`github_*`, `slack_*`, custom servers
+ * registered at runtime); the predicate plugs them in based on the
+ * `mutates` / source flags carried on each `CoderTool`.
+ */
+export const READ_ONLY_FILTER: (tool: CoderTool) => boolean = (tool) => {
+  if (EXPLORE_ALLOWLIST.has(tool.name)) return true;
+  if (tool.source === 'mcp_external') {
+    // External MCPs default to `mutates: true` (conservative) when the
+    // server didn't declare otherwise; only admit those that explicitly
+    // self-declare as non-mutating.
+    return tool.mutates === false;
+  }
+  return false;
+};
+
+/**
+ * Read-write filter — `IMPLEMENT_ALLOWLIST` PLUS every external MCP tool,
+ * mutating or not. The implement subagent is supposed to make changes
+ * end-to-end so denying mutating MCPs would defeat the point.
+ */
+export const READ_WRITE_FILTER: (tool: CoderTool) => boolean = (tool) => {
+  if (IMPLEMENT_ALLOWLIST.has(tool.name)) return true;
+  if (EXPLORE_ALLOWLIST.has(tool.name)) return true; // implement inherits read tools
+  if (tool.source === 'mcp_external') return true;
+  return false;
+};
+
+/**
+ * Full-access filter — `null` means "no filter, inherit the parent
+ * registry as-is". Use this for an unrestricted subagent that can call
+ * every tool the parent has (every tier, every MCP, every native).
+ */
+export const FULL_ACCESS_FILTER: SubagentAllowlist = null;
+
+/**
  * Allowlist for an implementation subagent. Includes the read tools needed to
  * navigate the local file scope plus the mutating tools that actually carry
  * out the task. Notably absent: submit_plan, submit_tasks, ask_user,
@@ -299,7 +357,7 @@ ${refs}
    <result>{"summary": "<≤200 chars: what was done>", "files_modified": ["path1", "path2"], "errors": "<only on failure>"}</result>
    \`\`\`
    The orchestrator parses this. If the block is absent or unparseable, the task is treated as failed.
-5. You CANNOT call submit_plan, submit_tasks, ask_user, spawn_subagent, execute_task, or task_complete. You answer only to the orchestrator via your final <result> block.
+5. You CANNOT call submit_plan, submit_tasks, ask_user, spawn_agent, execute_task, or task_complete. You answer only to the orchestrator via your final <result> block.
 6. Be terse. Don't narrate every file read — just do the work and report.
 
 # Token economy
@@ -462,6 +520,14 @@ export interface ParallelAgentSpec {
   task: string;
   label: string;
   maxTurns: number;
+  /**
+   * Per-agent overrides — fall back to the global `systemPrompt` /
+   * `allowlist` passed to `runParallelAgents` when omitted. Lets a single
+   * parallel batch mix `explore` and `implement` (and even `full`) agents.
+   */
+  systemPrompt?: string;
+  allowlist?: SubagentAllowlist;
+  pathScope?: string[];
 }
 
 export interface ParallelAgentProgress {
@@ -487,7 +553,7 @@ export async function runParallelAgents(
   parent: SubagentParent,
   agents: ParallelAgentSpec[],
   systemPrompt: string,
-  allowlist: Set<string>,
+  allowlist: SubagentAllowlist,
   onProgress: (p: ParallelAgentProgress) => void,
   concurrency?: number,
 ): Promise<{ results: ParallelAgentResult[]; totalUsage: ChatUsage }> {
@@ -499,11 +565,21 @@ export async function runParallelAgents(
 
     let toolCallCount = 0;
 
-    // Build isolated registry.
+    // Per-agent overrides (fall through to the global args).
+    const effectiveAllowlist = spec.allowlist ?? allowlist;
+    const effectiveSystemPromptBase = spec.systemPrompt ?? systemPrompt;
+    const effectivePathScope = spec.pathScope;
+    const violationsForThisAgent: string[] = [];
+
+    // Build isolated registry — accepts Set, predicate, or null (full access).
     const subRegistry = new ToolRegistry();
     for (const tool of parent.tools) {
-      if (!allowlist.has(tool.name)) continue;
-      subRegistry.register(tool);
+      if (!isAllowed(effectiveAllowlist, tool)) continue;
+      subRegistry.register(
+        effectivePathScope
+          ? wrapToolForPathScope(tool, effectivePathScope, violationsForThisAgent)
+          : tool,
+      );
     }
 
     const subContext: ToolContext = {
@@ -522,7 +598,7 @@ export async function runParallelAgents(
     const v2Framing = parent.agentLoopV2
       ? (await import('@mcp/code-agent/core/system-prompt.js')).buildSubagentLoopFraming()
       : '';
-    const finalSystemPrompt = systemPrompt + v2Framing;
+    const finalSystemPrompt = effectiveSystemPromptBase + v2Framing;
 
     const subRunner = new CoderRunner({
       provider: parent.provider,
@@ -556,7 +632,7 @@ export async function runParallelAgents(
         reason: runResult.reason,
         finalText,
         usage: runResult.totalUsage,
-        sandboxViolations: [],
+        sandboxViolations: violationsForThisAgent.slice(),
         label: spec.label,
         toolCallCount,
       };
@@ -584,8 +660,31 @@ export async function runParallelAgents(
     }
   });
 
-  // Run with concurrency limit.
-  const settled = await withConcurrencyLimit(tasks, limit);
+  // Heartbeat — keep the parent's StuckBanner alive while subagents are
+  // mid-stream. Without this, the master goes silent during any window
+  // where every sub is awaiting its provider response (no tool_call_result
+  // bubbles up → no agent_progress → no SSE event → StuckBanner trips
+  // around 30s). Period chosen well below the 30s threshold.
+  const HEARTBEAT_MS = Number(process.env.CODER_PARALLEL_HEARTBEAT_MS ?? '15000') || 15_000;
+  const startedAt = Date.now();
+  const heartbeatTimer = setInterval(() => {
+    // Use `tool_progress` on the PARENT runner — same channel the dashboard
+    // already monitors for "still working" feedback during long tools.
+    parent.ctx.runner?.emit('tool_progress', {
+      id: 'spawn_agent',
+      name: 'spawn_agent',
+      elapsedMs: Date.now() - startedAt,
+      note: `${agents.length} parallel agents still running`,
+    });
+  }, HEARTBEAT_MS);
+
+  // Run with concurrency limit. Heartbeat cleanup MUST happen even on throw.
+  let settled: PromiseSettledResult<ParallelAgentResult>[];
+  try {
+    settled = await withConcurrencyLimit(tasks, limit);
+  } finally {
+    clearInterval(heartbeatTimer);
+  }
 
   let totalInput = 0;
   let totalOutput = 0;

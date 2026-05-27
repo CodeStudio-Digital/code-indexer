@@ -2,25 +2,25 @@
  * Executing node — drives ONE full provider turn.
  *
  * Pipeline:
- *   1. bump `ctx.turn` and emit `turn_start`.
+ *   1. bump `ctx.turn`, emit `turn_start`.
  *   2. assemble messages (via assembly + bridge callbacks for skills /
  *      active-context).
  *   3. build tools (via assembly).
- *   4. assemble the system prompt (base + quality-feedback suffix from
- *      bridge).
- *   5. stream `provider.chat()` with every parameter the legacy passes
- *      (thinking, sessionId, previousResponseId, inference.temperature).
- *   6. push the assistant message.
- *   7. dispatch tools via tuple-hash guard + bridge.toolGate.
- *   8. push tool-role message, decide next event:
- *        - any dedup refusal     → ToolLoopDetected (→ Planning)
+ *   4. assemble system prompt (base + quality-feedback suffix).
+ *   5. deep-think pre-think (bridge.runPreThink) — prefills
+ *      `<thinking data-source="aux">…</thinking>` if produced.
+ *   6. stream `provider.chat()` with the full ChatRequest legacy passes.
+ *   7. push assistant message.
+ *   8. dispatch tools — pre-read + tuple-hash gates, smart-reducer +
+ *      polling-stuck on results.
+ *   9. push tool-role message, emit per-tool telemetry.
+ *  10. fire-and-forget quality watchdog (bridge.runQualityCheck).
+ *  11. decide next event:
+ *        - dedup refusal         → ToolLoopDetected (→ Planning)
  *        - token usage ≥ 90% eff → TokenThresholdHit (→ Compacting)
  *        - assistant text only   → CleanFinish
+ *        - turn == maxTurns      → MaxTurnsReached or auto-continue
  *        - otherwise             → TurnSucceeded
- *
- * The bridge (`ctx.bridge`) is how the BT inherits behavior still owned
- * by the legacy `CoderRunner`: skills, active-context, plan/spec gates,
- * Responses-API state, temperature resolution, quality-feedback suffix.
  */
 import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.js';
 import type { ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
@@ -32,14 +32,16 @@ import { buildTools } from '../assembly/tools.js';
 import { shouldCompact90 } from '../compaction/threshold.js';
 import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
+import {
+  decideTerminal,
+  runQualityCheck,
+  joinText,
+  providerErrorEvent,
+} from './executing-decisions.js';
 
-// Until the BT migration stabilises in production, log key checkpoints
-// unconditionally so a hang in `provider.chat()` or `consumeStream` is
-// visible in the worker terminal without enabling `CODER_BT_DEBUG`.
-const QUIET = process.env.CODER_BT_QUIET === '1';
+const DEBUG = process.env.CODER_BT_DEBUG === '1';
 function dbg(...args: unknown[]): void {
-  if (QUIET) return;
-  console.log('[coder/bt]', ...args);
+  if (DEBUG) console.log('[bt-debug]', ...args);
 }
 
 export class ExecutingNode implements BehaviorNode {
@@ -77,8 +79,64 @@ export class ExecutingNode implements BehaviorNode {
     const qualitySuffix = ctx.bridge?.buildQualityFeedbackSuffix?.() ?? '';
     const systemPrompt = qualitySuffix ? `${ctx.opts.systemPrompt}${qualitySuffix}` : ctx.opts.systemPrompt;
 
+    // Deep-think pre-think (opt-in via opts.deepThink). Prefills an
+    // auxiliary reasoning block onto BOTH the working window and the
+    // persistent history (legacy parity). Failures degrade silently —
+    // the bridge emits its own diagnostic events.
+    if (ctx.opts.deepThink && ctx.bridge?.runPreThink) {
+      try {
+        const pre = await ctx.bridge.runPreThink({
+          messages: messagesForChat,
+          toolNames: toolsBuilt.tools.map((t) => t.name),
+          turn: ctx.turn,
+        });
+        if (pre?.text) {
+          const auxModel = ctx.opts.deepThinkModel ?? 'claude-haiku-4-5-20251001';
+          const preThinkBlock: ContentBlock = {
+            type: 'text',
+            text: `<thinking data-source="aux" data-model="${auxModel}">\n${pre.text}\n</thinking>\n\n`,
+          };
+          messagesForChat.push({ role: 'assistant', content: [preThinkBlock] });
+          accumulateUsage(ctx, pre.usage ?? null);
+
+          // Persist into the durable history so the dashboard renders the
+          // emerald `<thinking data-source="aux">` block in the transcript
+          // AND so future turns/resumes see the accumulated reasoning.
+          if (ctx.opts.persistPreThoughts !== false) {
+            const persistMsg = { role: 'assistant' as const, content: [preThinkBlock] };
+            ctx.messages.push(persistMsg);
+            const store = ctx.opts.sessionStore;
+            if (store && ctx.opts.sessionId !== undefined) {
+              try {
+                store.appendMessage(ctx.opts.sessionId, persistMsg);
+              } catch (e) {
+                dbg('pre-think persistence failed', e);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        dbg('runPreThink threw', e);
+      }
+    }
+
     const tempResolution = ctx.bridge?.resolveTemperature?.();
     const prevResponse = ctx.bridge?.getPreviousResponseId?.();
+
+    // Dashboard telemetry — fires BEFORE the network call so the UI can
+    // show "calling provider…" with the resolved tool count + payload size.
+    const historyChars = ctx.messages.reduce(
+      (acc, m) => acc + JSON.stringify(m.content).length,
+      0,
+    );
+    ctx.emit('provider_call', {
+      runId: ctx.runId,
+      turn: ctx.turn,
+      provider: ctx.opts.provider.name,
+      model: ctx.opts.provider.model,
+      toolCount: toolsBuilt.tools.length,
+      historyChars,
+    });
 
     let stream: AsyncIterable<ChatDelta>;
     try {
@@ -102,7 +160,7 @@ export class ExecutingNode implements BehaviorNode {
           : {}),
       });
     } catch (e) {
-      dbg(`provider.chat() threw`, e);
+      dbg('provider.chat() threw', e);
       return providerErrorEvent(e);
     }
 
@@ -115,7 +173,7 @@ export class ExecutingNode implements BehaviorNode {
         onThinkingDelta: (text) => ctx.emit('thinking_delta', text),
       });
     } catch (e) {
-      dbg(`consumeStream threw`, e);
+      dbg('consumeStream threw', e);
       return providerErrorEvent(e);
     }
     dbg(`stream done text=${result.textBlocks.length}b tools=${result.toolUses.length} usage_in=${result.usage?.input_tokens ?? '?'}`);
@@ -126,7 +184,13 @@ export class ExecutingNode implements BehaviorNode {
       ctx.bridge?.onResponseId?.(result.responseId, result.responseMessageCount);
     }
 
+    // Block order MUST be: thinking → text → tool_use. The provider rejects
+    // (Anthropic 400) when extended-thinking content arrives after text or
+    // tool_use in the SAME assistant message — preserve the legacy order.
     const assistantContent: ContentBlock[] = [];
+    for (const t of result.thinkingBlocks) {
+      if (t) assistantContent.push({ type: 'thinking', text: t });
+    }
     for (const text of result.textBlocks) {
       if (text) assistantContent.push({ type: 'text', text });
     }
@@ -138,7 +202,19 @@ export class ExecutingNode implements BehaviorNode {
       ctx.emit('message_complete', { role: 'assistant', content: assistantContent }, result.usage);
     }
 
+    // Dashboard telemetry — preview the batch before dispatch so the UI
+    // can render the pending tool list immediately (legacy parity).
+    ctx.emit('tool_batch', {
+      runId: ctx.runId,
+      turn: ctx.turn,
+      count: result.toolUses.length,
+      names: result.toolUses.map((t) => t.name),
+    });
+
     if (result.toolUses.length === 0) {
+      // Text-only assistant turn ends the run — no tool_use means the
+      // model is delivering its final reply.
+      runQualityCheck(ctx, joinText(result.textBlocks), [], result.toolUses);
       ctx.stopReason = 'completed';
       return events.cleanFinish();
     }
@@ -150,6 +226,14 @@ export class ExecutingNode implements BehaviorNode {
       turn: ctx.turn,
       dupCalls: ctx.dupCalls,
       toolGate: ctx.bridge?.toolGate,
+      enforcePreRead: ctx.bridge?.enforcePreRead,
+      reduceToolResult: ctx.bridge?.reduceToolResult,
+      detectPollingStuck: ctx.bridge?.detectPollingStuck,
+      onToolCallStart: (id, name, input) => ctx.emit('tool_call_start', id, name, input),
+      onToolCallFinalized: (id, shapedChars) =>
+        ctx.emit('tool_call_finalized', id, { shapedChars }),
+      onToolProgress: (id, name, elapsedMs) =>
+        ctx.emit('tool_progress', { id, name, elapsedMs }),
     });
 
     ctx.messages.push(buildToolMessage(dispatch.results));
@@ -162,6 +246,9 @@ export class ExecutingNode implements BehaviorNode {
         r.durationMs,
       );
     }
+
+    // Fire-and-forget quality classifier. Errors must NOT block the turn.
+    runQualityCheck(ctx, joinText(result.textBlocks), dispatch.results, result.toolUses);
 
     if (dispatch.toolLoopDetected) {
       return events.toolLoopDetected({ guard: 'tuple-hash' });
@@ -177,22 +264,7 @@ export class ExecutingNode implements BehaviorNode {
       }
     }
 
-    return events.turnSucceeded({ hasToolCalls: true });
+    return decideTerminal(ctx);
   }
 }
 
-function providerErrorEvent(e: unknown): BehaviorEvent {
-  const status = inferStatus(e);
-  return events.providerError({
-    retryable: status >= 500 || status === 429 || status === 401,
-    status,
-  });
-}
-
-function inferStatus(e: unknown): number {
-  if (e && typeof e === 'object') {
-    const s = (e as { status?: number }).status;
-    if (typeof s === 'number') return s;
-  }
-  return 500;
-}

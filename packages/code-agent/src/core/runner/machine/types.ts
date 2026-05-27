@@ -135,6 +135,53 @@ export interface BridgeCallbacks {
    * null when allowed.
    */
   toolGate?: (toolName: string, input: unknown) => string | null;
+  /**
+   * Pre-read enforcement — refuse re-reads of the same path+slice that
+   * a prior turn already produced. Returns a refusal string when the
+   * call should be blocked, null when allowed.
+   */
+  enforcePreRead?: (toolName: string, input: unknown, turn: number) => string | null;
+  /**
+   * Smart-reducer post-result hook. Receives the raw tool result content
+   * and returns a possibly-shortened version (tool-aware truncation, e.g.
+   * git_log keeps the head commits, grep keeps the first matches).
+   */
+  reduceToolResult?: (toolName: string, content: string) => string;
+  /**
+   * Polling-stuck detector. Tracks consecutive identical results for
+   * polling tools (`repeatable=true`). Returns a refusal string when
+   * the polling has been stuck N times in a row, null otherwise.
+   */
+  detectPollingStuck?: (
+    toolName: string,
+    content: string,
+    isError: boolean,
+    isRepeatable: boolean,
+    turn: number,
+  ) => string | null;
+  /**
+   * Deep-think pre-think — calls an auxiliary cheap model BEFORE the
+   * main provider.chat() to produce a reasoning block that gets
+   * prefilled onto the conversation. Failures must NOT block the
+   * main turn — the callback handles its own error events.
+   */
+  runPreThink?: (args: {
+    messages: AgentMessage[];
+    toolNames: string[];
+    turn: number;
+  }) => Promise<{ text: string; usage?: ChatUsage } | null>;
+  /**
+   * Quality watchdog — fire-and-forget classifier triggered AFTER each
+   * turn finishes. The callback is expected to schedule the LLM call
+   * asynchronously and emit `quality_watchdog_alert` when relevant.
+   * The Executing node MUST NOT await this — degrades silently if it
+   * throws synchronously.
+   */
+  runQualityCheck?: (args: {
+    turn: number;
+    assistantText: string;
+    toolResults: Array<{ name: string; input: unknown; content: string; isError: boolean }>;
+  }) => void;
 }
 
 /** Transition table shape: `TRANSITIONS[state][event.kind] = nextState`. */

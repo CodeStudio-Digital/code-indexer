@@ -80,17 +80,34 @@ export function buildFindToolsTool(
       const tools = registry.list();
 
       // Tokenize query into lowercase keywords; keep words >=2 chars.
+      // We split on non-alphanumeric INCLUDING underscores so that compound
+      // names like "spawn_agent" become ["spawn", "agent"] — same shape as
+      // `nameParts` below. Without this, the whole-part bonus never fires
+      // for snake_case queries and substring fallback dominates.
       const qTokens = query
         .toLowerCase()
-        .split(/[^a-z0-9_]+/)
+        .split(/[^a-z0-9]+/)
         .filter((t) => t.length >= 2);
       if (qTokens.length === 0) {
         return err('find_tools: query has no usable tokens.');
       }
 
-      // Score each tool: count how many query tokens appear in name+description.
-      // Name matches weight more (they're terse and intentional). Substring
-      // match in name = +3 per token, description = +1 per token.
+      // Score each tool:
+      //   - whole snake_case part match in NAME: +4 (e.g. "agent" hits "spawn_agent" parts)
+      //   - substring match in NAME (fallback):  +2 (catches "agent" inside "subagent")
+      //   - substring match in DESCRIPTION:      +1
+      // Then enforce a minimum score so weak fuzzy hits don't crowd the top-N:
+      //   - 1 token   → need >= 3 (i.e. at least a name match)
+      //   - N tokens  → need >= max(3, ceil(N * 1.5))
+      // And a floor for pure-description matches: at least 2 desc hits when
+      // the name didn't match at all — kills "agent" in a JSON example
+      // bleeding into a totally unrelated tool's description.
+      const ratioOverride = Number(process.env.CODER_FIND_TOOLS_MIN_SCORE_RATIO ?? '1.5');
+      const ratio = Number.isFinite(ratioOverride) && ratioOverride > 0 ? ratioOverride : 1.5;
+      const minScore = qTokens.length === 1
+        ? 3
+        : Math.max(3, Math.ceil(qTokens.length * ratio));
+
       type Scored = {
         name: string;
         tier: ToolTier;
@@ -103,12 +120,20 @@ export function buildFindToolsTool(
       for (const t of tools) {
         const name = t.name.toLowerCase();
         const desc = (t.description ?? '').toLowerCase();
-        let score = 0;
+        const nameParts = name.split(/[^a-z0-9]+/).filter(Boolean);
+        let nameScore = 0;
+        let descScore = 0;
         for (const tok of qTokens) {
-          if (name.includes(tok)) score += 3;
-          if (desc.includes(tok)) score += 1;
+          if (nameParts.includes(tok)) nameScore += 4;
+          else if (name.includes(tok)) nameScore += 2;
+          if (desc.includes(tok)) descScore += 1;
         }
-        if (score === 0) continue;
+        const score = nameScore + descScore;
+        if (score < minScore) continue;
+        // Pure-description matches need at least 2 desc hits — otherwise a
+        // single incidental token in an example/snippet ranks alongside
+        // real candidates.
+        if (nameScore === 0 && descScore < 2) continue;
         const tier = getToolTier(t.name, tierOverrides);
         const visible = active ? active.has(tier) : true;
         scored.push({

@@ -316,7 +316,7 @@ export function buildToolResultBlock(
     tool_use_id: toolUseId,
     content:
       head +
-      `\n\n[truncated: original_size=${content.length} chars; ${content.length - cap} chars elided — call the tool again with narrower params if needed, OR explicitly use 'spawn_agents' to delegate this exploration without bloating your main context window${idSuffix}]`,
+      `\n\n[truncated: original_size=${content.length} chars; ${content.length - cap} chars elided — call the tool again with narrower params if needed, OR use 'spawn_agent' (with an explore agent) to delegate this exploration without bloating your main context window${idSuffix}]`,
     is_error: isError,
     truncated: true,
     originalSize: content.length,
@@ -2477,8 +2477,107 @@ export class CoderRunner extends EventEmitter {
           }
           return null;
         },
+        enforcePreRead: (toolName, input, turn) => this.enforcePreReadForBridge(toolName, input, turn),
+        reduceToolResult: (toolName, content) =>
+          applySmartReducer(toolName, content, this.effectivePushTimeCap),
+        detectPollingStuck: (toolName, content, isError, isRepeatable, turn) =>
+          this.detectPollingStuckForBridge(toolName, content, isError, isRepeatable, turn),
+        runPreThink: async ({ messages, toolNames, turn }) => {
+          const r = await this.runAuxiliaryPreThink({ messages, toolNames, turn });
+          return { text: r.text, usage: r.usage };
+        },
+        runQualityCheck: ({ turn, assistantText, toolResults }) => {
+          // Mirror the legacy recordToolCallsForWatchdog + maybeRunWatchdog
+          // pipeline. recordToolCallsForWatchdog updates the rolling
+          // window (60 names + calls); maybeRunWatchdog fires the LLM
+          // classifier asynchronously when the pre-filter says the
+          // pattern is suspicious AND the cooldown has elapsed.
+          if (toolResults.length > 0) {
+            const blocks = toolResults.map((r) => ({
+              name: r.name,
+              input: (r.input ?? {}) as Record<string, unknown>,
+            }));
+            const isErrorPerBlock = toolResults.map((r) => r.isError);
+            this.recordToolCallsForWatchdog(turn, blocks, isErrorPerBlock);
+          }
+          this.maybeRunWatchdog(turn, assistantText);
+        },
       },
     });
+  }
+
+  /**
+   * Simplified pre-read enforcement for the BT bridge. Mirrors the
+   * legacy logic at runner.ts ~line 3735 but without the mutation-since /
+   * elided / auto-downgrade layers (those depend on `this.recentWrites` +
+   * `this.pendingDiffRereads` state the BT doesn't track yet). Layer
+   * coverage will expand in a follow-up commit; for now the simple
+   * "refuse on Nth identical read" path catches the regression case.
+   */
+  private enforcePreReadForBridge(
+    toolName: string,
+    input: unknown,
+    turn: number,
+  ): string | null {
+    if (!this.opts.agentLoopV2) return null;
+    if (!REDUCIBLE_READ_TOOLS.has(toolName)) return null;
+    const inp = input as Record<string, unknown> | undefined;
+    const path = getStringField(inp, 'path', 'file_path');
+    if (!path) return null;
+    if (inp?.force_reread === true) {
+      this.setTransition('pre-read-force-reread');
+      return null;
+    }
+    const readKey = `${toolName}|${buildReadDedupKey(path, inp)}`;
+    const threshold = readDupThreshold();
+    const window = readDupWindow();
+    const minTurn = turn - window;
+    const prior = (this.recentReadKeys.get(readKey) ?? []).filter((e) => e.turn > minTurn);
+    prior.push({ turn, useId: 'bt' });
+    this.recentReadKeys.set(readKey, prior);
+    if (threshold >= 1 && prior.length >= threshold) {
+      this.setTransition('pre-read-blocked');
+      return buildRichRefusal({ toolName, path, prior, windowTurns: window });
+    }
+    return null;
+  }
+
+  /**
+   * Polling-stuck detector for the BT bridge. Tracks the most-recent
+   * content hash per polling tool and refuses on the Nth identical run.
+   * Uses the same `pollingResultRun` map as the legacy loop, so both
+   * paths share state — switching between BT and legacy mid-session
+   * doesn't reset the counter.
+   */
+  private detectPollingStuckForBridge(
+    toolName: string,
+    content: string,
+    isError: boolean,
+    isRepeatable: boolean,
+    turn: number,
+  ): string | null {
+    if (!isRepeatable || isError) return null;
+    if (POLLING_STUCK_CAP < 2) return null;
+    if (content.length < POLLING_STUCK_MIN_CHARS) return null;
+    const rHash = createHash('sha1').update(content).digest('hex');
+    const prev = this.pollingResultRun.get(toolName);
+    const next = prev && prev.hash === rHash
+      ? { hash: rHash, count: prev.count + 1, firstTurn: prev.firstTurn }
+      : { hash: rHash, count: 1, firstTurn: turn };
+    this.pollingResultRun.set(toolName, next);
+    if (next.count >= POLLING_STUCK_CAP) {
+      this.pollingResultRun.delete(toolName);
+      this.setTransition('dup-call-cap');
+      console.warn(
+        `[coder] polling-stuck refusal (BT): ${toolName} same result ${next.count}× — refused at turn ${turn}`,
+      );
+      return buildPollingStuckRefusal({
+        toolName,
+        count: next.count,
+        firstTurn: next.firstTurn,
+      });
+    }
+    return null;
   }
 
   /** Lookup helper for the toolGate bridge. */

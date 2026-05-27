@@ -110,8 +110,7 @@ const CODE_EXEC_DESC =
 function isSafeTool(tool: CoderTool): boolean {
   if (tool.interactive) return false;
   if (
-    tool.name === 'spawn_subagent' ||
-    tool.name === 'spawn_agents' ||
+    tool.name === 'spawn_agent' ||
     tool.name === 'code_exec' ||
     tool.name.startsWith('spawn_') ||
     tool.name === 'execute_task' ||

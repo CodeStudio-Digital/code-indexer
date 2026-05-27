@@ -50,7 +50,7 @@ export function getStats(db: DB, id: number): CoderSessionStats | null {
         COUNT(*) AS tool_call_count,
         SUM(CASE WHEN tc.is_error = 1 THEN 1 ELSE 0 END) AS tool_error_count,
         COUNT(DISTINCT tc.tool_name) AS distinct_tools,
-        SUM(CASE WHEN tc.tool_name = 'spawn_subagent' THEN 1 ELSE 0 END) AS subagent_call_count,
+        SUM(CASE WHEN tc.tool_name IN ('spawn_agent', 'spawn_subagent', 'spawn_agents') THEN 1 ELSE 0 END) AS subagent_call_count,
         COALESCE(SUM(tc.duration_ms), 0) AS total_tool_duration_ms
       FROM coder_tool_calls tc
       JOIN coder_messages m ON m.id = tc.message_id

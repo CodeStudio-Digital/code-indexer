@@ -89,8 +89,7 @@ const BUILTIN_CLASSIFICATION: Record<
   exit_worktree:    { mutates: true, parallelSafe: false, riskLevel: 'admin' },
 
   // ─── Subagent / orchestration ─────────────────────────────────
-  spawn_subagent:   { mutates: false, parallelSafe: false, riskLevel: 'admin' },
-  spawn_agents:     { mutates: false, parallelSafe: false, riskLevel: 'admin' },
+  spawn_agent:      { mutates: false, parallelSafe: false, riskLevel: 'admin' },
   expand_toolset:   { mutates: false, parallelSafe: false, riskLevel: 'admin' },
   invoke_skill:     { mutates: false, parallelSafe: false, riskLevel: 'read' },
 

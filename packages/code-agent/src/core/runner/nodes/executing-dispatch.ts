@@ -45,6 +45,49 @@ export interface DispatchArgs {
    * dedup counter.
    */
   toolGate?: (toolName: string, input: unknown) => string | null;
+  /**
+   * Pre-read enforcement — refuse re-reads of the same path+slice that
+   * a prior turn already produced. Runs AFTER `toolGate` and BEFORE the
+   * tuple-hash check (so a refused re-read doesn't bump dedup).
+   */
+  enforcePreRead?: (toolName: string, input: unknown, turn: number) => string | null;
+  /** Smart-reducer applied to the raw result content before push. */
+  reduceToolResult?: (toolName: string, content: string) => string;
+  /**
+   * Polling-stuck detector. Returns a refusal string when a polling
+   * tool returned identical content N times in a row. Replaces the
+   * shaped content with the refusal payload.
+   */
+  detectPollingStuck?: (
+    toolName: string,
+    content: string,
+    isError: boolean,
+    isRepeatable: boolean,
+    turn: number,
+  ) => string | null;
+  /**
+   * Telemetry hook — fired BEFORE each tool invocation lands. Lets the
+   * dashboard show a "tool started" badge in real time. Skipped when the
+   * call is refused by toolGate, pre-read, or dedup (the synthesized
+   * result emits `tool_call_result` directly).
+   */
+  onToolCallStart?: (id: string, name: string, input: Record<string, unknown>) => void;
+  /**
+   * Telemetry hook — fired AFTER the final shaped content is ready
+   * (post smart-reducer + polling-stuck shaping). Carries the size the
+   * LLM will actually see so dashboards can show per-call savings.
+   */
+  onToolCallFinalized?: (id: string, shapedChars: number) => void;
+  /**
+   * Telemetry hook — fired periodically (default every 10s) while a tool
+   * invocation is in flight. Drives the dashboard's StuckBanner reset
+   * during long-running tools (web_fetch, run_command, spawn_agent
+   * parallel batches). Skipped when the tool is `interactive: true` or
+   * `timeoutMs: Infinity` — the runner is correctly idle there.
+   */
+  onToolProgress?: (id: string, name: string, elapsedMs: number) => void;
+  /** Heartbeat interval in ms. Default 10 000 (10s). */
+  toolProgressIntervalMs?: number;
 }
 
 export interface DispatchResult {
@@ -77,6 +120,22 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       continue;
     }
 
+    // Pre-read enforcement (Row 32 from agent-research comparisons).
+    // Refuses re-reads BEFORE the dedup check so the dedup counter
+    // stays meaningful only for non-read tools.
+    const preReadRefusal = args.enforcePreRead?.(tu.name, tu.input, args.turn) ?? null;
+    if (preReadRefusal !== null) {
+      results.push({
+        toolUseId: tu.id,
+        name: tu.name,
+        content: preReadRefusal,
+        isError: true,
+        durationMs: 0,
+        wasRefusedByDedup: false,
+      });
+      continue;
+    }
+
     const verdict = checkDupCall({
       name: tu.name,
       input: tu.input,
@@ -100,9 +159,26 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     }
 
     const reminderPrefix = verdict.kind === 'allow-with-reminder' ? verdict.reminderText : '';
+    // Telemetry: signal start BEFORE invoking so the dashboard can render
+    // "tool in flight" the moment the call is dispatched.
+    args.onToolCallStart?.(tu.id, tu.name, tu.input);
     const t0 = Date.now();
     let invocationContent: string;
     let invocationIsError = false;
+
+    // Periodic heartbeat — keeps the dashboard StuckBanner alive during
+    // long-running invocations (web_fetch, run_command, spawn_agent
+    // parallel batches). Suppressed for `interactive: true` (waiting for
+    // user input) and `timeoutMs: Infinity` (legitimately long polling).
+    const heartbeatSuppressed =
+      tool?.interactive === true || tool?.timeoutMs === Infinity || !args.onToolProgress;
+    let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+    if (!heartbeatSuppressed) {
+      const intervalMs = args.toolProgressIntervalMs ?? 10_000;
+      heartbeatTimer = setInterval(() => {
+        args.onToolProgress!(tu.id, tu.name, Date.now() - t0);
+      }, intervalMs);
+    }
 
     try {
       const result = await args.registry.invoke(tu.name, tu.input, args.toolContext);
@@ -111,12 +187,36 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     } catch (e) {
       invocationContent = e instanceof Error ? e.message : String(e);
       invocationIsError = true;
+    } finally {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
     }
 
+    // Smart-reducer post-result. Tool-aware truncation that keeps the
+    // most useful slices intact (git_log head, grep first matches, etc.)
+    // before any generic truncation. Determinism is part of the contract.
+    let shapedContent = args.reduceToolResult?.(tu.name, invocationContent) ?? invocationContent;
+
+    // Polling-stuck detection. When a polling tool returns byte-identical
+    // content N consecutive times the state isn't changing — replace with
+    // a refusal so the agent stops burning tokens on dead polls.
+    const stuckRefusal = args.detectPollingStuck?.(
+      tu.name,
+      shapedContent,
+      invocationIsError,
+      isRepeatable,
+      args.turn,
+    ) ?? null;
+    if (stuckRefusal !== null) {
+      shapedContent = stuckRefusal;
+      invocationIsError = true;
+    }
+
+    const finalContent = reminderPrefix + shapedContent;
+    args.onToolCallFinalized?.(tu.id, finalContent.length);
     results.push({
       toolUseId: tu.id,
       name: tu.name,
-      content: reminderPrefix + invocationContent,
+      content: finalContent,
       isError: invocationIsError,
       durationMs: Date.now() - t0,
       wasRefusedByDedup: false,

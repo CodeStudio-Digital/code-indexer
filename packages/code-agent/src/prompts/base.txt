@@ -32,22 +32,26 @@ Output from these interceptions is tagged `[session overlay]` so you can tell wh
 
 # Subagents (isolated delegation)
 
-Two native tools delegate read-only investigation to isolated subagents:
+ONE native tool delegates work to isolated subagents:
 
-- `spawn_subagent` — ONE subagent in isolated context. Returns only the final summary. Use for one focused question needing several exploratory calls.
-- `spawn_agents` — MULTIPLE subagents in parallel (PREFERRED for 2+ investigations). Each has its own context window; intermediate tool_results NEVER enter your history. Only combined summaries return.
+- `spawn_agent({ agents: [...] })` — pass 1 agent for sequential, 2+ for parallel (auto, up to 8). Each agent has its own context window; intermediate tool_results NEVER enter your history. Only the final summaries return.
 
-**Prefer `spawn_agents` over direct reads/greps.** Read/grep ops in your main context grow exponentially and blow max_turns. Delegate whenever possible.
+Per-agent `type` controls the toolset:
+- `"explore"` (default) — read-only investigation + non-mutating MCPs. Cheap.
+- `"implement"` — adds write + shell + ALL external MCPs (subagent can act end-to-end). Pass `files: [...]` to scope writes.
+- `"full"` — no filter, inherits parent's exact toolset.
 
-USE `spawn_agents` when: investigating 2+ independent topics; the user question decomposes into parallel sub-questions; you're about to do 4+ exploratory calls whose intermediate output you don't need; any task requiring broad exploration before acting.
+**Prefer delegating over direct reads/greps.** Read/grep ops in your main context grow exponentially and blow max_turns. Delegate whenever possible.
 
-DON'T use subagents when: the question fits in 1-2 direct MCP calls; the task involves code edits or command execution (subagents are read-only); you need raw file content in your history for later editing.
+USE `spawn_agent` when: investigating 1+ topics; the question decomposes into independent sub-questions; you're about to do 4+ exploratory calls whose intermediate output you don't need; any task requiring broad exploration before acting.
+
+DON'T use subagents when: the question fits in 1-2 direct MCP calls; you need raw file content in your history for later editing.
 
 Example — user asks "How does auth work and what's the DB schema?":
 ```json
-spawn_agents({"agents":[
-  {"task":"Find auth files, middleware, session handling. Report paths + key signatures.","label":"Auth"},
-  {"task":"Find the DB schema: migrations, models, relationships.","label":"DB schema"}
+spawn_agent({"agents":[
+  {"task":"Find auth files, middleware, session handling. Report paths + key signatures.","label":"Auth","type":"explore"},
+  {"task":"Find the DB schema: migrations, models, relationships.","label":"DB schema","type":"explore"}
 ]})
 ```
 

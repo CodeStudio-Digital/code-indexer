@@ -99,6 +99,10 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'ds_publish_version',
   'expand_toolset',
   'find_tools',
+  // spawn_agent is orchestration — same tier as expand_toolset/find_tools.
+  // Lives in BOOTSTRAP (not NAVIGATE) so any session can delegate without
+  // needing to unlock a tier first.
+  'spawn_agent',
   'request_review',
   'get_tool_output',
   'glob',
@@ -146,8 +150,8 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'git_status',
   'git_diff',
   'git_log',
-  'spawn_subagent',
-  'spawn_agents',
+  // spawn_agent moved to BOOTSTRAP_TOOLS — orchestration tools live there
+  // alongside expand_toolset/find_tools so any session can delegate.
   'execute_task',
   'task_complete',
   // MCP — deep navigation + edit prep
@@ -401,7 +405,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   git_status: 'Show working tree status',
   git_diff: 'Show staged/unstaged changes',
   git_log: 'Show recent commit history',
-  spawn_subagent: 'Launch a scoped sub-agent for a subtask',
+  spawn_agent: 'Spawn 1 (or N parallel, up to 8) agent(s) with read/implement/full toolset',
   execute_task: 'Execute a task from the approved task list',
   task_complete: 'Mark the current task as completed',
   // ─── Navigate MCP ─────────────────────────────────────────────

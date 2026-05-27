@@ -676,7 +676,7 @@ function buildAgentSystemPrompt(node: PipelineNode): string {
 1. Stay focused on this stage's task — do not start adjacent work.
 2. Verify your changes when relevant (tests, lint, type-check) using run_command.
 3. Your LAST assistant message is the only thing the orchestrator forwards downstream. Make it self-contained: 5–15 lines covering what was done, what files changed, and any caveat the next stage should know.
-4. Do NOT call submit_plan, submit_tasks, ask_user, spawn_subagent, execute_task, or task_complete — those tools are not available in pipeline stages.
+4. Do NOT call submit_plan, submit_tasks, ask_user, spawn_agent, execute_task, or task_complete — those tools are not available in pipeline stages.
 5. If the task can't be completed as described, stop and report findings instead of guessing.
 
 # Token economy

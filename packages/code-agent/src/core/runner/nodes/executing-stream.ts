@@ -105,33 +105,39 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
       case 'tool_call_start': {
         // Flush any accumulated text BEFORE this tool_use boundary —
         // well-formed streams emit `[text, tool_use, text?, ...]`.
+        // We do NOT allocate the ToolUseAccumulated here: providers like
+        // openai.ts (used by ZAI/GLM/DeepSeek) may emit `tool_call_start`
+        // with a placeholder id (`tool_${idx}`) and only commit the REAL
+        // id on `tool_call_end` — so `start` and `end` ids can differ.
+        // The legacy `handleDelta` (runner.ts) follows the same rule:
+        // only `tool_call_end` is authoritative.
         if (currentText) {
           textBlocks.push(currentText);
           currentText = '';
         }
-        const tu: ToolUseAccumulated = {
-          id: delta.id,
-          name: delta.name,
-          input: {},
-          partialJson: [],
-        };
-        toolUsesById.set(delta.id, tu);
-        toolUses.push(tu);
         args.onToolCallStart?.(delta.id, delta.name);
         break;
       }
 
       case 'tool_call_args': {
-        const tu = toolUsesById.get(delta.id);
-        if (tu) tu.partialJson.push(delta.partial_json);
+        // Ignored — `tool_call_end` ships the fully-parsed input. The
+        // legacy loop also ignores this delta (runner.ts handleDelta).
         break;
       }
 
       case 'tool_call_end': {
-        const tu = toolUsesById.get(delta.id);
-        if (tu) {
-          tu.input = delta.input ?? tu.input;
-        }
+        // Authoritative: create the tool_use block here with the final id
+        // and parsed input. Dedup by id in case a misbehaving provider
+        // emits `end` more than once for the same call.
+        if (toolUsesById.has(delta.id)) break;
+        const tu: ToolUseAccumulated = {
+          id: delta.id,
+          name: delta.name,
+          input: delta.input ?? {},
+          partialJson: [],
+        };
+        toolUsesById.set(delta.id, tu);
+        toolUses.push(tu);
         break;
       }
 
