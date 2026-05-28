@@ -635,8 +635,8 @@ async function runAsResult(cwd: string, _cmd: 'git', args: string[]): Promise<Gi
  * plan so the user gets an actionable message instead of a 500.
  *
  * Provider selection mirrors the generate-title route: prefer
- * `getGeneralDefault()`, then fall through to any anthropic/openai/zai/
- * deepseek provider with an api_key. OAuth-only kinds aren't usable
+ * `getGeneralDefault()`, then fall through to any anthropic/openai/
+ * openrouter/zai/deepseek provider with an api_key. OAuth-only kinds aren't usable
  * by the SDKs here.
  */
 async function generateAiPlan(
@@ -648,7 +648,7 @@ async function generateAiPlan(
   const isUsable = (p: { kind?: string; api_key?: string | null; enabled?: boolean } | null) => {
     if (!p?.enabled || !p.api_key) return false;
     const k = p.kind ?? '';
-    return k === 'anthropic' || k === 'openai' || k === 'zai' || k === 'deepseek';
+    return k === 'anthropic' || k === 'openai' || k === 'openrouter' || k === 'zai' || k === 'deepseek';
   };
 
   const def = providerStore.getGeneralDefault();
@@ -697,6 +697,8 @@ async function generateAiPlan(
     } else if (!baseUrl) {
       baseUrl = 'https://api.z.ai/api/paas/v4/';
     }
+  } else if (cfg.kind === 'openrouter' && !baseUrl) {
+    baseUrl = 'https://openrouter.ai/api/v1';
   }
 
   const system = `You are a git expert wired into an IDE. The user describes what they want; you produce a JSON plan of git commands to execute. NEVER execute or assume — your sole job is to plan.

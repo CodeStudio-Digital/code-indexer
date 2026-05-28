@@ -44,8 +44,32 @@ export interface SubagentSpec {
   initialMessages: AgentMessage[];
   maxTurns: number;
   pushTimeCap?: number;
+  limits?: SubagentLimits;
+  signal?: AbortSignal;
   /** When set, fs/shell tools log (do not block) reads/writes outside this list. */
   pathScope?: string[];
+  /** Optional progress hook for callers that need a per-subagent live timeline. */
+  onProgress?: (progress: {
+    event: 'heartbeat' | 'tool_call';
+    status?: 'running' | 'completed' | 'error' | 'timed_out' | 'aborted';
+    toolCallCount: number;
+    toolName?: string;
+    note?: string;
+    phase?: string;
+    turn?: number;
+    elapsedMs?: number;
+    stallMs?: number;
+    idleMs?: number;
+    deadlineMs?: number;
+    lastToolName?: string;
+    limit?: SubagentLimits;
+  }) => void;
+}
+
+export interface SubagentLimits {
+  maxToolCalls?: number;
+  timeoutMs?: number;
+  stallMs?: number;
 }
 
 /** Helper: tests whether a tool is admitted by the given allowlist shape. */
@@ -53,6 +77,30 @@ function isAllowed(allowlist: SubagentAllowlist, tool: CoderTool): boolean {
   if (allowlist === null) return true;
   if (typeof allowlist === 'function') return allowlist(tool);
   return allowlist.has(tool.name);
+}
+
+const DEFAULT_SUBAGENT_LIMITS: Required<SubagentLimits> = {
+  maxToolCalls: Number(process.env.CODER_SUBAGENT_MAX_TOOLS ?? 80) || 80,
+  timeoutMs: Number(process.env.CODER_SUBAGENT_TIMEOUT_MS ?? 10 * 60_000) || 10 * 60_000,
+  stallMs: Number(process.env.CODER_SUBAGENT_STALL_MS ?? 120_000) || 120_000,
+};
+
+function withDefaultLimits(limits?: SubagentLimits): SubagentLimits {
+  return {
+    maxToolCalls: limits?.maxToolCalls ?? DEFAULT_SUBAGENT_LIMITS.maxToolCalls,
+    timeoutMs: limits?.timeoutMs ?? DEFAULT_SUBAGENT_LIMITS.timeoutMs,
+    stallMs: limits?.stallMs ?? DEFAULT_SUBAGENT_LIMITS.stallMs,
+  };
+}
+
+export interface SubagentCollected {
+  memos: ReadonlyArray<import('@mcp/code-agent/tools/subagent-collector.js').SubagentMemo>;
+  snapshots: ReadonlyArray<import('@mcp/code-agent/tools/subagent-collector.js').SubagentSnapshotRef>;
+  boardPosts: ReadonlyArray<import('@mcp/code-agent/tools/subagent-collector.js').SubagentBoardPostRef>;
+}
+
+export function emptyCollected(): SubagentCollected {
+  return { memos: [], snapshots: [], boardPosts: [] };
 }
 
 export interface SubagentRunResult {
@@ -64,6 +112,18 @@ export interface SubagentRunResult {
   usage: ChatUsage;
   /** Path strings flagged by the path-scope wrapper, in arrival order. */
   sandboxViolations: string[];
+  /**
+   * Frente C (PR 3 da reavaliação) — structured trail the sub emitted via
+   * `record_memo` / `mcp__add_snapshot` / `post_to_board`. The parent
+   * `spawn_agent` handler appends a compact rendering of this to the
+   * tool_result text so the master sees what the sub found beyond the
+   * one final assistant message.
+   *
+   * Production paths always return empty arrays when the sub didn't emit
+   * anything. Optional in the type so legacy tests/fakes that predate the
+   * collector can keep using compact result literals.
+   */
+  collected?: SubagentCollected;
 }
 
 export interface SubagentParent {
@@ -103,20 +163,114 @@ export interface SubagentParent {
  */
 export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): Promise<SubagentRunResult> {
   const sandboxViolations: string[] = [];
+  const limits = withDefaultLimits(spec.limits);
+  const startedAt = Date.now();
+  let lastActivityAt = startedAt;
+  let lastToolName: string | undefined;
+  let subToolCalls = 0;
+  let currentTurn = 0;
+  let watchdogFailed = false;
+  let lastStreamProgressAt = 0;
+  const streamProgressThrottleMs =
+    Number(process.env.CODER_SUBAGENT_STREAM_PROGRESS_THROTTLE_MS ?? '5000') || 5_000;
 
-  // Build the filtered + (optionally) path-wrapped registry. `allowlist`
-  // accepts Set / predicate / null (full access) — see SubagentAllowlist.
+  const subAbort = new AbortController();
+  const abortSubagent = (reason: string): void => {
+    try { subAbort.abort(new Error(reason)); } catch { /* ignore */ }
+  };
+  const parentAbort = () => abortSubagent('parent aborted');
+  const explicitAbort = () => abortSubagent('subagent aborted');
+  if (parent.ctx.signal) {
+    if (parent.ctx.signal.aborted) parentAbort();
+    else parent.ctx.signal.addEventListener('abort', parentAbort, { once: true });
+  }
+  if (spec.signal) {
+    if (spec.signal.aborted) explicitAbort();
+    else spec.signal.addEventListener('abort', explicitAbort, { once: true });
+  }
+
+  const markActivity = (
+    phase: string,
+    note: string,
+    extra: Partial<Parameters<NonNullable<SubagentSpec['onProgress']>>[0]> = {},
+  ): void => {
+    const now = Date.now();
+    lastActivityAt = now;
+    spec.onProgress?.({
+      event: 'heartbeat',
+      toolCallCount: subToolCalls,
+      toolName: lastToolName,
+      note,
+      phase,
+      turn: currentTurn,
+      elapsedMs: now - startedAt,
+      stallMs: 0,
+      idleMs: 0,
+      deadlineMs: limits.timeoutMs,
+      lastToolName,
+      limit: limits,
+      ...extra,
+    });
+  };
+
+  const markStreamActivity = (phase: string, note: string): void => {
+    const now = Date.now();
+    lastActivityAt = now;
+    if (now - lastStreamProgressAt < streamProgressThrottleMs) return;
+    lastStreamProgressAt = now;
+    spec.onProgress?.({
+      event: 'heartbeat',
+      status: 'running',
+      toolCallCount: subToolCalls,
+      toolName: lastToolName,
+      note,
+      phase,
+      turn: currentTurn,
+      elapsedMs: now - startedAt,
+      stallMs: 0,
+      idleMs: 0,
+      deadlineMs: limits.timeoutMs,
+      lastToolName,
+      limit: limits,
+    });
+  };
+
+  // Subagent collector — bridges the sub's structured emissions
+  // (memos / snapshots / board posts) back to the parent's tool_result.
+  // Created BEFORE the registry build so the snapshot/board wrappers can
+  // close over it during registration.
+  const { SubagentCollector } = await import('@mcp/code-agent/tools/subagent-collector.js');
+  const collector = new SubagentCollector();
+
+  // Build the filtered + (optionally) path-wrapped + (optionally) collector-
+  // wrapped registry. `allowlist` accepts Set / predicate / null (full
+  // access) — see SubagentAllowlist. Wrappers compose: path-scope first
+  // (so we record violations against the *raw* paths), collector second
+  // (so we mirror the successful tool_result regardless of scope).
   const subRegistry = new ToolRegistry();
   for (const tool of parent.tools) {
     if (!isAllowed(spec.allowlist, tool)) continue;
-    subRegistry.register(spec.pathScope ? wrapToolForPathScope(tool, spec.pathScope, sandboxViolations) : tool);
+    let wrapped = spec.pathScope ? wrapToolForPathScope(tool, spec.pathScope, sandboxViolations) : tool;
+    wrapped = wrapToolForCollector(wrapped, collector);
+    subRegistry.register(wrapped);
+  }
+  // Frente C — `record_memo` is ALWAYS available in subagents regardless
+  // of the allowlist. It's how the sub speaks back to the parent beyond
+  // the final assistant text.
+  try {
+    const { recordMemoTool } = await import('@mcp/code-agent/tools/record-memo.js');
+    if (!subRegistry.has('record_memo')) {
+      subRegistry.register(recordMemoTool);
+    }
+  } catch (e) {
+    console.warn(`[subagent] record_memo registration failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   const subContext: ToolContext = {
     cwd: parent.ctx.cwd,
     projectName: parent.ctx.projectName,
     overlay: parent.ctx.overlay,
-    signal: parent.ctx.signal,
+    signal: subAbort.signal,
     // Inherit the parent's "unrestricted tool output" toggle so MCP/code_exec
     // calls inside the subagent honour the same per-call truncation policy
     // as the main session (with the smaller subagent ceiling enforced by
@@ -124,6 +278,10 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput,
     // Intentionally NO `runner` — interactive tools fail inside the subagent.
     planMode: false,
+    // Frente C — collector receives memos / snapshots / board posts from
+    // the sub. The parent reads `collector.snapshot()` after the sub
+    // finishes and appends it to the tool_result text.
+    subagentCollector: collector,
   };
 
   // PR-6 (R23): when v2 is on, append the subagent-specific framing to the
@@ -155,8 +313,14 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput ?? false,
   });
 
+  const abortRunner = () => subRunner.abort();
   if (parent.ctx.signal) {
-    parent.ctx.signal.addEventListener('abort', () => subRunner.abort(), { once: true });
+    if (parent.ctx.signal.aborted) abortRunner();
+    else parent.ctx.signal.addEventListener('abort', abortRunner, { once: true });
+  }
+  if (spec.signal) {
+    if (spec.signal.aborted) abortRunner();
+    else spec.signal.addEventListener('abort', abortRunner, { once: true });
   }
 
   // Propagate selected sub-runner events to the PARENT so the dashboard's
@@ -167,28 +331,172 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   //   - tool_call_result: per-call activity ping with a [subagent] prefix
   //     so the parent's Worker Log shows what the sub is doing.
   const parentEmit = parent.ctx.runner;
-  let subToolCalls = 0;
-  if (parentEmit) {
-    subRunner.on('tool_progress', (payload) => {
+  subRunner.on('turn_start', (turn) => {
+    currentTurn = typeof turn === 'number' ? turn : currentTurn + 1;
+    markActivity('turn', `turn ${currentTurn}`);
+  });
+  subRunner.on('provider_call', (payload: { provider?: string; model?: string }) => {
+    const provider = payload.provider ?? parent.provider.name;
+    const model = payload.model ?? parent.provider.model;
+    markActivity('provider_call', `awaiting ${provider}:${model}`);
+  });
+  subRunner.on('text_delta', () => {
+    markStreamActivity('text_delta', 'streaming text');
+  });
+  subRunner.on('thinking_delta', () => {
+    markStreamActivity('thinking_delta', 'thinking');
+  });
+  subRunner.on('tool_progress', (payload) => {
+    lastToolName = payload.name;
+    lastActivityAt = Date.now();
+    if (parentEmit) {
       parentEmit.emit('tool_progress', {
         ...payload,
         note: `[subagent] ${payload.note ?? payload.name}`,
       });
+    }
+    spec.onProgress?.({
+      event: 'heartbeat',
+      toolCallCount: subToolCalls,
+      toolName: payload.name,
+      note: payload.note ?? payload.name,
+      phase: 'tool_progress',
+      turn: currentTurn,
+      elapsedMs: Date.now() - startedAt,
+      stallMs: 0,
+      idleMs: 0,
+      deadlineMs: limits.timeoutMs,
+      lastToolName: payload.name,
+      limit: limits,
     });
-    subRunner.on('tool_call_result', (_id, name) => {
-      subToolCalls++;
+  });
+  // PR-C quality watchdog — hoisted so both tool_call_result and
+  // message_complete handlers can mutate it. See block below where the
+  // listener is wired for full context.
+  const QUALITY_NO_TOOL_MAX = (() => {
+    const raw = process.env.CODER_SUBAGENT_QUALITY_NO_TOOL_MAX;
+    if (raw == null || raw === '') return 3;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : 3;
+  })();
+  let consecutiveNoToolCount = 0;
+
+  subRunner.on('tool_call_result', (_id, name) => {
+    subToolCalls++;
+    lastToolName = name;
+    lastActivityAt = Date.now();
+    // PR-C quality watchdog — any tool call resets the "no-tool streak".
+    consecutiveNoToolCount = 0;
+    spec.onProgress?.({
+      event: 'tool_call',
+      toolCallCount: subToolCalls,
+      toolName: name,
+      note: `${name} completed`,
+      phase: 'tool_call',
+      turn: currentTurn,
+      elapsedMs: Date.now() - startedAt,
+      stallMs: 0,
+      idleMs: 0,
+      deadlineMs: limits.timeoutMs,
+      lastToolName: name,
+      limit: limits,
+    });
+    if (parentEmit) {
       parentEmit.emit('tool_progress', {
         id: `subagent-tool:${subRunner.runId}:${subToolCalls}`,
         name: `subagent:${name}`,
         elapsedMs: 0,
         note: `[subagent] ${name} ✓ (#${subToolCalls})`,
       });
-    });
-  }
+    }
+    const maxToolCalls = limits.maxToolCalls;
+    if (maxToolCalls != null && maxToolCalls > 0 && subToolCalls >= maxToolCalls) {
+      failWatchdog(`task tool limit reached (${subToolCalls}/${maxToolCalls})`);
+    }
+  });
+
+  // PR-C quality watchdog (forwarding variant). Codex tracks "agente
+  // está falando muito sem chamar tool" via `should_compact_session`; we
+  // approximate by counting assistant messages that have NO tool_use
+  // block. A streak of N (default 3) is a strong signal the sub is
+  // monologuing instead of acting — abort with a recognisable reason so
+  // the parent's retry classifier flags it as transient.
+  //
+  // Reset to 0 on every tool_call_result (any tool execution = progress).
+  // Env override: `CODER_SUBAGENT_QUALITY_NO_TOOL_MAX=N` (default 3,
+  // 0 disables). State `QUALITY_NO_TOOL_MAX` and `consecutiveNoToolCount`
+  // are declared above the tool_call_result handler so both listeners
+  // can mutate them.
+  subRunner.on('message_complete', (message) => {
+    if (message.role !== 'assistant') return;
+    const hasToolUse = Array.isArray(message.content)
+      && message.content.some((b: { type?: string }) => b && typeof b === 'object' && b.type === 'tool_use');
+    if (hasToolUse) {
+      consecutiveNoToolCount = 0;
+      return;
+    }
+    consecutiveNoToolCount++;
+    // Surface the streak to the parent so dashboards can show a
+    // "subagent monologuing" banner even before the watchdog fires.
+    if (parentEmit) {
+      parentEmit.emit('tool_progress', {
+        id: `subagent-quality:${subRunner.runId}:${currentTurn}`,
+        name: 'subagent:quality-watchdog',
+        elapsedMs: Date.now() - startedAt,
+        note: `[subagent] no_tool_streak=${consecutiveNoToolCount}/${QUALITY_NO_TOOL_MAX}`,
+      });
+    }
+    if (QUALITY_NO_TOOL_MAX > 0 && consecutiveNoToolCount >= QUALITY_NO_TOOL_MAX) {
+      failWatchdog(
+        `subagent_quality_watchdog: ${consecutiveNoToolCount} consecutive turns without tool use`,
+        'quality',
+      );
+    }
+  });
 
   let result: { totalUsage: ChatUsage; reason: SubagentRunResult['reason'] };
+  const watchdog = createSubagentWatchdog({
+    limits,
+    startedAt,
+    getLastActivityAt: () => lastActivityAt,
+    getToolCallCount: () => subToolCalls,
+    getTurn: () => currentTurn,
+    getLastToolName: () => lastToolName,
+    onFail: (message, phase) => {
+      failWatchdog(message, phase);
+    },
+  });
+
+  function failWatchdog(message: string, phase = 'limit'): void {
+    if (watchdogFailed) return;
+    watchdogFailed = true;
+    const now = Date.now();
+    try { subRunner.abort(); } catch { /* ignore */ }
+    abortSubagent(message);
+    spec.onProgress?.({
+      event: 'heartbeat',
+      toolCallCount: subToolCalls,
+      toolName: lastToolName,
+      note: message,
+      phase,
+      turn: currentTurn,
+      elapsedMs: now - startedAt,
+      stallMs: now - lastActivityAt,
+      idleMs: now - lastActivityAt,
+      deadlineMs: limits.timeoutMs,
+      lastToolName,
+      status: phase === 'timeout' ? 'timed_out' : phase === 'aborted' ? 'aborted' : 'error',
+      limit: limits,
+    });
+    watchdog.fail(message);
+  }
+
   try {
-    result = await subRunner.run();
+    const runPromise = subRunner.run();
+    runPromise.catch(() => {
+      /* consumed by the race below or intentionally ignored after watchdog abort */
+    });
+    result = await Promise.race([runPromise, watchdog.promise]);
   } catch (e) {
     return {
       reason: 'error',
@@ -198,7 +506,14 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         output_tokens: 0,
       },
       sandboxViolations,
+      collected: collector.snapshot(),
     };
+  } finally {
+    watchdog.cleanup();
+    if (parent.ctx.signal) parent.ctx.signal.removeEventListener('abort', parentAbort);
+    if (spec.signal) spec.signal.removeEventListener('abort', explicitAbort);
+    if (parent.ctx.signal) parent.ctx.signal.removeEventListener('abort', abortRunner);
+    if (spec.signal) spec.signal.removeEventListener('abort', abortRunner);
   }
 
   return {
@@ -206,6 +521,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     finalText: extractLastAssistantText(subRunner.messages),
     usage: result.totalUsage,
     sandboxViolations,
+    collected: collector.snapshot(),
   };
 }
 
@@ -258,6 +574,13 @@ export const EXPLORE_ALLOWLIST = new Set<string>([
   'git_status',
   'git_diff',
   'git_log',
+  // Frente C — pre-approved write channels for subagents. Both are
+  // additionally wrapped by `wrapToolForCollector` so any successful call
+  // is mirrored into the parent's structured trail (the master sees the
+  // memo / snapshot / deliverable post in the tool_result text without
+  // needing to re-read the board or the snapshot store).
+  'mcp__add_snapshot',
+  'post_to_board',
 ]);
 
 /**
@@ -524,6 +847,76 @@ function parseResultBlock(finalText: string): { summary: string; files_modified?
 }
 
 /**
+ * Frente C — when the sub calls `mcp__add_snapshot` or
+ * `post_to_board` we tee the success into the parent's collector so the
+ * master sees a structured trail in addition to the final assistant text.
+ *
+ * Only mirrors on a successful invocation. The wrap is name-keyed so any
+ * other tool passes through untouched. Errors during the mirror step are
+ * swallowed — the underlying tool's result already went out and we don't
+ * want telemetry to mask a real failure.
+ *
+ * `post_to_board` is filtered to the "deliverable" / "decision" /
+ * "handoff" kinds — routine `message` posts would flood the parent with
+ * chit-chat the master doesn't need.
+ */
+function wrapToolForCollector(
+  tool: CoderTool,
+  collector: import('@mcp/code-agent/tools/subagent-collector.js').SubagentCollector,
+): CoderTool {
+  if (tool.name === 'mcp__add_snapshot') {
+    return {
+      ...tool,
+      handler: async (args, ctx): Promise<ToolResult> => {
+        const result = await tool.handler(args, ctx);
+        if (!result.isError) {
+          try {
+            const category = typeof args.category === 'string' ? args.category : 'general';
+            const body = typeof args.body === 'string'
+              ? args.body
+              : typeof args.content === 'string'
+                ? (args.content as string)
+                : '';
+            // Snapshot id is typically embedded in the tool's response text
+            // (e.g. "Snapshot created (id=ABC123)"). Try to extract; fall
+            // back to a deterministic placeholder.
+            const idMatch = /id[=:]\s*([A-Za-z0-9_-]+)/.exec(result.content) ?? null;
+            const id = idMatch ? idMatch[1] : `snap-${Date.now().toString(36)}`;
+            collector.recordSnapshot(id, category, body);
+          } catch {
+            /* swallow — never let mirror failure surface as tool error */
+          }
+        }
+        return result;
+      },
+    };
+  }
+  if (tool.name === 'post_to_board') {
+    return {
+      ...tool,
+      handler: async (args, ctx): Promise<ToolResult> => {
+        const result = await tool.handler(args, ctx);
+        if (!result.isError) {
+          try {
+            const kind = typeof args.kind === 'string' ? (args.kind as string) : 'message';
+            // Only mirror the kinds the master genuinely needs to see
+            // post-hoc. Routine `message` posts stay on the board only.
+            if (kind === 'deliverable' || kind === 'decision' || kind === 'handoff' || kind === 'blocker') {
+              const content = typeof args.content === 'string' ? (args.content as string) : '';
+              collector.recordBoardPost(kind, content);
+            }
+          } catch {
+            /* swallow */
+          }
+        }
+        return result;
+      },
+    };
+  }
+  return tool;
+}
+
+/**
  * Wrap a tool's handler so any path arguments outside `pathScope` are
  * recorded into `violations` (and the call still proceeds — warning mode).
  *
@@ -570,21 +963,111 @@ export interface ParallelAgentSpec {
   systemPrompt?: string;
   allowlist?: SubagentAllowlist;
   pathScope?: string[];
+  limits?: SubagentLimits;
+  signal?: AbortSignal;
 }
 
 export interface ParallelAgentProgress {
   agentIndex: number;
   label: string;
-  event: 'spawned' | 'tool_call' | 'completed' | 'error';
+  event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'error' | 'timed_out' | 'aborted';
+  status?: 'pending' | 'running' | 'completed' | 'error' | 'timed_out' | 'aborted';
   provider?: string;
   model?: string;
   toolCallCount?: number;
+  note?: string;
+  phase?: string;
+  turn?: number;
+  elapsedMs?: number;
+  stallMs?: number;
+  idleMs?: number;
+  deadlineMs?: number;
+  lastToolName?: string;
+  limit?: SubagentLimits;
   usage?: ChatUsage;
   summary?: string;
   error?: string;
 }
 
+function createSubagentWatchdog(args: {
+  limits?: SubagentLimits;
+  startedAt: number;
+  getLastActivityAt: () => number;
+  getToolCallCount: () => number;
+  getTurn: () => number;
+  getLastToolName: () => string | undefined;
+  onFail: (message: string, phase?: string) => void;
+}): {
+  promise: Promise<never>;
+  fail: (message: string) => void;
+  cleanup: () => void;
+} {
+  let settled = false;
+  let rejectPromise: (error: Error) => void = () => {};
+  const timers: Array<ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>> = [];
+  const promise = new Promise<never>((_, reject) => {
+    rejectPromise = reject;
+  });
+  const fail = (message: string): void => {
+    if (settled) return;
+    settled = true;
+    rejectPromise(new Error(message));
+  };
+
+  const timeoutMs = args.limits?.timeoutMs;
+  if (timeoutMs != null && timeoutMs > 0) {
+    timers.push(setTimeout(() => {
+      args.onFail(`task timeout reached (${formatMs(timeoutMs)})`, 'timeout');
+    }, timeoutMs));
+  }
+
+  const stallMs = args.limits?.stallMs;
+  if (stallMs != null && stallMs > 0) {
+    const intervalMs = Math.min(10_000, Math.max(1_000, Math.floor(stallMs / 4)));
+    timers.push(setInterval(() => {
+      const idleMs = Date.now() - args.getLastActivityAt();
+      if (idleMs < stallMs) return;
+      const tool = args.getLastToolName();
+      const suffix = tool ? ` after ${tool}` : '';
+      args.onFail(
+        `task stalled for ${formatMs(idleMs)}${suffix} (turn ${args.getTurn()}, tools ${args.getToolCallCount()})`,
+        'stalled',
+      );
+    }, intervalMs));
+  }
+
+  return {
+    promise,
+    fail,
+    cleanup: () => {
+      settled = true;
+      for (const timer of timers) clearTimeout(timer as ReturnType<typeof setTimeout>);
+    },
+  };
+}
+
+function formatMs(ms: number): string {
+  if (ms >= 60_000) return `${Math.round(ms / 60_000)}m`;
+  return `${Math.round(ms / 1000)}s`;
+}
+
 export type ParallelAgentResult = SubagentRunResult & { label: string; toolCallCount: number };
+
+function classifySubagentTerminal(
+  reason: SubagentRunResult['reason'],
+  text: string,
+): {
+  event: ParallelAgentProgress['event'];
+  status: NonNullable<ParallelAgentProgress['status']>;
+} {
+  if (reason === 'completed') return { event: 'completed', status: 'completed' };
+  if (reason === 'aborted') return { event: 'aborted', status: 'aborted' };
+  const lower = text.toLowerCase();
+  if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('stalled')) {
+    return { event: 'timed_out', status: 'timed_out' };
+  }
+  return { event: 'error', status: 'error' };
+}
 
 /**
  * Run N subagents in parallel with a concurrency limiter. Each agent gets its
@@ -603,103 +1086,60 @@ export async function runParallelAgents(
   const results: ParallelAgentResult[] = new Array(agents.length);
 
   const tasks = agents.map((spec, agentIndex) => async () => {
-    onProgress({ agentIndex, label: spec.label, event: 'spawned' });
+    onProgress({ agentIndex, label: spec.label, event: 'spawned', status: 'running' });
 
     let toolCallCount = 0;
 
-    // Per-agent overrides (fall through to the global args).
-    const effectiveAllowlist = spec.allowlist ?? allowlist;
-    const effectiveSystemPromptBase = spec.systemPrompt ?? systemPrompt;
-    const effectivePathScope = spec.pathScope;
-    const violationsForThisAgent: string[] = [];
-
-    // Build isolated registry — accepts Set, predicate, or null (full access).
-    const subRegistry = new ToolRegistry();
-    for (const tool of parent.tools) {
-      if (!isAllowed(effectiveAllowlist, tool)) continue;
-      subRegistry.register(
-        effectivePathScope
-          ? wrapToolForPathScope(tool, effectivePathScope, violationsForThisAgent)
-          : tool,
-      );
-    }
-
-    const subContext: ToolContext = {
-      cwd: parent.ctx.cwd,
-      projectName: parent.ctx.projectName,
-      overlay: parent.ctx.overlay,
-      signal: parent.ctx.signal,
-      // Inherit the parent's "unrestricted tool output" toggle so MCP /
-      // code_exec calls inside parallel agents honour the same per-call
-      // truncation policy as the main session.
-      unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput,
-      planMode: false,
-    };
-
-    // PR-6 (R23): same v2 framing append as in runSubagent above.
-    const v2Framing = parent.agentLoopV2
-      ? (await import('@mcp/code-agent/core/system-prompt.js')).buildSubagentLoopFraming()
-      : '';
-    const finalSystemPrompt = effectiveSystemPromptBase + v2Framing;
-
-    const subRunner = new CoderRunner({
-      provider: parent.provider,
-      registry: subRegistry,
-      systemPrompt: finalSystemPrompt,
-      toolContext: subContext,
-      initialMessages: [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
-      maxTurns: spec.maxTurns,
-      pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
-      sessionId: parent.sessionId,
-      isSubagent: true,
-      agentLoopV2: parent.agentLoopV2,
-      // Subagent inherits parent's unrestricted-tool-output toggle.
-      unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput ?? false,
-    });
-
-    // Track tool calls for progress reporting (drives `agent_progress`
-    // event on the parent → dashboard updates per-agent badges).
-    subRunner.on('tool_call_result', () => {
-      toolCallCount++;
-      onProgress({ agentIndex, label: spec.label, event: 'tool_call', toolCallCount });
-    });
-
-    // Propagate sub heartbeats to the PARENT so the StuckBanner doesn't
-    // trip during long sub-runner waits (provider.chat lerdo no sub,
-    // long invokes inside the sub, etc.). Resets the parent's
-    // `lastEventAt` via tool_progress on the master SSE bus.
-    const parentEmit = parent.ctx.runner;
-    if (parentEmit) {
-      subRunner.on('tool_progress', (payload) => {
-        parentEmit.emit('tool_progress', {
-          ...payload,
-          note: `[parallel ${spec.label}] ${payload.note ?? payload.name}`,
-        });
-      });
-    }
-
-    if (parent.ctx.signal) {
-      parent.ctx.signal.addEventListener('abort', () => subRunner.abort(), { once: true });
-    }
-
     try {
-      const runResult = await subRunner.run();
-      const finalText = extractLastAssistantText(subRunner.messages);
+      const runResult = await runSubagent(parent, {
+        systemPrompt: spec.systemPrompt ?? systemPrompt,
+        allowlist: spec.allowlist ?? allowlist,
+        initialMessages: [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
+        maxTurns: spec.maxTurns,
+        pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
+        pathScope: spec.pathScope,
+        limits: spec.limits,
+        signal: spec.signal,
+        onProgress: (progress) => {
+          toolCallCount = progress.toolCallCount;
+          onProgress({
+            agentIndex,
+            label: spec.label,
+            event: progress.event,
+            toolCallCount,
+            note: progress.note,
+            phase: progress.phase,
+            turn: progress.turn,
+            elapsedMs: progress.elapsedMs,
+            stallMs: progress.stallMs,
+            idleMs: progress.idleMs,
+            deadlineMs: progress.deadlineMs,
+            lastToolName: progress.lastToolName ?? progress.toolName,
+            status: progress.status ?? 'running',
+            limit: progress.limit,
+          });
+        },
+      });
+      const finalText = runResult.finalText;
       const agentResult: ParallelAgentResult = {
         reason: runResult.reason,
         finalText,
-        usage: runResult.totalUsage,
-        sandboxViolations: violationsForThisAgent.slice(),
+        usage: runResult.usage,
+        sandboxViolations: runResult.sandboxViolations,
+        collected: runResult.collected ?? emptyCollected(),
         label: spec.label,
         toolCallCount,
       };
+      const terminal = classifySubagentTerminal(runResult.reason, finalText);
       onProgress({
         agentIndex,
         label: spec.label,
-        event: 'completed',
+        event: terminal.event,
+        status: terminal.status,
         toolCallCount,
-        usage: runResult.totalUsage,
+        usage: runResult.usage,
         summary: finalText.slice(0, 500),
+        error: terminal.status === 'completed' ? undefined : finalText.slice(0, 500),
       });
       return agentResult;
     } catch (e) {
@@ -709,10 +1149,12 @@ export async function runParallelAgents(
         finalText: errMsg,
         usage: { input_tokens: 0, output_tokens: 0 },
         sandboxViolations: [],
+        collected: emptyCollected(),
         label: spec.label,
         toolCallCount,
       };
-      onProgress({ agentIndex, label: spec.label, event: 'error', error: errMsg });
+      const terminal = classifySubagentTerminal('error', errMsg);
+      onProgress({ agentIndex, label: spec.label, event: terminal.event, status: terminal.status, error: errMsg });
       return agentResult;
     }
   });
@@ -733,6 +1175,7 @@ export async function runParallelAgents(
       elapsedMs: Date.now() - startedAt,
       note: `${agents.length} parallel agents still running`,
     });
+    parent.ctx.reportProgress?.(`${agents.length} parallel agents still running`);
   }, HEARTBEAT_MS);
 
   // Run with concurrency limit. Heartbeat cleanup MUST happen even on throw.
@@ -764,6 +1207,7 @@ export async function runParallelAgents(
         finalText: errMsg,
         usage: { input_tokens: 0, output_tokens: 0 },
         sandboxViolations: [],
+        collected: emptyCollected(),
         label: agents[i].label,
         toolCallCount: 0,
       };

@@ -47,6 +47,7 @@ import { OnboardingWizard, isOnboarded, resetOnboarding } from './features/onboa
  */
 function AppRoot() {
   const [showOnboarding, setShowOnboarding] = useState(() => !isOnboarded());
+  const navigate = useNavigate();
 
   // Dev helpers — surfaced via DevTools console so QA can re-run the
   // wizard, inspect Electron bridge state, etc. without rebuilding.
@@ -66,6 +67,24 @@ function AppRoot() {
       },
     };
   }, []);
+
+  // Deep-link from `window.electronAPI.openInNewWindow(route)`. In dev
+  // the main process appends the route to the Vite URL and BrowserRouter
+  // picks it up via pathname automatically. In production we `loadFile`
+  // the bundled index.html with `{ hash: route }` — BrowserRouter can't
+  // read that, so we navigate manually on mount. The hash is consumed
+  // (cleared) so refresh inside the window doesn't double-fire.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash;
+    if (!hash || hash === '#' || hash === '#/') return;
+    const route = hash.startsWith('#') ? hash.slice(1) : hash;
+    if (!route.startsWith('/')) return;
+    // Clear the hash so a manual refresh in the new window doesn't
+    // re-run navigation if the user has since navigated elsewhere.
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    navigate(route, { replace: true });
+  }, [navigate]);
 
   return (
     <>

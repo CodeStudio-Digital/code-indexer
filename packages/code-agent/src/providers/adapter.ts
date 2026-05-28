@@ -64,6 +64,7 @@ export type CoderProviderName =
   | 'anthropic'
   | 'claude-code'
   | 'openai'
+  | 'openrouter'
   | 'zai'
   | 'deepseek'
   | 'gemini'

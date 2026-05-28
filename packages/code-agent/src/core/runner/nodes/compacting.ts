@@ -53,6 +53,9 @@ export class CompactingNode implements BehaviorNode {
       protectTokens,
       summaryProvider,
       summarize: this.nodeOpts.summarizeOverride,
+      // A3 — pass the abort signal so a hung aux provider (during summary
+      // call) can be cancelled instead of stalling the whole Compacting node.
+      signal: ctx.opts.toolContext.signal,
     });
 
     if (!result.ok) {
@@ -105,6 +108,10 @@ export class CompactingNode implements BehaviorNode {
     // Reset the compact-failure counter on a clean run — the circuit
     // breaker should fire only on CONSECUTIVE failures.
     ctx.recovery.set('compact-failure', 0);
+    // PR-F dynamic injection — mark the compaction so the next Executing
+    // turn renders a "context summarized" reminder. Carries for ≤2 turns
+    // (clamped inside the dynamic-injection helper) then auto-clears.
+    ctx.injectionState.recentCompactionAt = ctx.turn;
 
     const charsAfter = approxChars(ctx.messages);
     ctx.emit('history_compacted', {

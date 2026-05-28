@@ -262,8 +262,14 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
       'update_goal',
       'get_goal',
       'submit_tasks',
+      'list_tasks',
+      'cancel_tasks',
+      'delete_tasks',
+      'archive_task_list',
+      'execute_tasks',
       'execute_task',
       'task_complete',
+      'update_task',
       'approve_subordinate_tasks',
       'submit_tasks_to_master',
     ]);
@@ -345,7 +351,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     await sendMessage(text, async () => {
       refetchSession();
       if (shouldAutoTitle) {
-        apiPost<{ title: string }>(`/coder/sessions/${selectedId}/generate-title`, {})
+        apiPost<{ title: string }>(`/coder/sessions/${selectedId}/generate-title`, { content: text })
           .then(() => {
             refetchSessions();
             window.dispatchEvent(new CustomEvent('coder:sessions-changed'));

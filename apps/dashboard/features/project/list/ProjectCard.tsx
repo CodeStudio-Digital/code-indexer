@@ -15,7 +15,9 @@ import {
   CardHeader,
   CardTitle,
 } from '../../../components/ui/card.js';
+import { useContextMenu } from '../../../components/ui/context-menu.js';
 import { formatRelativeTime } from '../../../lib/utils.js';
+import { buildProjectContextMenuItems } from './projectContextMenu.js';
 
 export interface ProjectCardData {
   id: number;
@@ -36,9 +38,24 @@ export interface ProjectCardProps {
 
 export function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) {
   const { t } = useTranslation(['projects', 'common']);
+  const { triggerProps, Menu } = useContextMenu(
+    buildProjectContextMenuItems({
+      project: p,
+      onSelect,
+      onEdit,
+      labels: {
+        open: t('projects:contextMenu.open', 'Open'),
+        openInNewWindow: t('projects:contextMenu.openInNewWindow', 'Open in new window'),
+        copyPath: t('projects:contextMenu.copyPath', 'Copy path'),
+        edit: t('projects:contextMenu.edit', 'Edit'),
+        copied: t('projects:contextMenu.copied', 'Copied'),
+      },
+    }),
+  );
   return (
     <Card
       onClick={onSelect}
+      {...triggerProps}
       className="cursor-pointer transition-all hover:shadow-md hover:border-primary/40 hover:-translate-y-0.5 group"
     >
       <CardHeader className="pb-3">
@@ -87,6 +104,7 @@ export function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) 
           {p.last_indexed ? formatRelativeTime(p.last_indexed) : t('projects:neverIndexed')}
         </div>
       </CardContent>
+      {Menu}
     </Card>
   );
 }

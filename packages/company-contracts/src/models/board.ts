@@ -1,4 +1,4 @@
-export type BoardKind = 'message' | 'decision' | 'question' | 'deliverable' | 'handoff';
+export type BoardKind = 'message' | 'decision' | 'question' | 'deliverable' | 'handoff' | 'blocker';
 
 export interface BoardEntry {
   id: number;

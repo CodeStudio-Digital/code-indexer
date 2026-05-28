@@ -199,8 +199,12 @@ export function providersRouter(store: ProviderStore): Hono {
         if (r && (r.status === 401 || r.status === 403)) {
           throw new Error(`HTTP ${r.status}`);
         }
-      } else if (cfg.kind === 'openai') {
-        const base = cfg.base_url ?? 'https://api.openai.com/v1';
+      } else if (cfg.kind === 'openai' || cfg.kind === 'openrouter') {
+        const base = cfg.base_url ?? (
+          cfg.kind === 'openrouter'
+            ? 'https://openrouter.ai/api/v1'
+            : 'https://api.openai.com/v1'
+        );
         const url = base.endsWith('/') ? `${base}models` : `${base}/models`;
         const r = await fetch(url, {
           headers: { Authorization: `Bearer ${cfg.api_key ?? ''}` },

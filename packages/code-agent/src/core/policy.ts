@@ -97,8 +97,14 @@ const BUILTIN_CLASSIFICATION: Record<
   ask_user:         { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   submit_plan:      { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   submit_tasks:     { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
-  execute_task:     { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
+  list_tasks:        { mutates: false, parallelSafe: true,  riskLevel: 'read' },
+  cancel_tasks:      { mutates: false, parallelSafe: false, riskLevel: 'read' },
+  delete_tasks:      { mutates: false, parallelSafe: false, riskLevel: 'read' },
+  archive_task_list: { mutates: false, parallelSafe: false, riskLevel: 'read' },
+  // Frente D — `execute_task` (singular) removed; only `execute_tasks`
+  // (plural) and `task_complete` (inline-scope closer) remain.
   task_complete:    { mutates: false, parallelSafe: false, riskLevel: 'read' },
+  update_task:      { mutates: false, parallelSafe: false, riskLevel: 'read' },
   todo_write:       { mutates: false, parallelSafe: false, riskLevel: 'read' },
 
   // ─── Subordinate company variants (master-directed) ───────────

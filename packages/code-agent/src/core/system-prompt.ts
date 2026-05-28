@@ -10,9 +10,10 @@
  * tier hint.
  *
  * Per-provider preambles (`providerFamily`) tune tone/format per model family
- * AND — crucially — give each family its own stable, unique prefix so the
+ * AND — crucially — give each native family its own stable prefix so the
  * server-side prompt cache (Anthropic ephemeral, ZAI/GLM auto, OpenAI's
  * system-prefix cache) hits reliably without cross-provider cache pollution.
+ * OpenRouter intentionally reuses the OpenAI-compatible preamble.
  */
 import { loadPrompt, interpolate } from '@mcp/code-agent/prompts/loader.js';
 import { runSystemPromptHook } from '@mcp/code-agent/core/hooks.js';
@@ -61,6 +62,7 @@ export type ProviderFamily =
   | 'anthropic'
   | 'claude-code'
   | 'openai'
+  | 'openrouter'
   | 'zai'
   | 'gemini'
   | 'deepseek'
@@ -148,7 +150,8 @@ function providerPreamble(family: ProviderFamily): string {
 </formatting>
 `;
     case 'openai':
-      // GPT-4/5 responds well to explicit checklists and "think step by step" cues.
+    case 'openrouter':
+      // OpenAI-compatible models respond well to explicit checklist-style cues.
       return `# Role
 You are a coding agent (OpenAI GPT family).
 
@@ -260,7 +263,8 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 - \`submit_spec\`: REQUIRED before any mutating tool (see Spec mode above). Pass \`{ name, body, parent_id? }\`. The runner writes the spec to \`.mcp/specs/<slug>-<unix>.md\` and blocks until a human approves or requests changes.` : ''}
 - \`submit_plan\`: ${isSpec ? 'BLOCKED in spec mode — the spec IS the plan.' : ctx.planMode ? 'REQUIRED before mutating tools when the work is linear/informational (see Plan mode above).' : 'Optional — call when the user explicitly asks for a plan.'}
 - \`submit_tasks\`: ${isSpec ? 'BLOCKED before spec approval. After approval, derive tasks from the spec\'s Implementation Plan and call submit_tasks.' : ctx.planMode ? 'REQUIRED instead of submit_plan when the work decomposes into 2+ independent tasks (see Plan mode above).' : 'Optional — for multi-item work that benefits from per-task context curation and individual user approval.'}
-- \`execute_task\` / \`task_complete\`: companions to submit_tasks; call execute_task once per approved task in dependency order, then task_complete to close the inline scope.
+- \`list_tasks\` / \`execute_tasks\` / \`task_complete\`: companions to submit_tasks. Task ids are backend-generated \`tsk_...\` ids; call list_tasks if unsure, then \`execute_tasks\` ONCE to dispatch the whole approved list (wave-based; runs investigate/implement/verify kinds with the right toolset). \`task_complete\` only closes an inline scope opened by \`execute_tasks\` — never call it on a subagent-mode task.
+- \`cancel_tasks\` / \`delete_tasks\` / \`archive_task_list\`: use these to abandon, remove, or clear task rounds. Never reuse legacy ids like \`task_1\` as executable ids.
 `;
 
   // Static "agent loop" + "do not re-read" + "active context pointer". The
@@ -388,7 +392,7 @@ function tierHint(profile?: 'bootstrap' | 'navigate' | 'full'): string {
 
   if (profile === 'bootstrap') {
     return `# Tool tiers (IMPORTANT)
-You started in the **bootstrap** tier. Only ~13 essential read/search tools are visible right now (get_project_pulse, query_snapshots, get_context_for, search, grep_code, get_file_skeleton, read_file, list_directory, ask_user, submit_plan, submit_tasks, expand_toolset).
+You started in the **bootstrap** tier. Only the essential read/search/workflow tools are visible right now (get_project_pulse, query_snapshots, get_context_for, search, grep_code, get_file_skeleton, read_file, list_directory, ask_user, submit_plan, submit_tasks, list_tasks, cancel_tasks, delete_tasks, archive_task_list, expand_toolset).
 
 Write/edit/git/shell tools and deep navigation tools (find_references, trace_usage, prepare_edit, get_symbol_body, etc.) are HIDDEN. To unlock them, call \`expand_toolset({tier: "navigate", reason: "..."})\`. They become visible on the next turn.
 

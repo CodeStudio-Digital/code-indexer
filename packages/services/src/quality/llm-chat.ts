@@ -8,7 +8,7 @@
  *
  * This helper hits the OpenAI Chat Completions endpoint directly, which
  * works for every provider in the registry that uses OpenAI-compatible
- * REST: Cloudflare, OpenAI, DeepSeek, ZAI, Moonshot, etc.
+ * REST: Cloudflare, OpenAI, OpenRouter, DeepSeek, ZAI, Moonshot, etc.
  *
  * Anthropic-native / Gemini-native shapes need their own helpers; this
  * one is named `openAiCompatibleChat` so it's obvious which dialect it
@@ -84,6 +84,7 @@ function resolveBaseUrl(binding: ResolvedBinding, override?: string): string {
       return CLOUDFLARE_PATH_TEMPLATE.replace('{account_id}', accountId);
     }
     case 'openai':   return 'https://api.openai.com/v1';
+    case 'openrouter': return 'https://openrouter.ai/api/v1';
     case 'deepseek': return 'https://api.deepseek.com/v1';
     case 'zai':      return 'https://api.z.ai/api/coding/paas/v4';
     case 'moonshot': return 'https://api.moonshot.cn/v1';

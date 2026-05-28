@@ -120,7 +120,7 @@ O runner capa o tools array no topo quando o modelo estiver abaixo do count tota
 ## Requisitos
 
 - Node.js >= 20
-- Uma API key de LLM (ZAI, Anthropic, OpenAI, DeepSeek ou Gemini)
+- Uma API key de LLM (ZAI, Anthropic, OpenAI, OpenRouter, DeepSeek ou Gemini)
 - (Opcional) Cloudflare account para embeddings/vector search
 
 ## Instalacao
@@ -139,6 +139,7 @@ npm run build
 ZAI_API_KEY=sua-chave
 # ANTHROPIC_API_KEY=sk-ant-...
 # OPENAI_API_KEY=sk-...
+# OPENROUTER_API_KEY=sk-or-...
 # DEEPSEEK_API_KEY=sk-...
 # GEMINI_API_KEY=AI...
 
@@ -229,6 +230,7 @@ out/
 | ZAI (Zhipu) | `ZAI_API_KEY` | glm-5.1 | Auto-detect (coding/general) |
 | Anthropic | `ANTHROPIC_API_KEY` | claude-haiku-4-5-20251001 | api.anthropic.com |
 | OpenAI | `OPENAI_API_KEY` | gpt-4o-mini | api.openai.com |
+| OpenRouter | `OPENROUTER_API_KEY` | ~openai/gpt-latest | openrouter.ai/api/v1 |
 | DeepSeek | `DEEPSEEK_API_KEY` | deepseek-chat | api.deepseek.com |
 | Gemini | `GEMINI_API_KEY` | gemini-2.0-flash | generativelanguage.googleapis.com |
 
@@ -595,6 +597,7 @@ Acesse `http://localhost:3333`. Tabs disponiveis por projeto:
 | `ZAI_API_KEY` | API key Zhipu AI | - |
 | `ANTHROPIC_API_KEY` | API key Anthropic | - |
 | `OPENAI_API_KEY` | API key OpenAI | - |
+| `OPENROUTER_API_KEY` | API key OpenRouter | - |
 | `DEEPSEEK_API_KEY` | API key DeepSeek | - |
 | `GEMINI_API_KEY` | API key Google Gemini | - |
 | `MCP_INDEX_DB` | Caminho do banco SQLite | `~/.mcp-code-indexer/index.db` |

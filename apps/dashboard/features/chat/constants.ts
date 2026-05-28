@@ -8,6 +8,7 @@ export const PROVIDERS = [
   { id: 'anthropic', label: 'Claude', defaultModel: 'claude-sonnet-4-6', accent: 'bg-orange-500' },
   { id: 'zai', label: 'ZAI / GLM', defaultModel: 'glm-5.1', accent: 'bg-info' },
   { id: 'openai', label: 'OpenAI', defaultModel: 'gpt-4o-mini', accent: 'bg-success' },
+  { id: 'openrouter', label: 'OpenRouter', defaultModel: '~openai/gpt-latest', accent: 'bg-cyan-500' },
   { id: 'deepseek', label: 'DeepSeek', defaultModel: 'deepseek-chat', accent: 'bg-purple-500' },
 ];
 

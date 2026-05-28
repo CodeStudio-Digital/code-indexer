@@ -20,6 +20,24 @@ import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ToolContext, CoderTool } from '@mcp/code-agent/core/tool.js';
 import { checkDupCall } from '../guards/tuple-hash-dedup.js';
 import type { DupCallEntry } from '../machine/types.js';
+import { withAbortAndTimeout, isTimeoutError, isAbortError } from './executing-abort.js';
+
+/**
+ * Hard upper bound on a single tool invocation. Catches misbehaving MCP
+ * tools that have no `timeoutMs` declared and would otherwise wedge the
+ * Executing node forever (the Camada 1 heartbeat surfaces "still running"
+ * but cannot cancel). Tools explicitly marked `interactive: true` or
+ * `timeoutMs: Infinity` are exempt — they legitimately wait on humans /
+ * cooperative polling.
+ */
+const DEFAULT_TOOL_TIMEOUT_MS = (() => {
+  const v = process.env.CODER_TOOL_DEFAULT_TIMEOUT_MS;
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 300_000; // 5 minutes
+})();
 
 export interface DispatchedToolResult {
   toolUseId: string;
@@ -50,7 +68,12 @@ export interface DispatchArgs {
    * a prior turn already produced. Runs AFTER `toolGate` and BEFORE the
    * tuple-hash check (so a refused re-read doesn't bump dedup).
    */
-  enforcePreRead?: (toolName: string, input: unknown, turn: number) => string | null;
+  enforcePreRead?: (
+    toolName: string,
+    input: unknown,
+    turn: number,
+    toolUseId: string,
+  ) => string | { content: string; isError?: boolean } | null;
   /**
    * Task-mode gate — enforces `execution_mode='all-subagent'` by refusing
    * mutating tools that would bypass `execute_task`. Pure consult; no
@@ -59,6 +82,19 @@ export interface DispatchArgs {
   enforceTaskMode?: (toolName: string, toolMutates: boolean) => string | null;
   /** Smart-reducer applied to the raw result content before push. */
   reduceToolResult?: (toolName: string, content: string) => string;
+  /**
+   * Post-result hook for runner-owned state that needs the real tool_use id
+   * and raw content (mutation-aware reread diffs, write tracking, etc.).
+   */
+  postProcessToolResult?: (args: {
+    toolUseId: string;
+    name: string;
+    input: Record<string, unknown>;
+    rawContent: string;
+    content: string;
+    isError: boolean;
+    turn: number;
+  }) => { content: string; isError?: boolean } | null | void;
   /**
    * Polling-stuck detector. Returns a refusal string when a polling
    * tool returned identical content N times in a row. Replaces the
@@ -91,7 +127,7 @@ export interface DispatchArgs {
    * parallel batches). Skipped when the tool is `interactive: true` or
    * `timeoutMs: Infinity` — the runner is correctly idle there.
    */
-  onToolProgress?: (id: string, name: string, elapsedMs: number) => void;
+  onToolProgress?: (id: string, name: string, elapsedMs: number, note?: string) => void;
   /** Heartbeat interval in ms. Default 10 000 (10s). */
   toolProgressIntervalMs?: number;
 }
@@ -129,13 +165,15 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // Pre-read enforcement (Row 32 from agent-research comparisons).
     // Refuses re-reads BEFORE the dedup check so the dedup counter
     // stays meaningful only for non-read tools.
-    const preReadRefusal = args.enforcePreRead?.(tu.name, tu.input, args.turn) ?? null;
+    const preReadRefusal = args.enforcePreRead?.(tu.name, tu.input, args.turn, tu.id) ?? null;
     if (preReadRefusal !== null) {
+      const content = typeof preReadRefusal === 'string' ? preReadRefusal : preReadRefusal.content;
+      const isError = typeof preReadRefusal === 'string' ? true : preReadRefusal.isError ?? true;
       results.push({
         toolUseId: tu.id,
         name: tu.name,
-        content: preReadRefusal,
-        isError: true,
+        content,
+        isError,
         durationMs: 0,
         wasRefusedByDedup: false,
       });
@@ -205,21 +243,91 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       }, intervalMs);
     }
 
+    const noTimeout = tool?.interactive === true || tool?.timeoutMs === Infinity;
+    const toolTimeoutMs = noTimeout
+      ? 0
+      : (typeof tool?.timeoutMs === 'number' && tool.timeoutMs > 0
+          ? tool.timeoutMs
+          : DEFAULT_TOOL_TIMEOUT_MS);
+    const parentSignal = tool?.interactive === true ? undefined : args.toolContext.signal;
+    const invocationAbort = tool?.interactive === true ? undefined : new AbortController();
+    let relayParentAbort: (() => void) | undefined;
+    if (invocationAbort && parentSignal) {
+      relayParentAbort = (): void => {
+        const reason = (parentSignal as { reason?: unknown }).reason;
+        invocationAbort.abort(reason instanceof Error ? reason : new Error('parent aborted'));
+      };
+      if (parentSignal.aborted) relayParentAbort();
+      else parentSignal.addEventListener('abort', relayParentAbort, { once: true });
+    }
+
     try {
-      const result = await args.registry.invoke(tu.name, tu.input, args.toolContext);
+      const callContext: ToolContext = {
+        ...args.toolContext,
+        signal: invocationAbort?.signal ?? parentSignal,
+        reportProgress: (note: string) => {
+          const trimmed = typeof note === 'string'
+            ? (note.length > 200 ? note.slice(0, 200) + '...' : note)
+            : '';
+          args.onToolProgress?.(tu.id, tu.name, Date.now() - t0, trimmed);
+        },
+      };
+      // A4 — global tool timeout. Resolve precedence:
+      //   1. tool.timeoutMs === Infinity → no timeout (cooperative polling)
+      //   2. tool.interactive === true   → no timeout (waiting on human)
+      //   3. tool.timeoutMs > 0           → use it (per-tool override)
+      //   4. otherwise                    → DEFAULT_TOOL_TIMEOUT_MS (5min)
+      // Abort signal applies in ALL cases except `interactive: true`
+      // (which has its own pause mechanism via provideUserInput).
+      const result = await withAbortAndTimeout(
+        args.registry.invoke(tu.name, tu.input, callContext),
+        {
+          signal: callContext.signal,
+          ms: toolTimeoutMs,
+          label: `tool:${tu.name}`,
+        },
+      );
       invocationContent = typeof result.content === 'string' ? result.content : String(result.content);
       invocationIsError = !!result.isError;
     } catch (e) {
-      invocationContent = e instanceof Error ? e.message : String(e);
+      if (isTimeoutError(e)) {
+        if (invocationAbort && !invocationAbort.signal.aborted) {
+          try { invocationAbort.abort(e); } catch { /* ignore */ }
+        }
+        invocationContent =
+          `[tool-timeout: \`${tu.name}\` exceeded ${e.ms}ms. ` +
+          `Override via CODER_TOOL_DEFAULT_TIMEOUT_MS or declare timeoutMs on the tool.]`;
+      } else if (isAbortError(e)) {
+        invocationContent = `[tool-aborted: \`${tu.name}\` cancelled by user/session.]`;
+      } else {
+        invocationContent = e instanceof Error ? e.message : String(e);
+      }
       invocationIsError = true;
     } finally {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (relayParentAbort && parentSignal) {
+        parentSignal.removeEventListener('abort', relayParentAbort);
+      }
     }
 
     // Smart-reducer post-result. Tool-aware truncation that keeps the
     // most useful slices intact (git_log head, grep first matches, etc.)
     // before any generic truncation. Determinism is part of the contract.
     let shapedContent = args.reduceToolResult?.(tu.name, invocationContent) ?? invocationContent;
+
+    const postProcessed = args.postProcessToolResult?.({
+      toolUseId: tu.id,
+      name: tu.name,
+      input: tu.input,
+      rawContent: invocationContent,
+      content: shapedContent,
+      isError: invocationIsError,
+      turn: args.turn,
+    });
+    if (postProcessed) {
+      shapedContent = postProcessed.content;
+      if (postProcessed.isError !== undefined) invocationIsError = postProcessed.isError;
+    }
 
     // Polling-stuck detection. When a polling tool returns byte-identical
     // content N consecutive times the state isn't changing — replace with

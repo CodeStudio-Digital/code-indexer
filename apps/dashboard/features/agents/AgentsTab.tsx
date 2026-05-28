@@ -1,9 +1,23 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Plus, Users, FileText, Trash2, Edit2, ChevronRight, ChevronLeft, PanelLeft, PanelLeftClose, Copy } from 'lucide-react';
+import {
+  Plus,
+  Users,
+  FileText,
+  Trash2,
+  Edit2,
+  ChevronRight,
+  ChevronLeft,
+  PanelLeft,
+  PanelLeftClose,
+  Copy,
+  ExternalLink,
+  FolderOpen,
+} from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
+import { useContextMenu, type ContextMenuItem } from '../../components/ui/context-menu.js';
 import { useApi } from '../../hooks/useApi.js';
 import { cn } from '../../lib/utils.js';
 import {
@@ -129,51 +143,14 @@ export function AgentsTab() {
                 </p>
               )}
               {sessions?.map((s) => (
-                <div
+                <SessionRow
                   key={s.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => selectSession(s.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') selectSession(s.id);
-                  }}
-                  className={cn(
-                    'w-full text-left px-3 py-2.5 border-b text-xs hover:bg-muted/50 transition-colors group cursor-pointer',
-                    selectedSessionId === s.id && 'bg-muted',
-                  )}
-                >
-                  <div className="flex items-center gap-2">
-                    <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    <span className="font-medium truncate flex-1">{s.name}</span>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => handleDuplicate(e as unknown as React.MouseEvent, s.id)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleDuplicate(e as unknown as React.MouseEvent, s.id); } }}
-                        className="text-muted-foreground hover:text-primary cursor-pointer"
-                        title={t('duplicateSession')}
-                      >
-                        <Copy className="h-3 w-3" />
-                      </span>
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => handleDelete(e as unknown as React.MouseEvent, s.id)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleDelete(e as unknown as React.MouseEvent, s.id); } }}
-                        className="text-muted-foreground hover:text-destructive cursor-pointer"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <StatusBadge status={s.status} />
-                    <span className="text-[10px] text-muted-foreground">
-                      {new Date(s.created_at).toLocaleDateString()}
-                    </span>
-                  </div>
-                </div>
+                  session={s}
+                  selected={selectedSessionId === s.id}
+                  onSelect={() => selectSession(s.id)}
+                  onDuplicate={(e) => handleDuplicate(e, s.id)}
+                  onDelete={(e) => handleDelete(e, s.id)}
+                />
               ))}
             </>
           )}
@@ -278,6 +255,132 @@ export function AgentsTab() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * One row of the company sessions list. Owns its own context menu
+ * (right-click → "Open", "Open in new window", "Duplicate", "Delete")
+ * so the menu items can reference `session` directly without prop
+ * drilling. Lives at module scope so each row gets its OWN
+ * `useContextMenu` hook — calling the hook inside the parent's `.map`
+ * would violate Rules of Hooks because the iteration count is dynamic.
+ */
+interface SessionRowProps {
+  session: CompanySession;
+  selected: boolean;
+  onSelect: () => void;
+  onDuplicate: (e: React.MouseEvent) => void;
+  onDelete: (e: React.MouseEvent) => void;
+}
+
+function SessionRow({ session: s, selected, onSelect, onDuplicate, onDelete }: SessionRowProps) {
+  const { t } = useTranslation('agents');
+
+  const items: ContextMenuItem[] = [
+    {
+      id: 'open',
+      label: t('contextMenu.open', 'Open'),
+      icon: FolderOpen,
+      onSelect,
+    },
+  ];
+
+  const electronAPI = typeof window !== 'undefined' ? window.electronAPI : undefined;
+  if (electronAPI?.openInNewWindow) {
+    items.push({
+      id: 'open-new-window',
+      label: t('contextMenu.openInNewWindow', 'Open in new window'),
+      icon: ExternalLink,
+      onSelect: () => {
+        void electronAPI.openInNewWindow!(buildAgentsDefaultUrl(s.id), s.name);
+      },
+    });
+  }
+
+  items.push({
+    id: 'duplicate',
+    label: t('duplicateSession', 'Duplicate'),
+    icon: Copy,
+    separatorBefore: true,
+    onSelect: () => {
+      // Synthesize a MouseEvent-shaped object — onDuplicate only reads
+      // stopPropagation, so a noop stub is enough.
+      onDuplicate({
+        stopPropagation: () => undefined,
+      } as unknown as React.MouseEvent);
+    },
+  });
+
+  items.push({
+    id: 'delete',
+    label: t('deleteSession', 'Delete'),
+    icon: Trash2,
+    destructive: true,
+    onSelect: () => {
+      onDelete({ stopPropagation: () => undefined } as unknown as React.MouseEvent);
+    },
+  });
+
+  const { triggerProps, Menu } = useContextMenu(items);
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') onSelect();
+      }}
+      {...triggerProps}
+      className={cn(
+        'w-full text-left px-3 py-2.5 border-b text-xs hover:bg-muted/50 transition-colors group cursor-pointer',
+        selected && 'bg-muted',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <span className="font-medium truncate flex-1">{s.name}</span>
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={onDuplicate}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.stopPropagation();
+                onDuplicate(e as unknown as React.MouseEvent);
+              }
+            }}
+            className="text-muted-foreground hover:text-primary cursor-pointer"
+            title={t('duplicateSession')}
+          >
+            <Copy className="h-3 w-3" />
+          </span>
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={onDelete}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.stopPropagation();
+                onDelete(e as unknown as React.MouseEvent);
+              }
+            }}
+            className="text-muted-foreground hover:text-destructive cursor-pointer"
+          >
+            <Trash2 className="h-3 w-3" />
+          </span>
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5 mt-1">
+        <StatusBadge status={s.status} />
+        <span className="text-[10px] text-muted-foreground">
+          {new Date(s.created_at).toLocaleDateString()}
+        </span>
+      </div>
+      {Menu}
     </div>
   );
 }

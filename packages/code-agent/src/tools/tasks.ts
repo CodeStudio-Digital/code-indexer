@@ -12,6 +12,7 @@
  * per task, we can ship subagents an order of magnitude less context than the
  * parent's full history.
  */
+import { randomUUID } from 'node:crypto';
 import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type {
@@ -34,16 +35,16 @@ import {
 // Mirrors the create_goal / todo_write burst guards. When the agent
 // reissues `submit_tasks` with the same logical task list 3+ times in 90s
 // without anything changing in between, refuse hard and point at
-// update_task. The signature includes the summary plus sorted task ids,
-// so refining (adding/removing tasks, renaming) resets the counter.
+// update_task. The signature includes the summary plus sorted title/body
+// pairs so backend-generated ids don't make each duplicate look new.
 
 const SUBMIT_BURST_BY_RUNNER = new WeakMap<object, { count: number; lastAt: number; lastSig: string }>();
 const SUBMIT_BURST_THRESHOLD = 3;
 const SUBMIT_BURST_WINDOW_MS = 90_000;
 
-function tasksSignature(summary: string, tasks: ReadonlyArray<{ id: string; title: string }>): string {
-  const ids = tasks.map((t) => `${t.id}:${t.title}`).sort().join('|');
-  return `${summary.trim()}::${ids}`;
+function tasksSignature(summary: string, tasks: ReadonlyArray<{ title: string; description: string }>): string {
+  const logicalItems = tasks.map((t) => `${t.title}:${t.description}`).sort().join('|');
+  return `${summary.trim()}::${logicalItems}`;
 }
 
 function readRunnerKey(ctx: { runner?: unknown }): object | null {
@@ -158,11 +159,27 @@ function validateReference(r: unknown): TaskReference | string {
   return ref;
 }
 
+function makeTaskId(): string {
+  return `tsk_${randomUUID()}`;
+}
+
+function looksLikeGeneratedTaskId(id: string): boolean {
+  return id.startsWith('tsk_');
+}
+
+function looksLikeLegacyTaskId(id: string): boolean {
+  return /^task[_-]?\d+$/i.test(id) || /^\d+$/.test(id);
+}
+
 function validateTaskInput(raw: unknown, idx: number): CoderTask | string {
   if (!raw || typeof raw !== 'object') return `tasks[${idx}] must be an object`;
   const o = raw as Record<string, unknown>;
-  const id = String(o.id ?? '').trim();
-  if (!id) return `tasks[${idx}].id required`;
+  // `id` is now only an optional client alias used to resolve depends_on
+  // inside this submit_tasks call. The backend replaces it with a unique
+  // generated `tsk_...` id before persistence so new rounds never inherit
+  // lifecycle state from previous "task_1" style ids.
+  const rawId = typeof o.id === 'string' ? o.id.trim() : '';
+  const id = rawId || `task_${idx + 1}`;
   const title = String(o.title ?? '').trim();
   if (!title) return `tasks[${idx}].title required`;
   const description = String(o.description ?? '').trim();
@@ -241,7 +258,17 @@ export function validateTasksInput(raw: unknown): { summary: string; tasks: Code
       if (!seen.has(dep)) return `task ${t.id} depends_on '${dep}' which doesn't exist`;
     }
   }
-  return { summary, tasks };
+
+  const idMap = new Map<string, string>();
+  for (const t of tasks) {
+    idMap.set(t.id, makeTaskId());
+  }
+  const generated = tasks.map((t) => ({
+    ...t,
+    id: idMap.get(t.id)!,
+    depends_on: t.depends_on.map((dep) => idMap.get(dep)!),
+  }));
+  return { summary, tasks: generated };
 }
 
 // ─── Format helpers (cache-stable) ──────────────────────────────
@@ -263,15 +290,12 @@ export function formatTasksApprovedResult(state: TasksState, feedback?: string):
   // workflow only when execute_tasks is unavailable (no subagent
   // capability — Company master, CODER_DISABLE_SUBAGENTS=1).
   lines.push(
-    'PREFERRED: call `execute_tasks` ONCE to run the whole approved list. ' +
+    'Call `execute_tasks` ONCE to run the whole approved list. ' +
     'It walks the dependency graph, batches independent tasks into parallel waves ' +
     '(by `parallel_group`), and spawns the right subagent kind per task ' +
-    '(investigate/implement/verify). Returns a consolidated summary.',
-  );
-  lines.push('');
-  lines.push(
-    'FALLBACK: if `execute_tasks` is unavailable, call `execute_task` once per task in order; ' +
-    'after each call `task_complete` (inline) or wait for the subagent result (subagent mode).',
+    '(investigate/implement/verify). Returns a consolidated summary. ' +
+    'Inline-mode tasks open a scope on this runner; close each one with `task_complete` ' +
+    'and call `execute_tasks` again to advance.',
   );
   return lines.join('\n');
 }
@@ -299,7 +323,11 @@ const submitTasksSchema: JsonSchema = {
       items: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: "Stable id like 'task_1'. Referenced by depends_on of other tasks." },
+          id: {
+            type: 'string',
+            description:
+              'Optional client alias used only within this submit_tasks call for depends_on references. The backend replaces it with a generated tsk_... id before execution.',
+          },
           title: { type: 'string', description: '1-line label shown to the user.' },
           description: { type: 'string', description: '3-10 lines: what to do + the success criterion.' },
           files: {
@@ -315,7 +343,8 @@ const submitTasksSchema: JsonSchema = {
           depends_on: {
             type: 'array',
             items: { type: 'string' },
-            description: 'ids of tasks that must finish before this one starts.',
+            description:
+              'Optional client aliases from this submit_tasks call that must finish before this task starts. The backend rewrites them to generated tsk_... ids.',
           },
           suggested_mode: {
             type: 'string',
@@ -341,7 +370,7 @@ const submitTasksSchema: JsonSchema = {
               "Omit (or empty) to keep the task strictly sequential.",
           },
         },
-        required: ['id', 'title', 'description', 'files', 'suggested_mode', 'estimated_complexity'],
+        required: ['title', 'description', 'files', 'suggested_mode', 'estimated_complexity'],
       },
     },
   },
@@ -367,7 +396,7 @@ export const submitTasks: CoderTool = {
       const ids = validated.tasks.map((t) => t.id).join(', ');
       return err(
         `Refused: submit_tasks called ${burst.count} times in the last ${Math.round(SUBMIT_BURST_WINDOW_MS / 1000)}s ` +
-          `with the same summary and task ids. Use update_task({task_id: "...", status: "..."}) to mutate ` +
+          `with the same logical task list. Use update_task({task_id: "...", status: "..."}) to mutate ` +
           `existing tasks (status, files, title) instead of resubmitting the whole list. ` +
           `Current ids: ${ids}.`,
       );
@@ -487,6 +516,12 @@ export const executeTask: CoderTool = {
 
     const task = state.tasks.find((t) => t.id === taskId);
     if (!task) {
+      if (looksLikeLegacyTaskId(taskId) || !looksLikeGeneratedTaskId(taskId)) {
+        return err(
+          `execute_task: invalid task_id '${taskId}'. Task ids are generated by submit_tasks and look like 'tsk_...'. ` +
+            'Call list_tasks() and pass an exact id from the approved task list.',
+        );
+      }
       return err(buildTaskIdErrorMessage(taskId, state, `execute_task: unknown task_id '${taskId}'.`));
     }
     const retryable: ReadonlySet<string> = new Set(['pending', 'interrupted', 'failed']);
@@ -642,6 +677,266 @@ export const executeTask: CoderTool = {
   },
 };
 
+// ─── list_tasks ─────────────────────────────────────────────────
+
+const listTasksSchema: JsonSchema = {
+  type: 'object',
+  properties: {
+    statuses: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Optional status filter: pending, running, done, failed, skipped, interrupted.',
+    },
+  },
+  additionalProperties: false,
+} as unknown as JsonSchema;
+
+export const listTasks: CoderTool = {
+  name: 'list_tasks',
+  description:
+    'List the current approved/pending task list with generated task ids. Use before execute_task/update_task if you are unsure which task id is current.',
+  source: 'native',
+  mutates: false,
+  parallelSafe: true,
+  riskLevel: 'read',
+  parameters: listTasksSchema,
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const state = ctx.getTasksState?.();
+    if (!state) return err('list_tasks: no task list found. Call submit_tasks first.');
+    const rawStatuses = Array.isArray(args.statuses) ? args.statuses.filter((s): s is string => typeof s === 'string') : [];
+    const statusFilter = rawStatuses.length > 0 ? new Set(rawStatuses) : null;
+    const tasks = statusFilter ? state.tasks.filter((t) => statusFilter.has(t.status)) : state.tasks;
+    const lines: string[] = [
+      `Task list: ${state.summary}`,
+      `approved=${state.approved} execution_mode=${state.execution_mode ?? 'null'} current_task_id=${state.current_task_id ?? 'null'}`,
+      '',
+      'Tasks:',
+    ];
+    for (const t of tasks) {
+      const deps = t.depends_on.length > 0 ? ` after=[${t.depends_on.join(', ')}]` : '';
+      const files = t.files.length > 0 ? ` files=[${t.files.join(', ')}]` : '';
+      lines.push(`- id=${t.id} status=${t.status} kind=${t.kind ?? 'implement'} title="${t.title}"${deps}${files}`);
+    }
+    if (tasks.length === 0) lines.push('(no tasks match the requested filter)');
+    return ok(lines.join('\n'));
+  },
+};
+
+// ─── task list mutation helpers ─────────────────────────────────
+
+function persistTaskList(ctx: { recordTasks?: (toolUseId: string, state: TasksState) => void }, state: TasksState): void {
+  ctx.recordTasks?.(`tasks_edit_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`, state);
+}
+
+function emitTaskListUpdated(runner: { emit: (event: 'task_updated', payload: { task_id: string; patch: Partial<CoderTask> }) => void }): void {
+  runner.emit('task_updated', { task_id: '__task_list__', patch: {} });
+}
+
+function parseTaskIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = v.trim();
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+function validateKnownTaskIds(state: TasksState, taskIds: string[], toolName: string): string | null {
+  for (const id of taskIds) {
+    if (state.tasks.some((t) => t.id === id)) continue;
+    if (looksLikeLegacyTaskId(id) || !looksLikeGeneratedTaskId(id)) {
+      return `${toolName}: invalid task_id '${id}'. Task ids are generated by submit_tasks and look like 'tsk_...'. Call list_tasks() and pass exact ids.`;
+    }
+    return buildTaskIdErrorMessage(id, state, `${toolName}: unknown task_id '${id}'.`);
+  }
+  return null;
+}
+
+// ─── cancel_tasks ───────────────────────────────────────────────
+
+const cancelTasksSchema: JsonSchema = {
+  type: 'object',
+  properties: {
+    task_ids: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Generated tsk_... ids to cancel. Omit when all=true.',
+    },
+    all: {
+      type: 'boolean',
+      description: 'When true, cancel every non-terminal task in the current list.',
+    },
+    reason: {
+      type: 'string',
+      description: 'Optional short reason stored on each cancelled task result.',
+    },
+  },
+  additionalProperties: false,
+} as unknown as JsonSchema;
+
+export const cancelTasks: CoderTool = {
+  name: 'cancel_tasks',
+  description:
+    'Cancel tasks in the current task list. Pending/failed/interrupted/running tasks become skipped with a cancellation result; done tasks are left untouched.',
+  source: 'native',
+  parameters: cancelTasksSchema,
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const runner = ctx.runner;
+    if (!runner) return err('cancel_tasks requires runner context');
+    const state = ctx.getTasksState?.();
+    if (!state) return err('cancel_tasks: no task list found. Call submit_tasks first.');
+
+    const all = args.all === true;
+    const explicitIds = parseTaskIds(args.task_ids);
+    if (!all && explicitIds.length === 0) return err('cancel_tasks: provide task_ids or all=true.');
+    const selectedIds = all
+      ? state.tasks.filter((t) => t.status !== 'done' && t.status !== 'skipped').map((t) => t.id)
+      : explicitIds;
+    const knownError = validateKnownTaskIds(state, selectedIds, 'cancel_tasks');
+    if (knownError) return err(knownError);
+
+    const reason = typeof args.reason === 'string' && args.reason.trim() ? args.reason.trim() : 'Cancelled by cancel_tasks.';
+    const finishedAt = new Date().toISOString();
+    const changed: string[] = [];
+    for (const taskId of selectedIds) {
+      const task = state.tasks.find((t) => t.id === taskId);
+      if (!task || task.status === 'done' || task.status === 'skipped') continue;
+      if (runner.currentTaskScopeId() === taskId) runner.endTaskScope();
+      const result = { summary: reason, files_modified: [], errors: reason };
+      const updated = ctx.updateTaskStatus?.(taskId, {
+        status: 'skipped',
+        finished_at: finishedAt,
+        result,
+      });
+      if (!updated) return err(`cancel_tasks: failed to persist cancellation for '${taskId}'.`);
+      runner.emit('task_finished', { task_id: taskId, status: 'skipped', result, finished_at: finishedAt });
+      changed.push(taskId);
+    }
+
+    if (changed.length === 0) return ok('cancel_tasks: nothing changed; selected tasks were already terminal.');
+    runner.emit('task_updated', { task_id: '__task_list__', patch: {} });
+    return ok(`cancel_tasks: cancelled ${changed.length} task(s): ${changed.join(', ')}`);
+  },
+};
+
+// ─── delete_tasks ───────────────────────────────────────────────
+
+const deleteTasksSchema: JsonSchema = {
+  type: 'object',
+  properties: {
+    task_ids: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Generated tsk_... ids to delete from the current list. Omit when all=true.',
+    },
+    all: {
+      type: 'boolean',
+      description: 'When true, delete every task from the current task list.',
+    },
+    force_running: {
+      type: 'boolean',
+      description: 'When true, also delete running tasks and close the active inline task scope if it matches. Default false.',
+    },
+  },
+  additionalProperties: false,
+} as unknown as JsonSchema;
+
+export const deleteTasks: CoderTool = {
+  name: 'delete_tasks',
+  description:
+    'Delete tasks from the current task list. This removes them from persisted state and strips dependencies pointing at them; use cancel_tasks when you want an audit trail.',
+  source: 'native',
+  parameters: deleteTasksSchema,
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const runner = ctx.runner;
+    if (!runner) return err('delete_tasks requires runner context');
+    const state = ctx.getTasksState?.();
+    if (!state) return err('delete_tasks: no task list found. Call submit_tasks first.');
+
+    const all = args.all === true;
+    const explicitIds = parseTaskIds(args.task_ids);
+    if (!all && explicitIds.length === 0) return err('delete_tasks: provide task_ids or all=true.');
+    const selectedIds = all ? state.tasks.map((t) => t.id) : explicitIds;
+    const knownError = validateKnownTaskIds(state, selectedIds, 'delete_tasks');
+    if (knownError) return err(knownError);
+
+    const selected = new Set(selectedIds);
+    const running = state.tasks.filter((t) => selected.has(t.id) && t.status === 'running');
+    if (running.length > 0 && args.force_running !== true) {
+      return err(
+        `delete_tasks: refusing to delete running task(s): ${running.map((t) => t.id).join(', ')}. ` +
+          'Call task_complete/cancel_tasks first, or pass force_running=true if you are deliberately discarding the running scope.',
+      );
+    }
+    if (args.force_running === true) {
+      const active = runner.currentTaskScopeId();
+      if (active && selected.has(active)) runner.endTaskScope();
+    }
+
+    const remaining = state.tasks
+      .filter((t) => !selected.has(t.id))
+      .map((t) => ({ ...t, depends_on: t.depends_on.filter((dep) => !selected.has(dep)) }));
+    const removed = state.tasks.length - remaining.length;
+    if (removed === 0) return ok('delete_tasks: nothing changed.');
+
+    const nextState: TasksState = {
+      ...state,
+      tasks: remaining,
+      current_task_id: state.current_task_id && selected.has(state.current_task_id) ? null : state.current_task_id,
+    };
+    persistTaskList(ctx, nextState);
+    emitTaskListUpdated(runner);
+    return ok(`delete_tasks: deleted ${removed} task(s). Remaining tasks: ${remaining.length}.`);
+  },
+};
+
+// ─── archive_task_list ─────────────────────────────────────────
+
+const archiveTaskListSchema: JsonSchema = {
+  type: 'object',
+  properties: {
+    reason: {
+      type: 'string',
+      description: 'Optional reason for clearing the current task list.',
+    },
+  },
+  additionalProperties: false,
+} as unknown as JsonSchema;
+
+export const archiveTaskList: CoderTool = {
+  name: 'archive_task_list',
+  description:
+    'Clear the current task list for this session so the next submit_tasks starts from a clean UI/state surface. Use when abandoning an old round.',
+  source: 'native',
+  parameters: archiveTaskListSchema,
+  handler: async (args, ctx): Promise<ToolResult> => {
+    const runner = ctx.runner;
+    if (!runner) return err('archive_task_list requires runner context');
+    const state = ctx.getTasksState?.();
+    if (!state) return ok('archive_task_list: no active task list.');
+    const active = runner.currentTaskScopeId();
+    if (active) runner.endTaskScope();
+
+    if (ctx.clearTasksState) {
+      const okClear = ctx.clearTasksState();
+      if (!okClear) return err('archive_task_list: failed to clear persisted task list.');
+    } else {
+      persistTaskList(ctx, {
+        summary: '',
+        tasks: [],
+        execution_mode: null,
+        approved: false,
+        current_task_id: null,
+      });
+    }
+    emitTaskListUpdated(runner);
+    const reason = typeof args.reason === 'string' && args.reason.trim() ? ` Reason: ${args.reason.trim()}` : '';
+    return ok(`archive_task_list: cleared ${state.tasks.length} task(s).${reason}`);
+  },
+};
+
 // ─── task_complete ──────────────────────────────────────────────
 
 const taskCompleteSchema: JsonSchema = {
@@ -758,7 +1053,8 @@ const ALLOWED_STATUS_TRANSITIONS: Record<string, ReadonlySet<string>> = {
   failed: new Set(['pending', 'skipped']),
   interrupted: new Set(['pending', 'skipped']),
   skipped: new Set(['pending']),
-  // running/done are owned by execute_task / task_complete — refuse here.
+  // Frente D — running/done are owned by `execute_tasks` (subagent
+  // dispatch) and `task_complete` (inline scope close). Refuse here.
   running: new Set([]),
   done: new Set([]),
 };
@@ -772,7 +1068,10 @@ const updateTaskSchema: JsonSchema = {
       enum: ['pending', 'skipped'],
       description:
         "New status. Allowed: 'skipped' (drop a pending/failed/interrupted task), 'pending' (retry a failed/interrupted/skipped task). " +
-        "running/done/failed transitions are owned by execute_task / task_complete and cannot be set here.",
+        // Frente D — singular `execute_task` is gone; lifecycle owners are
+        // `execute_tasks` (running/done/failed via subagent) and
+        // `task_complete` (running/done via inline scope close).
+        "running/done/failed transitions are owned by `execute_tasks` / `task_complete` and cannot be set here.",
     },
     files_add: { type: 'array', items: { type: 'string' }, description: 'Add these paths to the task scope.' },
     files_remove: { type: 'array', items: { type: 'string' }, description: 'Remove these paths from the task scope.' },
@@ -787,7 +1086,10 @@ export const updateTask: CoderTool = {
   description:
     'Patch a single task by id without resubmitting the whole list. Use to: skip a task that is no longer relevant, retry a failed/interrupted task, ' +
     'add or remove files from its scope, or rename it. ' +
-    'Status transitions other than skip/retry are owned by execute_task / task_complete — call those instead for running/done/failed.',
+    // Frente D — `execute_task` is gone; running/done lifecycle now lives
+    // inside `execute_tasks` (subagent dispatch) and `task_complete`
+    // (inline scope closer).
+    'Status transitions other than skip/retry are owned by `execute_tasks` / `task_complete` — call those instead for running/done/failed.',
   source: 'native',
   parameters: updateTaskSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
@@ -802,6 +1104,12 @@ export const updateTask: CoderTool = {
 
     const task = state.tasks.find((t) => t.id === taskId);
     if (!task) {
+      if (looksLikeLegacyTaskId(taskId) || !looksLikeGeneratedTaskId(taskId)) {
+        return err(
+          `update_task: invalid task_id '${taskId}'. Task ids are generated by submit_tasks and look like 'tsk_...'. ` +
+            'Call list_tasks() and pass an exact id from the current task list.',
+        );
+      }
       return err(buildTaskIdErrorMessage(taskId, state, `update_task: unknown task_id '${taskId}'.`));
     }
 
@@ -826,7 +1134,7 @@ export const updateTask: CoderTool = {
     if (newStatus !== undefined) {
       if (typeof newStatus !== 'string' || (newStatus !== 'pending' && newStatus !== 'skipped')) {
         return err(`update_task: status must be 'pending' or 'skipped', got '${String(newStatus)}'. ` +
-          'For running/done/failed, use execute_task / task_complete.');
+          'For running/done/failed, use `execute_tasks` / `task_complete`.');
       }
       const allowed = ALLOWED_STATUS_TRANSITIONS[task.status] ?? new Set<string>();
       if (!allowed.has(newStatus)) {
@@ -873,4 +1181,17 @@ export const updateTask: CoderTool = {
 // Avoid the unused-import linter complaint until Phase 2 needs them.
 void extractPathsFromToolArgs;
 
-export const tasksTools: CoderTool[] = [submitTasks, executeTask, taskComplete, updateTask];
+// Frente D — `executeTask` (singular) intentionally absent: the
+// orchestrator `execute_tasks` (plural, wave-based) is the only path
+// the model needs. The export still exists below for backwards
+// compatibility with callers that import it directly, but it is NOT
+// registered in any session.
+export const tasksTools: CoderTool[] = [
+  submitTasks,
+  listTasks,
+  cancelTasks,
+  deleteTasks,
+  archiveTaskList,
+  taskComplete,
+  updateTask,
+];

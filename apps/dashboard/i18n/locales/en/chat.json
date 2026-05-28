@@ -275,7 +275,7 @@
   "state.goalBudget": "budget {{tokens}}",
   "state.tasksLabel": "Tasks",
   "state.tasksAwaiting": "awaiting approval",
-  "state.tasksCounts": "{{pending}} pending · {{running}} running · {{completed}} done · {{failed}} failed",
+  "state.tasksCounts": "{{pending}} pending · {{running}} running · {{completed}} done · {{skipped}} skipped · {{interrupted}} interrupted · {{failed}} failed",
   "state.tasksMode": "mode: {{mode}}",
   "state.tasksRunning": "Running: {{title}}",
   "files.title": "Project files",

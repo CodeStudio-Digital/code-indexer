@@ -27,7 +27,8 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
       a.provider !== b.provider ||
       a.model !== b.model ||
       a.summary !== b.summary ||
-      a.error !== b.error
+      a.error !== b.error ||
+      a.progressNote !== b.progressNote
     )
       return false;
   }
@@ -132,11 +133,11 @@ function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
   const StatusIcon =
     agent.status === 'running' || agent.status === 'pending'
       ? Loader2
-      : agent.status === 'error'
+      : agent.status === 'error' || agent.status === 'timed_out' || agent.status === 'aborted'
         ? X
         : Check;
   const statusColor =
-    agent.status === 'error'
+    agent.status === 'error' || agent.status === 'timed_out' || agent.status === 'aborted'
       ? 'text-destructive bg-destructive/10'
       : agent.status === 'running' || agent.status === 'pending'
         ? 'text-warning bg-warning/10'
@@ -203,6 +204,17 @@ function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
               <Markdown text={agent.summary!} />
             </div>
           )}
+        </div>
+      )}
+      {agent.status === 'running' && agent.progressNote && (
+        <div className="px-8 pb-2 text-[11px] text-warning truncate">
+          {agent.phase ? `${agent.phase}: ` : ''}{agent.progressNote}
+        </div>
+      )}
+      {agent.status === 'running' && !agent.progressNote && agent.phase && (
+        <div className="px-8 pb-2 text-[11px] text-warning truncate">
+          {agent.phase}
+          {agent.lastToolName ? ` / ${agent.lastToolName}` : ''}
         </div>
       )}
     </div>

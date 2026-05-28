@@ -11,6 +11,7 @@ import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { CoderProfile, ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import { AsyncOperationRegistry } from '../../operations.js';
 
 export interface RecordedEvent<E extends keyof RunnerEvents = keyof RunnerEvents> {
   event: E;
@@ -92,6 +93,16 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     transition: null,
     stopReason: null,
     error: null,
+    operations: new AsyncOperationRegistry(emit),
+    lastTurnTelemetryId: null,
+    // PR-F — every test context carries an empty injection state so
+    // Executing's dynamic-injection helper doesn't NPE. Tests that
+    // exercise injection seed this explicitly.
+    injectionState: {
+      lastInjectedSkillIds: new Set<string>(),
+      lastInjectedFiles: new Set<string>(),
+      recentCompactionAt: null,
+    },
   };
   return { ctx, recordedEvents };
 }

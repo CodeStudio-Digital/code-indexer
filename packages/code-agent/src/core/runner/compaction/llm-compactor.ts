@@ -52,6 +52,12 @@ export interface CompactArgs {
     head: AgentMessage[],
     provider: ChatProvider,
   ) => Promise<CompactionSummaryV2 | null>;
+  /**
+   * Optional abort signal. When fired BEFORE / DURING the LLM summary
+   * call, the await races against the signal and rejects with an abort
+   * error rather than hanging on a stalled aux provider.
+   */
+  signal?: AbortSignal;
 }
 
 export interface CompactResult {
@@ -89,7 +95,10 @@ export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> 
   const summarize = args.summarize ?? summarizeSpanV2;
 
   try {
-    const summary = await summarize(head, args.summaryProvider);
+    // Race the summary call against the abort signal (A3). If the aux
+    // provider stalls and the user aborts, we throw immediately instead
+    // of holding the Compacting node hostage.
+    const summary = await raceSummary(summarize(head, args.summaryProvider), args.signal);
     if (!summary) {
       return {
         ok: false,
@@ -132,4 +141,25 @@ function noOp(messages: AgentMessage[], cutoff = 0): CompactResult {
     collapsedTo: 0,
     cutoffApplied: cutoff,
   };
+}
+
+/**
+ * Race the summarize promise against `signal`. The listener is removed in
+ * `finally` so this never leaks even on the happy path. Same shape as
+ * `withAbort` in `nodes/executing-abort.ts` — kept local here to avoid a
+ * cross-folder import.
+ */
+async function raceSummary<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  if (signal.aborted) throw new Error('compactWithLLM aborted by signal');
+  let onAbort: (() => void) | undefined;
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      onAbort = (): void => reject(new Error('compactWithLLM aborted by signal'));
+      signal.addEventListener('abort', onAbort, { once: true });
+      p.then(resolve, reject);
+    });
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
 }

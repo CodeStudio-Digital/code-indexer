@@ -89,6 +89,53 @@ export interface TasksPrompt {
   resolved?: 'approved' | 'rejected';
 }
 
+export type TaskRunStatus = 'running' | 'completed' | 'failed' | 'aborted';
+export type TaskRunTaskStatus = StreamTaskStatus;
+export type TaskRunMode = 'auto' | 'inline-all';
+
+export interface TaskRunTask {
+  id: string;
+  title: string;
+  kind: 'investigate' | 'implement' | 'verify';
+  wave: number;
+  mode: StreamTaskMode;
+  status: TaskRunTaskStatus;
+  toolCallCount: number;
+  startedAt?: string;
+  finishedAt?: string;
+  summary?: string;
+  error?: string;
+  usage?: Usage;
+  progressNote?: string;
+  phase?: string;
+  lastToolName?: string;
+  turn?: number;
+  limit?: {
+    maxToolCalls?: number;
+    timeoutMs?: number;
+    stallMs?: number;
+  };
+  elapsedMs?: number;
+  stallMs?: number;
+}
+
+export interface TaskRunWave {
+  index: number;
+  taskIds: string[];
+}
+
+export interface TaskRunState {
+  runId: string;
+  mode: TaskRunMode;
+  status: TaskRunStatus;
+  totalTasks: number;
+  waves: TaskRunWave[];
+  tasks: TaskRunTask[];
+  totalUsage?: Usage;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
 export interface AgentAttachment {
   name: string;
   mediaType: string;
@@ -98,7 +145,7 @@ export interface AgentAttachment {
 
 // ─── Parallel agents ──────────────────────────────────────────
 
-export type AgentStatus = 'pending' | 'running' | 'completed' | 'error';
+export type AgentStatus = 'pending' | 'running' | 'completed' | 'error' | 'timed_out' | 'aborted';
 
 export interface ParallelAgent {
   index: number;
@@ -110,6 +157,13 @@ export interface ParallelAgent {
   usage?: Usage;
   summary?: string;
   error?: string;
+  progressNote?: string;
+  phase?: string;
+  turn?: number;
+  elapsedMs?: number;
+  idleMs?: number;
+  deadlineMs?: number;
+  lastToolName?: string;
 }
 
 export interface AgentsGroup {
@@ -149,6 +203,7 @@ export type StreamBlock =
   | { type: 'spec'; spec: SpecPrompt }
   | { type: 'question'; question: QuestionPrompt }
   | { type: 'tasks'; tasks: TasksPrompt }
+  | { type: 'task_run'; run: TaskRunState }
   | { type: 'agents'; group: AgentsGroup };
 
 export interface AssistantTurn {

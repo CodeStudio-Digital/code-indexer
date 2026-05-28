@@ -31,6 +31,7 @@ import { discoverGoogleOAuth } from './google-oauth.js';
 import { discoverKimiCode } from './kimi-code.js';
 import { discoverCloudflare } from './cloudflare.js';
 import { discoverMoonshot } from './moonshot.js';
+import { discoverOpenrouter } from './openrouter.js';
 
 export interface DiscoveryResult {
   models: UpsertModelInput[];
@@ -71,6 +72,8 @@ export async function discoverModels(
       return wrap(await discoverCloudflare(cfg));
     case 'moonshot':
       return wrap(await discoverMoonshot(cfg));
+    case 'openrouter':
+      return wrap(await discoverOpenrouter(cfg));
     default:
       throw new Error(`Live discovery not implemented for kind=${cfg.kind}`);
   }

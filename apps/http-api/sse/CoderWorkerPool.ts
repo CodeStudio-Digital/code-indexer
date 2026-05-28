@@ -370,6 +370,11 @@ export class CoderWorkerPool {
             errorName: err.name,
             message: err.message,
           });
+          publish(entry.bus, 'error', {
+            message: `worker crashed: ${err.message}`,
+            reason: 'worker-crashed',
+            sessionId,
+          });
           markEnded(entry.bus, 'error', {
             reason: 'worker-crashed',
             message: err.message,

@@ -27,7 +27,7 @@ import type { ApiContext, AsyncStream } from './common.js';
 
 export type AgentPreset = 'explore' | 'plan' | 'build' | 'admin';
 export type ToolProfile = 'bootstrap' | 'navigate' | 'full' | 'auto';
-export type CoderProvider = 'anthropic' | 'openai' | 'gemini' | 'bedrock' | 'zai' | 'deepseek' | 'kimi-code' | 'claude-code' | 'cloudflare';
+export type CoderProvider = 'anthropic' | 'openai' | 'openrouter' | 'gemini' | 'bedrock' | 'zai' | 'deepseek' | 'kimi-code' | 'claude-code' | 'cloudflare';
 
 export interface CoderSession {
   id: number;

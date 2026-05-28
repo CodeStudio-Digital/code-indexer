@@ -125,6 +125,11 @@ export function getState(db: DB, sessionId: number): TasksState | null {
   catch { return null; }
 }
 
+export function clear(db: DB, sessionId: number): boolean {
+  const result = db.prepare('DELETE FROM coder_tasks_state WHERE session_id = ?').run(sessionId);
+  return result.changes > 0;
+}
+
 /**
  * On session resume, any task stuck in 'running' is an orphan — the previous
  * runner died before it could finish. Reset to 'interrupted' so `execute_task`

@@ -16,6 +16,7 @@ import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { RunnerOptions, StopReason, TransitionKind } from '../types.js';
 import type { RunnerEvents } from '../events.js';
 import type { RecoveryKind } from '../recovery-config.js';
+import type { AsyncOperationRegistry } from '../operations.js';
 
 export type NodeState =
   | 'Bootstrap'
@@ -83,12 +84,43 @@ export interface RunContext {
   stopReason: StopReason | null;
   /** Underlying error for failure modes. */
   error: Error | null;
+  /** Live registry for long async operations that must emit terminal events. */
+  operations: AsyncOperationRegistry;
   /**
    * Optional bridge to features still owned by the legacy `CoderRunner`.
    * When unset the BT uses safe defaults (no skills, no quality suffix,
    * no plan-mode gate, etc.).
    */
   bridge?: BridgeCallbacks;
+  /**
+   * Telemetry — id of the most recent `coder_turn_telemetry` row this
+   * run inserted, or null when persistence is unavailable / hasn't yet
+   * fired this run. `ExecutingNode` updates this AFTER each successful
+   * turn so the host's `flushPendingTurn` (in `index.ts`) can stamp the
+   * pending tool calls with the same id (FK across `tool_calls` ↔
+   * `coder_turn_telemetry`).
+   */
+  lastTurnTelemetryId: number | null;
+  /**
+   * PR-F dynamic-injection state. Tracked across turns so the Kimi-style
+   * `computeDynamicInjection` provider doesn't include the same skill /
+   * file twice across consecutive turns.
+   *
+   *   - `lastInjectedSkillIds` — skill ids already mentioned in a
+   *     prior turn's `<system-reminder>`.
+   *   - `lastInjectedFiles`    — file paths already mentioned.
+   *   - `recentCompactionAt`   — turn index at which the Compacting node
+   *     last fired; the injector emits a "context summarized" notice for
+   *     the next ≤2 turns so the model knows older detail was dropped.
+   *
+   * Mutated by Executing (after a successful injection) and Compacting
+   * (on every successful collapse). Empty by default.
+   */
+  injectionState: {
+    lastInjectedSkillIds: Set<string>;
+    lastInjectedFiles: Set<string>;
+    recentCompactionAt: number | null;
+  };
 }
 
 export interface BehaviorNode {
@@ -140,7 +172,12 @@ export interface BridgeCallbacks {
    * a prior turn already produced. Returns a refusal string when the
    * call should be blocked, null when allowed.
    */
-  enforcePreRead?: (toolName: string, input: unknown, turn: number) => string | null;
+  enforcePreRead?: (
+    toolName: string,
+    input: unknown,
+    turn: number,
+    toolUseId: string,
+  ) => string | { content: string; isError?: boolean } | null;
   /**
    * Task-mode gate — when the user approved `submit_tasks` with
    * `execution_mode='all-subagent'`, refuse mutating tool calls that
@@ -153,6 +190,19 @@ export interface BridgeCallbacks {
    * git_log keeps the head commits, grep keeps the first matches).
    */
   reduceToolResult?: (toolName: string, content: string) => string;
+  /**
+   * Post-result hook for runner-owned state that needs raw and shaped
+   * content (mutation-aware reread diffs, write tracking, etc.).
+   */
+  postProcessToolResult?: (args: {
+    toolUseId: string;
+    name: string;
+    input: Record<string, unknown>;
+    rawContent: string;
+    content: string;
+    isError: boolean;
+    turn: number;
+  }) => { content: string; isError?: boolean } | null | void;
   /**
    * Polling-stuck detector. Tracks consecutive identical results for
    * polling tools (`repeatable=true`). Returns a refusal string when
@@ -188,6 +238,56 @@ export interface BridgeCallbacks {
     assistantText: string;
     toolResults: Array<{ name: string; input: unknown; content: string; isError: boolean }>;
   }) => void;
+  /**
+   * PR-F — supply per-turn signals that drive Kimi-style dynamic
+   * injection. Returns the diff between the runner's current view of
+   * skills/files and what's been seen so far this turn:
+   *
+   *   - `newlyRegisteredSkillIds` — skills the host registered THIS
+   *     session that the reminder hasn't surfaced yet.
+   *   - `recentlyEditedFiles`     — paths the agent's tools touched in
+   *     the last N turns.
+   *
+   * Returns null when there's nothing fresh; that short-circuits the
+   * provider so most turns have no reminder.
+   */
+  collectDynamicInjectionSignals?: () => {
+    newlyRegisteredSkillIds: ReadonlyArray<string>;
+    recentlyEditedFiles: ReadonlyArray<string>;
+  } | null;
+  /**
+   * Drain `runner.pendingUserMessages` into the main `messages` array.
+   * Called at the START of each Executing turn so messages pushed via
+   * `runner.pushUserMessage` (master → subordinate, SSE push from the
+   * dashboard) land BEFORE the model is invoked — instead of being
+   * silently held forever on the runner.
+   *
+   * Implemented in `runner.ts:runViaBehaviorTree`; no-op when unset.
+   */
+  flushPendingMessages?: () => void;
+  /**
+   * Per-turn telemetry persistence — wraps the pure
+   * `core/runner/telemetry/persist-turn.ts` helper with class-bound side
+   * effects (quality classifier dispatch + tool-selection feedback
+   * observer). Returns the inserted `coder_turn_telemetry.id` so the
+   * Executing node can update `ctx.lastTurnTelemetryId` for the host's
+   * `flushPendingTurn` to consume.
+   *
+   * Unset on subagents / standalone tests — the BT then skips
+   * persistence entirely (no-op, no row, no error).
+   */
+  persistTurnTelemetry?: (input: {
+    turn: number;
+    usage: import('@mcp/code-agent/core/messages.js').ChatUsage | null;
+    toolUseBlocks: ReadonlyArray<import('@mcp/code-agent/core/messages.js').ToolUseBlock>;
+    toolResultBlocks: ReadonlyArray<import('@mcp/code-agent/core/messages.js').ContentBlock>;
+    historyChars: number;
+    systemPromptChars: number;
+    toolsDefChars: number;
+    responseMeta: import('@mcp/code-agent/core/messages.js').ChatProviderResponseMeta | null;
+    compactionTriggered: boolean;
+    summarizerRan: boolean;
+  }) => number | null;
 }
 
 /** Transition table shape: `TRANSITIONS[state][event.kind] = nextState`. */

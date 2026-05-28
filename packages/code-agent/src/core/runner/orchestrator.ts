@@ -57,19 +57,11 @@ export interface OrchestratorArgs {
   bridge?: BridgeCallbacks;
 }
 
-/**
- * Routing predicate consumed by `runner.ts`. **Default-on** since Commit 7:
- *   - returns true unless `CODER_LEGACY_RUNNER=1` (explicit opt-out).
- *
- * The legacy while-loop in `runner.ts` is kept as a safety net for cases
- * the BT's Executing node doesn't cover yet (plan/spec mode gating, deep-
- * think, polling caps, quality watchdog, pre-read enforcement). If the
- * BT throws, `runner.ts` catches and falls through to the legacy path
- * automatically — `CODER_LEGACY_RUNNER=1` is for forcing the bypass.
- */
-export function isBehaviorTreeEnabled(): boolean {
-  return process.env.CODER_LEGACY_RUNNER !== '1';
-}
+// `isBehaviorTreeEnabled` was the flag-driven router during the BT
+// migration. After the post-Frente-E sweep, the legacy while-loop is
+// gone and the BT is the only path — nothing reads this anymore and the
+// `CODER_LEGACY_RUNNER` env var is a no-op (documented for the
+// historical record only).
 
 /**
  * Build the node table for this run. Exposed (not inlined) so tests can
@@ -115,8 +107,23 @@ export async function runBehaviorTree(
   // those listeners exist and disappear into the void.
   await new Promise<void>((resolve) => setImmediate(resolve));
 
+  // A5 — set of allowed BehaviorEvent.kind values. Anything outside this
+  // set means a node returned garbage and we should force-abort the run
+  // (silently falling through to 'Done' was masking real bugs upstream).
+  const VALID_EVENT_KINDS: ReadonlySet<string> = new Set([
+    'TurnSucceeded', 'TokenThresholdHit', 'ToolLoopDetected',
+    'MaxTurnsReached', 'ProviderError', 'CompactionDone',
+    'CleanFinish', 'Aborted',
+  ]);
+
   let state: NodeState = 'Bootstrap';
   let lastEvent: BehaviorEvent | null = null;
+  // Frente E — dwell telemetry. Record entry time per node visit; emit
+  // a `bt_state_dwell` event with the wall-clock dwell once the
+  // transition is decided. Aggregate per-node totals too so the final
+  // log line has the full profile.
+  let stateEnteredAt = Date.now();
+  const dwellTotals: Partial<Record<NodeState, number>> = {};
   try {
     while (state !== 'Done') {
       const node = nodes[state];
@@ -128,9 +135,45 @@ export async function runBehaviorTree(
         console.error(`[coder/bt] node=${state} threw:`, e);
         throw e;
       }
-      console.log(`[coder/bt] node=${state} → event=${event.kind}`);
+      // A5 — validate the returned event. Garbage (undefined, null,
+      // missing kind, unknown kind) is treated as a node bug and routed
+      // to Aborted with a clear stopReason. Without this the fall-through
+      // (nextState → 'Done' default) terminated the run with reason=null.
+      if (!event || typeof event !== 'object' || !VALID_EVENT_KINDS.has(event.kind)) {
+        const got = event === null ? 'null'
+          : event === undefined ? 'undefined'
+          : typeof event !== 'object' ? typeof event
+          : `kind=${String((event as { kind?: unknown }).kind)}`;
+        console.error(`[coder/bt] node=${state} returned INVALID event (${got}). Forcing Aborted.`);
+        ctx.stopReason = ctx.stopReason ?? 'error';
+        ctx.error = ctx.error ?? new Error(`BT node ${state} returned invalid event: ${got}`);
+        event = { kind: 'Aborted' };
+      }
+      // Frente E — dwell telemetry. Compute the leave-time first so the
+      // emit reflects the actual time spent (excluding any synthetic
+      // event upgrade in the validation branch above).
+      const dwellMs = Date.now() - stateEnteredAt;
+      dwellTotals[state] = (dwellTotals[state] ?? 0) + dwellMs;
+      try {
+        ctx.emit('bt_state_dwell', {
+          runId: ctx.runId,
+          state,
+          event: event.kind,
+          dwellMs,
+          turn: ctx.turn,
+        });
+      } catch (e) {
+        // Never let telemetry break the run. SSE handlers can throw on
+        // backpressure; the BT should keep going.
+        console.warn(
+          `[coder/bt] bt_state_dwell emit failed (${state}→${event.kind}): ` +
+          (e instanceof Error ? e.message : String(e)),
+        );
+      }
+      console.log(`[coder/bt] node=${state} → event=${event.kind} dwellMs=${dwellMs}`);
       lastEvent = event;
       state = nextState(state, event);
+      stateEnteredAt = Date.now();
     }
   } finally {
     // Lifecycle cleanup — tasks left in `running` (because the BT exited
@@ -148,12 +191,30 @@ export async function runBehaviorTree(
           `[coder/bt] recoverStaleTasks on shutdown failed: ${e instanceof Error ? e.message : String(e)}`,
         );
       }
+      // PR-B: any execute_tasks runs that were `running` when the worker
+      // exited (crash, OOM, intentional shutdown) get promoted to
+      // `aborted` with reject_reason='worker_restart'. The dashboard
+      // resumes correctly; the agent's next turn sees consistent state.
+      try {
+        store.recoverRunningTaskRuns(sessionId);
+      } catch (e) {
+        console.warn(
+          `[coder/bt] recoverRunningTaskRuns on shutdown failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
     }
+    ctx.operations.abortAll('run shutdown');
   }
 
   const reason = ctx.stopReason ?? 'completed';
   const transition = ctx.transition;
-  console.log(`[coder/bt] done runId=${ctx.runId} reason=${reason}`);
+  // Frente E — surface the BT profile in the run-final log so an
+  // operator can spot pathological dwells (Compacting>30s, Executing
+  // dwarfing everything, Recovering looping) without enabling SSE.
+  const profile = (Object.keys(dwellTotals) as NodeState[])
+    .map((s) => `${s}=${dwellTotals[s]}ms`)
+    .join(' ');
+  console.log(`[coder/bt] done runId=${ctx.runId} reason=${reason} profile={${profile}}`);
 
   // Mirror the legacy `finishWith()` — emit the terminal `done` event so
   // listeners (SSE, CLI, dashboard) can dismiss their "streaming…" state.

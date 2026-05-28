@@ -3,6 +3,7 @@ import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import { AGENTS } from '@mcp/code-agent/agents/index.js';
 import { getAllKnownToolsMeta, getToolTier, inferProfileFromMessage, TIER_COUNTS } from '@mcp/code-agent/tools/tiers.js';
 import { getModelContextWindow } from '@mcp/code-agent/providers/capabilities.js';
+import { runGeneralAi, GeneralAiNotConfiguredError } from '@mcp/services/ai-general/generalClient.js';
 import { enumerateExternalTools } from '../../../admin/mcp-servers.routes.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import type { ServerDeps } from '../../deps.js';
@@ -46,6 +47,67 @@ function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(mess
       return b;
     }),
   }));
+}
+
+type GenerateTitleBody = {
+  content?: unknown;
+  text?: unknown;
+  message?: unknown;
+};
+
+function textFromUnknown(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const block = item as { type?: unknown; text?: unknown };
+          if (block.type === 'text' && typeof block.text === 'string') return block.text;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (value && typeof value === 'object') {
+    const block = value as { type?: unknown; text?: unknown };
+    if (block.type === 'text' && typeof block.text === 'string') return block.text;
+  }
+  return '';
+}
+
+function cleanTitleSeed(text: string): string {
+  return text
+    .replace(/<file_refs>[\s\S]*?<\/file_refs>/g, '')
+    .replace(/<active_skills>[\s\S]*?<\/active_skills>/g, '')
+    .replace(/<active-context>[\s\S]*?<\/active-context>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
+}
+
+function extractTitleSeedFromBody(body: Partial<GenerateTitleBody>): string {
+  return cleanTitleSeed(
+    textFromUnknown(body.content)
+      || textFromUnknown(body.text)
+      || textFromUnknown(body.message),
+  );
+}
+
+function extractTitleSeedFromRow(contentJson: string): string {
+  const blocks = JSON.parse(contentJson) as unknown;
+  return cleanTitleSeed(textFromUnknown(blocks));
+}
+
+function cleanGeneratedTitle(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[.!?;:]+$/g, '')
+    .trim()
+    .slice(0, 80);
 }
 
 interface CreateSessionBody {
@@ -175,115 +237,24 @@ export function mountCoderSessionsRoutes(
     const src = sessionStore.loadSessionWithMessages(id);
     if (!src) return notFound(c);
 
-    const firstUser = src.message_rows.find((r) => r.role === 'user');
-    if (!firstUser) {
-      console.warn(`[generate-title] session=${id}: no user messages yet`);
-      return c.json({ error: 'no messages yet' }, 400);
-    }
-
-    // Extract plain text from the first user message's content blocks.
-    // Defensive: wrap the JSON.parse so a malformed row doesn't 500 the
-    // route — we'd rather return 400 with a clear reason.
-    type Block = { type: string; text?: string };
-    let blocks: Block[];
-    try {
-      blocks = JSON.parse(firstUser.content_json) as Block[];
-    } catch (e) {
-      console.warn(`[generate-title] session=${id}: malformed content_json:`, e);
-      return c.json({ error: 'first message content is malformed JSON' }, 400);
-    }
-    // Strip the `<file_refs>…</file_refs>` block the composer prepends when
-    // the user picks files in the sidebar — those are noise for a title,
-    // and a message that's ONLY file refs (no prose) would otherwise feed
-    // an empty prompt to the LLM and produce a useless title.
-    const text = blocks
-      .filter((b) => b.type === 'text' && b.text)
-      .map((b) => b.text!)
-      .join(' ')
-      .replace(/<file_refs>[\s\S]*?<\/file_refs>/g, '')
-      .replace(/<active_skills>[\s\S]*?<\/active_skills>/g, '')
-      .trim()
-      .slice(0, 500);
+    const body = await parseJsonBody<GenerateTitleBody>(c);
+    let text = extractTitleSeedFromBody(body);
     if (!text) {
-      console.warn(`[generate-title] session=${id}: no text content in first message`);
-      return c.json({ error: 'no text content in first message' }, 400);
-    }
-
-    // Pick a provider usable by a one-shot SDK call. OAuth-only kinds
-    // (copilot/chatgpt/claude-code) and non-OpenAI-compatible kinds
-    // (bedrock/gemini) can't be driven by the Anthropic/OpenAI SDKs we
-    // import below — same constraint as HyDE. Fall through the list:
-    //   1. session's own provider, if usable
-    //   2. admin "general AI" pin, if usable
-    //   3. first enabled provider with an api_key in a usable kind
-    const isUsable = (p: { kind?: string; api_key?: string | null; enabled?: boolean } | null) => {
-      if (!p?.enabled || !p.api_key) return false;
-      const k = p.kind ?? '';
-      return k === 'anthropic' || k === 'openai' || k === 'zai' || k === 'deepseek';
-    };
-    let cfg = providerStore.getProvider(src.session.provider as string);
-    let modelId: string = src.session.model;
-    if (!isUsable(cfg) || !modelId) {
-      const def = providerStore.getGeneralDefault();
-      const generalCfg = def ? providerStore.getProvider(def.providerId) : null;
-      if (def && isUsable(generalCfg)) {
-        cfg = generalCfg;
-        modelId = def.modelId;
-      } else {
-        // Last-ditch: any enabled provider with an api_key in a usable kind.
-        const fallback = providerStore.listProviders({ enabled: true })
-          .find((p) => isUsable(p));
-        if (!fallback) {
-          console.warn(
-            `[generate-title] session=${id}: no usable provider. ` +
-            `session.provider=${src.session.provider} kind=${cfg?.kind ?? '?'} ` +
-            `enabled=${cfg?.enabled} hasKey=${!!cfg?.api_key}`,
-          );
-          return c.json({
-            error: 'no usable AI provider — set an API key for an Anthropic / OpenAI / Z.AI / DeepSeek provider in Configurações',
-          }, 400);
-        }
-        cfg = fallback;
-        const firstModel = providerStore.listModels(fallback.id, true)[0];
-        modelId = firstModel?.model_id ?? '';
-        if (!modelId) {
-          console.warn(`[generate-title] session=${id}: fallback provider ${fallback.id} has no enabled models`);
-          return c.json({ error: 'fallback provider has no models configured' }, 400);
-        }
+      const firstUser = src.message_rows.find((r) => r.role === 'user');
+      if (!firstUser) {
+        console.warn(`[generate-title] session=${id}: no user messages yet and no request content`);
+        return c.json({ error: 'no messages yet' }, 400);
+      }
+      try {
+        text = extractTitleSeedFromRow(firstUser.content_json);
+      } catch (e) {
+        console.warn(`[generate-title] session=${id}: malformed content_json:`, e);
+        return c.json({ error: 'first message content is malformed JSON' }, 400);
       }
     }
-    if (!cfg) return c.json({ error: 'provider config missing after selection' }, 500);
-
-    // Strip the `::mode` suffix the dashboard appends when a model has
-    // multiple modes (e.g. `glm-5::coding`). The upstream APIs only
-    // understand the bare model id — the mode is our internal routing
-    // signal (used by the Z.AI base-URL selector below). Without this,
-    // every Z.AI / GLM session generates a 400 from the vendor.
-    let modelMode: string | undefined;
-    if (modelId.includes('::')) {
-      const [bareModel, mode] = modelId.split('::', 2);
-      modelId = bareModel;
-      modelMode = mode;
-    }
-
-    // Z.AI routing precedence:
-    //   1. ZAI_BASE_URL env (test / dev override)
-    //   2. `::coding` / `::general` per-request override from the picker
-    //   3. cfg.base_url from the admin (set once by Coding-Plan users)
-    //   4. General URL fallback for fresh installs
-    let baseUrl: string | undefined = cfg.base_url ?? undefined;
-    if (cfg.kind === 'zai') {
-      if (process.env.ZAI_BASE_URL) {
-        baseUrl = process.env.ZAI_BASE_URL;
-      } else if (modelMode === 'coding') {
-        baseUrl = 'https://api.z.ai/api/coding/paas/v4/';
-      } else if (modelMode === 'general') {
-        baseUrl = 'https://api.z.ai/api/paas/v4/';
-      } else if (!baseUrl) {
-        baseUrl = 'https://api.z.ai/api/paas/v4/';
-      }
-      // else: keep cfg.base_url — the admin-configured URL is correct
-      // for this caller (Coding-Plan users put the coding URL here).
+    if (!text) {
+      console.warn(`[generate-title] session=${id}: no text content for title generation`);
+      return c.json({ error: 'no text content for title generation' }, 400);
     }
 
     const prompt =
@@ -291,44 +262,22 @@ export function mountCoderSessionsRoutes(
 
     let title = '';
     try {
-      if (cfg.kind === 'anthropic') {
-        const { default: Anthropic } = await import('@anthropic-ai/sdk');
-        const client = new Anthropic({
-          apiKey: cfg.api_key ?? '',
-          ...(baseUrl ? { baseURL: baseUrl } : {}),
-        });
-        const resp = await client.messages.create({
-          model: modelId,
-          max_tokens: 40,
-          messages: [{ role: 'user', content: prompt }],
-        });
-        title = resp.content
-          .filter((b) => b.type === 'text')
-          .map((b) => (b as { text: string }).text)
-          .join('');
-      } else {
-        const { default: OpenAI } = await import('openai');
-        const client = new OpenAI({
-          apiKey: cfg.api_key ?? '',
-          ...(baseUrl ? { baseURL: baseUrl } : {}),
-        });
-        const resp = await client.chat.completions.create({
-          model: modelId,
-          max_tokens: 40,
-          temperature: 0.3,
-          messages: [{ role: 'user', content: prompt }],
-        });
-        title = resp.choices[0]?.message?.content ?? '';
-      }
+      title = await runGeneralAi(prompt, {
+        system:
+          'You generate short chat session titles. Respond with only the title, no quotes, no punctuation, no markdown.',
+      });
     } catch (e) {
+      if (e instanceof GeneralAiNotConfiguredError) {
+        return c.json({ error: e.message, code: 'general_ai_not_configured' }, 412);
+      }
       console.warn(
-        `[generate-title] session=${id}: AI call failed (provider=${cfg.kind} model=${modelId} baseUrl=${baseUrl ?? '(default)'}):`,
+        `[generate-title] session=${id}: general AI call failed:`,
         e,
       );
       return c.json({ error: `AI call failed: ${e instanceof Error ? e.message : String(e)}` }, 500);
     }
 
-    title = title.trim().replace(/^["']|["']$/g, '').trim().slice(0, 80);
+    title = cleanGeneratedTitle(title);
     if (!title) return c.json({ error: 'empty title generated' }, 400);
 
     sessionStore.setSessionTitle(id, title);

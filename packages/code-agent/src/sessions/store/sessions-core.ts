@@ -119,3 +119,31 @@ export function recoverStale(db: DB): number {
   `).run();
   return result.changes;
 }
+
+/**
+ * Frente E — periodic watchdog sweep. Same shape as `recoverStale`, but
+ * targets ONLY sessions whose `updated_at` is older than `maxAgeMs`. The
+ * boot sweep catches worker-restart victims; this catches sessions that
+ * the worker forgot about (heartbeat hang, infinite tool loop that the
+ * runner-level guards missed) without resetting every active row on a
+ * brand-new install.
+ *
+ * The threshold is intentionally generous (default 10 minutes) — a long
+ * compaction or a legitimately slow provider response should never be
+ * confused with a stuck session. Returns the number of rows touched so
+ * the watchdog can decide whether to emit a warn-level log.
+ */
+export function recoverStuckRunning(
+  db: DB,
+  args: { maxAgeMs?: number } = {},
+): number {
+  const maxAgeMs = args.maxAgeMs ?? 10 * 60 * 1000; // 10min default
+  const cutoffSeconds = Math.floor(maxAgeMs / 1000);
+  const result = db.prepare(`
+    UPDATE coder_sessions
+    SET status = 'idle', updated_at = datetime('now')
+    WHERE status IN ('in_progress', 'running', 'working')
+      AND updated_at < datetime('now', '-' || ? || ' seconds')
+  `).run(cutoffSeconds);
+  return result.changes;
+}

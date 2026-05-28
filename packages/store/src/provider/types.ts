@@ -4,7 +4,7 @@
  * Runtime-validated string; the provider registry at
  * `packages/services/src/providers/registry.ts` is the source of truth
  * for valid shapes. Known built-ins for IDE autocompletion:
- * 'anthropic' | 'claude-code' | 'openai' | 'gemini' | 'bedrock' | 'copilot' | 'chatgpt' | 'deepseek' | 'zai' | 'kimi-code'
+ * 'anthropic' | 'claude-code' | 'openai' | 'openrouter' | 'gemini' | 'bedrock' | 'copilot' | 'chatgpt' | 'deepseek' | 'zai' | 'kimi-code'
  */
 export type ProviderKind = string;
 

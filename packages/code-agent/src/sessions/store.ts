@@ -32,6 +32,7 @@ import * as messages from './store/messages.js';
 import * as plans from './store/plans.js';
 import * as inputs from './store/inputs.js';
 import * as tasks from './store/tasks.js';
+import * as taskRuns from './store/task-runs.js';
 import * as toolStats from './store/tool-stats.js';
 import * as groups from './store/groups.js';
 import * as disabledTools from './store/disabled-tools.js';
@@ -65,6 +66,15 @@ export class SessionStore {
   deleteSession(id: number): void { core.del(this.db, id); }
   deleteSessionsBatch(ids: number[]): number { return core.delBatch(this.db, ids); }
   recoverStaleSessions(): number { return core.recoverStale(this.db); }
+  /**
+   * Frente E — periodic watchdog hook. Recovers ONLY sessions whose
+   * `updated_at` is older than `maxAgeMs` (default 10 min). The boot
+   * sweep above is broader (it touches every active row); this one is
+   * safe to call repeatedly at runtime without disrupting healthy runs.
+   */
+  recoverStuckRunningSessions(opts: { maxAgeMs?: number } = {}): number {
+    return core.recoverStuckRunning(this.db, opts);
+  }
 
   // ─── Sessions state (set*) ─────────────────────────────────────
   setSessionAgent(id: number, agent: string | null): void { state.setAgent(this.db, id, agent); }
@@ -134,8 +144,20 @@ export class SessionStore {
   }
   updateTaskStatus(sessionId: number, taskId: string, patch: Partial<CoderTask>): TasksState | null { return tasks.updateStatus(this.db, sessionId, taskId, patch); }
   getTasksState(sessionId: number): TasksState | null { return tasks.getState(this.db, sessionId); }
+  clearTasksState(sessionId: number): boolean { return tasks.clear(this.db, sessionId); }
   recoverStaleTasks(sessionId: number): number { return tasks.recoverStale(this.db, sessionId); }
   getTasksRow(sessionId: number): CoderTasksRow | null { return tasks.getRow(this.db, sessionId); }
+
+  // ─── execute_tasks runs (migration 108) ────────────────────────
+  createTaskRun(input: taskRuns.CreateTaskRunInput): void { taskRuns.createRun(this.db, input); }
+  updateTaskRun(runId: string, patch: taskRuns.UpdateRunPatch): void { taskRuns.updateRun(this.db, runId, patch); }
+  upsertTaskRunItem(input: taskRuns.UpsertItemInput): void { taskRuns.upsertItem(this.db, input); }
+  getTaskRun(runId: string): taskRuns.TaskRunRow | null { return taskRuns.getRun(this.db, runId); }
+  listTaskRunsBySession(sessionId: number, limit = 25): taskRuns.TaskRunRow[] { return taskRuns.listRunsBySession(this.db, sessionId, limit); }
+  listTaskRunItems(runId: string): taskRuns.TaskRunItemRow[] { return taskRuns.listItems(this.db, runId); }
+  getTaskRunWithItems(runId: string): { run: taskRuns.TaskRunRow; items: taskRuns.TaskRunItemRow[] } | null { return taskRuns.getRunWithItems(this.db, runId); }
+  findLastCompletedTaskItem(taskId: string): taskRuns.TaskRunItemRow | null { return taskRuns.findLastCompletedItem(this.db, taskId); }
+  recoverRunningTaskRuns(sessionId?: number): number { return taskRuns.recoverRunningRuns(this.db, sessionId); }
 
   // ─── Tool stats ────────────────────────────────────────────────
   getToolCallStats(sessionId: number, recentLimit = 30): toolStats.ToolCallStats { return toolStats.getToolCallStats(this.db, sessionId, recentLimit); }

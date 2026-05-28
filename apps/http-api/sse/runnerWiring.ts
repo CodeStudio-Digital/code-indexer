@@ -34,6 +34,15 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
   runner.on('tool_progress', (payload) => {
     publish(bus, 'tool_progress', payload);
   });
+  runner.on('operation_started', (payload) => {
+    publish(bus, 'operation_started', payload);
+  });
+  runner.on('operation_progress', (payload) => {
+    publish(bus, 'operation_progress', payload);
+  });
+  runner.on('operation_finished', (payload) => {
+    publish(bus, 'operation_finished', payload);
+  });
   runner.on('message_complete', (message, usage) => {
     publish(bus, 'message_complete', { message, usage });
   });
@@ -54,6 +63,24 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
   });
   runner.on('task_finished', (payload) => {
     publish(bus, 'task_finished', payload);
+  });
+  runner.on('task_updated', (payload) => {
+    publish(bus, 'task_updated', payload);
+  });
+  runner.on('task_run_started', (payload) => {
+    publish(bus, 'task_run_started', payload);
+  });
+  runner.on('task_run_task_started', (payload) => {
+    publish(bus, 'task_run_task_started', payload);
+  });
+  runner.on('task_run_task_progress', (payload) => {
+    publish(bus, 'task_run_task_progress', payload);
+  });
+  runner.on('task_run_task_finished', (payload) => {
+    publish(bus, 'task_run_task_finished', payload);
+  });
+  runner.on('task_run_finished', (payload) => {
+    publish(bus, 'task_run_finished', payload);
   });
   runner.on('todos_updated', (payload) => {
     publish(bus, 'todos_updated', payload);
@@ -115,6 +142,9 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
   });
   runner.on('pre_think_failed', (payload) => {
     publish(bus, 'pre_think_failed', payload);
+  });
+  runner.on('bt_state_dwell', (payload) => {
+    publish(bus, 'bt_state_dwell', payload);
   });
   runner.on('done', (reason, error) => {
     if (error) {

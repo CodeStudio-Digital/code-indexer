@@ -13,6 +13,21 @@
  * feedback path is migrated.
  */
 
+/**
+ * Version stamp embedded in every `coder_task_run_items.inputs_fingerprint`
+ * (PR-D). Bump manually whenever the master/subagent system prompts change
+ * in a way that should invalidate the skip-stale cache — adding a new
+ * tool to the bootstrap list, changing the implement subagent's framing,
+ * tightening sandboxing rules, etc.
+ *
+ * Format: YYYYMMDD.NN (NN counts changes inside the same day, starting 1).
+ */
+// Frente D bump — `execute_task` (singular) removed from the registry,
+// `update_task` promoted to BOOTSTRAP_TOOLS. Old fingerprints must
+// invalidate so PR-D's skip-stale gate re-runs anything that depended
+// on the old tool surface.
+export const SYSTEM_PROMPT_VERSION = '20260528.1';
+
 export interface AssembleSystemPromptArgs {
   basePrompt: string;
   qualitySuffix: string;

@@ -8,7 +8,17 @@
  *   - Otherwise: stop with `MaxTurnsReached` → Reviewing.
  */
 
-/** Default auto-continue cap per run. Env-overridable. */
+/**
+ * Default auto-continue cap per run.
+ *
+ * Frente E — tunable via `CODER_MAX_AUTO_CONTINUES`. Use cases:
+ *   - 0  → disable auto-continue (hard stop at maxTurns).
+ *   - 3  → default; total turn budget = maxTurns × (1 + 3) = 4×maxTurns.
+ *   - >3 → for extremely long sessions where you've validated the agent
+ *          won't run away. Combined with the BT's other guards (tuple-hash
+ *          dedup, doom-loop, dominance), the practical ceiling is the
+ *          provider's tokens-per-minute budget, not this counter.
+ */
 export function maxAutoContinues(): number {
   const v = process.env.CODER_MAX_AUTO_CONTINUES;
   if (v != null && v !== '') {

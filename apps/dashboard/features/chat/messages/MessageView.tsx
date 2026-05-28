@@ -18,6 +18,7 @@ import type {
 import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { CopyMarkdownButton } from './CopyMarkdownButton.js';
 import { Markdown } from './Markdown.js';
+import { TaskExecutionBlock, parseExecuteTasksResult } from './TaskExecutionBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 
@@ -461,7 +462,7 @@ export function renderAssistantBlock(
     const tasks = tasksState?.tasks
       ? tasksState.tasks
       : (Array.isArray(inp.tasks) ? inp.tasks : []).map((t, ti) => ({
-          id: String(t.id ?? `task_${ti}`),
+          id: String(t.id ?? `alias_${ti + 1}`),
           title: String(t.title ?? ''),
           description: String(t.description ?? ''),
           files: Array.isArray(t.files) ? (t.files as string[]) : [],
@@ -523,6 +524,13 @@ export function renderAssistantBlock(
     const group = parsePersistedAgentsGroup(b.input, result);
     if (group) {
       return <AgentsGroupBlock key={`ag-${b.id}-${i}`} group={group} />;
+    }
+  }
+
+  if (b.name === 'execute_tasks' && result && !result.isError) {
+    const parsedRun = parseExecuteTasksResult(result.content);
+    if (parsedRun) {
+      return <TaskExecutionBlock key={`trp-${b.id}-${i}`} run={parsedRun} defaultOpen={false} />;
     }
   }
 

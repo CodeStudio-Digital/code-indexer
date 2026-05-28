@@ -3,11 +3,11 @@ import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapte
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 
 /**
- * OpenAI-compatible chat adapter (works with OpenAI, ZAI/GLM, DeepSeek and any
+ * OpenAI-compatible chat adapter (works with OpenAI, OpenRouter, ZAI/GLM, DeepSeek and any
  * provider that implements the OpenAI chat completions schema with function
  * calling and streaming).
  */
-export type OpenAICompatVendor = 'openai' | 'zai' | 'deepseek' | 'copilot';
+export type OpenAICompatVendor = 'openai' | 'openrouter' | 'zai' | 'deepseek' | 'copilot';
 
 export class OpenAIChatProvider implements ChatProvider {
   readonly name: string;
@@ -81,6 +81,17 @@ export class OpenAIChatProvider implements ChatProvider {
       deepseekExtras.thinking = { type: 'enabled' };
     }
 
+    // OpenRouter normalizes reasoning controls across providers via the
+    // `reasoning` parameter. Use the budget when the caller supplied one;
+    // otherwise ask OpenRouter to enable the model's default reasoning mode.
+    const openrouterExtras: Record<string, unknown> = {};
+    if (this.vendor === 'openrouter' && req.thinking === true) {
+      openrouterExtras.reasoning =
+        typeof req.thinkingBudgetTokens === 'number' && req.thinkingBudgetTokens > 0
+          ? { max_tokens: req.thinkingBudgetTokens }
+          : { enabled: true };
+    }
+
     // Stable cache hint per session. OpenAI accepts `prompt_cache_key`
     // (https://platform.openai.com/docs/guides/prompt-caching#prompt-cache-key)
     // and routes the request to a server that has the prefix cached. DeepSeek
@@ -113,6 +124,7 @@ export class OpenAIChatProvider implements ChatProvider {
         ...(typeof temperature === 'number' ? { temperature } : {}),
         ...zaiExtras,
         ...deepseekExtras,
+        ...openrouterExtras,
         ...cacheKeyExtras,
       };
       stream = await this.client.chat.completions.create(
@@ -136,6 +148,10 @@ export class OpenAIChatProvider implements ChatProvider {
       const reasoning = (delta as { reasoning_content?: unknown })?.reasoning_content;
       if (typeof reasoning === 'string' && reasoning.length > 0) {
         yield { type: 'thinking_delta', text: reasoning };
+      }
+      const openrouterReasoning = (delta as { reasoning?: unknown })?.reasoning;
+      if (typeof openrouterReasoning === 'string' && openrouterReasoning.length > 0) {
+        yield { type: 'thinking_delta', text: openrouterReasoning };
       }
       if (delta?.tool_calls) {
         for (const tc of delta.tool_calls) {
@@ -166,9 +182,10 @@ export class OpenAIChatProvider implements ChatProvider {
           prompt_tokens_details?: { cached_tokens?: number };
           prompt_cache_hit_tokens?: number;
           completion_tokens_details?: { reasoning_tokens?: number };
+          reasoning_tokens?: number;
         };
         const cachedRead = u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0;
-        const reasoningTokens = u.completion_tokens_details?.reasoning_tokens;
+        const reasoningTokens = u.completion_tokens_details?.reasoning_tokens ?? u.reasoning_tokens;
         yield {
           type: 'usage',
           usage: {

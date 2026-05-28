@@ -27,9 +27,9 @@ Call this when the work is BETTER decomposed into 2+ independent tasks that bene
 - "Migrate the auth system to JWT" → tasks for token issuance, middleware, refresh, tests.
 - "Find redundancies and propose fixes" → 1 analysis task + N implementation tasks.
 
-Each task carries: id, title, description, **files** (the project-relative paths the task may read AND write), **references** (curated symbol/snippet/file/doc context you pre-extract), depends_on (ids that must finish first), suggested_mode ('inline' or 'subagent'), and estimated_complexity.
+Each task carries: optional client alias id (only for depends_on inside this submission), title, description, **files** (the project-relative paths the task may read AND write), **references** (curated symbol/snippet/file/doc context you pre-extract), depends_on (aliases that must finish first), suggested_mode ('inline' or 'subagent'), and estimated_complexity. After approval, the backend replaces aliases with generated `tsk_...` ids.
 
-After approval, call `execute_task` once per task in dependency order. Inline mode opens a task scope on the parent runner — mutating tools become unlocked but ONLY for paths inside the task's files. Finish each inline task with `task_complete(task_id, summary, files_modified, errors?)` to release the scope and move to the next task. (Subagent mode is Phase 2.)
+After approval, use the generated `tsk_...` task ids from the approved result (or call `list_tasks` if unsure), then call `execute_task` once per task in dependency order. Inline mode opens a task scope on the parent runner — mutating tools become unlocked but ONLY for paths inside the task's files. Finish each inline task with `task_complete(task_id, summary, files_modified, errors?)` to release the scope and move to the next task. Use `cancel_tasks`, `delete_tasks`, or `archive_task_list` to abandon/reset rounds; never pass legacy aliases like `task_1` to lifecycle tools. (Subagent mode is Phase 2.)
 
 ### Decision rule
 - 1 cohesive change OR informational answer → `submit_plan`

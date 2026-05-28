@@ -262,6 +262,22 @@ export interface CoderTask {
   result?: TaskResult;
   started_at?: string;
   finished_at?: string;
+  /**
+   * Optional human-readable reason set when the orchestrator declined to
+   * run this task (e.g. `execute_tasks` was called while the approved
+   * execution_mode is 'inline' and the user requires explicit subagent
+   * dispatch). Does NOT change `status` — the task remains `pending` and
+   * can still be retried — but the dashboard surfaces a "skipped" badge
+   * so the user understands the run intentionally bypassed this task.
+   */
+  reject_reason?: string;
+  /**
+   * When true (PR-D), the skip-stale fingerprint check is bypassed and
+   * the task always runs even if its inputs haven't changed since the
+   * last successful execution. Useful when the user knows side-effects
+   * outside the file scope changed (env vars, DB seeds, external API).
+   */
+  force_run?: boolean;
 }
 
 export interface TaskResult {

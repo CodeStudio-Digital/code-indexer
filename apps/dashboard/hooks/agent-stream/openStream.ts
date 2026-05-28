@@ -39,7 +39,8 @@ function buildLogEntry(eventName: string, data: Record<string, unknown>): Worker
   // not for forensics. The full event name stays in `event` for power users.
   let category: WorkerLogEntry['category'] = 'other';
   let level: WorkerLogEntry['level'] = 'info';
-  if (eventName.startsWith('tool_')) category = 'tool';
+  if (eventName.startsWith('tool_') || eventName.startsWith('task_run_')) category = 'tool';
+  else if (eventName.startsWith('operation_') || eventName === 'bt_state_dwell') category = 'runner';
   else if (eventName.startsWith('quality_') || eventName === 'tool_loop_intervention')
     category = 'quality';
   else if (

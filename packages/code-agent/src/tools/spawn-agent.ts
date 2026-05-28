@@ -51,9 +51,12 @@ import {
   READ_WRITE_FILTER,
   FULL_ACCESS_FILTER,
   extractLastAssistantText,
+  emptyCollected,
   type SubagentAllowlist,
+  type SubagentLimits,
   type ParallelAgentSpec,
 } from '@mcp/code-agent/tools/implement-subagent.js';
+import { renderCollectedSnapshotForParent } from '@mcp/code-agent/tools/subagent-collector.js';
 import {
   EXPLORE_SYSTEM_PROMPT,
   IMPLEMENT_SYSTEM_PROMPT,
@@ -89,6 +92,28 @@ interface NormalizedAgent {
   label: string;
   maxTurns: number;
   files?: string[];
+}
+
+const SPAWN_LIMITS: Record<NormalizedAgent['type'], Required<SubagentLimits>> = {
+  explore: {
+    maxToolCalls: Number(process.env.CODER_SPAWN_EXPLORE_MAX_TOOLS ?? 40) || 40,
+    timeoutMs: Number(process.env.CODER_SPAWN_EXPLORE_TIMEOUT_MS ?? 10 * 60_000) || 10 * 60_000,
+    stallMs: Number(process.env.CODER_SPAWN_EXPLORE_STALL_MS ?? 90_000) || 90_000,
+  },
+  implement: {
+    maxToolCalls: Number(process.env.CODER_SPAWN_IMPLEMENT_MAX_TOOLS ?? 80) || 80,
+    timeoutMs: Number(process.env.CODER_SPAWN_IMPLEMENT_TIMEOUT_MS ?? 20 * 60_000) || 20 * 60_000,
+    stallMs: Number(process.env.CODER_SPAWN_IMPLEMENT_STALL_MS ?? 120_000) || 120_000,
+  },
+  full: {
+    maxToolCalls: Number(process.env.CODER_SPAWN_FULL_MAX_TOOLS ?? 80) || 80,
+    timeoutMs: Number(process.env.CODER_SPAWN_FULL_TIMEOUT_MS ?? 20 * 60_000) || 20 * 60_000,
+    stallMs: Number(process.env.CODER_SPAWN_FULL_STALL_MS ?? 120_000) || 120_000,
+  },
+};
+
+function limitsForAgent(agent: NormalizedAgent): SubagentLimits {
+  return SPAWN_LIMITS[agent.type];
 }
 
 function resolveTypeArtifacts(type: NormalizedAgent['type']): {
@@ -211,6 +236,7 @@ async function runSingleEphemeral(
       initialMessages,
       maxTurns: agent.maxTurns,
       pathScope: agent.type === 'implement' && agent.files && agent.files.length > 0 ? agent.files : undefined,
+      limits: limitsForAgent(agent),
     },
   );
 
@@ -220,12 +246,16 @@ async function runSingleEphemeral(
     `reason=${result.reason} input=${result.usage.input_tokens} output=${result.usage.output_tokens} cache_hit=${cached}]\n\n`;
   const body = result.finalText
     || `(subagent did not produce a final summary — reason=${result.reason}. Retry with narrower scope or investigate directly.)`;
+  // Frente C — append the sub's structured trail (memos / snapshots /
+  // board posts) so the master sees what the sub explicitly flagged for
+  // it. Empty when the sub didn't emit anything → no-op concat.
+  const trail = renderCollectedSnapshotForParent(result.collected ?? emptyCollected());
 
   if (isGlobalSubAgentCacheEnabled() && result.finalText) {
     writeGlobalSubAgentResult(cacheKeyInput, { header, body, usage: result.usage }, { sessionId: parentSessionId });
   }
   void extractLastAssistantText; // keep helper referenced for re-exports
-  return { ...ok(header + body), subUsage: result.usage };
+  return { ...ok(header + body + trail), subUsage: result.usage };
 }
 
 async function runParallelEphemeral(
@@ -280,6 +310,7 @@ async function runParallelEphemeral(
       systemPrompt,
       allowlist,
       pathScope: a.type === 'implement' && a.files && a.files.length > 0 ? a.files : undefined,
+      limits: limitsForAgent(a),
     };
   });
 
@@ -319,7 +350,12 @@ async function runParallelEphemeral(
     .map((r, i) => {
       const meta = `[type=${agents[i].type} reason=${r.reason} tools=${r.toolCallCount} input=${r.usage.input_tokens} output=${r.usage.output_tokens}]`;
       const text = r.finalText || '(no summary produced)';
-      return `### Agent ${i + 1}: ${r.label}\n${meta}\n${text}`;
+      // Frente C — per-agent trail (memos/snapshots/board) appended after
+      // its summary so the master can attribute each entry to the right
+      // sub. `r.collected` is always present (empty arrays when nothing
+      // was emitted), so the render returns '' and concat is a no-op.
+      const trail = renderCollectedSnapshotForParent(r.collected ?? emptyCollected());
+      return `### Agent ${i + 1}: ${r.label}\n${meta}\n${text}${trail}`;
     })
     .join('\n\n---\n\n');
 
@@ -354,7 +390,13 @@ async function runPersistent(
   return runSingleEphemeral({ provider: ctx.runner?.provider as never, parentTools: [] } as never, agent, ctx);
 }
 
-export function buildSpawnAgentTool(deps: SubagentDeps, registry: ToolRegistry): CoderTool {
+export function buildSpawnAgentTool(registry: ToolRegistry): CoderTool;
+export function buildSpawnAgentTool(deps: SubagentDeps, registry: ToolRegistry): CoderTool;
+export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry, maybeRegistry?: ToolRegistry): CoderTool {
+  const registry = maybeRegistry ?? (depsOrRegistry as ToolRegistry);
+  const deps = maybeRegistry
+    ? depsOrRegistry as SubagentDeps
+    : ({ provider: undefined as never, parentTools: [] } as SubagentDeps);
   return {
     name: 'spawn_agent',
     description: maybeTerse(SPAWN_AGENT_DESC),

@@ -16,6 +16,7 @@ import type { CoderTunables } from '@mcp/code-agent/core/tunables.js';
 import type { CompactionLimits } from '@mcp/code-agent/core/compaction.js';
 import { compactHistoryForLLM } from '@mcp/code-agent/core/runner.js';
 import { reducePreThinkInHistory } from '@mcp/code-agent/core/smart-reducers.js';
+import { formatDynamicInjection, type DynamicInjectionResult } from './dynamic-injection.js';
 
 export interface AssembleMessagesArgs {
   /** Full history as held by the runner. NOT mutated. */
@@ -41,6 +42,16 @@ export interface AssembleMessagesArgs {
    * state (goal, tasks, todos). Returns null when nothing to inject.
    */
   buildActiveContextBlock: () => string | null;
+  /**
+   * PR-F: optional callback returning a Kimi-style dynamic injection
+   * (skill diff, recently-edited files, compaction marker). Wrapped in
+   * `<system-reminder>` and appended to the trailing user message ALONG
+   * WITH active_skills + active-context. Returns null when nothing to
+   * inject (most turns). The runner is responsible for tracking which
+   * skills/files have already been included so the same content doesn't
+   * appear twice — see `dynamic-injection.ts`.
+   */
+  computeDynamicInjection?: () => DynamicInjectionResult | null;
 }
 
 export function assembleMessagesForChat(args: AssembleMessagesArgs): AgentMessage[] {
@@ -55,8 +66,9 @@ export function assembleMessagesForChat(args: AssembleMessagesArgs): AgentMessag
 
   const activeSkillsBlock = args.buildActiveSkillsBlock(compacted);
   const activeContextBlock = args.agentLoopV2 ? args.buildActiveContextBlock() : null;
+  const dynamicInjection = args.computeDynamicInjection?.() ?? null;
 
-  if (!activeSkillsBlock && !activeContextBlock) return compacted;
+  if (!activeSkillsBlock && !activeContextBlock && !dynamicInjection) return compacted;
 
   const extras: ContentBlock[] = [];
   // Skills go BEFORE active-context so the model treats them as fresh
@@ -64,6 +76,14 @@ export function assembleMessagesForChat(args: AssembleMessagesArgs): AgentMessag
   // reading the live goal first and then second-guessing it.
   if (activeSkillsBlock) extras.push({ type: 'text', text: activeSkillsBlock });
   if (activeContextBlock) extras.push({ type: 'text', text: activeContextBlock });
+  // PR-F dynamic injection comes LAST — closest to the user message so
+  // the model treats it as the freshest signal about what changed since
+  // the last turn. Wrapped in `<system-reminder>` so it visually
+  // differs from active_skills / active-context which target distinct
+  // axes of context.
+  if (dynamicInjection) {
+    extras.push({ type: 'text', text: formatDynamicInjection(dynamicInjection.reminder) });
+  }
 
   const cloned = compacted.slice();
   const lastIdx = cloned.length - 1;

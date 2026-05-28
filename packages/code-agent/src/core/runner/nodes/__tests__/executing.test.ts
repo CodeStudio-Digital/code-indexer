@@ -14,6 +14,7 @@ import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolContext, CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ExecutingNode } from '../executing.js';
+import { consumeStream } from '../executing-stream.js';
 import { makeTestContext } from './test-helpers.js';
 
 function makeStreamingProvider(deltas: ChatDelta[]): ChatProvider {
@@ -51,6 +52,10 @@ function emptyToolContext(): ToolContext {
     cwd: process.cwd(),
     projectName: 'test',
   } as ToolContext;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 describe('ExecutingNode', () => {
@@ -152,5 +157,85 @@ describe('ExecutingNode', () => {
       expect(event.status).toBe(429);
       expect(event.retryable).toBe(true);
     }
+  });
+
+  it('routes provider stream abort to Aborted instead of ProviderError', async () => {
+    const abort = new AbortController();
+    abort.abort();
+    const { ctx, recordedEvents } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'text_delta', text: 'should not matter' },
+      ]),
+      registry: makeRegistry({}),
+      toolContext: { ...emptyToolContext(), signal: abort.signal },
+    });
+
+    const event = await new ExecutingNode().execute(ctx, null);
+
+    expect(event.kind).toBe('Aborted');
+    expect(ctx.stopReason).toBe('aborted');
+    expect(recordedEvents).toContainEqual(expect.objectContaining({
+      event: 'operation_finished',
+      args: [expect.objectContaining({ status: 'aborted', kind: 'provider' })],
+    }));
+  });
+
+  it('times out thinking-only provider streams', async () => {
+    async function* thinkingOnly(): AsyncIterable<ChatDelta> {
+      yield { type: 'thinking_delta', text: 'still thinking' };
+      await sleep(20);
+      yield { type: 'thinking_delta', text: 'still only thinking' };
+    }
+
+    await expect(consumeStream({
+      stream: thinkingOnly(),
+      idleTimeoutMs: 1_000,
+      thinkingOnlyTimeoutMs: 1,
+    })).rejects.toMatchObject({ name: 'TimeoutError', code: 'TIMEOUT' });
+  });
+
+  it('aborts the tool invocation signal when a tool deadline expires', async () => {
+    let sawAbort = false;
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'slow_tool',
+      description: 'slow test tool',
+      parameters: { type: 'object', properties: {} },
+      source: 'native',
+      timeoutMs: 5,
+      handler: async (_args, toolCtx) => new Promise<ToolResult>((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const finish = (result: ToolResult): void => {
+          if (timer) clearTimeout(timer);
+          resolve(result);
+        };
+        if (toolCtx.signal?.aborted) {
+          sawAbort = true;
+          finish({ content: 'aborted immediately' });
+          return;
+        }
+        toolCtx.signal?.addEventListener('abort', () => {
+          sawAbort = true;
+          finish({ content: 'aborted by deadline' });
+        }, { once: true });
+        timer = setTimeout(() => finish({ content: 'late success' }), 1_000);
+      }),
+    });
+    const { ctx } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'tool_call_start', id: 'tu-slow', name: 'slow_tool' },
+        { type: 'tool_call_end', id: 'tu-slow', name: 'slow_tool', input: {} },
+        { type: 'done', stop_reason: 'tool_use' },
+      ]),
+      registry,
+      toolContext: emptyToolContext(),
+    });
+
+    const event = await new ExecutingNode().execute(ctx, null);
+    await sleep(0);
+
+    expect(event.kind).toBe('TurnSucceeded');
+    expect(sawAbort).toBe(true);
+    expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('[tool-timeout: `slow_tool` exceeded');
   });
 });

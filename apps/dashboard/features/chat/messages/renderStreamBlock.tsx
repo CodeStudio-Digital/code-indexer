@@ -9,6 +9,7 @@ import { TaskListReview } from '../prompts/TaskListReview.js';
 import type { PromptHandlers } from '../types.js';
 import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { Markdown } from './Markdown.js';
+import { TaskExecutionBlock } from './TaskExecutionBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 
@@ -135,6 +136,9 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
         onResponse={handlers.onTasksResponse}
       />
     );
+  }
+  if (block.type === 'task_run') {
+    return <TaskExecutionBlock key={`tr-${block.run.runId}`} run={block.run} />;
   }
   if (block.type === 'agents') {
     return <AgentsGroupBlock key={`ag-${block.group.groupId}`} group={block.group} />;

@@ -276,7 +276,7 @@
   "state.goalBudget": "orçamento {{tokens}}",
   "state.tasksLabel": "Tarefas",
   "state.tasksAwaiting": "aguardando aprovação",
-  "state.tasksCounts": "{{pending}} pendentes · {{running}} executando · {{completed}} concluídas · {{failed}} falhas",
+  "state.tasksCounts": "{{pending}} pendentes · {{running}} executando · {{completed}} concluídas · {{skipped}} puladas · {{interrupted}} interrompidas · {{failed}} falhas",
   "state.tasksMode": "modo: {{mode}}",
   "state.tasksRunning": "Executando: {{title}}",
   "files.title": "Arquivos do projeto",

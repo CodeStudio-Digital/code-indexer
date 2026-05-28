@@ -14,6 +14,7 @@ import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { RunnerOptions } from '../types.js';
 import type { RecoveryKind } from '../recovery-config.js';
 import type { BridgeCallbacks, RunContext } from './types.js';
+import { AsyncOperationRegistry } from '../operations.js';
 
 export interface CreateRunContextArgs {
   opts: RunnerOptions;
@@ -60,7 +61,20 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     transition: null,
     stopReason: null,
     error: null,
+    operations: new AsyncOperationRegistry(args.emit),
     bridge: args.bridge,
+    // Telemetry — set by ExecutingNode after each successful turn.
+    // Host's `flushPendingTurn` (`index.ts`) reads from
+    // `runner.lastTurnTelemetryId`, which mirrors this value through
+    // the bridge callback in `runViaBehaviorTree`.
+    lastTurnTelemetryId: null,
+    // PR-F — dynamic-injection state starts empty; Executing/Compacting
+    // mutate it as they emit reminders / compact.
+    injectionState: {
+      lastInjectedSkillIds: new Set<string>(),
+      lastInjectedFiles: new Set<string>(),
+      recentCompactionAt: null,
+    },
   };
 }
 

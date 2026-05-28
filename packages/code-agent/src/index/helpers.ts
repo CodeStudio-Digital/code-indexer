@@ -33,6 +33,8 @@ export function defaultModelFor(provider: CoderProviderName): string {
       return 'claude-sonnet-4-6';
     case 'openai':
       return 'gpt-4o-mini';
+    case 'openrouter':
+      return '~openai/gpt-latest';
     case 'zai':
       return 'glm-5.1';
     case 'deepseek':

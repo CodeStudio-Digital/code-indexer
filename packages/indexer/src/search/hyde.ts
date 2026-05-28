@@ -15,7 +15,7 @@
  *
  * Supports two shapes:
  *   - Anthropic (claude-haiku-4-5) via @anthropic-ai/sdk
- *   - OpenAI-compatible (openai, zai, deepseek, ...) via openai SDK
+ *   - OpenAI-compatible (openai, openrouter, zai, deepseek, ...) via openai SDK
  *
  * Results are cached in-process keyed by query — consecutive calls for the
  * same question are free.
@@ -84,7 +84,7 @@ export class HyDEService {
   private async callLLM(cfg: ProviderConfig, query: string, projectContext?: { language?: string; concepts?: string[] }): Promise<string> {
     const prompt = buildHyDEPrompt(query, projectContext);
     if (cfg.kind === 'anthropic') return this.callAnthropic(cfg, prompt);
-    // OpenAI-compatible: openai, zai, deepseek, and any "kind: openai" custom.
+    // OpenAI-compatible: openai, openrouter, zai, deepseek, and any "kind: openai" custom.
     return this.callOpenAICompat(cfg, prompt);
   }
 
@@ -135,9 +135,10 @@ export class HyDEService {
     const extraModel = (cfg.extra as { hyde_model?: string } | undefined)?.hyde_model;
     const model = extraModel ?? this.defaultModelFor(cfg.kind);
 
+    const baseURL = cfg.base_url ?? (cfg.kind === 'openrouter' ? 'https://openrouter.ai/api/v1' : undefined);
     const client = new OpenAI({
       apiKey: cfg.api_key ?? '',
-      ...(cfg.base_url ? { baseURL: cfg.base_url } : {}),
+      ...(baseURL ? { baseURL } : {}),
     });
     const resp = await client.chat.completions.create({
       model,
@@ -152,6 +153,8 @@ export class HyDEService {
     switch (kind) {
       case 'openai':
         return 'gpt-4o-mini';
+      case 'openrouter':
+        return 'openai/gpt-4o-mini';
       case 'deepseek':
         return 'deepseek-chat';
       case 'zai':

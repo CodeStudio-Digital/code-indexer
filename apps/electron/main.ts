@@ -99,9 +99,87 @@ async function bootstrap() {
   mountIpcHandlers(deps, honoApp);
   mountTerminalIpc(deps);
   registerNativeIpc();
+  registerWindowIpc();
   registerMcpProtocol(honoApp);
 
-  const window = new BrowserWindow({
+  await createAppWindow();
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
+}
+
+/**
+ * Decide whether a URL belongs to the in-app surface or should be
+ * treated as "external" (and therefore opened in the user's default
+ * browser instead of an Electron window).
+ *
+ * Internal protocols:
+ *   - `mcp://`        — our in-process backend (prod renderer hits this).
+ *   - `file://`       — bundled dashboard assets in production.
+ *   - `about:blank`   — Chromium internal, harmless.
+ *
+ * Plus the Vite dev server URL when running `npm run electron:dev`, so
+ * that internal SPA navigation in development isn't mistaken for an
+ * external link.
+ */
+function isInternalUrl(rawUrl: string): boolean {
+  if (!rawUrl) return false;
+  if (rawUrl === 'about:blank') return true;
+  if (rawUrl.startsWith('mcp://')) return true;
+  if (rawUrl.startsWith('file://')) return true;
+  if (DEV_URL && rawUrl.startsWith(DEV_URL)) return true;
+  return false;
+}
+
+/**
+ * Attach the window-open + navigation handlers that route external
+ * URLs to the OS default browser. Without this, `<a target="_blank">`
+ * and `window.open(...)` would spawn a chromeless popup INSIDE Electron
+ * — bad UX (no address bar, no history, no extensions) and a security
+ * footgun (the popup inherits our preload bridge).
+ *
+ * The preview pane of the builder is the one place we intentionally
+ * WANT an in-Electron window — callers pass `features: 'newWindow'`
+ * (or any feature string at all, since regular SPA navigation never
+ * sets features) to opt into that path. Anything else with an
+ * external URL goes to the OS browser.
+ */
+function attachWindowHandlers(win: BrowserWindow) {
+  win.webContents.setWindowOpenHandler(({ url, features }) => {
+    // Internal URL + caller asked for a real window → let Electron
+    // open it (e.g. preview pane's "open in new tab" inside our shell).
+    if (isInternalUrl(url)) {
+      if (features && features.length > 0) {
+        return { action: 'allow' };
+      }
+      // Stray popup attempt without features — block; SPA nav should
+      // use router instead of window.open.
+      return { action: 'deny' };
+    }
+    // External URL → user's default browser.
+    void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  // Catches `<a href="https://...">` clicks (top-level nav) that bypass
+  // setWindowOpenHandler. Without this, clicking such a link replaces
+  // the dashboard with the external page inside our window.
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isInternalUrl(url)) return;
+    event.preventDefault();
+    void shell.openExternal(url);
+  });
+}
+
+/**
+ * Create the main BrowserWindow (also reused for "open in new window"
+ * spawned via the `window:open` IPC handler). `routeSuffix` is appended
+ * to the dashboard base URL — e.g. `/projects/42` or
+ * `/company/sessions/7/main/work/chat`.
+ */
+async function createAppWindow(routeSuffix?: string): Promise<BrowserWindow> {
+  const win = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 1024,
@@ -116,16 +194,51 @@ async function bootstrap() {
     },
   });
 
+  attachWindowHandlers(win);
+
   if (DEV_URL) {
-    await window.loadURL(DEV_URL);
-    window.webContents.openDevTools({ mode: 'detach' });
+    const target = routeSuffix ? `${DEV_URL.replace(/\/$/, '')}${routeSuffix}` : DEV_URL;
+    await win.loadURL(target);
+    win.webContents.openDevTools({ mode: 'detach' });
   } else {
     // Production: dashboard build is bundled into the asar at dist/dashboard.
-    await window.loadFile(path.join(__dirname, '../../dashboard/index.html'));
+    // React Router uses BrowserRouter, so a deep-link route lives in the
+    // pathname — we use hash-prefixed style here (`#/path`) only if the
+    // app is hash-routed. Today it's BrowserRouter, so we load the
+    // base index.html and rely on the renderer reading the hash/query
+    // we append. Simpler: pass the route via a `?initial=...` query the
+    // App entry reads on mount, falling back to current location.
+    const baseFile = path.join(__dirname, '../../dashboard/index.html');
+    if (routeSuffix) {
+      await win.loadFile(baseFile, { hash: routeSuffix });
+    } else {
+      await win.loadFile(baseFile);
+    }
   }
 
-  app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+  return win;
+}
+
+/**
+ * IPC handler for "open in new window" — the renderer's context menu
+ * calls `window.electronAPI.openInNewWindow(route)` and we spawn a
+ * fresh BrowserWindow pointing at that route. The window inherits the
+ * same preload + protocol setup, so it talks to the same in-process
+ * backend.
+ */
+function registerWindowIpc() {
+  ipcMain.handle('window:open', async (_event, payload: { route?: string; title?: string }) => {
+    const route = typeof payload?.route === 'string' ? payload.route : undefined;
+    const title = typeof payload?.title === 'string' ? payload.title : undefined;
+    try {
+      const win = await createAppWindow(route);
+      if (title) win.setTitle(title);
+      return { ok: true, windowId: win.id };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[electron] window:open failed:', message);
+      return { ok: false, error: message };
+    }
   });
 }
 

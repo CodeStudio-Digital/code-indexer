@@ -213,12 +213,15 @@ export function SessionStateSidebar({
                   <span className="mt-0.5 shrink-0">{taskStatusIcon(task.status, isCurrent)}</span>
                   <span
                     className={cn(
-                      task.status === 'completed' && 'text-muted-foreground line-through',
+                      (task.status === 'done' || task.status === 'skipped') && 'text-muted-foreground line-through',
                       task.status === 'failed' && 'text-destructive',
+                      task.status === 'interrupted' && 'text-warning',
                       isCurrent && 'text-foreground font-medium',
                       !isCurrent &&
-                        task.status !== 'completed' &&
+                        task.status !== 'done' &&
+                        task.status !== 'skipped' &&
                         task.status !== 'failed' &&
+                        task.status !== 'interrupted' &&
                         'text-muted-foreground',
                     )}
                     title={task.title}
@@ -308,7 +311,7 @@ export function SessionStateSidebar({
 }
 
 function taskStatusIcon(status: string, isCurrent: boolean) {
-  if (status === 'completed') {
+  if (status === 'done') {
     return <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />;
   }
   if (status === 'running' || isCurrent) {
@@ -321,9 +324,16 @@ function taskStatusIcon(status: string, isCurrent: boolean) {
 }
 
 function countByStatus(tasks: TaskRow[]): Record<string, number> {
-  const out: Record<string, number> = { pending: 0, running: 0, completed: 0, failed: 0 };
+  const out: Record<string, number> = {
+    pending: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    skipped: 0,
+    interrupted: 0,
+  };
   for (const t of tasks) {
-    const k = t.status in out ? t.status : 'pending';
+    const k = t.status === 'done' ? 'completed' : t.status in out ? t.status : 'pending';
     out[k] = (out[k] ?? 0) + 1;
   }
   return out;

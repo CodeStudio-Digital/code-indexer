@@ -30,7 +30,14 @@ export interface CompactionThresholdDecision {
   effective: number;
 }
 
-export const DEFAULT_TRIGGER_RATIO = 0.9;
+/**
+ * Frente B (PR 2 da reavaliação) — desceu de 0.9 → 0.75. Com o char
+ * compactor legacy morto, o LLM compactor precisa disparar ANTES da
+ * pressão real para preservar fidelidade (90% deixava pouco espaço para
+ * o LLM auxiliar trabalhar; 75% antecipa o resumo enquanto ainda há
+ * 25% de janela disponível para o turno em curso).
+ */
+export const DEFAULT_TRIGGER_RATIO = 0.75;
 
 export function shouldCompact90(inp: CompactionThresholdInputs): CompactionThresholdDecision {
   const limits = deriveTokenLimits(inp.model);

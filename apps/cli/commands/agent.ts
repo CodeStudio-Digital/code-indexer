@@ -1,4 +1,5 @@
 import type { Command } from 'commander';
+import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import { resolve } from 'node:path';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { getDB, promptStdin } from '../helpers.js';
@@ -87,7 +88,7 @@ export function register(program: Command): void {
             create: {
               project_id: projectId!,
               title: task.slice(0, 60),
-              provider: opts.provider as 'anthropic' | 'openai' | 'zai' | 'deepseek',
+              provider: opts.provider as CoderProviderName,
               model: opts.model,
             },
           } as const);

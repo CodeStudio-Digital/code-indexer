@@ -191,6 +191,7 @@ export interface ToolContext {
     patch: Partial<import('@mcp/code-agent/sessions/types.js').CoderTask>,
   ) => import('@mcp/code-agent/sessions/types.js').TasksState | null;
   getTasksState?: () => import('@mcp/code-agent/sessions/types.js').TasksState | null;
+  clearTasksState?: () => boolean;
   /**
    * Optional persistence sinks for the goal tools (`create_goal`,
    * `get_goal`, `update_goal`). Wired by `runCoder` so the goal survives
@@ -230,6 +231,16 @@ export interface ToolContext {
     fs?: import('@mcp/code-agent/ports/filesystem-port.js').IFilesystemPort;
     shell?: import('@mcp/code-agent/ports/shell-port.js').IShellPort;
   };
+  /**
+   * Frente C (PR 3 da reavaliação) — present only inside subagent runs.
+   * The `record_memo` tool consults this; subagent-collector-aware tool
+   * wrappers (snapshot, board_post) also mirror their writes here so
+   * the parent gets a structured trail.
+   *
+   * Untyped here to avoid a circular import with `tools/subagent-collector.ts`;
+   * the consumer narrows when needed.
+   */
+  subagentCollector?: import('@mcp/code-agent/tools/subagent-collector.js').SubagentCollector;
 }
 
 export interface ToolResult {

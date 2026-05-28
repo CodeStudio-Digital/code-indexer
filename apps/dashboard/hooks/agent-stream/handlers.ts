@@ -7,6 +7,10 @@ import type {
   StreamTask,
   StreamTaskMode,
   StreamTaskStatus,
+  TaskRunMode,
+  TaskRunState,
+  TaskRunTask,
+  TaskRunTaskStatus,
   TodoItem,
   ToolCallEvent,
   ToolLoopIntervention,
@@ -259,6 +263,144 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       updateSession(sid, (cur) => ({ sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
     },
 
+    task_run_started: (data) => {
+      const d = data as {
+        run_id: string;
+        mode: TaskRunMode;
+        total_tasks: number;
+        waves: Array<{
+          index: number;
+          tasks: Array<{
+            id: string;
+            title: string;
+            kind: TaskRunTask['kind'];
+            mode: StreamTaskMode;
+          }>;
+        }>;
+      };
+      removeLiveExecuteTasksToolBlock(blocks, toolIndex);
+      const tasks: TaskRunTask[] = [];
+      const waves = d.waves.map((wave) => {
+        const taskIds: string[] = [];
+        for (const task of wave.tasks) {
+          taskIds.push(task.id);
+          tasks.push({
+            id: task.id,
+            title: task.title,
+            kind: task.kind,
+            wave: wave.index,
+            mode: task.mode,
+            status: 'pending',
+            toolCallCount: 0,
+          });
+        }
+        return { index: wave.index, taskIds };
+      });
+      blocks.push({
+        type: 'task_run',
+        run: {
+          runId: d.run_id,
+          mode: d.mode,
+          status: 'running',
+          totalTasks: d.total_tasks,
+          waves,
+          tasks,
+          startedAt: new Date().toISOString(),
+        },
+      });
+      flush();
+    },
+
+    task_run_task_started: (data) => {
+      const d = data as {
+        run_id: string;
+        task_id: string;
+        title: string;
+        kind: TaskRunTask['kind'];
+        wave: number;
+        mode: StreamTaskMode;
+        started_at: string;
+      };
+      patchTaskRun(blocks, d.run_id, d.task_id, (task) => ({
+        ...task,
+        title: d.title,
+        kind: d.kind,
+        wave: d.wave,
+        mode: d.mode,
+        status: 'running',
+        startedAt: d.started_at,
+      }));
+      updateSession(sid, (cur) => ({ sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
+      flush();
+    },
+
+    task_run_task_progress: (data) => {
+      const d = data as {
+        run_id: string;
+        task_id: string;
+        tool_call_count: number;
+        note?: string;
+        phase?: string;
+        last_tool_name?: string;
+        turn?: number;
+        limit?: TaskRunTask['limit'];
+        elapsed_ms?: number;
+        stall_ms?: number;
+      };
+      patchTaskRun(blocks, d.run_id, d.task_id, (task) => ({
+        ...task,
+        toolCallCount: d.tool_call_count,
+        ...(d.note ? { progressNote: d.note } : {}),
+        ...(d.phase ? { phase: d.phase } : {}),
+        ...(d.last_tool_name ? { lastToolName: d.last_tool_name } : {}),
+        ...(d.turn != null ? { turn: d.turn } : {}),
+        ...(d.limit ? { limit: d.limit } : {}),
+        ...(d.elapsed_ms != null ? { elapsedMs: d.elapsed_ms } : {}),
+        ...(d.stall_ms != null ? { stallMs: d.stall_ms } : {}),
+      }));
+      flush();
+    },
+
+    task_run_task_finished: (data) => {
+      const d = data as {
+        run_id: string;
+        task_id: string;
+        status: TaskRunTaskStatus;
+        summary: string;
+        error?: string;
+        usage?: Usage;
+        tool_call_count?: number;
+        finished_at: string;
+      };
+      patchTaskRun(blocks, d.run_id, d.task_id, (task) => ({
+        ...task,
+        status: d.status,
+        summary: d.summary,
+        ...(d.error ? { error: d.error } : {}),
+        ...(d.usage ? { usage: d.usage } : {}),
+        ...(d.tool_call_count != null ? { toolCallCount: d.tool_call_count } : {}),
+        finishedAt: d.finished_at,
+      }));
+      updateSession(sid, (cur) => ({ sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
+      flush();
+    },
+
+    task_run_finished: (data) => {
+      const d = data as {
+        run_id: string;
+        status: 'completed' | 'failed' | 'aborted';
+        total_usage?: Usage;
+        finished_at: string;
+      };
+      const run = findTaskRun(blocks, d.run_id);
+      if (run) {
+        run.status = d.status;
+        run.totalUsage = d.total_usage;
+        run.finishedAt = d.finished_at;
+      }
+      flush();
+    },
+
     agents_group_start: (data) => {
       const d = data as {
         groupId: string;
@@ -289,10 +431,18 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         groupId: string;
         agentIndex: number;
         label: string;
-        event: 'spawned' | 'tool_call' | 'completed' | 'error';
+        event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'error' | 'timed_out' | 'aborted';
+        status?: AgentStatus;
         provider?: string;
         model?: string;
         toolCallCount?: number;
+        note?: string;
+        phase?: string;
+        turn?: number;
+        elapsedMs?: number;
+        idleMs?: number;
+        deadlineMs?: number;
+        lastToolName?: string;
         usage?: Usage;
         summary?: string;
         error?: string;
@@ -303,16 +453,38 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         if (!agent) continue;
         if (d.provider) agent.provider = d.provider;
         if (d.model) agent.model = d.model;
+        if (d.phase) agent.phase = d.phase;
+        if (d.turn != null) agent.turn = d.turn;
+        if (d.elapsedMs != null) agent.elapsedMs = d.elapsedMs;
+        if (d.idleMs != null) agent.idleMs = d.idleMs;
+        if (d.deadlineMs != null) agent.deadlineMs = d.deadlineMs;
+        if (d.lastToolName) agent.lastToolName = d.lastToolName;
         switch (d.event) {
           case 'spawned':
-            agent.status = 'running';
+            agent.status = d.status ?? 'running';
+            break;
+          case 'heartbeat':
+            agent.status = d.status ?? 'running';
+            if (d.toolCallCount != null) agent.toolCallCount = d.toolCallCount;
+            if (d.note) agent.progressNote = d.note;
             break;
           case 'tool_call':
+            agent.status = d.status ?? 'running';
             agent.toolCallCount = d.toolCallCount ?? agent.toolCallCount + 1;
             break;
           case 'completed':
             agent.status = 'completed';
             agent.usage = d.usage;
+            agent.summary = d.summary;
+            break;
+          case 'timed_out':
+            agent.status = 'timed_out';
+            agent.error = d.error;
+            agent.summary = d.summary;
+            break;
+          case 'aborted':
+            agent.status = 'aborted';
+            agent.error = d.error;
             agent.summary = d.summary;
             break;
           case 'error':
@@ -440,8 +612,10 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     },
 
     error: (data) => {
+      const message = String((data as { message?: string }).message ?? 'unknown');
+      markInFlightBlocksFailed(blocks, message);
       flushNow();
-      updateSession(sid, { error: String((data as { message?: string }).message ?? 'unknown') });
+      updateSession(sid, { error: message });
     },
   };
 }
@@ -633,6 +807,25 @@ export function createPipelineEventHandlers(
 }
 
 
+function removeLiveExecuteTasksToolBlock(
+  blocks: StreamBlock[],
+  toolIndex: Map<string, number>,
+): void {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i];
+    if (block.type !== 'tool') continue;
+    if (block.call.name !== 'execute_tasks') continue;
+    if (block.call.status !== 'running') continue;
+    toolIndex.delete(block.call.id);
+    blocks.splice(i, 1);
+  }
+  toolIndex.clear();
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (block.type === 'tool') toolIndex.set(block.call.id, i);
+  }
+}
+
 function patchTask(
   blocks: StreamBlock[],
   flush: () => void,
@@ -672,4 +865,59 @@ function patchTask(
     mutated = true;
   }
   if (mutated) flush();
+}
+
+function findTaskRun(blocks: StreamBlock[], runId: string): TaskRunState | null {
+  for (const block of blocks) {
+    if (block.type === 'task_run' && block.run.runId === runId) return block.run;
+  }
+  return null;
+}
+
+function patchTaskRun(
+  blocks: StreamBlock[],
+  runId: string,
+  taskId: string,
+  patch: (task: TaskRunTask) => TaskRunTask,
+): void {
+  const run = findTaskRun(blocks, runId);
+  if (!run) return;
+  const idx = run.tasks.findIndex((task) => task.id === taskId);
+  if (idx < 0) return;
+  run.tasks[idx] = patch(run.tasks[idx]);
+}
+
+function markInFlightBlocksFailed(blocks: StreamBlock[], message: string): void {
+  const finishedAt = new Date().toISOString();
+  for (const block of blocks) {
+    if (block.type === 'tool' && block.call.status === 'running') {
+      block.call = {
+        ...block.call,
+        status: 'error',
+        result: { content: message, isError: true },
+        durationMs: block.call.startedAt ? Date.now() - block.call.startedAt : block.call.durationMs,
+        elapsedMs: undefined,
+        progressNote: undefined,
+      };
+      continue;
+    }
+    if (block.type !== 'task_run' || block.run.status !== 'running') continue;
+    block.run.status = 'failed';
+    block.run.finishedAt = finishedAt;
+    for (let i = 0; i < block.run.tasks.length; i++) {
+      const task = block.run.tasks[i];
+      if (
+        task.status === 'done' ||
+        task.status === 'failed' ||
+        task.status === 'skipped' ||
+        task.status === 'interrupted'
+      ) continue;
+      block.run.tasks[i] = {
+        ...task,
+        status: task.status === 'pending' ? 'skipped' : 'interrupted',
+        finishedAt,
+        error: task.status === 'pending' ? undefined : message,
+      };
+    }
+  }
 }

@@ -150,9 +150,16 @@ export function SessionStateBanner({ sessionId, refreshKey, onActiveTaskChange }
 }
 
 function countByStatus(tasks: TaskRow[]): Record<string, number> {
-  const out: Record<string, number> = { pending: 0, running: 0, completed: 0, failed: 0 };
+  const out: Record<string, number> = {
+    pending: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    skipped: 0,
+    interrupted: 0,
+  };
   for (const t of tasks) {
-    const k = t.status in out ? t.status : 'pending';
+    const k = t.status === 'done' ? 'completed' : t.status in out ? t.status : 'pending';
     out[k] = (out[k] ?? 0) + 1;
   }
   return out;

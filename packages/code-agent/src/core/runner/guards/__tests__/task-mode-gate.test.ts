@@ -6,11 +6,11 @@
  *   - Tasks not approved → allow.
  *   - `execution_mode` != 'all-subagent' → allow (inline/smart/per-task
  *     are the model's discretion).
- *   - Workflow-internal tools (execute_task, task_complete, …) → always allow.
+ *   - Workflow-internal tools (execute_tasks, task_complete, …) → always allow.
  *   - Read-only tools (`mutates=false`) → allow.
  *   - All tasks done/skipped → workflow finished, allow.
  *   - Mutating non-workflow tool while pending → REFUSE with pointer to
- *     `execute_task` and the next pending task id.
+ *     `execute_tasks` and the next pending task id.
  */
 import { describe, it, expect } from 'vitest';
 import { checkTaskModeGate, type TaskGateState } from '../task-mode-gate.js';
@@ -20,8 +20,8 @@ function state(overrides: Partial<TaskGateState> = {}): TaskGateState {
     approved: true,
     execution_mode: 'all-subagent',
     tasks: [
-      { id: 'task_1', status: 'pending' },
-      { id: 'task_2', status: 'pending' },
+      { id: 'tsk_one', status: 'pending' },
+      { id: 'tsk_two', status: 'pending' },
     ],
     ...overrides,
   };
@@ -63,7 +63,20 @@ describe('checkTaskModeGate', () => {
   });
 
   it('allows workflow tools even under all-subagent', () => {
-    for (const name of ['execute_task', 'task_complete', 'update_task', 'submit_tasks', 'spawn_agent']) {
+    // Frente D — `execute_task` (singular) is no longer registered, so
+    // the gate doesn't need to allowlist it. `execute_tasks` (plural) is
+    // the only dispatch entry point now.
+    for (const name of [
+      'execute_tasks',
+      'task_complete',
+      'list_tasks',
+      'cancel_tasks',
+      'delete_tasks',
+      'archive_task_list',
+      'update_task',
+      'submit_tasks',
+      'spawn_agent',
+    ]) {
       expect(checkTaskModeGate({
         tasksState: state(),
         toolName: name,
@@ -84,8 +97,8 @@ describe('checkTaskModeGate', () => {
     expect(checkTaskModeGate({
       tasksState: state({
         tasks: [
-          { id: 'task_1', status: 'done' },
-          { id: 'task_2', status: 'skipped' },
+          { id: 'tsk_one', status: 'done' },
+          { id: 'tsk_two', status: 'skipped' },
         ],
       }),
       toolName: 'edit_file',
@@ -101,24 +114,27 @@ describe('checkTaskModeGate', () => {
     });
     expect(refusal).not.toBeNull();
     expect(refusal!).toMatch(/all-subagent/);
-    expect(refusal!).toMatch(/execute_task/);
-    expect(refusal!).toMatch(/task_1/); // next pending task id surfaced
+    // Frente D — refusal now points at `execute_tasks` (plural).
+    expect(refusal!).toMatch(/execute_tasks/);
+    expect(refusal!).toMatch(/tsk_one/); // next pending task id surfaced
   });
 
   it('points at the FIRST non-terminal task as the next id', () => {
     const refusal = checkTaskModeGate({
       tasksState: state({
         tasks: [
-          { id: 'task_1', status: 'done' },
-          { id: 'task_2', status: 'pending' },
-          { id: 'task_3', status: 'pending' },
+          { id: 'tsk_one', status: 'done' },
+          { id: 'tsk_two', status: 'pending' },
+          { id: 'tsk_three', status: 'pending' },
         ],
       }),
       toolName: 'run_command',
       toolMutates: true,
     });
     expect(refusal).not.toBeNull();
-    expect(refusal!).toMatch(/"task_id":"task_2"/);
-    expect(refusal!).toMatch(/Pending tasks: task_2, task_3/);
+    // Frente D — refusal text now mentions `(next pending: ID)` instead
+    // of an embedded `task_id` JSON literal.
+    expect(refusal!).toMatch(/next pending: tsk_two/);
+    expect(refusal!).toMatch(/Pending tasks: tsk_two, tsk_three/);
   });
 });

@@ -32,6 +32,7 @@ export {
   MessageBridge,
   ErrPortClosed,
   ErrRequestTimeout,
+  isPortClosedError,
 } from './MessageBridge.js';
 export type { MessageBridgeOpts, MessagePortLike } from './MessageBridge.js';
 export { WorkerHost } from './WorkerHost.js';

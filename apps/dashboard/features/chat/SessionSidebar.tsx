@@ -265,7 +265,7 @@ export function SessionSidebar({
               </Button>
             )}
             <Button size="sm" onClick={onNew}>
-              <Plus className="h-3.5 w-3.5" /> {t('chat:sidebar.new')}
+              <Plus className="h-3.5 w-3.5" />
             </Button>
           </div>
         </div>

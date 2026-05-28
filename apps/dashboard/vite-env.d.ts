@@ -33,6 +33,16 @@ declare global {
     openDirectory?: () => Promise<string | null>;
     /** Open a URL in the user's default browser. */
     openExternal?: (url: string) => void;
+    /**
+     * Spawn a new Electron window pointing at `route` (e.g. `/projects/42`
+     * or `/company/sessions/7/main/work/chat`). The new window inherits
+     * the same preload + protocol setup, so it talks to the same
+     * in-process backend without extra wiring.
+     */
+    openInNewWindow?: (
+      route: string,
+      title?: string,
+    ) => Promise<{ ok: boolean; windowId?: number; error?: string }>;
     /** App version reported by Electron's main process. */
     getAppVersion?: () => Promise<string>;
     /** Show a native desktop notification. */

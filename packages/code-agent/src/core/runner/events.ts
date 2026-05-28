@@ -6,6 +6,7 @@ import type {
   QuestionBlock,
 } from '@mcp/code-agent/core/messages.js';
 import type { StopReason, TransitionKind } from './types.js';
+import type { AsyncOperationSnapshot } from './operations.js';
 
 /**
  * Events emitted by the runner. CLI and SSE handler both consume these.
@@ -41,6 +42,10 @@ export interface RunnerEvents {
    * there for the persistence path.
    */
   tool_call_finalized: (id: string, info: { shapedChars: number }) => void;
+  /** Generic lifecycle for long async operations (provider/tool/subagent/task). */
+  operation_started: (payload: AsyncOperationSnapshot) => void;
+  operation_progress: (payload: AsyncOperationSnapshot) => void;
+  operation_finished: (payload: AsyncOperationSnapshot) => void;
   message_complete: (message: AgentMessage, usage: ChatUsage | null) => void;
   turn_start: (turn: number) => void;
   /**
@@ -87,6 +92,87 @@ export interface RunnerEvents {
     task_id: string;
     patch: Partial<import('@mcp/code-agent/sessions/types.js').CoderTask>;
   }) => void;
+  /** Emitted by execute_tasks to render a live task execution timeline. */
+  task_run_started: (payload: {
+    run_id: string;
+    mode: 'auto' | 'inline-all';
+    total_tasks: number;
+    waves: Array<{
+      index: number;
+      tasks: Array<{
+        id: string;
+        title: string;
+        kind: import('@mcp/code-agent/sessions/types.js').TaskKind;
+        mode: 'subagent' | 'inline';
+      }>;
+    }>;
+  }) => void;
+  task_run_task_started: (payload: {
+    run_id: string;
+    task_id: string;
+    title: string;
+    kind: import('@mcp/code-agent/sessions/types.js').TaskKind;
+    wave: number;
+    mode: 'subagent' | 'inline';
+    started_at: string;
+  }) => void;
+  task_run_task_progress: (payload: {
+    run_id: string;
+    task_id: string;
+    tool_call_count: number;
+    note?: string;
+    phase?: string;
+    last_tool_name?: string;
+    turn?: number;
+    limit?: {
+      maxToolCalls?: number;
+      timeoutMs?: number;
+      stallMs?: number;
+    };
+    elapsed_ms?: number;
+    stall_ms?: number;
+  }) => void;
+  task_run_task_finished: (payload: {
+    run_id: string;
+    task_id: string;
+    status: import('@mcp/code-agent/sessions/types.js').TaskStatus;
+    summary: string;
+    error?: string;
+    usage?: ChatUsage;
+    tool_call_count: number;
+    finished_at: string;
+  }) => void;
+  /**
+   * PR-E: emitted by `execute_tasks` when the run's token budget is
+   * about to be exceeded. The dashboard renders the prompt and posts
+   * the user's choice back via `runner.provideUserInput(answer, ask_id)`.
+   * Tools without a UI can ignore this event — the orchestrator falls
+   * back to 'cancel_pending' when no answer arrives.
+   */
+  budget_request: (payload: {
+    ask_id: string;
+    run_id: string;
+    spent: number;
+    cap: number;
+    estimated: number;
+    options: ReadonlyArray<string>;
+  }) => void;
+  task_run_finished: (payload: {
+    run_id: string;
+    /**
+     * `aborted` (PR-A) signals the orchestrator intentionally declined to
+     * dispatch (e.g. execute_tasks called while execution_mode='inline').
+     * Distinct from `failed`, which means a subagent crashed or returned
+     * an error result. The dashboard renders both as terminal but with
+     * different colour/icon — `aborted` shows the optional `reject_reason`
+     * tooltip.
+     */
+    status: 'completed' | 'failed' | 'aborted';
+    /** Set when `status==='aborted'` to explain WHY the run was declined. */
+    reject_reason?: string;
+    total_usage: ChatUsage;
+    finished_at: string;
+  }) => void;
   /** Emitted when `todo_write` replaces the session's lightweight checklist. */
   todos_updated: (payload: {
     todos: import('@mcp/code-agent/tools/todo.js').TodoItem[];
@@ -118,10 +204,23 @@ export interface RunnerEvents {
     groupId: string;
     agentIndex: number;
     label: string;
-    event: 'spawned' | 'tool_call' | 'completed' | 'error';
+    event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'error' | 'timed_out' | 'aborted';
+    status?: 'pending' | 'running' | 'completed' | 'error' | 'timed_out' | 'aborted';
     provider?: string;
     model?: string;
     toolCallCount?: number;
+    note?: string;
+    phase?: string;
+    turn?: number;
+    elapsedMs?: number;
+    idleMs?: number;
+    deadlineMs?: number;
+    lastToolName?: string;
+    limit?: {
+      maxToolCalls?: number;
+      timeoutMs?: number;
+      stallMs?: number;
+    };
     usage?: ChatUsage;
     summary?: string;
     error?: string;
@@ -367,5 +466,28 @@ export interface RunnerEvents {
     runId: string;
     turn: number;
     error: string;
+  }) => void;
+  /**
+   * Frente E — BT state dwell telemetry. Fires once per state transition,
+   * carrying how long the BT spent in the state it just left and which
+   * event triggered the transition. Useful for spotting pathological
+   * profiles (Executing dwells of multiple minutes, Compacting taking
+   * >30s, Recovering looping). Dashboard can render this as a per-node
+   * time histogram; bare CLI consumers may ignore it.
+   *
+   * Phase-1 telemetry: emitted but NOT persisted to any table. If we
+   * later want a coder_session_events table, the producer is already
+   * in place.
+   */
+  bt_state_dwell: (payload: {
+    runId: string;
+    /** Node we just left (the one whose execute() resolved with `event`). */
+    state: import('./machine/types.js').NodeState;
+    /** Event the node produced, driving the transition. */
+    event: import('./machine/types.js').BehaviorEventKind;
+    /** Wall-clock ms spent in `state` between entry and the transition. */
+    dwellMs: number;
+    /** Turn counter at the time of the transition — helps correlate. */
+    turn: number;
   }) => void;
 }

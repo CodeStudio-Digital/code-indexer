@@ -178,7 +178,9 @@ const SUBMIT_TASKS_TO_MASTER_DESC =
   "USE: when per-task context curation pays off — each task declares its files, references, and dependencies.\n" +
   "DON'T: use for linear single-action work. Use submit_plan_to_master — it's lighter.";
 
-// Reuse the schema shape from the original tasks.ts
+// Reuse the schema shape from the original tasks.ts. Task ids are generated
+// by validateTasksInput; any `id` supplied here is only a client alias used
+// to resolve depends_on inside this one submission.
 const submitTasksToMasterSchema: JsonSchema = {
   type: 'object',
   properties: {
@@ -192,7 +194,11 @@ const submitTasksToMasterSchema: JsonSchema = {
       items: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Unique task ID (e.g. "task_1")' },
+          id: {
+            type: 'string',
+            description:
+              'Optional client alias for depends_on within this submit_tasks_to_master call. The backend replaces it with a generated tsk_... id.',
+          },
           title: { type: 'string', description: 'Short task title' },
           description: { type: 'string', description: 'Detailed description of what to do' },
           files: { type: 'array', items: { type: 'string' }, description: 'File paths this task touches' },
@@ -210,11 +216,15 @@ const submitTasksToMasterSchema: JsonSchema = {
             },
             description: 'Code references relevant to this task',
           },
-          depends_on: { type: 'array', items: { type: 'string' }, description: 'IDs of tasks this depends on' },
+          depends_on: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional client aliases from this same submission. Rewritten to generated tsk_... ids.',
+          },
           suggested_mode: { type: 'string', enum: ['inline', 'subagent'], description: 'Suggested execution mode' },
           estimated_complexity: { type: 'string', enum: ['small', 'medium', 'large'] },
         },
-        required: ['id', 'title', 'description'],
+        required: ['title', 'description'],
       },
     },
   },
@@ -280,7 +290,7 @@ export const submitTasksToMaster: CoderTool = {
       const fb = parsed.feedback ? ` Master feedback: ${parsed.feedback}` : '';
       return ok(
         `Tasks approved by Master. Execution mode: ${mode}. ${finalTasks.length} task(s) ready.${fb}\n` +
-        'Call execute_task for each task in dependency order.',
+        'Call list_tasks if unsure, then execute_task with the generated tsk_... ids in dependency order.',
       );
     }
     ctx.resolveTasks?.({ approved: false });

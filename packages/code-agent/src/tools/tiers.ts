@@ -62,6 +62,10 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'ask_user',
   'submit_plan',
   'submit_tasks',
+  'list_tasks',
+  'cancel_tasks',
+  'delete_tasks',
+  'archive_task_list',
   // Subordinate variants (company mode — same events, master-directed names)
   'ask_master',
   'submit_plan_to_master',
@@ -106,6 +110,11 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // execute_tasks — wave-based orchestrator (PR 3). Same rationale as
   // spawn_agent: orchestration that any session must be able to call.
   'execute_tasks',
+  // Frente D — `update_task` joins the bootstrap set so it is
+  // discoverable via `find_tools` and usable without a tier unlock.
+  // The agent calls it to skip/retry/rename/rescope a task; status
+  // mutations beyond that stay with the orchestrator.
+  'update_task',
   'request_review',
   'get_tool_output',
   'glob',
@@ -157,8 +166,9 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   // alongside expand_toolset/find_tools so any session can delegate.
   // execute_tasks (plural) is the new wave-based orchestrator (PR 3) —
   // also BOOTSTRAP so the master can dispatch the whole approved list
-  // in one call. execute_task (singular) stays in NAVIGATE for legacy.
-  'execute_task',
+  // in one call. Frente D — `execute_task` (singular) is gone; only
+  // `task_complete` remains to close inline scopes opened by
+  // `execute_tasks` in inline / inline-all / smart modes.
   'task_complete',
   // MCP — deep navigation + edit prep
   'mcp__find_references',
@@ -363,6 +373,10 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   ask_user: 'Ask the user a question and wait for a reply',
   submit_plan: 'Submit an implementation plan for user approval',
   submit_tasks: 'Submit a task list for user approval',
+  list_tasks: 'List current task ids and statuses',
+  cancel_tasks: 'Cancel current tasks without deleting the audit trail',
+  delete_tasks: 'Delete tasks from the current task list',
+  archive_task_list: 'Clear the current task list',
   expand_toolset: 'Unlock higher-tier tools (navigate/admin)',
   find_tools: 'Search the full tool catalog by description',
   request_review: 'Spawn a reviewer subagent to second-opinion the diff',
@@ -412,8 +426,9 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   git_diff: 'Show staged/unstaged changes',
   git_log: 'Show recent commit history',
   spawn_agent: 'Spawn 1 (or N parallel, up to 8) agent(s) with read/implement/full toolset',
-  execute_task: 'Execute a task from the approved task list',
-  task_complete: 'Mark the current task as completed',
+  // Frente D — `execute_task` is gone; orchestration goes through `execute_tasks` (BOOTSTRAP).
+  task_complete: 'Close the current inline task scope and mark it done (inline-mode tail of execute_tasks).',
+  update_task: 'Skip / retry / rename / rescope a task without re-running submit_tasks.',
   // ─── Navigate MCP ─────────────────────────────────────────────
   mcp__find_references: 'Find all references to a symbol',
   mcp__trace_usage: 'Recursive usage tree (depth 3)',

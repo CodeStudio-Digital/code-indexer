@@ -12,6 +12,7 @@ import { googleOAuth } from './definitions/google-oauth.js';
 import { kimiCode } from './definitions/kimi-code.js';
 import { cloudflare } from './definitions/cloudflare.js';
 import { moonshot } from './definitions/moonshot.js';
+import { openrouter } from './definitions/openrouter.js';
 
 /**
  * Provider registry — single source of truth for all provider shapes.
@@ -44,6 +45,7 @@ const ALL_DEFINITIONS: ProviderDefinition[] = [
   kimiCode,
   cloudflare,
   moonshot,
+  openrouter,
 ];
 
 let cachedRegistry: Map<string, ProviderDefinition> | null = null;

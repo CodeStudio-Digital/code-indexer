@@ -121,6 +121,7 @@ import { apiTokensTier104 } from './104_api_tokens_tier.js';
 import { appSettings105 } from './105_app_settings.js';
 import { agentBoardWatermarks106 } from './106_agent_board_watermarks.js';
 import { agentSupervision107 } from './107_agent_supervision.js';
+import { coderTaskRuns108 } from './108_coder_task_runs.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -258,6 +259,7 @@ export const MIGRATIONS: Migration[] = [
   appSettings105,
   agentBoardWatermarks106,
   agentSupervision107,
+  coderTaskRuns108,
 ];
 
 /**

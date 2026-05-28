@@ -7,6 +7,7 @@ export type ProviderKind =
   | 'copilot'
   | 'chatgpt'
   | 'google-oauth'
+  | 'openrouter'
   | 'kimi-code'
   | 'cloudflare'
   | 'moonshot';
@@ -56,6 +57,7 @@ export const KINDS: ProviderKind[] = [
   'copilot',
   'chatgpt',
   'google-oauth',
+  'openrouter',
   'kimi-code',
   'cloudflare',
   'moonshot',

@@ -42,9 +42,14 @@ export interface TaskGateInputs {
  * always pass the gate even when the all-subagent constraint is active.
  */
 const WORKFLOW_TOOLS: ReadonlySet<string> = new Set([
-  'execute_tasks',  // PR 3 — wave-based orchestrator, preferred entry point
-  'execute_task',
+  'execute_tasks',  // PR 3 — wave-based orchestrator, the sole dispatch entry
+  // Frente D — `execute_task` (singular) is no longer registered; the gate
+  // doesn't need to keep an entry for a name the model can't produce.
   'task_complete',
+  'list_tasks',
+  'cancel_tasks',
+  'delete_tasks',
+  'archive_task_list',
   'update_task',
   'submit_tasks',
   // Investigation / orchestration tools — fine to call between tasks.
@@ -82,7 +87,7 @@ export function checkTaskModeGate(inp: TaskGateInputs): string | null {
   return (
     `[task-mode-gate: this session was approved with execution_mode="all-subagent". ` +
     `Every mutating change MUST go through an isolated implement subagent. ` +
-    `Call \`execute_task({"task_id":"${nextId}"})\` instead of \`${inp.toolName}\`.\n` +
+    `Call \`execute_tasks()\` (next pending: ${nextId}) instead of \`${inp.toolName}\`.\n` +
     `Pending tasks: ${pending.join(', ')}.]`
   );
 }

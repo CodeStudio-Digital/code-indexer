@@ -128,6 +128,8 @@ export class ModelDiscovery {
         return this.fetchAnthropicModels(apiKey, now);
       case 'openai':
         return this.fetchOpenAICompatModels('https://api.openai.com/v1/models', apiKey, 'openai', now);
+      case 'openrouter':
+        return this.fetchOpenAICompatModels('https://openrouter.ai/api/v1/models', apiKey, 'openrouter', now);
       case 'deepseek':
         return this.fetchOpenAICompatModels('https://api.deepseek.com/models', apiKey, 'deepseek', now);
       case 'zai':

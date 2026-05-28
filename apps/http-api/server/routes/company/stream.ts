@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import { isPortClosedError } from '@mcp/orchestrator-host';
 import {
   getCompanyOrchestrator,
   hasCompanyOrchestrator,
@@ -10,6 +11,14 @@ import {
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { withSessionLock } from '../coder/sessionLock.js';
+
+/**
+ * Backoff before retrying a resume that hit `port_closed`. The default
+ * WorkerHost restart cadence is `500ms * 2^attempt` (capped 8s); 600ms
+ * here covers the first restart attempt without making the user wait
+ * forever if the worker is truly dead.
+ */
+const PORT_CLOSED_RETRY_DELAY_MS = 600;
 
 /**
  * Backwards-compatible accessor used by sibling routes (kanban.ts).
@@ -236,6 +245,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       const session = companyStore.getCompanySession(id);
       if (!session) return { kind: 'reject', status: 404, body: { error: 'Not found' } };
       if (!body.message) return { kind: 'reject', status: 400, body: { error: 'message required' } };
+      const userMessage = body.message;
 
       // Sub-sessions (migration 067): a brand-new tab has no master_run
       // yet, so we cold-start instead of trying to resume.
@@ -251,19 +261,27 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       try { config = JSON.parse(session.config_json); } catch { /* defaults */ }
       const roleConfigs = config.role_assignments ?? [];
 
-      // Workers-only: spawn the orchestrator inside its worker_thread.
-      const spawned = await getOrSpawnCompanyOrchestrator(id);
-      const orchestrator = spawned.orchestrator;
-
-      // Same recovery path as the start branch — see /start above.
-      void orchestrator.pipelineRecoverRunning().catch((err) => {
-        console.warn(`[company s=${id}] pipeline recovery failed:`, err);
-      });
-
-      try {
+      // Spawn-or-attach helper. Wraps one full attempt at:
+      //   1. getOrSpawn the orchestrator (creates worker if needed)
+      //   2. fire pipeline recovery
+      //   3. resume OR cold-start the master
+      // Returns the spawn handle on success, throws on any failure.
+      //
+      // Extracted so the catch block can call it a SECOND time after a
+      // `port_closed` (the WorkerHost auto-restarts on worker exit, so
+      // the next `getOrSpawn` returns a fresh, healthy bridge).
+      const attemptSpawnAndResume = async (): Promise<{
+        orchestrator: CompanyOrchestrator;
+        bus: CompanyOrchestrator['metaBus'];
+      }> => {
+        const spawned = await getOrSpawnCompanyOrchestrator(id);
+        const orchestrator = spawned.orchestrator;
+        void orchestrator.pipelineRecoverRunning().catch((err) => {
+          console.warn(`[company s=${id}] pipeline recovery failed:`, err);
+        });
         if (masterRun) {
           await orchestrator.resumeExistingMaster({
-            userMessage: body.message,
+            userMessage,
             maxTurns: 100,
             roleConfigs,
             attachments,
@@ -273,7 +291,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           // Cold-start path for a brand-new sub-session in a resumable
           // root. Same `startMaster` flow `/start` uses.
           await orchestrator.startMaster({
-            userMessage: body.message,
+            userMessage,
             provider: config.master_provider ?? 'anthropic',
             model: config.master_model ?? 'claude-sonnet-4-6',
             maxTurns: 100,
@@ -282,14 +300,52 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
             thinking: body.thinking,
           });
         }
+        return { orchestrator, bus: spawned.bus };
+      };
+
+      let result: { orchestrator: CompanyOrchestrator; bus: CompanyOrchestrator['metaBus'] };
+      try {
+        result = await attemptSpawnAndResume();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[company s=${id}] Resume failed:`, msg);
-        deleteCompanyOrchestrator(id);
-        return { kind: 'reject', status: 500, body: { error: `Resume failed: ${msg}` } };
+        // `port_closed`: the worker exited mid-RPC and the auto-restart
+        // pipeline (WorkerHost backoff ≈500ms→8s) was racing. Evict the
+        // dead handle and try ONE more time with a fresh spawn. Any
+        // subsequent failure propagates to the original 500 path so the
+        // user isn't stuck in a silent loop.
+        if (isPortClosedError(err)) {
+          console.warn(
+            `[company s=${id}] Resume hit port_closed; worker likely crashed mid-RPC. ` +
+              `Evicting + retrying once after ${PORT_CLOSED_RETRY_DELAY_MS}ms.`,
+          );
+          deleteCompanyOrchestrator(id);
+          await new Promise((r) => setTimeout(r, PORT_CLOSED_RETRY_DELAY_MS));
+          try {
+            result = await attemptSpawnAndResume();
+            console.log(`[company s=${id}] Resume retry after port_closed: success.`);
+          } catch (err2) {
+            const msg2 = err2 instanceof Error ? err2.message : String(err2);
+            console.error(`[company s=${id}] Resume retry after port_closed failed:`, msg2);
+            deleteCompanyOrchestrator(id);
+            return {
+              kind: 'reject',
+              status: 500,
+              body: {
+                error:
+                  `Resume failed after retry: ${msg2}. The worker thread crashed twice — ` +
+                  'check the previous logs for the original cause (OOM, uncaught exception, etc.) ' +
+                  'before retrying.',
+              },
+            };
+          }
+        } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[company s=${id}] Resume failed:`, msg);
+          deleteCompanyOrchestrator(id);
+          return { kind: 'reject', status: 500, body: { error: `Resume failed: ${msg}` } };
+        }
       }
 
-      return { kind: 'fresh', orchestrator, bus: spawned.bus };
+      return { kind: 'fresh', orchestrator: result.orchestrator, bus: result.bus };
     });
 
     if (decision.kind === 'reject') {

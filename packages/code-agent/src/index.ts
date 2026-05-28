@@ -26,7 +26,19 @@ import { SandboxFilesystemAdapter } from '@mcp/services/sandbox/adapters/sandbox
 import { SandboxShellAdapter } from '@mcp/services/sandbox/adapters/sandbox-shell-adapter.js';
 import { planTools } from '@mcp/code-agent/tools/plan.js';
 import { specTools } from '@mcp/code-agent/tools/spec/index.js';
-import { tasksTools, executeTask, taskComplete } from '@mcp/code-agent/tools/tasks.js';
+import {
+  tasksTools,
+  listTasks,
+  cancelTasks,
+  deleteTasks,
+  archiveTaskList,
+  // Frente D — `executeTask` (singular) removed: `execute_tasks` (plural,
+  // wave-based) is the single orchestration entry point. `taskComplete`
+  // stays because inline-mode scope closure inside `execute_tasks` still
+  // depends on it (the agent's "I finished this inline turn" signal).
+  taskComplete,
+  updateTask,
+} from '@mcp/code-agent/tools/tasks.js';
 import { interactionTools } from '@mcp/code-agent/tools/interaction.js';
 import { buildExpandTools } from '@mcp/code-agent/tools/expand.js';
 import { buildFindToolsTool } from '@mcp/code-agent/tools/find-tools.js';
@@ -104,6 +116,38 @@ export type { CoderAttachment, IndexStatus, RunCoderHandle, RunCoderOptions };
 import { extractFilePathsFromText, defaultModelFor } from './index/helpers.js';
 
 // (Type bodies moved to './index/types.ts'.)
+
+/**
+ * Module-level lazy singleton for the incremental indexer.
+ *
+ * Why a singleton and not a static import?
+ *   - `@mcp/indexer/indexer/incremental` instantiates a `TreeSitterExtractor`
+ *     and `initTreeSitter()` (WASM load) at module-eval time.
+ *   - Sessions that never edit code (plan-mode / pure investigation)
+ *     should pay ZERO of that cost.
+ *
+ * Why a singleton and not `await import(...)` in the hook?
+ *   - The hook fires on every successful mutating tool call. Without
+ *     memoisation each call creates an extra Promise + microtask, even
+ *     though ESM caches the actual module after the first load.
+ *   - Promise.all-style concurrent edits in the same turn would also
+ *     trigger N parallel resolutions; the singleton dedupes them.
+ *
+ * Cached as a Promise (not the resolved function) so concurrent first-
+ * callers race on the SAME load instead of starting two of them.
+ */
+let incrementalIndexerPromise:
+  | Promise<typeof import('@mcp/indexer/indexer/incremental.js').indexFileNow>
+  | null = null;
+function loadIncrementalIndexer(): Promise<
+  typeof import('@mcp/indexer/indexer/incremental.js').indexFileNow
+> {
+  if (!incrementalIndexerPromise) {
+    incrementalIndexerPromise = import('@mcp/indexer/indexer/incremental.js')
+      .then((mod) => mod.indexFileNow);
+  }
+  return incrementalIndexerPromise;
+}
 
 /**
  * Build a fully-wired runner for a coder session and start it.
@@ -197,8 +241,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // tools emit the same runner events so orchestrator interception is unchanged.
   if (opts.companyContext && !opts.companyContext.isMaster) {
     registry.registerAll(buildSubordinateTools());
-    registry.register(executeTask);
+    registry.register(listTasks);
+    registry.register(cancelTasks);
+    registry.register(deleteTasks);
+    registry.register(archiveTaskList);
+    // Frente D — drop `execute_task` (singular). The orchestrator
+    // `execute_tasks` (plural) covers every dispatch path; the model has
+    // no remaining reason to call the per-task entry point.
     registry.register(taskComplete);
+    registry.register(updateTask);
   } else {
     registry.registerAll(planTools);
     registry.registerAll(specTools);
@@ -614,6 +665,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         return null;
       }
     },
+    clearTasksState: () => {
+      try {
+        return store.clearTasksState(session.id);
+      } catch (e) {
+        console.warn(`[coder] clearTasksState failed: ${e instanceof Error ? e.message : String(e)}`);
+        return false;
+      }
+    },
     getGoalState: () => {
       try {
         return store.getSessionGoal(session.id);
@@ -980,13 +1039,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // when the agent passes `./src/foo.ts`, and the tree-sitter refresh
       // is silently skipped.
       const relPath = rawStr.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
-      // Async, non-blocking. We re-import to avoid pulling tree-sitter wasm
-      // into sessions that never edit code.
+      // Async, non-blocking. `loadIncrementalIndexer` (module-level lazy
+      // singleton above) defers the tree-sitter WASM load to the first
+      // mutation in this process — sessions that never edit code pay
+      // zero cost. Subsequent calls reuse the cached `indexFileNow`
+      // reference without re-entering the module resolver.
       void (async () => {
         try {
-          const { indexFileNow } = await import('@mcp/indexer/indexer/incremental.js');
-          const { resolve: resolveAbs } = await import('node:path');
-          const abs = resolveAbs(toolContext.cwd, relPath);
+          const indexFileNow = await loadIncrementalIndexer();
+          const abs = resolvePath(toolContext.cwd, relPath);
           const content = await (toolContext.ports?.fs ?? defaultLocalFilesystemPort()).readFile(abs);
           await indexFileNow(db, project.id, relPath, content);
         } catch {

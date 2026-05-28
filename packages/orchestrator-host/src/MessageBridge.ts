@@ -68,6 +68,28 @@ export class ErrPortClosed extends Error {
   }
 }
 
+/**
+ * Type guard for "the worker port closed under me" errors. Use in catch
+ * blocks of any RPC call into a worker — when true, the WorkerHost
+ * supervisor is (a) auto-restarting the worker (default backoff
+ * 500ms ↗ 8s, capped by maxRestarts=3) OR (b) was deliberately evicted
+ * and the caller can choose to re-spawn fresh. Either way the original
+ * request is no longer in flight and a single retry with a fresh
+ * orchestrator/bridge is the standard recovery.
+ *
+ * Defensive: recognises BOTH `instanceof ErrPortClosed` AND the
+ * `code === 'port_closed'` shape so structured-cloned errors crossing
+ * a MessageChannel (which lose their prototype) still match.
+ */
+export function isPortClosedError(err: unknown): boolean {
+  if (err instanceof ErrPortClosed) return true;
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: unknown }).code === 'port_closed'
+  );
+}
+
 export class ErrRequestTimeout extends Error {
   readonly code = 'request_timeout';
   constructor(message = 'MessageBridge request timed out') {

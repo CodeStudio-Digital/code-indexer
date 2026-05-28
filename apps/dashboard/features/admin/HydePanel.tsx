@@ -10,6 +10,7 @@ import type { AdminModel, AdminProvider } from './types.js';
 const DEFAULT_HYDE_MODEL: Record<string, string> = {
   anthropic: 'claude-haiku-4-5-20251001',
   openai: 'gpt-4o-mini',
+  openrouter: 'openai/gpt-4o-mini',
   deepseek: 'deepseek-chat',
   zai: 'glm-4.5-flash',
   gemini: 'gemini-2.0-flash-lite',

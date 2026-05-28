@@ -244,6 +244,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openDuplexStream: (channel: string, payload: unknown) => openDuplex(`api:${channel}`, payload),
   openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
   openExternal: (url: string) => ipcRenderer.send('shell:openExternal', url),
+  /**
+   * Spawn a new Electron window pointing at `route` (e.g. `/projects/42`).
+   * Returns `{ ok, windowId? , error? }`. The new window inherits the
+   * same preload + protocol setup, so it talks to the same in-process
+   * backend with no extra wiring.
+   */
+  openInNewWindow: (route: string, title?: string) =>
+    ipcRenderer.invoke('window:open', { route, title }) as Promise<{
+      ok: boolean;
+      windowId?: number;
+      error?: string;
+    }>,
   getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
   showNotification: (opts: { title: string; body: string }) => ipcRenderer.send('app:notify', opts),
   // Auto-updater hooks land in Dia 17; stubbed so the dashboard typechecks.

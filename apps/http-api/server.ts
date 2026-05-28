@@ -105,6 +105,9 @@ import {
 } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { setCoderWorkerDocDeps, setCoderWorkerMcpPool } from './sse/coderWorkerPoolSingleton.js';
 import { McpExternalPool, setGlobalMcpExternalPool } from './sse/McpExternalPool.js';
+// Frente E — periodic watchdog for stuck coder_sessions. Started during
+// server bootstrap below; auto-`unref()` so it never holds process exit.
+import { startCoderWatchdog } from './sse/coder-watchdog.js';
 import { AppSettingsStore } from '@mcp/store/app-settings-store.js';
 import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
@@ -423,6 +426,20 @@ export function createApp() {
     }
   } catch (e) {
     console.warn(`[coder] Startup recovery failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // Frente E — periodic watchdog. The boot sweep above catches every
+  // active session after a restart; this catches sessions that hang IN
+  // FLIGHT (provider hang outside the dispatch timeout, MCP tool that
+  // never resolves, etc.) without disturbing healthy in-progress runs.
+  // The 10-minute stale threshold is well above any legitimate slow
+  // turn — long compactions, big provider calls, even subagent batches
+  // all complete well inside it. Synchronous import — the enclosing
+  // function isn't async; dynamic import was the original bug.
+  try {
+    startCoderWatchdog({ sessionStore: deps.sessionStore });
+  } catch (e) {
+    console.warn(`[coder/watchdog] failed to start: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   // Phase A "living company": surface any sessions that carry pending

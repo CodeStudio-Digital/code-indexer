@@ -13,9 +13,11 @@
 import { useTranslation } from 'react-i18next';
 import { Clock, Pencil } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
+import { useContextMenu } from '../../../components/ui/context-menu.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { cn, formatRelativeTime } from '../../../lib/utils.js';
 import type { ProjectCardData } from './ProjectCard.js';
+import { buildProjectContextMenuItems } from './projectContextMenu.js';
 
 export interface ProjectRowProps {
   project: ProjectCardData;
@@ -26,9 +28,24 @@ export interface ProjectRowProps {
 export function ProjectRow({ project: p, onSelect, onEdit }: ProjectRowProps) {
   const { t } = useTranslation(['projects', 'common']);
   const indexed = !!p.last_indexed;
+  const { triggerProps, Menu } = useContextMenu(
+    buildProjectContextMenuItems({
+      project: p,
+      onSelect,
+      onEdit,
+      labels: {
+        open: t('projects:contextMenu.open', 'Open'),
+        openInNewWindow: t('projects:contextMenu.openInNewWindow', 'Open in new window'),
+        copyPath: t('projects:contextMenu.copyPath', 'Copy path'),
+        edit: t('projects:contextMenu.edit', 'Edit'),
+        copied: t('projects:contextMenu.copied', 'Copied'),
+      },
+    }),
+  );
   return (
     <div
       onClick={onSelect}
+      {...triggerProps}
       className={cn(
         'group flex items-center gap-2.5 px-3 py-2 rounded-md border bg-card cursor-pointer',
         'hover:border-primary/40 hover:bg-card/80 transition-colors',
@@ -92,6 +109,7 @@ export function ProjectRow({ project: p, onSelect, onEdit }: ProjectRowProps) {
       >
         <Pencil className="h-3.5 w-3.5" />
       </Button>
+      {Menu}
     </div>
   );
 }
