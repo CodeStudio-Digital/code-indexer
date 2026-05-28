@@ -196,6 +196,7 @@ import { assembleMessagesForChat as assembleMessagesForChatImpl } from './runner
 // watchdog, pre-read). Set `CODER_LEGACY_RUNNER=1` to force the legacy
 // path unconditionally.
 import { isBehaviorTreeEnabled, runBehaviorTree } from './runner/orchestrator.js';
+import { checkTaskModeGate } from './runner/guards/task-mode-gate.js';
 
 // (RESULT_DUP_ESCALATION_*, REPEATABLE_*, POLLING_STUCK_*, DUP_CALL_REMINDER_*,
 // SUMMARIZER_*, RESULT_DUP_LARGE_THRESHOLD, RESULT_DUP_HEAD_CHARS, canRunSummarizer —
@@ -2298,8 +2299,27 @@ export class CoderRunner extends EventEmitter {
     if (!this.opts.createProvider) return undefined;
     const model = this.opts.deepThinkModel ?? 'claude-haiku-4-5-20251001';
     const providerName = this.opts.deepThinkProvider ?? 'anthropic';
-    this.auxProvider = await this.opts.createProvider(providerName, model);
-    return this.auxProvider;
+    // Hard timeout on createProvider() — historically the OAuth/ChatGPT
+    // path could hang for minutes on a stale refresh token. Without this
+    // race, deepthink stalls indefinitely on the first invocation of the
+    // session and the whole Executing node freezes.
+    const TIMEOUT_MS =
+      Number(process.env.CODER_AUX_PROVIDER_TIMEOUT_MS ?? '15000') || 15_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      this.auxProvider = await Promise.race([
+        this.opts.createProvider(providerName, model),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`aux provider createProvider() exceeded ${TIMEOUT_MS}ms`)),
+            TIMEOUT_MS,
+          );
+        }),
+      ]);
+      return this.auxProvider;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /** Gate for the per-turn auxiliary call. Returns false when the turn is
@@ -2347,11 +2367,25 @@ export class CoderRunner extends EventEmitter {
     const model = this.opts.deepThinkModel ?? 'claude-haiku-4-5-20251001';
     const providerName = this.opts.deepThinkProvider ?? 'anthropic';
 
+    // Emit `pre_think_started` BEFORE any await — including the aux
+    // provider construction. Otherwise a slow `createProvider()` blocks
+    // the Executing node with NO event surfaced to the UI, and the
+    // StuckBanner trips on a silent stall. With the emit upfront, the
+    // dashboard renders "Pré-pensando…" the moment we commit to running
+    // the aux call, even if the provider isn't built yet.
+    this.emit('pre_think_started', {
+      runId: this.runId,
+      turn: args.turn,
+      model,
+      provider: providerName,
+    });
+
     let provider: ChatProvider | undefined;
     try {
       provider = await this.resolveAuxProvider();
     } catch (err) {
-      // Factory threw — provider not registered, bad credentials, etc.
+      // Factory threw — provider not registered, bad credentials, hit
+      // the createProvider() timeout, etc.
       this.emit('pre_think_failed', {
         runId: this.runId,
         turn: args.turn,
@@ -2369,13 +2403,6 @@ export class CoderRunner extends EventEmitter {
       });
       return { text: '', usage: undefined };
     }
-
-    this.emit('pre_think_started', {
-      runId: this.runId,
-      turn: args.turn,
-      model,
-      provider: providerName,
-    });
     try {
       const result = await runPreThink({
         provider,
@@ -2478,6 +2505,22 @@ export class CoderRunner extends EventEmitter {
           return null;
         },
         enforcePreRead: (toolName, input, turn) => this.enforcePreReadForBridge(toolName, input, turn),
+        enforceTaskMode: (toolName, toolMutates) => {
+          // Pure guard — reads the persisted tasks state and decides. Same
+          // family as enforcePreRead but specific to the `submit_tasks` →
+          // `execute_task` workflow.
+          const tasksState = this.opts.toolContext.getTasksState?.() ?? null;
+          if (!tasksState) return null;
+          return checkTaskModeGate({
+            tasksState: {
+              approved: tasksState.approved,
+              execution_mode: tasksState.execution_mode,
+              tasks: tasksState.tasks.map((t) => ({ id: t.id, status: t.status })),
+            },
+            toolName,
+            toolMutates,
+          });
+        },
         reduceToolResult: (toolName, content) =>
           applySmartReducer(toolName, content, this.effectivePushTimeCap),
         detectPollingStuck: (toolName, content, isError, isRepeatable, turn) =>

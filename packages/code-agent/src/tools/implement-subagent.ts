@@ -159,6 +159,33 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     parent.ctx.signal.addEventListener('abort', () => subRunner.abort(), { once: true });
   }
 
+  // Propagate selected sub-runner events to the PARENT so the dashboard's
+  // StuckBanner doesn't trip and the user sees progress for what would
+  // otherwise be a black-box `spawn_agent` invocation. Mirrors the same
+  // pattern `runParallelAgents` uses (tool_call_result → onProgress).
+  //   - tool_progress: heartbeat from Camada 1/3/4 of the SUB's BT.
+  //   - tool_call_result: per-call activity ping with a [subagent] prefix
+  //     so the parent's Worker Log shows what the sub is doing.
+  const parentEmit = parent.ctx.runner;
+  let subToolCalls = 0;
+  if (parentEmit) {
+    subRunner.on('tool_progress', (payload) => {
+      parentEmit.emit('tool_progress', {
+        ...payload,
+        note: `[subagent] ${payload.note ?? payload.name}`,
+      });
+    });
+    subRunner.on('tool_call_result', (_id, name) => {
+      subToolCalls++;
+      parentEmit.emit('tool_progress', {
+        id: `subagent-tool:${subRunner.runId}:${subToolCalls}`,
+        name: `subagent:${name}`,
+        elapsedMs: 0,
+        note: `[subagent] ${name} ✓ (#${subToolCalls})`,
+      });
+    });
+  }
+
   let result: { totalUsage: ChatUsage; reason: SubagentRunResult['reason'] };
   try {
     result = await subRunner.run();
@@ -269,6 +296,21 @@ export const READ_WRITE_FILTER: (tool: CoderTool) => boolean = (tool) => {
  * every tool the parent has (every tier, every MCP, every native).
  */
 export const FULL_ACCESS_FILTER: SubagentAllowlist = null;
+
+/**
+ * Verify filter — read tools + shell + LSP diagnostics, NO edit/write.
+ * For `kind: 'verify'` tasks in execute_tasks: run tests, linters,
+ * type-checkers, observe output, report findings. Cannot mutate code.
+ */
+export const VERIFY_FILTER: (tool: CoderTool) => boolean = (tool) => {
+  if (EXPLORE_ALLOWLIST.has(tool.name)) return true;
+  if (tool.name === 'run_command' || tool.name === 'run_command_pty') return true;
+  if (tool.name === 'get_diagnostics' || tool.name === 'lsp_diagnostics') return true;
+  // MCP external tools that are explicitly non-mutating (test runners, linters
+  // exposed via MCP).
+  if (tool.source === 'mcp_external' && tool.mutates === false) return true;
+  return false;
+};
 
 /**
  * Allowlist for an implementation subagent. Includes the read tools needed to
@@ -615,11 +657,26 @@ export async function runParallelAgents(
       unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput ?? false,
     });
 
-    // Track tool calls for progress reporting.
+    // Track tool calls for progress reporting (drives `agent_progress`
+    // event on the parent → dashboard updates per-agent badges).
     subRunner.on('tool_call_result', () => {
       toolCallCount++;
       onProgress({ agentIndex, label: spec.label, event: 'tool_call', toolCallCount });
     });
+
+    // Propagate sub heartbeats to the PARENT so the StuckBanner doesn't
+    // trip during long sub-runner waits (provider.chat lerdo no sub,
+    // long invokes inside the sub, etc.). Resets the parent's
+    // `lastEventAt` via tool_progress on the master SSE bus.
+    const parentEmit = parent.ctx.runner;
+    if (parentEmit) {
+      subRunner.on('tool_progress', (payload) => {
+        parentEmit.emit('tool_progress', {
+          ...payload,
+          note: `[parallel ${spec.label}] ${payload.note ?? payload.name}`,
+        });
+      });
+    }
 
     if (parent.ctx.signal) {
       parent.ctx.signal.addEventListener('abort', () => subRunner.abort(), { once: true });

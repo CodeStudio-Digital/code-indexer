@@ -51,6 +51,12 @@ export interface DispatchArgs {
    * tuple-hash check (so a refused re-read doesn't bump dedup).
    */
   enforcePreRead?: (toolName: string, input: unknown, turn: number) => string | null;
+  /**
+   * Task-mode gate — enforces `execution_mode='all-subagent'` by refusing
+   * mutating tools that would bypass `execute_task`. Pure consult; no
+   * dedup counter side-effect.
+   */
+  enforceTaskMode?: (toolName: string, toolMutates: boolean) => string | null;
   /** Smart-reducer applied to the raw result content before push. */
   reduceToolResult?: (toolName: string, content: string) => string;
   /**
@@ -129,6 +135,25 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         toolUseId: tu.id,
         name: tu.name,
         content: preReadRefusal,
+        isError: true,
+        durationMs: 0,
+        wasRefusedByDedup: false,
+      });
+      continue;
+    }
+
+    // Task-mode gate (execution_mode='all-subagent'). Refuses mutating
+    // tools that would bypass the task workflow. Runs AFTER pre-read so
+    // a write that would have been pre-read-refused stays on that
+    // (clearer) error path, and BEFORE the tuple-hash so the dedup
+    // counter isn't polluted by gate-blocked calls.
+    const toolMutates = tool?.mutates ?? (tool?.source === 'mcp_external');
+    const taskModeRefusal = args.enforceTaskMode?.(tu.name, !!toolMutates) ?? null;
+    if (taskModeRefusal !== null) {
+      results.push({
+        toolUseId: tu.id,
+        name: tu.name,
+        content: taskModeRefusal,
         isError: true,
         durationMs: 0,
         wasRefusedByDedup: false,

@@ -224,6 +224,18 @@ export type TaskReference =
   | { type: 'file'; value: string; file?: string; lines?: string; note?: string }
   | { type: 'doc'; value: string; file?: string; lines?: string; note?: string };
 
+/**
+ * Kind of work the task represents. Drives toolset selection in the new
+ * `execute_tasks` orchestrator (PR 3):
+ *   - 'investigate' → READ_ONLY_FILTER subagent (cheap exploration).
+ *   - 'implement'   → READ_WRITE_FILTER subagent + path scope on `files`.
+ *   - 'verify'      → subagent with run_command + read + lsp_diagnostics
+ *                     only (tests, linters, type-checkers).
+ * Optional in JSON for backward compat — defaults to 'implement' on parse
+ * (most conservative: gives write access if the model forgot to declare).
+ */
+export type TaskKind = 'investigate' | 'implement' | 'verify';
+
 /** A single executable unit produced by submit_tasks and consumed by execute_task. */
 export interface CoderTask {
   id: string;
@@ -234,6 +246,16 @@ export interface CoderTask {
   depends_on: string[];
   suggested_mode: 'inline' | 'subagent';
   estimated_complexity: 'small' | 'medium' | 'large';
+  /**
+   * Optional grouping label. Tasks that share a `parallel_group` AND have
+   * no unfinished dependency on each other run CONCURRENTLY in the same
+   * wave (via `runParallelAgents`). Null/undefined → strictly sequential.
+   */
+  parallel_group?: string;
+  /**
+   * Defaults to 'implement' when omitted. Drives `execute_tasks` dispatch.
+   */
+  kind?: TaskKind;
   // runtime state
   status: TaskStatus;
   mode_used?: 'inline' | 'subagent';

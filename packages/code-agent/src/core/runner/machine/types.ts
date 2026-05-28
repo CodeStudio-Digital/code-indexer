@@ -142,6 +142,12 @@ export interface BridgeCallbacks {
    */
   enforcePreRead?: (toolName: string, input: unknown, turn: number) => string | null;
   /**
+   * Task-mode gate — when the user approved `submit_tasks` with
+   * `execution_mode='all-subagent'`, refuse mutating tool calls that
+   * would bypass `execute_task`. Returns refusal text or null.
+   */
+  enforceTaskMode?: (toolName: string, toolMutates: boolean) => string | null;
+  /**
    * Smart-reducer post-result hook. Receives the raw tool result content
    * and returns a possibly-shortened version (tool-aware truncation, e.g.
    * git_log keeps the head commits, grep keeps the first matches).

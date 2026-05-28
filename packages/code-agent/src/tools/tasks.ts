@@ -183,8 +183,23 @@ function validateTaskInput(raw: unknown, idx: number): CoderTask | string {
     ? (o.estimated_complexity as 'small' | 'medium' | 'large')
     : 'medium';
 
-  if (suggestedMode === 'subagent' && files.length === 0) {
-    return `tasks[${idx}] (${id}): subagent tasks must declare at least one file in scope`;
+  // NEW (PR 2): kind drives execute_tasks dispatch.
+  // Defaults to 'implement' (conservative — write access) when omitted so
+  // existing prompts that don't yet emit `kind` keep working.
+  const kindRaw = String(o.kind ?? '').trim();
+  const kind: 'investigate' | 'implement' | 'verify' =
+    kindRaw === 'investigate' || kindRaw === 'verify' ? kindRaw : 'implement';
+
+  // NEW (PR 2): parallel_group — string label for wave-level batching.
+  // Tasks sharing this label AND without unfinished mutual deps run
+  // concurrently. Empty string is treated as "no group" (serial).
+  const parallelGroup =
+    typeof o.parallel_group === 'string' && o.parallel_group.trim()
+      ? o.parallel_group.trim()
+      : undefined;
+
+  if (suggestedMode === 'subagent' && kind === 'implement' && files.length === 0) {
+    return `tasks[${idx}] (${id}): implement subagent tasks must declare at least one file in scope`;
   }
 
   return {
@@ -196,6 +211,8 @@ function validateTaskInput(raw: unknown, idx: number): CoderTask | string {
     depends_on: dependsOn,
     suggested_mode: suggestedMode,
     estimated_complexity: complexity,
+    kind,
+    parallel_group: parallelGroup,
     status: 'pending',
   };
 }
@@ -242,7 +259,20 @@ export function formatTasksApprovedResult(state: TasksState, feedback?: string):
     lines.push(`- ${t.id}: ${t.title}${deps}`);
   }
   lines.push('');
-  lines.push('Now call execute_task once per task in order. After each task call task_complete (inline) or wait for the subagent result (subagent mode).');
+  // PR 3: prefer the wave-based orchestrator. Falls back to the singular
+  // workflow only when execute_tasks is unavailable (no subagent
+  // capability — Company master, CODER_DISABLE_SUBAGENTS=1).
+  lines.push(
+    'PREFERRED: call `execute_tasks` ONCE to run the whole approved list. ' +
+    'It walks the dependency graph, batches independent tasks into parallel waves ' +
+    '(by `parallel_group`), and spawns the right subagent kind per task ' +
+    '(investigate/implement/verify). Returns a consolidated summary.',
+  );
+  lines.push('');
+  lines.push(
+    'FALLBACK: if `execute_tasks` is unavailable, call `execute_task` once per task in order; ' +
+    'after each call `task_complete` (inline) or wait for the subagent result (subagent mode).',
+  );
   return lines.join('\n');
 }
 
@@ -293,6 +323,23 @@ const submitTasksSchema: JsonSchema = {
             description: "'inline' = execute in the parent context (good for tasks needing prior history). 'subagent' = isolated subagent with only this task's files+references (token-cheap).",
           },
           estimated_complexity: { type: 'string', enum: ['small', 'medium', 'large'] },
+          kind: {
+            type: 'string',
+            enum: ['investigate', 'implement', 'verify'],
+            description:
+              "What KIND of work this task is — drives toolset selection in execute_tasks:\n" +
+              "  'investigate' → read-only exploration (cheaper, no write access).\n" +
+              "  'implement'   → read + write + shell, scoped to `files` (default).\n" +
+              "  'verify'      → run_command + read + lsp_diagnostics only (tests, linters).\n" +
+              "Defaults to 'implement' when omitted.",
+          },
+          parallel_group: {
+            type: 'string',
+            description:
+              "Optional label for parallel batching. Tasks sharing the same `parallel_group` " +
+              "AND with no unfinished dependency on each other run CONCURRENTLY in the same wave. " +
+              "Omit (or empty) to keep the task strictly sequential.",
+          },
         },
         required: ['id', 'title', 'description', 'files', 'suggested_mode', 'estimated_complexity'],
       },
@@ -361,16 +408,21 @@ export const submitTasks: CoderTool = {
       return err('Task list review aborted by user.');
     }
     if (parsed.approved) {
+      const resolvedMode = parsed.execution_mode ?? 'inline';
+      console.log(
+        `[coder/tasks] submit_tasks approved — execution_mode=${resolvedMode} ` +
+        `(received=${parsed.execution_mode ?? 'undefined'}) tasks=${parsed.tasks?.length ?? '?'}`,
+      );
       ctx.resolveTasks?.({
         approved: true,
         tasks: parsed.tasks,
-        execution_mode: parsed.execution_mode ?? 'inline',
+        execution_mode: resolvedMode,
       });
       runner.markTasksApproved();
       const finalState = ctx.getTasksState?.() ?? {
         ...initialState,
         approved: true,
-        execution_mode: parsed.execution_mode ?? 'inline',
+        execution_mode: resolvedMode,
         tasks: parsed.tasks ?? initialState.tasks,
       };
       return ok(formatTasksApprovedResult(finalState, parsed.feedback));
@@ -468,6 +520,10 @@ export const executeTask: CoderTool = {
     }
 
     const effectiveMode = resolveEffectiveMode(task, state.execution_mode, overrideMode);
+    console.log(
+      `[coder/tasks] execute_task task_id=${taskId} state.execution_mode=${state.execution_mode ?? 'null'} ` +
+      `suggested_mode=${task.suggested_mode} override=${overrideMode ?? 'none'} → effective=${effectiveMode}`,
+    );
 
     if (effectiveMode === 'subagent') {
       // Subagent mode: spin up an isolated CoderRunner with the curated

@@ -103,6 +103,9 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // Lives in BOOTSTRAP (not NAVIGATE) so any session can delegate without
   // needing to unlock a tier first.
   'spawn_agent',
+  // execute_tasks — wave-based orchestrator (PR 3). Same rationale as
+  // spawn_agent: orchestration that any session must be able to call.
+  'execute_tasks',
   'request_review',
   'get_tool_output',
   'glob',
@@ -152,6 +155,9 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'git_log',
   // spawn_agent moved to BOOTSTRAP_TOOLS — orchestration tools live there
   // alongside expand_toolset/find_tools so any session can delegate.
+  // execute_tasks (plural) is the new wave-based orchestrator (PR 3) —
+  // also BOOTSTRAP so the master can dispatch the whole approved list
+  // in one call. execute_task (singular) stays in NAVIGATE for legacy.
   'execute_task',
   'task_complete',
   // MCP — deep navigation + edit prep

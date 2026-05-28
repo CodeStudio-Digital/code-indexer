@@ -117,19 +117,38 @@ export async function runBehaviorTree(
 
   let state: NodeState = 'Bootstrap';
   let lastEvent: BehaviorEvent | null = null;
-  while (state !== 'Done') {
-    const node = nodes[state];
-    console.log(`[coder/bt] node=${state} turn=${ctx.turn}`);
-    let event: BehaviorEvent;
-    try {
-      event = await node.execute(ctx, lastEvent);
-    } catch (e) {
-      console.error(`[coder/bt] node=${state} threw:`, e);
-      throw e;
+  try {
+    while (state !== 'Done') {
+      const node = nodes[state];
+      console.log(`[coder/bt] node=${state} turn=${ctx.turn}`);
+      let event: BehaviorEvent;
+      try {
+        event = await node.execute(ctx, lastEvent);
+      } catch (e) {
+        console.error(`[coder/bt] node=${state} threw:`, e);
+        throw e;
+      }
+      console.log(`[coder/bt] node=${state} → event=${event.kind}`);
+      lastEvent = event;
+      state = nextState(state, event);
     }
-    console.log(`[coder/bt] node=${state} → event=${event.kind}`);
-    lastEvent = event;
-    state = nextState(state, event);
+  } finally {
+    // Lifecycle cleanup — tasks left in `running` (because the BT exited
+    // mid-execute_task, was aborted, hit a circuit breaker, or a node
+    // threw) get promoted to `interrupted` so the dashboard doesn't show
+    // false spinners and the next resume sees real state. Best-effort:
+    // a DB failure here MUST NOT mask the RunResult.
+    const store = ctx.opts.sessionStore;
+    const sessionId = ctx.opts.sessionId;
+    if (store && sessionId != null) {
+      try {
+        store.recoverStaleTasks(sessionId);
+      } catch (e) {
+        console.warn(
+          `[coder/bt] recoverStaleTasks on shutdown failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
   }
 
   const reason = ctx.stopReason ?? 'completed';

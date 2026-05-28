@@ -487,6 +487,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     registry.register(buildSpawnAgentTool(fallbackDeps, registry));
   }
 
+  // execute_tasks — wave-based orchestrator (PR 3). Needs subagentDeps to
+  // exist; only registers when the session has the subagent capability
+  // (i.e. NOT a Company master, NOT CODER_DISABLE_SUBAGENTS=1).
+  if (subagentDeps && registry.get('submit_tasks')) {
+    const { buildExecuteTasksTool } = await import('@mcp/code-agent/tools/execute-tasks.js');
+    registry.register(buildExecuteTasksTool(subagentDeps));
+  }
+
   // Builder mode: when the company context carries a sandbox binding,
   // we pin `cwd` to the container workdir and swap the default ports
   // for sandbox-backed adapters. Every filesystem/shell tool from here

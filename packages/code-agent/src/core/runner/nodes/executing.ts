@@ -83,7 +83,24 @@ export class ExecutingNode implements BehaviorNode {
     // auxiliary reasoning block onto BOTH the working window and the
     // persistent history (legacy parity). Failures degrade silently —
     // the bridge emits its own diagnostic events.
+    //
+    // Camada 4 — heartbeat around the entire bridge.runPreThink() await
+    // so the StuckBanner doesn't trip when the aux provider's first call
+    // is slow (OAuth refresh, socket warm-up, slow first-token aux model).
+    // Same pattern as Camadas 1/2/3 — independent setInterval cleaned up
+    // in finally.
     if (ctx.opts.deepThink && ctx.bridge?.runPreThink) {
+      const PRE_THINK_HEARTBEAT_MS =
+        Number(process.env.CODER_PRE_THINK_HEARTBEAT_MS ?? '10000') || 10_000;
+      const preThinkStartedAt = Date.now();
+      const preThinkHeartbeat = setInterval(() => {
+        ctx.emit('tool_progress', {
+          id: `pre-think:${ctx.runId}:${ctx.turn}`,
+          name: 'pre-think',
+          elapsedMs: Date.now() - preThinkStartedAt,
+          note: 'resolving aux provider / awaiting reasoning…',
+        });
+      }, PRE_THINK_HEARTBEAT_MS);
       try {
         const pre = await ctx.bridge.runPreThink({
           messages: messagesForChat,
@@ -117,6 +134,8 @@ export class ExecutingNode implements BehaviorNode {
         }
       } catch (e) {
         dbg('runPreThink threw', e);
+      } finally {
+        clearInterval(preThinkHeartbeat);
       }
     }
 
@@ -164,6 +183,23 @@ export class ExecutingNode implements BehaviorNode {
       return providerErrorEvent(e);
     }
 
+    // Camada 3 — heartbeat around `provider.chat()` so the dashboard
+    // StuckBanner doesn't trip while the model is slow to start emitting
+    // deltas (GLM-5 with large tools+system prompt routinely takes 30-90s
+    // before the first text_delta). Cleared in finally regardless of how
+    // consumeStream resolves. Default 10s; env-tunable.
+    const STREAM_HEARTBEAT_MS =
+      Number(process.env.CODER_STREAM_HEARTBEAT_MS ?? '10000') || 10_000;
+    const streamStartedAt = Date.now();
+    const streamHeartbeat = setInterval(() => {
+      ctx.emit('tool_progress', {
+        id: `provider-chat:${ctx.runId}:${ctx.turn}`,
+        name: 'provider.chat',
+        elapsedMs: Date.now() - streamStartedAt,
+        note: `awaiting ${ctx.opts.provider.name}:${ctx.opts.provider.model}…`,
+      });
+    }, STREAM_HEARTBEAT_MS);
+
     let result: Awaited<ReturnType<typeof consumeStream>>;
     try {
       result = await consumeStream({
@@ -175,6 +211,8 @@ export class ExecutingNode implements BehaviorNode {
     } catch (e) {
       dbg('consumeStream threw', e);
       return providerErrorEvent(e);
+    } finally {
+      clearInterval(streamHeartbeat);
     }
     dbg(`stream done text=${result.textBlocks.length}b tools=${result.toolUses.length} usage_in=${result.usage?.input_tokens ?? '?'}`);
 
@@ -227,6 +265,7 @@ export class ExecutingNode implements BehaviorNode {
       dupCalls: ctx.dupCalls,
       toolGate: ctx.bridge?.toolGate,
       enforcePreRead: ctx.bridge?.enforcePreRead,
+      enforceTaskMode: ctx.bridge?.enforceTaskMode,
       reduceToolResult: ctx.bridge?.reduceToolResult,
       detectPollingStuck: ctx.bridge?.detectPollingStuck,
       onToolCallStart: (id, name, input) => ctx.emit('tool_call_start', id, name, input),
