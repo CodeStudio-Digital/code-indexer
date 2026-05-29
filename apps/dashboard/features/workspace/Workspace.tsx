@@ -59,6 +59,10 @@ import { BottomPanel } from './BottomPanel.js';
 import { ActivityRail, type RailItem } from './jetbrains/ActivityRail.js';
 import { StatusBar } from './jetbrains/StatusBar.js';
 import { CommandPalette, type Command } from './jetbrains/CommandPalette.js';
+import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
+import { buildThemeCommands } from './registries/commands.js';
+import { contributedRailItems } from './registries/rail-items.js';
+import { installWebviewBridge } from './webview-bridge.js';
 import { QuickOpen } from './jetbrains/QuickOpen.js';
 import { FileTreeWindow } from './jetbrains/tool-windows/FileTreeWindow.js';
 import { SnapshotsWindow } from './jetbrains/tool-windows/SnapshotsWindow.js';
@@ -67,6 +71,7 @@ import { SearchWindow } from './jetbrains/tool-windows/SearchWindow.js';
 import { SpecsWindow } from './jetbrains/tool-windows/SpecsWindow.js';
 import { ChatWindow } from './jetbrains/tool-windows/ChatWindow.js';
 import { PlaceholderWindow } from './jetbrains/tool-windows/PlaceholderWindow.js';
+import { WebviewWindow } from './jetbrains/tool-windows/WebviewWindow.js';
 
 interface WorkspaceProps {
   projectId: number;
@@ -93,6 +98,8 @@ const RIGHT_ITEMS: RailItem<RightToolId>[] = [
 
 export function Workspace({ projectId, projectName, initialSessionId, onExit }: WorkspaceProps) {
   const layout = useWorkspaceLayout();
+  const contribThemes = useContributions((s) => s.themes);
+  const contribWindows = useContributions((s) => s.toolWindows);
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const openFile = useWorkspaceStore((s) => s.openFile);
   const [activeSessionId, setActiveSessionId] = useState<number | undefined>(initialSessionId);
@@ -173,6 +180,14 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
   // Build the command list once per layout-state change. Each command
   // captures the live setter, so toggling a tool window via the palette
   // produces the same state delta as clicking the rail icon.
+  // Hydrate plugin UI contributions (themes, commands, tool windows) once.
+  useEffect(() => {
+    void hydrateContributions();
+  }, []);
+
+  // Host side of the plugin webview bridge (whitelisted read-only calls).
+  useEffect(() => installWebviewBridge(), []);
+
   const commands = useMemo<Command[]>(() => {
     const toggleLeft = (id: LeftToolId, label: string): Command => ({
       id: `view.toggle-left-${id}`,
@@ -277,8 +292,10 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
         icon: RefreshCw,
         run: () => window.location.reload(),
       },
+      // ── Plugin contributions ──────
+      ...buildThemeCommands(contribThemes),
     ];
-  }, [layout, activeFilePath, closeFile, openFiles]);
+  }, [layout, activeFilePath, closeFile, openFiles, contribThemes]);
 
   // Global keyboard shortcuts. Each binding is gated on the focus
   // not being inside another input (Monaco already swallows the
@@ -360,7 +377,7 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
       <div className="flex flex-1 min-h-0">
         <ActivityRail
           side="left"
-          items={LEFT_ITEMS}
+          items={[...LEFT_ITEMS, ...contributedRailItems(contribWindows, 'left')]}
           active={layout.activeLeft}
           onToggle={layout.toggleLeft}
         />
@@ -431,7 +448,7 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
         </div>
         <ActivityRail
           side="right"
-          items={RIGHT_ITEMS}
+          items={[...RIGHT_ITEMS, ...contributedRailItems(contribWindows, 'right')]}
           active={layout.activeRight}
           onToggle={layout.toggleRight}
         />
@@ -463,6 +480,7 @@ interface LeftToolPanelProps {
 
 function LeftToolPanel({ projectId, activeFilePath, onOpen, onClose }: LeftToolPanelProps) {
   const activeLeft = useWorkspaceLayout((s) => s.activeLeft);
+  const contribWindows = useContributions((s) => s.toolWindows);
   if (activeLeft === 'files') {
     return (
       <FileTreeWindow
@@ -485,6 +503,12 @@ function LeftToolPanel({ projectId, activeFilePath, onOpen, onClose }: LeftToolP
   if (activeLeft === 'git') {
     return <GitWindow projectId={projectId} onClose={onClose} />;
   }
+  const win = contribWindows.find((w) => w.side === 'left' && w.id === activeLeft);
+  if (win) {
+    return (
+      <WebviewWindow namespace={win.pluginNs} title={win.title} entry={win.entry} onClose={onClose} />
+    );
+  }
   return null;
 }
 
@@ -502,6 +526,7 @@ function RightToolPanel({
   onClose,
 }: RightToolPanelProps) {
   const activeRight = useWorkspaceLayout((s) => s.activeRight);
+  const contribWindows = useContributions((s) => s.toolWindows);
   if (activeRight === 'chat') {
     return (
       <ChatWindow
@@ -519,6 +544,12 @@ function RightToolPanel({
         hint="Background agent notifications + interrupt-resume prompts will surface here."
         onClose={onClose}
       />
+    );
+  }
+  const win = contribWindows.find((w) => w.side === 'right' && w.id === activeRight);
+  if (win) {
+    return (
+      <WebviewWindow namespace={win.pluginNs} title={win.title} entry={win.entry} onClose={onClose} />
     );
   }
   return null;

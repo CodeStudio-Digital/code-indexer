@@ -127,6 +127,7 @@ import { sessionSnapshotReviews110 } from './110_session_snapshot_reviews.js';
 import { modelPrices111 } from './111_model_prices.js';
 import { installedPlugins112 } from './112_installed_plugins.js';
 import { embeddingFingerprint113 } from './113_embedding_fingerprint.js';
+import { snapshotMemory114 } from './114_snapshot_memory.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -270,6 +271,7 @@ export const MIGRATIONS: Migration[] = [
   modelPrices111,
   installedPlugins112,
   embeddingFingerprint113,
+  snapshotMemory114,
 ];
 
 /**

@@ -6,5 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./*": "./src/*"
+  },
+  "scripts": {
+    "cli": "tsx src/cli/index.ts"
   }
 }

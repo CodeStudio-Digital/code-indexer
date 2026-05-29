@@ -33,6 +33,8 @@ export interface AgentDefinition {
   profile: CoderProfile;
   /** Starts the runner in plan mode — mutating tools blocked until submit_plan approved. */
   planMode: boolean;
+  /** Spec mode: agent must submit_spec and get approval before mutating tools. */
+  specMode?: boolean;
   /** Optional max-turns override for this agent. */
   maxTurns?: number;
   /**
@@ -96,6 +98,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
       'Spec-driven authoring. Navigate tier with dedicated spec gate — must submit_spec and get human approval before mutating the workspace. One spec → N tasks/PRs.',
     profile: 'navigate',
     planMode: false,
+    specMode: true,
     maxTurns: 120,
     defaultTemperature: 0.3,
   },

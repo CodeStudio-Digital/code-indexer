@@ -392,6 +392,9 @@ importers:
       '@mcp/code-agent':
         specifier: workspace:*
         version: link:../code-agent
+      '@mcp/plugin-market-client':
+        specifier: workspace:*
+        version: link:../plugin-market-client
       '@mcp/plugin-sdk':
         specifier: workspace:*
         version: link:../plugin-sdk
@@ -401,6 +404,8 @@ importers:
       '@mcp/store':
         specifier: workspace:*
         version: link:../store
+
+  packages/plugin-market-client: {}
 
   packages/plugin-sdk: {}
 

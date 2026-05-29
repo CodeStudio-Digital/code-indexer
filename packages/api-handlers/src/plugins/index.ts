@@ -17,10 +17,20 @@ import {
   listInstalledPlugins,
   getInstalledPlugin,
   setPluginEnabled,
+  readPluginAsset,
   type InstalledPlugin,
 } from '@mcp/plugin-host';
 import type { PluginSource } from '@mcp/plugin-sdk';
+import { MarketClient } from '@mcp/plugin-market-client';
 import type { HandlerDeps } from '../types.js';
+
+function marketClient(): MarketClient {
+  const url = process.env.MCP_MARKET_URL;
+  if (!url) {
+    throw new ApiError('market_not_configured', 503, 'hosted market not configured (set MCP_MARKET_URL)');
+  }
+  return new MarketClient(url);
+}
 
 function toInfo(p: InstalledPlugin): InstalledPluginInfo {
   return {
@@ -45,7 +55,7 @@ function toSource(s: PluginInstallSource): PluginSource {
     case 'url':
       return { source: 'url', url: s.url };
     case 'market':
-      return { source: 'market' };
+      return { source: 'market', name: s.name, ref: s.ref };
   }
 }
 
@@ -92,6 +102,18 @@ export function createPluginsHandlers(_deps: HandlerDeps): PluginsApi {
     async setEnabled({ namespace, enabled }) {
       setPluginEnabled(namespace, enabled);
       return { ok: true as const };
+    },
+
+    async readAsset({ namespace, path }) {
+      return { content: await readPluginAsset(namespace, path) };
+    },
+
+    async searchMarket({ query }) {
+      return marketClient().search(query);
+    },
+
+    async marketInfo({ name }) {
+      return marketClient().getInfo(name);
     },
   };
 }

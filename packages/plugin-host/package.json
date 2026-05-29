@@ -11,6 +11,7 @@
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
     "@mcp/code-agent": "workspace:*",
-    "@mcp/plugin-sdk": "workspace:*"
+    "@mcp/plugin-sdk": "workspace:*",
+    "@mcp/plugin-market-client": "workspace:*"
   }
 }

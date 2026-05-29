@@ -49,6 +49,8 @@
       "@mcp/plugin-sdk/*": ["packages/plugin-sdk/src/*"],
       "@mcp/plugin-host": ["packages/plugin-host/src/index.ts"],
       "@mcp/plugin-host/*": ["packages/plugin-host/src/*"],
+      "@mcp/plugin-market-client": ["packages/plugin-market-client/src/index.ts"],
+      "@mcp/plugin-market-client/*": ["packages/plugin-market-client/src/*"],
       "@apps/*": ["apps/*"]
     }
   }

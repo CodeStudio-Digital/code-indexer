@@ -1,6 +1,7 @@
 import type { PluginSource } from '@mcp/plugin-sdk';
 import { materializeLocal } from './fetch-local.js';
 import { materializeGithub } from './fetch-github.js';
+import { materializeMarket } from './fetch-market.js';
 
 export interface MaterializeResult {
   /** Commit SHA for github sources; null otherwise. */
@@ -19,11 +20,11 @@ export async function materialize(
     case 'github':
       if (!source.repo) throw new Error('github source requires "repo"');
       return materializeGithub(source.repo, source.ref, stagingDir);
-    case 'url':
     case 'market':
-      throw new Error(
-        `source "${source.source}" is not supported until the hosted Market phase`,
-      );
+      if (!source.name) throw new Error('market source requires "name"');
+      return materializeMarket(source.name, source.ref, stagingDir);
+    case 'url':
+      throw new Error('source "url" is not supported yet');
     default:
       throw new Error(
         `unknown plugin source "${(source as { source: string }).source}"`,

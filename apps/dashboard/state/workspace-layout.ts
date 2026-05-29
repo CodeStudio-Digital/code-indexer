@@ -10,9 +10,12 @@
 
 import { create } from 'zustand';
 
-export type LeftToolId = 'files' | 'search' | 'snapshots' | 'git' | 'specs';
-export type RightToolId = 'chat' | 'inbox';
-export type BottomToolId = 'terminal' | 'problems' | 'output' | 'find';
+// Open id types: built-ins plus any string id a plugin contributes. The
+// activity rail + layout store are id-agnostic, so widening to `string` lets
+// plugin-contributed tool windows participate without a union edit.
+export type LeftToolId = string;
+export type RightToolId = string;
+export type BottomToolId = string;
 
 interface WorkspaceLayoutState {
   activeLeft: LeftToolId | null;

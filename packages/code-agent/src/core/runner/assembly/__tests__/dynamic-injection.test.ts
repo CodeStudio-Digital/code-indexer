@@ -129,6 +129,50 @@ describe('computeDynamicInjection', () => {
     const ctx = baseCtx({ newlyRegisteredSkillIds: ['s1'], recentlyEditedFiles: ['a.ts'] });
     expect(computeDynamicInjection(ctx)).toEqual(computeDynamicInjection(ctx));
   });
+
+  it('includes relevant memory up to maxMemoryItems and triggers a reminder alone', () => {
+    const out = computeDynamicInjection(baseCtx({
+      relevantMemory: [
+        { id: 'm1', title: 'AuthDecision', content: 'JWT refresh tokens rotate.' },
+        { id: 'm2', title: 'CacheNote', content: 'Redis L2.' },
+        { id: 'm3', title: 'DbNote', content: 'better-sqlite3.' },
+        { id: 'm4', title: 'DroppedItem', content: 'beyond the cap' },
+      ],
+      maxMemoryItems: 3,
+    }));
+    expect(out).not.toBeNull();
+    expect(out!.includedMemoryIds).toEqual(['m1', 'm2', 'm3']);
+    expect(out!.reminder).toContain('relevant project memory');
+    expect(out!.reminder).toContain('AuthDecision');
+    expect(out!.reminder).not.toContain('DroppedItem');
+  });
+
+  it('skips memory already injected (lastInjectedMemoryIds)', () => {
+    const out = computeDynamicInjection(baseCtx({
+      relevantMemory: [
+        { id: 'm1', title: 'AlphaMemory', content: 'a' },
+        { id: 'm2', title: 'BetaMemory', content: 'b' },
+      ],
+      lastInjectedMemoryIds: new Set(['m1']),
+    }));
+    expect(out!.includedMemoryIds).toEqual(['m2']);
+    expect(out!.reminder).not.toContain('AlphaMemory');
+    expect(out!.reminder).toContain('BetaMemory');
+  });
+
+  it('truncates long memory content with an ellipsis', () => {
+    const out = computeDynamicInjection(baseCtx({
+      relevantMemory: [{ id: 'm1', title: 'LongOne', content: 'x'.repeat(500) }],
+    }));
+    expect(out!.reminder).toContain('…');
+  });
+
+  it('returns null when the only memory was already injected', () => {
+    expect(computeDynamicInjection(baseCtx({
+      relevantMemory: [{ id: 'm1', title: 'Solo', content: 'a' }],
+      lastInjectedMemoryIds: new Set(['m1']),
+    }))).toBeNull();
+  });
 });
 
 describe('formatDynamicInjection', () => {

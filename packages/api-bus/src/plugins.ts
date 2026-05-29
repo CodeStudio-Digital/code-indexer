@@ -41,6 +41,17 @@ export interface PluginInstallResult {
   warnings: string[];
 }
 
+export interface MarketPluginInfo {
+  name: string;
+  displayName?: string;
+  description?: string;
+  latestVersion: string;
+  downloads: number;
+  category?: string;
+  author?: string;
+  brandColor?: string;
+}
+
 export interface PluginsApi {
   list(input: void, ctx: ApiContext): Promise<InstalledPluginInfo[]>;
   get(input: { namespace: string }, ctx: ApiContext): Promise<InstalledPluginInfo | null>;
@@ -53,4 +64,14 @@ export interface PluginsApi {
     input: { namespace: string; enabled: boolean },
     ctx: ApiContext,
   ): Promise<{ ok: true }>;
+  /** Read a text asset (e.g. a tool-window HTML entry) from a plugin's dir. */
+  readAsset(
+    input: { namespace: string; path: string },
+    ctx: ApiContext,
+  ): Promise<{ content: string }>;
+
+  /** Search the hosted market catalog. */
+  searchMarket(input: { query: string }, ctx: ApiContext): Promise<MarketPluginInfo[]>;
+  /** Look up one market plugin by name (null if absent). */
+  marketInfo(input: { name: string }, ctx: ApiContext): Promise<MarketPluginInfo | null>;
 }

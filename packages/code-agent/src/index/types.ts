@@ -126,6 +126,13 @@ export interface RunCoderOptions {
    */
   externalMcpManager?: import('@mcp/code-agent/tools/mcp-server-manager-interface.js').IMcpServerManager;
   /**
+   * Tools contributed by installed plugins. Synthesized + worker-backed by
+   * the http-api layer (see `@mcp/plugin-host` `buildPluginTools`) and passed
+   * in per run. Registered at the tail of the registry like external MCP
+   * tools. Omitted in CLI / test usage (no plugins loaded).
+   */
+  pluginTools?: import('@mcp/code-agent/core/tool.js').CoderTool[];
+  /**
    * Phase 2 hardening: explicit escape hatch the policy module consults when
    * running in strict mode (Phase 5). Today reserved.
    */

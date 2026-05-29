@@ -15,9 +15,12 @@
   "asarUnpack": [
     "node_modules/better-sqlite3/**/*",
     "node_modules/node-pty/**/*",
-    "node_modules/sqlite-vec*/**/*",
-    "node_modules/@huggingface/transformers/**/*",
-    "node_modules/onnxruntime-node/**/*"
+    "node_modules/sqlite-vec/**/*",
+    "node_modules/sqlite-vec-*/**/*",
+    "node_modules/@huggingface/**/*",
+    "node_modules/onnxruntime-node/**/*",
+    "node_modules/onnxruntime-web/**/*",
+    "node_modules/sharp/**/*"
   ],
   "win": {
     "target": ["nsis"],

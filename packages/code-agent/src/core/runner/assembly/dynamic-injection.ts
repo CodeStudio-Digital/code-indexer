@@ -53,6 +53,16 @@ export interface DynamicInjectionContext {
   /** Limit on file names included per reminder. Default 6. */
   maxActiveFiles?: number;
   /**
+   * Relevant project memory retrieved for this turn (already relevance-gated
+   * + ranked by the caller — the provider only formats + dedupes). Each item
+   * is a durable memory/snapshot worth surfacing for the current task.
+   */
+  relevantMemory?: ReadonlyArray<{ id: string; title: string; content: string }>;
+  /** Memory ids already injected in prior reminders — skipped. */
+  lastInjectedMemoryIds?: ReadonlySet<string>;
+  /** Limit on memory items per reminder. Default 3. */
+  maxMemoryItems?: number;
+  /**
    * Test-mode escape hatch — when true, the provider always returns
    * null so snapshot tests don't see non-deterministic injections.
    */
@@ -66,9 +76,13 @@ export interface DynamicInjectionResult {
   includedSkillIds: string[];
   /** Files that were included — caller adds to `lastInjectedFiles`. */
   includedFiles: string[];
+  /** Memory ids that were included — caller adds to `lastInjectedMemoryIds`. */
+  includedMemoryIds: string[];
 }
 
 const DEFAULT_MAX_FILES = 6;
+const DEFAULT_MAX_MEMORY = 3;
+const MEMORY_CONTENT_CAP = 300;
 
 /**
  * Compute the dynamic injection for the next turn. Returns null when
@@ -98,9 +112,24 @@ export function computeDynamicInjection(
     }
   }
 
+  const maxMemory = Math.max(0, ctx.maxMemoryItems ?? DEFAULT_MAX_MEMORY);
+  const lastMemoryIds = ctx.lastInjectedMemoryIds ?? new Set<string>();
+  const includedMemory: Array<{ id: string; title: string; content: string }> = [];
+  for (const m of ctx.relevantMemory ?? []) {
+    if (includedMemory.length >= maxMemory) break;
+    if (!lastMemoryIds.has(m.id) && !includedMemory.some((x) => x.id === m.id)) {
+      includedMemory.push(m);
+    }
+  }
+
   const recentCompaction = ctx.recentCompactionAt != null && (ctx.turn - ctx.recentCompactionAt) <= 2;
 
-  if (includedSkillIds.length === 0 && includedFiles.length === 0 && !recentCompaction) {
+  if (
+    includedSkillIds.length === 0 &&
+    includedFiles.length === 0 &&
+    includedMemory.length === 0 &&
+    !recentCompaction
+  ) {
     return null;
   }
 
@@ -119,11 +148,23 @@ export function computeDynamicInjection(
       : '';
     lines.push(`recently edited files (may not be in your current context): ${includedFiles.join(', ')}${truncated}`);
   }
+  if (includedMemory.length > 0) {
+    const items = includedMemory
+      .map((m) => {
+        const body = m.content.length > MEMORY_CONTENT_CAP
+          ? `${m.content.slice(0, MEMORY_CONTENT_CAP)}…`
+          : m.content;
+        return `- ${m.title}: ${body.replace(/\s*\n\s*/g, ' ')}`;
+      })
+      .join('\n');
+    lines.push(`relevant project memory (retrieved — verify against current code before relying on it):\n${items}`);
+  }
 
   return {
     reminder: lines.join('\n'),
     includedSkillIds,
     includedFiles,
+    includedMemoryIds: includedMemory.map((m) => m.id),
   };
 }
 

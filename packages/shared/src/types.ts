@@ -230,6 +230,13 @@ export interface ContextSnapshot {
   created_by: string;
   /** MD5 of the text fed to the embedding service. NULL = needs embedding. */
   embedding_hash: string | null;
+  /** Memory provenance (migration 114): manual | agent | session | compaction | index. */
+  source: string;
+  /** 0..1 salience used to rank retrieval and survive consolidation (migration 114). */
+  importance: number;
+  /** Usage signal for retrieval ranking / decay (migration 114). */
+  last_accessed_at: string | null;
+  access_count: number;
 }
 
 // ─── Webhooks ─────────────────────────────────────────────────────

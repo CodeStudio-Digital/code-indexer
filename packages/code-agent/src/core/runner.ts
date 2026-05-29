@@ -1527,6 +1527,26 @@ export class CoderRunner extends EventEmitter {
   }
 
   /**
+   * Aplica um switch de agente ao vivo no runner em execução: muta opts para
+   * que o gate / tier filter / system-prompt do próximo turno leiam o novo
+   * modo, e reseta as flags de aprovação ao entrar num modo com gate.
+   * Espelha o que o construtor deriva de AGENTS[id] no início do run.
+   */
+  applyLiveAgent(
+    def: import('@mcp/code-agent/agents/index.js').AgentDefinition,
+    agent: import('@mcp/code-agent/agents/index.js').AgentId,
+  ): void {
+    this.opts.planMode = def.planMode ?? false;
+    this.opts.specMode = def.specMode ?? false;
+    this.opts.agentId = agent;
+    // Mantém toolContext.planMode em sincronia — igual ao construtor; tier
+    // filter / system prompt leem daqui.
+    this.opts.toolContext.planMode = this.opts.planMode;
+    if (this.opts.planMode) this.resetPlanApproval();
+    if (this.opts.specMode) this.resetSpecApproval();
+  }
+
+  /**
    * Append a `<system-reminder>` wrapped user message to the conversation.
    * Used by tools that need to nudge the model out-of-band (e.g. mode
    * transition after plan approval). Mirrors to the SessionStore when

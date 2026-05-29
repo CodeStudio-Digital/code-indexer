@@ -146,14 +146,14 @@ function writeArchitectureOverview(db: CodeIndexDB, project: { id: number }, a: 
     a.entryPoints.length > 0 ? `\n## Entry Points\n${a.entryPoints.map((p) => `- ${p}`).join('\n')}` : '',
     a.testFiles.length > 0 ? `\n## Test Files\n${a.testFiles.length} test files detected` : '',
   ].filter(Boolean).join('\n');
-  db.createSnapshot(project.id, { title: 'Architecture Overview', category: 'architecture', content, tags: ['auto-generated', 'architecture'], createdBy: 'auto' });
+  db.createSnapshot(project.id, { title: 'Architecture Overview', category: 'architecture', content, tags: ['auto-generated', 'architecture'], createdBy: 'auto', source: 'index' });
 }
 
 function writePatterns(db: CodeIndexDB, project: { id: number }, a: CollectedAnalytics): void {
   const patterns = detectArchitecturalPatterns(a.filePaths);
   if (patterns.length === 0) return;
   const content = `# Design Patterns Detected\n\n${patterns.map((p) => `## ${p.name}\n${p.description}\n\nFiles:\n${p.files.map((f) => `- ${f}`).join('\n')}`).join('\n\n')}`;
-  db.createSnapshot(project.id, { title: 'Design Patterns', category: 'pattern', content, tags: ['auto-generated', 'patterns'], createdBy: 'auto' });
+  db.createSnapshot(project.id, { title: 'Design Patterns', category: 'pattern', content, tags: ['auto-generated', 'patterns'], createdBy: 'auto', source: 'index' });
 }
 
 function writeKeyConcepts(db: CodeIndexDB, project: { id: number }, a: CollectedAnalytics): void {
@@ -163,7 +163,7 @@ function writeKeyConcepts(db: CodeIndexDB, project: { id: number }, a: Collected
   db.createSnapshot(project.id, {
     title: 'Key Concepts', category: 'note',
     content: `# Key Concepts\n\nTop concepts found across the codebase:\n\n${lines}`,
-    tags: ['auto-generated', 'concepts'], createdBy: 'auto',
+    tags: ['auto-generated', 'concepts'], createdBy: 'auto', source: 'index',
   });
 }
 
@@ -187,7 +187,7 @@ function writeClassHierarchy(db: CodeIndexDB, project: { id: number }, a: Collec
   db.createSnapshot(project.id, {
     title: 'Classes & Interfaces', category: 'architecture',
     content: `# Classes & Interfaces\n\n${entries.length} classes/interfaces found:\n\n${entries.join('\n\n')}`,
-    tags: ['auto-generated', 'hierarchy'], createdBy: 'auto',
+    tags: ['auto-generated', 'hierarchy'], createdBy: 'auto', source: 'index',
   });
 }
 
@@ -197,7 +197,7 @@ function writeExternalDeps(db: CodeIndexDB, project: { id: number }, a: Collecte
   db.createSnapshot(project.id, {
     title: 'External Dependencies', category: 'note',
     content: `# External Dependencies\n\n${sorted.length} external dependencies detected:\n\n${sorted.map((d) => `- \`${d}\``).join('\n')}`,
-    tags: ['auto-generated', 'dependencies'], createdBy: 'auto',
+    tags: ['auto-generated', 'dependencies'], createdBy: 'auto', source: 'index',
   });
 }
 
@@ -206,7 +206,7 @@ function writeHighComplexity(db: CodeIndexDB, project: { id: number }, a: Collec
   db.createSnapshot(project.id, {
     title: 'High Complexity Files', category: 'todo',
     content: `# High Complexity Files\n\nThese files have high or very-high complexity and may benefit from refactoring:\n\n${a.highComplexity.map((f) => `- **${f.path}** (${f.complexity})`).join('\n')}`,
-    tags: ['auto-generated', 'complexity', 'tech-debt'], createdBy: 'auto',
+    tags: ['auto-generated', 'complexity', 'tech-debt'], createdBy: 'auto', source: 'index',
   });
 }
 
@@ -227,7 +227,7 @@ function writePublicApi(db: CodeIndexDB, project: { id: number }, a: CollectedAn
   db.createSnapshot(project.id, {
     title: 'Public API Surface', category: 'convention',
     content: `# Public API Surface\n\nExported functions and entry points:\n\n${apiLines}`,
-    tags: ['auto-generated', 'api-surface'], createdBy: 'auto',
+    tags: ['auto-generated', 'api-surface'], createdBy: 'auto', source: 'index',
   });
 }
 
@@ -259,6 +259,6 @@ function writeConventions(db: CodeIndexDB, project: { id: number }, a: Collected
   db.createSnapshot(project.id, {
     title: 'Project Conventions', category: 'convention',
     content: `# Project Conventions\n\nDetected conventions and patterns:\n\n${conventions.join('\n')}`,
-    tags: ['auto-generated', 'conventions'], createdBy: 'auto',
+    tags: ['auto-generated', 'conventions'], createdBy: 'auto', source: 'index',
   });
 }

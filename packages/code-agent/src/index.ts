@@ -405,6 +405,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     console.warn(`[coder] External MCP servers failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
+  // Plugin tools — contributed by installed plugins, with worker-backed
+  // handlers synthesized by the http-api layer (@mcp/plugin-host
+  // buildPluginTools). Registered at the tail like external MCP tools, so
+  // they're trimmed first under the model tool cap. Dormant in CLI/tests.
+  if (opts.pluginTools?.length) {
+    registry.registerAll(opts.pluginTools);
+  }
+
   // expand_toolset — registered AFTER external servers so the tier enum
   // includes any custom tiers (e.g., "cloudflare", "github") from connected servers.
   // For subordinates, every enabled MCP server is exposed as its own opt-in tier
@@ -653,18 +661,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         if (live) {
           const def = AGENTS[agent];
           if (def) {
-            // Mutate the live opts — the toolGate / tier filter / system
-            // prompt assembly all read from here per-turn.
-            (live.opts as { planMode?: boolean }).planMode = def.planMode ?? false;
-            (live.opts as { agentId?: import('@mcp/code-agent/agents/index.js').AgentId }).agentId = agent;
-            // When switching INTO plan/spec mode (rare — usually it's
-            // the reverse), the approval flag must reset so the gate
-            // re-engages until a fresh submit_plan/submit_spec is
-            // approved. Switching OUT of plan mode (the common case)
-            // leaves the existing `planApproved=true` harmless since
-            // the gate now short-circuits on `planMode=false`.
-            if (def.planMode && live.resetPlanApproval) live.resetPlanApproval();
-            if (def.specMode && live.resetSpecApproval) live.resetSpecApproval();
+            // Apply the new agent's mode to the live runner so the next
+            // mutating tool call unlocks/re-gates immediately (plan→build
+            // after submit_plan approval). See CoderRunner.applyLiveAgent.
+            live.applyLiveAgent(def, agent);
           }
           live.emit('session_agent_changed', { agent });
         }

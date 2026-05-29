@@ -10,6 +10,8 @@ export const pluginSourceSchema = z.object({
   repo: z.string().optional(),
   ref: z.string().optional(),
   url: z.string().url().optional(),
+  /** Plugin name for `market` sources. */
+  name: z.string().optional(),
 });
 
 export const marketplacePluginEntrySchema = z.object({

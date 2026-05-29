@@ -169,6 +169,10 @@ export class SnapshotService {
       tags?: string[];
       createdBy?: string;
       referencedFiles?: string[];
+      /** Memory provenance (manual|agent|session|compaction|index). */
+      source?: string;
+      /** 0..1 salience. */
+      importance?: number;
     }
   ): Promise<SnapshotMutationResult> {
     const snap = this.db.createSnapshot(projectId, data);

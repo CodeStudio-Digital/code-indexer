@@ -11,7 +11,7 @@ import type { Worker } from 'node:worker_threads';
  * separate auto-scale logic. Add new kinds here when a new CPU-heavy
  * workload appears.
  */
-export type WorkerKind = 'coder' | 'lsp' | 'index';
+export type WorkerKind = 'coder' | 'lsp' | 'index' | 'plugin';
 
 export interface WorkerSpec {
   /** Absolute path to the worker entry file (.js for prod, .ts under tsx). */

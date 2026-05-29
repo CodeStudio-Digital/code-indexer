@@ -7,6 +7,10 @@ export interface CreateSnapshotData {
   content: string;
   tags?: string[];
   createdBy?: string;
+  /** Memory provenance (migration 114). Defaults to 'manual'. */
+  source?: string;
+  /** 0..1 salience (migration 114). Defaults to 0.5. */
+  importance?: number;
 }
 
 export type UpdateSnapshotData = Partial<Pick<ContextSnapshot, 'title' | 'category' | 'content'>> & {
@@ -16,14 +20,27 @@ export type UpdateSnapshotData = Partial<Pick<ContextSnapshot, 'title' | 'catego
 
 export function create(db: DB, projectId: number, data: CreateSnapshotData): ContextSnapshot {
   const result = db.prepare(`
-    INSERT INTO snapshots (project_id, title, category, content, tags, created_by)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO snapshots (project_id, title, category, content, tags, created_by, source, importance)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     projectId, data.title, data.category, data.content,
-    JSON.stringify(data.tags ?? []), data.createdBy ?? 'manual'
+    JSON.stringify(data.tags ?? []), data.createdBy ?? 'manual',
+    data.source ?? 'manual', data.importance ?? 0.5
   );
   return db.prepare('SELECT * FROM snapshots WHERE id = ?')
     .get(result.lastInsertRowid) as ContextSnapshot;
+}
+
+/** Bump usage signal when memory is retrieved (migration 114). Best-effort. */
+export function markAccessed(db: DB, ids: number[]): void {
+  if (ids.length === 0) return;
+  const stmt = db.prepare(
+    `UPDATE snapshots SET access_count = access_count + 1, last_accessed_at = datetime('now') WHERE id = ?`,
+  );
+  const tx = db.transaction((list: number[]) => {
+    for (const id of list) stmt.run(id);
+  });
+  tx(ids);
 }
 
 export function setFiles(db: DB, snapshotId: number, projectId: number, filePaths: string[]): { inserted: number; skipped: string[] } {

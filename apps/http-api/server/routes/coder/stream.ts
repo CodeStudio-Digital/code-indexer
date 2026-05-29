@@ -20,6 +20,8 @@ import { parseIdParam, notFound } from '../_helpers.js';
 import { withSessionLock } from './sessionLock.js';
 import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { getGlobalMcpExternalPool } from '../../../sse/McpExternalPool.js';
+import { listEnabledPluginRuntime, buildPluginTools } from '@mcp/plugin-host';
+import { PluginWorkerHost } from '../../../sse/PluginWorkerHost.js';
 import {
   getRuntimeEventLog,
   installRuntimeEventLog,
@@ -434,7 +436,17 @@ export function mountCoderStreamRoutes(
     // until it finishes.
     const bus = decision.bus;
     void (async () => {
+      let pluginHost: PluginWorkerHost | null = null;
       try {
+        const { toolPlugins, bundles } = listEnabledPluginRuntime();
+        let pluginTools: ReturnType<typeof buildPluginTools> | undefined;
+        if (toolPlugins.length > 0) {
+          const host = new PluginWorkerHost({ bundles });
+          pluginHost = host;
+          pluginTools = buildPluginTools(toolPlugins, (ns, name, args, ctx) =>
+            host.invokeTool(ns, name, args, ctx),
+          );
+        }
         const handle = await runCoder({
           session: { id },
           userMessage: body.content,
@@ -447,6 +459,7 @@ export function mountCoderStreamRoutes(
           thinking: body.thinking,
           ...resolveDeepThinkForRequest(body),
           selectedSkillIds,
+          pluginTools,
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
           // Reuse the long-lived McpExternalPool from server boot so we
@@ -478,6 +491,7 @@ export function mountCoderStreamRoutes(
         publish(bus, 'error', { message });
         markEnded(bus, 'error', { message });
       } finally {
+        void pluginHost?.dispose();
         // Linger in the map so a late reattach (tab closed near done) still
         // sees the full buffer. After BUS_LINGER_MS the entry is evicted.
         setTimeout(() => {
@@ -535,7 +549,17 @@ export function mountCoderStreamRoutes(
     });
 
     void (async () => {
+      let pluginHost: PluginWorkerHost | null = null;
       try {
+        const { toolPlugins, bundles } = listEnabledPluginRuntime();
+        let pluginTools: ReturnType<typeof buildPluginTools> | undefined;
+        if (toolPlugins.length > 0) {
+          const host = new PluginWorkerHost({ bundles });
+          pluginHost = host;
+          pluginTools = buildPluginTools(toolPlugins, (ns, name, args, ctx) =>
+            host.invokeTool(ns, name, args, ctx),
+          );
+        }
         const handle = await runCoder({
           session: { id },
           userMessage: '',
@@ -544,6 +568,7 @@ export function mountCoderStreamRoutes(
           agent: body.agent,
           profile: body.profile,
           resume: true,
+          pluginTools,
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
           // Same pool reuse as the fresh-run path — `continue` resumes
@@ -568,6 +593,7 @@ export function mountCoderStreamRoutes(
         publish(bus, 'error', { message });
         markEnded(bus, 'error', { message });
       } finally {
+        void pluginHost?.dispose();
         setTimeout(() => {
           if (activeRuns.get(id) === bus) activeRuns.delete(id);
         }, BUS_LINGER_MS);

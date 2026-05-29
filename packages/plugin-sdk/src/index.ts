@@ -8,3 +8,4 @@
  */
 export * from './manifest/schema.js';
 export type * from './manifest/types.js';
+export * from './define.js';

@@ -1,0 +1,73 @@
+/**
+ * Runtime contribution types for the authoring SDK. Plain interfaces, zero
+ * deps (no zod) — so a plugin bundle that imports `definePlugin`/`contributeX`
+ * stays lean. The declarative subset of each shape mirrors the `.app.json`
+ * manifest schema; the CLI `build` step extracts it (dropping handlers).
+ */
+
+/** What a plugin tool handler returns. The host maps it to the agent's ToolResult. */
+export interface PluginToolResult {
+  content: string;
+  isError?: boolean;
+}
+
+/** Restricted context handed to a tool handler. Runs inside the plugin worker. */
+export interface PluginToolContext {
+  projectName: string | null;
+  cwd: string;
+  signal?: AbortSignal;
+  /** Surface a log line to the host (shows in plugin diagnostics). */
+  log(message: string): void;
+  /** Network access — handlers get fetch but no fs/child_process. */
+  fetch: typeof fetch;
+  /** Reverse-RPC to whitelisted host api-bus methods (read-only surface). */
+  host: { invoke(method: string, payload?: unknown): Promise<unknown> };
+}
+
+export type PluginToolHandler = (
+  args: Record<string, unknown>,
+  ctx: PluginToolContext,
+) => Promise<PluginToolResult> | PluginToolResult;
+
+export interface ContributedTool {
+  name: string;
+  description: string;
+  /** JSON Schema object describing the tool input. */
+  parameters: Record<string, unknown>;
+  riskLevel?: 'read' | 'write' | 'execute' | 'admin';
+  mutates?: boolean;
+  handler: PluginToolHandler;
+}
+
+export interface ContributedToolWindow {
+  id: string;
+  title: string;
+  icon?: string;
+  side: 'left' | 'right' | 'bottom';
+  /** Relative path to the HTML entry rendered in a sandboxed iframe. */
+  entry: string;
+}
+
+export interface ContributedCommand {
+  id: string;
+  label: string;
+  category?: string;
+  shortcut?: string;
+  /** When set, running the command invokes this contributed tool by name. */
+  runsTool?: string;
+}
+
+export interface ContributedTheme {
+  id: string;
+  label: string;
+  appearance: 'dark' | 'light';
+  /** CSS variable overrides, e.g. `{ '--primary': '#4d8cff' }`. */
+  tokens: Record<string, string>;
+}
+
+export interface PluginModule {
+  tools: ContributedTool[];
+  toolWindows: ContributedToolWindow[];
+  commands: ContributedCommand[];
+  themes: ContributedTheme[];
+}
