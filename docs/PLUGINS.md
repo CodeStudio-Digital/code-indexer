@@ -129,14 +129,9 @@ wrangler secret put MARKET_SIGNING_PRIVKEY      # base64 pkcs8 from keygen
 wrangler deploy
 ```
 
-=== MCP_MARKET_PUBKEY (host env — full PEM, keep the BEGIN/END lines) ===
------BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAePMGi3DT5VaYkrwfSnV7Zsb1O+LPGhGb0JV3RRbqMGM=
------END PUBLIC KEY-----
-
-=== MARKET_SIGNING_PRIVKEY (wrangler secret put — base64 pkcs8) ===
-wrangler secret put MARKET_SIGNING_PRIVKEY MC4CAQAwBQYDK2VwBCIEIOatQnIUjU4QSc8W67bZgFgRM6/PiB1tQpFGI+P8bFkm
-
+> The keygen prints two values: the **PEM public key** (set as `MCP_MARKET_PUBKEY` on the host)
+> and the **base64 private key** (feed ONLY to `wrangler secret put MARKET_SIGNING_PRIVKEY` —
+> never paste it into a file or commit it).
 
 On the host/IDE, set: `MCP_MARKET_URL` (deployed worker URL), `MCP_MARKET_PUBKEY` (PEM public key
 from keygen — used to verify bundles), `MCP_MARKET_TOKEN` (publish token).

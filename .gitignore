@@ -11,3 +11,12 @@ dist/
 data/
 .tmp/
 .reference/
+
+# Secrets / keys — never commit private keys (PEM, pkcs8, etc.)
+*.pem
+
+# Local infra / build temp
+worker-market/.wrangler/
+worker-market/.deploy.*
+.tmp-deploy/
+.tmp-smoke/
