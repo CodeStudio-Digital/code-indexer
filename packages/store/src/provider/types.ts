@@ -91,7 +91,7 @@ export interface DeepThinkDefaults {
   preThinkOnToolResults: boolean;
 }
 
-export type EmbeddingKind = 'cloudflare' | 'bedrock' | 'null';
+export type EmbeddingKind = 'cloudflare' | 'bedrock' | 'local' | 'null';
 
 export interface EmbeddingConfigRow {
   id: string;
@@ -107,7 +107,7 @@ export interface EmbeddingConfigRow {
  * Vector store backends. Decoupled from EmbeddingKind because a user can
  * generate embeddings with Bedrock Titan and store them in Qdrant, etc.
  */
-export type VectorStoreKind = 'cloudflare' | 'qdrant' | 'bedrock-opensearch' | 'pinecone' | 'null';
+export type VectorStoreKind = 'cloudflare' | 'qdrant' | 'bedrock-opensearch' | 'pinecone' | 'sqlite-vec' | 'null';
 
 export interface VectorStoreConfigRow {
   id: string;
@@ -185,4 +185,39 @@ export interface UpsertModelInput {
   visibility?: string | null;
   supported_in_api?: boolean | null;
   input_modalities?: string[] | null;
+}
+
+/**
+ * One pricing row in `model_prices` (migration 111). Unit is USD per 1M
+ * tokens. `provider` is '' for cross-provider price lists (OpenRouter /
+ * LiteLLM); a provider-specific string scopes the row to one provider.
+ * `source` is the origin: 'openrouter' | 'litellm' | 'manual' | 'hardcoded'.
+ */
+export interface ModelPriceRow {
+  provider: string;
+  model_id: string;
+  input_per_mtok: number | null;
+  output_per_mtok: number | null;
+  cache_read_per_mtok: number | null;
+  cache_write_per_mtok: number | null;
+  currency: string;
+  source: string;
+  source_model_ref: string | null;
+  fetched_at: string | null;
+  updated_at: string;
+}
+
+export interface UpsertModelPriceInput {
+  /** '' (or omitted) = cross-provider. */
+  provider?: string | null;
+  model_id: string;
+  input_per_mtok?: number | null;
+  output_per_mtok?: number | null;
+  cache_read_per_mtok?: number | null;
+  cache_write_per_mtok?: number | null;
+  currency?: string;
+  /** Raw upstream id before normalization (audit/debug only). */
+  source_model_ref?: string | null;
+  /** Upstream freshness (ISO). Null for the offline seed. */
+  fetched_at?: string | null;
 }

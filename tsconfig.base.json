@@ -45,6 +45,10 @@
       "@mcp/api-handlers/*": ["packages/api-handlers/src/*"],
       "@mcp/worker-pool": ["packages/worker-pool/src/index.ts"],
       "@mcp/worker-pool/*": ["packages/worker-pool/src/*"],
+      "@mcp/plugin-sdk": ["packages/plugin-sdk/src/index.ts"],
+      "@mcp/plugin-sdk/*": ["packages/plugin-sdk/src/*"],
+      "@mcp/plugin-host": ["packages/plugin-host/src/index.ts"],
+      "@mcp/plugin-host/*": ["packages/plugin-host/src/*"],
       "@apps/*": ["apps/*"]
     }
   }

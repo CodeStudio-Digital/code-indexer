@@ -12,6 +12,8 @@ import { describe, expect, it } from 'vitest';
 import {
   shouldClassifyTurn,
   computeOutcome,
+  scoreOutcome,
+  fnv1aSample,
   worstVerdictOf,
 } from '../feedback-builder.js';
 import type { QualityClassificationRow } from '@mcp/store/quality-classification-store.js';
@@ -266,5 +268,73 @@ describe('worstVerdictOf', () => {
       row({ verdict: 'error' }),
       row({ verdict: 'error' }),
     ])).toBe('ok');
+  });
+});
+
+describe('scoreOutcome (Quality v2 — measurability)', () => {
+  it('reports the direction AND how many pairs were measurable', () => {
+    expect(scoreOutcome(
+      [{ classifierName: 'completeness', verdict: 'flagged' }],
+      [{ classifierName: 'completeness', verdict: 'ok' }],
+    )).toEqual({ outcome: 'improved', measurable: 1 });
+  });
+
+  it('all-error follow-up → measurable=0 (caller must leave it pending)', () => {
+    // This is the core fix: an errored follow-up turn must NOT be scored as
+    // a real "unchanged" — measurable=0 signals "we could not tell yet".
+    expect(scoreOutcome(
+      [{ classifierName: 'completeness', verdict: 'flagged' }],
+      [{ classifierName: 'completeness', verdict: 'error' }],
+    )).toEqual({ outcome: 'unchanged', measurable: 0 });
+  });
+
+  it('counts only non-error pairs toward measurable', () => {
+    const s = scoreOutcome(
+      [
+        { classifierName: 'completeness', verdict: 'flagged' },
+        { classifierName: 'off_topic',    verdict: 'warn' },
+      ],
+      [
+        { classifierName: 'completeness', verdict: 'ok' },     // measurable, -2
+        { classifierName: 'off_topic',    verdict: 'error' },  // not measurable
+      ],
+    );
+    expect(s).toEqual({ outcome: 'improved', measurable: 1 });
+  });
+
+  it('empty inputs → unchanged with measurable 0', () => {
+    expect(scoreOutcome([], [])).toEqual({ outcome: 'unchanged', measurable: 0 });
+  });
+});
+
+describe('fnv1aSample', () => {
+  it('is deterministic for the same inputs', () => {
+    expect(fnv1aSample(7, 42)).toBe(fnv1aSample(7, 42));
+    expect(fnv1aSample(7, 42, 'nudge_holdout')).toBe(fnv1aSample(7, 42, 'nudge_holdout'));
+  });
+
+  it('always returns a fraction in [0, 1)', () => {
+    for (let t = 1; t <= 50; t++) {
+      const v = fnv1aSample(123, t);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThan(1);
+    }
+  });
+
+  it('the salt yields a decorrelated stream (holdout vs sampling)', () => {
+    let differ = 0;
+    for (let t = 1; t <= 50; t++) {
+      if (fnv1aSample(1, t) !== fnv1aSample(1, t, 'nudge_holdout')) differ++;
+    }
+    expect(differ).toBeGreaterThan(45); // essentially all values change
+  });
+
+  it('held-out selection is ~rate over many turns (deterministic)', () => {
+    let held = 0;
+    for (let t = 1; t <= 1000; t++) {
+      if (fnv1aSample(99, t, 'nudge_holdout') < 0.15) held++;
+    }
+    expect(held).toBeGreaterThan(90);  // ~150 ± noise
+    expect(held).toBeLessThan(210);
   });
 });

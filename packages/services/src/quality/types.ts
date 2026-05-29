@@ -27,6 +27,14 @@ export interface AgentOutputForClassification {
 export interface ClassificationVerdict {
   classifierName: string;
   verdict: QualityVerdict;
+  /**
+   * True when `verdict==='error'` reflects a CLASSIFIER FAILURE (no binding,
+   * LLM call errored, unparseable reply) rather than a content judgement. The
+   * LLM may legitimately return verdict='error' to mean "the agent's output is
+   * broken" — that is NOT a system error. Telemetry counts only systemError as
+   * a failure so content verdicts don't inflate the error metric.
+   */
+  systemError?: boolean;
   /** Optional model-emitted confidence. */
   confidence?: number;
   /** Free-form reason — surfaced in admin UI tooltips. */

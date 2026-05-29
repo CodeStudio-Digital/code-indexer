@@ -123,6 +123,10 @@ import { agentBoardWatermarks106 } from './106_agent_board_watermarks.js';
 import { agentSupervision107 } from './107_agent_supervision.js';
 import { coderTaskRuns108 } from './108_coder_task_runs.js';
 import { rerankerConfigs109 } from './109_reranker_configs.js';
+import { sessionSnapshotReviews110 } from './110_session_snapshot_reviews.js';
+import { modelPrices111 } from './111_model_prices.js';
+import { installedPlugins112 } from './112_installed_plugins.js';
+import { embeddingFingerprint113 } from './113_embedding_fingerprint.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -262,6 +266,10 @@ export const MIGRATIONS: Migration[] = [
   agentSupervision107,
   coderTaskRuns108,
   rerankerConfigs109,
+  sessionSnapshotReviews110,
+  modelPrices111,
+  installedPlugins112,
+  embeddingFingerprint113,
 ];
 
 /**

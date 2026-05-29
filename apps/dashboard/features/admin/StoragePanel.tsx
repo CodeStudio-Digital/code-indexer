@@ -24,12 +24,14 @@ import {
 import { StorageConfigDialog } from './StorageConfigDialog.js';
 
 const EMBEDDING_KINDS: Array<{ value: EmbeddingKind; label: string }> = [
+  { value: 'local', label: 'Local (transformers.js — offline)' },
   { value: 'cloudflare', label: 'Cloudflare Workers AI' },
   { value: 'bedrock', label: 'AWS Bedrock (Titan)' },
   { value: 'null', label: 'None (disable vectors)' },
 ];
 
 const VECTOR_STORE_KINDS: Array<{ value: VectorStoreKind; label: string }> = [
+  { value: 'sqlite-vec', label: 'SQLite-vec (local, embedded — offline)' },
   { value: 'cloudflare', label: 'Cloudflare Vectorize' },
   { value: 'qdrant', label: 'Qdrant (self-hosted)' },
   { value: 'bedrock-opensearch', label: 'AWS OpenSearch (SigV4)' },

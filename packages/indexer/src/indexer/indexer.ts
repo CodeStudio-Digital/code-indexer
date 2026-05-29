@@ -100,6 +100,20 @@ export class IndexAgent {
 
     const project = this.db.resolveProject(undefined, projectNameOrPath) ?? this.db.resolveProject(projectNameOrPath);
 
+    // Detect an embedding-model change. If this project was last indexed with
+    // a different model/backend, clear embedding hashes so everything re-embeds
+    // under the new model — otherwise the incremental hash check skips re-embed
+    // and the new vector store (e.g. sqlite-vec) stays empty / dim-mismatched.
+    const embFingerprint = this.embeddingService.fingerprint?.();
+    if (embFingerprint) {
+      const prevFingerprint = this.db.getProjectEmbeddingFingerprint(project.id);
+      if (prevFingerprint && prevFingerprint !== embFingerprint) {
+        console.error(`[indexer] Embedding model changed (${prevFingerprint} → ${embFingerprint}) — clearing embedding hashes for a full re-embed`);
+        this.db.clearEmbeddingHashes(project.id);
+      }
+      this.db.setProjectEmbeddingFingerprint(project.id, embFingerprint);
+    }
+
     const scanner = new FileScanner(project.root_path, this.config.ignorePatterns, this.config.maxFileSize);
     const scanResult = await scanner.scan(this.db, project.id);
 

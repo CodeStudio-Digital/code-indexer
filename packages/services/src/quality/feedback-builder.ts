@@ -269,9 +269,13 @@ export function shouldClassifyTurn(opts: ShouldClassifyTurnOpts): boolean {
  * without producing different sampling decisions.
  *
  * Borrowed from `packages/services/src/shadow-traffic/shadow-traffic-runner.ts`.
+ *
+ * `salt` lets independent decisions over the same (session, turn) draw from
+ * decorrelated streams — e.g. classification sampling vs. nudge held-out
+ * selection must not be correlated, or the counterfactual baseline is biased.
  */
-function fnv1aSample(sessionId: number, turn: number): number {
-  const text = `${sessionId}::${turn}`;
+export function fnv1aSample(sessionId: number, turn: number, salt = ''): number {
+  const text = salt ? `${sessionId}::${turn}::${salt}` : `${sessionId}::${turn}`;
   let h = 0x811c9dc5 >>> 0;
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
@@ -282,42 +286,68 @@ function fnv1aSample(sessionId: number, turn: number): number {
 
 export type InterventionOutcome = 'improved' | 'unchanged' | 'worsened';
 
+export interface OutcomeScore {
+  /** Directional result from the summed per-classifier severity delta. */
+  outcome: InterventionOutcome;
+  /**
+   * How many triggering classifiers had a non-`error` verdict in BOTH the
+   * before AND after snapshots — i.e. how many actually contributed a
+   * delta. When this is 0 the `outcome` is meaningless: provider errors on
+   * the follow-up turn masked the signal, so the caller must NOT record it
+   * (otherwise an unmeasurable turn is mislabeled 'unchanged', deflating
+   * the effectiveness rate). Leave the intervention pending and re-score on
+   * a later, cleaner turn instead.
+   */
+  measurable: number;
+}
+
 /**
- * Compute whether an intervention (nudge / planning / policy block) made
- * the agent's behavior better, worse, or unchanged on the next turn.
+ * Score whether an intervention (nudge / planning / policy block) made the
+ * agent's behavior better, worse, or unchanged on the next turn — AND how
+ * much of that judgment was actually measurable.
  *
  * Algorithm:
  *   - Pair verdicts by `classifierName` (before, after).
  *   - Map each verdict to a severity score: ok=0, warn=1, flagged=2.
  *   - `error` is ignored (treated as missing — provider hiccups
- *     shouldn't dominate the effectiveness signal).
+ *     shouldn't dominate the effectiveness signal) and does NOT count
+ *     toward `measurable`.
  *   - Sum the per-classifier deltas (after - before).
  *
- * Result:
+ * Result direction:
  *   - sum < 0 → 'improved' (at least one classifier dropped severity)
  *   - sum > 0 → 'worsened' (severity rose)
  *   - sum == 0 → 'unchanged'
  *
  * Pure; no DB.
  */
-export function computeOutcome(
+export function scoreOutcome(
   before: ReadonlyArray<Pick<ClassificationVerdict, 'classifierName' | 'verdict'>>,
   after: ReadonlyArray<Pick<ClassificationVerdict, 'classifierName' | 'verdict'>>,
-): InterventionOutcome {
+): OutcomeScore {
   const beforeByName = new Map<string, QualityVerdict>();
   for (const v of before) beforeByName.set(v.classifierName, v.verdict);
   let delta = 0;
+  let measurable = 0;
   for (const v of after) {
     const prev = beforeByName.get(v.classifierName);
     if (prev === undefined) continue;
     const prevSev = VERDICT_SEVERITY[prev];
     const nextSev = VERDICT_SEVERITY[v.verdict];
-    if (prevSev < 0 || nextSev < 0) continue; // skip `error`
+    if (prevSev < 0 || nextSev < 0) continue; // skip `error` — not measurable
+    measurable += 1;
     delta += nextSev - prevSev;
   }
-  if (delta < 0) return 'improved';
-  if (delta > 0) return 'worsened';
-  return 'unchanged';
+  const outcome: InterventionOutcome = delta < 0 ? 'improved' : delta > 0 ? 'worsened' : 'unchanged';
+  return { outcome, measurable };
+}
+
+/** Back-compat thin wrapper returning only the direction. See {@link scoreOutcome}. */
+export function computeOutcome(
+  before: ReadonlyArray<Pick<ClassificationVerdict, 'classifierName' | 'verdict'>>,
+  after: ReadonlyArray<Pick<ClassificationVerdict, 'classifierName' | 'verdict'>>,
+): InterventionOutcome {
+  return scoreOutcome(before, after).outcome;
 }
 
 /**

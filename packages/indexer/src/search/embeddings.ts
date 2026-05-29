@@ -1,8 +1,15 @@
 import type { ProviderStore } from '@mcp/store/provider-store.js';
+import { LocalEmbeddingService } from './local-embeddings.js';
 
 export interface EmbeddingService {
   embed(texts: string[]): Promise<{ vectors: number[][]; tokens: number }>;
   embedQuery(text: string): Promise<{ vector: number[]; tokens: number }>;
+  /**
+   * Stable id of the model + backend (e.g. `cloudflare:bge-m3`,
+   * `local:Xenova/multilingual-e5-small`). Optional so test fakes don't need
+   * it; the indexer uses it to detect a model change and trigger a re-embed.
+   */
+  fingerprint?(): string;
 }
 
 export class CloudflareEmbeddingService implements EmbeddingService {
@@ -183,6 +190,12 @@ export class CloudflareEmbeddingService implements EmbeddingService {
       tokens: result.tokens,
     };
   }
+
+  fingerprint(): string {
+    // The Worker pins @cf/baai/bge-m3 (1024-d), so the URL/token don't change
+    // the vector space — the model identity is what matters for re-index.
+    return 'cloudflare:bge-m3';
+  }
 }
 
 /**
@@ -326,6 +339,10 @@ export class BedrockTitanEmbeddingService implements EmbeddingService {
     const r = await this.embed([text]);
     return { vector: r.vectors[0] ?? [], tokens: r.tokens };
   }
+
+  fingerprint(): string {
+    return `bedrock:${this.modelId}`;
+  }
 }
 
 export class NullEmbeddingService implements EmbeddingService {
@@ -335,6 +352,10 @@ export class NullEmbeddingService implements EmbeddingService {
 
   async embedQuery(_text: string): Promise<{ vector: number[]; tokens: number }> {
     return { vector: [], tokens: 0 };
+  }
+
+  fingerprint(): string {
+    return 'null';
   }
 }
 
@@ -378,6 +399,10 @@ export function createEmbeddingService(
             sessionToken: c.sessionToken,
           });
         }
+      }
+      if (cfg.kind === 'local') {
+        const c = cfg.config as { model?: string; cacheDir?: string };
+        return new LocalEmbeddingService({ model: c.model, cacheDir: c.cacheDir });
       }
     }
   }

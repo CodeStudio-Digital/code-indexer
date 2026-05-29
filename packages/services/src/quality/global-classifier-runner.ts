@@ -28,7 +28,16 @@ import type { AgentOutputForClassification, QualityResult } from './types.js';
 import type { QualityClassifierPipeline } from './quality-pipeline.js';
 import type { QualityClassificationStore } from '@mcp/store/quality-classification-store.js';
 import type { QualityInterventionStore } from '@mcp/store/quality-intervention-store.js';
-import { computeOutcome } from './feedback-builder.js';
+import { scoreOutcome } from './feedback-builder.js';
+
+/**
+ * How many turns back the backfill looks for still-pending interventions.
+ * The immediate next turn (N+1) is the ideal "after", but it may be skipped
+ * (no narrative / sampled out) or unmeasurable (all target classifiers
+ * errored). A small window lets the first CLEAN classified turn resolve the
+ * row instead of leaving it pending forever.
+ */
+const MAX_BACKFILL_LOOKBACK = 3;
 
 let globalPipeline: QualityClassifierPipeline | undefined;
 let enabled = false;
@@ -164,20 +173,26 @@ function backfillPendingInterventions(
   if (!m) return;
   const currentTurn = Number(m[1]);
   if (!Number.isFinite(currentTurn) || currentTurn <= 0) return;
-  const priorTurn = currentTurn - 1;
-  const pending = store.findPendingByPriorTurn(output.sessionId, priorTurn);
+  const maxTurn = currentTurn - 1;
+  const minTurn = Math.max(1, currentTurn - MAX_BACKFILL_LOOKBACK);
+  if (maxTurn < minTurn) return;
+  const pending = store.findPendingByPriorTurnRange(output.sessionId, minTurn, maxTurn);
   if (pending.length === 0) return;
+  const after = result.verdicts.map((v) => ({
+    classifierName: v.classifierName,
+    verdict: v.verdict,
+    confidence: v.confidence ?? null,
+    reason: v.reason ?? null,
+  }));
   for (const row of pending) {
     let before: ReturnType<typeof parseVerdicts>;
     try { before = parseVerdicts(row.triggering_verdicts_json); }
     catch { continue; } // bad JSON — skip silently
-    const after = result.verdicts.map((v) => ({
-      classifierName: v.classifierName,
-      verdict: v.verdict,
-      confidence: v.confidence ?? null,
-      reason: v.reason ?? null,
-    }));
-    const outcome = computeOutcome(before, after);
+    const { outcome, measurable } = scoreOutcome(before, after);
+    // Unmeasurable (every target classifier errored on this turn): leave the
+    // row pending so a later, cleaner turn can score it. Recording it now
+    // would mislabel it 'unchanged' and deflate the effectiveness rate.
+    if (measurable === 0) continue;
     try {
       store.recordOutcome({
         id: row.id,

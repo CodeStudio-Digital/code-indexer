@@ -14,24 +14,33 @@ import {
   type CacheStat,
   type HistogramBucket,
   type TelemetryRow,
+  type TelemetrySummary,
   fetchCacheStats,
   fetchHistogram,
+  fetchSummary,
   fetchTelemetry,
   prunePipelineTelemetry,
 } from './pipeline-telemetry-api.js';
+import { SINCE_PRESETS, sinceForKey } from '../telemetry/since.js';
 
+// Stored bucket values (must match durationToBucket/sizeToBucket in the store).
 const BUCKETS_DURATION = ['0-10ms', '0-50ms', '50-500ms', '500-2500ms', '2500ms+'];
 const BUCKETS_SIZE = ['0-10', '0-50', '50-500', '500-1000', '1000-2500', '2500+'];
+// Friendly display labels — the buckets are disjoint, so "0-50ms" really means
+// [10,50). Override the misleading ones without rewriting stored values.
+const BUCKET_LABEL: Record<string, string> = { '0-50ms': '10-50ms', '0-50': '10-50' };
 
 export function PipelineTelemetryPanel() {
   const { t } = useTranslation(['telemetry', 'common']);
   const confirm = useConfirm();
   const notify = useNotify();
   const [rows, setRows] = useState<TelemetryRow[]>([]);
+  const [summary, setSummary] = useState<TelemetrySummary | null>(null);
   const [histogram, setHistogram] = useState<HistogramBucket[]>([]);
   const [cacheStats, setCacheStats] = useState<CacheStat[]>([]);
   const [pipelineFilter, setPipelineFilter] = useState('');
   const [stageFilter, setStageFilter] = useState('');
+  const [sinceKey, setSinceKey] = useState('all');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bucketField, setBucketField] = useState<'duration_bucket' | 'size_bucket'>('duration_bucket');
@@ -40,17 +49,21 @@ export function PipelineTelemetryPanel() {
     setLoading(true);
     setError(null);
     try {
-      const opts = {
+      // Same filters drive every block, so the cards, histogram, cache stats
+      // and recent sample all describe the same population + time window.
+      const filters = {
         pipelineName: pipelineFilter.trim() || undefined,
         stage: stageFilter.trim() || undefined,
-        limit: 200,
+        since: sinceForKey(sinceKey) ?? undefined,
       };
-      const [telemRes, histRes, cacheRes] = await Promise.all([
-        fetchTelemetry(opts),
-        fetchHistogram({ ...opts, bucketField }),
-        fetchCacheStats(),
+      const [telemRes, sumRes, histRes, cacheRes] = await Promise.all([
+        fetchTelemetry({ ...filters, limit: 200 }),
+        fetchSummary(filters),
+        fetchHistogram({ ...filters, bucketField }),
+        fetchCacheStats(filters),
       ]);
       setRows(telemRes.rows);
+      setSummary(sumRes.summary);
       setHistogram(histRes.histogram);
       setCacheStats(cacheRes.stats);
     } catch (e) {
@@ -63,13 +76,16 @@ export function PipelineTelemetryPanel() {
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bucketField]);
+  }, [bucketField, sinceKey]);
 
-  const totalEvents = rows.length;
-  const errorCount  = useMemo(() => rows.reduce((acc, r) => acc + (r.errors || 0), 0), [rows]);
-  const cacheHits   = useMemo(() => rows.reduce((acc, r) => acc + r.cache_hits,  0), [rows]);
-  const cacheMisses = useMemo(() => rows.reduce((acc, r) => acc + r.cache_misses, 0), [rows]);
-  const hitRate     = cacheHits + cacheMisses > 0 ? cacheHits / (cacheHits + cacheMisses) : 0;
+  // Cards come from the backend summary (window-wide), not a client-side sum of
+  // the 200-row recent sample — so they match the histogram total.
+  const events      = summary?.events ?? 0;
+  const errorRows   = summary?.errorRows ?? 0;
+  const subErrors   = summary?.subErrors ?? 0;
+  const cacheHits   = summary?.cacheHits ?? 0;
+  const cacheMisses = summary?.cacheMisses ?? 0;
+  const hitRate     = summary?.hitRate ?? 0;
 
   const histogramMax = useMemo(
     () => histogram.reduce((max, b) => Math.max(max, b.count), 0),
@@ -127,13 +143,24 @@ export function PipelineTelemetryPanel() {
         <Button size="sm" variant="ghost" onClick={() => void onPrune()}>
           <Trash2 className="h-3 w-3 mr-1 text-red-500" /> {t('telemetry:pipeline.actions.prune')}
         </Button>
+        <div className="inline-flex rounded border overflow-hidden text-xs">
+          {SINCE_PRESETS.map((p) => (
+            <button
+              key={p.key}
+              className={`px-2 py-1 ${sinceKey === p.key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
+              onClick={() => setSinceKey(p.key)}
+            >
+              {t(`telemetry:filters.since.${p.key}`)}
+            </button>
+          ))}
+        </div>
       </div>
 
       {error && <div className="text-sm text-red-500">{error}</div>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">{t('telemetry:pipeline.stats.events')}</div><div className="text-2xl font-semibold">{totalEvents}</div></CardContent></Card>
-        <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">{t('telemetry:pipeline.stats.errors')}</div><div className="text-2xl font-semibold">{errorCount}</div></CardContent></Card>
+        <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">{t('telemetry:pipeline.stats.events')}</div><div className="text-2xl font-semibold">{events}</div></CardContent></Card>
+        <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">{t('telemetry:pipeline.stats.errorRows')}</div><div className="text-2xl font-semibold">{errorRows}</div>{subErrors > 0 && <div className="text-xs text-muted-foreground">{t('telemetry:pipeline.stats.subErrors', { count: subErrors })}</div>}</CardContent></Card>
         <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">{t('telemetry:pipeline.stats.cacheHitsMisses')}</div><div className="text-2xl font-semibold">{cacheHits} / {cacheMisses}</div></CardContent></Card>
         <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">{t('telemetry:pipeline.stats.hitRate')}</div><div className="text-2xl font-semibold">{(hitRate * 100).toFixed(1)}%</div></CardContent></Card>
       </div>
@@ -153,7 +180,7 @@ export function PipelineTelemetryPanel() {
             const pct = histogramMax > 0 ? (count / histogramMax) * 100 : 0;
             return (
               <div key={label} className="flex items-center gap-2 text-xs">
-                <span className="w-24 font-mono">{label}</span>
+                <span className="w-24 font-mono">{BUCKET_LABEL[label] ?? label}</span>
                 <div className="flex-1 h-3 rounded bg-muted overflow-hidden">
                   <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
                 </div>

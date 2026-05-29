@@ -15,6 +15,7 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
 import { SessionSnapshotService } from '@mcp/services/services/session-snapshots.js';
+import { mountSnapshotReviewRoutes } from '../snapshot-review-routes.js';
 
 export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
@@ -38,7 +39,14 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/coder/sessions/:id/snapshot/file/:baselineId/diff', async (c) => {
     const baselineId = parseIdParam(c, 'baselineId');
     if (!Number.isFinite(baselineId)) return c.json({ error: 'bad baselineId' }, 400);
-    const diff = await service.getDiff(baselineId);
+    const context = Number(c.req.query('context') ?? 3);
+    const contextBeforeRaw = c.req.query('contextBefore');
+    const contextAfterRaw = c.req.query('contextAfter');
+    const diff = await service.getDiff(baselineId, {
+      context: Number.isFinite(context) ? context : 3,
+      contextBefore: contextBeforeRaw ? Number(contextBeforeRaw) : undefined,
+      contextAfter: contextAfterRaw ? Number(contextAfterRaw) : undefined,
+    });
     if (!diff) return notFound(c, 'baseline not found');
     return c.json(diff);
   });
@@ -84,4 +92,6 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
     const r = await service.revertAll('coder', id);
     return c.json(r);
   });
+
+  mountSnapshotReviewRoutes(app, deps, { scope: 'coder' });
 }

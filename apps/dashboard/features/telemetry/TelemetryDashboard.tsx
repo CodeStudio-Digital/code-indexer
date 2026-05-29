@@ -6,6 +6,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/ta
 import { PipelineTelemetryPanel } from '../admin/PipelineTelemetryPanel.js';
 import { QualityPanel } from '../admin/QualityPanel.js';
 import { SupervisorPanel } from '../admin/SupervisorPanel.js';
+import { SINCE_PRESETS, sinceForKey } from './since.js';
+import { TelemetryCoverageNote, type TelemetryCoverage } from './TelemetryCoverageNote.js';
+import { ModelPricesPanel } from './ModelPricesPanel.js';
 
 interface ProviderRow {
   provider: string;
@@ -69,6 +72,7 @@ interface GlobalTelemetry {
     total_estimated_cost_usd: number;
     truncation_rate: number | null;
   };
+  coverage: TelemetryCoverage;
   by_provider: ProviderRow[];
   by_model: ModelRow[];
   skills_modes: SkillsModeRow[];
@@ -97,20 +101,6 @@ function formatUsd(value: number): string {
   return `$${(value / 1000).toFixed(1)}k`;
 }
 
-const SINCE_PRESETS: Array<{ key: string; days: number | null }> = [
-  { key: 'all', days: null },
-  { key: '24h', days: 1 },
-  { key: '7d', days: 7 },
-  { key: '30d', days: 30 },
-];
-
-function sinceForKey(key: string): string | null {
-  const preset = SINCE_PRESETS.find((p) => p.key === key);
-  if (!preset || preset.days == null) return null;
-  const d = new Date(Date.now() - preset.days * 24 * 3600 * 1000);
-  // Match SQLite's datetime('now') format: 'YYYY-MM-DD HH:MM:SS' UTC.
-  return d.toISOString().slice(0, 19).replace('T', ' ');
-}
 
 interface ProjectOption { id: number; name: string }
 
@@ -143,6 +133,7 @@ export function TelemetryDashboard() {
         <TabsList>
           <TabsTrigger value="overview">{t('telemetry:tabs.overview', { defaultValue: 'Overview' })}</TabsTrigger>
           <TabsTrigger value="pipeline">{t('telemetry:tabs.pipeline', { defaultValue: 'Pipeline Telemetry' })}</TabsTrigger>
+          <TabsTrigger value="prices">{t('telemetry:tabs.prices', { defaultValue: 'Preços' })}</TabsTrigger>
           <TabsTrigger value="quality">{t('telemetry:tabs.quality', { defaultValue: 'Quality' })}</TabsTrigger>
           <TabsTrigger value="supervisor">{t('telemetry:tabs.supervisor', { defaultValue: 'Supervisor' })}</TabsTrigger>
         </TabsList>
@@ -153,6 +144,10 @@ export function TelemetryDashboard() {
 
         <TabsContent value="pipeline">
           <PipelineTelemetryPanel />
+        </TabsContent>
+
+        <TabsContent value="prices">
+          <ModelPricesPanel />
         </TabsContent>
 
         <TabsContent value="quality">
@@ -272,6 +267,8 @@ function TelemetryOverview() {
               }
             />
           </div>
+
+          <TelemetryCoverageNote coverage={data.coverage} />
 
           {/* Top tools (migration 072) — by output_chars produced. */}
           {data.top_tools && data.top_tools.length > 0 && (

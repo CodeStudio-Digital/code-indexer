@@ -39,6 +39,15 @@ export interface CacheStat {
   hit_rate: number;
 }
 
+export interface TelemetrySummary {
+  events: number;
+  errorRows: number;
+  subErrors: number;
+  cacheHits: number;
+  cacheMisses: number;
+  hitRate: number;
+}
+
 export async function fetchTelemetry(opts: {
   pipelineName?: string;
   stage?: string;
@@ -73,11 +82,30 @@ export async function fetchHistogram(opts: {
   return (await r.json()) as { histogram: HistogramBucket[]; bucketField: string };
 }
 
-export async function fetchCacheStats(opts: { since?: string } = {}): Promise<{ stats: CacheStat[] }> {
+export async function fetchCacheStats(opts: {
+  pipelineName?: string;
+  stage?: string;
+  since?: string;
+} = {}): Promise<{ stats: CacheStat[] }> {
   const params = new URLSearchParams();
+  if (opts.pipelineName) params.set('pipeline_name', opts.pipelineName);
+  if (opts.stage) params.set('stage', opts.stage);
   if (opts.since) params.set('since', opts.since);
   const r = await fetch(`/api/admin/telemetry/pipelines/cache-stats?${params.toString()}`);
   return (await r.json()) as { stats: CacheStat[] };
+}
+
+export async function fetchSummary(opts: {
+  pipelineName?: string;
+  stage?: string;
+  since?: string;
+} = {}): Promise<{ summary: TelemetrySummary }> {
+  const params = new URLSearchParams();
+  if (opts.pipelineName) params.set('pipeline_name', opts.pipelineName);
+  if (opts.stage) params.set('stage', opts.stage);
+  if (opts.since) params.set('since', opts.since);
+  const r = await fetch(`/api/admin/telemetry/pipelines/summary?${params.toString()}`);
+  return (await r.json()) as { summary: TelemetrySummary };
 }
 
 export async function prunePipelineTelemetry(cutoff?: string): Promise<{ deleted: number; cutoff: string }> {

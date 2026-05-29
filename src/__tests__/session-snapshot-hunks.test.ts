@@ -57,6 +57,45 @@ describe('snapshot-hunks — computeHunks', () => {
     expect(hunks.length).toBe(2);
     expect(hunks[0].fingerprint).not.toBe(hunks[1].fingerprint);
   });
+
+  it('keeps a top-of-file edit compact instead of absorbing the unchanged tail', () => {
+    const beforeLines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`);
+    const afterLines = [...beforeLines];
+    afterLines[0] = 'changed line 1';
+    const hunks = computeHunks(`${beforeLines.join('\n')}\n`, `${afterLines.join('\n')}\n`);
+    expect(hunks).toHaveLength(1);
+    expect(hunks[0].lines).toHaveLength(5);
+    expect(hunks[0].hiddenBefore).toBe(0);
+    expect(hunks[0].hiddenAfter).toBe(96);
+    expect(hunks[0].canExpandAfter).toBe(true);
+  });
+
+  it('keeps an end-of-file edit compact with only leading context', () => {
+    const beforeLines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`);
+    const afterLines = [...beforeLines];
+    afterLines[99] = 'changed line 100';
+    const hunks = computeHunks(`${beforeLines.join('\n')}\n`, `${afterLines.join('\n')}\n`);
+    expect(hunks).toHaveLength(1);
+    expect(hunks[0].lines).toHaveLength(5);
+    expect(hunks[0].hiddenBefore).toBe(96);
+    expect(hunks[0].hiddenAfter).toBe(0);
+    expect(hunks[0].canExpandBefore).toBe(true);
+  });
+
+  it('supports incremental context expansion without changing hunk identity', () => {
+    const beforeLines = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`);
+    const afterLines = [...beforeLines];
+    afterLines[29] = 'changed line 30';
+    const compact = computeHunks(`${beforeLines.join('\n')}\n`, `${afterLines.join('\n')}\n`)[0];
+    const expanded = computeHunks(`${beforeLines.join('\n')}\n`, `${afterLines.join('\n')}\n`, {
+      context: 3,
+      contextBefore: 13,
+      contextAfter: 3,
+    })[0];
+    expect(expanded.lines.length).toBe(compact.lines.length + 10);
+    expect(expanded.hiddenBefore).toBe(compact.hiddenBefore - 10);
+    expect(expanded.fingerprint).toBe(compact.fingerprint);
+  });
 });
 
 describe('snapshot-hunks — applyHunkRevert', () => {

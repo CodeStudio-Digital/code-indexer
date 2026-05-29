@@ -97,6 +97,27 @@ export function QualityPanel() {
     return map;
   }, [distribution]);
 
+  // The REAL nudge lift: improved-rate WITH a nudge minus improved-rate when
+  // the nudge was held out (withheld) on the same population. `nudge_suppressed`
+  // is NOT a baseline (it's the repeat/dedup'd subset), so we compare against
+  // `nudge_holdout` only. Null until both arms have measured outcomes.
+  const lift = useMemo(() => {
+    if (!interventionStats) return null;
+    const nudge = interventionStats.byType.find((r) => r.intervention_type === 'nudge');
+    const holdout = interventionStats.byType.find((r) => r.intervention_type === 'nudge_holdout');
+    if (!nudge || !holdout || nudge.measured === 0 || holdout.measured === 0) return null;
+    return {
+      pp: nudge.improved_rate - holdout.improved_rate,
+      nudge: Math.round(nudge.improved_rate * 100),
+      holdout: Math.round(holdout.improved_rate * 100),
+    };
+  }, [interventionStats]);
+
+  // Translate an intervention_type to a friendly label; falls back to the raw
+  // key so unknown types still render.
+  const typeLabel = (type: string): string =>
+    t(`telemetry:quality.interventions.type.${type}`, { defaultValue: type });
+
   async function onPrune() {
     const ok = await confirm({
       title: t('telemetry:quality.confirmPrune.title'),
@@ -204,6 +225,21 @@ export function QualityPanel() {
             <CardTitle className="text-base">{t('telemetry:quality.interventions.title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
+            {lift && (
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <span
+                  className={`text-2xl font-semibold ${
+                    lift.pp > 0 ? 'text-emerald-500' : lift.pp < 0 ? 'text-red-500' : ''
+                  }`}
+                >
+                  {lift.pp >= 0 ? '+' : ''}{Math.round(lift.pp * 100)} pp
+                </span>
+                <span className="text-xs font-medium">{t('telemetry:quality.interventions.lift')}</span>
+                <span className="text-xs text-muted-foreground">
+                  · {t('telemetry:quality.interventions.liftHint', { nudge: lift.nudge, holdout: lift.holdout })}
+                </span>
+              </div>
+            )}
             {interventionStats.byType.length === 0 ? (
               <div className="text-xs text-muted-foreground italic">
                 {t('telemetry:quality.interventions.empty')}
@@ -219,7 +255,7 @@ export function QualityPanel() {
                   return (
                     <div key={row.intervention_type} className="space-y-1">
                       <div className="flex items-center gap-2 text-xs">
-                        <span className="font-mono w-36">{row.intervention_type}</span>
+                        <span className="font-mono w-36" title={row.intervention_type}>{typeLabel(row.intervention_type)}</span>
                         <div className="flex-1 h-4 rounded bg-muted overflow-hidden flex">
                           <div className="h-full bg-emerald-500" style={{ width: `${pct(row.improved)}%` }} title={`${t('telemetry:quality.interventions.improved')}: ${row.improved}`} />
                           <div className="h-full bg-slate-400"   style={{ width: `${pct(row.unchanged)}%` }} title={`${t('telemetry:quality.interventions.unchanged')}: ${row.unchanged}`} />
@@ -250,7 +286,7 @@ export function QualityPanel() {
                 {interventionStats.recent.map((r) => (
                   <div key={r.id} className="flex items-center gap-2 text-xs border-b py-1 last:border-b-0">
                     <span className="font-mono text-muted-foreground w-20">{r.created_at.slice(11, 19)}</span>
-                    <Badge variant="outline" className="font-mono">{r.intervention_type}</Badge>
+                    <Badge variant="outline" className="font-mono" title={r.intervention_type}>{typeLabel(r.intervention_type)}</Badge>
                     <span className="font-mono text-xs">turn {r.turn_fired}</span>
                     <span className="font-mono text-xs text-muted-foreground truncate flex-1">
                       {r.triggering_classifiers || '—'}

@@ -15,6 +15,18 @@ export interface GlobalTelemetrySummary {
     /** Migration 072. */
     truncation_rate: number | null;
   };
+  /**
+   * Price coverage (migration 111). Turns with token usage but a NULL
+   * estimated_cost_usd — i.e. the model had no resolvable price, so its cost
+   * is silently missing from total_estimated_cost_usd. Lets the dashboard
+   * show how much of the cost number is uncovered.
+   */
+  coverage: {
+    uncovered_turns: number;
+    uncovered_tokens: number;
+    total_turns: number;
+    uncovered_models: Array<{ model: string; turns: number; tokens: number }>;
+  };
   by_provider: Array<{
     provider: string;
     turns: number;
@@ -125,6 +137,32 @@ export function getGlobalTelemetrySummary(
     )
     .get(...toolParams) as { total: number; trunc: number };
   const truncation_rate = truncOverall.total > 0 ? truncOverall.trunc / truncOverall.total : null;
+
+  // Price coverage: turns with usage but NULL cost (model had no price). NULL
+  // is exactly the "unknown, not free" signal persist-turn writes.
+  const coverageOverall = db
+    .prepare(
+      `SELECT COUNT(*) AS uncovered_turns,
+              COALESCE(SUM(COALESCE(t.input_tokens, 0) + COALESCE(t.output_tokens, 0)), 0) AS uncovered_tokens
+       FROM coder_turn_telemetry t
+       WHERE t.estimated_cost_usd IS NULL
+         AND (t.input_tokens IS NOT NULL OR t.output_tokens IS NOT NULL)${turnWhere}`,
+    )
+    .get(...turnParams) as { uncovered_turns: number; uncovered_tokens: number };
+
+  const uncovered_models = db
+    .prepare(
+      `SELECT COALESCE(t.request_api_model, t.model) AS model, COUNT(*) AS turns,
+              COALESCE(SUM(COALESCE(t.input_tokens, 0) + COALESCE(t.output_tokens, 0)), 0) AS tokens
+       FROM coder_turn_telemetry t
+       WHERE t.estimated_cost_usd IS NULL
+         AND COALESCE(t.request_api_model, t.model) IS NOT NULL
+         AND (t.input_tokens IS NOT NULL OR t.output_tokens IS NOT NULL)${turnWhere}
+       GROUP BY COALESCE(t.request_api_model, t.model)
+       ORDER BY tokens DESC
+       LIMIT 10`,
+    )
+    .all(...turnParams) as Array<{ model: string; turns: number; tokens: number }>;
 
   const by_provider = db
     .prepare(
@@ -239,6 +277,12 @@ export function getGlobalTelemetrySummary(
 
   return {
     overall: { ...overall, cache_hit_ratio, truncation_rate },
+    coverage: {
+      uncovered_turns: coverageOverall.uncovered_turns,
+      uncovered_tokens: coverageOverall.uncovered_tokens,
+      total_turns: overall.turn_count,
+      uncovered_models,
+    },
     by_provider,
     by_model,
     skills_modes: skillsModes,

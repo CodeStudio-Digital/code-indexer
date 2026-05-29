@@ -7,7 +7,7 @@
  *   https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}
  */
 import type { ResolvedBinding } from '../pipelines/index.js';
-import type { ChatCallOptions, ChatCallResult, ChatMessage } from './llm-chat.js';
+import { type ChatCallOptions, type ChatCallResult, type ChatMessage, parseRetryAfter } from './llm-chat.js';
 
 const GEMINI_DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -95,7 +95,13 @@ export async function geminiChat(
     const latencyMs = performance.now() - startedAt;
     if (!res.ok) {
       const errorBody = await res.text().catch(() => '');
-      return { content: '', errorBody: errorBody.slice(0, 2000), latencyMs };
+      return {
+        content: '',
+        errorBody: errorBody.slice(0, 2000),
+        status: res.status,
+        retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
+        latencyMs,
+      };
     }
     const parsed = (await res.json()) as GeminiResponse;
     const content = (parsed.candidates?.[0]?.content?.parts ?? [])

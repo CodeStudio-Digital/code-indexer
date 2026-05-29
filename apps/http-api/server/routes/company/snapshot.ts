@@ -14,6 +14,7 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
 import { SessionSnapshotService, type FileSummary } from '@mcp/services/services/session-snapshots.js';
+import { mountSnapshotReviewRoutes } from '../snapshot-review-routes.js';
 
 interface AgentRunRow {
   coder_session_id: number | null;
@@ -80,7 +81,14 @@ export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get('/api/company/sessions/:id/snapshot/file/:baselineId/diff', async (c) => {
     const baselineId = parseIdParam(c, 'baselineId');
-    const diff = await service.getDiff(baselineId);
+    const context = Number(c.req.query('context') ?? 3);
+    const contextBeforeRaw = c.req.query('contextBefore');
+    const contextAfterRaw = c.req.query('contextAfter');
+    const diff = await service.getDiff(baselineId, {
+      context: Number.isFinite(context) ? context : 3,
+      contextBefore: contextBeforeRaw ? Number(contextBeforeRaw) : undefined,
+      contextAfter: contextAfterRaw ? Number(contextAfterRaw) : undefined,
+    });
     if (!diff) return notFound(c, 'baseline not found');
     return c.json(diff);
   });
@@ -135,5 +143,11 @@ export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
       closed += r.closed;
     }
     return c.json({ closed });
+  });
+
+  mountSnapshotReviewRoutes(app, deps, {
+    scope: 'company',
+    listCoderSessionIds: (companySessionId) =>
+      listCoderSessionIdsForCompany(sessionStore.getDb(), companySessionId),
   });
 }

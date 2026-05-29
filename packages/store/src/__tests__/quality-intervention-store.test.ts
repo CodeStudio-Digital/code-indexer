@@ -111,6 +111,36 @@ describe('QualityInterventionStore — findPendingByPriorTurn', () => {
   });
 });
 
+describe('QualityInterventionStore — findPendingByPriorTurnRange', () => {
+  let h: Handle;
+  beforeEach(() => { h = setup(); });
+  afterEach(() => teardown(h));
+
+  it('returns pending rows whose turn_fired is within [min, max], oldest-first', () => {
+    h.store.insert({ session_id: 1, turn_fired: 3, intervention_type: 'nudge', triggering_verdicts: [snap('flagged')] });
+    h.store.insert({ session_id: 1, turn_fired: 5, intervention_type: 'nudge_holdout', triggering_verdicts: [snap('flagged')] });
+    h.store.insert({ session_id: 1, turn_fired: 2, intervention_type: 'nudge', triggering_verdicts: [snap('flagged')] }); // below range
+    h.store.insert({ session_id: 1, turn_fired: 7, intervention_type: 'nudge', triggering_verdicts: [snap('flagged')] }); // above range
+    const rows = h.store.findPendingByPriorTurnRange(1, 3, 5);
+    expect(rows.map((r) => r.turn_fired)).toEqual([3, 5]);
+  });
+
+  it('excludes already-resolved rows and other sessions', () => {
+    const id = h.store.insert({ session_id: 1, turn_fired: 4, intervention_type: 'nudge', triggering_verdicts: [snap('flagged')] });
+    h.store.recordOutcome({ id, next_turn_verdicts: [snap('ok')], outcome: 'improved' });
+    h.store.insert({ session_id: 2, turn_fired: 4, intervention_type: 'nudge', triggering_verdicts: [snap('flagged')] });
+    expect(h.store.findPendingByPriorTurnRange(1, 1, 6)).toEqual([]);
+  });
+
+  it('round-trips a nudge_holdout intervention (counterfactual baseline type)', () => {
+    const id = h.store.insert({
+      session_id: 1, turn_fired: 9, intervention_type: 'nudge_holdout',
+      triggering_verdicts: [snap('flagged', 'completeness')],
+    });
+    expect(h.store.get(id)!.intervention_type).toBe('nudge_holdout');
+  });
+});
+
 describe('QualityInterventionStore — recordOutcome', () => {
   let h: Handle;
   beforeEach(() => { h = setup(); });

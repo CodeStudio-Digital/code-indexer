@@ -2,9 +2,10 @@
  * PipelineTelemetryStore — persists stage-level traces from the
  * candidate-pipeline framework.
  *
- * Schema is owned by migration 080. Each row is a single stage execution
- * (Source / Hydrator / Filter / Scorer / Selector / SideEffect) emitted via
- * the `@receiveStats` decorator in `packages/candidate-pipeline/src/stats`.
+ * Schema is owned by migration 085 (085_pipeline_foundation). Each row is a
+ * single stage execution (Source / Hydrator / Filter / Scorer / Selector /
+ * SideEffect) emitted via the telemetry sink in
+ * `packages/candidate-pipeline/src/stats`.
  *
  * Bucketed dimensions follow the convention from `candidate-pipeline/*.rs`
  * (xai-org/x-algorithm):
@@ -72,6 +73,19 @@ export interface PipelineTelemetryInsert {
 export interface PipelineTelemetryHistogramBucket {
   bucket: string;
   count: number;
+}
+
+export interface PipelineTelemetrySummary {
+  /** Total trace rows in the window. Matches the histogram total. */
+  events: number;
+  /** Rows where errors > 0 (always ≤ events). */
+  errorRows: number;
+  /** Sum of the `errors` column (sub-failures across rows). */
+  subErrors: number;
+  cacheHits: number;
+  cacheMisses: number;
+  /** cacheHits / (cacheHits + cacheMisses), or 0 when no lookups. */
+  hitRate: number;
 }
 
 interface RawRow {
@@ -244,7 +258,7 @@ export class PipelineTelemetryStore {
   }
 
   /** Cache hit/miss aggregation per pipeline. */
-  cacheStats(opts: { since?: string } = {}): Array<{
+  cacheStats(opts: { pipelineName?: string; stage?: string; since?: string } = {}): Array<{
     pipeline_name: string;
     stage: string;
     component_name: string;
@@ -254,7 +268,9 @@ export class PipelineTelemetryStore {
   }> {
     const where: string[] = ['(cache_hits + cache_misses) > 0'];
     const params: Record<string, unknown> = {};
-    if (opts.since) { where.push('created_at >= @since'); params.since = opts.since; }
+    if (opts.pipelineName) { where.push('pipeline_name = @pipelineName'); params.pipelineName = opts.pipelineName; }
+    if (opts.stage)        { where.push('stage = @stage');               params.stage = opts.stage; }
+    if (opts.since)        { where.push('created_at >= @since');          params.since = opts.since; }
     const whereSql = `WHERE ${where.join(' AND ')}`;
     const rows = this.db
       .prepare(
@@ -272,6 +288,33 @@ export class PipelineTelemetryStore {
         ? r.cache_hits / (r.cache_hits + r.cache_misses)
         : 0,
     }));
+  }
+
+  /**
+   * Window-wide aggregate for the stat cards. Computed in SQL over the same
+   * filter as `histogram`/`list` so the cards match the rest of the panel
+   * (instead of being summed client-side over a truncated row sample).
+   */
+  summary(opts: { pipelineName?: string; stage?: string; since?: string } = {}): PipelineTelemetrySummary {
+    const where: string[] = [];
+    const params: Record<string, unknown> = {};
+    if (opts.pipelineName) { where.push('pipeline_name = @pipelineName'); params.pipelineName = opts.pipelineName; }
+    if (opts.stage)        { where.push('stage = @stage');               params.stage = opts.stage; }
+    if (opts.since)        { where.push('created_at >= @since');          params.since = opts.since; }
+    const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const row = this.db
+      .prepare(
+        `SELECT
+           COUNT(*)                                          AS events,
+           COALESCE(SUM(CASE WHEN errors > 0 THEN 1 ELSE 0 END), 0) AS errorRows,
+           COALESCE(SUM(errors), 0)                          AS subErrors,
+           COALESCE(SUM(cache_hits), 0)                      AS cacheHits,
+           COALESCE(SUM(cache_misses), 0)                    AS cacheMisses
+         FROM pipeline_telemetry ${whereSql}`,
+      )
+      .get(params) as Omit<PipelineTelemetrySummary, 'hitRate'>;
+    const denom = row.cacheHits + row.cacheMisses;
+    return { ...row, hitRate: denom > 0 ? row.cacheHits / denom : 0 };
   }
 
   /** Prune rows older than the cutoff. Run periodically. */

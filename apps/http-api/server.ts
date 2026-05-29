@@ -79,7 +79,11 @@ import { createOAuthRouter } from './oauth/index.js';
 import { composeMcpClientAuth } from '@mcp/services/mcp-client/auth/composition.js';
 import { createMcpServersOauthRouter } from './admin/mcp-servers-oauth.routes.js';
 import { mergeDBCapabilities } from '@mcp/code-agent/providers/capabilities.js';
+import { mergeDBPricing } from '@mcp/code-agent/providers/pricing-cache.js';
+import { hardcodedPriceSeed } from '@mcp/code-agent/providers/pricing.js';
 import { startProviderRefreshScheduler } from '@mcp/indexer/indexer/providers/scheduled-refresh.js';
+import { startModelPricingRefreshScheduler } from '@mcp/indexer/indexer/providers/scheduled-pricing-refresh.js';
+import { getEnabledPriceSources } from '@mcp/services/services/pricing/index.js';
 import { ensureBuiltinSkills } from '@mcp/indexer/bootstrap/ensure-builtin-skills.js';
 import {
   setQaTestRunStore,
@@ -396,6 +400,29 @@ export function createApp() {
 
   // Start background model refresh (populates context_window in DB from APIs).
   startProviderRefreshScheduler(deps.providerStore);
+
+  // Seed the offline hardcoded price table into model_prices (idempotent) and
+  // hydrate the in-memory price cache so estimateCost() is accurate from the
+  // first turn — even before any network price refresh has run.
+  try {
+    deps.providerStore.seedHardcodedModelPrices(hardcodedPriceSeed());
+    mergeDBPricing(deps.providerStore.listAllModelPrices());
+  } catch (e) {
+    console.warn(`[pricing] DB hydration failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // Start background price refresh (OpenRouter + LiteLLM → model_prices),
+  // reusing any configured OpenRouter credentials to dodge rate limits.
+  {
+    const or = deps.providerStore.listProviders().find((p) => p.kind === 'openrouter');
+    startModelPricingRefreshScheduler(
+      deps.providerStore,
+      getEnabledPriceSources({
+        openrouterApiKey: or?.api_key ?? undefined,
+        openrouterBaseUrl: or?.base_url ?? undefined,
+      }),
+    );
+  }
 
   // Startup recovery — any company agent run / session left in an active
   // state by a previous crashed/restarted server cannot possibly still be

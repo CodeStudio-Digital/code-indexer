@@ -21,6 +21,7 @@ export {
 
 export {
   openAiCompatibleChat,
+  parseRetryAfter,
   type ChatMessage,
   type ChatCallResult,
   type ChatCallOptions,
@@ -29,6 +30,14 @@ export {
 export { anthropicChat } from './llm-chat-anthropic.js';
 export { geminiChat } from './llm-chat-gemini.js';
 export { pickChatFn, type ChatFn } from './chat-dispatcher.js';
+
+export {
+  withChatRetry,
+  isRetryableChatResult,
+  errorKindFromChatResult,
+  type ChatRetryOptions,
+  type ChatErrorKind,
+} from './chat-retry.js';
 
 export {
   DriftDetector,
@@ -53,10 +62,13 @@ export {
   detectToolMisuseStreak,
   shouldClassifyTurn,
   computeOutcome,
+  scoreOutcome,
+  fnv1aSample,
   worstVerdictOf,
   type QualityFeedbackBlock,
   type ShouldClassifyTurnOpts,
   type InterventionOutcome,
+  type OutcomeScore,
 } from './feedback-builder.js';
 
 export {

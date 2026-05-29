@@ -28,7 +28,7 @@ import type {
   ContentBlock,
   ToolUseBlock,
 } from '@mcp/code-agent/core/messages.js';
-import { estimateCost } from '@mcp/code-agent/providers/pricing.js';
+import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
 import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
 
 export interface PersistTurnTelemetryArgs {
@@ -111,8 +111,11 @@ export function persistTurnTelemetry(args: PersistTurnTelemetryArgs): number | n
   // ── estimated_cost_usd ──
   // Best-effort lookup; returns 0 for unknown provider/model pairs which
   // we collapse to null on the DB side (kept as null, not 0, so the
-  // dashboard can distinguish "unknown" from "actually free").
-  const cost = estimateCost(args.provider ?? '', args.model ?? '', args.usage);
+  // dashboard can distinguish "unknown" from "actually free"). Key on
+  // request_api_model when present so the live cost matches the dashboard's
+  // COALESCE(request_api_model, model) grouping and the backfill.
+  const apiModel = args.responseMeta?.request?.api_model ?? args.model;
+  const cost = estimateCost(args.provider ?? '', apiModel ?? '', args.usage);
 
   try {
     return args.store.recordTurnTelemetry({

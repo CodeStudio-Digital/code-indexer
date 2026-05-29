@@ -88,6 +88,26 @@ describe('Snapshot embedding pipeline', () => {
     expect(ids.some((r) => r.type === 'snapshot' && r.vector_id === vectors.upserts[0].id)).toBe(true);
   });
 
+  it('chunks a long snapshot into multiple vectors sharing one ref_id', async () => {
+    const longContent = 'lorem ipsum dolor sit amet '.repeat(400); // ~10.8k chars
+    const { snap, embedError } = await svc.create(projectId, {
+      title: 'Long note',
+      category: 'note',
+      content: longContent,
+    });
+    expect(embedError).toBeUndefined();
+    // Multiple overlapping windows → multiple vectors.
+    expect(vectors.upserts.length).toBeGreaterThan(1);
+    // Every chunk belongs to the same snapshot and carries a chunk_index.
+    const refIds = new Set(vectors.upserts.map((r) => r.metadata?.ref_id));
+    expect(refIds).toEqual(new Set([String(snap.id)]));
+    const indices = vectors.upserts.map((r) => r.metadata?.chunk_index).sort();
+    expect(indices[0]).toBe('0');
+    // All chunk ids are registered for later file/project cleanup.
+    const registered = db.getVectorIdsByProject(projectId).filter((r) => r.type === 'snapshot');
+    expect(registered.length).toBe(vectors.upserts.length);
+  });
+
   it('embed failure does not block the SQLite write and surfaces a warning', async () => {
     vectors.failNext = true;
     const { snap, embedError } = await svc.create(projectId, {

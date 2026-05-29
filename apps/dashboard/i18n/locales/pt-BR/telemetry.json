@@ -69,7 +69,8 @@
   "pipeline.toasts.pruned.description": "Removidas {{deleted}} linha(s) anteriores a {{cutoff}}.",
   "pipeline.toasts.pruneFailed": "Falha ao limpar",
   "pipeline.stats.events": "Eventos",
-  "pipeline.stats.errors": "Erros",
+  "pipeline.stats.errorRows": "Traços com erro",
+  "pipeline.stats.subErrors": "{{count}} subfalhas no total",
   "pipeline.stats.cacheHitsMisses": "Cache hits / misses",
   "pipeline.stats.hitRate": "Taxa de hit",
   "pipeline.histogram.title": "Histograma",
@@ -80,7 +81,7 @@
   "pipeline.cacheRate.empty": "Nenhum hydrator com cache foi executado ainda.",
   "pipeline.cacheRate.hits": "{{count}} hits",
   "pipeline.cacheRate.misses": "{{count}} miss",
-  "pipeline.recent.title": "Linhas recentes ({{count}})",
+  "pipeline.recent.title": "Amostra recente ({{count}} últimas)",
   "pipeline.recent.empty": "Nenhuma linha de telemetria corresponde aos filtros.",
   "pipeline.recent.errorsBadge": "err {{count}}",
 
@@ -116,5 +117,14 @@
   "quality.interventions.improved": "Melhorou",
   "quality.interventions.unchanged": "Sem mudança",
   "quality.interventions.worsened": "Piorou",
-  "quality.interventions.pending": "Pendente"
+  "quality.interventions.pending": "Pendente",
+  "quality.interventions.lift": "Lift do nudge (vs held-out)",
+  "quality.interventions.liftHint": "nudge {{nudge}}% vs held-out {{holdout}}% — ganho real de nudgar sobre não fazer nada",
+  "quality.interventions.liftPending": "Aguardando dados de held-out para calcular o lift real do nudge.",
+  "quality.interventions.type.nudge": "nudge",
+  "quality.interventions.type.nudge_holdout": "held-out (sem nudge)",
+  "quality.interventions.type.nudge_suppressed": "repetido (dedup)",
+  "quality.interventions.type.planning": "planning",
+  "quality.interventions.type.policy_block": "policy block",
+  "quality.interventions.type.board_alert": "board alert"
 }

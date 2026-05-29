@@ -9,7 +9,7 @@
  * default to 1024 if not provided in the binding's config.
  */
 import type { ResolvedBinding } from '../pipelines/index.js';
-import type { ChatCallOptions, ChatCallResult, ChatMessage } from './llm-chat.js';
+import { type ChatCallOptions, type ChatCallResult, type ChatMessage, parseRetryAfter } from './llm-chat.js';
 
 const ANTHROPIC_DEFAULT_BASE_URL = 'https://api.anthropic.com/v1';
 const ANTHROPIC_DEFAULT_VERSION = '2023-06-01';
@@ -103,7 +103,13 @@ export async function anthropicChat(
     const latencyMs = performance.now() - startedAt;
     if (!res.ok) {
       const errorBody = await res.text().catch(() => '');
-      return { content: '', errorBody: errorBody.slice(0, 2000), latencyMs };
+      return {
+        content: '',
+        errorBody: errorBody.slice(0, 2000),
+        status: res.status,
+        retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
+        latencyMs,
+      };
     }
     const parsed = (await res.json()) as AnthropicResponse;
     const content = (parsed.content ?? [])

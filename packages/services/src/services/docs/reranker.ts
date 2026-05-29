@@ -114,6 +114,13 @@ export interface DocReranker {
   ): Promise<RerankResult<T>>;
 }
 
+/**
+ * Why a rerank degraded, for honest telemetry. Only 'llm_error' (the LLM call
+ * threw/timed out) is counted as a telemetry error; 'skipped' (≤1 candidate or
+ * skipLlm) and 'no_binding' are degradations, not failures.
+ */
+type RerankFailure = 'none' | 'skipped' | 'no_binding' | 'llm_error';
+
 export class Reranker implements DocReranker {
   constructor(private opts: RerankerOptions) {}
 
@@ -134,7 +141,7 @@ export class Reranker implements DocReranker {
         modelId: null,
         durationMs: Date.now() - started,
       };
-      this.emitTelemetry(result, candidates.length, opts);
+      this.emitTelemetry(result, candidates.length, opts, 'skipped');
       return result;
     }
 
@@ -152,7 +159,7 @@ export class Reranker implements DocReranker {
         modelId: null,
         durationMs: Date.now() - started,
       };
-      this.emitTelemetry(result, candidates.length, opts);
+      this.emitTelemetry(result, candidates.length, opts, 'no_binding');
       return result;
     }
 
@@ -178,7 +185,7 @@ export class Reranker implements DocReranker {
         modelId: binding.modelId,
         durationMs: Date.now() - started,
       };
-      this.emitTelemetry(result, candidates.length, opts);
+      this.emitTelemetry(result, candidates.length, opts, 'none');
       return result;
     }
 
@@ -193,7 +200,7 @@ export class Reranker implements DocReranker {
         modelId: binding.modelId,
         durationMs: Date.now() - started,
       };
-      this.emitTelemetry(result, candidates.length, opts);
+      this.emitTelemetry(result, candidates.length, opts, 'llm_error');
       return result;
     }
 
@@ -222,7 +229,7 @@ export class Reranker implements DocReranker {
       modelId: binding.modelId,
       durationMs: Date.now() - started,
     };
-    this.emitTelemetry(result, candidates.length, opts);
+    this.emitTelemetry(result, candidates.length, opts, 'none');
     return result;
   }
 
@@ -319,9 +326,12 @@ export class Reranker implements DocReranker {
     result: RerankResult<RerankCandidate>,
     candidatesIn: number,
     opts: RerankOpts,
+    failure: RerankFailure,
   ): void {
     if (!this.opts.telemetry) return;
     const ctx = opts.resolveContext ?? {};
+    // A cache lookup only ran on the post-binding paths with a db configured.
+    const cacheChecked = !!this.opts.db && failure !== 'skipped' && failure !== 'no_binding';
     const row: PipelineTelemetryInsert = {
       session_id: ctx.sessionId ?? null,
       company_session_id: ctx.companySessionId ?? null,
@@ -333,12 +343,16 @@ export class Reranker implements DocReranker {
       candidates_in: candidatesIn,
       candidates_out: result.candidates.length,
       cache_hits: result.cacheHit ? 1 : 0,
-      cache_misses: result.reranked && !result.cacheHit ? 1 : 0,
-      errors: !result.reranked && candidatesIn > 1 ? 1 : 0,
+      // Only a real lookup that missed counts as a miss.
+      cache_misses: cacheChecked && !result.cacheHit ? 1 : 0,
+      // Only a true LLM transport/parse error is an error; no_binding / skipped
+      // (incl. ≤1 candidate) are degradations, not failures.
+      errors: failure === 'llm_error' ? 1 : 0,
       diag: {
         model_id: result.modelId,
         dropped: result.dropped,
         reranked: result.reranked,
+        failure,
       },
     };
     try {

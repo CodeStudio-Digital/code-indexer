@@ -26,6 +26,11 @@ export interface ChatCallResult {
   content: string;
   /** Provider returned a non-2xx — kept here for diagnostics. */
   errorBody?: string;
+  /** HTTP status when the provider returned a non-2xx. Undefined on
+   *  network/abort/timeout errors (no response). Drives retry classification. */
+  status?: number;
+  /** Parsed `Retry-After` (ms) when the provider supplied the header. */
+  retryAfterMs?: number;
   /** Usage in input/output tokens, if surfaced by the provider. */
   tokensIn?: number;
   tokensOut?: number;
@@ -136,7 +141,13 @@ export async function openAiCompatibleChat(
     const latencyMs = performance.now() - startedAt;
     if (!res.ok) {
       const errorBody = await res.text().catch(() => '');
-      return { content: '', errorBody: errorBody.slice(0, 2000), latencyMs };
+      return {
+        content: '',
+        errorBody: errorBody.slice(0, 2000),
+        status: res.status,
+        retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
+        latencyMs,
+      };
     }
     const parsed = (await res.json()) as OpenAiChatResponse;
     return {
@@ -154,5 +165,15 @@ export async function openAiCompatibleChat(
 
 function toNumber(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return undefined;
+}
+
+/** Parse an HTTP `Retry-After` header (delta-seconds or HTTP-date) to ms. */
+export function parseRetryAfter(header: string | null): number | undefined {
+  if (!header) return undefined;
+  const secs = Number(header);
+  if (Number.isFinite(secs) && secs >= 0) return Math.round(secs * 1000);
+  const date = Date.parse(header);
+  if (Number.isFinite(date)) return Math.max(0, date - Date.now());
   return undefined;
 }

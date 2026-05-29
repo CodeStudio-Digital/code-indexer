@@ -59,6 +59,7 @@ export interface FileDiff {
 }
 
 const MAX_TRANSPORT_BYTES = 2 * 1024 * 1024;
+const DEFAULT_DIFF_CONTEXT = 3;
 
 /** Project-relative POSIX path → absolute platform path inside the project. */
 function absoluteFor(projectRoot: string, relPath: string): string {
@@ -143,7 +144,10 @@ export class SessionSnapshotService {
     return summaries;
   }
 
-  async getDiff(baselineId: number): Promise<FileDiff | null> {
+  async getDiff(
+    baselineId: number,
+    opts: { context?: number; contextBefore?: number; contextAfter?: number } = {},
+  ): Promise<FileDiff | null> {
     const b = this.store.getBaselineById(baselineId);
     if (!b) return null;
     const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id);
@@ -172,7 +176,12 @@ export class SessionSnapshotService {
 
     const abs = absoluteFor(projectRoot, b.file_path);
     const current = await readCurrentContent(abs);
-    const hunks = computeHunks(b.content_before, current);
+    const context = opts.context ?? DEFAULT_DIFF_CONTEXT;
+    const hunks = computeHunks(b.content_before, current, {
+      context,
+      contextBefore: opts.contextBefore ?? context,
+      contextAfter: opts.contextAfter ?? context,
+    });
     const annotated = hunks.map((h) => ({
       ...h,
       decision: (decisions.get(h.fingerprint) ?? 'pending') as 'pending' | 'kept' | 'reverted',

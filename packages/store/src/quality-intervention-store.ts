@@ -29,7 +29,11 @@ export type InterventionType =
   | 'planning'
   | 'policy_block'
   | 'board_alert'
-  | 'nudge_suppressed';
+  | 'nudge_suppressed'
+  // Counterfactual control: a nudge that QUALIFIED but was deliberately
+  // withheld (held out) so we can compare improved-rate WITH vs WITHOUT a
+  // nudge on the same population — a real A/B baseline. See runner.ts.
+  | 'nudge_holdout';
 
 export type InterventionOutcomeRow = 'improved' | 'unchanged' | 'worsened' | 'pending';
 
@@ -153,6 +157,29 @@ export class QualityInterventionStore {
            AND outcome = 'pending'`,
       )
       .all({ session_id: sessionId, turn_before: turnBefore }) as QualityInterventionRow[];
+  }
+
+  /**
+   * Range variant of {@link findPendingByPriorTurn}. The backfill resolves
+   * an intervention on the FIRST classified turn that follows it — but the
+   * immediate next turn may be skipped (no narrative / sampled out) or come
+   * back unmeasurable (all target classifiers errored). Querying a small
+   * window of prior turns lets a later clean turn still resolve those rows
+   * instead of stranding them as 'pending' forever. Oldest-first so the
+   * caller resolves the nearest follow-up turn first.
+   *
+   * Uses the `(session_id, turn_fired)` index for the range scan.
+   */
+  findPendingByPriorTurnRange(sessionId: number, minTurn: number, maxTurn: number): QualityInterventionRow[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM quality_interventions
+         WHERE session_id = @session_id
+           AND turn_fired BETWEEN @min_turn AND @max_turn
+           AND outcome = 'pending'
+         ORDER BY turn_fired ASC, id ASC`,
+      )
+      .all({ session_id: sessionId, min_turn: minTurn, max_turn: maxTurn }) as QualityInterventionRow[];
   }
 
   /**

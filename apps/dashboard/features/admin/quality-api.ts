@@ -113,7 +113,8 @@ export type InterventionType =
   | 'planning'
   | 'policy_block'
   | 'board_alert'
-  | 'nudge_suppressed';
+  | 'nudge_suppressed'
+  | 'nudge_holdout';
 
 export type InterventionOutcome =
   | 'improved'

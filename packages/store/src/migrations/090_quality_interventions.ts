@@ -35,7 +35,8 @@ export const qualityInterventions090: Migration = {
         agent_run_id             INTEGER,
         turn_fired               INTEGER NOT NULL,
         intervention_type        TEXT NOT NULL,
-            -- 'nudge' | 'planning' | 'policy_block' | 'board_alert' | 'nudge_suppressed'
+            -- 'nudge' | 'planning' | 'policy_block' | 'board_alert'
+            -- | 'nudge_suppressed' | 'nudge_holdout'  (free text — no CHECK)
         triggering_verdicts_json TEXT NOT NULL,
             -- snapshot: [{ classifierName, verdict, confidence, reason }, ...]
         triggering_classifiers   TEXT NOT NULL,

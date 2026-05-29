@@ -5,17 +5,30 @@ import { useConfirm } from '../../components/ui/dialog-provider.js';
 import { cn } from '../../lib/utils.js';
 import { SnapshotFileList } from './SnapshotFileList.js';
 import { SnapshotDiffViewer } from './SnapshotDiffViewer.js';
+import { SnapshotReviewQueue } from './SnapshotReviewQueue.js';
 import {
   acceptAll,
   acceptFile,
   acceptHunk,
+  createReviewComment,
   fetchFileDiff,
+  fetchSnapshotReviews,
   fetchSnapshotList,
+  patchReviewComment,
   revertAll,
   revertFile,
   revertHunk,
+  runAutoReview,
+  submitReviewComments,
 } from './api.js';
-import type { SessionScope, SnapshotFileDiff, SnapshotFileSummary } from './types.js';
+import type {
+  SessionScope,
+  SnapshotFileDiff,
+  SnapshotFileSummary,
+  SnapshotReviewComment,
+  SnapshotReviewsResponse,
+} from './types.js';
+import type { AddReviewCommentInput } from './SnapshotDiffViewer.js';
 
 interface Props {
   scope: SessionScope;
@@ -23,9 +36,10 @@ interface Props {
   /** When provided, the panel will refetch every time the value changes — used to react
    *  to live `session_snapshot_changed` SSE events from the chat stream. */
   refreshKey?: number;
+  onSubmitReviewMessage?: (message: string) => Promise<void>;
 }
 
-export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
+export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMessage }: Props) {
   const confirm = useConfirm();
   const [files, setFiles] = useState<SnapshotFileSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,6 +49,11 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
   const [diff, setDiff] = useState<SnapshotFileDiff | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [reviews, setReviews] = useState<SnapshotReviewsResponse>({ runs: [], comments: [] });
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+  const [contextBefore, setContextBefore] = useState(3);
+  const [contextAfter, setContextAfter] = useState(3);
   // mobile: when a baseline is selected, drop the list to focus the diff
   const [mobileShowDiff, setMobileShowDiff] = useState(false);
   // Project filter: `null` shows files from every project. Built from the
@@ -57,9 +76,19 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
     }
   }, [scope, sessionId, showClosed]);
 
+  const reloadReviews = useCallback(async () => {
+    try {
+      const r = await fetchSnapshotReviews(scope, sessionId);
+      setReviews(r);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [scope, sessionId]);
+
   useEffect(() => {
     void reload();
-  }, [reload]);
+    void reloadReviews();
+  }, [reload, reloadReviews]);
 
   // React to live stream pings: refetch list and current diff.
   useEffect(() => {
@@ -67,12 +96,13 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
     if (lastRefreshKey.current === refreshKey) return;
     lastRefreshKey.current = refreshKey;
     void reload();
+    void reloadReviews();
     if (selectedBaselineId != null) {
-      void fetchFileDiff(scope, sessionId, selectedBaselineId)
+      void fetchFileDiff(scope, sessionId, selectedBaselineId, { context: 3, contextBefore, contextAfter })
         .then(setDiff)
         .catch(() => { /* swallow — UI shows stale */ });
     }
-  }, [refreshKey, reload, scope, sessionId, selectedBaselineId]);
+  }, [refreshKey, reload, reloadReviews, scope, sessionId, selectedBaselineId, contextBefore, contextAfter]);
 
   // Auto-select first active file when nothing selected yet.
   useEffect(() => {
@@ -84,14 +114,14 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
   const loadDiff = useCallback(async (baselineId: number) => {
     setDiffLoading(true);
     try {
-      const r = await fetchFileDiff(scope, sessionId, baselineId);
+      const r = await fetchFileDiff(scope, sessionId, baselineId, { context: 3, contextBefore, contextAfter });
       setDiff(r);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setDiffLoading(false);
     }
-  }, [scope, sessionId]);
+  }, [scope, sessionId, contextBefore, contextAfter]);
 
   useEffect(() => {
     if (selectedBaselineId == null) {
@@ -103,6 +133,8 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
 
   const handleSelect = useCallback((baselineId: number) => {
     setSelectedBaselineId(baselineId);
+    setContextBefore(3);
+    setContextAfter(3);
     setMobileShowDiff(true);
   }, []);
 
@@ -203,7 +235,94 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
     }
   }, [files, scope, sessionId, reload, confirm]);
 
+  const handleAddReviewComment = useCallback(async (input: AddReviewCommentInput) => {
+    setReviewBusy(true);
+    try {
+      const r = await createReviewComment(scope, sessionId, input);
+      setReviews((prev) => ({ ...prev, comments: [...prev.comments, r.comment] }));
+      setReviewNotice('Review comment added.');
+      await reloadReviews();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [scope, sessionId, reloadReviews]);
+
+  const handleUpdateReviewComment = useCallback(async (
+    id: number,
+    patch: Partial<Pick<SnapshotReviewComment, 'status'>>,
+  ) => {
+    setReviewBusy(true);
+    try {
+      const r = await patchReviewComment(scope, sessionId, id, patch);
+      setReviews((prev) => ({
+        ...prev,
+        comments: prev.comments.map((comment) => (comment.id === id ? r.comment : comment)),
+      }));
+      await reloadReviews();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [scope, sessionId, reloadReviews]);
+
+  const handleAutoReview = useCallback(async () => {
+    setReviewBusy(true);
+    try {
+      const r = await runAutoReview(scope, sessionId);
+      if (r.comments.length > 0) {
+        setReviews((prev) => ({ ...prev, comments: [...prev.comments, ...r.comments] }));
+        setReviewNotice(`Automatic review created ${r.comments.length} finding${r.comments.length === 1 ? '' : 's'}.`);
+      } else {
+        setReviewNotice(r.message ?? 'Automatic review finished with no findings.');
+      }
+      await reloadReviews();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [scope, sessionId, reloadReviews]);
+
+  const handleSubmitReview = useCallback(async () => {
+    if (!onSubmitReviewMessage) return;
+    const ids = reviews.comments
+      .filter((c) =>
+        (c.source === 'manual' && c.status === 'open') ||
+        (c.source === 'auto' && c.status === 'accepted'),
+      )
+      .map((c) => c.id);
+    if (ids.length === 0) return;
+    setReviewBusy(true);
+    try {
+      const r = await submitReviewComments(scope, sessionId, ids);
+      await onSubmitReviewMessage(r.message);
+      setReviewNotice(`Sent ${ids.length} review item${ids.length === 1 ? '' : 's'} to the chat.`);
+      await reloadReviews();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [scope, sessionId, reviews.comments, onSubmitReviewMessage, reloadReviews]);
+
+  const handleExpandContext = useCallback((side: 'before' | 'after') => {
+    if (side === 'before') setContextBefore((v) => v + 10);
+    else setContextAfter((v) => v + 10);
+  }, []);
+
   const activeCount = useMemo(() => files.filter((f) => f.status === 'active').length, [files]);
+  const canSubmitReview = useMemo(
+    () =>
+      !!onSubmitReviewMessage &&
+      reviews.comments.some((c) =>
+        (c.source === 'manual' && c.status === 'open') ||
+        (c.source === 'auto' && c.status === 'accepted'),
+      ),
+    [reviews.comments, onSubmitReviewMessage],
+  );
   // Distinct projects across the loaded files. Stable order by name.
   const projects = useMemo(() => {
     const seen = new Map<number, string>();
@@ -288,6 +407,21 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
           <button onClick={() => setError(null)} className="ml-2 underline">dismiss</button>
         </div>
       )}
+      {reviewNotice && (
+        <div className="px-3 py-1.5 text-xs bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-b">
+          {reviewNotice}
+          <button onClick={() => setReviewNotice(null)} className="ml-2 underline">dismiss</button>
+        </div>
+      )}
+      <SnapshotReviewQueue
+        comments={reviews.comments}
+        selectedBaselineId={selectedBaselineId}
+        busy={reviewBusy || busy}
+        canSubmit={canSubmitReview}
+        onSelectBaseline={handleSelect}
+        onUpdateComment={handleUpdateReviewComment}
+        onSubmit={handleSubmitReview}
+      />
       <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[320px_1fr]">
         {/* File list — hidden on mobile when a diff is being viewed */}
         <div
@@ -312,7 +446,7 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
         {/* Diff pane — hidden on mobile until a file is selected */}
         <div
           className={cn(
-            'min-h-0 flex flex-col',
+            'min-h-0 min-w-0 flex flex-col',
             !mobileShowDiff && 'hidden lg:flex',
           )}
         >
@@ -325,11 +459,19 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey }: Props) {
           ) : (
             <SnapshotDiffViewer
               diff={diff}
+              comments={reviews.comments}
               onAcceptHunk={handleAcceptHunk}
               onRevertHunk={handleRevertHunk}
               onAcceptFile={handleAcceptFile}
               onRevertFile={handleRevertFile}
+              onAddComment={handleAddReviewComment}
+              onUpdateComment={handleUpdateReviewComment}
+              onAutoReview={handleAutoReview}
+              onSubmitReview={handleSubmitReview}
+              onExpandContext={handleExpandContext}
               busy={busy}
+              reviewBusy={reviewBusy}
+              canSubmitReview={canSubmitReview}
             />
           )}
         </div>

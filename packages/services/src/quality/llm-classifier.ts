@@ -19,9 +19,15 @@ import type { ResolveContext } from '../pipelines/index.js';
 import type { PipelineProviderResolver } from '../pipelines/provider-resolver.js';
 import {
   type ChatCallOptions,
+  type ChatCallResult,
   type ChatMessage,
 } from './llm-chat.js';
 import { pickChatFn } from './chat-dispatcher.js';
+import {
+  type ChatRetryOptions,
+  errorKindFromChatResult,
+  withChatRetry,
+} from './chat-retry.js';
 import type {
   AgentOutputForClassification,
   ClassificationVerdict,
@@ -34,8 +40,22 @@ export interface LLMClassifierOptions {
     binding: import('../pipelines/index.js').ResolvedBinding,
     messages: ChatMessage[],
     options?: ChatCallOptions,
-  ) => Promise<{ content: string; errorBody?: string; latencyMs: number }>;
+  ) => Promise<ChatCallResult>;
+  /** Retry policy for the chat call. Defaults to 2 retries on the
+   *  rate-limit family. Pass `{ maxRetries: 0 }` to disable. */
+  retry?: ChatRetryOptions;
 }
+
+/**
+ * Classifier-specific defaults. A single-task classification needs a tiny
+ * JSON reply, so we cap tokens low and time out sooner than the generic
+ * 30s — a fast classifier model answers in well under a second, and a
+ * shorter ceiling means a hung request fails fast instead of burning 30s.
+ * Operator config (`config_json.timeout` / `.max_tokens` in the Pipelines
+ * tab) still wins when set.
+ */
+const CLASSIFIER_DEFAULT_TIMEOUT_MS = 15_000;
+const CLASSIFIER_DEFAULT_MAX_TOKENS = 1024;
 
 export abstract class LLMClassifier {
   abstract readonly classifierName: string;
@@ -56,16 +76,16 @@ export abstract class LLMClassifier {
    * implementation expects a strict JSON object — subclasses can override
    * for non-JSON parsing.
    */
-  protected parseVerdict(text: string): { verdict: QualityVerdict; confidence?: number; reason?: string } {
+  protected parseVerdict(text: string): { verdict: QualityVerdict; systemError?: boolean; confidence?: number; reason?: string } {
     const json = tryParseJson(text);
     if (!json || typeof json !== 'object') {
-      return { verdict: 'error', reason: 'unparseable response' };
+      return { verdict: 'error', systemError: true, reason: 'unparseable response' };
     }
     const verdict = (json as { verdict?: unknown }).verdict;
     const confidence = (json as { confidence?: unknown }).confidence;
     const reason = (json as { reason?: unknown }).reason;
     if (!isQualityVerdict(verdict)) {
-      return { verdict: 'error', reason: `bad verdict field: ${String(verdict)}` };
+      return { verdict: 'error', systemError: true, reason: `bad verdict field: ${String(verdict)}` };
     }
     return {
       verdict,
@@ -91,7 +111,8 @@ export abstract class LLMClassifier {
       return {
         classifierName: this.classifierName,
         verdict: 'error',
-        reason: 'no provider binding configured',
+        systemError: true,
+        reason: '[no_binding] no provider binding configured',
         latencyMs: performance.now() - startedAt,
       };
     }
@@ -100,13 +121,19 @@ export abstract class LLMClassifier {
       { role: 'system', content: this.systemPrompt() },
       { role: 'user',   content: this.buildUserPrompt(output) },
     ];
+    const cfg = binding.config as Record<string, unknown>;
+    const chatOptions: ChatCallOptions = {
+      timeoutMs: toNumber(cfg.timeout) ?? CLASSIFIER_DEFAULT_TIMEOUT_MS,
+      maxTokens: toNumber(cfg.max_tokens) ?? CLASSIFIER_DEFAULT_MAX_TOKENS,
+    };
     const chat = this.options.chatFn ?? pickChatFn(binding);
-    const result = await chat(binding, messages);
+    const result = await withChatRetry(() => chat(binding, messages, chatOptions), this.options.retry);
     if (result.errorBody) {
       return {
         classifierName: this.classifierName,
         verdict: 'error',
-        reason: result.errorBody.slice(0, 500),
+        systemError: true,
+        reason: `[${errorKindFromChatResult(result)}] ${result.errorBody.slice(0, 480)}`,
         latencyMs: result.latencyMs,
         providerId: binding.provider.id,
         modelId: binding.modelId,
@@ -116,14 +143,22 @@ export abstract class LLMClassifier {
     return {
       classifierName: this.classifierName,
       verdict: parsed.verdict,
+      systemError: parsed.systemError,
       confidence: parsed.confidence,
-      reason: parsed.reason,
+      // Tag unparseable replies so the dashboard distinguishes a model
+      // formatting failure (systemError) from a content verdict of 'error'.
+      reason: parsed.systemError && parsed.reason ? `[parse] ${parsed.reason}` : parsed.reason,
       latencyMs: result.latencyMs,
       providerId: binding.provider.id,
       modelId: binding.modelId,
       raw: result.content,
     };
   }
+}
+
+function toNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return undefined;
 }
 
 /**

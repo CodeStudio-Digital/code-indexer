@@ -65,6 +65,16 @@ export interface RewriteOpts {
   maxVariants?: number;
 }
 
+/**
+ * Why the rewrite degraded, for honest telemetry:
+ *   - 'none'       : ran normally (LLM produced variants, or cache hit)
+ *   - 'skipped'    : skipLlm / empty query — no work attempted
+ *   - 'no_binding' : no provider binding configured (a config gap, not a failure)
+ *   - 'llm_error'  : the LLM call threw/timed out — the only real error
+ * Only 'llm_error' is counted as a telemetry error.
+ */
+export type RewriteFailure = 'none' | 'skipped' | 'no_binding' | 'llm_error';
+
 export interface RewriteResult {
   /** Variants in ranked order; variants[0] is ALWAYS the original query. */
   variants: string[];
@@ -79,6 +89,10 @@ export interface RewriteResult {
   llmUsed: boolean;
   /** Whether the result came from cache. */
   cacheHit: boolean;
+  /** True when a cache lookup actually ran (so a "miss" is a real miss). */
+  cacheChecked: boolean;
+  /** Degradation reason — drives the error metric. */
+  failure: RewriteFailure;
   /** Model id from the resolved binding (null if no LLM call happened). */
   modelId: string | null;
   /** Wall-clock duration of the rewrite stage in ms. */
@@ -104,6 +118,8 @@ export class QueryRewriter {
         variants: [normalizedQuery],
         llmUsed: false,
         cacheHit: false,
+        cacheChecked: false,
+        failure: 'skipped',
         modelId: null,
         durationMs: 0,
       };
@@ -117,6 +133,8 @@ export class QueryRewriter {
         variants: [normalizedQuery],
         llmUsed: false,
         cacheHit: false,
+        cacheChecked: false,
+        failure: 'skipped',
         modelId: null,
         durationMs: Date.now() - started,
       };
@@ -135,6 +153,8 @@ export class QueryRewriter {
         variants: [normalizedQuery],
         llmUsed: false,
         cacheHit: false,
+        cacheChecked: false,
+        failure: 'no_binding',
         modelId: null,
         durationMs: Date.now() - started,
       };
@@ -158,6 +178,8 @@ export class QueryRewriter {
           variants,
           llmUsed: false,
           cacheHit: true,
+          cacheChecked: true,
+          failure: 'none',
           modelId: binding.modelId,
           durationMs: Date.now() - started,
         };
@@ -166,8 +188,10 @@ export class QueryRewriter {
       }
     }
 
-    // LLM call.
-    const variants = await this.callLlm(binding, normalizedQuery, maxVariants);
+    // LLM call. null signals a real transport/parse error (vs. a successful
+    // call that simply produced no extra variants).
+    const llmVariants = await this.callLlm(binding, normalizedQuery, maxVariants);
+    const variants = llmVariants ?? [normalizedQuery];
     const llmUsed = variants.length > 1;
 
     // Cache write — only on success (≥2 variants).
@@ -189,6 +213,8 @@ export class QueryRewriter {
       variants,
       llmUsed,
       cacheHit: false,
+      cacheChecked: !!this.opts.cache,
+      failure: llmVariants === null ? 'llm_error' : 'none',
       modelId: binding.modelId,
       durationMs: Date.now() - started,
     };
@@ -200,7 +226,7 @@ export class QueryRewriter {
     binding: ResolvedBinding,
     query: string,
     maxVariants: number,
-  ): Promise<string[]> {
+  ): Promise<string[] | null> {
     const chat = pickChatFn(binding);
     try {
       const result = await chat(binding, [
@@ -209,8 +235,8 @@ export class QueryRewriter {
       ]);
       return parseLlmResponse(result.content, query, maxVariants);
     } catch {
-      // Network/timeout/parse error → degrade to original only.
-      return [query];
+      // Network/timeout/parse error → signal failure to the caller.
+      return null;
     }
   }
 
@@ -228,11 +254,15 @@ export class QueryRewriter {
       candidates_in: 1,
       candidates_out: result.variants.length,
       cache_hits: result.cacheHit ? 1 : 0,
-      cache_misses: result.cacheHit ? 0 : 1,
-      errors: result.llmUsed || result.cacheHit ? 0 : 1,
+      // Only a real lookup that missed counts as a miss (not no-binding/skip).
+      cache_misses: result.cacheChecked && !result.cacheHit ? 1 : 0,
+      // Only a true LLM transport/parse error is an error; no_binding / skipped
+      // / "LLM produced no extra variants" are degradations, not failures.
+      errors: result.failure === 'llm_error' ? 1 : 0,
       diag: {
         model_id: result.modelId,
         llm_used: result.llmUsed,
+        failure: result.failure,
       },
     };
     try {

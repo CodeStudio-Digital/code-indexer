@@ -9,6 +9,7 @@
     "./files": "./src/files/index.ts",
     "./terminal": "./src/terminal/index.ts",
     "./coder": "./src/coder/index.ts",
+    "./plugins": "./src/plugins/index.ts",
     "./context": "./src/context.ts",
     "./types": "./src/types.ts"
   }

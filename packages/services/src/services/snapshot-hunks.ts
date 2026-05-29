@@ -20,6 +20,10 @@ export interface HunkLine {
   /** 'context' = unchanged, 'add' = present in after only, 'remove' = present in before only. */
   type: 'context' | 'add' | 'remove';
   content: string;
+  /** 1-based line number on the BEFORE side, absent for pure additions. */
+  oldLine?: number;
+  /** 1-based line number on the AFTER side, absent for pure removals. */
+  newLine?: number;
 }
 
 export interface Hunk {
@@ -35,6 +39,12 @@ export interface Hunk {
   /** Convenience counters. */
   addedCount: number;
   removedCount: number;
+  /** Unrendered unchanged lines available immediately before this hunk. */
+  hiddenBefore: number;
+  /** Unrendered unchanged lines available immediately after this hunk. */
+  hiddenAfter: number;
+  canExpandBefore: boolean;
+  canExpandAfter: boolean;
 }
 
 /**
@@ -131,7 +141,47 @@ function fingerprint(removedLines: string[], addedLines: string[], anchor: strin
  * Convert an edit script into grouped hunks with up to `context` lines of
  * unchanged context surrounding each change block.
  */
-function groupIntoHunks(ops: EditOp[], context: number): Hunk[] {
+export interface ComputeHunksOptions {
+  /** Symmetric context, used when side-specific values are omitted. */
+  context?: number;
+  contextBefore?: number;
+  contextAfter?: number;
+}
+
+function countEqBackward(ops: EditOp[], fromExclusive: number): number {
+  let count = 0;
+  for (let i = fromExclusive - 1; i >= 0 && ops[i].kind === 'eq'; i--) count++;
+  return count;
+}
+
+function countEqForward(ops: EditOp[], fromInclusive: number): number {
+  let count = 0;
+  for (let i = fromInclusive; i < ops.length && ops[i].kind === 'eq'; i++) count++;
+  return count;
+}
+
+function lineNumbersAt(ops: EditOp[], index: number): { before: number; after: number } {
+  let before = 1;
+  let after = 1;
+  for (let i = 0; i < index; i++) {
+    const op = ops[i];
+    if (op.kind === 'eq') {
+      before++;
+      after++;
+    } else if (op.kind === 'del') {
+      before++;
+    } else {
+      after++;
+    }
+  }
+  return { before, after };
+}
+
+function groupIntoHunks(
+  ops: EditOp[],
+  contextBefore: number,
+  contextAfter: number,
+): Hunk[] {
   const hunks: Hunk[] = [];
   let i = 0;
   let beforeLineNo = 1;
@@ -159,10 +209,16 @@ function groupIntoHunks(ops: EditOp[], context: number): Hunk[] {
       let k = j;
       while (k < ops.length && ops[k].kind === 'eq') k++;
       const eqLen = k - j;
-      if (eqLen >= 2 * context && k < ops.length) {
+      if (eqLen > contextBefore + contextAfter && k < ops.length) {
         // Long enough gap → end this hunk before the eq block, leaving
-        // `context` lines as trailing context.
-        j = j + context;
+        // the requested trailing context.
+        j = j + contextAfter;
+        break;
+      }
+      if (k === ops.length && eqLen > contextAfter) {
+        // Final unchanged tail. Git-style diffs keep only the requested
+        // context after the last edit, not the entire rest of the file.
+        j = j + contextAfter;
         break;
       }
       // Otherwise absorb the eq block and continue.
@@ -171,7 +227,7 @@ function groupIntoHunks(ops: EditOp[], context: number): Hunk[] {
     const changeEnd = j;
 
     // Expand the start backward by `context` if possible.
-    const hunkStart = Math.max(0, changeStart - context);
+    const hunkStart = Math.max(0, changeStart - contextBefore);
     // beforeLineNo / afterLineNo here point at op index `i`. We need to
     // recompute their values at `hunkStart` by walking back.
     let beforeAtStart = beforeLineNo;
@@ -193,29 +249,38 @@ function groupIntoHunks(ops: EditOp[], context: number): Hunk[] {
     const added: string[] = [];
     let oldLines = 0;
     let newLines = 0;
-    let beforeContextHead: string[] = [];
-    let afterContextHead: string[] = [];
+    let oldCursor = beforeAtStart;
+    let newCursor = afterAtStart;
     // Collect leading context.
     for (let p = hunkStart; p < changeStart; p++) {
-      lines.push({ type: 'context', content: ops[p].line });
+      lines.push({
+        type: 'context',
+        content: ops[p].line,
+        oldLine: oldCursor,
+        newLine: newCursor,
+      });
+      oldCursor++;
+      newCursor++;
       oldLines++;
       newLines++;
-      beforeContextHead.push(ops[p].line);
-      afterContextHead.push(ops[p].line);
     }
     // Collect change region (changeStart..changeEnd).
     for (let p = changeStart; p < changeEnd; p++) {
       const op = ops[p];
       if (op.kind === 'eq') {
-        lines.push({ type: 'context', content: op.line });
+        lines.push({ type: 'context', content: op.line, oldLine: oldCursor, newLine: newCursor });
+        oldCursor++;
+        newCursor++;
         oldLines++;
         newLines++;
       } else if (op.kind === 'del') {
-        lines.push({ type: 'remove', content: op.line });
+        lines.push({ type: 'remove', content: op.line, oldLine: oldCursor });
+        oldCursor++;
         removed.push(op.line);
         oldLines++;
       } else {
-        lines.push({ type: 'add', content: op.line });
+        lines.push({ type: 'add', content: op.line, newLine: newCursor });
+        newCursor++;
         added.push(op.line);
         newLines++;
       }
@@ -224,7 +289,15 @@ function groupIntoHunks(ops: EditOp[], context: number): Hunk[] {
     // Anchor uses 3 lines of leading context plus the index in the file for
     // disambiguation (otherwise identical hunks at different locations would
     // share fingerprints).
-    const anchor = `${beforeAtStart}:${afterAtStart}:${beforeContextHead.slice(-3).join('\n')}`;
+    const fingerprintStart = Math.max(0, changeStart - 3);
+    const fpLines = lineNumbersAt(ops, fingerprintStart);
+    const fpContext = ops
+      .slice(fingerprintStart, changeStart)
+      .filter((op) => op.kind === 'eq')
+      .map((op) => op.line);
+    const anchor = `${fpLines.before}:${fpLines.after}:${fpContext.slice(-3).join('\n')}`;
+    const hiddenBefore = countEqBackward(ops, hunkStart);
+    const hiddenAfter = countEqForward(ops, changeEnd);
     hunks.push({
       fingerprint: fingerprint(removed, added, anchor),
       oldStart: beforeAtStart,
@@ -234,6 +307,10 @@ function groupIntoHunks(ops: EditOp[], context: number): Hunk[] {
       lines,
       addedCount: added.length,
       removedCount: removed.length,
+      hiddenBefore,
+      hiddenAfter,
+      canExpandBefore: hiddenBefore > 0,
+      canExpandAfter: hiddenAfter > 0,
     });
 
     // Advance counters to where we stopped, then continue.
@@ -265,15 +342,21 @@ function groupIntoHunks(ops: EditOp[], context: number): Hunk[] {
 export function computeHunks(
   before: string | null,
   after: string | null,
-  context = 3,
+  options: number | ComputeHunksOptions = 3,
 ): Hunk[] {
+  const context =
+    typeof options === 'number' ? options : options.context ?? 3;
+  const contextBefore =
+    typeof options === 'number' ? context : options.contextBefore ?? context;
+  const contextAfter =
+    typeof options === 'number' ? context : options.contextAfter ?? context;
   const a = splitLines(normalizeForDiff(before ?? ''));
   const b = splitLines(normalizeForDiff(after ?? ''));
   if (a.length === 0 && b.length === 0) return [];
   if (a.join('\n') === b.join('\n')) return [];
   const t = lcsTable(a, b);
   const ops = traceback(a, b, t);
-  return groupIntoHunks(ops, context);
+  return groupIntoHunks(ops, Math.max(0, contextBefore), Math.max(0, contextAfter));
 }
 
 /**

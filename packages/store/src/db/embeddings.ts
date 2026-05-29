@@ -79,6 +79,21 @@ export function setSymbolHash(db: DB, symbolId: number, hash: string, kind: 'sig
   db.prepare(`UPDATE symbols SET ${col} = ? WHERE id = ?`).run(hash, symbolId);
 }
 
+/**
+ * Null every embedding hash for a project so the next index re-embeds all
+ * content. Used when the embedding model/dimension changes — otherwise the
+ * incremental hash check would skip re-embedding and leave the new (e.g.
+ * sqlite-vec) store empty / dimension-mismatched.
+ */
+export function clearHashes(db: DB, projectId: number): void {
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE files SET embedding_hash = NULL WHERE project_id = ?').run(projectId);
+    db.prepare('UPDATE symbols SET embedding_hash = NULL, body_embedding_hash = NULL WHERE project_id = ?').run(projectId);
+    db.prepare('UPDATE snapshots SET embedding_hash = NULL WHERE project_id = ?').run(projectId);
+  });
+  tx();
+}
+
 export function coverage(db: DB, projectId: number): EmbeddingCoverage {
   const files = db.prepare(
     'SELECT COUNT(*) AS total, COUNT(embedding_hash) AS embedded FROM files WHERE project_id = ?'

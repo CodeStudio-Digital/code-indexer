@@ -33,8 +33,10 @@ function scheduleSnapshotBackfill(): void {
       for (const p of projects) {
         const total = ctx.db.countSnapshots(p.id);
         if (total === 0) continue;
-        const indexed = ctx.db.countSnapshotVectors(p.id);
-        if (indexed >= total) continue;
+        // Don't gate on countSnapshotVectors: snapshots are chunked now, so
+        // the vector count can exceed the snapshot count even while some
+        // snapshots remain un-embedded. backfill queries `embedding_hash IS
+        // NULL` (the source of truth) and short-circuits cheaply when none.
         const result = await backfillSnapshotEmbeddings(ctx.db, ctx.snapshotService, p.id);
         if (result.embedded > 0 || result.failed > 0) {
           console.error(

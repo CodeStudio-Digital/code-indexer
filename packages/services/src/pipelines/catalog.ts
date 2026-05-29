@@ -20,7 +20,8 @@ export type BindingRole =
   | 'hyde'
   | 'compaction_llm'
   | 'link_extractor'
-  | 'rewriter';
+  | 'rewriter'
+  | 'reviewer';
 
 export interface PipelineCatalogEntry {
   pipelineName: string;
@@ -169,6 +170,17 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
       config: { temperature: 0.000001, max_tokens: 256 },
     },
     introducedInPhase: '6',
+  },
+  {
+    pipelineName: 'snapshot_review',
+    bindingRole: 'reviewer',
+    description: 'Automatic code review over active Session Snapshot diffs.',
+    recommendedDefault: {
+      providerKind: 'anthropic',
+      modelHint: 'claude-sonnet-4',
+      config: { temperature: 0, max_tokens: 4000, json_mode: true },
+    },
+    introducedInPhase: 'snapshot-review',
   },
 
   // ─── Documentação (RAG) pipelines (Phase 9) ──────────────────────────────

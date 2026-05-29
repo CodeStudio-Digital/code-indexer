@@ -50,7 +50,7 @@ import { applySmartReducer, reducePreThinkInHistory } from '@mcp/code-agent/core
 import { getModelContextWindow, getModelMaxTools, getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilities.js';
 import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { resolveTemperature } from '@mcp/code-agent/inference/temperature.js';
-import { estimateCost } from '@mcp/code-agent/providers/pricing.js';
+import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
 import { buildActiveContextBlock } from '@mcp/code-agent/core/active-context.js';
 import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js';
 import type { SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
@@ -66,6 +66,7 @@ import {
   getGlobalPolicyEnforcer,
   shouldClassifyTurn,
   worstVerdictOf,
+  fnv1aSample,
 } from '@mcp/services/quality/index.js';
 import type { QualityResult } from '@mcp/services/quality/index.js';
 import type { QualityClassificationRow } from '@mcp/store/quality-classification-store.js';
@@ -757,6 +758,16 @@ export class CoderRunner extends EventEmitter {
    */
   private pendingInterventionByTurn = new Map<number, number>();
 
+  /**
+   * Quality v2 — Held-out counterfactual rate. A qualifying nudge is
+   * deterministically withheld with this probability so the dashboard can
+   * compare improved-rate WITH vs WITHOUT a nudge on the same population
+   * (a real A/B baseline — `nudge_suppressed` is NOT a baseline, it's the
+   * repeat/dedup'd subset). 0 disables; default 0.15. Set via
+   * `CODER_NUDGE_HOLDOUT_RATE`.
+   */
+  private readonly nudgeHoldoutRate = parseNudgeHoldoutRate(process.env.CODER_NUDGE_HOLDOUT_RATE);
+
 
   /**
    * PR-4 (Row 3): record of the most recent recovery transition the runner
@@ -1156,6 +1167,7 @@ export class CoderRunner extends EventEmitter {
       const nudge = buildQualityNudge(rows, { minConfidence: 0.6 });
       let nudgeEmitted = false;
       let nudgeSuppressed = false;
+      let nudgeHeldOut = false;
       if (nudge.text) {
         // Quality v2, D1 — Dedup identical nudges within a 5-turn window.
         // When the same text fires turn after turn, the model has already
@@ -1168,6 +1180,14 @@ export class CoderRunner extends EventEmitter {
         );
         if (recentlySent) {
           nudgeSuppressed = true;
+        } else if (this.shouldHoldOutNudge()) {
+          // Quality v2 — Counterfactual control. This nudge QUALIFIED but we
+          // deliberately withhold it (deterministic per session×turn) so the
+          // dashboard can compare improved-rate WITH vs WITHOUT a nudge on the
+          // same population. Do NOT inject the text, and do NOT record the
+          // hash — a future identical nudge must still fire, since the model
+          // never actually received this one.
+          nudgeHeldOut = true;
         } else {
           parts.push(nudge.text);
           nudgeEmitted = true;
@@ -1193,22 +1213,23 @@ export class CoderRunner extends EventEmitter {
           finalText.length,
         );
       }
-      if (nudgeEmitted) {
-        // Triggering verdicts: the nudge's chosen rows (one per classifier).
+      // nudge / nudge_holdout / nudge_suppressed are mutually exclusive and
+      // share the same triggering verdicts (one per contributing classifier),
+      // so the backfill scores all three identically — that's what makes the
+      // held-out rows a valid counterfactual baseline.
+      if (nudgeEmitted || nudgeHeldOut || nudgeSuppressed) {
         const triggers = rows
           .filter((r) => nudge.contributingClassifiers.includes(r.classifier_name))
           // Dedupe by classifier_name keeping most recent (rows are DESC).
           .filter((r, i, arr) => arr.findIndex((x) => x.classifier_name === r.classifier_name) === i)
           .map(rowToVerdictSnapshot);
-        this.recordIntervention('nudge', triggers, finalText.length);
-      } else if (nudgeSuppressed) {
-        // Even when suppressed we record (without nudge_chars) so the
-        // dashboard can show "X% of would-be nudges were dedup'd".
-        const triggers = rows
-          .filter((r) => nudge.contributingClassifiers.includes(r.classifier_name))
-          .filter((r, i, arr) => arr.findIndex((x) => x.classifier_name === r.classifier_name) === i)
-          .map(rowToVerdictSnapshot);
-        this.recordIntervention('nudge_suppressed', triggers, 0);
+        if (nudgeEmitted) {
+          this.recordIntervention('nudge', triggers, finalText.length);
+        } else if (nudgeHeldOut) {
+          this.recordIntervention('nudge_holdout', triggers, 0);
+        } else {
+          this.recordIntervention('nudge_suppressed', triggers, 0);
+        }
       }
 
       return finalText;
@@ -1219,12 +1240,24 @@ export class CoderRunner extends EventEmitter {
   }
 
   /**
+   * Quality v2 — Decide whether to hold out (withhold) a qualifying nudge
+   * for the counterfactual baseline. Deterministic per (session, turn) and
+   * salted so it's decorrelated from the classification-sampling decision —
+   * reproducible across re-runs and unbiased.
+   */
+  private shouldHoldOutNudge(): boolean {
+    if (this.nudgeHoldoutRate <= 0) return false;
+    if (this.sessionId == null) return false;
+    return fnv1aSample(this.sessionId, this.turn, 'nudge_holdout') < this.nudgeHoldoutRate;
+  }
+
+  /**
    * Quality v2, C4 — Persist an intervention row with outcome='pending'.
    * Never throws. Silently no-op when the global store isn't installed
    * (tests, opt-out env, etc).
    */
   private recordIntervention(
-    type: 'nudge' | 'planning' | 'nudge_suppressed',
+    type: 'nudge' | 'planning' | 'nudge_suppressed' | 'nudge_holdout',
     triggers: ReadonlyArray<InterventionVerdictSnapshot>,
     chars: number,
   ): void {
@@ -2436,3 +2469,16 @@ export function isPathInsideScope(candidate: string, scopeFiles: string[]): bool
 // suppress unused-import warning until other helpers reference these
 void pathResolve;
 void pathRelative;
+
+/**
+ * Parse `CODER_NUDGE_HOLDOUT_RATE` into a probability in [0, 1].
+ * Unset → 0.15 (held-out counterfactual on by default). Explicit 0,
+ * negative, or non-numeric → 0 (disabled — every qualifying nudge is sent).
+ * Values above 1 are clamped to 1.
+ */
+function parseNudgeHoldoutRate(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return 0.15;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(1, n);
+}

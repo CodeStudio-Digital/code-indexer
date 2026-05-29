@@ -29,6 +29,7 @@ import type { WorkspaceApi } from './workspace.js';
 import type { ProjectGitApi } from './projectGit.js';
 import type { AuthApi } from './auth.js';
 import type { BillingApi } from './billing.js';
+import type { PluginsApi } from './plugins.js';
 import type {
   CostsApi,
   DiffApi,
@@ -61,6 +62,7 @@ export * from './workspace.js';
 export * from './projectGit.js';
 export * from './auth.js';
 export * from './billing.js';
+export * from './plugins.js';
 export * from './misc.js';
 
 /**
@@ -94,6 +96,9 @@ export interface Api {
   // Account
   auth: AuthApi;
   billing: BillingApi;
+
+  // Plugins / marketplace
+  plugins: PluginsApi;
 
   // Operational
   admin: AdminApi;

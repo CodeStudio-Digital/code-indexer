@@ -72,6 +72,14 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 async function bootstrap() {
+  // Pin the local-embedding model cache to a stable per-user dir so the
+  // transformers.js model downloads once and survives app updates — never
+  // into the read-only asar bundle. Read by LocalEmbeddingService. Set
+  // before createApp() so the embedding service picks it up at construction.
+  if (!process.env.MCP_MODEL_CACHE_DIR) {
+    process.env.MCP_MODEL_CACHE_DIR = path.join(app.getPath('userData'), 'models');
+  }
+
   // Boot the backend in-process. The Hono app is built but not served
   // unless MCP_DEV_HTTP=1 — that flag exists so an operator can curl
   // the same backend from outside the Electron window for debugging.

@@ -10,6 +10,7 @@ import type DatabaseConstructor from 'better-sqlite3';
 
 import * as providers from './provider/providers.js';
 import * as models from './provider/models.js';
+import * as modelPrices from './provider/model-prices.js';
 import * as appSettings from './provider/app-settings.js';
 import * as catalogEtag from './provider/catalog-etag.js';
 import * as subagent from './provider/subagent.js';
@@ -41,6 +42,8 @@ export type {
   RerankerConfigRow,
   UpsertProviderInput,
   UpsertModelInput,
+  ModelPriceRow,
+  UpsertModelPriceInput,
 } from './provider/types.js';
 
 import type {
@@ -53,6 +56,8 @@ import type {
   EmbeddingConfigRow,
   VectorStoreConfigRow,
   RerankerConfigRow,
+  ModelPriceRow,
+  UpsertModelPriceInput,
 } from './provider/types.js';
 
 export class ProviderStore {
@@ -87,6 +92,12 @@ export class ProviderStore {
   replaceModelsFromSource(providerId: string, source: string, modelInputs: UpsertModelInput[]): void { models.replaceFromSource(this.db, providerId, source, modelInputs); }
   updateModel(providerId: string, modelId: string, mode: string, patch: Parameters<typeof models.update>[4]): void { models.update(this.db, providerId, modelId, mode, patch); }
   backfillContextWindowsFromRegistry(lookup: (modelId: string) => number | null): { updated: number; still_null: number; total: number } { return models.backfillContextWindows(this.db, lookup); }
+
+  // ─── Model Prices ──────────────────────────────────────────────
+  listAllModelPrices(): ModelPriceRow[] { return modelPrices.listAllPrices(this.db); }
+  replaceModelPricesFromSource(source: string, prices: UpsertModelPriceInput[]): { inserted: number; skipped_protected: number } { return modelPrices.replacePricesFromSource(this.db, source, prices); }
+  upsertManualModelPrice(input: UpsertModelPriceInput): void { modelPrices.upsertManualPrice(this.db, input); }
+  seedHardcodedModelPrices(seed: UpsertModelPriceInput[]): number { return modelPrices.seedHardcodedPricesIfMissing(this.db, seed); }
 
   // ─── App Settings & General Default & deepThink & Fallback ─────
   getAppSetting(key: string): string | null { return appSettings.getAppSetting(this.db, key); }

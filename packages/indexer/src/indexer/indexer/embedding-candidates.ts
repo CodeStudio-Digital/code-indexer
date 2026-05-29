@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import { slidingWindows } from '@mcp/shared/utils/sliding-window.js';
 
 export interface CandidateSymbol {
   name: string;
@@ -38,6 +39,10 @@ interface SkippedSymbolGroup {
 
 const MIN_BODY_LINES = Number(process.env.MCP_INDEX_BODY_MIN_LINES ?? 8);
 const MAX_BODY_CHARS = Number(process.env.MCP_INDEX_BODY_MAX_CHARS ?? 2500);
+// Bodies over MAX_BODY_CHARS are split into overlapping windows instead of
+// being truncated, so the tail of large functions stays searchable.
+const BODY_OVERLAP_CHARS = Number(process.env.MCP_INDEX_BODY_OVERLAP_CHARS ?? 250);
+const MAX_BODY_CHUNKS = Number(process.env.MCP_INDEX_BODY_MAX_CHUNKS ?? 4);
 const SIBLING_GAP = 3;
 const GROUP_MIN_LINES = 3;
 
@@ -211,22 +216,47 @@ function appendBodyCandidate(
   lineEnd: number,
   symHashMap: Map<number, { sig: string | null; body: string | null }>,
 ): void {
-  const bodySlice = fileLines.slice(lineStart, lineEnd).join('\n').slice(0, MAX_BODY_CHARS);
-  const bodyText = `[Context: ${globalContext}]\n${sym.kind} ${sym.name}\n${sym.signature ?? ''}\n---\n${bodySlice}`;
-  const bodyHash = createHash('md5').update(bodyText).digest('hex');
-  const bodyVecId = 'sb_' + createHash('md5').update(`${project.id}:${filePath}:${sym.name}:body`).digest('hex').slice(0, 23);
-  const storedBodyHash = symHashMap.get(symDbId)?.body ?? null;
+  const fullBody = fileLines.slice(lineStart, lineEnd).join('\n');
+  const windows = slidingWindows(fullBody, {
+    windowChars: MAX_BODY_CHARS,
+    overlapChars: BODY_OVERLAP_CHARS,
+    maxChunks: MAX_BODY_CHUNKS,
+  });
+  const header = `[Context: ${globalContext}]\n${sym.kind} ${sym.name}\n${sym.signature ?? ''}\n---\n`;
+  // Single-window case is byte-identical to the pre-windowing text+hash, so
+  // unchanged small symbols never re-embed. Multi-window adds a part marker.
+  const chunkTexts = windows.map((w, i) =>
+    windows.length > 1 ? `${header}(part ${i + 1}/${windows.length})\n${w}` : `${header}${w}`,
+  );
 
-  if (storedBodyHash !== bodyHash) {
+  // One combined hash gates the whole body: any window change re-emits all
+  // windows. Stored in the symbol's single body-hash slot — the per-chunk
+  // onCommit calls all write the same value (idempotent).
+  const combinedHash = createHash('md5').update(chunkTexts.join(' ')).digest('hex');
+  const storedBodyHash = symHashMap.get(symDbId)?.body ?? null;
+  if (storedBodyHash === combinedHash) return;
+
+  chunkTexts.forEach((text, i) => {
+    // Chunk 0 keeps the historical id (no suffix) so it overwrites the old
+    // single vector in place — no mass re-orphaning on the first reindex.
+    const idSeed = i === 0
+      ? `${project.id}:${filePath}:${sym.name}:body`
+      : `${project.id}:${filePath}:${sym.name}:body:${i}`;
+    const bodyVecId = 'sb_' + createHash('md5').update(idSeed).digest('hex').slice(0, 23);
     candidates.push({
-      text: bodyText,
+      text,
       id: bodyVecId,
       filePath,
-      metadata: { project_name: project.name, type: 'symbol_body', ref_id: String(symDbId) },
-      hash: bodyHash,
-      onCommit: () => db.setSymbolEmbeddingHash(symDbId, bodyHash, 'body'),
+      metadata: {
+        project_name: project.name,
+        type: 'symbol_body',
+        ref_id: String(symDbId),
+        chunk_index: String(i),
+      },
+      hash: combinedHash,
+      onCommit: () => db.setSymbolEmbeddingHash(symDbId, combinedHash, 'body'),
     });
-  }
+  });
 }
 
 function mergeSiblings(

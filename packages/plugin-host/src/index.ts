@@ -1,0 +1,22 @@
+/**
+ * @mcp/plugin-host — installs/uninstalls plugins (Claude Code-compatible
+ * bundles) by namespace, generalizing the agent-skills installer. Applies a
+ * plugin's skills, MCP servers, and UI/agent contributions, and records the
+ * install in the `installed_plugins` store.
+ */
+export { installPlugin } from './installer.js';
+export type { InstallPluginOptions } from './installer.js';
+export { uninstallPlugin } from './uninstall.js';
+export type { UninstallResult } from './uninstall.js';
+export { loadManifest, peekManifestName } from './manifest-loader.js';
+export type { LoadedManifest } from './manifest-loader.js';
+export { verifyBundle, bundleSha256 } from './signature.js';
+export { buildContributions } from './apply/contributions.js';
+export type { PluginContributions } from './apply/contributions.js';
+export {
+  listInstalledPlugins,
+  getInstalledPlugin,
+  setPluginEnabled,
+} from './registry.js';
+export type { InstalledPlugin } from './registry.js';
+export * from './types.js';

@@ -5,13 +5,14 @@
  * `/api/admin/embeddings` and `/api/admin/vector-stores` endpoints.
  */
 
-export type EmbeddingKind = 'cloudflare' | 'bedrock' | 'null';
+export type EmbeddingKind = 'cloudflare' | 'bedrock' | 'local' | 'null';
 
 export type VectorStoreKind =
   | 'cloudflare'
   | 'qdrant'
   | 'bedrock-opensearch'
   | 'pinecone'
+  | 'sqlite-vec'
   | 'null';
 
 export type RerankerKind = 'cloudflare' | 'cohere' | 'null';
@@ -140,6 +141,10 @@ export const EMBEDDING_FIELDS: Record<EmbeddingKind, FieldSpec[]> = {
     { key: 'accessKeyId', label: 'Access Key ID (optional)', type: 'text' },
     { key: 'secretAccessKey', label: 'Secret Access Key (optional)', type: 'password' },
   ],
+  local: [
+    { key: 'model', label: 'Model', type: 'text', placeholder: 'Xenova/multilingual-e5-small' },
+    { key: 'cacheDir', label: 'Model Cache Dir (optional)', type: 'text' },
+  ],
   null: [],
 };
 
@@ -173,6 +178,9 @@ export const VECTOR_STORE_FIELDS: Record<VectorStoreKind, FieldSpec[]> = {
     { key: 'host', label: 'Index Host', type: 'text', placeholder: 'my-index-abcd.svc.us-east-1-aws.pinecone.io', required: true },
     { key: 'apiKey', label: 'API Key', type: 'password', required: true },
     { key: 'namespace', label: 'Namespace (optional)', type: 'text' },
+  ],
+  'sqlite-vec': [
+    { key: 'path', label: 'Database Path (optional)', type: 'text', placeholder: 'defaults beside the index DB' },
   ],
   null: [],
 };

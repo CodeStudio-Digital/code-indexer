@@ -69,7 +69,8 @@
   "pipeline.toasts.pruned.description": "Deleted {{deleted}} row(s) older than {{cutoff}}.",
   "pipeline.toasts.pruneFailed": "Prune failed",
   "pipeline.stats.events": "Events",
-  "pipeline.stats.errors": "Errors",
+  "pipeline.stats.errorRows": "Traces with errors",
+  "pipeline.stats.subErrors": "{{count}} sub-failures total",
   "pipeline.stats.cacheHitsMisses": "Cache hits / misses",
   "pipeline.stats.hitRate": "Hit rate",
   "pipeline.histogram.title": "Histogram",
@@ -80,7 +81,7 @@
   "pipeline.cacheRate.empty": "No cached hydrators have run yet.",
   "pipeline.cacheRate.hits": "{{count}} hits",
   "pipeline.cacheRate.misses": "{{count}} miss",
-  "pipeline.recent.title": "Recent rows ({{count}})",
+  "pipeline.recent.title": "Recent sample ({{count}} latest)",
   "pipeline.recent.empty": "No telemetry rows match the filters.",
   "pipeline.recent.errorsBadge": "err {{count}}",
 
@@ -116,5 +117,14 @@
   "quality.interventions.improved": "Improved",
   "quality.interventions.unchanged": "Unchanged",
   "quality.interventions.worsened": "Worsened",
-  "quality.interventions.pending": "Pending"
+  "quality.interventions.pending": "Pending",
+  "quality.interventions.lift": "Nudge lift (vs held-out)",
+  "quality.interventions.liftHint": "nudge {{nudge}}% vs held-out {{holdout}}% — the real gain of nudging over doing nothing",
+  "quality.interventions.liftPending": "Waiting on held-out data to compute the real nudge lift.",
+  "quality.interventions.type.nudge": "nudge",
+  "quality.interventions.type.nudge_holdout": "held-out (no nudge)",
+  "quality.interventions.type.nudge_suppressed": "repeated (dedup)",
+  "quality.interventions.type.planning": "planning",
+  "quality.interventions.type.policy_block": "policy block",
+  "quality.interventions.type.board_alert": "board alert"
 }

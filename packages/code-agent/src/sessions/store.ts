@@ -40,6 +40,7 @@ import * as telemetryRecord from './store/telemetry-record.js';
 import * as telemetryPayload from './store/telemetry-payload.js';
 import * as telemetrySession from './store/telemetry-session.js';
 import * as telemetryGlobal from './store/telemetry-global.js';
+import * as telemetryBackfill from './store/telemetry-backfill.js';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
@@ -181,5 +182,8 @@ export class SessionStore {
   getSessionTelemetrySummary(sessionId: number): telemetrySession.SessionTelemetrySummary { return telemetrySession.getSessionTelemetrySummary(this.db, sessionId); }
   getGlobalTelemetrySummary(opts: { limit?: number; project_id?: number | null; since?: string | null } = {}): telemetryGlobal.GlobalTelemetrySummary {
     return telemetryGlobal.getGlobalTelemetrySummary(this.db, opts);
+  }
+  backfillTurnCosts(opts?: telemetryBackfill.BackfillOptions): telemetryBackfill.BackfillResult {
+    return telemetryBackfill.backfillTurnCosts(this.db, opts);
   }
 }

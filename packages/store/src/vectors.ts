@@ -1,5 +1,6 @@
 import type { VectorRecord, VectorMatch } from '@mcp/shared/types.js';
 import type { ProviderStore } from './provider-store.js';
+import { SqliteVecVectorStore, defaultSqliteVecPath } from './sqlite-vec-store.js';
 
 /**
  * Abstraction over the vector database. Swapping Cloudflare Vectorize for
@@ -739,6 +740,10 @@ export function createVectorStore(
             namespace: c.namespace,
           });
         }
+      }
+      if (cfg.kind === 'sqlite-vec') {
+        const c = cfg.config as { path?: string };
+        return new SqliteVecVectorStore({ path: c.path || defaultSqliteVecPath() });
       }
       if (cfg.kind === 'bedrock-opensearch') {
         const c = cfg.config as {

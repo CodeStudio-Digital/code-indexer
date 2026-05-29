@@ -33,6 +33,8 @@ export default defineConfig({
       ...pkgAliases('@mcp/company-contracts', 'company-contracts'),
       ...pkgAliases('@mcp/candidate-pipeline', 'candidate-pipeline'),
       ...pkgAliases('@mcp/orchestrator-host', 'orchestrator-host'),
+      ...pkgAliases('@mcp/plugin-sdk', 'plugin-sdk'),
+      ...pkgAliases('@mcp/plugin-host', 'plugin-host'),
       { find: /^@apps\/(.*)$/, replacement: resolve(repoRoot, 'apps/$1') },
     ],
   },

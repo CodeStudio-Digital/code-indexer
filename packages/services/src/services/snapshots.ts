@@ -3,6 +3,13 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { ContextSnapshot, SnapshotCategory, SnapshotVersion, VectorRecord } from '@mcp/shared/types.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
+import { slidingWindows } from '@mcp/shared/utils/sliding-window.js';
+
+// Long snapshots are split into overlapping windows instead of being
+// truncated at 2000 chars, so the whole note stays semantically searchable.
+const SNAPSHOT_WINDOW_CHARS = 2000;
+const SNAPSHOT_OVERLAP_CHARS = 200;
+const MAX_SNAPSHOT_CHUNKS = 6;
 
 export interface SnapshotWithStale extends ContextSnapshot {
   stale?: boolean;
@@ -27,15 +34,17 @@ export interface SnapshotMutationResult {
  * shape consistent with file/symbol vectors (`f_<hash>`, `s_<hash>`) so all
  * vector records share the same id space.
  */
-function snapshotVecId(snapshotId: number): string {
-  return 'sn_' + createHash('md5').update(`snapshot:${snapshotId}`).digest('hex').slice(0, 24);
+function snapshotVecId(snapshotId: number, chunk = 0): string {
+  const seed = chunk === 0 ? `snapshot:${snapshotId}` : `snapshot:${snapshotId}:${chunk}`;
+  return 'sn_' + createHash('md5').update(seed).digest('hex').slice(0, 24);
 }
 
-/** Stable hash of the text actually fed to the embedding service. Used to
- *  detect "content unchanged → skip embedding" on update/backfill. */
+/** Stable hash of the FULL text fed to the embedding service. Used to detect
+ *  "content unchanged → skip embedding" on update/backfill. Hashes the whole
+ *  title+content (no truncation) so edits past the old 2000-char cap also
+ *  trigger a re-embed. */
 function embeddingTextHash(snap: Pick<ContextSnapshot, 'title' | 'content'>): string {
-  const text = `${snap.title}\n${snap.content}`.slice(0, 2000);
-  return createHash('md5').update(text).digest('hex');
+  return createHash('md5').update(`${snap.title}\n${snap.content}`).digest('hex');
 }
 
 export class SnapshotService {
@@ -85,35 +94,45 @@ export class SnapshotService {
     }
 
     try {
-      const text = `${snap.title}\n${snap.content}`.slice(0, 2000);
-      const { vectors } = await this.embeddingService.embed([text]);
+      const windows = slidingWindows(`${snap.title}\n${snap.content}`, {
+        windowChars: SNAPSHOT_WINDOW_CHARS,
+        overlapChars: SNAPSHOT_OVERLAP_CHARS,
+        maxChunks: MAX_SNAPSHOT_CHUNKS,
+      });
+      // Non-first windows get the title prepended so every vector carries the
+      // snapshot's subject as context (chunk 0 already starts with it).
+      const chunkTexts = windows.map((w, i) => (i === 0 ? w : `${snap.title}\n${w}`));
+      const { vectors } = await this.embeddingService.embed(chunkTexts);
       if (vectors.length === 0 || vectors[0].length === 0) {
         return { ok: false, error: 'embedding service returned no vectors' };
       }
-      const vectorId = snapshotVecId(snap.id);
-      const record: VectorRecord = {
-        id: vectorId,
-        values: vectors[0],
+      const records: VectorRecord[] = vectors.map((values, i) => ({
+        id: snapshotVecId(snap.id, i),
+        values,
         metadata: {
           project_name: projectName,
           type: 'snapshot',
           ref_id: String(snap.id),
+          chunk_index: String(i),
         },
-      };
-      await this.vectorStore.upsert([record]);
-      this.db.updateSnapshotEmbeddingHash(snap.id, newHash);
-      // Idempotent: vector_ids has a UNIQUE on (project_id, vector_id) so
-      // re-registering the same id is a no-op via INSERT OR IGNORE-style
-      // behaviour. We rely on saveVectorIds being called once per snapshot;
-      // for updates the same vectorId is reused and the row already exists.
-      const existing = this.db
-        .getVectorIdsByProject(snap.project_id)
-        .some((r) => r.vector_id === vectorId);
-      if (!existing) {
-        this.db.saveVectorIds(snap.project_id, [
-          { vectorId, type: 'snapshot' },
-        ]);
+      }));
+      await this.vectorStore.upsert(records);
+
+      // Drop leftover chunk vectors from a previously-longer version of this
+      // snapshot (e.g. it shrank from 5 windows to 2). Best-effort.
+      const staleIds: string[] = [];
+      for (let i = records.length; i < MAX_SNAPSHOT_CHUNKS; i++) staleIds.push(snapshotVecId(snap.id, i));
+      if (staleIds.length > 0) {
+        try { await this.vectorStore.deleteByIds(staleIds); } catch { /* best-effort */ }
       }
+
+      this.db.updateSnapshotEmbeddingHash(snap.id, newHash);
+      // INSERT OR REPLACE keyed on (project_id, vector_id) — idempotent, so we
+      // register every current chunk id unconditionally.
+      this.db.saveVectorIds(
+        snap.project_id,
+        records.map((r) => ({ vectorId: r.id, type: 'snapshot' as const })),
+      );
       return { ok: true };
     } catch (err) {
       const msg = (err as Error).message ?? String(err);
@@ -124,8 +143,12 @@ export class SnapshotService {
 
   private async removeFromVectorStore(snapshotId: number): Promise<void> {
     if (!this.vectorStore) return;
+    // Delete every possible chunk id — deleting absent ids is a no-op, so a
+    // fixed [0, MAX) sweep cleans up regardless of how many chunks existed.
+    const ids: string[] = [];
+    for (let i = 0; i < MAX_SNAPSHOT_CHUNKS; i++) ids.push(snapshotVecId(snapshotId, i));
     try {
-      await this.vectorStore.deleteByIds([snapshotVecId(snapshotId)]);
+      await this.vectorStore.deleteByIds(ids);
     } catch (err) {
       console.error('[snapshot-embed] delete failed:', (err as Error).message);
     }

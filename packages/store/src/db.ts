@@ -150,6 +150,17 @@ export class CodeIndexDB {
   getSymbolEmbeddingHashes(symbolIds: number[]): Map<number, { sig: string | null; body: string | null }> { return embeddings.getSymbolHashes(this.db, symbolIds); }
   setSymbolEmbeddingHash(symbolId: number, hash: string, kind: 'sig' | 'body'): void { embeddings.setSymbolHash(this.db, symbolId, hash, kind); }
   getEmbeddingCoverage(projectId: number): embeddings.EmbeddingCoverage { return embeddings.coverage(this.db, projectId); }
+  /** Null all embedding hashes for a project → next index re-embeds everything. */
+  clearEmbeddingHashes(projectId: number): void { embeddings.clearHashes(this.db, projectId); }
+  /** Embedding model/backend the project was last indexed with (migration 113). */
+  getProjectEmbeddingFingerprint(projectId: number): string | null {
+    const row = this.db.prepare('SELECT embedding_fingerprint FROM projects WHERE id = ?')
+      .get(projectId) as { embedding_fingerprint: string | null } | undefined;
+    return row?.embedding_fingerprint ?? null;
+  }
+  setProjectEmbeddingFingerprint(projectId: number, fingerprint: string): void {
+    this.db.prepare('UPDATE projects SET embedding_fingerprint = ? WHERE id = ?').run(fingerprint, projectId);
+  }
 
   // ─── Models Cache ───────────────────────────────────────────────
   getCachedModels(provider: string): DiscoveredModel[] | null { return modelsCache.get(this.db, provider); }

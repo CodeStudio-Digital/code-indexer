@@ -17,6 +17,7 @@ import {
   createParser,
   initTreeSitter,
 } from '@mcp/indexer/indexer/tree-sitter/languages.js';
+import { extractCalls } from '@mcp/indexer/indexer/tree-sitter/call-extractor.js';
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -226,10 +227,18 @@ export class TreeSitterExtractor {
       const { internalDeps, externalDeps, allDeps, references } =
         this.extractImportsAndRefs(tree.rootNode, language, content, filePath);
 
+      // Call-graph: capture call sites whose callee is a name we know in this
+      // file (locally defined or imported). Merged into the import references
+      // so they flow through the same `symbol_references` persistence path.
+      const knownNames = new Set<string>();
+      for (const s of symbols) knownNames.add(s.name);
+      for (const r of references) knownNames.add(r.symbol_name);
+      const callRefs = extractCalls(tree.rootNode, language, knownNames);
+
       const analysis: Partial<LLMFileAnalysis> = {
         language,
         symbols,
-        references,
+        references: references.concat(callRefs),
         dependencies: allDeps,
         internal_deps: internalDeps,
         external_deps: externalDeps,

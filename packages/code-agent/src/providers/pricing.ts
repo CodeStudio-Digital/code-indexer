@@ -1,19 +1,18 @@
 /**
- * Per-model pricing for cost estimation in telemetry.
+ * Per-model pricing DATA + pure cost math for telemetry.
  *
- * Prices are USD per 1,000,000 tokens. Cache-read pricing reflects the
- * provider's discounted rate when a cached prefix hits (Anthropic ~10%,
- * OpenAI ~50%, Gemini varies). Cache-write reflects the one-time premium
- * Anthropic charges to populate the cache. Providers without a cache
- * column omit it (treated as full input price).
+ * Prices are USD per 1,000,000 tokens. Cache-read reflects the provider's
+ * discounted rate on a cache hit (Anthropic ~10%, OpenAI ~50%, Gemini
+ * varies). Cache-write reflects Anthropic's one-time premium to populate the
+ * cache. Providers without a cache column omit it (treated as full input).
  *
- * This file intentionally lives next to model-registry.ts so adding a
- * model in one place is a strong nudge to add pricing in the other.
- * If a model is missing from this table, estimateCost returns 0 (we
- * never block telemetry on missing prices) and logs once per process.
+ * This module is PURE: it knows nothing about the DB or the live price
+ * cache. Runtime resolution (env override → DB → this static table) and the
+ * public estimateCost/getPricing live in ./pricing-cache.ts. Keeping the data
+ * here means adding a model is still a one-file nudge next to model-registry.
  *
- * Sources are checked at the time of writing; treat as a snapshot. UI
- * always shows "estimated" so users know it's not a billing source.
+ * Sources are checked at the time of writing; treat as a snapshot. UI always
+ * shows "estimated" so users know it's not a billing source.
  */
 export interface ModelPricing {
   /** USD per 1M input tokens (full price). */
@@ -33,10 +32,16 @@ export interface ModelPricing {
  */
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   // ── Anthropic ───────────────────────────────────────────────────────────
-  'claude-opus-4-7':            { input: 15.0, output: 75.0, cacheRead: 1.5,  cacheWrite: 18.75 },
-  'claude-opus-4-6':            { input: 15.0, output: 75.0, cacheRead: 1.5,  cacheWrite: 18.75 },
-  'claude-sonnet-4-6':          { input: 3.0,  output: 15.0, cacheRead: 0.3,  cacheWrite: 3.75  },
-  'claude-haiku-4-5':           { input: 0.8,  output: 4.0,  cacheRead: 0.08, cacheWrite: 1.0   },
+  // opus-4-8 mirrors opus-4-7 list price. The [1m] row is the 1M-context
+  // premium tier (>200K input): ~2x input / ~1.5x output, matching the
+  // pattern Anthropic uses for its 1M beta. ESTIMATE — confirm against the
+  // published 1M-context price and pin via `manual` if it differs.
+  'claude-opus-4-8':            { input: 15.0, output: 75.0,  cacheRead: 1.5,  cacheWrite: 18.75 },
+  'claude-opus-4-8[1m]':        { input: 30.0, output: 112.5, cacheRead: 3.0,  cacheWrite: 37.5  },
+  'claude-opus-4-7':            { input: 15.0, output: 75.0,  cacheRead: 1.5,  cacheWrite: 18.75 },
+  'claude-opus-4-6':            { input: 15.0, output: 75.0,  cacheRead: 1.5,  cacheWrite: 18.75 },
+  'claude-sonnet-4-6':          { input: 3.0,  output: 15.0,  cacheRead: 0.3,  cacheWrite: 3.75  },
+  'claude-haiku-4-5':           { input: 0.8,  output: 4.0,   cacheRead: 0.08, cacheWrite: 1.0   },
 
   // ── OpenAI ──────────────────────────────────────────────────────────────
   'gpt-5':                      { input: 1.25, output: 10.0, cacheRead: 0.125 },
@@ -83,9 +88,12 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
 };
 
 const PREFIX_FALLBACKS: Array<[string, string]> = [
+  // Most-specific first: opus-4-8 variants before the broad 'claude-opus'.
+  ['claude-opus-4-8[1m]', 'claude-opus-4-8[1m]'],
+  ['claude-opus-4-8',  'claude-opus-4-8'],
   ['claude-opus-4-7',  'claude-opus-4-7'],
   ['claude-opus-4-6',  'claude-opus-4-6'],
-  ['claude-opus',      'claude-opus-4-7'],
+  ['claude-opus',      'claude-opus-4-8'],
   ['claude-sonnet-4',  'claude-sonnet-4-6'],
   ['claude-sonnet',    'claude-sonnet-4-6'],
   ['claude-haiku-4',   'claude-haiku-4-5'],
@@ -125,9 +133,12 @@ const PREFIX_FALLBACKS: Array<[string, string]> = [
   ['kimi-k2.5',        'kimi-k2.5'],
 ];
 
-const warnedMissing = new Set<string>();
-
-export function getPricing(model: string | null | undefined): ModelPricing | null {
+/**
+ * Pure static lookup: exact model id, then prefix fallback. No DB, no
+ * logging, no side effects. Returns null when the static table can't price
+ * the model — the caller (pricing-cache) decides what to do.
+ */
+export function lookupStaticPricing(model: string | null | undefined): ModelPricing | null {
   if (!model) return null;
   const direct = MODEL_PRICING[model];
   if (direct) return direct;
@@ -136,12 +147,6 @@ export function getPricing(model: string | null | undefined): ModelPricing | nul
       const aliased = MODEL_PRICING[alias];
       if (aliased) return aliased;
     }
-  }
-  if (!warnedMissing.has(model)) {
-    warnedMissing.add(model);
-    // Single-line stderr — the user's dashboard surfaces "estimated cost: 0"
-    // which makes the gap visible without flooding logs.
-    console.warn(`[pricing] no entry for model "${model}" — cost will report 0`);
   }
   return null;
 }
@@ -154,36 +159,45 @@ export interface UsageForCost {
 }
 
 /**
- * Estimate USD cost for a single turn. cache_read tokens are subtracted
- * from full input tokens (providers report them as a subset of input)
- * before pricing — re-pricing the cached fraction at the cheaper rate.
+ * Pure cost math from already-resolved pricing + usage. cache_read tokens
+ * are subtracted from full input tokens (providers report them as a subset)
+ * before pricing, then re-priced at the cheaper cache rate.
  *
- * Returns 0 (not null) when the model is unknown so callers don't have
- * to special-case it; the warning in getPricing() makes the gap visible.
+ * Anthropic semantics: input_tokens EXCLUDES cache_read/cache_creation.
+ * OpenAI semantics: input_tokens INCLUDES cached_tokens. Both are handled by
+ * clamping inputBilled to non-negative.
  */
-export function estimateCost(
-  _provider: string | null | undefined,
-  model: string | null | undefined,
-  usage: UsageForCost | null | undefined,
-): number {
-  if (!usage) return 0;
-  const pricing = getPricing(model);
-  if (!pricing) return 0;
-
+export function computeCost(pricing: ModelPricing, usage: UsageForCost): number {
   const inputTotal = usage.input_tokens ?? 0;
   const cacheRead = usage.cache_read_input_tokens ?? 0;
   const cacheWrite = usage.cache_creation_input_tokens ?? 0;
   const output = usage.output_tokens ?? 0;
-
-  // Anthropic semantics: input_tokens excludes cache_read and cache_creation.
-  // OpenAI semantics: input_tokens INCLUDES cached_tokens.
-  // We handle both by clamping inputBilled to non-negative.
   const inputBilled = Math.max(0, inputTotal - cacheRead - cacheWrite);
-
   const inputCost = (inputBilled * pricing.input) / 1_000_000;
   const outputCost = (output * pricing.output) / 1_000_000;
   const cacheReadCost = (cacheRead * (pricing.cacheRead ?? pricing.input)) / 1_000_000;
   const cacheWriteCost = (cacheWrite * (pricing.cacheWrite ?? pricing.input)) / 1_000_000;
-
   return inputCost + outputCost + cacheReadCost + cacheWriteCost;
+}
+
+/** Plain seed row shape consumed by the store's seedHardcodedModelPrices. */
+export interface HardcodedPriceSeed {
+  provider: string;
+  model_id: string;
+  input_per_mtok: number;
+  output_per_mtok: number;
+  cache_read_per_mtok: number | null;
+  cache_write_per_mtok: number | null;
+}
+
+/** Flatten MODEL_PRICING into seed rows (provider '' = cross-provider). */
+export function hardcodedPriceSeed(): HardcodedPriceSeed[] {
+  return Object.entries(MODEL_PRICING).map(([model_id, p]) => ({
+    provider: '',
+    model_id,
+    input_per_mtok: p.input,
+    output_per_mtok: p.output,
+    cache_read_per_mtok: p.cacheRead ?? null,
+    cache_write_per_mtok: p.cacheWrite ?? null,
+  }));
 }

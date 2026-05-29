@@ -2,6 +2,7 @@
  * Admin routes for the pipeline_telemetry table (migration 080).
  *
  *   GET /api/admin/telemetry/pipelines              → recent rows (filterable)
+ *   GET /api/admin/telemetry/pipelines/summary      → window-wide aggregate (cards)
  *   GET /api/admin/telemetry/pipelines/histogram    → bucket counts
  *   GET /api/admin/telemetry/pipelines/cache-stats  → hit rate per component
  *   POST /api/admin/telemetry/pipelines/prune       → drop rows older than cutoff
@@ -38,6 +39,19 @@ export function mountAdminPipelineTelemetryRoutes(app: Hono, deps: ServerDeps): 
     return c.json({ rows: pipelineTelemetryStore.list(opts) });
   });
 
+  app.get('/api/admin/telemetry/pipelines/summary', (c) => {
+    const pipelineName = c.req.query('pipeline_name') ?? undefined;
+    const stage        = c.req.query('stage') ?? undefined;
+    const since        = c.req.query('since') ?? undefined;
+
+    const opts: { pipelineName?: string; stage?: string; since?: string } = {};
+    if (pipelineName) opts.pipelineName = pipelineName;
+    if (stage) opts.stage = stage;
+    if (since) opts.since = since;
+
+    return c.json({ summary: pipelineTelemetryStore.summary(opts) });
+  });
+
   app.get('/api/admin/telemetry/pipelines/histogram', (c) => {
     const pipelineName = c.req.query('pipeline_name') ?? undefined;
     const stage        = c.req.query('stage') ?? undefined;
@@ -58,8 +72,16 @@ export function mountAdminPipelineTelemetryRoutes(app: Hono, deps: ServerDeps): 
   });
 
   app.get('/api/admin/telemetry/pipelines/cache-stats', (c) => {
-    const since = c.req.query('since') ?? undefined;
-    return c.json({ stats: pipelineTelemetryStore.cacheStats(since ? { since } : {}) });
+    const pipelineName = c.req.query('pipeline_name') ?? undefined;
+    const stage        = c.req.query('stage') ?? undefined;
+    const since        = c.req.query('since') ?? undefined;
+
+    const opts: { pipelineName?: string; stage?: string; since?: string } = {};
+    if (pipelineName) opts.pipelineName = pipelineName;
+    if (stage) opts.stage = stage;
+    if (since) opts.since = since;
+
+    return c.json({ stats: pipelineTelemetryStore.cacheStats(opts) });
   });
 
   app.post('/api/admin/telemetry/pipelines/prune', async (c) => {

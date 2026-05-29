@@ -696,13 +696,18 @@ export class HybridSearch {
       try {
         const { vector } = await this.embeddingService.embedQuery(query);
         if (vector.length > 0) {
+          // Snapshots are now chunked, so several matches can share a ref_id.
+          // Over-fetch (×4) and keep the first (best-scored) chunk per
+          // snapshot — dedup here keeps RRF ranks one-per-snapshot.
           const matches = await this.vectorStore.search(vector, {
-            topK: limit * 2,
+            topK: limit * 4,
             filter: { project_name: projectName, type: 'snapshot' },
           });
+          const seen = new Set<number>();
           for (const m of matches) {
             const refId = m.metadata.ref_id ? parseInt(m.metadata.ref_id, 10) : 0;
-            if (!refId) continue;
+            if (!refId || seen.has(refId)) continue;
+            seen.add(refId);
             const snap = this.db.getSnapshotById(refId);
             if (snap && snap.project_id === projectId) vectorSnaps.push(snap);
           }

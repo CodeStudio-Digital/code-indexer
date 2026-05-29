@@ -21,6 +21,7 @@ import { createSnapshotsHandlers } from './snapshots/index.js';
 import { createRunsHandlers } from './runs/index.js';
 import { createSearchHandlers } from './search/index.js';
 import { createProjectGitHandlers } from './projectGit/index.js';
+import { createPluginsHandlers } from './plugins/index.js';
 import type { HandlerDeps } from './types.js';
 
 export type { HandlerDeps } from './types.js';
@@ -34,6 +35,7 @@ export { createSnapshotsHandlers } from './snapshots/index.js';
 export { createRunsHandlers } from './runs/index.js';
 export { createSearchHandlers } from './search/index.js';
 export { createProjectGitHandlers } from './projectGit/index.js';
+export { createPluginsHandlers } from './plugins/index.js';
 
 /**
  * Aggregate factory. As more namespaces are extracted, add them here so
@@ -55,5 +57,6 @@ export function createHandlers(deps: HandlerDeps): Partial<Api> {
     runs: createRunsHandlers(deps),
     search: createSearchHandlers(deps),
     projectGit: createProjectGitHandlers(deps),
+    plugins: createPluginsHandlers(deps),
   };
 }

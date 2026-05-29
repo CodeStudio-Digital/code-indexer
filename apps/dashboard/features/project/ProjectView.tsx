@@ -552,10 +552,19 @@ function TabContent({
     );
   }
 
-  // Search, git, snapshots and the analytics-style tabs render in a
-  // scrollable surface — none of them currently need a dedicated
-  // sub-panel layout. Wrapped in a uniform padded container so the
-  // user gets consistent breathing room across tools.
+  // Snapshots owns its own master/detail layout (resizable sidebar +
+  // detail) and needs the full viewport height, with scroll managed by
+  // its inner panes. Wrapping it in the generic `overflow-auto` /
+  // padded container below would create a redundant scrollbar and
+  // collapse `h-full` propagation.
+  if (tab === 'snapshots') {
+    return <SnapshotEditor projectId={projectId} />;
+  }
+
+  // Search and the analytics-style tabs render in a scrollable surface
+  // — none of them currently need a dedicated sub-panel layout. Wrapped
+  // in a uniform padded container so the user gets consistent breathing
+  // room across tools.
   return (
     <div className="h-full overflow-auto">
       <ToolSurface tab={tab} projectId={projectId} projectName={projectName} />
@@ -583,12 +592,8 @@ function ToolSurface({
     // GitWindow + EditorPane); this case is unreachable but kept off the
     // switch so we don't render a duplicate GitWindow if TabContent's
     // branching is ever refactored.
-    case 'snapshots':
-      return (
-        <div className="px-4 py-3">
-          <SnapshotEditor projectId={projectId} />
-        </div>
-      );
+    // 'snapshots' is also intercepted by TabContent — it owns its own
+    // resizable master/detail layout.
     case 'indexed':
       return (
         <div className="px-4 py-3">

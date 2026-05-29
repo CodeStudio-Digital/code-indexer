@@ -397,6 +397,15 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     }, { attachments: atts, agent, maxTurns, thinking, deepThink, selectedSkillIds });
   }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, deepThink]);
 
+  const handleSnapshotReviewMessage = useCallback(async (message: string) => {
+    if (!message.trim() || !selectedId) return;
+    setSnapshotsOpen(false);
+    const reviewAgent = agent === 'explore' || agent === 'plan' ? 'build' : agent;
+    await sendMessage(message, async () => {
+      refetchSession();
+    }, { agent: reviewAgent, maxTurns, thinking, deepThink });
+  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking, deepThink]);
+
   /**
    * Pipeline-mode send: post to `/pipelines/:pid/start` instead of
    * /messages. Pipeline events arrive over a separate SSE stream — see
@@ -1074,7 +1083,12 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
               </DialogDescription>
             </DialogHeader>
             <div className="flex-1 min-h-0">
-              <SnapshotsPanel scope="coder" sessionId={selectedId} refreshKey={snapshotTick} />
+              <SnapshotsPanel
+                scope="coder"
+                sessionId={selectedId}
+                refreshKey={snapshotTick}
+                onSubmitReviewMessage={handleSnapshotReviewMessage}
+              />
             </div>
           </DialogContent>
         </Dialog>
