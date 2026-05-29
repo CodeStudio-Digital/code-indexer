@@ -14,6 +14,8 @@ export type VectorStoreKind =
   | 'pinecone'
   | 'null';
 
+export type RerankerKind = 'cloudflare' | 'cohere' | 'null';
+
 export interface EmbeddingConfig {
   id: string;
   kind: EmbeddingKind;
@@ -27,6 +29,16 @@ export interface EmbeddingConfig {
 export interface VectorStoreConfig {
   id: string;
   kind: VectorStoreKind;
+  name: string;
+  enabled: boolean;
+  is_default: boolean;
+  config: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface RerankerConfig {
+  id: string;
+  kind: RerankerKind;
   name: string;
   enabled: boolean;
   is_default: boolean;
@@ -76,6 +88,28 @@ export async function upsertVectorStore(c: VectorStoreConfig): Promise<VectorSto
   });
   if (!r.ok) throw new Error(`save failed: ${r.status}`);
   return (await r.json()) as VectorStoreConfig;
+}
+
+export async function fetchRerankers(): Promise<RerankerConfig[]> {
+  const r = await fetch('/api/admin/rerankers');
+  const j = (await r.json()) as { configs: RerankerConfig[] };
+  return j.configs;
+}
+
+export async function upsertReranker(c: RerankerConfig): Promise<RerankerConfig> {
+  const r = await fetch(`/api/admin/rerankers/${encodeURIComponent(c.id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      kind: c.kind,
+      name: c.name,
+      enabled: c.enabled,
+      is_default: c.is_default,
+      config: c.config,
+    }),
+  });
+  if (!r.ok) throw new Error(`save failed: ${r.status}`);
+  return (await r.json()) as RerankerConfig;
 }
 
 /**
@@ -139,6 +173,18 @@ export const VECTOR_STORE_FIELDS: Record<VectorStoreKind, FieldSpec[]> = {
     { key: 'host', label: 'Index Host', type: 'text', placeholder: 'my-index-abcd.svc.us-east-1-aws.pinecone.io', required: true },
     { key: 'apiKey', label: 'API Key', type: 'password', required: true },
     { key: 'namespace', label: 'Namespace (optional)', type: 'text' },
+  ],
+  null: [],
+};
+
+export const RERANKER_FIELDS: Record<RerankerKind, FieldSpec[]> = {
+  cloudflare: [
+    { key: 'workerUrl', label: 'Worker URL', type: 'text', placeholder: 'https://mcp-indexer.you.workers.dev', required: true },
+    { key: 'workerToken', label: 'Worker Token', type: 'password' },
+  ],
+  cohere: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true },
+    { key: 'model', label: 'Model', type: 'text', placeholder: 'rerank-v3.5' },
   ],
   null: [],
 };

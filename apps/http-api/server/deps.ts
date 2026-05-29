@@ -46,6 +46,7 @@ import { SubAgentResultCache } from '@mcp/services/sub-agent-cache/index.js';
 import { DocStore } from '@mcp/store/doc-store.js';
 import {
   BrowserBackend,
+  CrossEncoderReranker,
   detectBlocked,
   DocHybridSearch,
   DocIngestProgressTracker,
@@ -471,7 +472,7 @@ export function createDeps(): ServerDeps {
     createSearchBundle(
       db,
       providerStore,
-      createReranker(),
+      createReranker(providerStore),
       recentFilesSource,
       pipelineTelemetrySink,
     );
@@ -621,11 +622,21 @@ export function createDeps(): ServerDeps {
     cache: subAgentResultCacheStore,
     telemetry: pipelineTelemetryStore,
   });
-  const docReranker = new Reranker({
+  // Reranker selection. Default: the LLM-as-judge `Reranker` (GLM via the
+  // doc_search/reranker binding). Set DOCS_RERANK_CROSS_ENCODER=1 to use a
+  // real cross-encoder (bge-reranker-v2-m3) over the worker /rerank instead
+  // — its native score is better-calibrated and feeds DocSearchResult
+  // .relevance directly. Reuses the indexer's reranker client/config; with
+  // none configured it degrades to uncalibrated (no false confidence).
+  const docLlmReranker = new Reranker({
     resolver: pipelineProviderResolver,
     db: db.raw(),
     telemetry: pipelineTelemetryStore,
   });
+  const docReranker =
+    process.env.DOCS_RERANK_CROSS_ENCODER === '1'
+      ? new CrossEncoderReranker(createReranker(providerStore))
+      : docLlmReranker;
   const docHybridSearch = new DocHybridSearch(
     docStore,
     embeddingService,

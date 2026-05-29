@@ -18,6 +18,7 @@
 import type {
   IFilesystemPort,
   PortDirent,
+  PortStats,
   FilesystemReaddirOptions,
 } from '@mcp/code-agent/ports/filesystem-port.js';
 import type { ISandboxDriver } from '../ports/sandbox-driver.js';
@@ -71,6 +72,53 @@ export class SandboxFilesystemAdapter implements IFilesystemPort {
     if (res.exitCode !== 0) {
       const detail = (res.stderr || res.stdout || '').trim();
       throw new Error(`sandbox unlink failed (${res.exitCode}) at ${absPath}: ${detail}`);
+    }
+  }
+
+  async stat(absPath: string): Promise<PortStats> {
+    const script = [
+      'if [ -d "$1" ]; then echo "dir 0";',
+      'elif [ -f "$1" ]; then bytes=$(wc -c < "$1" 2>/dev/null || echo 0); echo "file $bytes";',
+      'elif [ -e "$1" ]; then echo "other 0";',
+      'else exit 2; fi',
+    ].join(' ');
+    const res = await this.driver.run(this.containerId, 'sh', ['-c', script, 'sh', absPath], {
+      timeoutMs: 10_000,
+    });
+    if (res.exitCode !== 0) {
+      const detail = (res.stderr || res.stdout || '').trim();
+      throw new Error(`sandbox stat failed (${res.exitCode}) at ${absPath}: ${detail}`);
+    }
+    const [kind, sizeRaw] = res.stdout.trim().split(/\s+/, 2);
+    const size = Number(sizeRaw) || 0;
+    return {
+      isDirectory: () => kind === 'dir',
+      isFile: () => kind === 'file',
+      size,
+    };
+  }
+
+  async rename(oldAbsPath: string, newAbsPath: string): Promise<void> {
+    const res = await this.driver.run(this.containerId, 'mv', [oldAbsPath, newAbsPath], {
+      timeoutMs: 30_000,
+    });
+    if (res.exitCode !== 0) {
+      const detail = (res.stderr || res.stdout || '').trim();
+      throw new Error(`sandbox rename failed (${res.exitCode}) from ${oldAbsPath} to ${newAbsPath}: ${detail}`);
+    }
+  }
+
+  async rm(absPath: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
+    const st = await this.stat(absPath).catch(() => null);
+    const program = st?.isDirectory() && !options?.recursive ? 'rmdir' : 'rm';
+    const args: string[] = [];
+    if (program === 'rm' && options?.recursive) args.push('-r');
+    if (program === 'rm' && options?.force) args.push('-f');
+    args.push(absPath);
+    const res = await this.driver.run(this.containerId, program, args, { timeoutMs: 30_000 });
+    if (res.exitCode !== 0) {
+      const detail = (res.stderr || res.stdout || '').trim();
+      throw new Error(`sandbox rm failed (${res.exitCode}) at ${absPath}: ${detail}`);
     }
   }
 }

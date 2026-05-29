@@ -655,6 +655,7 @@ async function runOneTask(
         },
         {
           systemPrompt: art.systemPrompt,
+          label: task.title,
           allowlist: art.allowlist,
           initialMessages,
           maxTurns: 100,

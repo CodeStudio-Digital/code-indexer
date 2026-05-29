@@ -18,7 +18,8 @@ import { rrfMerge, RRF_DEFAULT_K } from '@mcp/candidate-pipeline';
 import type { DocChunk, DocStore } from '@mcp/store/doc-store.js';
 import type { ResolveContext } from '../../pipelines/index.js';
 import type { QueryRewriter } from './query-rewriter.js';
-import type { Reranker, RerankCandidate } from './reranker.js';
+import type { DocReranker, RerankCandidate } from './reranker.js';
+import { applyThreshold, type RelevanceSource } from './relevance-policy.js';
 
 /** Metadata filter values stored on the vector store side. */
 const VECTOR_FILTER_CORPUS = 'docs';
@@ -45,6 +46,13 @@ export interface DocSearchInput {
   collection?: string;
   /** Top-K cap. Default 5; clamped to [1, 20]. */
   limit?: number;
+  /**
+   * Drop results whose calibrated relevance is below this cutoff. Only
+   * applied when rerank produced calibrated scores (see relevance-policy);
+   * uncalibrated result sets pass through untouched. When everything is
+   * below the cutoff, `diag.no_good_match` is set and `results` is empty.
+   */
+  min_relevance?: number;
   /** Force a particular mode (debugging). */
   mode?: 'hybrid' | 'fts' | 'vector';
   /**
@@ -69,7 +77,16 @@ export interface DocSearchResult {
   source_uri: string | null;
   heading_path: string | null;
   snippet: string;
+  /** Raw fusion score (RRF reciprocal-rank). NOT comparable across queries. */
   score: number;
+  /**
+   * Calibrated 0-1 relevance, when available. Populated from the reranker;
+   * null when rerank didn't run. Prefer this over `score` for any
+   * confidence/threshold decision.
+   */
+  relevance: number | null;
+  /** Where `relevance` came from: 'rerank' is calibrated, 'rrf'/'none' are not. */
+  relevance_source: RelevanceSource;
   summary: string | null;
   concepts: string[];
 }
@@ -88,13 +105,17 @@ export interface DocSearchDiagnostics {
   rerank_used?: boolean;
   /** Candidates dropped by the reranker (vs incoming top-K). */
   rerank_dropped?: number;
+  /** True when calibrated scoring ran and nothing cleared `min_relevance`. */
+  no_good_match?: boolean;
+  /** Best calibrated relevance seen (pre-threshold); null when uncalibrated. */
+  top_relevance?: number | null;
 }
 
 export interface DocHybridSearchEnhancementDeps {
   /** Query rewriter — used when input.enhancements.rewrite is true. */
   rewriter?: QueryRewriter | null;
   /** Reranker — used when input.enhancements.rerank is true. */
-  reranker?: Reranker | null;
+  reranker?: DocReranker | null;
 }
 
 const SNIPPET_MAX_CHARS = 480;
@@ -238,6 +259,9 @@ export class DocHybridSearch {
         heading_path: chunk.heading_path,
         snippet: buildSnippet(chunk),
         score: m.rrfScore ?? m.score,
+        // Uncalibrated until the reranker (Stage 3) overwrites these.
+        relevance: null,
+        relevance_source: 'rrf',
         summary: chunk.summary,
         concepts: chunk.concepts,
       });
@@ -261,6 +285,32 @@ export class DocHybridSearch {
       rerankUsed = rerank.reranked;
       rerankDropped = rerank.dropped;
       results = rerank.candidates.map((c) => c.__result);
+      // Surface the calibrated 0-1 score the reranker just computed, instead
+      // of leaving the uninterpretable RRF score as the only signal.
+      if (rerank.reranked && rerank.scoreByChunkId) {
+        for (const r of results) {
+          const s = rerank.scoreByChunkId.get(r.chunk_id);
+          if (s != null) {
+            r.relevance = s;
+            r.relevance_source = 'rerank';
+          }
+        }
+      }
+    }
+
+    // ─── Stage 4: relevance threshold (optional) ──────────────────
+    // Honest "no good match": only drops hits when we have calibrated
+    // (rerank) scores. Computed pre-truncate so top_relevance reflects the
+    // true best candidate even when everything is below the cutoff.
+    let noGoodMatch = false;
+    let topRelevance: number | null = rerankUsed
+      ? results.reduce<number>((max, r) => Math.max(max, r.relevance ?? 0), 0)
+      : null;
+    if (input.min_relevance != null) {
+      const outcome = applyThreshold(results, input.min_relevance);
+      results = outcome.kept;
+      noGoodMatch = outcome.noGoodMatch;
+      if (outcome.topRelevance != null) topRelevance = outcome.topRelevance;
     }
 
     // Final truncate to the caller's requested `limit`.
@@ -280,6 +330,8 @@ export class DocHybridSearch {
         rewrite_variants: rewriteVariants,
         rerank_used: rerankUsed,
         rerank_dropped: rerankDropped,
+        no_good_match: noGoodMatch,
+        top_relevance: topRelevance,
       },
     };
   }

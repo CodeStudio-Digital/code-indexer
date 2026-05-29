@@ -34,6 +34,7 @@ export interface CoderRunBus {
   ended: boolean;
   endReason?: { event: 'done' | 'error'; data: unknown };
   endListeners: Set<() => void>;
+  eventSinks: Set<(ev: BufferedEvent) => void>;
   /**
    * Resolves once `runner` has been attached via `setBusRunner`. Lets callers
    * that need to push messages mid-run (the enqueue-and-attach branch of
@@ -67,6 +68,7 @@ export function createBus(ctrl: AbortController): CoderRunBus {
     subscribers: new Set(),
     ended: false,
     endListeners: new Set(),
+    eventSinks: new Set(),
     runnerReady,
     _resolveRunner: resolveRunner,
     _rejectRunner: rejectRunner,
@@ -91,7 +93,15 @@ export function publish(bus: CoderRunBus, event: string, data: unknown): Buffere
   for (const sub of bus.subscribers) {
     try { sub(ev); } catch { /* ignore subscriber errors */ }
   }
+  for (const sink of bus.eventSinks) {
+    try { sink(ev); } catch { /* ignore sink errors */ }
+  }
   return ev;
+}
+
+export function addBusEventSink(bus: CoderRunBus, sink: (ev: BufferedEvent) => void): () => void {
+  bus.eventSinks.add(sink);
+  return () => { bus.eventSinks.delete(sink); };
 }
 
 /**

@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { execCommand, writeStdin, __testing } from '@mcp/code-agent/tools/exec-command.js';
+import { execCommand, writeStdin, listSessions, __testing } from '@mcp/code-agent/tools/exec-command.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const cwd = process.cwd();
@@ -138,6 +138,57 @@ describe('exec_command + write_stdin', () => {
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('not active');
+  });
+
+  it('PR 5: write_stdin error lists active sessions for self-correction', async () => {
+    // Spawn one long-running session so the error has something to list.
+    const r1 = await execCommand.handler(
+      { cmd: `node ${scriptPath}`, yield_time_ms: 1500 },
+      makeCtx(),
+    );
+    const sid = extractSessionId(r1.content);
+
+    const bad = await writeStdin.handler(
+      { session_id: 'bogus_id', chars: 'x' },
+      makeCtx(),
+    );
+    expect(bad.isError).toBe(true);
+    // Lists active session ids so the model can correct itself.
+    expect(bad.content).toContain('Active sessions right now');
+    expect(bad.content).toContain(sid);
+    expect(bad.content).toContain('list_sessions');
+    expect(bad.content).toContain('exec_command');
+  });
+
+  it('PR 5: write_stdin error explains "no active sessions" when registry is empty', async () => {
+    const bad = await writeStdin.handler(
+      { session_id: 'nothing_alive', chars: '' },
+      makeCtx(),
+    );
+    expect(bad.isError).toBe(true);
+    expect(bad.content).toContain('no active sessions');
+  });
+
+  it('PR 5 list_sessions: returns "no active sessions" when empty', async () => {
+    const r = await listSessions.handler({}, makeCtx());
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('no active sessions');
+  });
+
+  it('PR 5 list_sessions: lists active sessions with id, status, mode and age', async () => {
+    const r1 = await execCommand.handler(
+      { cmd: `node ${scriptPath}`, yield_time_ms: 1500 },
+      makeCtx(),
+    );
+    const sid = extractSessionId(r1.content);
+
+    const list = await listSessions.handler({}, makeCtx());
+    expect(list.isError).toBeFalsy();
+    expect(list.content).toContain('Active sessions');
+    expect(list.content).toContain(sid);
+    expect(list.content).toContain('running');
+    // Schema legend present so the model can self-parse the columns.
+    expect(list.content).toContain('| <status> |');
   });
 
   it('caps output to max_output_tokens and flags truncation', async () => {

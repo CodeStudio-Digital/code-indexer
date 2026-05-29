@@ -33,6 +33,12 @@ export interface PortDirent {
   isFile(): boolean;
 }
 
+export interface PortStats {
+  isDirectory(): boolean;
+  isFile(): boolean;
+  size: number;
+}
+
 export interface FilesystemReaddirOptions {
   /** Always true in our tools — kept explicit so future additions can't silently regress. */
   withFileTypes: true;
@@ -59,6 +65,15 @@ export interface IFilesystemPort {
 
   /** Remove a file at `absPath`. Throws if it does not exist. */
   unlink(absPath: string): Promise<void>;
+
+  /** Return basic metadata for `absPath`. Throws if it does not exist. */
+  stat(absPath: string): Promise<PortStats>;
+
+  /** Move or rename a filesystem entry. Destination parent must exist. */
+  rename(oldAbsPath: string, newAbsPath: string): Promise<void>;
+
+  /** Remove a file or directory. Mirrors the subset of node fs.rm we need. */
+  rm(absPath: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
 }
 
 /**
@@ -90,6 +105,18 @@ export class LocalFilesystemAdapter implements IFilesystemPort {
 
   async unlink(absPath: string): Promise<void> {
     await fs.unlink(absPath);
+  }
+
+  async stat(absPath: string): Promise<PortStats> {
+    return await fs.stat(absPath);
+  }
+
+  async rename(oldAbsPath: string, newAbsPath: string): Promise<void> {
+    await fs.rename(oldAbsPath, newAbsPath);
+  }
+
+  async rm(absPath: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
+    await fs.rm(absPath, options);
   }
 }
 

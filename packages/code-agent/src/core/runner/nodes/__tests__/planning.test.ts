@@ -53,6 +53,15 @@ describe('PlanningNode', () => {
     expect(ctx.transition).toBe('doom-loop-fuzzy');
   });
 
+  it('records failure-streak guard correctly', async () => {
+    const { ctx } = makeTestContext();
+    await new PlanningNode().execute(ctx, {
+      kind: 'ToolLoopDetected',
+      guard: 'failure-streak',
+    });
+    expect(ctx.transition).toBe('failure-streak');
+  });
+
   it('leaves ctx.transition unchanged when lastEvent is not ToolLoopDetected', async () => {
     const { ctx } = makeTestContext();
     ctx.transition = null;

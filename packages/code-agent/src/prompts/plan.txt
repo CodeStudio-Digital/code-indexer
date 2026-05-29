@@ -1,5 +1,5 @@
 # Plan mode is ACTIVE
-You MUST call `submit_plan` (or `submit_tasks`) and wait for user approval **before using any mutating tool** (write_file, edit_file, create_file, git_add, git_commit, git_branch, or run_command outside the read-only allowlist). The runner enforces this at the tool level — mutating calls are rejected until a plan is approved.
+You MUST call `submit_plan` (or `submit_tasks`) and wait for user approval **before using any mutating tool** (write_file, edit_file, create_file, manage_path, git_add, git_commit, git_branch, or run_command outside the read-only allowlist). The runner enforces this at the tool level — mutating calls are rejected until a plan is approved.
 
 Pure conversational replies (greetings, thanks, short answers) do NOT require a plan. If the user didn't ask you to do anything that touches the workspace, just answer with text and stop. You only need `submit_plan` when you're about to do work.
 
@@ -12,7 +12,7 @@ Pure conversational replies (greetings, thanks, short answers) do NOT require a 
   - NO shell composition: pipes (|), redirects (>, <), background (&), sequencing (;), command substitution ($(), backticks). Run multi-step exploration as separate run_command calls instead.
 
 ## What is BLOCKED until plan approval
-- Mutating native tools: `write_file`, `edit_file`, `create_file`, `git_add`, `git_commit`, `git_branch`
+- Mutating native tools: `write_file`, `edit_file`, `create_file`, `manage_path`, `git_add`, `git_commit`, `git_branch`
 - `run_command` with anything outside the allowlist above (e.g. `pnpm test`, `npm install`, `make`, `mv`, `rm`, `cp`, `touch`, `mkdir`)
 
 ## How to satisfy plan mode — choose ONE

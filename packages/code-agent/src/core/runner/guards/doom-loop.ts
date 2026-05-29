@@ -13,7 +13,7 @@
  * (`CODER_DOOM_LOOP_THRESHOLD`, `CODER_DOOM_LOOP_FUZZY_THRESHOLD`).
  */
 import { toolCallsSignature, toolNamesSignature } from '../signatures.js';
-import { doomLoopThreshold, DOOM_LOOP_FUZZY_THRESHOLD } from '../constants.js';
+import { doomLoopThreshold, DOOM_LOOP_FUZZY_THRESHOLD, doomLoopFuzzyTolerance } from '../constants.js';
 
 export interface DoomLoopState {
   /** Rolling window of recent strict signatures. */
@@ -49,11 +49,18 @@ export function checkDoomLoop(args: CheckDoomLoopArgs): DoomLoopVerdict {
   const strictSig = toolCallsSignature(args.blocks);
   const fuzzySig = toolNamesSignature(args.blocks);
 
-  // No tool calls this turn — clear the window. Pure-text turns are
-  // legitimate progress, not loop fodder.
+  // No tool calls this turn — strict resets (a pure-text turn breaks a
+  // strict identical-signature chain), but fuzzy is PRESERVED.
+  //
+  // PR 5 — write_stdin loop on session 798 had 5-8s of provider-chat
+  // (occasionally a no-tool turn) between failures. The legacy reset
+  // wiped fuzzy on every such turn, so the 13-failure chain never
+  // accumulated 6 consecutive fuzzy hits. Preserving fuzzy across
+  // intercalated reasoning turns closes that gap — combined with the
+  // tolerance window below, fuzzy now fires on patterns that interleave
+  // reasoning between tool retries.
   if (!strictSig && !fuzzySig) {
     args.state.strict.length = 0;
-    args.state.fuzzy.length = 0;
     return { fired: false };
   }
 
@@ -80,17 +87,27 @@ export function checkDoomLoop(args: CheckDoomLoopArgs): DoomLoopVerdict {
     }
   }
 
+  // Fuzzy: tolerance-window count. The old check required ALL last
+  // `DOOM_LOOP_FUZZY_THRESHOLD` signatures to equal `fuzzySig`. The
+  // new check fires when at least `THRESHOLD - TOLERANCE` of the last
+  // `THRESHOLD` signatures match — covering loops with intercalated
+  // sigs from short reasoning detours. Tolerance defaults to
+  // `floor(THRESHOLD / 3)` (2 for the default threshold of 6); env
+  // override `CODER_DOOM_LOOP_FUZZY_TOLERANCE`.
   if (
     DOOM_LOOP_FUZZY_THRESHOLD >= 2 &&
     fuzzySig &&
     args.state.fuzzy.length >= DOOM_LOOP_FUZZY_THRESHOLD
   ) {
+    const tolerance = Math.max(0, doomLoopFuzzyTolerance(DOOM_LOOP_FUZZY_THRESHOLD));
+    const minMatches = Math.max(2, DOOM_LOOP_FUZZY_THRESHOLD - tolerance);
     const recent = args.state.fuzzy.slice(-DOOM_LOOP_FUZZY_THRESHOLD);
-    if (recent.every((s) => s === fuzzySig)) {
+    const matches = recent.reduce((acc, s) => acc + (s === fuzzySig ? 1 : 0), 0);
+    if (matches >= minMatches) {
       return {
         fired: true,
         guard: 'doom-loop-fuzzy',
-        count: DOOM_LOOP_FUZZY_THRESHOLD,
+        count: matches,
         threshold: DOOM_LOOP_FUZZY_THRESHOLD,
         signature: fuzzySig,
       };

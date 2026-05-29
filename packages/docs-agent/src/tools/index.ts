@@ -16,8 +16,10 @@ import { makeDocsReadChunkTool } from './docs-read-chunk.js';
 import { makeDocsListSourcesTool } from './docs-list-sources.js';
 import { makeDocsSynthesizeTool } from './docs-synthesize.js';
 import { makeDocsFinishTool, type DocsFinishSlot } from './docs-finish.js';
+import { makeDocsPlanTool, type PlanSlot } from './docs-plan.js';
 
 export type { DocsFinishPayload, DocsFinishSlot } from './docs-finish.js';
+export type { PlanSlot } from './docs-plan.js';
 
 export interface DocsToolsetCounters {
   searches: number;
@@ -37,12 +39,15 @@ export interface BuildDocsToolsetInput {
   scopedCollections?: string[];
   /** Slot the docs_finish handler writes into; the wrapper reads it post-run. */
   finishSlot: DocsFinishSlot;
+  /** Slot the docs_plan handler writes the agent's sub-questions into. */
+  planSlot: PlanSlot;
   /** Live counters the wrapper inspects to persist telemetry. */
   counters: DocsToolsetCounters;
 }
 
 export function buildDocsToolset(input: BuildDocsToolsetInput): CoderTool[] {
   return [
+    makeDocsPlanTool({ slot: input.planSlot }),
     makeDocsListSourcesTool({ docStore: input.docStore }),
     makeDocsSearchTool({
       docHybridSearch: input.docHybridSearch,

@@ -7,6 +7,7 @@ import {
   type IFilesystemPort,
 } from '@mcp/code-agent/ports/filesystem-port.js';
 import { emitRecentFileTouched } from '@mcp/code-agent/tools/global-recent-files.js';
+import { managePathTool } from '@mcp/code-agent/tools/manage-path.js';
 
 /**
  * Resolve the filesystem port for a tool invocation. Falls back to the
@@ -638,7 +639,11 @@ function performSingleEdit(
   if (nonUnique) {
     return {
       ok: false,
-      error: `old_string is not unique (${nonUnique.occurrences} occurrences via ${nonUnique.strategy}). Add context or use replace_all=true.`,
+      error:
+        `old_string is not unique (${nonUnique.occurrences} occurrences via ${nonUnique.strategy}). ` +
+        `PREFERRED: add surrounding context to old_string so it anchors ONE specific occurrence. ` +
+        `Use replace_all=true ONLY if you actually want to replace ALL ${nonUnique.occurrences} occurrences ` +
+        `(silently affecting code you did not inspect is the most common cause of broken builds).`,
     };
   }
 
@@ -649,7 +654,10 @@ function performSingleEdit(
     if (hits.length > 1 && !replaceAll) {
       return {
         ok: false,
-        error: `old_string is not unique (${hits.length} matches via ${label}). Add context or use replace_all=true.`,
+        error:
+          `old_string is not unique (${hits.length} matches via ${label}). ` +
+          `PREFERRED: add surrounding context to old_string so it anchors ONE specific occurrence. ` +
+          `Use replace_all=true ONLY if you actually want to replace ALL ${hits.length} matches.`,
       };
     }
     const updated = applyHits(content, hits, newStr, replaceAll);
@@ -665,7 +673,7 @@ function performSingleEdit(
   };
 }
 
-const multiEdit: CoderTool = {
+export const multiEdit: CoderTool = {
   name: 'multi_edit',
   description: maybeTerse(MULTI_EDIT_DESC),
   source: 'native',
@@ -708,38 +716,91 @@ const multiEdit: CoderTool = {
       return err(`File ${path} not found`);
     }
 
-    const applied: Array<{ index: number; strategy: string; occurrences: number }> = [];
+    // Full-validation pass: try every edit on the rolling buffer, but
+    // do NOT abort on the first failure. The agent gets a complete
+    // report so it can fix everything in a single re-submit instead of
+    // discovering one error per round-trip (the pattern that caused
+    // the write_stdin loop in session 798).
+    //
+    // Atomicity is preserved — disk is only written when EVERY edit
+    // succeeds. When an edit fails the rolling buffer DOES NOT advance
+    // (so subsequent edits see the same content as if the failing one
+    // had been a no-op), which means:
+    //   - Independent edits that target untouched regions get
+    //     accurate verdicts (still succeed / still fail).
+    //   - Edits that DEPEND on the failed edit's output will report
+    //     "not found" or "still not unique" against the unchanged
+    //     content — flagged with a hint so the agent recognises it.
+    type EditOutcome =
+      | { index: number; ok: true; strategy: string; occurrences: number }
+      | { index: number; ok: false; error: string; dependsOnPrior: boolean };
+
+    const outcomes: EditOutcome[] = [];
     let current = content;
+    let firstFailIdx = -1;
     for (let i = 0; i < edits.length; i++) {
       const raw = edits[i] as Record<string, unknown>;
       const oldStr = String(raw.old_string ?? '');
       const newStr = String(raw.new_string ?? '');
       const replaceAll = Boolean(raw.replace_all);
       const r = performSingleEdit(current, oldStr, newStr, replaceAll);
-      if (!r.ok) {
-        // Atomic rollback: we never wrote anything, so just return the error
-        // with context about which edit failed and what did succeed so far.
-        const progress = applied.length === 0
-          ? '(no prior edits succeeded in-memory)'
-          : `prior edits that matched in-memory: ${applied.map((a) => `#${a.index + 1}:${a.strategy}`).join(', ')}`;
-        return err(
-          `multi_edit aborted at edit #${i + 1} (${edits.length} total). ${r.error}\n${progress}\n` +
-            'Nothing was written to disk. Fix the failing edit and re-submit the whole list.',
-        );
+      if (r.ok) {
+        outcomes.push({ index: i, ok: true, strategy: r.strategy, occurrences: r.occurrences });
+        // Rolling buffer only advances on success. Failures leave it
+        // alone so the next edit's verdict mirrors what would happen
+        // after the agent fixed the prior issue (best-effort).
+        current = r.content;
+        continue;
       }
-      current = r.content;
-      applied.push({ index: i, strategy: r.strategy, occurrences: r.occurrences });
+      // Mark dependents: when an EARLIER edit failed, the rolling
+      // buffer is "behind". This edit's verdict may be a false
+      // positive — the agent should re-validate after fixing the
+      // earlier failure. Flag explicitly.
+      const dependsOnPrior = firstFailIdx >= 0;
+      outcomes.push({ index: i, ok: false, error: r.error, dependsOnPrior });
+      if (firstFailIdx < 0) firstFailIdx = i;
     }
 
-    await fs.writeFile(abs, current);
-    ctx.overlay?.mark(path);
-    emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
+    const failed = outcomes.filter((o): o is Extract<EditOutcome, { ok: false }> => !o.ok);
+    if (failed.length === 0) {
+      await fs.writeFile(abs, current);
+      ctx.overlay?.mark(path);
+      emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
+      const summary = outcomes
+        .filter((o): o is Extract<EditOutcome, { ok: true }> => o.ok)
+        .map((a) => `  #${a.index + 1}: ${a.occurrences} replacement${a.occurrences === 1 ? '' : 's'} [${a.strategy}]`)
+        .join('\n');
+      return ok(`Edited ${path} — ${outcomes.length} edit${outcomes.length === 1 ? '' : 's'} applied atomically:\n${summary}`);
+    }
 
-    const summary = applied
-      .map((a) => `  #${a.index + 1}: ${a.occurrences} replacement${a.occurrences === 1 ? '' : 's'} [${a.strategy}]`)
-      .join('\n');
-    return ok(`Edited ${path} — ${applied.length} edit${applied.length === 1 ? '' : 's'} applied atomically:\n${summary}`);
+    // Atomic rollback path: write nothing, but surface EVERY problem
+    // at once.
+    const lines: string[] = [];
+    lines.push(
+      `multi_edit aborted: ${failed.length} of ${edits.length} edit${edits.length === 1 ? '' : 's'} failed. ` +
+        'Nothing was written to disk. Fix every failing edit below and re-submit the whole list.',
+    );
+    lines.push('');
+    for (const o of outcomes) {
+      if (o.ok) {
+        lines.push(`  #${o.index + 1}: would succeed [${o.strategy}, ${o.occurrences} occurrence${o.occurrences === 1 ? '' : 's'}]`);
+      } else {
+        const dep = o.dependsOnPrior
+          ? ' (may also be a downstream effect of an earlier failed edit — re-validate after fixing the first one)'
+          : '';
+        lines.push(`  #${o.index + 1}: FAILED — ${o.error}${dep}`);
+      }
+    }
+    return err(lines.join('\n'));
   },
 };
 
-export const fsTools: CoderTool[] = [writeFile, createFile, editFile, multiEdit, readFile, listDirectory];
+export const fsTools: CoderTool[] = [
+  writeFile,
+  createFile,
+  editFile,
+  multiEdit,
+  managePathTool,
+  readFile,
+  listDirectory,
+];

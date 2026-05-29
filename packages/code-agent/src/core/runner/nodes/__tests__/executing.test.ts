@@ -135,6 +135,54 @@ describe('ExecutingNode', () => {
     expect(JSON.stringify(lastMsg?.content)).toMatch(/loop-refused/);
   });
 
+  it('routes to ToolLoopDetected{guard:"failure-streak"} after the 5th consecutive failure', async () => {
+    // Tool that always fails. The pre-seeded streak puts us at 4
+    // failures already → the next dispatch is the 5th and crosses the
+    // refuse threshold.
+    const failingDeltas: ChatDelta[] = [
+      { type: 'tool_call_start', id: 'tu5', name: 'write_stdin' },
+      // Rotating args defeat the tuple-hash dedup so we know it is the
+      // failure-streak that fires, not tuple-hash.
+      { type: 'tool_call_end', id: 'tu5', name: 'write_stdin', input: { session_id: 'B' } },
+      { type: 'usage', usage: { input_tokens: 50, output_tokens: 5 } as ChatUsage },
+      { type: 'done', stop_reason: 'tool_use' },
+    ];
+    const { ctx, recordedEvents } = makeTestContext({
+      provider: makeStreamingProvider(failingDeltas),
+      registry: makeRegistry({
+        write_stdin: () => ({ content: 'session not active', isError: true }),
+      }),
+      toolContext: emptyToolContext(),
+    });
+
+    ctx.failureStreaks.streaks.set('write_stdin', {
+      consecutive: 4,
+      firstFailureTurn: 1,
+      lastFailureTurn: 4,
+      lastError: 'session not active',
+    });
+
+    const event = await new ExecutingNode().execute(ctx, null);
+
+    expect(event.kind).toBe('ToolLoopDetected');
+    if (event.kind === 'ToolLoopDetected') {
+      expect(event.guard).toBe('failure-streak');
+    }
+    expect(ctx.failureStreaks.streaks.get('write_stdin')?.consecutive).toBe(5);
+
+    // The tool_result content has been REPLACED with the refusal text.
+    const lastMsg = ctx.messages.at(-1);
+    expect(JSON.stringify(lastMsg?.content)).toMatch(/failure-streak REFUSED/);
+
+    // The runner emitted a tool_loop_intervention event tagged
+    // 'failure-streak' so the dashboard sees the banner.
+    const intervention = recordedEvents.find((e) => e.event === 'tool_loop_intervention');
+    expect(intervention).toBeDefined();
+    const payload = intervention?.args[0] as { kind?: string; severity?: string };
+    expect(payload?.kind).toBe('failure-streak');
+    expect(payload?.severity).toBe('refused');
+  });
+
   it('emits ProviderError on a synchronous chat() throw', async () => {
     const brokenProvider: ChatProvider = {
       name: 'mock',

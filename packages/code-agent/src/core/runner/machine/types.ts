@@ -30,7 +30,7 @@ export type NodeState =
 export type BehaviorEvent =
   | { kind: 'TurnSucceeded'; hasToolCalls: boolean }
   | { kind: 'TokenThresholdHit'; ratio: number }
-  | { kind: 'ToolLoopDetected'; guard: 'tuple-hash' | 'doom-loop' | 'dominance' }
+  | { kind: 'ToolLoopDetected'; guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak' }
   | { kind: 'MaxTurnsReached'; autoContinueLeft: number }
   | { kind: 'ProviderError'; retryable: boolean; status: number }
   | { kind: 'CompactionDone'; collapsedFrom: number; collapsedTo: number }
@@ -75,6 +75,17 @@ export interface RunContext {
   /** Tuple-hash dedup table. Key = `${name}|${stableArgsKey(input)}`. */
   dupCalls: Map<string, DupCallEntry>;
   autoContinues: number;
+  /**
+   * Consecutive pre-emit compaction routings since the last turn that
+   * actually issued a provider call. The pre-emit gate (`executing.ts`)
+   * decrements `turn` when it fires, so `maxTurns` can't backstop a
+   * compaction that keeps firing without ever freeing enough space. This
+   * counter does: the Executing node aborts the run with
+   * `stopReason='compact_exhausted'` once it exceeds
+   * `CODER_PREEMIT_COMPACT_MAX` (default 3). Reset to 0 whenever the gate
+   * passes and the provider call proceeds.
+   */
+  preEmitCompactions: number;
   /** Stable run id (uuid) for telemetry correlation. */
   runId: string;
   aborted: boolean;
@@ -101,6 +112,18 @@ export interface RunContext {
    * `coder_turn_telemetry`).
    */
   lastTurnTelemetryId: number | null;
+  /**
+   * PR 5 — per-tool consecutive-failure counters. Closes the gap that
+   * let 13 `write_stdin` failures escape every other guard in session
+   * 798 by treating `isError=true` as the SOLE loop signal.
+   *
+   * Lifecycle: empty on Bootstrap, accumulated by Executing's dispatch
+   * (`executing-dispatch.ts`) on every tool result. A single
+   * `isError=false` clears the entry for that tool; thresholds trigger
+   * reminder / refuse verdicts. State survives across turns within a
+   * run; fresh run starts empty.
+   */
+  failureStreaks: import('../guards/failure-streak.js').FailureStreakState;
   /**
    * PR-F dynamic-injection state. Tracked across turns so the Kimi-style
    * `computeDynamicInjection` provider doesn't include the same skill /

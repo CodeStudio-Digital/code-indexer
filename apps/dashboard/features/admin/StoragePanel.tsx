@@ -7,14 +7,19 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/ca
 import {
   EMBEDDING_FIELDS,
   VECTOR_STORE_FIELDS,
+  RERANKER_FIELDS,
   fetchEmbeddings,
   fetchVectorStores,
+  fetchRerankers,
   upsertEmbedding,
   upsertVectorStore,
+  upsertReranker,
   type EmbeddingConfig,
   type EmbeddingKind,
   type VectorStoreConfig,
   type VectorStoreKind,
+  type RerankerConfig,
+  type RerankerKind,
 } from './storage-api.js';
 import { StorageConfigDialog } from './StorageConfigDialog.js';
 
@@ -30,6 +35,12 @@ const VECTOR_STORE_KINDS: Array<{ value: VectorStoreKind; label: string }> = [
   { value: 'bedrock-opensearch', label: 'AWS OpenSearch (SigV4)' },
   { value: 'pinecone', label: 'Pinecone' },
   { value: 'null', label: 'None (disable search)' },
+];
+
+const RERANKER_KINDS: Array<{ value: RerankerKind; label: string }> = [
+  { value: 'cloudflare', label: 'Cloudflare Workers AI (bge-reranker)' },
+  { value: 'cohere', label: 'Cohere Rerank' },
+  { value: 'null', label: 'None (RRF order only)' },
 ];
 
 /**
@@ -55,18 +66,25 @@ export function StoragePanel() {
   const { t } = useTranslation(['admin', 'common']);
   const [embeddings, setEmbeddings] = useState<EmbeddingConfig[]>([]);
   const [vectorStores, setVectorStores] = useState<VectorStoreConfig[]>([]);
+  const [rerankers, setRerankers] = useState<RerankerConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingEmbedding, setEditingEmbedding] = useState<Partial<EmbeddingConfig> | null>(null);
   const [editingVectorStore, setEditingVectorStore] = useState<Partial<VectorStoreConfig> | null>(
     null,
   );
+  const [editingReranker, setEditingReranker] = useState<Partial<RerankerConfig> | null>(null);
 
   async function load() {
     setLoading(true);
     try {
-      const [emb, vec] = await Promise.all([fetchEmbeddings(), fetchVectorStores()]);
+      const [emb, vec, rer] = await Promise.all([
+        fetchEmbeddings(),
+        fetchVectorStores(),
+        fetchRerankers(),
+      ]);
       setEmbeddings(emb);
       setVectorStores(vec);
+      setRerankers(rer);
     } finally {
       setLoading(false);
     }
@@ -196,6 +214,64 @@ export function StoragePanel() {
         </div>
       </div>
 
+      {/* Rerankers section */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Rerankers</h2>
+            <p className="text-xs text-muted-foreground">
+              Cross-encoder re-scoring applied after hybrid search to boost precision. Optional.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            onClick={() =>
+              setEditingReranker({
+                kind: 'cloudflare',
+                enabled: true,
+                is_default: true,
+                config: {},
+              })
+            }
+          >
+            <Plus className="h-4 w-4 mr-2" /> {t('common:actions.add')}
+          </Button>
+        </div>
+
+        <div className="grid gap-2">
+          {loading && rerankers.length === 0 && (
+            <div className="text-sm text-muted-foreground">{t('common:actions.loading')}</div>
+          )}
+          {!loading && rerankers.length === 0 && (
+            <Card>
+              <CardContent className="py-6 text-sm text-muted-foreground text-center">
+                No rerankers configured — search uses RRF ordering only.
+              </CardContent>
+            </Card>
+          )}
+          {rerankers.map((rk) => (
+            <Card key={rk.id}>
+              <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  {rk.name}
+                  <Badge variant={rk.enabled ? 'success' : 'muted'}>
+                    {rk.enabled ? t('common:status.enabled') : t('common:status.disabled')}
+                  </Badge>
+                  {rk.is_default && <Badge variant="info">{t('common:status.default')}</Badge>}
+                  <Badge variant="outline">{rk.kind}</Badge>
+                </CardTitle>
+                <Button variant="ghost" size="sm" onClick={() => setEditingReranker(rk)}>
+                  <Pencil className="h-3.5 w-3.5 mr-1" /> {t('common:actions.edit')}
+                </Button>
+              </CardHeader>
+              <CardContent className="p-4 pt-0 text-xs text-muted-foreground font-mono break-all">
+                {summarizeConfig(rk.config)}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+
       {editingEmbedding && (
         <StorageConfigDialog<EmbeddingKind>
           title="Embedding"
@@ -226,6 +302,23 @@ export function StoragePanel() {
           onSave={async (c) => {
             await upsertVectorStore(c as VectorStoreConfig);
             setEditingVectorStore(null);
+            await load();
+          }}
+        />
+      )}
+      {editingReranker && (
+        <StorageConfigDialog<RerankerKind>
+          title="Reranker"
+          initial={{
+            ...editingReranker,
+            kind: (editingReranker.kind as RerankerKind) ?? 'cloudflare',
+          }}
+          kinds={RERANKER_KINDS}
+          fieldsByKind={RERANKER_FIELDS}
+          onClose={() => setEditingReranker(null)}
+          onSave={async (c) => {
+            await upsertReranker(c as RerankerConfig);
+            setEditingReranker(null);
             await load();
           }}
         />

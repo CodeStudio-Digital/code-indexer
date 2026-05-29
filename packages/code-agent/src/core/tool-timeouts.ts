@@ -15,10 +15,11 @@
  *     seconds (`read_file`, `grep`, `glob`, `write_file`, `edit_file`,
  *     `apply_patch`, …). 5 min is the ceiling, not the expectation.
  *   - SLOW (30 min)   — anything we either KNOW takes long (deep
- *     research, subagents, code_exec, run_command) or whose latency we
+ *     research, subagents, parallel orchestrators) or whose latency we
  *     CAN'T predict (any MCP tool, vector-search/docs tools). MCP tools
  *     can transparently call a remote DB / API, so being generous here
- *     is correct.
+ *     is correct. (code_exec self-caps at 30s; run_command declares its
+ *     own 10-min timeoutMs — neither belongs in this tier.)
  *   - INFINITY        — interactive tools (`submit_plan`, `ask_user`,
  *     `submit_tasks`) and repeatable wait-style tools manage their own
  *     blocking and must NOT have a runner-level timeout.
@@ -46,9 +47,17 @@ const SLOW_NATIVE_NAMES = new Set<string>([
   'docs_deep_research',
   'implement_subagent',
   'review_subagent',
-  'code_exec',
-  'run_command',
+  // Orchestrators: spawn parallel/child agents that have their own internal
+  // per-agent caps (10–20 min). A 30-min tool-level backstop sits above
+  // those caps instead of the 5-min NORMAL default that was killing them.
+  'spawn_agent',
+  'execute_tasks',
 ]);
+// NOTE: code_exec and run_command are deliberately NOT here. code_exec
+// self-caps at 30s (node:vm Promise.race in code-exec.ts), so a runner
+// timeout is moot — NORMAL is a harmless backstop. run_command declares an
+// explicit 10-min `timeoutMs` on its own tool definition (shell.ts), which
+// wins over this tier; a one-shot command should not get the 30-min budget.
 
 /**
  * Name-pattern fallback for tools that do vector search or documentation

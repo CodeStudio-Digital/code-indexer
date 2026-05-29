@@ -231,6 +231,7 @@ async function runSingleEphemeral(
       agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
     },
     {
+      label: agent.label,
       systemPrompt,
       allowlist,
       initialMessages,

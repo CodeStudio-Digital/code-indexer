@@ -10,6 +10,7 @@
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { DocHybridSearch } from '@mcp/services/services/docs/index.js';
+import { classifyConfidence } from '@mcp/services/services/docs/index.js';
 import type { ResolveContext } from '@mcp/services/pipelines/index.js';
 
 export interface DocsSearchToolDeps {
@@ -118,7 +119,13 @@ export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
         const lines: string[] = [];
         lines.push(`## [${i + 1}] chunk_id=${r.chunk_id} — ${r.heading_path ?? '(untitled)'} — ${r.collection}`);
         if (r.source_uri) lines.push(`Source: ${r.source_uri}`);
-        lines.push(`Score: ${r.score.toFixed(4)}`);
+        // Prefer the calibrated relevance (present when use_rerank ran); fall
+        // back to the opaque RRF score, clearly flagged as uncalibrated.
+        if (r.relevance != null) {
+          lines.push(`Relevance: ${r.relevance.toFixed(2)} (${classifyConfidence(r.relevance, r.relevance_source)})`);
+        } else {
+          lines.push(`Score: ${r.score.toFixed(4)} (uncalibrated)`);
+        }
         if (r.summary) lines.push(`Summary: ${r.summary}`);
         if (r.concepts.length > 0) lines.push(`Concepts: ${r.concepts.join(', ')}`);
         lines.push('', r.snippet);

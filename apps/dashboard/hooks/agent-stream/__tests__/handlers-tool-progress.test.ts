@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEventHandlers } from '../handlers.js';
-import type { StreamBlock, ToolCallEvent, UpdateSession } from '../types.js';
+import type { StreamActivityBlock, StreamBlock, ToolCallEvent, UpdateSession } from '../types.js';
 
 /**
  * Pure-handler tests for the `tool_progress` event added in commit 3.
@@ -32,6 +32,11 @@ function getToolCall(blocks: StreamBlock[], id: string): ToolCallEvent | undefin
     if (b.type === 'tool' && b.call.id === id) return b.call;
   }
   return undefined;
+}
+
+function getActivity(blocks: StreamBlock[], id: string): StreamActivityBlock | undefined {
+  const block = blocks.find((b) => b.type === 'activity' && b.id === id);
+  return block?.type === 'activity' ? block : undefined;
 }
 
 describe('tool_progress handler', () => {
@@ -74,10 +79,43 @@ describe('tool_progress handler', () => {
     expect(call?.progressNote).toBe('reranking'); // still there
   });
 
-  it('is a no-op for an unknown id (late event arriving after result)', () => {
-    const { handlers, flush } = setup();
-    handlers.tool_progress({ id: 'unknown', name: 'x', elapsedMs: 100 }, 'tool_progress');
+  it('creates a compact activity for an unknown progress id', () => {
+    const { handlers, blocks, flush } = setup();
+    handlers.tool_progress(
+      { id: 'provider-chat:run:1', name: 'provider.chat', elapsedMs: 100, note: 'awaiting zai:glm-5' },
+      'tool_progress',
+    );
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(getActivity(blocks, 'provider-chat:run:1')).toMatchObject({
+      kind: 'provider',
+      label: 'provider.chat',
+      phase: 'awaiting provider',
+      note: 'awaiting zai:glm-5',
+      status: 'running',
+    });
+  });
+
+  it('does not create global activity rows for subagent progress', () => {
+    const { handlers, blocks, flush } = setup();
+    handlers.tool_progress(
+      {
+        id: 'subagent-tool:run-1:7',
+        name: 'subagent:glob',
+        elapsedMs: 37_000,
+        note: '[subagent] glob ✓ (#7)',
+      },
+      'tool_progress',
+    );
     expect(flush).not.toHaveBeenCalled();
+    expect(blocks).toEqual([]);
+  });
+
+  it('does not create an activity when the progress id belongs to a rendered tool', () => {
+    const { handlers, blocks } = setup();
+    handlers.tool_call_start({ id: 'c1', name: 'read_file' }, 'tool_call_start');
+    handlers.tool_progress({ id: 'c1', name: 'read_file', elapsedMs: 100 }, 'tool_progress');
+    expect(getActivity(blocks, 'c1')).toBeUndefined();
+    expect(getToolCall(blocks, 'c1')?.elapsedMs).toBe(100);
   });
 
   it('ignores heartbeats that land after the tool finished', () => {

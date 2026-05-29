@@ -43,11 +43,11 @@ Quando uma tool passa do `PUSH_TIME_CAP` (default 8k chars), o conteudo integral
 ### Summarizer de compaction (opt-in)
 `CODER_SUMMARIZER_ENABLE=1` ativa um summarizer LLM que roda uma vez por sessao quando o historico excede `PRUNE_MINIMUM`. Substitui N mensagens antigas por **uma** sintetica com resumo estruturado (`what_done`, `current_work`, `files_touched`, `decisions`, `next_steps`). Fallback robusto: qualquer erro cai no path deterministico existente.
 
-### run_command_pty (opcional)
-Tool nova que roda comandos num pseudo-terminal real via `node-pty` (dynamic import — nao e dependencia forte). Use para REPLs, ncurses, prompts interativos. Suporta `stdin: string[]` para responder prompts sequencialmente. Se `node-pty` nao estiver instalado, devolve erro com instrucoes claras.
+### Pseudo-terminal (PTY) — via exec_command
+Comandos que precisam de um TTY real (REPLs, ncurses, prompts que dependem de `isatty()`) usam `exec_command({ tty: true })`, que abre uma sessao persistente num pseudo-terminal via `node-pty` (dynamic import — nao e dependencia forte) e e dirigida com `write_stdin`. Se `node-pty` nao estiver instalado, devolve erro com instrucoes. (O tool one-shot `run_command_pty` foi removido em favor desse caminho.)
 
 ```bash
-npm install node-pty   # opcional
+npm install node-pty   # opcional, so necessario para tty=true
 ```
 
 ### Anti-pattern descriptions

@@ -101,6 +101,111 @@ const STATUS_STYLES: Record<CoderPlanRow['status'], string> = {
 
 // STATUS_LABELS is now provided via i18n t('details.planStatus.*')
 
+/**
+ * Headless body of the session-details surface. Reused by the legacy
+ * modal AND the right-rail `SessionDetailsPanel`. `active` gates the
+ * fetches when the panel is collapsed.
+ */
+export function SessionDetailsView({
+  sessionId,
+  session,
+  stats,
+  active,
+}: {
+  sessionId: number | null;
+  session: SessionLike | null;
+  stats: SessionStatsLike | null;
+  active: boolean;
+}) {
+  const { t } = useTranslation(['chat', 'common']);
+  const plansUrl = active && sessionId ? `/coder/sessions/${sessionId}/plans` : '';
+  const { data: plans, loading } = useApi<CoderPlanRow[]>(plansUrl);
+  const todoHistoryUrl = active && sessionId ? `/coder/sessions/${sessionId}/todo-history` : '';
+  const { data: todoHistory, loading: todoHistoryLoading } = useApi<TodoHistoryEntry[]>(todoHistoryUrl);
+  const inputsUrl = active && sessionId ? `/coder/sessions/${sessionId}/inputs` : '';
+  const { data: inputs, loading: inputsLoading } = useApi<SessionInputRow[]>(inputsUrl);
+  return (
+    <Tabs defaultValue="summary" className="flex-1 flex flex-col min-h-0">
+      {/* Compact tab strip tuned for the right-rail width: smaller text,
+          shorter row, no icons (the labels are short enough to read).
+          `overflow-x-auto` still keeps the row scrollable on very narrow
+          panels. `bg-transparent` + `rounded-none` + bottom border match
+          the chrome of the parent `PanelChrome`. */}
+      <TabsList className="w-full justify-start overflow-x-auto shrink-0 h-8 rounded-none border-b bg-transparent px-2 gap-0.5">
+        <TabsTrigger value="summary" className="h-7 px-2 text-[11px]">
+          {t('chat:details.summary')}
+        </TabsTrigger>
+        <TabsTrigger value="plans" className="h-7 px-2 text-[11px] gap-1">
+          {t('chat:details.plans')}
+          {plans && plans.length > 0 && (
+            <Badge variant="muted" className="h-3.5 text-[9px] px-1">
+              {plans.length}
+            </Badge>
+          )}
+        </TabsTrigger>
+        <TabsTrigger value="todos" className="h-7 px-2 text-[11px] gap-1">
+          {t('chat:details.tasks')}
+          {todoHistory && todoHistory.length > 0 && (
+            <Badge variant="muted" className="h-3.5 text-[9px] px-1">
+              {todoHistory.length}
+            </Badge>
+          )}
+        </TabsTrigger>
+        <TabsTrigger value="inputs" className="h-7 px-2 text-[11px] gap-1">
+          {t('chat:details.inputs')}
+          {inputs && inputs.length > 0 && (
+            <Badge variant="muted" className="h-3.5 text-[9px] px-1">
+              {inputs.length}
+            </Badge>
+          )}
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="summary" className="flex-1 overflow-y-auto mt-0 px-3 py-3">
+        {session ? (
+          <SummaryTab session={session} stats={stats} />
+        ) : (
+          <div className="text-xs text-muted-foreground">{t('chat:details.noData')}</div>
+        )}
+      </TabsContent>
+
+      <TabsContent value="plans" className="flex-1 overflow-y-auto mt-0 px-3 py-3">
+        {loading && <div className="text-xs text-muted-foreground">{t('common:actions.loading')}</div>}
+        {!loading && (!plans || plans.length === 0) && (
+          <div className="text-xs text-muted-foreground py-8 text-center">
+            {t('chat:details.noPlans')}
+          </div>
+        )}
+        <div className="space-y-2">{plans?.map((p) => <PlanItem key={p.id} plan={p} />)}</div>
+      </TabsContent>
+
+      <TabsContent value="todos" className="flex-1 overflow-y-auto mt-0 px-3 py-3">
+        {todoHistoryLoading && <div className="text-xs text-muted-foreground">{t('common:actions.loading')}</div>}
+        {!todoHistoryLoading && (!todoHistory || todoHistory.length === 0) && (
+          <div className="text-xs text-muted-foreground py-8 text-center">
+            {t('chat:details.noTasks')}
+          </div>
+        )}
+        <div className="space-y-2">
+          {todoHistory?.map((entry) => <TodoHistoryItem key={entry.id} entry={entry} />)}
+        </div>
+      </TabsContent>
+
+      <TabsContent value="inputs" className="flex-1 overflow-y-auto mt-0 px-3 py-3">
+        {inputsLoading && <div className="text-xs text-muted-foreground">{t('common:actions.loading')}</div>}
+        {!inputsLoading && (!inputs || inputs.length === 0) && (
+          <div className="text-xs text-muted-foreground py-8 text-center">
+            {t('chat:details.noInputs')}
+          </div>
+        )}
+        <div className="space-y-2">
+          {inputs?.map((entry) => <InputItem key={entry.id} entry={entry} />)}
+        </div>
+      </TabsContent>
+    </Tabs>
+  );
+}
+
 export function SessionDetailsModal({
   open,
   onOpenChange,
@@ -108,93 +213,19 @@ export function SessionDetailsModal({
   session,
   stats,
 }: SessionDetailsModalProps) {
-  const { t } = useTranslation(['chat', 'common']);
-  const plansUrl = open && sessionId ? `/coder/sessions/${sessionId}/plans` : '';
-  const { data: plans, loading } = useApi<CoderPlanRow[]>(plansUrl);
-  const todoHistoryUrl = open && sessionId ? `/coder/sessions/${sessionId}/todo-history` : '';
-  const { data: todoHistory, loading: todoHistoryLoading } = useApi<TodoHistoryEntry[]>(todoHistoryUrl);
-  const inputsUrl = open && sessionId ? `/coder/sessions/${sessionId}/inputs` : '';
-  const { data: inputs, loading: inputsLoading } = useApi<SessionInputRow[]>(inputsUrl);
-
+  const { t } = useTranslation(['chat']);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>{t('chat:details.title')}</DialogTitle>
         </DialogHeader>
-        <Tabs defaultValue="summary" className="flex-1 flex flex-col min-h-0">
-          <TabsList className="w-full justify-start">
-            <TabsTrigger value="summary" className="gap-1.5">
-              <BarChart3 className="h-3.5 w-3.5" /> {t('chat:details.summary')}
-            </TabsTrigger>
-            <TabsTrigger value="plans" className="gap-1.5">
-              <ClipboardList className="h-3.5 w-3.5" /> {t('chat:details.plans')}
-              {plans && plans.length > 0 && (
-                <Badge variant="muted" className="h-4 text-[10px] ml-1">
-                  {plans.length}
-                </Badge>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="todos" className="gap-1.5">
-              <ListChecks className="h-3.5 w-3.5" /> {t('chat:details.tasks')}
-              {todoHistory && todoHistory.length > 0 && (
-                <Badge variant="muted" className="h-4 text-[10px] ml-1">
-                  {todoHistory.length}
-                </Badge>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="inputs" className="gap-1.5">
-              <ScrollText className="h-3.5 w-3.5" /> {t('chat:details.inputs')}
-              {inputs && inputs.length > 0 && (
-                <Badge variant="muted" className="h-4 text-[10px] ml-1">
-                  {inputs.length}
-                </Badge>
-              )}
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="summary" className="flex-1 overflow-y-auto mt-4">
-            {session ? (
-              <SummaryTab session={session} stats={stats} />
-            ) : (
-              <div className="text-xs text-muted-foreground">{t('chat:details.noData')}</div>
-            )}
-          </TabsContent>
-
-          <TabsContent value="plans" className="flex-1 overflow-y-auto mt-4">
-            {loading && <div className="text-xs text-muted-foreground">{t('common:actions.loading')}</div>}
-            {!loading && (!plans || plans.length === 0) && (
-              <div className="text-xs text-muted-foreground py-8 text-center">
-                {t('chat:details.noPlans')}
-              </div>
-            )}
-            <div className="space-y-2">{plans?.map((p) => <PlanItem key={p.id} plan={p} />)}</div>
-          </TabsContent>
-
-          <TabsContent value="todos" className="flex-1 overflow-y-auto mt-4">
-            {todoHistoryLoading && <div className="text-xs text-muted-foreground">{t('common:actions.loading')}</div>}
-            {!todoHistoryLoading && (!todoHistory || todoHistory.length === 0) && (
-              <div className="text-xs text-muted-foreground py-8 text-center">
-                {t('chat:details.noTasks')}
-              </div>
-            )}
-            <div className="space-y-2">
-              {todoHistory?.map((entry) => <TodoHistoryItem key={entry.id} entry={entry} />)}
-            </div>
-          </TabsContent>
-
-          <TabsContent value="inputs" className="flex-1 overflow-y-auto mt-4">
-            {inputsLoading && <div className="text-xs text-muted-foreground">{t('common:actions.loading')}</div>}
-            {!inputsLoading && (!inputs || inputs.length === 0) && (
-              <div className="text-xs text-muted-foreground py-8 text-center">
-                {t('chat:details.noInputs')}
-              </div>
-            )}
-            <div className="space-y-2">
-              {inputs?.map((entry) => <InputItem key={entry.id} entry={entry} />)}
-            </div>
-          </TabsContent>
-        </Tabs>
+        <SessionDetailsView
+          sessionId={sessionId}
+          session={session}
+          stats={stats}
+          active={open}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -222,25 +253,33 @@ function SummaryTab({ session, stats }: { session: SessionLike; stats: SessionSt
     ? Math.min(Math.round((lastTurnInput / contextWindow) * 100), 100)
     : null;
 
+  // `text-xs` + `gap-x-3` keeps the two-column key/value rows readable
+  // when the panel is at minSize (≈220px). The labels are left-aligned
+  // with `truncate` so very long i18n strings don't push the numeric
+  // value off-screen — they just get a tooltip-equivalent via title.
   return (
-    <div className="space-y-4 text-sm">
-      {/* Context Window section */}
+    <div className="space-y-4 text-xs">
       {ctxPct !== null && contextWindow && (
         <section>
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-            {t('header.contextWindow')}
-          </h4>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1 tabular-nums">
-            <span className="text-muted-foreground">{t('header.currentContext')}</span>
-            <span className="text-right">{lastTurnInput.toLocaleString()} ({formatK(lastTurnInput)})</span>
-            <span className="text-muted-foreground">{t('header.windowSize')}</span>
-            <span className="text-right">{contextWindow.toLocaleString()} ({formatK(contextWindow)})</span>
-            <span className="text-muted-foreground">{t('header.contextUsage')}</span>
-            <span className={cn('text-right font-medium', ctxPct > 90 ? 'text-red-500' : ctxPct > 70 ? 'text-amber-500' : 'text-emerald-600 dark:text-emerald-400')}>
+          <SectionTitle>{t('header.contextWindow')}</SectionTitle>
+          <KvGrid>
+            <Kv label={t('header.currentContext')}>
+              {lastTurnInput.toLocaleString()} <span className="text-muted-foreground">({formatK(lastTurnInput)})</span>
+            </Kv>
+            <Kv label={t('header.windowSize')}>
+              {contextWindow.toLocaleString()} <span className="text-muted-foreground">({formatK(contextWindow)})</span>
+            </Kv>
+            <Kv
+              label={t('header.contextUsage')}
+              valueClassName={cn(
+                'font-medium',
+                ctxPct > 90 ? 'text-red-500' : ctxPct > 70 ? 'text-amber-500' : 'text-emerald-600 dark:text-emerald-400',
+              )}
+            >
               {ctxPct}%
-            </span>
-          </div>
-          <div className="mt-2 w-full h-2 bg-muted rounded-full overflow-hidden">
+            </Kv>
+          </KvGrid>
+          <div className="mt-2 w-full h-1.5 bg-muted rounded-full overflow-hidden">
             <div
               className={cn(
                 'h-full rounded-full transition-all',
@@ -252,58 +291,81 @@ function SummaryTab({ session, stats }: { session: SessionLike; stats: SessionSt
         </section>
       )}
 
-      {/* API Totals (billing) */}
       <section>
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-          {t('header.apiTotals')}
-        </h4>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-1 tabular-nums">
-          <span className="text-muted-foreground">{t('header.totalInput')}</span>
-          <span className="text-right">{totalIn.toLocaleString()}</span>
-          <span className="text-muted-foreground">{t('header.output')}</span>
-          <span className="text-right">{totalOut.toLocaleString()}</span>
-          <span className="text-muted-foreground">{t('header.cacheRead')}</span>
-          <span className="text-right text-emerald-600 dark:text-emerald-400">{totalCR.toLocaleString()}</span>
-          <span className="text-muted-foreground">{t('header.cacheWrite')}</span>
-          <span className="text-right">{totalCW.toLocaleString()}</span>
-          <span className="text-muted-foreground">{t('header.hitRate')}</span>
-          <span className="text-right text-emerald-600 dark:text-emerald-400">{hitRate}%</span>
-          <span className="text-muted-foreground">{t('header.tokensSaved')}</span>
-          <span className="text-right text-emerald-600 dark:text-emerald-400">{savedTokens.toLocaleString()}</span>
-        </div>
+        <SectionTitle>{t('header.apiTotals')}</SectionTitle>
+        <KvGrid>
+          <Kv label={t('header.totalInput')}>{totalIn.toLocaleString()}</Kv>
+          <Kv label={t('header.output')}>{totalOut.toLocaleString()}</Kv>
+          <Kv label={t('header.cacheRead')} valueClassName="text-emerald-600 dark:text-emerald-400">
+            {totalCR.toLocaleString()}
+          </Kv>
+          <Kv label={t('header.cacheWrite')}>{totalCW.toLocaleString()}</Kv>
+          <Kv label={t('header.hitRate')} valueClassName="text-emerald-600 dark:text-emerald-400">
+            {hitRate}%
+          </Kv>
+          <Kv label={t('header.tokensSaved')} valueClassName="text-emerald-600 dark:text-emerald-400">
+            {savedTokens.toLocaleString()}
+          </Kv>
+        </KvGrid>
       </section>
 
       {stats && (
         <section>
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Atividade</h4>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1 tabular-nums">
-            <span className="text-muted-foreground">{t('header.messages')}</span>
-            <span className="text-right">{stats.message_count}</span>
-            <span className="text-muted-foreground">{t('header.assistantTurns')}</span>
-            <span className="text-right">{stats.assistant_turns}</span>
-            <span className="text-muted-foreground">{t('header.toolCalls')}</span>
-            <span className="text-right">{stats.tool_call_count}</span>
-            <span className="text-muted-foreground">{t('header.distinctTools')}</span>
-            <span className="text-right">{stats.distinct_tools}</span>
+          <SectionTitle>Atividade</SectionTitle>
+          <KvGrid>
+            <Kv label={t('header.messages')}>{stats.message_count}</Kv>
+            <Kv label={t('header.assistantTurns')}>{stats.assistant_turns}</Kv>
+            <Kv label={t('header.toolCalls')}>{stats.tool_call_count}</Kv>
+            <Kv label={t('header.distinctTools')}>{stats.distinct_tools}</Kv>
             {stats.tool_error_count > 0 && (
-              <>
-                <span className="text-muted-foreground">{t('header.toolErrors')}</span>
-                <span className="text-right text-red-500">{stats.tool_error_count}</span>
-              </>
+              <Kv label={t('header.toolErrors')} valueClassName="text-red-500">
+                {stats.tool_error_count}
+              </Kv>
             )}
             {stats.subagent_call_count > 0 && (
-              <>
-                <span className="text-muted-foreground">{t('header.subagents')}</span>
-                <span className="text-right">{stats.subagent_call_count}</span>
-              </>
+              <Kv label={t('header.subagents')}>{stats.subagent_call_count}</Kv>
             )}
-            <span className="text-muted-foreground">{t('header.timeInTools')}</span>
-            <span className="text-right">{(stats.total_tool_duration_ms / 1000).toFixed(1)}s</span>
-            <span className="text-muted-foreground">{t('header.duration')}</span>
-            <span className="text-right">{formatDuration(stats.duration_ms)}</span>
-          </div>
+            <Kv label={t('header.timeInTools')}>{(stats.total_tool_duration_ms / 1000).toFixed(1)}s</Kv>
+            <Kv label={t('header.duration')}>{formatDuration(stats.duration_ms)}</Kv>
+          </KvGrid>
         </section>
       )}
+    </div>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+      {children}
+    </h4>
+  );
+}
+
+function KvGrid({ children }: { children: React.ReactNode }) {
+  return <div className="space-y-0.5 tabular-nums">{children}</div>;
+}
+
+function Kv({
+  label,
+  valueClassName,
+  children,
+}: {
+  label: string;
+  valueClassName?: string;
+  children: React.ReactNode;
+}) {
+  // Single-row layout: label on the left, value pushed right via
+  // `ml-auto`. Doesn't rely on a fixed grid so very-long labels don't
+  // squeeze the numeric column — instead the label truncates with a
+  // tooltip-equivalent `title` so the user can still recover the full
+  // string by hovering.
+  return (
+    <div className="flex items-baseline gap-2 min-w-0">
+      <span className="text-muted-foreground truncate min-w-0" title={label}>
+        {label}
+      </span>
+      <span className={cn('ml-auto text-right shrink-0', valueClassName)}>{children}</span>
     </div>
   );
 }

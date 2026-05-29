@@ -32,7 +32,7 @@ export class PlanningNode implements BehaviorNode {
 }
 
 function guardToTransition(
-  guard: 'tuple-hash' | 'doom-loop' | 'dominance',
+  guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak',
 ): TransitionKind {
   switch (guard) {
     case 'tuple-hash':
@@ -41,5 +41,7 @@ function guardToTransition(
       return 'doom-loop-strict';
     case 'dominance':
       return 'doom-loop-fuzzy';
+    case 'failure-streak':
+      return 'failure-streak';
   }
 }

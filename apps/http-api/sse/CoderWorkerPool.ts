@@ -37,6 +37,7 @@ import type { CoderAttachment } from '@mcp/code-agent/index.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import type { McpExternalPool } from './McpExternalPool.js';
+import { installRuntimeEventLog } from './runtime-event-log.js';
 
 /**
  * Optional doc-corpus deps the host wires AFTER `boot/createApp` has built
@@ -110,6 +111,17 @@ interface PoolEntry {
    * doesn't get evicted out from under the user.
    */
   postRunEvictTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * True while a `runCoder()` is in flight (between `runFresh` /
+   * `pushUserMessage` and the next `bus.end`). The idle sweep MUST NOT
+   * evict entries with `runInProgress=true` — a slow provider (6+ min
+   * on a fat prompt; session 798 symptom) makes the worker look idle
+   * to the sweep even though it is actively doing real work.
+   *
+   * Separate from `bus.ended` because the bus object is reused across
+   * runs and `bus.ended` is not reset on the next `runFresh`.
+   */
+  runInProgress: boolean;
 }
 
 export interface RunFreshOpts {
@@ -206,6 +218,10 @@ export class CoderWorkerPool {
     const entry = await this.ensureEntry(sessionId);
     this.cancelPostRunEvict(entry);
     entry.lastTouchedAt = Date.now();
+    // (B) — mark the run in-progress so the idle sweep keeps hands off
+    // until the worker emits its terminal `done`/`error` via the bus
+    // event mirror below.
+    entry.runInProgress = true;
     const bridge = entry.host.requireBridge();
     await bridge.request('runFresh', opts, { timeoutMs: 60_000 });
     return entry.bus;
@@ -221,6 +237,9 @@ export class CoderWorkerPool {
     if (!entry) throw new Error(`coder-pool: no active run for session ${sessionId}`);
     this.cancelPostRunEvict(entry);
     entry.lastTouchedAt = Date.now();
+    // (B) — re-engaging the worker mid-linger restarts the in-flight
+    // semantics. Cleared again when the next `bus.end` arrives.
+    entry.runInProgress = true;
     await entry.host.requireBridge().request('pushUserMessage', { content, selectedSkillIds });
   }
 
@@ -307,6 +326,14 @@ export class CoderWorkerPool {
   private sweep(): void {
     const now = Date.now();
     for (const [id, entry] of this.entries) {
+      // (B) — never evict while a run is in flight. A slow provider or
+      // long subagent batch can keep the worker busy past ttlMs without
+      // any external HTTP touch (the dashboard streams but doesn't
+      // re-POST). `runInProgress` is flipped by the `bus.event`
+      // mirror via the worker's own activity, so a hung run still
+      // gets evicted eventually by the server-side watchdog
+      // (Frente E) — but the normal sweep here stays hands-off.
+      if (entry.runInProgress) continue;
       if (now - entry.lastTouchedAt > this.ttlMs) {
         void this.evict(id);
       }
@@ -398,6 +425,7 @@ export class CoderWorkerPool {
     // Mirror the worker's bus to a main-side bus so existing
     // `pumpBusToSSE(c, bus, …)` calls keep working without change.
     const bus = createBus(new AbortController());
+    const detachRuntimeLog = installRuntimeEventLog(bus, 'coder', sessionId);
     // Log the spawn on the brand-new bus — the dashboard's
     // WorkerLogPanel will show "worker spawned (boot=Xms)" as the
     // first event of this run, before any runner events arrive.
@@ -474,11 +502,25 @@ export class CoderWorkerPool {
 
     const offEvent = bridge.on('bus.event', (payload) => {
       const env = payload as { event: string; data: unknown };
+      // (A) — worker activity refreshes the idle timer. Without this, a
+      // slow provider (LLM thinking 6+ min on a fat prompt) looks idle
+      // to the sweep and gets evicted mid-turn (session 798 symptom).
+      // Bus events flow continuously while the worker is doing real
+      // work (heartbeats every 10s, text/tool deltas, dispatch
+      // progress) — so any single such event resets `lastTouchedAt`
+      // far below the 5-min TTL.
+      const e = this.entries.get(sessionId);
+      if (e) e.lastTouchedAt = Date.now();
       publish(bus, env.event, env.data);
     });
     const offEnd = bridge.on('bus.end', (payload) => {
       const env = payload as { event: 'done' | 'error'; data: unknown };
       markEnded(bus, env.event, env.data);
+      // (B) — terminal event: run is no longer in progress; sweep may
+      // now consider this entry for eviction once ttlMs elapses without
+      // a follow-up `runFresh`/`pushUserMessage`.
+      const eEnd = this.entries.get(sessionId);
+      if (eEnd) eEnd.runInProgress = false;
       // Fast-evict on run completion. We can't synchronously evict
       // here because a follow-up `/messages` POST may arrive within
       // a few seconds and would have to pay the cold-start cost
@@ -511,7 +553,13 @@ export class CoderWorkerPool {
       bus,
       lastTouchedAt: Date.now(),
       postRunEvictTimer: null,
+      // Fresh entries are inert until the first `runFresh`. The sweep
+      // never sees them in this state because `lastTouchedAt` was just
+      // bumped by `ensureEntry`, but the explicit `false` documents
+      // intent.
+      runInProgress: false,
       detachBusMirror: () => {
+        try { detachRuntimeLog(); } catch { /* best-effort */ }
         try { offEvent(); } catch { /* best-effort */ }
         try { offEnd(); } catch { /* best-effort */ }
         try { offDocSearch(); } catch { /* best-effort */ }

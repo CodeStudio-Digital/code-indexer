@@ -1,44 +1,35 @@
-import { useState } from 'react';
+/**
+ * Context-snapshots editor — master/detail layout for the project-scoped
+ * knowledge cards (architecture, decisions, patterns, conventions, todos,
+ * notes). The legacy version rendered every snapshot as a fully-expanded
+ * card stacked vertically; this one splits the work:
+ *
+ *   ┌──────────────┬─────────────────────────────────────┐
+ *   │ SnapshotList │ SnapshotDetail                      │
+ *   │ (resizable)  │   header  (chip · title · actions)  │
+ *   │  - search    │   tabs    [View | Raw | History]    │
+ *   │  - filter    │   body    <rendered/raw/history>    │
+ *   │  - rows      │                                     │
+ *   └──────────────┴─────────────────────────────────────┘
+ *
+ * Edit/Create flows route through the modal `SnapshotForm` — kept off
+ * the detail surface so the read-only view stays uncluttered.
+ */
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { Plus } from 'lucide-react';
+import { Button } from '../../components/ui/button.js';
 import { useConfirm } from '../../components/ui/dialog-provider.js';
-import { apiDelete, apiPost, useApi } from '../../hooks/useApi.js';
-
-interface Snapshot {
-  id: number;
-  title: string;
-  category: string;
-  content: string;
-  tags: string;
-  created_by: string;
-  created_at: string;
-}
-
-interface SnapshotVersion {
-  id: number;
-  snapshot_id: number;
-  version: number;
-  title: string;
-  category: string;
-  content: string;
-  tags: string;
-  updated_at: string;
-  updated_by: string;
-}
+import { apiDelete, useApi } from '../../hooks/useApi.js';
+import { SnapshotList } from './parts/SnapshotList.js';
+import { SnapshotDetail } from './parts/SnapshotDetail.js';
+import { SnapshotForm } from './parts/SnapshotForm.js';
+import type { Snapshot } from './snapshot-types.js';
 
 interface SnapshotEditorProps {
   projectId: number;
 }
-
-const CATEGORIES = ['architecture', 'decision', 'pattern', 'convention', 'todo', 'note'];
-
-const CATEGORY_COLORS: Record<string, string> = {
-  architecture: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-  decision: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
-  pattern: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-  convention: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
-  todo: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
-  note: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200',
-};
 
 export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
   const { t } = useTranslation(['projects', 'common']);
@@ -48,27 +39,43 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
   const { data: snapshots, loading, refetch } = useApi<Snapshot[]>(
     `/projects/${projectId}/snapshots${categoryParam}`,
   );
-  const [showForm, setShowForm] = useState(false);
-  const [title, setTitle] = useState('');
-  const [category, setCategory] = useState('note');
-  const [content, setContent] = useState('');
-  const [tags, setTags] = useState('');
-  const [historyId, setHistoryId] = useState<number | null>(null);
-  const [expandedId, setExpandedId] = useState<number | null>(null);
-  const { data: history } = useApi<SnapshotVersion[]>(historyId ? `/snapshots/${historyId}/history` : '');
 
-  const handleCreate = async () => {
-    if (!title.trim() || !content.trim()) return;
-    const tagArray = tags.trim() ? tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
-    await apiPost(`/projects/${projectId}/snapshots`, { title, category, content, tags: tagArray });
-    setTitle('');
-    setContent('');
-    setTags('');
-    setShowForm(false);
-    refetch();
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  // `null` = creating a new snapshot; `Snapshot` = editing that one.
+  const [editTarget, setEditTarget] = useState<Snapshot | null>(null);
+
+  // Keep the selection alive across refetches by matching on id rather
+  // than holding the snapshot object directly. When the selected id no
+  // longer exists (e.g. after a delete or category filter narrows the
+  // list) we drop to `null` so the detail pane shows its empty state.
+  const selected = useMemo<Snapshot | null>(() => {
+    if (selectedId == null || !snapshots) return null;
+    return snapshots.find((s) => s.id === selectedId) ?? null;
+  }, [selectedId, snapshots]);
+
+  // Auto-select the first snapshot whenever the visible list changes and
+  // the user has nothing selected — saves an extra click on first load
+  // and after switching category filters.
+  useEffect(() => {
+    if (!snapshots || snapshots.length === 0) return;
+    if (selectedId != null && snapshots.some((s) => s.id === selectedId)) return;
+    setSelectedId(snapshots[0].id);
+  }, [snapshots, selectedId]);
+
+  const handleNew = () => {
+    setEditTarget(null);
+    setFormOpen(true);
   };
 
-  const handleDelete = async (id: number) => {
+  const handleEdit = () => {
+    if (!selected) return;
+    setEditTarget(selected);
+    setFormOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!selected) return;
     const ok = await confirm({
       title: t('projects:snapshots.deleteConfirm'),
       description: t('projects:snapshots.deleteDescription'),
@@ -76,212 +83,85 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
       confirmLabel: t('common:actions.delete'),
     });
     if (!ok) return;
-    await apiDelete(`/snapshots/${id}`);
+    await apiDelete(`/snapshots/${selected.id}`);
+    setSelectedId(null);
     refetch();
   };
 
-  if (loading) return <div className="text-gray-500">{t('common:actions.loading')}</div>;
+  if (loading) {
+    return (
+      <div className="px-4 py-6 text-sm text-muted-foreground">
+        {t('common:actions.loading')}
+      </div>
+    );
+  }
 
   return (
-    <div>
-      <div className="flex flex-wrap justify-between items-center mb-4 gap-3">
-        <h3 className="font-semibold text-gray-700 dark:text-gray-300">{t('projects:snapshots.title')}</h3>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setFilterCategory('')}
-              className={`px-2 py-1 text-xs rounded ${!filterCategory ? 'bg-indigo-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
-            >
-              {t('projects:snapshots.all')}
-            </button>
-            {CATEGORIES.map((c) => (
-              <button
-                key={c}
-                onClick={() => setFilterCategory(filterCategory === c ? '' : c)}
-                className={`px-2 py-1 text-xs rounded capitalize ${filterCategory === c ? 'bg-indigo-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
-              >
-                {c}
-              </button>
-            ))}
-          </div>
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700"
-          >
-            {showForm ? t('common:actions.cancel') : t('projects:snapshots.newSnapshot')}
-          </button>
-        </div>
-      </div>
-
-      {showForm && (
-        <div className="mb-6 p-4 border rounded-lg dark:border-gray-700 space-y-3 bg-gray-50 dark:bg-gray-800">
-          <div className="flex gap-3">
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder={t('projects:snapshots.titlePlaceholder')}
-              className="flex-1 px-3 py-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            />
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="px-3 py-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            >
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </div>
-          <textarea
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            placeholder={t('projects:snapshots.contentPlaceholder')}
-            rows={8}
-            className="w-full px-3 py-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white font-mono text-sm"
+    <div className="flex h-full min-h-0">
+      <PanelGroup
+        direction="horizontal"
+        autoSaveId="snapshots-editor-cols"
+        className="flex-1 min-h-0"
+      >
+        <Panel
+          id="snapshots-list"
+          order={1}
+          defaultSize={28}
+          minSize={20}
+          maxSize={45}
+          className="min-w-0"
+        >
+          <SnapshotList
+            snapshots={snapshots ?? []}
+            selectedId={selectedId}
+            filterCategory={filterCategory}
+            onFilterCategory={(c) => {
+              setFilterCategory(c);
+              // Don't keep a stale selection from the previous filter —
+              // the auto-select effect picks the new first row.
+              setSelectedId(null);
+            }}
+            onSelect={setSelectedId}
+            onNew={handleNew}
           />
-          <div className="flex gap-3 items-center">
-            <input
-              type="text"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder={t('projects:snapshots.tagsPlaceholder')}
-              className="flex-1 px-3 py-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white text-sm"
+        </Panel>
+        <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
+        <Panel id="snapshots-detail" order={2} minSize={40} className="min-w-0">
+          {selected ? (
+            <SnapshotDetail
+              snapshot={selected}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
             />
-            <button
-              onClick={handleCreate}
-              disabled={!title.trim() || !content.trim()}
-              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {t('projects:snapshots.saveSnapshot')}
-            </button>
-          </div>
-        </div>
-      )}
+          ) : (
+            <EmptyDetail onNew={handleNew} />
+          )}
+        </Panel>
+      </PanelGroup>
 
-      {!snapshots || snapshots.length === 0 ? (
-        <p className="text-gray-500 text-sm">
-          {filterCategory ? t('projects:snapshots.noInCategory', { category: filterCategory }) : t('projects:snapshots.none')}
-        </p>
-      ) : (
-        <div className="space-y-3">
-          {snapshots.map((s) => (
-            <SnapshotItem
-              key={s.id}
-              snapshot={s}
-              history={historyId === s.id ? history ?? null : null}
-              isExpanded={expandedId === s.id}
-              onToggleHistory={() => setHistoryId(historyId === s.id ? null : s.id)}
-              onToggleExpand={() => setExpandedId(expandedId === s.id ? null : s.id)}
-              onDelete={() => handleDelete(s.id)}
-            />
-          ))}
-        </div>
-      )}
+      <SnapshotForm
+        projectId={projectId}
+        snapshot={editTarget}
+        open={formOpen}
+        onOpenChange={(open) => {
+          setFormOpen(open);
+          if (!open) setEditTarget(null);
+        }}
+        onSaved={refetch}
+      />
     </div>
   );
 }
 
-function SnapshotItem({
-  snapshot: s,
-  history,
-  isExpanded,
-  onToggleHistory,
-  onToggleExpand,
-  onDelete,
-}: {
-  snapshot: Snapshot;
-  history: SnapshotVersion[] | null;
-  isExpanded: boolean;
-  onToggleHistory: () => void;
-  onToggleExpand: () => void;
-  onDelete: () => void;
-}) {
-  let parsedTags: string[] = [];
-  try {
-    parsedTags = JSON.parse(s.tags);
-  } catch {
-    /* ignore */
-  }
-  const isAutoGenerated = parsedTags.includes('auto-generated');
-
+function EmptyDetail({ onNew }: { onNew: () => void }) {
+  const { t } = useTranslation(['projects', 'common']);
   return (
-    <div className="p-4 border rounded-lg dark:border-gray-700">
-      <div className="flex justify-between items-start mb-2">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span
-            className={`px-2 py-0.5 rounded text-xs font-medium capitalize ${CATEGORY_COLORS[s.category] ?? CATEGORY_COLORS.note}`}
-          >
-            {s.category}
-          </span>
-          <span className="font-medium dark:text-white">{s.title}</span>
-          {isAutoGenerated && (
-            <span className="px-1.5 py-0.5 rounded text-xs bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-200">
-              auto
-            </span>
-          )}
-          <span className="text-xs text-gray-400">
-            {new Date(s.created_at).toLocaleDateString()} by {s.created_by}
-          </span>
-        </div>
-        <div className="flex gap-2 flex-shrink-0">
-          <button onClick={onToggleHistory} className="text-xs text-indigo-500 hover:text-indigo-700">
-            {history ? 'Hide History' : 'History'}
-          </button>
-          <button onClick={onDelete} className="text-xs text-red-500 hover:text-red-700">
-            Delete
-          </button>
-        </div>
-      </div>
-
-      {parsedTags.length > 0 && !parsedTags.every((t) => t === 'auto-generated') && (
-        <div className="flex gap-1 mb-2 flex-wrap">
-          {parsedTags
-            .filter((t) => t !== 'auto-generated')
-            .map((tag) => (
-              <span
-                key={tag}
-                className="px-1.5 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400"
-              >
-                {tag}
-              </span>
-            ))}
-        </div>
-      )}
-
-      <div className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap font-mono">
-        {isExpanded ? s.content : s.content.slice(0, 400)}
-        {s.content.length > 400 && (
-          <button
-            onClick={onToggleExpand}
-            className="ml-1 text-indigo-500 hover:text-indigo-700 font-medium font-sans"
-          >
-            {isExpanded ? ' [collapse]' : '... [expand]'}
-          </button>
-        )}
-      </div>
-
-      {history && (
-        <div className="mt-3 border-t dark:border-gray-700 pt-3 space-y-2">
-          <h4 className="text-xs font-semibold text-gray-500 uppercase">Version History</h4>
-          {history.length === 0 ? (
-            <p className="text-xs text-gray-400">No previous versions.</p>
-          ) : (
-            history.map((v) => (
-              <details key={v.id} className="text-sm">
-                <summary className="cursor-pointer text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">
-                  v{v.version} — {new Date(v.updated_at).toLocaleString()} by {v.updated_by}
-                </summary>
-                <div className="mt-1 p-2 bg-gray-50 dark:bg-gray-900 rounded text-xs whitespace-pre-wrap font-mono">
-                  {v.content}
-                </div>
-              </details>
-            ))
-          )}
-        </div>
-      )}
+    <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
+      <p className="text-sm">{t('projects:snapshots.none')}</p>
+      <Button size="sm" onClick={onNew} className="gap-1.5">
+        <Plus className="h-3.5 w-3.5" />
+        {t('projects:snapshots.newSnapshot')}
+      </Button>
     </div>
   );
 }

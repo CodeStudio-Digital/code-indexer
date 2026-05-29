@@ -62,6 +62,13 @@ interface SessionStateSidebarProps {
    * `usePipelineStream` in AgentChat.
    */
   pipelineRuntime?: PipelineRuntimeState | null;
+  /**
+   * When true, the sidebar drops its own `<aside>` wrapper (with border-l
+   * + w-64 + hidden lg:block) and renders as a plain scrollable block so
+   * it fits inside a parent that owns the chrome — e.g. `PanelChrome`
+   * inside the right-rail `RightPanelHost`.
+   */
+  embedded?: boolean;
 }
 
 /**
@@ -80,6 +87,7 @@ export function SessionStateSidebar({
   skillPicks,
   onToggleSkillPick,
   pipelineRuntime,
+  embedded,
 }: SessionStateSidebarProps) {
   const { t } = useTranslation(['chat', 'common']);
   const [data, setData] = useState<StateSummary | null>(null);
@@ -116,8 +124,18 @@ export function SessionStateSidebar({
   const todosTotal = effectiveTodos.length;
   const todosPercent = todosTotal === 0 ? 0 : Math.round((todosCompleted / todosTotal) * 100);
 
+  const Wrapper = embedded
+    ? (({ children }: { children: React.ReactNode }) => (
+        <div className="h-full w-full overflow-y-auto">{children}</div>
+      ))
+    : (({ children }: { children: React.ReactNode }) => (
+        <aside className="border-l bg-card/50 w-64 shrink-0 overflow-y-auto hidden lg:block">
+          {children}
+        </aside>
+      ));
+
   return (
-    <aside className="border-l bg-card/50 w-64 shrink-0 overflow-y-auto hidden lg:block">
+    <Wrapper>
       {pipelineRuntime && (
         <PipelineRuntimeSection
           sessionId={sessionId}
@@ -306,7 +324,7 @@ export function SessionStateSidebar({
         selected={skillPicks}
         onToggleSelect={onToggleSkillPick}
       />
-    </aside>
+    </Wrapper>
   );
 }
 

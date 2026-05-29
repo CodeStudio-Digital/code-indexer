@@ -17,6 +17,19 @@ import type {
   UpdateSession,
   Usage,
 } from './types.js';
+import {
+  applyAgentProgress,
+  applyAgentsGroupEnd,
+  type AgentProgressPayload,
+} from './agents-blocks.js';
+import {
+  clearProviderActivities,
+  finishActivity,
+  kindFromOperation,
+  removeActivity,
+  statusFromOperation,
+  upsertActivity,
+} from './activity-blocks.js';
 
 interface HandlerContext {
   sid: number;
@@ -39,6 +52,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     text: (data) => {
       const t = String((data as { text?: string }).text ?? '');
       if (!t) return;
+      if (clearProviderActivities(blocks)) rebuildToolIndex(blocks, toolIndex);
       const last = blocks[blocks.length - 1];
       if (last && last.type === 'text') {
         last.text += t;
@@ -51,6 +65,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     thinking: (data) => {
       const t = String((data as { text?: string }).text ?? '');
       if (!t) return;
+      if (clearProviderActivities(blocks)) rebuildToolIndex(blocks, toolIndex);
       const last = blocks[blocks.length - 1];
       if (last && last.type === 'thinking') {
         last.text += t;
@@ -132,6 +147,9 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
 
     tool_call_start: (data) => {
       const d = data as { id: string; name: string; input?: Record<string, unknown> };
+      if (clearProviderActivities(blocks) || removeActivity(blocks, `tool:${d.id}`)) {
+        rebuildToolIndex(blocks, toolIndex);
+      }
       const call: ToolCallEvent = {
         id: d.id,
         name: d.name,
@@ -167,6 +185,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
           };
         }
       }
+      if (removeActivity(blocks, `tool:${d.id}`)) rebuildToolIndex(blocks, toolIndex);
       flush();
     },
 
@@ -180,7 +199,20 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     tool_progress: (data) => {
       const d = data as { id: string; name: string; elapsedMs: number; note?: string };
       const idx = toolIndex.get(d.id);
-      if (idx === undefined) return;
+      if (idx === undefined) {
+        if (isSubagentToolProgress(d)) return;
+        upsertActivity(blocks, {
+          id: d.id,
+          kind: activityKindFromToolProgress(d.id, d.name),
+          label: d.name,
+          phase: d.name === 'provider.chat' ? 'awaiting provider' : 'running',
+          note: d.note,
+          elapsedMs: d.elapsedMs,
+          status: 'running',
+        });
+        flush();
+        return;
+      }
       const block = blocks[idx];
       if (!block || block.type !== 'tool') return;
       // Don't reanimate a finished tool — if a heartbeat slips in after
@@ -192,6 +224,48 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         ...(d.note !== undefined ? { progressNote: d.note } : {}),
       };
       flush();
+    },
+
+    provider_call: (data) => {
+      const d = data as {
+        runId?: string;
+        turn?: number;
+        provider?: string;
+        model?: string;
+        toolCount?: number;
+        historyChars?: number;
+      };
+      const id = `provider-chat:${String(d.runId ?? 'run')}:${String(d.turn ?? 0)}`;
+      const label = `${String(d.provider ?? 'provider')}:${String(d.model ?? 'model')}`;
+      upsertActivity(blocks, {
+        id,
+        kind: 'provider',
+        label,
+        phase: 'provider_call',
+        note: `calling provider${d.toolCount != null ? ` with ${d.toolCount} tools` : ''}`,
+        status: 'running',
+      });
+      flush();
+    },
+
+    operation_started: (data) => {
+      const d = data as OperationPayload;
+      if (isCoveredToolOperation(d, toolIndex)) return;
+      upsertActivity(blocks, activityPatchFromOperation(d));
+      flush();
+    },
+
+    operation_progress: (data) => {
+      const d = data as OperationPayload;
+      if (isCoveredToolOperation(d, toolIndex)) return;
+      upsertActivity(blocks, activityPatchFromOperation(d));
+      flush();
+    },
+
+    operation_finished: (data) => {
+      const d = data as OperationPayload;
+      if (isCoveredToolOperation(d, toolIndex)) return;
+      if (finishActivity(blocks, activityPatchFromOperation(d))) flush();
     },
 
     plan: (data) => {
@@ -427,85 +501,12 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     },
 
     agent_progress: (data) => {
-      const d = data as {
-        groupId: string;
-        agentIndex: number;
-        label: string;
-        event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'error' | 'timed_out' | 'aborted';
-        status?: AgentStatus;
-        provider?: string;
-        model?: string;
-        toolCallCount?: number;
-        note?: string;
-        phase?: string;
-        turn?: number;
-        elapsedMs?: number;
-        idleMs?: number;
-        deadlineMs?: number;
-        lastToolName?: string;
-        usage?: Usage;
-        summary?: string;
-        error?: string;
-      };
-      for (const b of blocks) {
-        if (b.type !== 'agents' || b.group.groupId !== d.groupId) continue;
-        const agent = b.group.agents[d.agentIndex];
-        if (!agent) continue;
-        if (d.provider) agent.provider = d.provider;
-        if (d.model) agent.model = d.model;
-        if (d.phase) agent.phase = d.phase;
-        if (d.turn != null) agent.turn = d.turn;
-        if (d.elapsedMs != null) agent.elapsedMs = d.elapsedMs;
-        if (d.idleMs != null) agent.idleMs = d.idleMs;
-        if (d.deadlineMs != null) agent.deadlineMs = d.deadlineMs;
-        if (d.lastToolName) agent.lastToolName = d.lastToolName;
-        switch (d.event) {
-          case 'spawned':
-            agent.status = d.status ?? 'running';
-            break;
-          case 'heartbeat':
-            agent.status = d.status ?? 'running';
-            if (d.toolCallCount != null) agent.toolCallCount = d.toolCallCount;
-            if (d.note) agent.progressNote = d.note;
-            break;
-          case 'tool_call':
-            agent.status = d.status ?? 'running';
-            agent.toolCallCount = d.toolCallCount ?? agent.toolCallCount + 1;
-            break;
-          case 'completed':
-            agent.status = 'completed';
-            agent.usage = d.usage;
-            agent.summary = d.summary;
-            break;
-          case 'timed_out':
-            agent.status = 'timed_out';
-            agent.error = d.error;
-            agent.summary = d.summary;
-            break;
-          case 'aborted':
-            agent.status = 'aborted';
-            agent.error = d.error;
-            agent.summary = d.summary;
-            break;
-          case 'error':
-            agent.status = 'error';
-            agent.error = d.error;
-            break;
-        }
-        break;
-      }
-      flush();
+      if (applyAgentProgress(blocks, data as AgentProgressPayload)) flush();
     },
 
     agents_group_end: (data) => {
       const d = data as { groupId: string; totalUsage?: Usage };
-      for (const b of blocks) {
-        if (b.type !== 'agents' || b.group.groupId !== d.groupId) continue;
-        b.group.status = 'completed';
-        b.group.totalUsage = d.totalUsage;
-        break;
-      }
-      flush();
+      if (applyAgentsGroupEnd(blocks, d)) flush();
     },
 
     auto_continue: (data) => {
@@ -551,6 +552,30 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // off refreshKey (state-summary fetch, banners) update in lockstep with
       // the prop-driven todo render.
       updateSession(sid, (cur) => ({ todos, sidebarRefreshTick: cur.sidebarRefreshTick + 1 }));
+    },
+
+    /**
+     * Mid-run agent transition (plan→build after submit_plan approval,
+     * spec→build after submit_spec, manual switches via dashboard).
+     * AgentChat.tsx subscribes to the DOM CustomEvent and updates its
+     * picker state without a manual `/sessions/:id` refetch.
+     *
+     * Bridged through a DOM event because `agent` is held as local
+     * useState in AgentChat rather than in this stream store — avoids
+     * a broader refactor while still closing the loop.
+     */
+    session_agent_changed: (data) => {
+      const d = data as { agent?: string };
+      if (typeof window === 'undefined' || !d.agent) return;
+      try {
+        window.dispatchEvent(
+          new CustomEvent('coder:session_agent_changed', {
+            detail: { sessionId: sid, agent: d.agent },
+          }),
+        );
+      } catch {
+        /* defensive — never let an event bridge crash the stream */
+      }
     },
 
     tool_loop_intervention: (data) => {
@@ -618,6 +643,66 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       updateSession(sid, { error: message });
     },
   };
+}
+
+interface OperationPayload {
+  opId?: string;
+  parentOpId?: string;
+  kind?: string;
+  label?: string;
+  phase?: string;
+  status?: string;
+  startedAt?: number;
+  elapsedMs?: number;
+  idleMs?: number;
+  deadlineMs?: number;
+  note?: string;
+}
+
+function activityPatchFromOperation(d: OperationPayload) {
+  const opId = String(d.opId ?? 'operation');
+  return {
+    id: opId,
+    kind: kindFromOperation(d.kind),
+    label: String(d.label ?? opId),
+    phase: d.phase,
+    note: d.note,
+    status: statusFromOperation(d.status),
+    startedAt: typeof d.startedAt === 'number' ? d.startedAt : undefined,
+    elapsedMs: typeof d.elapsedMs === 'number' ? d.elapsedMs : undefined,
+    idleMs: typeof d.idleMs === 'number' ? d.idleMs : undefined,
+    deadlineMs: typeof d.deadlineMs === 'number' ? d.deadlineMs : undefined,
+    parentOpId: typeof d.parentOpId === 'string' ? d.parentOpId : undefined,
+  };
+}
+
+function activityKindFromToolProgress(id: string, name: string) {
+  if (name === 'provider.chat' || id.startsWith('provider-chat:') || id.startsWith('pre-think:')) return 'provider';
+  if (name.startsWith('subagent:')) return 'subagent';
+  if (name === 'execute_tasks') return 'task';
+  return 'operation';
+}
+
+function isSubagentToolProgress(d: { id: string; name: string; note?: string }): boolean {
+  return (
+    d.name.startsWith('subagent:') ||
+    d.id.startsWith('subagent-') ||
+    d.note?.startsWith('[subagent]') === true
+  );
+}
+
+function isCoveredToolOperation(d: OperationPayload, toolIndex: Map<string, number>): boolean {
+  if (d.kind !== 'tool' || typeof d.opId !== 'string') return false;
+  const toolUseId = d.opId.startsWith('tool:') ? d.opId.slice('tool:'.length) : d.opId;
+  return toolIndex.has(toolUseId);
+}
+
+function rebuildToolIndex(blocks: StreamBlock[], toolIndex: Map<string, number>): void {
+  toolIndex.clear();
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (block.type === 'tool') toolIndex.set(block.call.id, i);
+  }
 }
 
 // ─── Chat pipeline events (PR-3) ─────────────────────────────────

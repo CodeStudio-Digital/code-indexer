@@ -15,7 +15,7 @@ export const events = {
     ratio: opts.ratio,
   }),
   toolLoopDetected: (opts: {
-    guard: 'tuple-hash' | 'doom-loop' | 'dominance';
+    guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak';
   }): BehaviorEvent => ({
     kind: 'ToolLoopDetected',
     guard: opts.guard,

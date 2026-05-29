@@ -203,7 +203,8 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
   {
     pipelineName: 'doc_ingest',
     bindingRole: 'embedder',
-    description: 'Embeddings used for the docs vector store. Can differ from the indexer_search embedder.',
+    description:
+      'INFORMATIONAL ONLY — not consumed by code. The docs embedder is governed by the shared embedding_configs default (the worker emits @cf/baai/bge-m3, 1024-dim, multilingual) for BOTH corpus and queries. This row is reserved for future per-corpus embedder selection; setting it today has no effect.',
     recommendedDefault: { providerKind: 'cloudflare', modelHint: '@cf/baai/bge-m3' },
     introducedInPhase: '9',
   },

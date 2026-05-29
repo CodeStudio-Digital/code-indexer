@@ -165,17 +165,38 @@ export class ExecutingNode implements BehaviorNode {
       model: ctx.opts.provider.model,
     });
     if (preEmit.shouldCompact) {
+      // The decrement below means `maxTurns` can't backstop a pre-emit
+      // compaction that keeps firing without ever freeing the window
+      // (e.g. the protected tail alone exceeds 90%, or a huge tool_result
+      // sits in the protected zone). Bound the consecutive cycles
+      // explicitly: after `cap` passes in a row the context is
+      // irreducible — abort cleanly rather than loop forever.
+      ctx.preEmitCompactions += 1;
+      const cap = Number(process.env.CODER_PREEMIT_COMPACT_MAX ?? '3') || 3;
+      if (ctx.preEmitCompactions > cap) {
+        ctx.stopReason = 'compact_exhausted';
+        ctx.error = new Error(
+          `pre-emit compaction failed to free the context window after ${cap} ` +
+          `consecutive passes (projected=${preEmit.projectedTokens} ` +
+          `effective=${preEmit.effective} ratio=${preEmit.ratio.toFixed(3)})`,
+        );
+        dbg(`pre-emit cap exceeded (${ctx.preEmitCompactions}/${cap}) — aborting compact_exhausted`);
+        return events.aborted();
+      }
       dbg(
-        `pre-emit gate fired: projected=${preEmit.projectedTokens} ` +
+        `pre-emit gate fired (${ctx.preEmitCompactions}/${cap}): projected=${preEmit.projectedTokens} ` +
         `effective=${preEmit.effective} ratio=${preEmit.ratio.toFixed(3)}`,
       );
-      // We bumped ctx.turn at line 52, but the provider was never called.
-      // Decrement so the next Executing entry (after Compacting) counts
-      // as the same logical turn — avoids burning the auto-continue
-      // budget on compactions.
+      // We bumped ctx.turn at the top of execute(), but the provider was
+      // never called. Decrement so the next Executing entry (after
+      // Compacting) counts as the same logical turn — avoids burning the
+      // auto-continue budget on compactions.
       ctx.turn = Math.max(0, ctx.turn - 1);
       return events.tokenThresholdHit({ ratio: preEmit.ratio });
     }
+    // Gate passed — any prior compaction freed enough room, so reset the
+    // consecutive-pre-emit counter. A future runaway starts counting fresh.
+    ctx.preEmitCompactions = 0;
 
     // Deep-think pre-think (opt-in via opts.deepThink). Prefills an
     // auxiliary reasoning block onto BOTH the working window and the
@@ -506,6 +527,26 @@ export class ExecutingNode implements BehaviorNode {
         ctx.operations.progress(`tool:${id}`, { phase: 'running', ...(note ? { note } : {}) });
         ctx.emit('tool_progress', { id, name, elapsedMs, ...(note ? { note } : {}) });
       },
+      // PR 5 — wire failure-streak guard. State lives on ctx so it
+      // survives across turns within the run. The intervention callback
+      // mirrors to `tool_loop_intervention` so the dashboard sees the
+      // banner identically to the other guard kinds.
+      failureStreakState: ctx.failureStreaks,
+      onFailureStreakIntervention: (payload) => {
+        ctx.emit('tool_loop_intervention', {
+          kind: 'failure-streak',
+          turn: payload.turn,
+          toolName: payload.toolName,
+          count: payload.count,
+          firstFailureTurn: payload.firstFailureTurn,
+          lastError: payload.lastError,
+          severity: payload.kind === 'refuse' ? 'refused' : 'informational',
+          reason:
+            payload.kind === 'refuse'
+              ? `Tool '${payload.toolName}' failed ${payload.count}x in a row — forcing planning turn.`
+              : `Tool '${payload.toolName}' has failed ${payload.count}x in a row — reminder injected.`,
+        });
+      },
     });
 
     const toolMessage = buildToolMessage(dispatch.results);
@@ -535,7 +576,7 @@ export class ExecutingNode implements BehaviorNode {
     runQualityCheck(ctx, joinText(result.textBlocks), dispatch.results, result.toolUses);
 
     if (dispatch.toolLoopDetected) {
-      return events.toolLoopDetected({ guard: 'tuple-hash' });
+      return events.toolLoopDetected({ guard: dispatch.loopGuard ?? 'tuple-hash' });
     }
 
     if (result.usage?.input_tokens) {

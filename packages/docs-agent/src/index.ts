@@ -28,11 +28,13 @@ import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type {
   PipelineProviderResolver,
   ResolveContext,
+  ResolvedBinding,
 } from '@mcp/services/pipelines/index.js';
 import type { DocHybridSearch } from '@mcp/services/services/docs/index.js';
 import type { DocStore } from '@mcp/store/doc-store.js';
-import { buildDocsToolset, type DocsToolsetCounters } from './tools/index.js';
-import type { DocsFinishSlot } from './tools/docs-finish.js';
+import { buildDocsToolset, type DocsToolsetCounters, type PlanSlot } from './tools/index.js';
+import type { DocsFinishSlot, DocsFinishPayload } from './tools/docs-finish.js';
+import { reviewAnswer, applyReview } from './review/review-gate.js';
 import { buildDocsSystemPrompt } from './prompts/system-prompt.js';
 import {
   DocsResearchSessionsStore,
@@ -47,9 +49,13 @@ import type {
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
-const DEFAULT_MAX_TURNS = 5;
+// Raised from 5/8 — the structured loop (plan → search per sub-question →
+// read → synthesize → finish) needs headroom so a multi-part query doesn't
+// hit the cap mid-coverage. The fidelity review gate is a post-run step, not
+// a turn, so it doesn't consume this budget.
+const DEFAULT_MAX_TURNS = 8;
 /** Hard cap so a misconfigured caller can't trigger arbitrarily long runs. */
-const MAX_MAX_TURNS = 8;
+const MAX_MAX_TURNS = 12;
 
 export interface RunDocsAgentDeps {
   /** SQLite handle — used to persist research sessions + reranker cache. */
@@ -94,6 +100,7 @@ export async function runDocsAgent(
     cost_usd: 0,
   };
   const finishSlot: DocsFinishSlot = { payload: null };
+  const planSlot: PlanSlot = { subQuestions: null };
 
   // Build a placeholder for the abort handle so we can wire `handle.abort`
   // before the runner exists.
@@ -135,6 +142,7 @@ export async function runDocsAgent(
         resolveContext: opts.resolveContext,
         scopedCollections: opts.collections,
         finishSlot,
+        planSlot,
         counters,
       });
 
@@ -188,11 +196,22 @@ export async function runDocsAgent(
 
       // 10. Map slot → result.
       if (finishSlot.payload) {
+        // Fidelity review gate — the strong model checks the (cheaply
+        // synthesized) answer against the cited chunks before it ships. Runs
+        // once, post-loop; degrades to a no-op on any reviewer failure.
+        const reviewed = await runFidelityReview(
+          finishSlot.payload,
+          opts.query,
+          planSlot.subQuestions,
+          binding,
+          deps.docStore,
+          counters,
+        );
         const result: DocsResearchResult = {
           sessionId,
-          markdown: finishSlot.payload.markdown,
+          markdown: reviewed.markdown,
           chunks_cited: finishSlot.payload.chunks_cited,
-          confidence: finishSlot.payload.confidence,
+          confidence: reviewed.confidence,
           telemetry: buildTelemetry(
             turns,
             counters,
@@ -257,6 +276,44 @@ export async function runDocsAgent(
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
+}
+
+/**
+ * Run the fidelity review gate over a finished answer and fold the verdict
+ * in. Hydrates the cited chunks, asks the strong `binding` to verify each
+ * claim, and applies any repair (corrected markdown + downgraded
+ * confidence). The reviewer's tokens roll into `counters` so the cost is
+ * never hidden. Disable with DOCS_REVIEW_GATE=0.
+ */
+async function runFidelityReview(
+  payload: DocsFinishPayload,
+  query: string,
+  subQuestions: string[] | null,
+  binding: ResolvedBinding,
+  docStore: DocStore,
+  counters: DocsToolsetCounters,
+): Promise<{ markdown: string; confidence: ResearchConfidence }> {
+  if (process.env.DOCS_REVIEW_GATE === '0') {
+    return { markdown: payload.markdown, confidence: payload.confidence };
+  }
+  const chunks = docStore.getChunksByIds(payload.chunks_cited).map((c) => ({
+    chunk_id: c.id,
+    heading_path: c.heading_path,
+    content: c.content,
+  }));
+  const review = await reviewAnswer({
+    query,
+    markdown: payload.markdown,
+    chunks,
+    binding,
+    subQuestions: subQuestions ?? undefined,
+  });
+  if (review.usage) {
+    counters.input_tokens += review.usage.input_tokens;
+    counters.output_tokens += review.usage.output_tokens;
+  }
+  const applied = applyReview(payload.markdown, payload.confidence, review);
+  return { markdown: applied.markdown, confidence: applied.confidence };
 }
 
 function buildTelemetry(

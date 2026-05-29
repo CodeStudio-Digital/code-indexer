@@ -102,7 +102,13 @@ interface ToolConfigDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-export function ToolConfigDialog({ sessionId, open, onOpenChange }: ToolConfigDialogProps) {
+/**
+ * Headless body of the tool-config surface. Shared by the legacy modal
+ * (`ToolConfigDialog`) and the new right-rail panel (`ToolConfigPanel`).
+ * The hook owns its fetch lifecycle; pass `sessionId=null` to suspend it
+ * (e.g. while the panel is collapsed).
+ */
+export function ToolConfigView({ sessionId }: { sessionId: number | null }) {
   const { t } = useTranslation(['chat', 'common']);
   const {
     byTier,
@@ -115,54 +121,64 @@ export function ToolConfigDialog({ sessionId, open, onOpenChange }: ToolConfigDi
     setFilter,
     toggle,
     resetAll,
-  } = useSessionToolConfig(open ? sessionId : null);
+  } = useSessionToolConfig(sessionId);
 
+  if (loading) {
+    return (
+      <div className="text-sm text-muted-foreground py-4 px-3">
+        {t('common:actions.loading')}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-center gap-3 text-xs text-muted-foreground px-3 py-1.5 border-b shrink-0">
+        <span>{t('chat:toolConfig.active', { count: activeCount })}</span>
+        {disabledCount > 0 && (
+          <span>{t('chat:toolConfig.sessionDisabled', { count: disabledCount })}</span>
+        )}
+        {globalDisabledCount > 0 && (
+          <span>{t('chat:toolConfig.globalDisabled', { count: globalDisabledCount })}</span>
+        )}
+        {disabledCount > 0 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto h-6 text-xs gap-1"
+            onClick={() => void resetAll()}
+          >
+            <RotateCcw className="h-3 w-3" /> {t('common:actions.reset')}
+          </Button>
+        )}
+      </div>
+      <div className="relative px-3 py-2 shrink-0">
+        <Search className="absolute left-5 top-4 h-3.5 w-3.5 text-muted-foreground" />
+        <Input
+          placeholder={t('chat:toolConfig.filterPlaceholder')}
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="pl-8 h-8 text-xs"
+        />
+      </div>
+      <div className="flex-1 overflow-auto space-y-1 px-2 pb-2">
+        {sortedTiers.map((tier) => (
+          <TierGroup key={tier} tier={tier} tools={byTier[tier] ?? []} onToggle={toggle} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function ToolConfigDialog({ sessionId, open, onOpenChange }: ToolConfigDialogProps) {
+  const { t } = useTranslation(['chat']);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>{t('chat:toolConfig.title')}</DialogTitle>
-          <DialogDescription>
-            {t('chat:toolConfig.description')}
-          </DialogDescription>
+          <DialogDescription>{t('chat:toolConfig.description')}</DialogDescription>
         </DialogHeader>
-
-        {loading ? (
-          <div className="text-sm text-muted-foreground py-4">{t('common:actions.loading')}</div>
-        ) : (
-          <>
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span>{t('chat:toolConfig.active', { count: activeCount })}</span>
-              {disabledCount > 0 && (
-                <span>{t('chat:toolConfig.sessionDisabled', { count: disabledCount })}</span>
-              )}
-              {globalDisabledCount > 0 && (
-                <span>{t('chat:toolConfig.globalDisabled', { count: globalDisabledCount })}</span>
-              )}
-              {disabledCount > 0 && (
-                <Button variant="ghost" size="sm" className="ml-auto h-6 text-xs gap-1" onClick={() => void resetAll()}>
-                  <RotateCcw className="h-3 w-3" /> {t('common:actions.reset')}
-                </Button>
-              )}
-            </div>
-
-            <div className="relative">
-              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-              <Input
-                placeholder={t('chat:toolConfig.filterPlaceholder')}
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                className="pl-8 h-8 text-xs"
-              />
-            </div>
-
-            <div className="flex-1 overflow-auto space-y-1 -mx-2 px-2">
-              {sortedTiers.map((tier) => (
-                <TierGroup key={tier} tier={tier} tools={byTier[tier] ?? []} onToggle={toggle} />
-              ))}
-            </div>
-          </>
-        )}
+        <ToolConfigView sessionId={open ? sessionId : null} />
       </DialogContent>
     </Dialog>
   );

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
 import { useAgentStream } from '../../hooks/useAgentStream.js';
 import { usePipelineStream } from '../../hooks/usePipelineStream.js';
@@ -16,7 +17,9 @@ import {
 import { Input } from '../../components/ui/input.js';
 import { TooltipProvider } from '../../components/ui/tooltip.js';
 import { ChatHeader } from './ChatHeader.js';
-import { SessionStateSidebar } from './SessionStateSidebar.js';
+import { ChatRightRail } from './right-panel/ChatRightRail.js';
+import { RightPanelHost } from './right-panel/RightPanelHost.js';
+import type { RightPanelId } from './right-panel/types.js';
 import { Composer, type ComposerHandle } from './composer/Composer.js';
 import { providerSupportsThinking } from './composer/provider-caps.js';
 import { PROVIDERS } from './constants.js';
@@ -24,13 +27,11 @@ import { EmptyChatState } from './EmptyChatState.js';
 import { MessageList } from './messages/MessageList.js';
 import { StuckBanner } from './StuckBanner.js';
 import { ToolLoopBanner } from './ToolLoopBanner.js';
-import { ToolStatsModal } from './ToolStatsModal.js';
-import { WorkerLogPanel } from './WorkerLogPanel.js';
-import { SessionDetailsModal } from './SessionDetailsModal.js';
-import { SessionMetricsModal } from './SessionMetricsModal.js';
+// The five ex-modals (Skills/Tools/Metrics/ToolStats/Details) and the
+// WorkerLog/SessionState panels are now routed through `RightPanelHost`
+// — only Snapshots stays as a true Dialog because its diff viewer needs
+// the full viewport width.
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
-import { ToolConfigDialog } from './ToolConfigDialog.js';
-import { SkillConfigDialog } from './SkillConfigDialog.js';
 import { SnapshotsPanel } from '../snapshots/SnapshotsPanel.js';
 import { fetchSnapshotList } from '../snapshots/api.js';
 import type {
@@ -58,6 +59,30 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [provider, setProvider] = useState('zai');
   const [model, setModel] = useState('');
   const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin' | 'spec'>('explore');
+
+  // SSE-driven agent transitions (Plan→Build after submit_plan approval,
+  // Spec→Build after submit_spec, manual server-side switches). Backend
+  // emits `session_agent_changed` via the runner bus; the stream handler
+  // (`hooks/agent-stream/handlers.ts`) bridges to this DOM CustomEvent.
+  // Replaces the polling refetch fallback in onPlanResponse / onSpecResponse
+  // (which stays as a belt-and-suspenders safety net for slow or dropped
+  // SSE deliveries).
+  useEffect(() => {
+    const onAgentChanged = (e: Event): void => {
+      const detail = (e as CustomEvent).detail as { sessionId?: number; agent?: string };
+      if (!detail || detail.sessionId !== selectedId) return;
+      const next = detail.agent;
+      if (
+        next
+        && next !== agent
+        && (next === 'explore' || next === 'plan' || next === 'build' || next === 'admin' || next === 'spec')
+      ) {
+        setAgent(next);
+      }
+    };
+    window.addEventListener('coder:session_agent_changed', onAgentChanged);
+    return () => window.removeEventListener('coder:session_agent_changed', onAgentChanged);
+  }, [agent, selectedId]);
   const [maxTurns, setMaxTurns] = useState<number | null>(null);
   const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
@@ -73,32 +98,38 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [renameGroupName, setRenameGroupName] = useState('');
   const [renameSessionTarget, setRenameSessionTarget] = useState<{ id: number; title: string } | null>(null);
   const [renameSessionTitle, setRenameSessionTitle] = useState('');
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [toolConfigOpen, setToolConfigOpen] = useState(false);
-  const [skillConfigOpen, setSkillConfigOpen] = useState(false);
-  const [metricsOpen, setMetricsOpen] = useState(false);
+  // Snapshots is the only surface that stays as a modal — its content
+  // (file diff viewer) needs the full viewport width. The other five
+  // ex-modals (skills, tools, metrics, tool-stats, details) live in the
+  // right rail now and are switched via `activeRightPanelId`.
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
-  const [toolStatsOpen, setToolStatsOpen] = useState(false);
   const [snapshotPending, setSnapshotPending] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [metaSidebarOpen, setMetaSidebarOpen] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true;
-    const saved = localStorage.getItem('chatMetaSidebarOpen');
-    return saved == null ? true : saved === 'true';
+
+  /**
+   * Single active right-rail panel id. Replaces the boolean pair
+   * `metaSidebarOpen` + `workerLogOpen` and the four modal-open flags
+   * (skillConfig/toolConfig/metrics/toolStats/details). `null` collapses
+   * the right panel entirely; the activity rail itself stays visible.
+   *
+   * Persisted so the user's preferred default panel survives reloads.
+   */
+  const [activeRightPanelId, setActiveRightPanelId] = useState<RightPanelId | null>(() => {
+    if (typeof window === 'undefined') return 'meta';
+    const saved = localStorage.getItem('chatRightPanelId');
+    // Backward-compat: honor the old `chatMetaSidebarOpen=false` flag so
+    // existing users who explicitly hid the meta sidebar don't get it
+    // popping back on the next reload.
+    if (saved === null) {
+      const legacyMetaClosed = localStorage.getItem('chatMetaSidebarOpen') === 'false';
+      return legacyMetaClosed ? null : 'meta';
+    }
+    if (saved === 'null') return null;
+    return saved as RightPanelId;
   });
   useEffect(() => {
-    localStorage.setItem('chatMetaSidebarOpen', String(metaSidebarOpen));
-  }, [metaSidebarOpen]);
-  // Worker-log inspector. Defaults off — a power-user surface, not for
-  // every session. Persist so a debugging operator stays in inspector
-  // mode across reloads.
-  const [workerLogOpen, setWorkerLogOpen] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem('chatWorkerLogOpen') === 'true';
-  });
-  useEffect(() => {
-    localStorage.setItem('chatWorkerLogOpen', String(workerLogOpen));
-  }, [workerLogOpen]);
+    localStorage.setItem('chatRightPanelId', activeRightPanelId ?? 'null');
+  }, [activeRightPanelId]);
   const [thinking, setThinking] = useState(false);
   /**
    * Per-session deepThink (simulated). Orthogonal to `thinking` — when on,
@@ -815,34 +846,25 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <SessionDetailsModal
-        open={detailsOpen}
-        onOpenChange={setDetailsOpen}
-        sessionId={selectedId}
-        session={sessionData?.session ?? null}
-        stats={stats}
-      />
-      <SessionMetricsModal
-        open={metricsOpen}
-        onOpenChange={setMetricsOpen}
-        sessionId={selectedId}
-      />
-      <ToolStatsModal
-        open={toolStatsOpen}
-        onClose={() => setToolStatsOpen(false)}
-        sessionId={selectedId}
-      />
-      <ToolConfigDialog
-        sessionId={selectedId}
-        open={toolConfigOpen}
-        onOpenChange={setToolConfigOpen}
-      />
-      <SkillConfigDialog
-        sessionId={selectedId}
-        open={skillConfigOpen}
-        onOpenChange={setSkillConfigOpen}
-      />
+      {/* Snapshots is the only ex-modal that stays modal — full-width
+          diff viewer needs the viewport. The other five (skills, tools,
+          metrics, tool-stats, details) live in the right rail as panels. */}
       <div className="flex h-full min-h-0">
+        {/* `agent-chat-cols-v2` bumps the persisted-storage key so the
+            three-panel layout (sessions / chat / right-rail) gets a fresh
+            split instead of inheriting the legacy two-panel sizing — which
+            could leave the right panel taking ~50% of the viewport and
+            squishing the chat header into a wrap. */}
+        <PanelGroup direction="horizontal" autoSaveId="agent-chat-cols-v2" className="flex-1 min-h-0">
+        <Panel
+          id="sessions-sidebar"
+          order={1}
+          defaultSize={20}
+          minSize={14}
+          maxSize={32}
+          collapsible
+          className="min-w-0"
+        >
         <SessionSidebar
           sessions={sessions ?? null}
           groups={groups ?? null}
@@ -883,17 +905,19 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
           providerOptions={providerOptions}
           currentProviderModels={currentProviderModels}
         />
-
-        <main className="flex flex-1 min-w-0 bg-card overflow-hidden min-h-0">
+        </Panel>
+        <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors hidden lg:block" />
+        <Panel id="chat-main" order={2} minSize={40} className="min-w-0">
           {!selectedId ? (
-            <EmptyChatState
-              onNew={handleNewSession}
-              projectName={projectName}
-              onOpenSidebar={() => setMobileSidebarOpen(true)}
-            />
+            <main className="flex h-full w-full min-w-0 bg-card overflow-hidden min-h-0">
+              <EmptyChatState
+                onNew={handleNewSession}
+                projectName={projectName}
+                onOpenSidebar={() => setMobileSidebarOpen(true)}
+              />
+            </main>
           ) : (
-            <>
-              <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+            <main className="flex h-full w-full min-w-0 bg-card overflow-hidden min-h-0 flex-col">
               {sessionData?.session && (
                 <ChatHeader
                   session={sessionData.session}
@@ -903,18 +927,13 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                   stats={stats}
                   contextStatus={contextStatus}
                   indexStatus={indexStatus}
-                  onOpenDetails={() => setDetailsOpen(true)}
+                  // Details/Tools/Skills/Metrics/ToolStats live in the right
+                  // rail now — the header only handles mobile sidebar toggle
+                  // and the tokens widget. The activity rail (rendered next
+                  // to the right panel) owns those buttons.
+                  onOpenDetails={() => setActiveRightPanelId('details')}
                   onOpenSidebar={() => setMobileSidebarOpen(true)}
-                  onOpenToolConfig={() => setToolConfigOpen(true)}
-                  onOpenSkillConfig={() => setSkillConfigOpen(true)}
-                  onOpenMetrics={() => setMetricsOpen(true)}
-                  onOpenSnapshots={() => setSnapshotsOpen(true)}
-                  onOpenToolStats={() => setToolStatsOpen(true)}
                   pendingSnapshots={snapshotPending}
-                  metaSidebarOpen={metaSidebarOpen}
-                  onToggleMetaSidebar={() => setMetaSidebarOpen((v) => !v)}
-                  workerLogOpen={workerLogOpen}
-                  onToggleWorkerLog={() => setWorkerLogOpen((v) => !v)}
                 />
               )}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -922,7 +941,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 <StuckBanner
                   streaming={streaming}
                   lastEventAt={lastEventAt ?? null}
-                  onOpenLog={() => setWorkerLogOpen(true)}
+                  onOpenLog={() => setActiveRightPanelId('worker-log')}
                 />
                 <MessageList
                   sessionData={sessionData ?? null}
@@ -991,33 +1010,57 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                   }
                 }}
               />
-              </div>
-              {workerLogOpen && (
-                <div className="w-[440px] shrink-0 min-w-0">
-                  <WorkerLogPanel
-                    entries={eventLog ?? []}
-                    onClose={() => setWorkerLogOpen(false)}
-                  />
-                </div>
-              )}
-              {sessionData?.session && metaSidebarOpen && (
-                <SessionStateSidebar
-                  sessionId={sessionData.session.id}
-                  refreshKey={stateRefreshKey + sidebarRefreshTick}
-                  todos={todos}
-                  projectId={projectId}
-                  filePicks={filePicks}
-                  onTogglePick={togglePick}
-                  onSetManyPicks={setManyPicks}
-                  onClearPicks={clearPicks}
-                  skillPicks={skillPicks}
-                  onToggleSkillPick={toggleSkillPick}
-                  pipelineRuntime={pipelineRuntime}
-                />
-              )}
-            </>
+            </main>
           )}
-        </main>
+        </Panel>
+        {selectedId && activeRightPanelId && (
+          <>
+            <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors hidden lg:block" />
+            <Panel
+              id="right-panel"
+              order={3}
+              defaultSize={22}
+              minSize={16}
+              maxSize={38}
+              collapsible
+              className="hidden lg:block min-w-0"
+            >
+              <RightPanelHost
+                activeId={activeRightPanelId}
+                sessionId={selectedId}
+                session={sessionData?.session ?? null}
+                sessionData={sessionData ?? null}
+                stats={stats}
+                projectId={projectId}
+                refreshKey={stateRefreshKey + sidebarRefreshTick}
+                todos={todos}
+                filePicks={filePicks}
+                onTogglePick={togglePick}
+                onSetManyPicks={setManyPicks}
+                onClearPicks={clearPicks}
+                skillPicks={skillPicks}
+                onToggleSkillPick={toggleSkillPick}
+                pipelineRuntime={pipelineRuntime}
+                eventLog={eventLog ?? []}
+                onClose={() => setActiveRightPanelId(null)}
+              />
+            </Panel>
+          </>
+        )}
+        </PanelGroup>
+        {/* Activity rail — fixed 40px, sits flush right when a session is
+            open. Hidden on mobile (where the sidebar drawer already
+            provides navigation, and 40px would crowd the chat). */}
+        {selectedId && (
+          <div className="hidden lg:block">
+            <ChatRightRail
+              activePanelId={activeRightPanelId}
+              onSelectPanel={setActiveRightPanelId}
+              onOpenSnapshots={() => setSnapshotsOpen(true)}
+              pendingSnapshots={snapshotPending}
+            />
+          </div>
+        )}
       </div>
       {selectedId != null && (
         <Dialog open={snapshotsOpen} onOpenChange={setSnapshotsOpen}>

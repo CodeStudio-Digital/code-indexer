@@ -71,7 +71,6 @@ import { ToolOutputStore } from '@mcp/code-agent/overlay/tool-output-store.js';
 import { toolOutputTools } from '@mcp/code-agent/tools/tool-output.js';
 import { diagnosticsTools } from '@mcp/code-agent/tools/diagnostics.js';
 import { lspTools } from '@mcp/code-agent/tools/lsp.js';
-import { ptyTools } from '@mcp/code-agent/tools/pty.js';
 import { execCommandTools } from '@mcp/code-agent/tools/exec-command.js';
 import { webTools } from '@mcp/code-agent/tools/web.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
@@ -280,7 +279,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(toolOutputTools);
   registry.registerAll(diagnosticsTools);
   registry.registerAll(lspTools);
-  registry.registerAll(ptyTools);
   registry.registerAll(execCommandTools);
   registry.registerAll(webTools);
   registry.registerAll(globTools);
@@ -641,6 +639,38 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       } catch (e) {
         console.warn(`[coder] setSessionAgent failed: ${e instanceof Error ? e.message : String(e)}`);
       }
+      // Apply the NEW agent's defaults to the LIVE runner so the next
+      // mutating tool call in the same run unlocks immediately
+      // (plan → build flow after `submit_plan` approval). Without this,
+      // the runner kept the old `planMode=true` until the NEXT runCoder
+      // invocation, so every edit between approval and the next user
+      // message was refused by the plan-mode gate.
+      //
+      // Also emits `session_agent_changed` so the dashboard's AgentPicker
+      // updates without a manual refetch (frontend listens on SSE).
+      try {
+        const live = runnerRef;
+        if (live) {
+          const def = AGENTS[agent];
+          if (def) {
+            // Mutate the live opts — the toolGate / tier filter / system
+            // prompt assembly all read from here per-turn.
+            (live.opts as { planMode?: boolean }).planMode = def.planMode ?? false;
+            (live.opts as { agentId?: import('@mcp/code-agent/agents/index.js').AgentId }).agentId = agent;
+            // When switching INTO plan/spec mode (rare — usually it's
+            // the reverse), the approval flag must reset so the gate
+            // re-engages until a fresh submit_plan/submit_spec is
+            // approved. Switching OUT of plan mode (the common case)
+            // leaves the existing `planApproved=true` harmless since
+            // the gate now short-circuits on `planMode=false`.
+            if (def.planMode && live.resetPlanApproval) live.resetPlanApproval();
+            if (def.specMode && live.resetSpecApproval) live.resetSpecApproval();
+          }
+          live.emit('session_agent_changed', { agent });
+        }
+      } catch (e) {
+        console.warn(`[coder] setSessionAgent live-apply failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
     },
     // Tasks persistence — see migration 008 + SessionStore.recordTasks/etc.
     recordTasks: (toolUseId, state) => {
@@ -996,15 +1026,19 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // a burst of edits in a single turn collapses into one reload.
   if (opts.companyContext?.sandbox) {
     const orch = opts.companyContext.orchestrator;
-    const FILE_WRITE_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'multi_edit']);
+    const FILE_WRITE_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'multi_edit', 'manage_path']);
     const pending = new Set<string>();
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     hookRegistry.onToolCall('after', (ctx) => {
       if (!FILE_WRITE_TOOLS.has(ctx.toolName)) return;
       if (ctx.result?.isError) return;
-      const raw = ctx.toolArgs.path ?? ctx.toolArgs.file_path ?? '';
-      const path = typeof raw === 'string' ? raw : String(raw);
-      if (path) pending.add(path);
+      const rawPaths = [ctx.toolArgs.path ?? ctx.toolArgs.file_path];
+      if (ctx.toolName === 'manage_path') rawPaths.push(ctx.toolArgs.from_path, ctx.toolArgs.to_path);
+      for (const raw of rawPaths) {
+        if (raw == null) continue;
+        const path = typeof raw === 'string' ? raw : String(raw);
+        if (path) pending.add(path);
+      }
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         const paths = [...pending];
@@ -1026,34 +1060,40 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // and forget: the hook returns immediately and the indexer runs in the
   // background while the next turn begins.
   if (isIndexed && !sandboxBinding) {
-    const FILE_MUTATING_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'multi_edit']);
+    const FILE_MUTATING_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'multi_edit', 'manage_path']);
     hookRegistry.onToolCall('after', (ctx) => {
       if (!FILE_MUTATING_TOOLS.has(ctx.toolName)) return;
       if (ctx.result?.isError) return;
-      const raw = ctx.toolArgs.path ?? ctx.toolArgs.file_path ?? '';
-      const rawStr = typeof raw === 'string' ? raw : String(raw);
-      if (!rawStr) return;
+      const rawPaths = [ctx.toolArgs.path ?? ctx.toolArgs.file_path];
+      if (ctx.toolName === 'manage_path') rawPaths.push(ctx.toolArgs.from_path, ctx.toolArgs.to_path);
+      const rawStrs = rawPaths
+        .filter((raw): raw is string | number | boolean => raw != null)
+        .map((raw) => (typeof raw === 'string' ? raw : String(raw)))
+        .filter(Boolean);
+      if (rawStrs.length === 0) return;
       // Normalize to the same shape the scanner stores in `files.path`:
       // forward slashes, no leading `./`, no trailing slash. Without this,
       // `db.getFile(projectId, relPath)` misses on Windows (backslashes) or
       // when the agent passes `./src/foo.ts`, and the tree-sitter refresh
       // is silently skipped.
-      const relPath = rawStr.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
-      // Async, non-blocking. `loadIncrementalIndexer` (module-level lazy
-      // singleton above) defers the tree-sitter WASM load to the first
-      // mutation in this process — sessions that never edit code pay
-      // zero cost. Subsequent calls reuse the cached `indexFileNow`
-      // reference without re-entering the module resolver.
-      void (async () => {
-        try {
-          const indexFileNow = await loadIncrementalIndexer();
-          const abs = resolvePath(toolContext.cwd, relPath);
-          const content = await (toolContext.ports?.fs ?? defaultLocalFilesystemPort()).readFile(abs);
-          await indexFileNow(db, project.id, relPath, content);
-        } catch {
-          // best-effort — never crash on incremental refresh failures
-        }
-      })();
+      for (const rawStr of rawStrs) {
+        const relPath = rawStr.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+        // Async, non-blocking. `loadIncrementalIndexer` (module-level lazy
+        // singleton above) defers the tree-sitter WASM load to the first
+        // mutation in this process — sessions that never edit code pay
+        // zero cost. Subsequent calls reuse the cached `indexFileNow`
+        // reference without re-entering the module resolver.
+        void (async () => {
+          try {
+            const indexFileNow = await loadIncrementalIndexer();
+            const abs = resolvePath(toolContext.cwd, relPath);
+            const content = await (toolContext.ports?.fs ?? defaultLocalFilesystemPort()).readFile(abs);
+            await indexFileNow(db, project.id, relPath, content);
+          } catch {
+            // best-effort — never crash on incremental refresh failures
+          }
+        })();
+      }
     });
   }
 

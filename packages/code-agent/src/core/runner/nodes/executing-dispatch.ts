@@ -19,25 +19,29 @@ import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.j
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ToolContext, CoderTool } from '@mcp/code-agent/core/tool.js';
 import { checkDupCall } from '../guards/tuple-hash-dedup.js';
+import {
+  checkFailureStreak,
+  buildFailureStreakReminderMarker,
+  buildFailureStreakRefusalText,
+  type FailureStreakState,
+  type FailureStreakVerdict,
+} from '../guards/failure-streak.js';
 import type { DupCallEntry } from '../machine/types.js';
 import { withAbortAndTimeout, isTimeoutError, isAbortError } from './executing-abort.js';
+import { resolveToolMetadata } from '../../policy.js';
+import { resolveToolTimeoutMs, NORMAL_TIMEOUT_MS } from '../../tool-timeouts.js';
 
 /**
- * Hard upper bound on a single tool invocation. Catches misbehaving MCP
- * tools that have no `timeoutMs` declared and would otherwise wedge the
- * Executing node forever (the Camada 1 heartbeat surfaces "still running"
- * but cannot cancel). Tools explicitly marked `interactive: true` or
- * `timeoutMs: Infinity` are exempt — they legitimately wait on humans /
- * cooperative polling.
+ * Per-invocation timeout is delegated to `resolveToolTimeoutMs` (the
+ * `core/tool-timeouts.ts` classification): interactive/repeatable tools get
+ * no timeout; known-slow tools (subagents, code_exec, run_command, research,
+ * MCP) get 30 min; everything else 5 min. Interactivity is resolved through
+ * `resolveToolMetadata` because the built-in interactive set declares the
+ * flag in `policy.ts` (BUILTIN_CLASSIFICATION), NOT on the tool object —
+ * reading the raw `tool.interactive` here is exactly what made submit_plan /
+ * ask_user hit the 5-min timeout while blocked on the user. Override the
+ * tiers via MCP_TOOL_NORMAL_TIMEOUT_MS / MCP_TOOL_SLOW_TIMEOUT_MS.
  */
-const DEFAULT_TOOL_TIMEOUT_MS = (() => {
-  const v = process.env.CODER_TOOL_DEFAULT_TIMEOUT_MS;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 300_000; // 5 minutes
-})();
 
 export interface DispatchedToolResult {
   toolUseId: string;
@@ -130,21 +134,59 @@ export interface DispatchArgs {
   onToolProgress?: (id: string, name: string, elapsedMs: number, note?: string) => void;
   /** Heartbeat interval in ms. Default 10 000 (10s). */
   toolProgressIntervalMs?: number;
+  /**
+   * PR 5 — per-tool failure-streak state. Shared across all dispatched
+   * tools in this turn (a single successful call resets the streak for
+   * its tool). Passed in by `ExecutingNode` from `ctx.failureStreaks`.
+   * Pass `undefined` to disable the guard (tests / subagent paths that
+   * don't need the protection).
+   */
+  failureStreakState?: FailureStreakState;
+  /**
+   * PR 5 — emitted when the failure-streak guard returns a non-pass
+   * verdict. The runner mirrors this onto `tool_loop_intervention` so
+   * the dashboard surfaces a banner. Optional: when omitted, the
+   * verdict still mutates state but no event fires.
+   */
+  onFailureStreakIntervention?: (payload: {
+    toolName: string;
+    kind: 'reminder' | 'refuse';
+    count: number;
+    firstFailureTurn: number;
+    lastError: string;
+    turn: number;
+  }) => void;
 }
 
 export interface DispatchResult {
   results: DispatchedToolResult[];
   /** True when at least one call was refused — caller routes to Planning. */
   toolLoopDetected: boolean;
+  /**
+   * PR 5 — which guard fired the most recent refusal in this batch.
+   * `undefined` when `toolLoopDetected` is false. Routed by the
+   * Executing node into `events.toolLoopDetected({ guard })` so the
+   * orchestrator and dashboard see WHICH guard fired (not just THAT
+   * one did).
+   */
+  loopGuard?: 'tuple-hash' | 'failure-streak';
 }
 
 export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult> {
   const results: DispatchedToolResult[] = [];
   let toolLoopDetected = false;
+  // PR 5 — which guard fired last. Tracked so the Executing node can
+  // surface the correct guard kind to the orchestrator.
+  let loopGuard: DispatchResult['loopGuard'] | undefined;
 
   for (const tu of args.toolUses) {
     const tool = lookupTool(args.registry, tu.name);
     const isRepeatable = !!tool?.repeatable;
+    // Interactivity comes from the policy classification, NOT the raw tool
+    // object: the built-in interactive tools (submit_plan, ask_user,
+    // submit_tasks, submit_spec, master variants) declare `interactive` in
+    // `policy.ts`'s BUILTIN_CLASSIFICATION, not on their CoderTool.
+    const interactive = tool ? resolveToolMetadata(tool).interactive : false;
 
     // Pre-dispatch gate (plan/spec/policy refusal). Synthesises an error
     // tool_result without touching the dedup counter — the call never
@@ -218,6 +260,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         wasRefusedByDedup: true,
       });
       toolLoopDetected = true;
+      loopGuard = 'tuple-hash';
       continue;
     }
 
@@ -233,8 +276,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // long-running invocations (web_fetch, run_command, spawn_agent
     // parallel batches). Suppressed for `interactive: true` (waiting for
     // user input) and `timeoutMs: Infinity` (legitimately long polling).
-    const heartbeatSuppressed =
-      tool?.interactive === true || tool?.timeoutMs === Infinity || !args.onToolProgress;
+    const heartbeatSuppressed = interactive || !args.onToolProgress;
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     if (!heartbeatSuppressed) {
       const intervalMs = args.toolProgressIntervalMs ?? 10_000;
@@ -243,14 +285,15 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       }, intervalMs);
     }
 
-    const noTimeout = tool?.interactive === true || tool?.timeoutMs === Infinity;
-    const toolTimeoutMs = noTimeout
-      ? 0
-      : (typeof tool?.timeoutMs === 'number' && tool.timeoutMs > 0
-          ? tool.timeoutMs
-          : DEFAULT_TOOL_TIMEOUT_MS);
-    const parentSignal = tool?.interactive === true ? undefined : args.toolContext.signal;
-    const invocationAbort = tool?.interactive === true ? undefined : new AbortController();
+    // Delegate the timeout to the classification util. Interactive tools
+    // (resolved via policy) opt out entirely. `resolveToolTimeoutMs` may
+    // return Infinity (interactive/repeatable/explicit) — map that to 0
+    // ("no timeout"), because `withAbortAndTimeout` treats ms<=0 as a no-op
+    // whereas passing Infinity to setTimeout would fire almost immediately.
+    const resolvedTimeout = tool ? resolveToolTimeoutMs(tool) : NORMAL_TIMEOUT_MS;
+    const toolTimeoutMs = (interactive || !Number.isFinite(resolvedTimeout)) ? 0 : resolvedTimeout;
+    const parentSignal = interactive ? undefined : args.toolContext.signal;
+    const invocationAbort = interactive ? undefined : new AbortController();
     let relayParentAbort: (() => void) | undefined;
     if (invocationAbort && parentSignal) {
       relayParentAbort = (): void => {
@@ -272,13 +315,10 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           args.onToolProgress?.(tu.id, tu.name, Date.now() - t0, trimmed);
         },
       };
-      // A4 — global tool timeout. Resolve precedence:
-      //   1. tool.timeoutMs === Infinity → no timeout (cooperative polling)
-      //   2. tool.interactive === true   → no timeout (waiting on human)
-      //   3. tool.timeoutMs > 0           → use it (per-tool override)
-      //   4. otherwise                    → DEFAULT_TOOL_TIMEOUT_MS (5min)
-      // Abort signal applies in ALL cases except `interactive: true`
-      // (which has its own pause mechanism via provideUserInput).
+      // A4 — global tool timeout, resolved above via `resolveToolTimeoutMs`
+      // (interactive/repeatable → no timeout; slow tools → 30 min; else
+      // 5 min). Abort signal applies in ALL cases except interactive tools
+      // (which have their own pause/resume mechanism via provideUserInput).
       const result = await withAbortAndTimeout(
         args.registry.invoke(tu.name, tu.input, callContext),
         {
@@ -296,7 +336,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         }
         invocationContent =
           `[tool-timeout: \`${tu.name}\` exceeded ${e.ms}ms. ` +
-          `Override via CODER_TOOL_DEFAULT_TIMEOUT_MS or declare timeoutMs on the tool.]`;
+          `Tune MCP_TOOL_NORMAL_TIMEOUT_MS / MCP_TOOL_SLOW_TIMEOUT_MS, or declare timeoutMs on the tool.]`;
       } else if (isAbortError(e)) {
         invocationContent = `[tool-aborted: \`${tu.name}\` cancelled by user/session.]`;
       } else {
@@ -313,50 +353,118 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // Smart-reducer post-result. Tool-aware truncation that keeps the
     // most useful slices intact (git_log head, grep first matches, etc.)
     // before any generic truncation. Determinism is part of the contract.
-    let shapedContent = args.reduceToolResult?.(tu.name, invocationContent) ?? invocationContent;
+    //
+    // These three bridge hooks (reduce / post-process / polling-stuck) are
+    // best-effort shaping. A throw here MUST NOT kill the turn: the
+    // tool_result is already valid, just unshaped. Each is guarded so a
+    // misbehaving host callback degrades to the pre-callback value instead
+    // of escaping `dispatchTools` (which would propagate to the
+    // orchestrator and abort the whole run).
+    let shapedContent = invocationContent;
+    try {
+      shapedContent = args.reduceToolResult?.(tu.name, invocationContent) ?? invocationContent;
+    } catch (e) {
+      console.warn(`[coder/bt] reduceToolResult threw (${tu.name}): ${errText(e)} — using raw content`);
+    }
 
-    const postProcessed = args.postProcessToolResult?.({
-      toolUseId: tu.id,
-      name: tu.name,
-      input: tu.input,
-      rawContent: invocationContent,
-      content: shapedContent,
-      isError: invocationIsError,
-      turn: args.turn,
-    });
-    if (postProcessed) {
-      shapedContent = postProcessed.content;
-      if (postProcessed.isError !== undefined) invocationIsError = postProcessed.isError;
+    try {
+      const postProcessed = args.postProcessToolResult?.({
+        toolUseId: tu.id,
+        name: tu.name,
+        input: tu.input,
+        rawContent: invocationContent,
+        content: shapedContent,
+        isError: invocationIsError,
+        turn: args.turn,
+      });
+      if (postProcessed) {
+        shapedContent = postProcessed.content;
+        if (postProcessed.isError !== undefined) invocationIsError = postProcessed.isError;
+      }
+    } catch (e) {
+      console.warn(`[coder/bt] postProcessToolResult threw (${tu.name}): ${errText(e)} — skipping post-process`);
     }
 
     // Polling-stuck detection. When a polling tool returns byte-identical
     // content N consecutive times the state isn't changing — replace with
     // a refusal so the agent stops burning tokens on dead polls.
-    const stuckRefusal = args.detectPollingStuck?.(
-      tu.name,
-      shapedContent,
-      invocationIsError,
-      isRepeatable,
-      args.turn,
-    ) ?? null;
+    let stuckRefusal: string | null = null;
+    try {
+      stuckRefusal = args.detectPollingStuck?.(
+        tu.name,
+        shapedContent,
+        invocationIsError,
+        isRepeatable,
+        args.turn,
+      ) ?? null;
+    } catch (e) {
+      console.warn(`[coder/bt] detectPollingStuck threw (${tu.name}): ${errText(e)} — skipping`);
+    }
     if (stuckRefusal !== null) {
       shapedContent = stuckRefusal;
       invocationIsError = true;
     }
 
-    const finalContent = reminderPrefix + shapedContent;
+    let finalContent = reminderPrefix + shapedContent;
+    let finalIsError = invocationIsError;
+
+    // PR 5 — failure-streak guard. After the call has settled (with
+    // all post-processing applied) we record the success/failure and
+    // decide whether the streak crossed a threshold. Mutates state in
+    // place; verdict drives content rewrite + ToolLoopDetected routing.
+    if (args.failureStreakState) {
+      const verdict: FailureStreakVerdict = checkFailureStreak({
+        toolName: tu.name,
+        isError: finalIsError,
+        errorContent: shapedContent,
+        turn: args.turn,
+        state: args.failureStreakState,
+      });
+      if (verdict.kind === 'reminder') {
+        finalContent =
+          buildFailureStreakReminderMarker({ ...verdict, toolName: tu.name }) +
+          '\n\n' + finalContent;
+        args.onFailureStreakIntervention?.({
+          toolName: tu.name,
+          kind: 'reminder',
+          count: verdict.count,
+          firstFailureTurn: verdict.firstFailureTurn,
+          lastError: verdict.lastError,
+          turn: args.turn,
+        });
+      } else if (verdict.kind === 'refuse') {
+        finalContent = buildFailureStreakRefusalText({ ...verdict, toolName: tu.name });
+        finalIsError = true;
+        toolLoopDetected = true;
+        loopGuard = 'failure-streak';
+        args.onFailureStreakIntervention?.({
+          toolName: tu.name,
+          kind: 'refuse',
+          count: verdict.count,
+          firstFailureTurn: verdict.firstFailureTurn,
+          lastError: verdict.lastError,
+          turn: args.turn,
+        });
+      }
+    }
+
     args.onToolCallFinalized?.(tu.id, finalContent.length);
     results.push({
       toolUseId: tu.id,
       name: tu.name,
       content: finalContent,
-      isError: invocationIsError,
+      isError: finalIsError,
       durationMs: Date.now() - t0,
       wasRefusedByDedup: false,
     });
   }
 
-  return { results, toolLoopDetected };
+  return { results, toolLoopDetected, loopGuard };
+}
+
+/** Compact error-to-string for the guarded bridge-callback warnings. */
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 /**

@@ -11,6 +11,11 @@ import {
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { withSessionLock } from '../coder/sessionLock.js';
+import {
+  getRuntimeEventLog,
+  runtimeEventsToJsonl,
+  summarizeRuntimeEvents,
+} from '../../../sse/runtime-event-log.js';
 
 /**
  * Backoff before retrying a resume that hit `port_closed`. The default
@@ -91,6 +96,22 @@ interface PlanResponseBody {
 
 export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   const { companyStore, db } = deps;
+
+  app.get('/api/company/sessions/:id/events.jsonl', (c) => {
+    const id = parseIdParam(c);
+    const events = getRuntimeEventLog('company', id);
+    return new Response(runtimeEventsToJsonl(events), {
+      headers: {
+        'content-type': 'application/x-ndjson; charset=utf-8',
+        'content-disposition': `attachment; filename="company-session-${id}-events.jsonl"`,
+      },
+    });
+  });
+
+  app.get('/api/company/sessions/:id/events-summary', (c) => {
+    const id = parseIdParam(c);
+    return c.json(summarizeRuntimeEvents(getRuntimeEventLog('company', id)));
+  });
 
   /**
    * Start the company session — spawns the Master agent and returns

@@ -5,6 +5,11 @@ import { defaultLocalShellPort, type IShellPort } from '@mcp/code-agent/ports/sh
 import { pathFor } from '@mcp/code-agent/tools/paths.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+// Ceiling for a one-shot command. One-shot shell work (builds, installs,
+// test suites) should finish well under this; for anything longer use a
+// persistent `exec_command` session or a background terminal. Mirrored onto
+// the tool's `timeoutMs` (runner backstop) so both layers agree at 10 min.
+const MAX_TIMEOUT_MS = 10 * 60_000;
 const MAX_OUTPUT_BYTES = 100_000;
 const MAX_STDIN_BYTES = 100_000;
 
@@ -127,12 +132,17 @@ const runCommandTool: CoderTool = {
   mutates: false,
   parallelSafe: false,
   riskLevel: 'execute',
+  // Runner backstop: a one-shot command is capped at 10 min (previously it
+  // inherited the 30-min SLOW tier). The handler also clamps `timeout_ms` to
+  // the same ceiling, so the shell port's clean SIGKILL fires before this
+  // hard abort ever does.
+  timeoutMs: MAX_TIMEOUT_MS,
   parameters: {
     type: 'object',
     properties: {
       command: { type: 'string', description: 'Shell command to execute' },
       cwd: { type: 'string', description: 'Optional subdirectory relative to project root' },
-      timeout_ms: { type: 'number', description: 'Timeout in ms (default 120000)' },
+      timeout_ms: { type: 'number', description: 'Timeout in ms (default 120000, max 600000 / 10 min).' },
       stdin: {
         type: 'string',
         description:
@@ -185,7 +195,10 @@ const runCommandTool: CoderTool = {
       stdin = args.stdin;
     }
 
-    const timeout = typeof args.timeout_ms === 'number' ? args.timeout_ms : DEFAULT_TIMEOUT_MS;
+    const timeout = Math.min(
+      MAX_TIMEOUT_MS,
+      typeof args.timeout_ms === 'number' && args.timeout_ms > 0 ? args.timeout_ms : DEFAULT_TIMEOUT_MS,
+    );
     const result = await shellPort(ctx).exec(command, {
       cwd,
       timeoutMs: timeout,

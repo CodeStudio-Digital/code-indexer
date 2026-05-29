@@ -47,7 +47,7 @@ export function buildExpandTools(
   let description =
     'Unlock a higher tier of tools for this session.\n\n' +
     'Tiers:\n' +
-    '- "navigate": write_file, edit_file, create_file, run_command, git_status/diff/log, ' +
+    '- "navigate": write_file, edit_file, create_file, manage_path, run_command, git_status/diff/log, ' +
     'task_complete (inline-mode closer), and deeper MCP navigation (find_references, trace_usage, ' +
     'get_dependencies, prepare_edit, get_symbol_body, etc.). Unlock this BEFORE editing code ' +
     'or running shell commands. (spawn_agent + execute_tasks + update_task are bootstrap-tier — ' +

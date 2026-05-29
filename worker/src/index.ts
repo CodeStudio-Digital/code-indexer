@@ -26,6 +26,12 @@ interface DeleteRequest {
   ids: string[];
 }
 
+interface RerankRequest {
+  query: string;
+  documents: string[];
+  top_k?: number;
+}
+
 function authorize(request: Request, env: Env): Response | null {
   const auth = request.headers.get('Authorization');
   if (!auth || auth !== `Bearer ${env.AUTH_TOKEN}`) {
@@ -73,6 +79,10 @@ export default {
 
       if (path === '/delete' && request.method === 'POST') {
         return await handleDelete(request, env);
+      }
+
+      if (path === '/rerank' && request.method === 'POST') {
+        return await handleRerank(request, env);
       }
 
       return json({ error: 'Not found' }, 404);
@@ -172,4 +182,41 @@ async function handleDelete(request: Request, env: Env): Promise<Response> {
   }
 
   return json({ count });
+}
+
+async function handleRerank(request: Request, env: Env): Promise<Response> {
+  const body = await request.json<RerankRequest>();
+
+  if (!body.query || typeof body.query !== 'string') {
+    return json({ error: 'query is required' }, 400);
+  }
+  if (!Array.isArray(body.documents) || body.documents.length === 0) {
+    return json({ error: 'documents array is required' }, 400);
+  }
+
+  const contexts = body.documents.map((text) => ({ text }));
+  const topK = Math.min(body.top_k ?? body.documents.length, body.documents.length);
+
+  // `env.AI.run` is overloaded by model name in @cloudflare/workers-types and
+  // the reranker input/output shape isn't present across all versions — call
+  // through a narrow local signature so this compiles version-independently.
+  const runAi = env.AI.run.bind(env.AI) as unknown as (
+    model: string,
+    input: { query: string; contexts: Array<{ text: string }>; top_k?: number },
+  ) => Promise<{ response?: Array<{ id: number; score: number }> }>;
+
+  // bge-reranker-base outputs `response: [{ id, score }]` where `id` indexes
+  // into `contexts`. Map to the `{ results: [{ index, score }] }` shape the
+  // CloudflareReranker client expects, sorted by score desc.
+  const out = await runAi('@cf/baai/bge-reranker-base', {
+    query: body.query,
+    contexts,
+    top_k: topK,
+  });
+
+  const results = (out.response ?? [])
+    .map((r) => ({ index: r.id, score: r.score }))
+    .sort((a, b) => b.score - a.score);
+
+  return json({ results });
 }

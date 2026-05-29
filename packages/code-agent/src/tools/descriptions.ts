@@ -33,6 +33,13 @@ export const CREATE_FILE_DESC =
   "DON'T: use this to replace an existing file — it will error. Use write_file for replacements.\n" +
   "DON'T: create placeholder/empty files speculatively. Create only when you have the final content ready.";
 
+export const MANAGE_PATH_DESC =
+  'Create directories, move/rename paths, or delete files/directories with safeguards.\n' +
+  'USE: mkdir, move, rename, or safe delete operations that would otherwise need shell mkdir/mv/rm.\n' +
+  "USE: delete_mode='trash' by default; recursive and permanent deletes require exact confirmation strings.\n" +
+  "DON'T: use shell commands for filesystem administration when manage_path can express the operation safely.\n" +
+  "DON'T: target project root, .git, .mcp-indexer, node_modules, absolute paths outside the project, or traversal paths.";
+
 export const EDIT_FILE_DESC =
   'Find-and-replace edit on a file. Progressive matching: exact → normalized whitespace → indentation-flexible → block-anchor. Returns a fuzzy hint if no match.\n' +
   "USE: targeted change within a larger file — fixing a function, tweaking a config value, renaming a symbol in one place.\n" +

@@ -23,6 +23,8 @@ import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner, SUBAGENT_TOOL_RESULT_CAP, extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import type { CoderTask, TaskResult, TaskReference } from '@mcp/code-agent/sessions/types.js';
+import { createSubagentMonitor } from '@mcp/code-agent/tools/subagent-monitor.js';
+import { buildSubagentSalvageSummary } from '@mcp/code-agent/tools/subagent-salvage.js';
 
 /**
  * Tool filter for a subagent. Three shapes:
@@ -40,6 +42,7 @@ export type SubagentAllowlist =
 
 export interface SubagentSpec {
   systemPrompt: string;
+  label?: string;
   allowlist: SubagentAllowlist;
   initialMessages: AgentMessage[];
   maxTurns: number;
@@ -165,7 +168,6 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   const sandboxViolations: string[] = [];
   const limits = withDefaultLimits(spec.limits);
   const startedAt = Date.now();
-  let lastActivityAt = startedAt;
   let lastToolName: string | undefined;
   let subToolCalls = 0;
   let currentTurn = 0;
@@ -175,11 +177,20 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     Number(process.env.CODER_SUBAGENT_STREAM_PROGRESS_THROTTLE_MS ?? '5000') || 5_000;
 
   const subAbort = new AbortController();
+  let abortFailure: ((message: string) => void) | undefined;
+  let lastAbortReason = 'subagent aborted';
   const abortSubagent = (reason: string): void => {
+    lastAbortReason = reason;
     try { subAbort.abort(new Error(reason)); } catch { /* ignore */ }
   };
-  const parentAbort = () => abortSubagent('parent aborted');
-  const explicitAbort = () => abortSubagent('subagent aborted');
+  const parentAbort = () => {
+    abortSubagent('parent aborted');
+    abortFailure?.('parent aborted');
+  };
+  const explicitAbort = () => {
+    abortSubagent('subagent aborted');
+    abortFailure?.('subagent aborted');
+  };
   if (parent.ctx.signal) {
     if (parent.ctx.signal.aborted) parentAbort();
     else parent.ctx.signal.addEventListener('abort', parentAbort, { once: true });
@@ -189,50 +200,27 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     else spec.signal.addEventListener('abort', explicitAbort, { once: true });
   }
 
-  const markActivity = (
-    phase: string,
-    note: string,
-    extra: Partial<Parameters<NonNullable<SubagentSpec['onProgress']>>[0]> = {},
-  ): void => {
-    const now = Date.now();
-    lastActivityAt = now;
-    spec.onProgress?.({
-      event: 'heartbeat',
-      toolCallCount: subToolCalls,
-      toolName: lastToolName,
-      note,
-      phase,
-      turn: currentTurn,
-      elapsedMs: now - startedAt,
-      stallMs: 0,
-      idleMs: 0,
-      deadlineMs: limits.timeoutMs,
-      lastToolName,
-      limit: limits,
-      ...extra,
-    });
+  const monitor = createSubagentMonitor({
+    limits,
+    startedAt,
+    getToolCallCount: () => subToolCalls,
+    getTurn: () => currentTurn,
+    getLastToolName: () => lastToolName,
+    onProgress: spec.onProgress,
+    onFail: (message, phase) => {
+      handleWatchdogFailure(message, phase);
+    },
+  });
+
+  const markActivity = (phase: string, note: string): void => {
+    monitor.recordVisual(phase, note);
   };
 
   const markStreamActivity = (phase: string, note: string): void => {
     const now = Date.now();
-    lastActivityAt = now;
-    if (now - lastStreamProgressAt < streamProgressThrottleMs) return;
-    lastStreamProgressAt = now;
-    spec.onProgress?.({
-      event: 'heartbeat',
-      status: 'running',
-      toolCallCount: subToolCalls,
-      toolName: lastToolName,
-      note,
-      phase,
-      turn: currentTurn,
-      elapsedMs: now - startedAt,
-      stallMs: 0,
-      idleMs: 0,
-      deadlineMs: limits.timeoutMs,
-      lastToolName,
-      limit: limits,
-    });
+    const shouldEmit = now - lastStreamProgressAt >= streamProgressThrottleMs;
+    if (shouldEmit) lastStreamProgressAt = now;
+    monitor.recordProviderDelta(phase, note, shouldEmit);
   };
 
   // Subagent collector — bridges the sub's structured emissions
@@ -338,7 +326,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   subRunner.on('provider_call', (payload: { provider?: string; model?: string }) => {
     const provider = payload.provider ?? parent.provider.name;
     const model = payload.model ?? parent.provider.model;
-    markActivity('provider_call', `awaiting ${provider}:${model}`);
+    monitor.recordProviderCall(provider, model);
   });
   subRunner.on('text_delta', () => {
     markStreamActivity('text_delta', 'streaming text');
@@ -346,29 +334,22 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   subRunner.on('thinking_delta', () => {
     markStreamActivity('thinking_delta', 'thinking');
   });
+  subRunner.on('tool_call_start', (_id, name) => {
+    lastToolName = name;
+    monitor.recordSemantic('tool_call_start', `${name} started`, {
+      toolName: name,
+      lastToolName: name,
+    });
+  });
   subRunner.on('tool_progress', (payload) => {
     lastToolName = payload.name;
-    lastActivityAt = Date.now();
+    monitor.recordToolProgress(payload.name, payload.note ?? payload.name);
     if (parentEmit) {
       parentEmit.emit('tool_progress', {
         ...payload,
         note: `[subagent] ${payload.note ?? payload.name}`,
       });
     }
-    spec.onProgress?.({
-      event: 'heartbeat',
-      toolCallCount: subToolCalls,
-      toolName: payload.name,
-      note: payload.note ?? payload.name,
-      phase: 'tool_progress',
-      turn: currentTurn,
-      elapsedMs: Date.now() - startedAt,
-      stallMs: 0,
-      idleMs: 0,
-      deadlineMs: limits.timeoutMs,
-      lastToolName: payload.name,
-      limit: limits,
-    });
   });
   // PR-C quality watchdog — hoisted so both tool_call_result and
   // message_complete handlers can mutate it. See block below where the
@@ -384,23 +365,9 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   subRunner.on('tool_call_result', (_id, name) => {
     subToolCalls++;
     lastToolName = name;
-    lastActivityAt = Date.now();
+    monitor.recordToolResult(name);
     // PR-C quality watchdog — any tool call resets the "no-tool streak".
     consecutiveNoToolCount = 0;
-    spec.onProgress?.({
-      event: 'tool_call',
-      toolCallCount: subToolCalls,
-      toolName: name,
-      note: `${name} completed`,
-      phase: 'tool_call',
-      turn: currentTurn,
-      elapsedMs: Date.now() - startedAt,
-      stallMs: 0,
-      idleMs: 0,
-      deadlineMs: limits.timeoutMs,
-      lastToolName: name,
-      limit: limits,
-    });
     if (parentEmit) {
       parentEmit.emit('tool_progress', {
         id: `subagent-tool:${subRunner.runId}:${subToolCalls}`,
@@ -455,22 +422,13 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   });
 
   let result: { totalUsage: ChatUsage; reason: SubagentRunResult['reason'] };
-  const watchdog = createSubagentWatchdog({
-    limits,
-    startedAt,
-    getLastActivityAt: () => lastActivityAt,
-    getToolCallCount: () => subToolCalls,
-    getTurn: () => currentTurn,
-    getLastToolName: () => lastToolName,
-    onFail: (message, phase) => {
-      failWatchdog(message, phase);
-    },
-  });
+  const watchdog = monitor;
 
-  function failWatchdog(message: string, phase = 'limit'): void {
+  function handleWatchdogFailure(message: string, phase = 'limit'): void {
     if (watchdogFailed) return;
     watchdogFailed = true;
     const now = Date.now();
+    const snapshot = monitor.snapshot();
     try { subRunner.abort(); } catch { /* ignore */ }
     abortSubagent(message);
     spec.onProgress?.({
@@ -481,14 +439,20 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
       phase,
       turn: currentTurn,
       elapsedMs: now - startedAt,
-      stallMs: now - lastActivityAt,
-      idleMs: now - lastActivityAt,
+      stallMs: snapshot.semanticIdleMs,
+      idleMs: snapshot.semanticIdleMs,
       deadlineMs: limits.timeoutMs,
       lastToolName,
-      status: phase === 'timeout' ? 'timed_out' : phase === 'aborted' ? 'aborted' : 'error',
+      status: phase === 'aborted' ? 'aborted' : 'timed_out',
       limit: limits,
     });
-    watchdog.fail(message);
+  }
+  abortFailure = (message) => handleWatchdogFailure(message, 'aborted');
+  if (subAbort.signal.aborted) handleWatchdogFailure(lastAbortReason, 'aborted');
+
+  function failWatchdog(message: string, phase = 'limit'): void {
+    handleWatchdogFailure(message, phase);
+    watchdog.fail(message, phase);
   }
 
   try {
@@ -498,6 +462,27 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     });
     result = await Promise.race([runPromise, watchdog.promise]);
   } catch (e) {
+    const collected = collector.snapshot();
+    if (watchdogFailed) {
+      const salvaged = await buildSubagentSalvageSummary({
+        provider: parent.provider,
+        label: spec.label,
+        reason: e instanceof Error ? e.message : String(e),
+        messages: subRunner.messages,
+        toolCallCount: subToolCalls,
+        lastToolName,
+        collected,
+        sandboxViolations,
+        parentSignal: parent.ctx.signal,
+      });
+      return {
+        reason: 'error',
+        finalText: salvaged.text,
+        usage: salvaged.usage,
+        sandboxViolations,
+        collected,
+      };
+    }
     return {
       reason: 'error',
       finalText: e instanceof Error ? e.message : String(e),
@@ -506,7 +491,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         output_tokens: 0,
       },
       sandboxViolations,
-      collected: collector.snapshot(),
+      collected,
     };
   } finally {
     watchdog.cleanup();
@@ -627,7 +612,7 @@ export const FULL_ACCESS_FILTER: SubagentAllowlist = null;
  */
 export const VERIFY_FILTER: (tool: CoderTool) => boolean = (tool) => {
   if (EXPLORE_ALLOWLIST.has(tool.name)) return true;
-  if (tool.name === 'run_command' || tool.name === 'run_command_pty') return true;
+  if (tool.name === 'run_command') return true;
   if (tool.name === 'get_diagnostics' || tool.name === 'lsp_diagnostics') return true;
   // MCP external tools that are explicitly non-mutating (test runners, linters
   // exposed via MCP).
@@ -658,6 +643,7 @@ export const IMPLEMENT_ALLOWLIST = new Set<string>([
   'write_file',
   'edit_file',
   'create_file',
+  'manage_path',
   // Shell — gated by the parent runner's plan-mode allowlist for read-only,
   // but inside an approved task scope the subagent gets the full set.
   'run_command',
@@ -927,6 +913,7 @@ function wrapToolForPathScope(tool: CoderTool, pathScope: string[], violations: 
     'write_file',
     'edit_file',
     'create_file',
+    'manage_path',
     'read_file',
     'mcp__read_file',
     'run_command',
@@ -989,68 +976,6 @@ export interface ParallelAgentProgress {
   error?: string;
 }
 
-function createSubagentWatchdog(args: {
-  limits?: SubagentLimits;
-  startedAt: number;
-  getLastActivityAt: () => number;
-  getToolCallCount: () => number;
-  getTurn: () => number;
-  getLastToolName: () => string | undefined;
-  onFail: (message: string, phase?: string) => void;
-}): {
-  promise: Promise<never>;
-  fail: (message: string) => void;
-  cleanup: () => void;
-} {
-  let settled = false;
-  let rejectPromise: (error: Error) => void = () => {};
-  const timers: Array<ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>> = [];
-  const promise = new Promise<never>((_, reject) => {
-    rejectPromise = reject;
-  });
-  const fail = (message: string): void => {
-    if (settled) return;
-    settled = true;
-    rejectPromise(new Error(message));
-  };
-
-  const timeoutMs = args.limits?.timeoutMs;
-  if (timeoutMs != null && timeoutMs > 0) {
-    timers.push(setTimeout(() => {
-      args.onFail(`task timeout reached (${formatMs(timeoutMs)})`, 'timeout');
-    }, timeoutMs));
-  }
-
-  const stallMs = args.limits?.stallMs;
-  if (stallMs != null && stallMs > 0) {
-    const intervalMs = Math.min(10_000, Math.max(1_000, Math.floor(stallMs / 4)));
-    timers.push(setInterval(() => {
-      const idleMs = Date.now() - args.getLastActivityAt();
-      if (idleMs < stallMs) return;
-      const tool = args.getLastToolName();
-      const suffix = tool ? ` after ${tool}` : '';
-      args.onFail(
-        `task stalled for ${formatMs(idleMs)}${suffix} (turn ${args.getTurn()}, tools ${args.getToolCallCount()})`,
-        'stalled',
-      );
-    }, intervalMs));
-  }
-
-  return {
-    promise,
-    fail,
-    cleanup: () => {
-      settled = true;
-      for (const timer of timers) clearTimeout(timer as ReturnType<typeof setTimeout>);
-    },
-  };
-}
-
-function formatMs(ms: number): string {
-  if (ms >= 60_000) return `${Math.round(ms / 60_000)}m`;
-  return `${Math.round(ms / 1000)}s`;
-}
-
 export type ParallelAgentResult = SubagentRunResult & { label: string; toolCallCount: number };
 
 function classifySubagentTerminal(
@@ -1093,6 +1018,7 @@ export async function runParallelAgents(
     try {
       const runResult = await runSubagent(parent, {
         systemPrompt: spec.systemPrompt ?? systemPrompt,
+        label: spec.label,
         allowlist: spec.allowlist ?? allowlist,
         initialMessages: [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
         maxTurns: spec.maxTurns,

@@ -119,6 +119,24 @@ export interface VectorStoreConfigRow {
   updated_at: string;
 }
 
+/**
+ * Cross-encoder reranker backends. Applied after the RRF merge of FTS +
+ * vector results to re-score (query, document) pairs. Decoupled from the
+ * embedding/vector kinds because a user can embed locally yet rerank via a
+ * Cloudflare Worker, or use Cohere independently of either.
+ */
+export type RerankerKind = 'cloudflare' | 'cohere' | 'null';
+
+export interface RerankerConfigRow {
+  id: string;
+  kind: RerankerKind;
+  name: string;
+  enabled: boolean;
+  is_default: boolean;
+  config: Record<string, unknown>;
+  updated_at: string;
+}
+
 export interface UpsertProviderInput {
   id: string;
   name: string;

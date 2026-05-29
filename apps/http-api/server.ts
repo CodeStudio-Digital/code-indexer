@@ -55,6 +55,7 @@ import {
   type WatchdogChatRunner,
 } from '@mcp/services/quality/index.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
+import { DEFAULT_MIN_RELEVANCE } from '@mcp/services/services/docs/index.js';
 import { setGlobalSubAgentCache } from '@mcp/services/sub-agent-cache/index.js';
 import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relevance/index.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
@@ -651,22 +652,25 @@ export function createApp() {
   mountDocsRoutes(app, deps);
   // Env-flag-aware adapter — the tool interface (DocSearchBackend in
   // packages/code-agent) only exposes {query,collection,limit}, so the
-  // enhancements (rewrite + rerank) live in this wrapper. Default OFF;
-  // operators turn them on via env vars without redeploying the tool.
-  //   DOCS_RAG_REWRITE=1  → query rewriter ON  (Phase 10 feature)
-  //   DOCS_RAG_RERANK=1   → LLM reranker ON   (Phase 10 feature)
+  // enhancements (rewrite + rerank) + relevance threshold live in this
+  // wrapper. They default ON so the first-line `rag_search_docs` every
+  // agent reaches for gets calibrated relevance and an honest "no good
+  // match" without opting in. Set the env var to '0' to disable.
+  //   DOCS_RAG_REWRITE=0  → query rewriter OFF
+  //   DOCS_RAG_RERANK=0   → reranker OFF (also disables calibrated scores)
   // Both still degrade to no-op when the corresponding binding is
   // unconfigured in the admin panel — flags only control the OPT-IN.
-  const docsRagRewrite = process.env.DOCS_RAG_REWRITE === '1';
-  const docsRagRerank = process.env.DOCS_RAG_RERANK === '1';
+  const docsRagRewrite = process.env.DOCS_RAG_REWRITE !== '0';
+  const docsRagRerank = process.env.DOCS_RAG_RERANK !== '0';
   const docSearchBackend = {
     search: async (input: Parameters<typeof deps.docHybridSearch.search>[0]) => {
       return deps.docHybridSearch.search({
+        // Threshold weak hits so the tool can report "nothing relevant"
+        // instead of citing junk. Only bites when rerank produced
+        // calibrated scores; a caller-supplied value still wins.
+        min_relevance: DEFAULT_MIN_RELEVANCE,
         ...input,
-        enhancements:
-          docsRagRewrite || docsRagRerank
-            ? { rewrite: docsRagRewrite, rerank: docsRagRerank }
-            : undefined,
+        enhancements: { rewrite: docsRagRewrite, rerank: docsRagRerank },
       });
     },
   };

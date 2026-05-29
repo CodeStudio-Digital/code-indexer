@@ -37,7 +37,10 @@ export interface DocSearchBackend {
       source_uri: string | null;
       heading_path: string | null;
       snippet: string;
+      /** Raw fusion score — opaque. Prefer `relevance` when present. */
       score: number;
+      /** Calibrated 0-1 relevance from the reranker; null when uncalibrated. */
+      relevance: number | null;
       summary: string | null;
       concepts: string[];
     }>;
@@ -47,6 +50,10 @@ export interface DocSearchBackend {
       mode: 'hybrid' | 'fts' | 'vector';
       embedding_available: boolean;
       vector_available: boolean;
+      /** Calibrated scoring ran and nothing cleared the relevance bar. */
+      no_good_match?: boolean;
+      /** Best calibrated relevance seen (even when below the bar). */
+      top_relevance?: number | null;
     };
   }>;
 }
@@ -69,6 +76,7 @@ export const ragSearchDocsTool: CoderTool = {
   name: 'rag_search_docs',
   description:
     'Semantic + lexical search over indexed external documentation (Unity, frameworks, libraries, internal handbooks). Returns the most relevant doc sections with their heading path, source URL/PDF, and a snippet.\n' +
+    'Each result carries a calibrated Relevance (0-1, shown high/medium/low). When the corpus has nothing relevant, the tool SAYS SO explicitly — treat that as a real answer; do NOT fabricate from a weak hit.\n' +
     'USE: when you need authoritative information that is NOT in this project\'s codebase — API references, framework concepts, library usage, third-party tooling.\n' +
     'USE: as the FIRST step before guessing or recalling. The corpus is fresher than your training cutoff and grounded in the user\'s own attached docs.\n' +
     "DON'T: use to search the current project's code — that's `mcp__search` / `mcp__grep_code`.\n" +
@@ -123,6 +131,18 @@ export const ragSearchDocsTool: CoderTool = {
     }
 
     const { results, diag } = response;
+    // Honest "no good match": the reranker scored everything below the
+    // relevance bar. Surface that as a real answer so the agent doesn't
+    // cite a weak hit as if it were authoritative.
+    if (diag.no_good_match) {
+      const best = typeof diag.top_relevance === 'number'
+        ? ` The closest match scored ${diag.top_relevance.toFixed(2)}, below the relevance bar.`
+        : '';
+      return ok(
+        `No sufficiently relevant documentation for "${query}"${collection ? ` in collection "${collection}"` : ''}.${best} ` +
+          "Don't guess from a weak match — broaden the query, drop the collection filter, or tell the user the docs don't cover this.",
+      );
+    }
     if (results.length === 0) {
       const hint = !diag.embedding_available
         ? ' (no embedder configured — only FTS5 was used)'
@@ -140,7 +160,13 @@ export const ragSearchDocsTool: CoderTool = {
       const lines: string[] = [];
       lines.push(`## [${i + 1}] ${r.heading_path ?? '(untitled)'} — ${r.collection}`);
       if (r.source_uri) lines.push(`Source: ${r.source_uri}`);
-      lines.push(`Score: ${r.score.toFixed(4)}`);
+      // Prefer the calibrated relevance; fall back to the opaque RRF score
+      // (clearly flagged) when rerank didn't run.
+      if (typeof r.relevance === 'number') {
+        lines.push(`Relevance: ${r.relevance.toFixed(2)} (${band(r.relevance)})`);
+      } else {
+        lines.push(`Score: ${r.score.toFixed(4)} (uncalibrated)`);
+      }
       if (r.summary) lines.push(`Summary: ${r.summary}`);
       if (r.concepts.length > 0) lines.push(`Concepts: ${r.concepts.join(', ')}`);
       lines.push('', r.snippet);
@@ -149,5 +175,16 @@ export const ragSearchDocsTool: CoderTool = {
     return ok(`${header}\n\n${blocks.join('\n\n---\n\n')}`);
   },
 };
+
+/**
+ * Coarse confidence band for display. Kept local (mirrors the bands in
+ * `@mcp/services` relevance-policy) so this tool stays decoupled from
+ * `@mcp/services` — presentation is a tool concern, policy is not.
+ */
+function band(relevance: number): string {
+  if (relevance >= 0.75) return 'high';
+  if (relevance >= 0.55) return 'medium';
+  return 'low';
+}
 
 export const ragSearchDocsTools: CoderTool[] = [ragSearchDocsTool];

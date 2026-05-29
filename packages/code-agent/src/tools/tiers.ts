@@ -148,12 +148,12 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'edit_file',
   'multi_edit',
   'create_file',
+  'manage_path',
   // Codex-only freeform editor (gated to the chatgpt provider in index.ts).
   'apply_patch',
   'web_fetch',
   'web_search',
   'run_command',
-  'run_command_pty',
   'get_diagnostics',
   'lsp_definition',
   'lsp_references',
@@ -413,10 +413,14 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   edit_file: 'Apply a targeted search-and-replace edit',
   multi_edit: 'Apply multiple edits to one file atomically',
   create_file: 'Create a new file (fails if it exists)',
+  manage_path: 'Create directories, move/rename paths, or safely delete',
   web_fetch: 'Fetch a URL and extract content',
   web_search: 'Search the web for information',
   run_command: 'Run a shell command (sandboxed to project)',
-  run_command_pty: 'Run a shell command in a PTY (interactive)',
+  // PR 5 — list_sessions for the persistent exec_command session
+  // registry. Bootstrap tier (no unlock); pairs with write_stdin's rich
+  // error to let the model self-correct after a stale session_id.
+  list_sessions: 'List active exec_command sessions (id, status, age) — call before write_stdin if unsure.',
   get_diagnostics: 'Get LSP diagnostics for a file',
   lsp_definition: 'Go to definition of a symbol',
   lsp_references: 'Find all references to a symbol',

@@ -42,6 +42,18 @@ export type {
   DocHybridSearchEnhancementDeps,
 } from './search.js';
 
+export {
+  applyThreshold,
+  classifyConfidence,
+  DEFAULT_MIN_RELEVANCE,
+} from './relevance-policy.js';
+export type {
+  RelevanceSource,
+  Confidence,
+  ThresholdableResult,
+  ThresholdOutcome,
+} from './relevance-policy.js';
+
 export { QueryRewriter } from './query-rewriter.js';
 export type {
   QueryRewriterOptions,
@@ -55,7 +67,9 @@ export type {
   RerankOpts,
   RerankCandidate,
   RerankResult,
+  DocReranker,
 } from './reranker.js';
+export { CrossEncoderReranker } from './cross-encoder-reranker.js';
 
 export { AutoDiscoveryService, _resetAutoDiscoveryThrottle } from './auto-discovery.js';
 export type {

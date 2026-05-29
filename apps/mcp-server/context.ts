@@ -40,7 +40,7 @@ export function buildContext(): ToolContext {
   const providerStore = createAndSeedProviderStore(config.dbPath);
 
   const { embeddingService, vectorStore, searchableVectorStore, hybridSearch } =
-    createSearchBundle(db, providerStore, createReranker());
+    createSearchBundle(db, providerStore, createReranker(providerStore));
 
   return {
     config,

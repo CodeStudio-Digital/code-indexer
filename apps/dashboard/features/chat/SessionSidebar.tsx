@@ -193,9 +193,11 @@ export function SessionSidebar({
           'fixed inset-y-0 left-0 z-50 w-[85%] max-w-[320px] rounded-r-xl shadow-2xl border',
           'transition-transform duration-200 ease-out',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
-          // Desktop (lg+): flush IDE-style column — only a right border, no
-          // rounded corners or shadow, no transitions.
-          'lg:static lg:inset-auto lg:z-auto lg:w-[280px] lg:max-w-none lg:shrink-0 lg:translate-x-0',
+          // Desktop (lg+): fill the host `<Panel>` from react-resizable-panels.
+          // Width is owned by the panel — we just expand to it. The right
+          // border still belongs to us (not to the panel) so the resize
+          // handle stays visually attached to the divider.
+          'lg:static lg:inset-auto lg:z-auto lg:w-full lg:h-full lg:max-w-none lg:translate-x-0',
           'lg:rounded-none lg:shadow-none lg:transition-none lg:border-0 lg:border-r',
         )}
       >

@@ -68,14 +68,27 @@ interface ToolStatsModalProps {
   onClose: () => void;
 }
 
-export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps) {
+/**
+ * Headless body of the tool-stats surface. Owns its own fetch lifecycle
+ * (refreshable via the refresh button rendered inline). Reused by the
+ * legacy modal AND the right-rail `ToolStatsPanel`.
+ */
+export function ToolStatsView({
+  sessionId,
+  active,
+}: {
+  sessionId: number;
+  /** When false, the view skips fetching. Used by the rail to suspend
+   *  the panel when it's not the active one. */
+  active: boolean;
+}) {
   const [data, setData] = useState<ToolStatsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
-    if (!open) return;
+    if (!active) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -96,9 +109,7 @@ export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps
     return () => {
       cancelled = true;
     };
-  }, [open, sessionId, refreshTick]);
-
-  if (!open) return null;
+  }, [active, sessionId, refreshTick]);
 
   const dominant = data && data.byName.length > 0 ? data.byName[0] : null;
   const dominantPct = dominant && data && data.totalCalls > 0
@@ -107,45 +118,30 @@ export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps
   const maxCount = data ? Math.max(1, ...data.byName.map((b) => b.count)) : 1;
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-card border rounded-lg shadow-lg w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2 border-b px-4 py-3">
-          <BarChart3 className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold flex-1">Tool stats — session {sessionId}</h2>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setRefreshTick((n) => n + 1)}
-            disabled={loading}
-            title="Refresh"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onClose} title="Close">
-            <X className="h-3.5 w-3.5" />
-          </Button>
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b shrink-0">
+        <span className="text-[11px] text-muted-foreground">session {sessionId}</span>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="ml-auto h-6 w-6 p-0"
+          onClick={() => setRefreshTick((n) => n + 1)}
+          disabled={loading}
+          title="Refresh"
+        >
+          <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+        </Button>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive shrink-0">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span>{error}</span>
         </div>
+      )}
 
-        {error && (
-          <div className="flex items-start gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
-            <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-            <span>{error}</span>
-          </div>
-        )}
-
-        {/* Native scroll container — Radix ScrollArea inside flex layouts
-            wouldn't compute Viewport height reliably (Viewport relies on
-            `h-full` which collapses when the Root's height is implicit).
-            `min-h-0` lets the flex item shrink below content size so
-            `overflow-y-auto` can actually clip and scroll. */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <div className="p-4 space-y-4">
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="p-3 space-y-4">
             {loading && !data && (
               <div className="text-xs text-muted-foreground">Loading tool stats…</div>
             )}
@@ -317,8 +313,35 @@ export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps
                 )}
               </>
             )}
-          </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Modal wrapper around `ToolStatsView` — kept for places that prefer a
+ * blocking overlay over a sidebar panel.
+ */
+export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps) {
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-card border rounded-lg shadow-lg w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 border-b px-4 py-3">
+          <BarChart3 className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-semibold flex-1">Tool stats — session {sessionId}</h2>
+          <Button size="sm" variant="ghost" onClick={onClose} title="Close">
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+        <ToolStatsView sessionId={sessionId} active={open} />
       </div>
     </div>
   );

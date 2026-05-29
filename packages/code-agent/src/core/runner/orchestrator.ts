@@ -132,8 +132,18 @@ export async function runBehaviorTree(
       try {
         event = await node.execute(ctx, lastEvent);
       } catch (e) {
+        // A node throwing used to re-throw out of `runBehaviorTree`, which
+        // skipped the terminal `ctx.emit('done')` below (it lives after the
+        // try/finally) — leaving SSE/dashboard listeners stuck in
+        // "streaming…" forever. Convert the throw into an `Aborted` event
+        // (same shape as the A5 invalid-event branch) so the loop exits
+        // cleanly to `Done`, the `finally` runs cleanup, and `done` fires
+        // with `reason='error'` + the captured error. Contract: the BT
+        // never throws — it always emits `done` and returns a `RunResult`.
         console.error(`[coder/bt] node=${state} threw:`, e);
-        throw e;
+        ctx.stopReason = ctx.stopReason ?? 'error';
+        ctx.error = ctx.error ?? (e instanceof Error ? e : new Error(String(e)));
+        event = { kind: 'Aborted' };
       }
       // A5 — validate the returned event. Garbage (undefined, null,
       // missing kind, unknown kind) is treated as a node bug and routed

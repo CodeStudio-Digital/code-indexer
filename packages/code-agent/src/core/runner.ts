@@ -1578,6 +1578,16 @@ export class CoderRunner extends EventEmitter {
     this.planApproved = true;
   }
 
+  /**
+   * Reset the plan-approval flag. Called when the runner is switched
+   * back into plan mode mid-session (e.g. an `admin` agent flips to
+   * `plan` via `setSessionAgent`) so the gate re-engages until a fresh
+   * `submit_plan` is approved.
+   */
+  resetPlanApproval(): void {
+    this.planApproved = false;
+  }
+
   /** Whether mutating tools should be allowed right now. */
   isPlanApproved(): boolean {
     return this.planApproved;
@@ -1588,6 +1598,16 @@ export class CoderRunner extends EventEmitter {
   approveSpec(path: string): void {
     this.specApproved = true;
     this.specPath = path;
+  }
+
+  /**
+   * Reset the spec-approval flag. Mirror of `resetPlanApproval` for the
+   * spec workflow — used by `setSessionAgent` when the agent transitions
+   * INTO `spec` mode mid-session.
+   */
+  resetSpecApproval(): void {
+    this.specApproved = false;
+    this.specPath = null;
   }
 
   /** Whether the current spec has been approved. Mirror of `isPlanApproved` for spec mode. */
@@ -1914,13 +1934,21 @@ export class CoderRunner extends EventEmitter {
           // the plan/spec. The detailed wording mirrors the legacy refusal
           // shape — `runner.ts` legacy path has richer rejection text; the
           // BT minimal path here keeps it short and explicit.
+          //
+          // Critical: the gate MUST respect `planApproved` / `specApproved`,
+          // otherwise `runner.approvePlan()` (called by submit_plan after
+          // user approval) does nothing and every mutating tool gets
+          // refused even though the user said "go". This was a regression
+          // when the BT bridge replaced the legacy `invokeToolWithGuards`
+          // path — that one consulted the approval flags; the bridge
+          // version originally checked only `planMode`/`specMode`.
           const tool = this.findTool(toolName);
           if (!tool) return null;
           const mutates = tool.mutates ?? (tool.source === 'mcp_external');
-          if (this.opts.planMode && mutates) {
+          if (this.opts.planMode && !this.planApproved && mutates) {
             return '[plan-mode: mutating tool blocked. Call `submit_plan` first; tools unlock after approval.]';
           }
-          if (this.opts.specMode && mutates) {
+          if (this.opts.specMode && !this.specApproved && mutates) {
             return '[spec-mode: mutating tool blocked. Call `submit_spec` first; tools unlock after approval.]';
           }
           return null;
@@ -2361,6 +2389,8 @@ export function extractPathsFromToolArgs(toolName: string, args: Record<string, 
   push((args as { file_path?: unknown }).file_path);
   push((args as { target?: unknown }).target);
   push((args as { destination?: unknown }).destination);
+  push((args as { from_path?: unknown }).from_path);
+  push((args as { to_path?: unknown }).to_path);
   const paths = (args as { paths?: unknown }).paths;
   if (Array.isArray(paths)) for (const p of paths) push(p);
 

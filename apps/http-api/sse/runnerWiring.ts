@@ -88,6 +88,12 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
   runner.on('provider_swapped', (provider, model) => {
     publish(bus, 'provider_swapped', { provider, model });
   });
+  runner.on('session_agent_changed', (payload) => {
+    // Mid-run agent transition (plan→build after submit_plan approval,
+    // spec→build after submit_spec, manual switches). Dashboard listens
+    // on SSE; AgentPicker updates without a manual refetch.
+    publish(bus, 'session_agent_changed', payload);
+  });
   runner.on('fallback_activated', (payload) => {
     publish(bus, 'fallback_activated', payload);
   });

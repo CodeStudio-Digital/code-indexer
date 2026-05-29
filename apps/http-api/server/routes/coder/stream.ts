@@ -20,6 +20,12 @@ import { parseIdParam, notFound } from '../_helpers.js';
 import { withSessionLock } from './sessionLock.js';
 import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { getGlobalMcpExternalPool } from '../../../sse/McpExternalPool.js';
+import {
+  getRuntimeEventLog,
+  installRuntimeEventLog,
+  runtimeEventsToJsonl,
+  summarizeRuntimeEvents,
+} from '../../../sse/runtime-event-log.js';
 
 interface SendMessageBody {
   content: string;
@@ -187,6 +193,22 @@ export function mountCoderStreamRoutes(
       alive,
       updatedAt: session.updated_at,
     });
+  });
+
+  app.get('/api/coder/sessions/:id/events.jsonl', (c) => {
+    const id = parseIdParam(c);
+    const events = getRuntimeEventLog('coder', id);
+    return new Response(runtimeEventsToJsonl(events), {
+      headers: {
+        'content-type': 'application/x-ndjson; charset=utf-8',
+        'content-disposition': `attachment; filename="coder-session-${id}-events.jsonl"`,
+      },
+    });
+  });
+
+  app.get('/api/coder/sessions/:id/events-summary', (c) => {
+    const id = parseIdParam(c);
+    return c.json(summarizeRuntimeEvents(getRuntimeEventLog('coder', id)));
   });
 
   app.post('/api/coder/sessions/:id/messages', async (c) => {
@@ -384,6 +406,7 @@ export function mountCoderStreamRoutes(
       function startFreshRun() {
         const ctrl = new AbortController();
         const newBus = createBus(ctrl);
+        installRuntimeEventLog(newBus, 'coder', id);
         activeRuns.set(id, newBus);
         return newBus;
       }
@@ -498,6 +521,7 @@ export function mountCoderStreamRoutes(
     const bus = await withSessionLock(id, async () => {
       const ctrl = new AbortController();
       const newBus = createBus(ctrl);
+      installRuntimeEventLog(newBus, 'coder', id);
       activeRuns.set(id, newBus);
       return newBus;
     });

@@ -88,6 +88,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     recovery: new Map(),
     dupCalls: new Map(),
     autoContinues: 0,
+    preEmitCompactions: 0,
     runId: 'test-run',
     aborted: false,
     transition: null,
@@ -95,6 +96,9 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     error: null,
     operations: new AsyncOperationRegistry(emit),
     lastTurnTelemetryId: null,
+    // PR 5 — tests start with an empty failure-streak state. Tests that
+    // need to exercise the guard seed entries directly via the helper.
+    failureStreaks: { streaks: new Map() },
     // PR-F — every test context carries an empty injection state so
     // Executing's dynamic-injection helper doesn't NPE. Tests that
     // exercise injection seed this explicitly.

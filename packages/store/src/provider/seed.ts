@@ -3,6 +3,7 @@ import { listDefinitions as listProviderDefinitions } from '@mcp/services/provid
 import * as providers from './providers.js';
 import * as embedding from './embedding.js';
 import * as vectorStore from './vector-store.js';
+import * as reranker from './reranker.js';
 
 type SeedBuiltin = {
   id: string;
@@ -75,6 +76,51 @@ export function seedFromEnvIfEmpty(db: DB): void {
   }
 
   seedEmbeddingAndVectorStore(db, env);
+  seedReranker(db, env);
+}
+
+/**
+ * Seed a reranker config from legacy env vars so existing deployments that
+ * set COHERE_API_KEY or MCP_RERANK_WORKER_URL get an admin-visible, enabled
+ * default without manual setup. Cohere wins when both are present (it doesn't
+ * depend on the indexer Worker being reachable). No-op when neither is set —
+ * `createReranker()` then yields a NullReranker (RRF-only, prior behavior).
+ */
+function seedReranker(db: DB, env: NodeJS.ProcessEnv): void {
+  if (reranker.list(db).length > 0) return; // operator already configured one
+
+  if (env.COHERE_API_KEY) {
+    reranker.upsert(db, {
+      id: 'cohere',
+      kind: 'cohere',
+      name: 'Cohere Rerank',
+      enabled: true,
+      is_default: true,
+      config: {
+        apiKey: env.COHERE_API_KEY,
+        model: env.COHERE_RERANK_MODEL ?? 'rerank-v3.5',
+      },
+    });
+    return;
+  }
+
+  // Only an explicit MCP_RERANK_WORKER_URL auto-enables — we deliberately do
+  // NOT reuse MCP_INDEX_WORKER_URL here, so existing installs don't silently
+  // gain per-query rerank latency/cost. The admin UI is the easy opt-in and
+  // pre-fills this URL from the embedding/vector config.
+  if (env.MCP_RERANK_WORKER_URL) {
+    reranker.upsert(db, {
+      id: 'cloudflare',
+      kind: 'cloudflare',
+      name: 'Cloudflare Reranker',
+      enabled: true,
+      is_default: true,
+      config: {
+        workerUrl: env.MCP_RERANK_WORKER_URL,
+        workerToken: env.MCP_RERANK_WORKER_TOKEN ?? env.MCP_INDEX_WORKER_TOKEN ?? '',
+      },
+    });
+  }
 }
 
 function seedEmbeddingAndVectorStore(db: DB, env: NodeJS.ProcessEnv): void {
@@ -89,8 +135,13 @@ function seedEmbeddingAndVectorStore(db: DB, env: NodeJS.ProcessEnv): void {
       config: {
         workerUrl: env.MCP_INDEX_WORKER_URL,
         workerToken: env.MCP_INDEX_WORKER_TOKEN ?? '',
-        model: env.MCP_INDEX_EMBEDDINGS_MODEL ?? '@cf/baai/bge-base-en-v1.5',
-        dimensions: 768,
+        // The embed worker hardcodes @cf/baai/bge-m3 (1024-dim, multilingual)
+        // and ignores this `model` field (see worker/src/index.ts handleEmbed).
+        // Record the TRUTH so the admin panel and /api/docs/vectors/diagnose
+        // don't claim English-only 768-dim embeddings. The env override stays
+        // for operators running a customized embed worker.
+        model: env.MCP_INDEX_EMBEDDINGS_MODEL ?? '@cf/baai/bge-m3',
+        dimensions: 1024,
       },
     });
 

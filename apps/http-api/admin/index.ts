@@ -15,6 +15,7 @@ import { providersRouter } from './providers.routes.js';
 import { modelsRouter } from './models.routes.js';
 import { embeddingsRouter } from './embeddings.routes.js';
 import { vectorStoresRouter } from './vector-stores.routes.js';
+import { rerankersRouter } from './rerankers.routes.js';
 import { oauthRouter } from './oauth.routes.js';
 import { copilotOAuthRouter } from './oauth-copilot.routes.js';
 import { openaiOAuthRouter } from './oauth-openai.routes.js';
@@ -39,6 +40,7 @@ export function createAdminRouter(store: ProviderStore): Hono {
   app.route('/', modelsRouter(store));
   app.route('/', embeddingsRouter(store));
   app.route('/', vectorStoresRouter(store));
+  app.route('/', rerankersRouter(store));
   app.route('/', oauthRouter(store));
   app.route('/', copilotOAuthRouter(store));
   app.route('/', openaiOAuthRouter(store));

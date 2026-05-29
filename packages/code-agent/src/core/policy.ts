@@ -52,6 +52,7 @@ const BUILTIN_CLASSIFICATION: Record<
   edit_file:        { mutates: true, parallelSafe: false, riskLevel: 'write', scopeAware: true },
   multi_edit:       { mutates: true, parallelSafe: false, riskLevel: 'write', scopeAware: true },
   create_file:      { mutates: true, parallelSafe: false, riskLevel: 'write', scopeAware: true },
+  manage_path:      { mutates: true, parallelSafe: false, riskLevel: 'write', scopeAware: true },
   apply_patch:      { mutates: true, parallelSafe: false, riskLevel: 'write', scopeAware: true },
 
   // ─── Shell ────────────────────────────────────────────────────
@@ -64,7 +65,6 @@ const BUILTIN_CLASSIFICATION: Record<
   // plan. `parallelSafe: false` because shell side effects make
   // parallel dispatch unsafe regardless of how the gate resolves.
   run_command:      { mutates: false, parallelSafe: false, riskLevel: 'execute' },
-  run_command_pty:  { mutates: false, parallelSafe: false, riskLevel: 'execute' },
 
   // ─── Git ──────────────────────────────────────────────────────
   git_status:       { mutates: false, parallelSafe: true,  riskLevel: 'read' },
@@ -97,6 +97,7 @@ const BUILTIN_CLASSIFICATION: Record<
   ask_user:         { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   submit_plan:      { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   submit_tasks:     { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
+  submit_spec:      { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   list_tasks:        { mutates: false, parallelSafe: true,  riskLevel: 'read' },
   cancel_tasks:      { mutates: false, parallelSafe: false, riskLevel: 'read' },
   delete_tasks:      { mutates: false, parallelSafe: false, riskLevel: 'read' },

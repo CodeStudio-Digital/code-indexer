@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
@@ -54,6 +54,14 @@ function hangingProvider(): ChatProvider {
 }
 
 describe('runSubagent limits', () => {
+  beforeEach(() => {
+    process.env.CODER_SUBAGENT_SALVAGE_TIMEOUT_MS = '20';
+  });
+
+  afterEach(() => {
+    delete process.env.CODER_SUBAGENT_SALVAGE_TIMEOUT_MS;
+  });
+
   it('returns an error result when the tool cap is reached', async () => {
     const progress: string[] = [];
     const result = await runSubagent(parent(toolCallingProvider()), {
@@ -82,6 +90,6 @@ describe('runSubagent limits', () => {
     });
 
     expect(result.reason).toBe('error');
-    expect(result.finalText).toContain('task stalled');
+    expect(result.finalText).toContain('subagent stalled');
   });
 });

@@ -6,6 +6,8 @@ import type {
   ProviderConfig,
   ProviderKind,
   ProviderModel,
+  RerankerConfigRow,
+  RerankerKind,
   VectorStoreConfigRow,
   VectorStoreKind,
 } from './types.js';
@@ -73,6 +75,16 @@ export interface EmbeddingConfigRaw {
 }
 
 export interface VectorStoreConfigRaw {
+  id: string;
+  kind: string;
+  name: string;
+  enabled: number;
+  is_default: number;
+  config: string;
+  updated_at: string;
+}
+
+export interface RerankerConfigRaw {
   id: string;
   kind: string;
   name: string;
@@ -175,6 +187,18 @@ export function hydrateVectorStore(r: VectorStoreConfigRaw): VectorStoreConfigRo
   return {
     id: r.id,
     kind: r.kind as VectorStoreKind,
+    name: r.name,
+    enabled: !!r.enabled,
+    is_default: !!r.is_default,
+    config: parseJson<Record<string, unknown>>(r.config, {}),
+    updated_at: r.updated_at,
+  };
+}
+
+export function hydrateReranker(r: RerankerConfigRaw): RerankerConfigRow {
+  return {
+    id: r.id,
+    kind: r.kind as RerankerKind,
     name: r.name,
     enabled: !!r.enabled,
     is_default: !!r.is_default,

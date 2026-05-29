@@ -151,8 +151,43 @@ export class NullReranker implements RerankerService {
 
 // ─── Factory ─────────────────────────────────────────────────────
 
-export function createReranker(): RerankerService {
-  // Check env vars for configuration
+/**
+ * Minimal structural view of the admin ProviderStore. Declared locally so
+ * this module stays decoupled from `@mcp/store` (the indexer is imported in
+ * contexts — tests, the worker — that don't construct a ProviderStore).
+ */
+interface RerankerConfigSource {
+  getDefaultReranker(): {
+    kind: string;
+    config: Record<string, unknown>;
+  } | null;
+}
+
+/**
+ * Build a RerankerService.
+ *
+ * Priority:
+ *   1. The admin-managed default in `reranker_configs` (via ProviderStore).
+ *   2. Legacy env vars (COHERE_API_KEY / MCP_RERANK_WORKER_URL) — covers
+ *      callers that pass no store (CLI/tests before seeding).
+ *   3. NullReranker — RRF ordering only (the prior behavior).
+ *
+ * `seedFromEnvIfEmpty()` migrates the env vars into `reranker_configs` at
+ * boot, so case 1 covers env-configured installs after the first run.
+ */
+export function createReranker(store?: RerankerConfigSource | null): RerankerService {
+  const cfg = store?.getDefaultReranker?.() ?? null;
+  if (cfg) {
+    if (cfg.kind === 'cohere') {
+      const c = cfg.config as { apiKey?: string; model?: string };
+      if (c.apiKey) return new CohereReranker({ apiKey: c.apiKey, model: c.model });
+    }
+    if (cfg.kind === 'cloudflare') {
+      const c = cfg.config as { workerUrl?: string; workerToken?: string };
+      if (c.workerUrl) return new CloudflareReranker({ workerUrl: c.workerUrl, workerToken: c.workerToken });
+    }
+  }
+
   const cohereKey = process.env.COHERE_API_KEY;
   if (cohereKey) {
     return new CohereReranker({ apiKey: cohereKey, model: process.env.COHERE_RERANK_MODEL });

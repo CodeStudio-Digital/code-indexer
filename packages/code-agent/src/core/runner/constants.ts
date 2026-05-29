@@ -77,6 +77,31 @@ export const TURN_BUDGET_CHARS = readEnvInt('CODER_TURN_BUDGET_CHARS', 30_000);
 export const DOOM_LOOP_FUZZY_THRESHOLD = readEnvInt('CODER_DOOM_LOOP_FUZZY_THRESHOLD', 6);
 
 /**
+ * PR 5 — fuzzy doom-loop tolerance window.
+ *
+ * The legacy fuzzy check fired only when ALL last `THRESHOLD` signatures
+ * matched. Session 798's `write_stdin` loop had 5-8s of provider-chat
+ * between failures (occasionally a no-tool turn). That intercalated
+ * reasoning reset the buffer before the fuzzy window could close.
+ *
+ * The new check counts MATCHES in the trailing window and fires when
+ * `matches >= THRESHOLD - TOLERANCE`. Default tolerance is
+ * `floor(THRESHOLD / 3)` (2 for the default 6 ⇒ requires 4-of-6).
+ *
+ * Env override: `CODER_DOOM_LOOP_FUZZY_TOLERANCE` (integer, clamped
+ * to `[0, THRESHOLD - 2]`).
+ */
+export function doomLoopFuzzyTolerance(threshold: number): number {
+  const raw = process.env.CODER_DOOM_LOOP_FUZZY_TOLERANCE;
+  const defaultTol = Math.floor(threshold / 3);
+  if (raw == null || raw === '') return defaultTol;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return defaultTol;
+  // Need at least 2 matches to claim a loop.
+  return Math.min(Math.floor(n), Math.max(0, threshold - 2));
+}
+
+/**
  * Opt-in debug logging for the 3 doom-loop guards (strict, fuzzy,
  * dominance) + the dup-call cap. When `CODER_DOOM_LOOP_DEBUG=1` every
  * push, reset, and check writes a structured `[doom-loop-debug]` line.
@@ -158,6 +183,27 @@ export const POLLING_STUCK_MIN_CHARS = readEnvInt('CODER_POLLING_STUCK_MIN_CHARS
  * Calls 3-4 get a `<system-reminder>` appended; call 5+ refuses.
  */
 export const DUP_CALL_REMINDER_THRESHOLD = readEnvInt('CODER_DUP_CALL_REMINDER_THRESHOLD', 3);
+
+/**
+ * PR 5 (failure-streak guard) — per-tool consecutive-failure counters.
+ *
+ * Gap caught in session 798: 13 `write_stdin` calls failed in 0ms each
+ * because the LLM rotated `session_id` between calls. Tuple-hash dedup
+ * saw 13 unique keys, doom-loop-fuzzy got reset by intercalated no-tool
+ * turns, and `isError=true` was invisible to every existing guard.
+ *
+ * `failure-streak` counts consecutive `isError=true` results per tool
+ * name. Threshold `REMINDER` prepends a sharp marker to the next result
+ * ("you've failed N×; LIST sessions / RE-READ the error / change tactic").
+ * Threshold `REFUSE` replaces the result with a hard refusal and emits
+ * `ToolLoopDetected{guard:'failure-streak'}` so the BT routes to
+ * Planning. A single successful call resets the streak.
+ *
+ * Tools matching `REPEATABLE_NAME_PATTERN` are exempt — for polling
+ * primitives a string of empty results is the workflow, not a loop.
+ */
+export const FAILURE_STREAK_REMINDER_THRESHOLD = readEnvInt('CODER_FAILURE_STREAK_REMINDER', 3);
+export const FAILURE_STREAK_REFUSE_THRESHOLD = readEnvInt('CODER_FAILURE_STREAK_REFUSE', 5);
 
 /**
  * Phase B — summarizer pass cap + cooldown. Up to `MAX_RUNS` LLM

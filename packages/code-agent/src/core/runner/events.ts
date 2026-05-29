@@ -402,6 +402,31 @@ export interface RunnerEvents {
       }
     | {
         /**
+         * PR 5 — failure-streak. A tool's `isError=true` results stacked
+         * past the configured threshold. Distinct from `dup-call-cap`
+         * (same args, irrespective of error) and `dup-result-marker`
+         * (same RESULT content). Only this kind fires on failure
+         * patterns where the args legitimately rotate.
+         *
+         * `severity: 'informational'` → reminder injected, the call's
+         * own error result is STILL delivered (model sees both).
+         * `severity: 'refused'`       → content REPLACED with refusal,
+         * and the orchestrator routes to Planning.
+         */
+        kind: 'failure-streak';
+        turn: number;
+        toolName: string;
+        /** Consecutive failure count that triggered the verdict. */
+        count: number;
+        /** Turn of the very first failure in the current streak. */
+        firstFailureTurn: number;
+        /** First ~200 chars of the most recent error content. */
+        lastError: string;
+        severity: 'informational' | 'refused';
+        reason: string;
+      }
+    | {
+        /**
          * Dup-result marker — agent re-fetched identical content. The
          * runner reacts in one of three tiers depending on how many
          * prior identical hits exist in the window:
@@ -489,5 +514,18 @@ export interface RunnerEvents {
     dwellMs: number;
     /** Turn counter at the time of the transition — helps correlate. */
     turn: number;
+  }) => void;
+  /**
+   * Emitted by `ToolContext.setSessionAgent` when the session's agent
+   * is flipped mid-run (`plan → build` after submit_plan approval,
+   * `spec → build` after submit_spec approval, manual agent switches via
+   * the dashboard). The dashboard's `AgentPicker` listens on this event
+   * via SSE and updates its selector without a manual refetch.
+   *
+   * Carries only the new agent id; the runner has already mutated its
+   * own `opts.{planMode, agentId}` by the time this fires.
+   */
+  session_agent_changed: (payload: {
+    agent: import('@mcp/code-agent/agents/index.js').AgentId;
   }) => void;
 }

@@ -65,6 +65,13 @@ export interface RerankCandidate {
 export interface RerankResult<TCandidate extends RerankCandidate = RerankCandidate> {
   /** Candidates in new order. Items may be dropped if score below cutoff. */
   candidates: TCandidate[];
+  /**
+   * Calibrated 0-1 relevance per chunk_id, as scored by the reranker.
+   * Present only on the reranked paths (LLM call or cache hit); undefined
+   * on degraded paths. Callers use this to surface a meaningful relevance
+   * to the agent instead of the uninterpretable RRF score.
+   */
+  scoreByChunkId?: Map<number, number>;
   /** Whether the reranker ran (false on degraded paths). */
   reranked: boolean;
   /** Whether the rerank verdict came from cache. */
@@ -93,7 +100,21 @@ export interface RerankOpts {
   scoreCutoff?: number;
 }
 
-export class Reranker {
+/**
+ * Minimal surface `DocHybridSearch` depends on, so an alternative reranker
+ * (e.g. a cross-encoder) can be swapped for this LLM-as-judge `Reranker`
+ * without touching the search engine. Both must populate
+ * `RerankResult.scoreByChunkId` with calibrated 0-1 scores.
+ */
+export interface DocReranker {
+  rerank<T extends RerankCandidate>(
+    query: string,
+    candidates: T[],
+    opts?: RerankOpts,
+  ): Promise<RerankResult<T>>;
+}
+
+export class Reranker implements DocReranker {
   constructor(private opts: RerankerOptions) {}
 
   async rerank<TCandidate extends RerankCandidate>(
@@ -150,6 +171,7 @@ export class Reranker {
       const reordered = applyCachedOrder(candidates, cached, opts.scoreCutoff ?? 0);
       const result: RerankResult<TCandidate> = {
         candidates: reordered,
+        scoreByChunkId: new Map(cached.map((c) => [c.chunk_id, c.score])),
         reranked: true,
         cacheHit: true,
         dropped: candidates.length - reordered.length,
@@ -193,6 +215,7 @@ export class Reranker {
 
     const result: RerankResult<TCandidate> = {
       candidates: kept,
+      scoreByChunkId: new Map(scored.map((s) => [s.candidate.chunk_id, s.score])),
       reranked: true,
       cacheHit: false,
       dropped: candidates.length - kept.length,

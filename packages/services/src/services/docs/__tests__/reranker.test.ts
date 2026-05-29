@@ -153,6 +153,23 @@ describe('Reranker', () => {
     expect(result.modelId).toBe('fake-reranker');
   });
 
+  it('exposes the calibrated 0-1 score per chunk_id', async () => {
+    stubFetchOk('[0.3, 0.95, 0.5]');
+    const reranker = new Reranker({ resolver: resolverWith(makeBinding()) });
+    const result = await reranker.rerank('q', makeCandidates());
+    expect(result.scoreByChunkId).toBeInstanceOf(Map);
+    expect(result.scoreByChunkId?.get(101)).toBeCloseTo(0.3);
+    expect(result.scoreByChunkId?.get(202)).toBeCloseTo(0.95);
+    expect(result.scoreByChunkId?.get(303)).toBeCloseTo(0.5);
+  });
+
+  it('leaves scoreByChunkId undefined on degraded paths', async () => {
+    const reranker = new Reranker({ resolver: resolverWith(null) });
+    const result = await reranker.rerank('q', makeCandidates());
+    expect(result.reranked).toBe(false);
+    expect(result.scoreByChunkId).toBeUndefined();
+  });
+
   it('falls back to original order on unparseable LLM response', async () => {
     stubFetchOk('not json at all');
     const reranker = new Reranker({ resolver: resolverWith(makeBinding()) });
@@ -198,6 +215,8 @@ describe('Reranker', () => {
     expect(second.reranked).toBe(true);
     expect(second.candidates.map((c) => c.chunk_id)).toEqual(first.candidates.map((c) => c.chunk_id));
     expect(fetchMock).toHaveBeenCalledTimes(1); // no second LLM call
+    // Calibrated scores survive the cache round-trip.
+    expect(second.scoreByChunkId?.get(202)).toBeCloseTo(0.95);
 
     db.close();
   });

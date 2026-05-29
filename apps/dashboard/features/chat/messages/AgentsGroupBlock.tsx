@@ -28,7 +28,14 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
       a.model !== b.model ||
       a.summary !== b.summary ||
       a.error !== b.error ||
-      a.progressNote !== b.progressNote
+      a.progressNote !== b.progressNote ||
+      a.phase !== b.phase ||
+      a.turn !== b.turn ||
+      a.elapsedMs !== b.elapsedMs ||
+      a.idleMs !== b.idleMs ||
+      a.deadlineMs !== b.deadlineMs ||
+      a.lastToolName !== b.lastToolName ||
+      a.usage !== b.usage
     )
       return false;
   }
@@ -145,6 +152,7 @@ function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
 
   const hasSummary = agent.summary || agent.error;
   const providerLabel = formatProviderLabel(agent.provider, agent.model);
+  const runningMeta = formatRunningMeta(agent);
 
   return (
     <div className="border-b last:border-b-0">
@@ -206,17 +214,30 @@ function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
           )}
         </div>
       )}
-      {agent.status === 'running' && agent.progressNote && (
-        <div className="px-8 pb-2 text-[11px] text-warning truncate">
-          {agent.phase ? `${agent.phase}: ` : ''}{agent.progressNote}
-        </div>
+      {agent.status === 'running' && (agent.progressNote || agent.phase || agent.lastToolName) && (
+        <AgentActivityLine agent={agent} runningMeta={runningMeta} />
       )}
-      {agent.status === 'running' && !agent.progressNote && agent.phase && (
-        <div className="px-8 pb-2 text-[11px] text-warning truncate">
-          {agent.phase}
-          {agent.lastToolName ? ` / ${agent.lastToolName}` : ''}
-        </div>
-      )}
+    </div>
+  );
+}
+
+function AgentActivityLine({ agent, runningMeta }: { agent: ParallelAgent; runningMeta: string }) {
+  const phase = agent.phase ? readable(agent.phase) : 'running';
+  const label = agent.lastToolName ?? activityLabelFromPhase(agent.phase) ?? 'subagent';
+  const note = agent.progressNote ?? agent.lastToolName ?? '';
+  return (
+    <div className="px-8 pb-2">
+      <div className="flex min-w-0 items-center gap-2 rounded-md border border-border/70 bg-muted/45 px-2 py-1 text-[11px]">
+        <Loader2 className="h-3 w-3 shrink-0 animate-spin text-warning" />
+        <span className="min-w-0 truncate font-mono font-medium text-foreground/80">{label}</span>
+        <span className="shrink-0 text-muted-foreground">{phase}</span>
+        {note && note !== label && (
+          <span className="min-w-0 truncate text-muted-foreground">{note}</span>
+        )}
+        {runningMeta && (
+          <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">{runningMeta}</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -231,4 +252,30 @@ function formatProviderLabel(provider?: string, model?: string): string | null {
   if (!provider && !model) return null;
   if (provider && model) return `${provider}:${model}`;
   return provider ?? model ?? null;
+}
+
+function activityLabelFromPhase(phase?: string): string | null {
+  if (!phase) return null;
+  if (phase.includes('provider')) return 'provider.chat';
+  if (phase.includes('thinking')) return 'thinking';
+  if (phase.includes('text')) return 'streaming text';
+  return null;
+}
+
+function readable(value: string): string {
+  return value.replace(/[_:.-]+/g, ' ');
+}
+
+function formatRunningMeta(agent: ParallelAgent): string {
+  const parts: string[] = [];
+  if (agent.idleMs != null) parts.push(`idle ${formatMs(agent.idleMs)}`);
+  if (agent.deadlineMs != null && agent.elapsedMs != null) {
+    parts.push(`left ${formatMs(Math.max(0, agent.deadlineMs - agent.elapsedMs))}`);
+  }
+  return parts.join(', ');
+}
+
+function formatMs(ms: number): string {
+  if (ms >= 60_000) return `${Math.round(ms / 60_000)}m`;
+  return `${Math.max(0, Math.round(ms / 1000))}s`;
 }

@@ -19,6 +19,7 @@ import type {
   FilesystemReaddirOptions,
   IFilesystemPort,
   PortDirent,
+  PortStats,
 } from '@mcp/code-agent/ports/filesystem-port.js';
 import { createHash } from 'node:crypto';
 import {
@@ -167,6 +168,37 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
   }
   readdir(absPath: string, options: FilesystemReaddirOptions): Promise<PortDirent[]> {
     return this.inner.readdir(absPath, options);
+  }
+  stat(absPath: string): Promise<PortStats> {
+    return this.inner.stat(absPath);
+  }
+  async rename(oldAbsPath: string, newAbsPath: string): Promise<void> {
+    let expectedAfter: string | null = null;
+    try {
+      const st = await this.inner.stat(oldAbsPath);
+      if (st.isFile()) expectedAfter = await this.inner.readFile(oldAbsPath);
+    } catch {
+      expectedAfter = null;
+    }
+    await this.recorder.record(oldAbsPath, this.inner, {
+      tool: this.currentToolName,
+      expectedAfter: null,
+      isDelete: true,
+    });
+    await this.recorder.record(newAbsPath, this.inner, {
+      tool: this.currentToolName,
+      expectedAfter,
+      isDelete: false,
+    });
+    await this.inner.rename(oldAbsPath, newAbsPath);
+  }
+  async rm(absPath: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
+    await this.recorder.record(absPath, this.inner, {
+      tool: this.currentToolName,
+      expectedAfter: null,
+      isDelete: true,
+    });
+    await this.inner.rm(absPath, options);
   }
 
   /**

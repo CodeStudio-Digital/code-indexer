@@ -128,22 +128,22 @@ function formatUsd(value: number): string {
   return `$${(value / 1000).toFixed(1)}k`;
 }
 
-export function SessionMetricsModal({ open, onOpenChange, sessionId }: SessionMetricsModalProps) {
+/**
+ * Headless body of the session-metrics surface. Reused by the legacy
+ * modal AND the right-rail `SessionMetricsPanel`.
+ */
+export function SessionMetricsView({
+  sessionId,
+  active,
+}: {
+  sessionId: number | null;
+  active: boolean;
+}) {
   const { t } = useTranslation(['chat', 'common']);
-  const url = open && sessionId ? `/sessions/${sessionId}/telemetry` : '';
+  const url = active && sessionId ? `/sessions/${sessionId}/telemetry` : '';
   const { data, loading, error } = useApi<SessionTelemetrySummary>(url);
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Activity className="h-4 w-4" />
-            {t('chat:metrics.title')}
-          </DialogTitle>
-        </DialogHeader>
-
-        <div className="flex-1 overflow-auto space-y-4 pr-1">
+    <div className="flex-1 overflow-auto space-y-4 pr-1 px-3 py-2">
           {loading && (
             <div className="flex items-center justify-center py-12 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />
@@ -305,7 +305,22 @@ export function SessionMetricsModal({ open, onOpenChange, sessionId }: SessionMe
               )}
             </>
           )}
-        </div>
+    </div>
+  );
+}
+
+export function SessionMetricsModal({ open, onOpenChange, sessionId }: SessionMetricsModalProps) {
+  const { t } = useTranslation(['chat']);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Activity className="h-4 w-4" />
+            {t('chat:metrics.title')}
+          </DialogTitle>
+        </DialogHeader>
+        <SessionMetricsView sessionId={sessionId} active={open} />
       </DialogContent>
     </Dialog>
   );

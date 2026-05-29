@@ -194,10 +194,30 @@ export interface PreThinkStreamBlock {
   error?: string;
 }
 
+export type StreamActivityStatus = 'running' | 'completed' | 'failed' | 'timed_out' | 'aborted';
+export type StreamActivityKind = 'provider' | 'tool' | 'spawn_agent' | 'subagent' | 'task' | 'operation';
+
+export interface StreamActivityBlock {
+  type: 'activity';
+  id: string;
+  kind: StreamActivityKind;
+  label: string;
+  status: StreamActivityStatus;
+  phase?: string;
+  note?: string;
+  startedAt: number;
+  lastEventAt: number;
+  elapsedMs?: number;
+  idleMs?: number;
+  deadlineMs?: number;
+  parentOpId?: string;
+}
+
 export type StreamBlock =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
   | PreThinkStreamBlock
+  | StreamActivityBlock
   | { type: 'tool'; call: ToolCallEvent }
   | { type: 'plan'; plan: PlanPrompt }
   | { type: 'spec'; spec: SpecPrompt }

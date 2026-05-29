@@ -7,7 +7,7 @@
  *
  * Scope (v1):
  *  - Read-only and search tools only. Mutating tools (write_file, edit_file,
- *    multi_edit, run_command, git_*) are NOT exposed. Direct tool calls
+ *    multi_edit, manage_path, run_command, git_*) are NOT exposed. Direct tool calls
  *    are still the path for those — they go through plan-mode policy.
  *  - Sandbox is `node:vm` (NOT a security boundary; the agent is trusted —
  *    same trust level as direct tool calls). Timeout via Promise.race plus
@@ -69,7 +69,7 @@ const CODE_EXEC_DESC =
   '  - The snippet runs as an async IIFE; use top-level `await` and `return` the result.\n' +
   '\n' +
   'Policy: every tool call inside the script goes through the same plan-mode / task-scope policy as a direct call. ' +
-  'Mutating tools (write_file, edit_file, multi_edit, create_file, apply_patch, git_add/commit/branch) work only when the plan is approved (or the active task scope unlocks the touched paths). ' +
+  'Mutating tools (write_file, edit_file, multi_edit, create_file, manage_path, apply_patch, git_add/commit/branch) work only when the plan is approved (or the active task scope unlocks the touched paths). ' +
   'Interactive prompts (submit_plan, submit_tasks, ask_user) and orchestration tools (spawn_*, expand_toolset) are NOT exposed — call them directly outside code_exec.\n' +
   '\n' +
   'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default timeout (max ' + MAX_TIMEOUT_MS + '), ' + MAX_TOOL_CALLS + ' tool calls per script, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB output cap.\n' +
@@ -146,7 +146,17 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
     },
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
       const code = String(args.code ?? '');
-      if (!code.trim()) return err('code cannot be empty');
+      if (!code.trim()) {
+        // PR 5 — guide the model towards the right tool when `code` is
+        // missing. A bare "code cannot be empty" message in session 798
+        // produced a 3ms failure with no clue what to do next.
+        return err(
+          'code_exec: `code` is required and non-empty. ' +
+          'If you wanted to run a shell command, use `exec_command`. ' +
+          'If you wanted to call a stored script, use `run_command` with the path. ' +
+          'code_exec runs an in-process JS snippet that can call other tools via the `tools` proxy.',
+        );
+      }
       const requested = typeof args.timeout_ms === 'number' ? args.timeout_ms : DEFAULT_TIMEOUT_MS;
       const timeout = Math.min(MAX_TIMEOUT_MS, Math.max(500, requested));
 

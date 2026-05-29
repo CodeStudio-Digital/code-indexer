@@ -12,6 +12,7 @@ import { Markdown } from './Markdown.js';
 import { TaskExecutionBlock } from './TaskExecutionBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
+import { ActivityLineBlock } from './ActivityLineBlock.js';
 
 function LiveThinkingBlock({ text }: { text: string }) {
   const { t } = useTranslation('chat');
@@ -97,6 +98,9 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
   }
   if (block.type === 'pre_think') {
     return <LivePreThinkBlock key={`pt-${key}`} block={block} />;
+  }
+  if (block.type === 'activity') {
+    return <ActivityLineBlock key={`act-${block.id}`} activity={block} />;
   }
   if (block.type === 'text') {
     return (

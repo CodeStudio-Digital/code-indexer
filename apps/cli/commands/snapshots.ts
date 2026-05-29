@@ -64,7 +64,7 @@ export function register(program: Command): void {
       const { embeddingService, searchableVectorStore } = createSearchBundle(
         db,
         providerStore,
-        createReranker(),
+        createReranker(providerStore),
       );
       const svc = new SnapshotService(db, embeddingService, searchableVectorStore);
       if (!svc.hasEmbeddingBackend()) {

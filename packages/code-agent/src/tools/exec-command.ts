@@ -13,12 +13,12 @@
  *                 string for a background poll), yield briefly, return
  *                 incremental output.
  *
- * Why this exists alongside `run_command_pty`: `run_command_pty` is
- * one-shot — you pre-feed all stdin lines, wait for the process to die
- * or hit a timeout, then get the full output. It can't keep a REPL alive
- * across model turns. exec_command holds the process open and lets the
- * model carry on a multi-turn conversation with it (node REPL, python -i,
- * psql, npm init, etc.).
+ * exec_command vs the one-shot `run_command`: run_command runs a command to
+ * completion (or timeout) and returns the full output — it can't keep a REPL
+ * alive across model turns. exec_command holds the process open so the model
+ * can carry on a multi-turn conversation with it (node REPL, python -i, psql,
+ * npm init, etc.). Pass `tty: true` for a real pseudo-terminal when a command
+ * gates on isatty() — this replaced the old one-shot `run_command_pty` tool.
  *
  * Two transports:
  *   - pipe (default): plain `child_process.spawn` with piped stdio.
@@ -85,6 +85,9 @@ interface SessionRecord {
   pending: string;
   /** Set when the buffer overflowed since the last read. */
   truncated: boolean;
+  /** Timestamp the process was spawned at. PR 5 — surfaced by
+   *  `list_sessions` so the model knows session age. */
+  startedAtMs: number;
   /** Timestamp of the last interaction; used for idle TTL eviction. */
   lastTouchMs: number;
   /** Resolved when the process exits — lets yield logic short-circuit. */
@@ -259,6 +262,7 @@ async function spawnSession(opts: {
     exitCode: null,
     pending: '',
     truncated: false,
+    startedAtMs: nowMs(),
     lastTouchMs: nowMs(),
     exitedPromise,
     markExited: (code) => {
@@ -448,6 +452,91 @@ const WRITE_STDIN_DESC =
   "not `'5+5'`. The tool does NOT auto-append newlines.\n" +
   "DON'T: call after `status=exited` — the session_id has been reaped. exec_command a new session.";
 
+/**
+ * PR 5 — formatted age helper used by `list_sessions` and the rich
+ * `write_stdin` error payload. Returns "5s", "3m", "1h2m" style.
+ */
+function formatAgeMs(ms: number): string {
+  if (ms < 1_000) return `${ms}ms`;
+  const totalSec = Math.floor(ms / 1_000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const totalMin = Math.floor(totalSec / 60);
+  if (totalMin < 60) return `${totalMin}m`;
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+  return mins === 0 ? `${hours}h` : `${hours}h${mins}m`;
+}
+
+/**
+ * PR 5 — snapshot of the live session registry. Pure read; mutates
+ * nothing. Used by `list_sessions` and by the rich error payload of
+ * `write_stdin` when an unknown session id is passed.
+ */
+interface SessionSnapshot {
+  id: string;
+  cmd: string;
+  cwd: string;
+  status: Status;
+  mode: 'pipe' | 'pty';
+  startedAtMs: number;
+  lastTouchMs: number;
+  ageStr: string;
+  idleStr: string;
+}
+
+function snapshotSessions(): SessionSnapshot[] {
+  const now = nowMs();
+  return [...sessions.values()].map((rec) => ({
+    id: rec.id,
+    cmd: rec.cmd,
+    cwd: rec.cwd,
+    status: rec.status,
+    mode: rec.mode,
+    startedAtMs: rec.startedAtMs,
+    lastTouchMs: rec.lastTouchMs,
+    ageStr: formatAgeMs(now - rec.startedAtMs),
+    idleStr: formatAgeMs(now - rec.lastTouchMs),
+  })).sort((a, b) => a.startedAtMs - b.startedAtMs);
+}
+
+const LIST_SESSIONS_DESC =
+  'List the active exec_command sessions in this runner (id, status, age, idle). ' +
+  'Use BEFORE `write_stdin` to confirm the session you want still exists. ' +
+  'Returns `(no active sessions)` when the registry is empty.\n\n' +
+  'USE: when you forgot the session_id, or when write_stdin returned ' +
+  '"session not active" and you want to know which ids ARE valid.\n' +
+  "DON'T: poll this in a loop — sessions only change when YOU call exec_command / write_stdin.";
+
+export const listSessions: CoderTool = {
+  name: 'list_sessions',
+  description: LIST_SESSIONS_DESC,
+  source: 'native',
+  mutates: false,
+  parallelSafe: true,
+  riskLevel: 'read',
+  parameters: {
+    type: 'object',
+    properties: {},
+    additionalProperties: false,
+  },
+  handler: async (): Promise<ToolResult> => {
+    reapIdleSessions();
+    const snap = snapshotSessions();
+    if (snap.length === 0) {
+      return ok('(no active sessions; spawn one with exec_command first)');
+    }
+    const lines = snap.map((s) => {
+      const cmd = s.cmd.length > 60 ? s.cmd.slice(0, 57) + '...' : s.cmd;
+      return `${s.id} | ${s.status} | ${s.mode} | age ${s.ageStr} | idle ${s.idleStr} | ${cmd}`;
+    });
+    return ok(
+      `Active sessions (${snap.length}):\n` +
+      `<id> | <status> | <mode> | <age since spawn> | <idle since last io> | <cmd>\n` +
+      lines.join('\n'),
+    );
+  },
+};
+
 export const writeStdin: CoderTool = {
   name: 'write_stdin',
   description: WRITE_STDIN_DESC,
@@ -480,10 +569,25 @@ export const writeStdin: CoderTool = {
     if (!id) return err('write_stdin: session_id is required');
     const rec = sessions.get(id);
     if (!rec) {
+      // PR 5 — rich error payload: list the IDs that ARE active so the
+      // model can immediately self-correct instead of rotating
+      // session_ids blindly. The failure-streak guard still escalates
+      // if the model ignores the list and keeps retrying.
+      const snap = snapshotSessions();
+      const activeStr = snap.length === 0
+        ? '  (no active sessions — use `exec_command` to spawn one)'
+        : snap.map((s) =>
+            `  - ${s.id} (${s.status}, ${s.mode}, age ${s.ageStr}, idle ${s.idleStr}): ` +
+            (s.cmd.length > 50 ? s.cmd.slice(0, 47) + '...' : s.cmd),
+          ).join('\n');
       return err(
-        `write_stdin: session '${id}' is not active. ` +
-          'It has either exited (its exit_code was returned in a prior call) or was reaped by the idle TTL. ' +
-          'Spawn a fresh session with exec_command.',
+        `write_stdin: session '${id}' is not active (exited / reaped by idle-TTL / never existed).\n` +
+        `Active sessions right now:\n${activeStr}\n` +
+        `A session that exited cannot be reopened — its stdin is gone. ` +
+        `Stop retrying with this id. Either:\n` +
+        `  (a) call \`write_stdin\` with one of the active session_ids above;\n` +
+        `  (b) spawn a fresh session via \`exec_command\`; or\n` +
+        `  (c) call \`list_sessions\` first to refresh your view, then decide.`,
       );
     }
 
@@ -523,4 +627,4 @@ export const __testing = {
   },
 };
 
-export const execCommandTools: CoderTool[] = [execCommand, writeStdin];
+export const execCommandTools: CoderTool[] = [execCommand, writeStdin, listSessions];

@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, BarChart3, Bot, Gauge, GitCompare, Info, PanelLeft, PanelRightClose, PanelRightOpen, ScrollText, Sparkles, Wrench } from 'lucide-react';
+import { AlertTriangle, Bot, Info, PanelLeft } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -58,7 +58,12 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
     : null;
 
   return (
-    <div className="border-b px-3 sm:px-5 py-3 flex items-center gap-2 sm:gap-3 bg-card/80 backdrop-blur">
+    // `min-w-0` lets the flex children shrink past their intrinsic width
+    // when the chat column is narrow (right rail open + small viewport),
+    // preventing the row from wrapping into two lines (which is what
+    // produced the "tokens widget on top of avatar" stack reported in
+    // the bug screenshot).
+    <div className="border-b px-3 sm:px-5 py-3 flex items-center gap-2 sm:gap-3 bg-card/80 backdrop-blur min-w-0 shrink-0">
       {onOpenSidebar && (
         <button
           type="button"
@@ -105,10 +110,10 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
           )}
         </div>
       </div>
-      <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-3 text-[11px] text-muted-foreground shrink-0">
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="hidden sm:flex flex-col items-end gap-0.5 tabular-nums cursor-help">
+            <div className="hidden xl:flex flex-col items-end gap-0.5 tabular-nums cursor-help">
               {ctxPct !== null && contextWindow ? (
                 <>
                   <div className="flex items-center gap-1.5">
@@ -143,109 +148,11 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
             <StatsTooltip session={session} lastUsage={lastUsage} stats={stats} contextWindow={contextWindow} lastTurnInput={lastTurnInput} ctxPct={ctxPct} />
           </TooltipContent>
         </Tooltip>
-        {onOpenSkillConfig && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={t('chat:header.skills')}
-                onClick={onOpenSkillConfig}
-                className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <Sparkles className="h-4 w-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>{t('chat:header.skills')}</TooltipContent>
-          </Tooltip>
-        )}
-        {onOpenToolConfig && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={t('chat:header.toolConfig')}
-                onClick={onOpenToolConfig}
-                className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <Wrench className="h-4 w-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>{t('chat:header.toolConfig')}</TooltipContent>
-          </Tooltip>
-        )}
-        {onOpenMetrics && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={t('chat:header.metrics')}
-                onClick={onOpenMetrics}
-                className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <Gauge className="h-4 w-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>{t('chat:header.metrics')}</TooltipContent>
-          </Tooltip>
-        )}
-        {onOpenToolStats && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label="Tool stats"
-                onClick={onOpenToolStats}
-                className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <BarChart3 className="h-4 w-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>Tool stats — what is this session calling?</TooltipContent>
-          </Tooltip>
-        )}
-        {onToggleWorkerLog && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={workerLogOpen ? 'Hide worker log' : 'Show worker log'}
-                aria-pressed={workerLogOpen}
-                onClick={onToggleWorkerLog}
-                className={cn(
-                  'p-1.5 rounded-md transition-colors',
-                  workerLogOpen
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                )}
-              >
-                <ScrollText className="h-4 w-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {workerLogOpen ? 'Hide worker log' : 'Show worker log — endpoints, hooks, tools, quality gate'}
-            </TooltipContent>
-          </Tooltip>
-        )}
-        {onOpenSnapshots && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label="Snapshots"
-                onClick={onOpenSnapshots}
-                className="relative p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <GitCompare className="h-4 w-4" />
-                {pendingSnapshots != null && pendingSnapshots > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-primary text-primary-foreground text-[9px] font-medium flex items-center justify-center tabular-nums">
-                    {pendingSnapshots > 99 ? '99+' : pendingSnapshots}
-                  </span>
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>Snapshots ({pendingSnapshots ?? 0} pending)</TooltipContent>
-          </Tooltip>
-        )}
+        {/* Session-details is still on the header as a fallback affordance —
+            the activity rail also has a Details panel, but power users still
+            expect a clickable "i" in the title bar. The other tool toggles
+            (Skills/Tools/Metrics/ToolStats/WorkerLog/Meta/Snapshots) moved
+            to the right activity rail. */}
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -259,33 +166,6 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
           </TooltipTrigger>
           <TooltipContent>{t('chat:header.sessionDetails')}</TooltipContent>
         </Tooltip>
-        {onToggleMetaSidebar && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={metaSidebarOpen ? t('chat:header.hideMeta') : t('chat:header.showMeta')}
-                aria-pressed={metaSidebarOpen}
-                onClick={onToggleMetaSidebar}
-                className={cn(
-                  'hidden lg:inline-flex p-1.5 rounded-md transition-colors',
-                  metaSidebarOpen
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                )}
-              >
-                {metaSidebarOpen ? (
-                  <PanelRightClose className="h-4 w-4" />
-                ) : (
-                  <PanelRightOpen className="h-4 w-4" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {metaSidebarOpen ? t('chat:header.hideMeta') : t('chat:header.showMeta')}
-            </TooltipContent>
-          </Tooltip>
-        )}
       </div>
     </div>
   );

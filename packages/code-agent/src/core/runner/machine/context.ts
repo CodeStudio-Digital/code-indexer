@@ -15,6 +15,7 @@ import type { RunnerOptions } from '../types.js';
 import type { RecoveryKind } from '../recovery-config.js';
 import type { BridgeCallbacks, RunContext } from './types.js';
 import { AsyncOperationRegistry } from '../operations.js';
+import { emptyFailureStreakState } from '../guards/failure-streak.js';
 
 export interface CreateRunContextArgs {
   opts: RunnerOptions;
@@ -56,6 +57,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     recovery: new Map(),
     dupCalls: new Map(),
     autoContinues: 0,
+    preEmitCompactions: 0,
     runId: randomUUID(),
     aborted: false,
     transition: null,
@@ -68,6 +70,10 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     // `runner.lastTurnTelemetryId`, which mirrors this value through
     // the bridge callback in `runViaBehaviorTree`.
     lastTurnTelemetryId: null,
+    // PR 5 — per-tool failure-streak counters start empty. Mutated by
+    // `executing-dispatch.ts` after every tool result; cleared per tool
+    // on the first `isError=false`.
+    failureStreaks: emptyFailureStreakState(),
     // PR-F — dynamic-injection state starts empty; Executing/Compacting
     // mutate it as they emit reminders / compact.
     injectionState: {

@@ -86,7 +86,7 @@ const LEAKY_TOOL_NAMES = new Set([
  * Mutating tool-name prefixes — blocked by policy.ts in plan mode but
  * cheaper to drop here.
  */
-const MUTATING_TOOL_PREFIXES = ['write_', 'create_', 'edit_', 'multi_edit', 'apply_patch'];
+const MUTATING_TOOL_PREFIXES = ['write_', 'create_', 'edit_', 'multi_edit', 'manage_path', 'apply_patch'];
 
 function isLeaky(tool: ThinTool): boolean {
   return LEAKY_TOOL_NAMES.has(tool.name);

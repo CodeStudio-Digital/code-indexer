@@ -16,6 +16,7 @@ import * as subagent from './provider/subagent.js';
 import * as oauth from './provider/oauth.js';
 import * as embedding from './provider/embedding.js';
 import * as vectorStore from './provider/vector-store.js';
+import * as reranker from './provider/reranker.js';
 import * as globalTools from './provider/global-tools.js';
 import { seedFromEnvIfEmpty } from './provider/seed.js';
 
@@ -36,6 +37,8 @@ export type {
   EmbeddingConfigRow,
   VectorStoreKind,
   VectorStoreConfigRow,
+  RerankerKind,
+  RerankerConfigRow,
   UpsertProviderInput,
   UpsertModelInput,
 } from './provider/types.js';
@@ -49,6 +52,7 @@ import type {
   OAuthTokenRow,
   EmbeddingConfigRow,
   VectorStoreConfigRow,
+  RerankerConfigRow,
 } from './provider/types.js';
 
 export class ProviderStore {
@@ -118,6 +122,11 @@ export class ProviderStore {
   listVectorStoreConfigs(): VectorStoreConfigRow[] { return vectorStore.list(this.db); }
   getDefaultVectorStore(): VectorStoreConfigRow | null { return vectorStore.getDefault(this.db); }
   upsertVectorStoreConfig(input: vectorStore.UpsertVectorStoreInput): VectorStoreConfigRow { return vectorStore.upsert(this.db, input); }
+
+  // ─── Rerankers ─────────────────────────────────────────────────
+  listRerankerConfigs(): RerankerConfigRow[] { return reranker.list(this.db); }
+  getDefaultReranker(): RerankerConfigRow | null { return reranker.getDefault(this.db); }
+  upsertRerankerConfig(input: reranker.UpsertRerankerInput): RerankerConfigRow { return reranker.upsert(this.db, input); }
 
   // ─── Global Disabled Tools ─────────────────────────────────────
   listGlobalDisabledTools(): string[] { return globalTools.listDisabled(this.db); }

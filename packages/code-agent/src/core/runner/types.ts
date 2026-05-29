@@ -20,6 +20,7 @@ export type TransitionKind =
   | 'provider-fallback'
   | 'doom-loop-strict'
   | 'doom-loop-fuzzy'
+  | 'failure-streak'
   | 'dup-call-cap'
   | 'result-dup-cap'
   | 'pre-read-blocked'
@@ -42,7 +43,8 @@ export type StopReason =
   | 'plan_required'
   | 'recovery_capped'   // a recovery-path circuit breaker (PR-2 R1) tripped
   | 'doom_loop'         // doom-loop guard refused identical tool calls
-  | 'compact_failure';  // consecutive compaction failures hit the cap
+  | 'compact_failure'   // consecutive compaction failures hit the cap
+  | 'compact_exhausted'; // pre-emit compaction kept firing without freeing the window
 
 export interface RunResult {
   totalUsage: ChatUsage;

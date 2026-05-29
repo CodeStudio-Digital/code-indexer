@@ -38,6 +38,7 @@ import {
   publishSupervisorIncident,
   type SupervisorIncidentEnvelope,
 } from './supervisor-incident-bus.js';
+import { installRuntimeEventLog } from './runtime-event-log.js';
 
 interface PoolEntry {
   host: WorkerHost;
@@ -242,6 +243,7 @@ export class WorkerOrchestratorPool {
 
     // ─── Bus mirror — worker → main ─────────────────────────────
     const bus = createBus(new AbortController());
+    const detachRuntimeLog = installRuntimeEventLog(bus, 'company', sessionId);
     const bridge = host.requireBridge();
     const offEvent = bridge.on('bus.event', (payload) => {
       const env = payload as { event: string; data: unknown };
@@ -283,6 +285,7 @@ export class WorkerOrchestratorPool {
     });
 
     const detachBusMirror = (): void => {
+      try { detachRuntimeLog(); } catch { /* best-effort */ }
       try { offEvent(); } catch { /* best-effort */ }
       try { offEnd(); } catch { /* best-effort */ }
       try { offSupervisorBoot(); } catch { /* best-effort */ }
