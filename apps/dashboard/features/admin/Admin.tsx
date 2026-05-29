@@ -4,6 +4,7 @@ import {
   Activity,
   AlertTriangle,
   AppWindow,
+  Blocks,
   BookOpen,
   Database,
   GitFork,
@@ -35,6 +36,7 @@ import { McpHttpStatusPanel } from './McpHttpStatusPanel.js';
 import { AppSettingsPanel } from './AppSettingsPanel.js';
 import { CapabilityFallbacksPanel } from './CapabilityFallbacksPanel.js';
 import { SkillsPanel } from './SkillsPanel.js';
+import { PluginsPanel } from './PluginsPanel.js';
 import { StoragePanel } from './StoragePanel.js';
 import { HydePanel } from './HydePanel.js';
 import { HygienePanel } from './HygienePanel.js';
@@ -62,6 +64,7 @@ type SectionId =
   | 'mcp-servers'
   | 'mcp-http'
   | 'skills'
+  | 'plugins'
   | 'ai-geral'
   | 'deepthink'
   | 'chrome-service'
@@ -145,6 +148,8 @@ export default function Admin() {
       hint: 'Expor nossas tools (incl. RAG) pra outros agentes' },
     { id: 'skills',            label: t('admin:tabs.skills'),     icon: BookOpen,
       hint: 'Skills (custom + builtin)' },
+    { id: 'plugins',           label: 'Plugins',                  icon: Blocks,
+      hint: 'Instalar/gerenciar plugins + navegar o Market' },
     { id: 'ai-geral',          label: 'IA Geral',                 icon: Activity,
       hint: 'Quality watchdog, intervention policies' },
     { id: 'deepthink',         label: 'deepThink',                icon: Sparkles,
@@ -343,6 +348,7 @@ export default function Admin() {
           {section === 'mcp-servers'       && <McpServersPanel />}
           {section === 'mcp-http'          && <McpHttpStatusPanel />}
           {section === 'skills'            && <SkillsPanel />}
+          {section === 'plugins'           && <PluginsPanel />}
           {section === 'ai-geral'          && <GeneralAiPanel />}
           {section === 'deepthink'         && <DeepThinkPanel />}
           {section === 'chrome-service'    && <ChromeServicePanel />}
