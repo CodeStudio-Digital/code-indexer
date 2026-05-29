@@ -358,6 +358,85 @@ const get_context_for = defineTool({
   })),
 });
 
+// ─── Memory-framed tools (Mem D) ─────────────────────────────────────
+// Same snapshot backend, names the agent reaches for intuitively: it treats
+// snapshots as "project memory" — search before exploring, save durable facts.
+
+const search_memory = defineTool({
+  name: 'search_memory',
+  description:
+    'Search PROJECT MEMORY (past decisions, conventions, gotchas, architecture, and auto-indexed facts) by meaning — hybrid FTS+vector. USE before exploring code; many answers are already remembered. DON\'T use for live file contents (use read_file). Pass format="json" for structured results.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_name: { type: 'string' },
+      query: { type: 'string' },
+      limit: { type: 'number' },
+      format: { type: 'string', enum: ['text', 'json'] },
+    },
+    required: ['project_name', 'query'],
+  },
+  handler: withProject(withSnapshotErrorHandling(async (args, { db, snapshotService, hybridSearch }, project) => {
+    const query = (args.query as string).trim();
+    if (!query) return 'search_memory requires a non-empty query.';
+    const limit = (args.limit as number) ?? 5;
+    const raw = await hybridSearch.searchSnapshotsHybrid(project.id, project.name, query, limit);
+    if (raw.length === 0) {
+      const total = db.countSnapshots(project.id);
+      return total === 0
+        ? 'No project memory yet. Use save_memory to record one, or index the project to auto-generate memory.'
+        : `No memory matched "${query}" (${total} entries exist). Try broader terms.`;
+    }
+    const results = snapshotService.annotateStaleMany(project.id, raw);
+    if (args.format === 'json') {
+      return JSON.stringify({
+        query,
+        total: results.length,
+        results: results.map((s) => ({
+          id: s.id, title: s.title, category: s.category, content: s.content,
+          source: s.source, importance: s.importance,
+        })),
+      });
+    }
+    return results.map((s) => `## ${s.title} [${s.category}]\n${s.content}`).join('\n\n---\n\n');
+  })),
+});
+
+const save_memory = defineTool({
+  name: 'save_memory',
+  description:
+    'Save a DURABLE fact to PROJECT MEMORY for future sessions — a decision (and why), a convention, a non-obvious gotcha/constraint, or an architecture note. USE for things that stay true beyond the current task. DON\'T use for transient task state. Provide a specific title + 1-4 sentence content.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_name: { type: 'string' },
+      title: { type: 'string' },
+      category: { type: 'string', enum: ['architecture', 'decision', 'pattern', 'convention', 'todo', 'note'] },
+      content: { type: 'string' },
+      referenced_files: {
+        type: 'array', items: { type: 'string' },
+        description: 'Project-relative paths this memory depends on (staleness tracking).',
+      },
+      importance: { type: 'number', description: '0..1 salience — how reusable/durable. Decisions/conventions high.' },
+    },
+    required: ['project_name', 'title', 'category', 'content'],
+  },
+  handler: withProject(withSnapshotErrorHandling(async (args, { snapshotService }, project, authCtx) => {
+    const result = await snapshotService.create(project.id, {
+      title: args.title as string,
+      category: args.category as SnapshotCategory,
+      content: args.content as string,
+      referencedFiles: args.referenced_files as string[] | undefined,
+      createdBy: authCtx?.principal ?? 'agent',
+      source: 'agent',
+      importance: typeof args.importance === 'number' ? args.importance : undefined,
+    });
+    const embed = summarizeEmbedError(result.embedError);
+    const embedNote = embed ? ` (warning: vector index failed — pending backfill: ${embed})` : '';
+    return `Memory #${result.snap.id} "${result.snap.title}" saved.${embedNote}`;
+  })),
+});
+
 export const snapshotTools: McpTool[] = [
   add_snapshot,
   list_snapshots,
@@ -367,4 +446,6 @@ export const snapshotTools: McpTool[] = [
   get_project_context,
   query_snapshots,
   get_context_for,
+  search_memory,
+  save_memory,
 ];

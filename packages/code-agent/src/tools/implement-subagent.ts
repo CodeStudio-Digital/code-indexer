@@ -541,6 +541,7 @@ export const EXPLORE_ALLOWLIST = new Set<string>([
   'mcp__search_by_kind',
   'mcp__search_concepts',
   'mcp__query_snapshots',
+  'mcp__search_memory',
   'mcp__get_context_for',
   'mcp__prepare_edit',
   // Native read-only filesystem

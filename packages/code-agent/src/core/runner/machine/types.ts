@@ -143,6 +143,15 @@ export interface RunContext {
     lastInjectedSkillIds: Set<string>;
     lastInjectedFiles: Set<string>;
     recentCompactionAt: number | null;
+    /** Memory ids already injected (Mem C) — avoids re-injecting each turn. */
+    lastInjectedMemoryIds: Set<string>;
+    /**
+     * Project memory retrieved THIS turn (async, before assembly) so the
+     * synchronous dynamic injector can include it. Reset each turn.
+     */
+    pendingMemory?: ReadonlyArray<{ id: string; title: string; content: string }>;
+    /** Task text the pending memory was retrieved for (throttle key). */
+    lastMemoryQuery?: string;
   };
 }
 
@@ -278,6 +287,17 @@ export interface BridgeCallbacks {
     newlyRegisteredSkillIds: ReadonlyArray<string>;
     recentlyEditedFiles: ReadonlyArray<string>;
   } | null;
+  /**
+   * Async retrieval of relevant project memory for the current task (Mem C).
+   * The Executing node awaits this BEFORE assembling messages (the dynamic
+   * injector is synchronous) and stashes the result in `injectionState`.
+   * Returns items already relevance-gated + ranked by the host. Unset =
+   * memory injection disabled.
+   */
+  getRelevantProjectMemory?: (
+    taskText: string,
+    turn: number,
+  ) => Promise<ReadonlyArray<{ id: string; title: string; content: string }>>;
   /**
    * Drain `runner.pendingUserMessages` into the main `messages` array.
    * Called at the START of each Executing turn so messages pushed via

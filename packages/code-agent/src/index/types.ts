@@ -25,6 +25,19 @@ export interface RunCoderOptions {
   maxTurns?: number;
   /** Abort signal */
   signal?: AbortSignal;
+  /**
+   * Mem C — host-provided project-memory retriever. Structural type to avoid
+   * a code-agent → services dependency. When set and the project has memory
+   * enabled, runCoder wires it into `RunnerOptions.getRelevantProjectMemory`
+   * so the runner proactively injects relevant memory each turn.
+   */
+  memoryRetriever?: {
+    retrieve(
+      projectId: number,
+      projectName: string,
+      taskText: string,
+    ): Promise<ReadonlyArray<{ id: string; title: string; content: string }>>;
+  };
   /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
   planMode?: boolean;
   /**

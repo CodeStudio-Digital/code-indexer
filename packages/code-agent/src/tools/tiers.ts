@@ -131,6 +131,7 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // MCP — token-efficient discovery / search
   'mcp__get_project_pulse',
   'mcp__query_snapshots',
+  'mcp__search_memory',
   'mcp__get_context_for',
   'mcp__search',
   'mcp__grep_code',
@@ -191,6 +192,7 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'mcp__get_recently_modified_files',
   'mcp__search_global',
   'mcp__list_snapshots',
+  'mcp__save_memory',
 ]);
 
 /**
@@ -400,6 +402,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   // ─── Bootstrap MCP ────────────────────────────────────────────
   mcp__get_project_pulse: 'Ultra-compact project overview (~100 tokens)',
   mcp__query_snapshots: 'Full-text search over project snapshots',
+  mcp__search_memory: 'Search project memory (decisions/conventions/gotchas/facts) by meaning — try before exploring code',
   mcp__get_context_for: 'Curated context bundle for an NL question',
   mcp__search: 'Hybrid search (FTS + vector) across the project',
   mcp__grep_code: 'Text search with language/layer/glob filters',
@@ -453,6 +456,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   mcp__get_project_context: 'All project snapshots (use max_tokens)',
   mcp__get_recently_modified_files: 'Recently indexed files',
   mcp__search_global: 'Search across all projects',
+  mcp__save_memory: 'Save a durable fact (decision/convention/gotcha/architecture) to project memory for future sessions',
   mcp__list_snapshots: 'List project snapshots',
   // ─── Admin native ─────────────────────────────────────────────
   git_add: 'Stage files for commit',

@@ -3,6 +3,7 @@ import { loadConfig, type IndexerConfig } from '@mcp/shared/utils/config.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { CostTracker } from '@mcp/services/services/costs.js';
 import { SnapshotService } from '@mcp/services/services/snapshots.js';
+import { MemoryRetriever } from '@mcp/services/memory/retriever.js';
 import { DiffService } from '@mcp/services/services/differ.js';
 import { ExportService } from '@mcp/services/services/exporter.js';
 import { WebhookDispatcher } from '@mcp/services/services/webhooks.js';
@@ -139,6 +140,8 @@ export interface SearchDeps {
   embeddingService: EmbeddingService;
   vectorStore: VectorStore;
   hybridSearch: HybridSearch;
+  /** Mem C — project-memory retrieval over snapshots (relevance × importance). */
+  memoryRetriever: MemoryRetriever;
   /**
    * I2 — process-wide hot cache of recently-touched files. Always
    * constructed (so tools can `touch()` regardless of feature flag), but
@@ -523,6 +526,10 @@ export function createDeps(): ServerDeps {
   });
 
   const snapshotService = new SnapshotService(db, embeddingService, searchableVectorStore);
+  // Mem C — project-memory retriever over the snapshot store (reuses the
+  // admin-configured embedding/vector backend via hybridSearch). Passed into
+  // runCoder so the runner proactively injects relevant memory per turn.
+  const memoryRetriever = new MemoryRetriever(hybridSearch, db);
   const sessionStore = new SessionStore(config.dbPath);
   const companyStore = new CompanyStore(config.dbPath);
   // Share the same underlying better-sqlite3 handle that CodeIndexDB
@@ -842,6 +849,7 @@ export function createDeps(): ServerDeps {
     embeddingService,
     vectorStore,
     hybridSearch,
+    memoryRetriever,
     recentFilesSource,
     sessionStore,
     companyStore,

@@ -97,6 +97,15 @@ export class CodeIndexDB {
   // ─── Snapshots ──────────────────────────────────────────────────
   createSnapshot(projectId: number, data: snapshots.CreateSnapshotData): ContextSnapshot { return snapshots.create(this.db, projectId, data); }
   markSnapshotAccessed(ids: number[]): void { snapshots.markAccessed(this.db, ids); }
+  /** Per-project memory toggle (migration 115). Default ON. */
+  getProjectMemoryEnabled(projectId: number): boolean {
+    const row = this.db.prepare('SELECT memory_enabled FROM projects WHERE id = ?')
+      .get(projectId) as { memory_enabled?: number } | undefined;
+    return row?.memory_enabled !== 0;
+  }
+  setProjectMemoryEnabled(projectId: number, enabled: boolean): void {
+    this.db.prepare('UPDATE projects SET memory_enabled = ? WHERE id = ?').run(enabled ? 1 : 0, projectId);
+  }
   setSnapshotFiles(snapshotId: number, projectId: number, filePaths: string[]): { inserted: number; skipped: string[] } { return snapshots.setFiles(this.db, snapshotId, projectId, filePaths); }
   getStaleSnapshotFiles(snapshotId: number, projectId: number): string[] { return snapshots.getStaleFiles(this.db, snapshotId, projectId); }
   getSnapshotFiles(snapshotId: number): string[] { return snapshots.getFiles(this.db, snapshotId); }

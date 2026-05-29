@@ -169,6 +169,16 @@ export interface RunnerOptions {
   /** Callback fired when the provider returns a new response.id. */
   onResponseId?: (responseId: string, messageCount: number) => void;
   /**
+   * Mem C — host-provided retrieval of relevant project memory for the
+   * current task. The host closes over a MemoryRetriever + the session's
+   * project, returning already relevance-gated + ranked items. Unset =
+   * proactive memory injection disabled.
+   */
+  getRelevantProjectMemory?: (
+    taskText: string,
+    turn: number,
+  ) => Promise<ReadonlyArray<{ id: string; title: string; content: string }>>;
+  /**
    * Phase 2 hardening: explicit escape hatch for admin-level operations.
    * Today the runner constructs the policy context with `strict: false`.
    */

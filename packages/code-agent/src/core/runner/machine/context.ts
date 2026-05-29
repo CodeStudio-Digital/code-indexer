@@ -80,6 +80,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
       lastInjectedSkillIds: new Set<string>(),
       lastInjectedFiles: new Set<string>(),
       recentCompactionAt: null,
+      lastInjectedMemoryIds: new Set<string>(),
     },
   };
 }

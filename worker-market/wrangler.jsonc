@@ -1,19 +1,30 @@
 {
-  // Hosted plugin Market: D1 catalog + R2 bundles + Ed25519 signing.
-  // Setup:
-  //   wrangler d1 create plugin-market         (paste database_id below)
-  //   wrangler r2 bucket create mcp-plugin-bundles
-  //   wrangler d1 execute plugin-market --file schema.sql
-  //   node scripts/keygen.mjs                  (prints keypair)
-  //   wrangler secret put AUTH_TOKEN           (publish auth)
-  //   wrangler secret put MARKET_SIGNING_PRIVKEY   (base64 pkcs8 from keygen)
-  //   set MARKET_SIGNING_PUBKEY var below (or leave; host pins its own copy)
-  "name": "mcp-plugin-market",
-  "main": "src/index.ts",
-  "compatibility_date": "2024-09-23",
-  "d1_databases": [
-    { "binding": "DB", "database_name": "plugin-market", "database_id": "REPLACE_WITH_D1_ID" }
-  ],
-  "r2_buckets": [{ "binding": "BUNDLES", "bucket_name": "mcp-plugin-bundles" }],
-  "vars": { "MARKET_SIGNING_PUBKEY": "" }
+	// Hosted plugin Market: D1 catalog + R2 bundles + Ed25519 signing.
+	// Setup:
+	//   wrangler d1 create plugin-market         (paste database_id below)
+	//   wrangler r2 bucket create mcp-plugin-bundles
+	//   wrangler d1 execute plugin-market --file schema.sql
+	//   node scripts/keygen.mjs                  (prints keypair)
+	//   wrangler secret put AUTH_TOKEN           (publish auth)
+	//   wrangler secret put MARKET_SIGNING_PRIVKEY   (base64 pkcs8 from keygen)
+	//   set MARKET_SIGNING_PUBKEY var below (or leave; host pins its own copy)
+	"name": "mcp-plugin-market",
+	"main": "src/index.ts",
+	"compatibility_date": "2024-09-23",
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "plugin-market",
+			"database_id": "e8f20709-12be-4c94-bfe2-fee26d30638c"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "BUNDLES",
+			"bucket_name": "mcp-plugin-bundles"
+		}
+	],
+	"vars": {
+		"MARKET_SIGNING_PUBKEY": "MCowBQYDK2VwAyEAePMGi3DT5VaYkrwfSnV7Zsb1O+LPGhGb0JV3RRbqMGM="
+	}
 }

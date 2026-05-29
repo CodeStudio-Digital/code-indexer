@@ -25,6 +25,7 @@ const DEFAULT_MAX_TOKENS_BUILTIN: Record<string, number> = {
   search_concepts: 1500,
   get_context_for: 2500,
   query_snapshots: 1500,
+  search_memory: 1500,
 };
 
 function loadDefaultMaxTokens(): Record<string, number> {

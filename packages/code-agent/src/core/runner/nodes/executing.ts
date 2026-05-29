@@ -56,6 +56,30 @@ function dbg(...args: unknown[]): void {
   if (DEBUG) console.log('[bt-debug]', ...args);
 }
 
+/** Latest user-message text — the "current task" signal for memory retrieval. */
+function latestUserTaskText(messages: RunContext['messages']): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i] as { role?: string; content?: unknown };
+    if (m.role !== 'user') continue;
+    const c = m.content;
+    if (typeof c === 'string') return c.trim();
+    if (Array.isArray(c)) {
+      return c
+        .map((b) =>
+          typeof b === 'string'
+            ? b
+            : b && typeof b === 'object' && 'text' in b
+              ? String((b as { text?: unknown }).text ?? '')
+              : '',
+        )
+        .join(' ')
+        .trim();
+    }
+    return '';
+  }
+  return '';
+}
+
 export class ExecutingNode implements BehaviorNode {
   readonly state = 'Executing' as const;
 
@@ -71,6 +95,24 @@ export class ExecutingNode implements BehaviorNode {
     ctx.bridge?.flushPendingMessages?.();
     dbg(`Executing turn=${ctx.turn} messages=${ctx.messages.length}`);
 
+    // Mem C — proactive project-memory retrieval. Async, so it runs HERE
+    // (before the synchronous message assembly) and stashes the result in
+    // injectionState for the dynamic injector to surface. Throttled: only the
+    // first turn or when the task text materially changes, so we don't re-query
+    // (or re-inject) every turn.
+    ctx.injectionState.pendingMemory = undefined;
+    if (ctx.bridge?.getRelevantProjectMemory) {
+      const taskText = latestUserTaskText(ctx.messages);
+      if (taskText && (ctx.turn === 1 || taskText !== ctx.injectionState.lastMemoryQuery)) {
+        try {
+          ctx.injectionState.pendingMemory = await ctx.bridge.getRelevantProjectMemory(taskText, ctx.turn);
+          ctx.injectionState.lastMemoryQuery = taskText;
+        } catch (e) {
+          dbg('memory retrieval failed', (e as Error).message);
+        }
+      }
+    }
+
     const tunables = ctx.opts.tunables ?? envTunables();
     // PR-F dynamic injection — invoke the provider once per assembly so
     // the post-injection state updates are coherent. The pure
@@ -84,8 +126,9 @@ export class ExecutingNode implements BehaviorNode {
     const dynamicInjectionFn = (): DynamicInjectionResult | null => {
       const signals = ctx.bridge?.collectDynamicInjectionSignals?.() ?? null;
       const recentCompactionAt = ctx.injectionState.recentCompactionAt;
-      // Skip computing when nothing fresh AND no recent compaction marker.
-      if (!signals && recentCompactionAt == null) return null;
+      const pendingMemory = ctx.injectionState.pendingMemory ?? [];
+      // Skip computing when nothing fresh AND no recent compaction AND no memory.
+      if (!signals && recentCompactionAt == null && pendingMemory.length === 0) return null;
       const result = computeDynamicInjection({
         turn: ctx.turn,
         newlyRegisteredSkillIds: signals?.newlyRegisteredSkillIds ?? [],
@@ -93,6 +136,8 @@ export class ExecutingNode implements BehaviorNode {
         recentlyEditedFiles: signals?.recentlyEditedFiles ?? [],
         lastInjectedFiles: ctx.injectionState.lastInjectedFiles,
         recentCompactionAt,
+        relevantMemory: pendingMemory,
+        lastInjectedMemoryIds: ctx.injectionState.lastInjectedMemoryIds,
       });
       // Stash for post-assembly commit so we don't double-update state
       // when the same injection is consulted (e.g. by tests).
@@ -121,6 +166,9 @@ export class ExecutingNode implements BehaviorNode {
       }
       for (const f of injectionToCommit.includedFiles) {
         ctx.injectionState.lastInjectedFiles.add(f);
+      }
+      for (const mid of injectionToCommit.includedMemoryIds) {
+        ctx.injectionState.lastInjectedMemoryIds.add(mid);
       }
     }
     if (

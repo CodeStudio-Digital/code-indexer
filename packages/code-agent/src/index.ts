@@ -1171,6 +1171,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     sessionId: session.id,
     sessionStore: store,
     skillStore,
+    // Mem C — proactive project-memory retrieval. Wired only when the host
+    // provided a retriever AND this project has memory enabled (migration 115);
+    // the Executing node awaits it before assembly and injects relevant memory.
+    getRelevantProjectMemory:
+      opts.memoryRetriever && db.getProjectMemoryEnabled(project.id)
+        ? (taskText: string) => opts.memoryRetriever!.retrieve(project.id, project.name, taskText)
+        : undefined,
     // (assignment below) — keeps recorder in sync with runner.turn
     // even though the runner is constructed after recorder. The recorder
     // reads `runnerRef?.turn` lazily, so this assignment closes the loop.

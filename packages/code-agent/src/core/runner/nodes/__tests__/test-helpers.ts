@@ -106,6 +106,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
       lastInjectedSkillIds: new Set<string>(),
       lastInjectedFiles: new Set<string>(),
       recentCompactionAt: null,
+      lastInjectedMemoryIds: new Set<string>(),
     },
   };
   return { ctx, recordedEvents };

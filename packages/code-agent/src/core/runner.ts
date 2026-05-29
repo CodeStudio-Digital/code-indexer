@@ -1961,6 +1961,7 @@ export class CoderRunner extends EventEmitter {
         buildActiveContextBlock: () =>
           this.opts.agentLoopV2 ? this.buildActiveContextBlockForTurn() : null,
         buildQualityFeedbackSuffix: () => this.buildQualityFeedbackSuffix(),
+        getRelevantProjectMemory: this.opts.getRelevantProjectMemory,
         resolveTemperature: () => {
           const r = resolveTemperature({
             agent: this.opts.agentId ?? null,
