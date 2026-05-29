@@ -11,6 +11,7 @@ An AI-native IDE for builders. Bring your own keys, work in a fast desktop app, 
 - **Project understanding** — built on the MCP Code Indexer: hybrid FTS5 + vector search over the codebase, dependency graph, symbol hierarchy, snapshots (curated project notes), and a docs RAG corpus (Pro feature).
 - **Local first** — the backend runs in-process inside Electron. No HTTP loopback is exposed in production (a Hono port can be enabled with `MCP_DEV_HTTP=1` for debugging). API surface lives in `@mcp/api-bus`; handlers in `@mcp/api-handlers`; transport adapters mount them on `ipcMain.handle` (Electron) or Hono routes (dev / external clients).
 - **Multi-platform** — Windows, macOS, Linux via `electron-builder` (release pipeline in progress).
+- **Plugins** — extend the agent + workspace with installable plugins: agent tools (run isolated in a worker thread), MCP servers, skills, sandboxed webview tool windows, command-palette commands, and themes. Authored with a typed SDK + CLI, Claude Code-compatible, and distributed through a hosted Market (Cloudflare Worker + D1 + R2, Ed25519-signed bundles). See [docs/PLUGINS.md](docs/PLUGINS.md).
 
 ## Quick start
 

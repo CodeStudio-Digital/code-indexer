@@ -77,6 +77,7 @@ The `Api` interface in [packages/api-bus/src/index.ts](../packages/api-bus/src/i
 | `workspace` | Sandbox file/git operations | Pro (planned) |
 | `admin` | Provider config, quality dashboards, MCP servers | Operator |
 | `auth` / `billing` | Proxy to `worker-license` (Cloudflare Worker) | Always |
+| `plugins` | Install/uninstall/list/enable plugins, read webview assets, search the Market | Free |
 
 ## Streaming
 
@@ -103,11 +104,36 @@ for await (const frame of apiStream<MyEvent>('projects.indexStream', input)) {
 
 ## Worker pool (`@mcp/worker-pool`)
 
-Per-kind dynamic pool (`coder` / `lsp` / `index`) with auto-scale,
+Per-kind dynamic pool (`coder` / `lsp` / `index` / `plugin`) with auto-scale,
 idle eviction, and saturation queueing. See
 [packages/worker-pool/src/pool.ts](../packages/worker-pool/src/pool.ts).
 LSP currently runs in-process for simplicity; the pool is the lever
 when a real user hits a project big enough to feel the main-thread cost.
+
+## Plugins
+
+Installable extensions that add agent + workspace capabilities. A plugin
+(`plugin.json` + `.app.json` + optional `.mcp.json` / `skills/` + a built
+`dist/plugin.js`) contributes agent tools, MCP servers, skills, sandboxed
+webview tool windows, palette commands, and themes. Claude Code-compatible.
+
+- **Authoring** — `@mcp/plugin-sdk` (`definePlugin` / `contributeX` + a
+  `create` / `build` / `validate` / `publish` CLI).
+- **Install** — `@mcp/plugin-host` materializes a bundle by namespace into
+  `{dataDir}/plugins/{ns}/`, applies skills/MCP/contributions, records the
+  `installed_plugins` row (migration 112). Sources: local · github · market.
+- **Agent execution** — tools run isolated in a `worker_thread`
+  (`apps/http-api/sse/PluginWorkerHost.ts` + `workers/plugin-worker.ts`); the
+  http-api builds `pluginTools` and passes them to `runCoder`.
+- **UI** — a Zustand contribution registry (hydrated from `plugins.list`)
+  merges plugin rail items / tool windows / commands / themes with the
+  built-ins; tool windows render in a null-origin sandboxed iframe bridged by a
+  read-only api-bus whitelist.
+- **Market** — `worker-market/`: a Cloudflare Worker (D1 catalog + R2 bundles +
+  Ed25519 signing). The host re-hashes and verifies a bundle's signature before
+  extracting.
+
+Full guide: [docs/PLUGINS.md](PLUGINS.md).
 
 ## Storage
 
