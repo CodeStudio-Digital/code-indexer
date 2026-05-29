@@ -16,6 +16,8 @@ import EnvTab from '../EnvTab.js';
 import DatabasesTab from '../DatabasesTab.js';
 import { SupervisorPanel } from '../../admin/SupervisorPanel.js';
 import { useExtraServices } from './useExtraServices.js';
+import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
+import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 import type { SidePanel } from './SidebarRail.js';
 
 interface SidebarPanelsProps {
@@ -31,15 +33,25 @@ interface SidebarPanelsProps {
    * caller.
    */
   companyConfigSlot?: React.ReactNode;
+  /** Contributed tool windows — render the matching one's webview. */
+  pluginWindows?: ContribToolWindow[];
 }
 
-export function SidebarPanels({ sessionId, active, companyConfigSlot }: SidebarPanelsProps) {
+export function SidebarPanels({ sessionId, active, companyConfigSlot, pluginWindows = [] }: SidebarPanelsProps) {
   const { data, refresh, retry, restartDev } = useSandboxStatus(sessionId);
   const extraServices = useExtraServices(sessionId);
 
   const fileChangeTick = useCompanyStore(
     (s) => selectSandbox(s, sessionId).lastFileChange?.seq ?? 0,
   );
+
+  // Plugin-contributed tool window → its sandboxed webview fills the drawer.
+  if (active.startsWith('plugin:')) {
+    const win = pluginWindows.find((w) => `plugin:${w.pluginNs}:${w.id}` === active);
+    return win ? (
+      <WebviewWindow namespace={win.pluginNs} title={win.title} entry={win.entry} />
+    ) : null;
+  }
 
   if (active === 'company-config') {
     // Slot is non-null in normal use; the guard keeps the panel from

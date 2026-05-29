@@ -12,8 +12,9 @@
  * Preview is the only icon gated on `builderMode` — the others work
  * against per-session data regardless of sandbox state.
  */
-import { Building2, Database, Inbox, KeyRound, Monitor, ShieldOff } from 'lucide-react';
+import { Building2, Database, Inbox, KeyRound, Monitor, Puzzle, ShieldOff } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
+import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 
 export type SidePanel =
   | 'preview'
@@ -21,13 +22,17 @@ export type SidePanel =
   | 'env'
   | 'databases'
   | 'company-config'
-  | 'supervisor';
+  | 'supervisor'
+  // Plugin-contributed tool windows: `plugin:<namespace>:<windowId>`.
+  | `plugin:${string}`;
 
 interface SidebarRailProps {
   active: SidePanel | null;
   onToggle: (panel: SidePanel) => void;
   /** Hide the Preview icon when the session has no builder sandbox. */
   showPreview: boolean;
+  /** Contributed tool windows → extra rail icons opening their webview. */
+  pluginWindows?: ContribToolWindow[];
 }
 
 interface RailIcon {
@@ -49,10 +54,17 @@ const BASE_ICONS: RailIcon[] = [
   { id: 'databases', Icon: Database, title: 'Databases' },
 ];
 
-export function SidebarRail({ active, onToggle, showPreview }: SidebarRailProps) {
-  const icons: RailIcon[] = showPreview
-    ? [{ id: 'preview', Icon: Monitor, title: 'Preview' }, ...BASE_ICONS]
-    : BASE_ICONS;
+export function SidebarRail({ active, onToggle, showPreview, pluginWindows = [] }: SidebarRailProps) {
+  const pluginIcons: RailIcon[] = pluginWindows.map((w) => ({
+    id: `plugin:${w.pluginNs}:${w.id}` as SidePanel,
+    Icon: Puzzle,
+    title: w.title,
+  }));
+  const icons: RailIcon[] = [
+    ...(showPreview ? [{ id: 'preview' as SidePanel, Icon: Monitor, title: 'Preview' }] : []),
+    ...BASE_ICONS,
+    ...pluginIcons,
+  ];
 
   return (
     <div className="w-10 border-l flex flex-col items-center gap-1 py-2 bg-card flex-shrink-0">

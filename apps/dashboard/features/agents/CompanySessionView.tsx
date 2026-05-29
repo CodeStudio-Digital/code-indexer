@@ -32,6 +32,7 @@ import { NewRoleDialog } from './session-view/NewRoleDialog.js';
 import { parseConfig } from './session-view/types.js';
 import { SidebarRail, type SidePanel } from './preview-sidebar/SidebarRail.js';
 import { SidebarPanels } from './preview-sidebar/SidebarPanels.js';
+import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
 import { useResizableWidth } from '../../hooks/useResizableWidth.js';
 import type {
   AvailableProject,
@@ -94,6 +95,7 @@ export function CompanySessionView({
   onToggleSessionsList,
 }: CompanySessionViewProps) {
   const { t } = useTranslation('agents');
+  const contribWindows = useContributions((s) => s.toolWindows);
 
   // Multi-front (migration 067): the URL identifies the ROOT session
   // (parent of the tab tree). The active tab can be the parent itself
@@ -207,6 +209,12 @@ export function CompanySessionView({
   const { data: allProjects } = useApi<AvailableProject[]>('/projects');
   const { data: skillsList } = useApi<{ skills: SkillDef[] }>('/admin/skills');
   const { providerOptions, getModelsForProvider, getDefaultModel } = useProviders();
+
+  // Hydrate plugin UI contributions so contributed tool windows show up
+  // as extra right-drawer panels in this company session view.
+  useEffect(() => {
+    void hydrateContributions();
+  }, []);
 
   // Ctrl+J toggles the bottom terminal — same shortcut as the
   // Workspace. We listen at the window level so the binding works
@@ -505,6 +513,7 @@ export function CompanySessionView({
                     }
                   />
                 }
+                pluginWindows={contribWindows}
               />
             </div>
           </>
@@ -513,6 +522,7 @@ export function CompanySessionView({
           active={sidePanelEffective}
           onToggle={togglePanel}
           showPreview={builderMode}
+          pluginWindows={contribWindows}
         />
       </div>
 

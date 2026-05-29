@@ -59,6 +59,7 @@ import {
   Network,
   PanelBottomClose,
   PanelBottomOpen,
+  Puzzle,
   Search,
   TerminalSquare,
   type LucideIcon,
@@ -72,6 +73,9 @@ import {
   useWorkspaceStore,
 } from '../../state/workspace.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
+import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
+import type { ContribToolWindow } from '../../state/contribution-registry.js';
+import { WebviewWindow } from '../workspace/jetbrains/tool-windows/WebviewWindow.js';
 import { FileTreeRail } from '../workspace/FileTreeRail.js';
 import { EditorPane } from '../workspace/EditorPane.js';
 import { BottomPanel } from '../workspace/BottomPanel.js';
@@ -90,18 +94,9 @@ import { Button } from '../../components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
 
-export type ProjectTabId =
-  | 'chat'
-  | 'files'
-  | 'indexed'
-  | 'search'
-  | 'git'
-  | 'snapshots'
-  | 'dependencies'
-  | 'architecture'
-  | 'diff'
-  | 'costs'
-  | 'runs';
+// Built-in tab ids (chat/files/search/git/snapshots + analytics) plus any
+// plugin-contributed tool-window id — so widened to `string`.
+export type ProjectTabId = string;
 
 interface TabDef {
   id: ProjectTabId;
@@ -109,7 +104,7 @@ interface TabDef {
   icon: LucideIcon;
   /** Group separates the IDE-core tools (top) from the analytics-style
    *  tools (bottom). Visually rendered as a divider in the rail. */
-  group: 'core' | 'analytics';
+  group: 'core' | 'analytics' | 'plugins';
 }
 
 const TABS: TabDef[] = [
@@ -141,6 +136,7 @@ interface ProjectViewProps {
 export function ProjectView({ projectId, projectName, initialSessionId }: ProjectViewProps) {
   const navigate = useNavigate();
   const layout = useWorkspaceLayout();
+  const contribWindows = useContributions((s) => s.toolWindows);
   const openFile = useWorkspaceStore((s) => s.openFile);
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const openFiles = useWorkspaceStore((s) => s.openFiles);
@@ -275,6 +271,22 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // duplicate it here.
   void openFiles;
 
+  // Plugin UI contributions — hydrate once; each contributed tool window
+  // becomes an extra rail tab that renders its sandboxed webview.
+  useEffect(() => {
+    void hydrateContributions();
+  }, []);
+  const pluginTabs = useMemo<TabDef[]>(
+    () =>
+      contribWindows.map((w) => ({
+        id: w.id,
+        label: w.title,
+        icon: Puzzle,
+        group: 'plugins' as const,
+      })),
+    [contribWindows],
+  );
+
   return (
     // `h-full` (not `flex-1`) because the parent <main> in AppShell is
     // a plain block element — `flex-1` would no-op and the bottom of
@@ -290,7 +302,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
         onOpenAnalytics={() => navigate(`/projects/${projectId}/analytics`)}
       />
       <div className="flex flex-1 min-h-0">
-        <ProjectRail activeTab={tab} onSelect={setTab} layout={layout} />
+        <ProjectRail activeTab={tab} onSelect={setTab} layout={layout} pluginTabs={pluginTabs} />
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
           <PanelGroup direction="vertical" autoSaveId="mcp-project-vert">
             <Panel minSize={20}>
@@ -301,6 +313,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
                 initialSessionId={initialSessionId}
                 onOpenFile={handleOpen}
                 activeFilePath={activeFilePath}
+                contribWindows={contribWindows}
               />
             </Panel>
             {layout.activeBottom && (
@@ -390,9 +403,10 @@ interface ProjectRailProps {
   activeTab: ProjectTabId;
   onSelect: (id: ProjectTabId) => void;
   layout: ReturnType<typeof useWorkspaceLayout>;
+  pluginTabs: TabDef[];
 }
 
-function ProjectRail({ activeTab, onSelect, layout }: ProjectRailProps) {
+function ProjectRail({ activeTab, onSelect, layout, pluginTabs }: ProjectRailProps) {
   const core = TABS.filter((t) => t.group === 'core');
   const analytics = TABS.filter((t) => t.group === 'analytics');
   return (
@@ -405,6 +419,10 @@ function ProjectRail({ activeTab, onSelect, layout }: ProjectRailProps) {
       ))}
       <span className="h-px w-6 bg-border my-1.5" aria-hidden />
       {analytics.map((tabDef) => (
+        <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
+      ))}
+      {pluginTabs.length > 0 && <span className="h-px w-6 bg-border my-1.5" aria-hidden />}
+      {pluginTabs.map((tabDef) => (
         <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
       ))}
       <div className="mt-auto pb-1">
@@ -489,6 +507,7 @@ interface TabContentProps {
   initialSessionId?: number;
   onOpenFile: (path: string) => void;
   activeFilePath: string | null;
+  contribWindows: ContribToolWindow[];
 }
 
 function TabContent({
@@ -498,6 +517,7 @@ function TabContent({
   initialSessionId,
   onOpenFile,
   activeFilePath,
+  contribWindows,
 }: TabContentProps) {
   // Files tab gets a sub-PanelGroup so the user can resize the file
   // tree independently of the editor (just like JetBrains/VS Code).
@@ -559,6 +579,16 @@ function TabContent({
   // collapse `h-full` propagation.
   if (tab === 'snapshots') {
     return <SnapshotEditor projectId={projectId} />;
+  }
+
+  // Plugin-contributed tool window → its sandboxed webview fills the area.
+  const pluginWin = contribWindows.find((w) => w.id === tab);
+  if (pluginWin) {
+    return (
+      <div className="h-full overflow-hidden">
+        <WebviewWindow namespace={pluginWin.pluginNs} title={pluginWin.title} entry={pluginWin.entry} />
+      </div>
+    );
   }
 
   // Search and the analytics-style tabs render in a scrollable surface
