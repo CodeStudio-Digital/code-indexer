@@ -79,6 +79,20 @@ export const PLUGIN_IFRAME_RUNTIME = `(function () {
       /** Approve/deny a paused mutating tool call (from a confirm_request chunk). */
       confirm: function (callId, approved) { return call('plugins.assistantConfirm', { callId: callId, approved: !!approved }); }
     },
+    /**
+     * Host-rendered dialogs + toasts. A sandboxed iframe can't use
+     * window.confirm/alert/prompt (they silently no-op), so use these instead.
+     * All return Promises. confirm → boolean; prompt → string|null; alert/toast
+     * → void. Options use plugin-friendly names: { title, message, confirmText,
+     * cancelText, danger } for confirm; add { defaultValue, placeholder } for
+     * prompt; toast takes { kind:'info'|'success'|'error'|'warning', message }.
+     */
+    ui: {
+      confirm: function (opts) { return call('plugins.ui.confirm', opts || {}); },
+      prompt: function (opts) { return call('plugins.ui.prompt', opts || {}); },
+      alert: function (opts) { return call('plugins.ui.alert', opts || {}); },
+      toast: function (opts) { return call('plugins.ui.toast', opts || {}); }
+    },
     listPlugins: function () { return call('plugins.list'); },
     readFile: function (path) { return call('files.read', { path: path }); }
   };

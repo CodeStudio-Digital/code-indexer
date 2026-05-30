@@ -13,6 +13,7 @@
  * Anything off both lists is rejected.
  */
 import { apiCall, apiStream } from '../../lib/api-client.js';
+import { confirm as hostConfirm, prompt as hostPrompt, toast } from '../../components/ui/prompt-dialog.js';
 
 const READ_ONLY = new Set<string>([
   'plugins.list',
@@ -130,6 +131,57 @@ async function runStream(source: WindowProxy, msg: StreamMessage): Promise<void>
   }
 }
 
+/**
+ * Host-rendered dialogs/toasts for plugin webviews. A sandboxed iframe
+ * (`allow-scripts`, no `allow-modals`) can't use window.confirm/alert/prompt —
+ * they silently no-op — so plugins call `window.mcp.ui.*`, which routes here to
+ * the app's GLOBAL dialog host (the same confirm/prompt/toast the rest of the
+ * IDE uses). Pure UI: no privilege, no backend, no namespace binding. Options
+ * are coerced to strings so a plugin can't smuggle non-text into the dialog.
+ */
+async function handlePluginUi(method: string, payload: unknown): Promise<unknown> {
+  const p = (typeof payload === 'object' && payload ? payload : {}) as Record<string, unknown>;
+  const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+  // Plugin-facing field names (message/confirmText/danger) → the host dialog's
+  // internal names (description/confirmLabel/tone), so plugin authors don't
+  // depend on our internals.
+  switch (method) {
+    case 'plugins.ui.confirm':
+      return hostConfirm({
+        title: str(p.title) ?? 'Confirm',
+        description: str(p.message),
+        confirmLabel: str(p.confirmText),
+        cancelLabel: str(p.cancelText),
+        tone: p.danger ? 'destructive' : 'default',
+      });
+    case 'plugins.ui.prompt':
+      return hostPrompt({
+        title: str(p.title) ?? 'Input',
+        description: str(p.message),
+        defaultValue: str(p.defaultValue),
+        placeholder: str(p.placeholder),
+        confirmLabel: str(p.confirmText),
+        cancelLabel: str(p.cancelText),
+      });
+    case 'plugins.ui.alert':
+      // No dedicated alert host — a single-acknowledge confirm reads as a notice.
+      await hostConfirm({
+        title: str(p.title) ?? 'Notice',
+        description: str(p.message),
+        confirmLabel: str(p.confirmText) ?? 'OK',
+        cancelLabel: 'Close',
+      });
+      return null;
+    case 'plugins.ui.toast': {
+      const kind = p.kind === 'success' || p.kind === 'error' || p.kind === 'warning' ? p.kind : 'info';
+      toast[kind](str(p.message) ?? '', { duration: typeof p.durationMs === 'number' ? p.durationMs : undefined });
+      return null;
+    }
+    default:
+      throw new Error(`unknown ui method: ${method}`);
+  }
+}
+
 /** Install the global listener. Returns a disposer. Mounted once on app load. */
 export function installWebviewBridge(): () => void {
   const onMessage = async (e: MessageEvent): Promise<void> => {
@@ -151,7 +203,9 @@ export function installWebviewBridge(): () => void {
 
     try {
       let result: unknown;
-      if (NS_BOUND.has(method)) {
+      if (method.startsWith('plugins.ui.')) {
+        result = await handlePluginUi(method, payload);
+      } else if (NS_BOUND.has(method)) {
         const frame = frames.get(source);
         if (!frame) {
           reply({ ok: false, error: 'frame not registered' });
