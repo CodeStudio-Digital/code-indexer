@@ -78,10 +78,19 @@ export const useContributions = create<ContributionState>((set) => ({
   setContributions: (c) => set({ ...c, hydrated: true }),
 }));
 
-/** Fetch installed plugins + populate the registry. Safe to call on mount. */
-export async function hydrateContributions(): Promise<void> {
+/**
+ * Fetch installed plugins + populate the registry. Pass a `projectId` to get
+ * activation-filtered contributions (tool windows whose `activation` rule
+ * matches the project — auto-detection), so panels surface only in relevant
+ * projects. Without it, `plugins.list` returns everything (used outside a
+ * project context). Safe to call on mount.
+ */
+export async function hydrateContributions(projectId?: number): Promise<void> {
   try {
-    const plugins = await apiCall<RawPlugin[]>('plugins.list', undefined);
+    const plugins =
+      projectId != null
+        ? await apiCall<RawPlugin[]>('plugins.activeContributions', { projectId })
+        : await apiCall<RawPlugin[]>('plugins.list', undefined);
     useContributions.getState().setContributions(collectContributions(plugins));
   } catch {
     /* backend not ready / no plugins installed — leave the registry empty */

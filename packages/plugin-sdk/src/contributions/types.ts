@@ -59,6 +59,19 @@ export interface ContributedTool {
   handler: PluginToolHandler;
 }
 
+/**
+ * Declarative activation rule: when should this contribution show for a given
+ * project? Evaluated by the HOST (no plugin code runs) against the project
+ * root. Omit it entirely to always show. Any matching condition activates
+ * (OR semantics). Mirrors VS Code's activationEvents/`when`.
+ */
+export interface ActivationRule {
+  /** Show if ANY of these files exist at the project root (exact name or `*.ext`). */
+  whenFiles?: string[];
+  /** Show if package.json has ANY of these as a (dev)dependency. */
+  whenPackageDep?: string[];
+}
+
 export interface ContributedToolWindow {
   id: string;
   title: string;
@@ -66,6 +79,12 @@ export interface ContributedToolWindow {
   side: 'left' | 'right' | 'bottom';
   /** Relative path to the HTML entry rendered in a sandboxed iframe. */
   entry: string;
+  /**
+   * Optional auto-detection: only surface this window when the open project
+   * matches (e.g. a Cloudflare plugin shows only when a wrangler config or the
+   * `wrangler` dep is present). Omit to always show.
+   */
+  activation?: ActivationRule;
 }
 
 export interface ContributedCommand {

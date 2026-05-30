@@ -24,6 +24,12 @@ export default definePlugin({
       title: 'Cloudflare',
       side: 'bottom',
       entry: 'ui/panel.html',
+      // Auto-detect: only surface this panel in a Cloudflare project — a
+      // wrangler config at the root, or the `wrangler` dep in package.json.
+      activation: {
+        whenFiles: ['wrangler.toml', 'wrangler.jsonc', 'wrangler.json'],
+        whenPackageDep: ['wrangler', '@cloudflare/workers-types'],
+      },
     }),
   ],
 });

@@ -18,12 +18,20 @@ export const pluginToolDeclSchema = z.object({
   mutates: z.boolean().optional(),
 });
 
+export const activationRuleSchema = z
+  .object({
+    whenFiles: z.array(z.string().min(1)).optional(),
+    whenPackageDep: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
+
 export const toolWindowDeclSchema = z.object({
   id: contribId,
   title: z.string().min(1),
   icon: z.string().optional(),
   side: z.enum(['left', 'right', 'bottom']),
   entry: relPath,
+  activation: activationRuleSchema.optional(),
 });
 
 export const commandDeclSchema = z.object({

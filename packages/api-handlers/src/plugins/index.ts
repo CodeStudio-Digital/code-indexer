@@ -22,6 +22,7 @@ import {
   setPluginPermissionsGranted,
   readPluginAsset,
   execStream,
+  isActivated,
   type InstalledPlugin,
 } from '@mcp/plugin-host';
 import type { PluginSource } from '@mcp/plugin-sdk';
@@ -80,6 +81,20 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
   return {
     async list() {
       return listInstalledPlugins().map(toInfo);
+    },
+
+    async activeContributions({ projectId }) {
+      const root = projectId != null ? (deps.db.getProject(projectId)?.root_path ?? null) : null;
+      return listInstalledPlugins().map((p) => {
+        const info = toInfo(p);
+        const contrib = info.contributions as
+          | { toolWindows?: Array<{ activation?: import('@mcp/plugin-host').ActivationRule }> }
+          | null;
+        if (contrib?.toolWindows?.length) {
+          contrib.toolWindows = contrib.toolWindows.filter((w) => isActivated(w.activation, root));
+        }
+        return info;
+      });
     },
 
     async get({ namespace }) {

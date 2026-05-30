@@ -85,6 +85,18 @@ export interface MarketPluginInfo {
 
 export interface PluginsApi {
   list(input: void, ctx: ApiContext): Promise<InstalledPluginInfo[]>;
+  /**
+   * Like `list`, but each plugin's tool windows are filtered by their
+   * `activation` rule against the given project's root (auto-detection): a
+   * window with `activation` only stays if the project matches; windows with no
+   * rule always stay. Omit `projectId` to evaluate with no project context
+   * (only unconditional windows remain). The UI hydrates from this so panels
+   * appear only in relevant projects (e.g. Cloudflare only in wrangler repos).
+   */
+  activeContributions(
+    input: { projectId?: number },
+    ctx: ApiContext,
+  ): Promise<InstalledPluginInfo[]>;
   get(input: { namespace: string }, ctx: ApiContext): Promise<InstalledPluginInfo | null>;
   install(input: PluginInstallInput, ctx: ApiContext): Promise<PluginInstallResult>;
   uninstall(
