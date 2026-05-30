@@ -5,7 +5,12 @@
  * needs no preload streaming-path entry. `searchMarket` / `marketInfo`
  * arrive with the hosted Market phase.
  */
-import type { ApiContext } from './common.js';
+import type { ApiContext, AsyncStream } from './common.js';
+
+/** A frame of a streamed plugin command (live `wrangler tail`, `login`, …). */
+export type PluginExecChunk =
+  | { type: 'data'; data: string }
+  | { type: 'exit'; code: number | null };
 
 export type PluginInstallSource =
   | { source: 'local'; path: string }
@@ -89,6 +94,17 @@ export interface PluginsApi {
     input: { namespace: string; tool: string; args?: Record<string, unknown>; projectId?: number },
     ctx: ApiContext,
   ): Promise<{ content: string; isError?: boolean }>;
+
+  /**
+   * Stream a long-running allowlisted command for a plugin (live `wrangler
+   * tail`, `wrangler login`). Namespace + cmd are checked against the plugin's
+   * granted `exec.allow`; cwd is the project root. The `Stream` suffix makes it
+   * auto-mount as a MessagePort/SSE stream (handlers-mount convention).
+   */
+  execStream(
+    input: { namespace: string; cmd: string; args: string[]; projectId?: number },
+    ctx: ApiContext,
+  ): AsyncStream<PluginExecChunk>;
 
   /** Declared + currently-granted capability subsets (for the approval UI). */
   getPermissions(

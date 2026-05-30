@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { handleExec, isExecAllowed } from '../exec.js';
+import { handleExec, execStream, isExecAllowed, type ExecChunk } from '../exec.js';
 
 describe('isExecAllowed', () => {
   const allow = ['npx', 'wrangler'];
@@ -37,5 +37,53 @@ describe('handleExec', () => {
     await expect(
       handleExec({ cmd: 'rm', args: ['-rf', '/'] }, process.cwd(), { allow: ['node'] }),
     ).rejects.toThrow(/permission_denied/);
+  });
+});
+
+describe('execStream', () => {
+  it('streams data frames then an exit frame', async () => {
+    const chunks: ExecChunk[] = [];
+    for await (const c of execStream({
+      cmd: process.execPath,
+      args: ['-e', 'process.stdout.write("a");process.stdout.write("b")'],
+      cwd: process.cwd(),
+      allow: ['node'],
+    })) {
+      chunks.push(c);
+    }
+    const data = chunks.filter((c) => c.type === 'data').map((c) => (c as { data: string }).data).join('');
+    const exit = chunks.find((c) => c.type === 'exit') as { type: 'exit'; code: number | null };
+    expect(data).toContain('a');
+    expect(data).toContain('b');
+    expect(exit?.code).toBe(0);
+  });
+
+  it('throws permission_denied for a non-allowlisted command', async () => {
+    await expect(async () => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _ of execStream({ cmd: 'rm', args: ['-rf', '/'], cwd: process.cwd(), allow: ['node'] })) {
+        /* unreachable */
+      }
+    }).rejects.toThrow(/permission_denied/);
+  });
+
+  it('stops the child when the consumer aborts', async () => {
+    const ac = new AbortController();
+    const seen: string[] = [];
+    const iter = execStream({
+      cmd: process.execPath,
+      args: ['-e', 'setInterval(()=>process.stdout.write("x"),10)'],
+      cwd: process.cwd(),
+      allow: ['node'],
+      signal: ac.signal,
+    });
+    for await (const c of iter) {
+      if (c.type === 'data') {
+        seen.push(c.data);
+        if (seen.length >= 1) ac.abort();
+      }
+      if (c.type === 'exit') break;
+    }
+    expect(seen.length).toBeGreaterThanOrEqual(1);
   });
 });

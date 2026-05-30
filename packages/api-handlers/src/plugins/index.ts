@@ -11,6 +11,7 @@ import {
   type InstalledPluginInfo,
   type PluginInstallResult,
   type PluginPermissionsShape,
+  type PluginExecChunk,
 } from '@mcp/api-bus';
 import {
   installPlugin,
@@ -20,6 +21,7 @@ import {
   setPluginEnabled,
   setPluginPermissionsGranted,
   readPluginAsset,
+  execStream,
   type InstalledPlugin,
 } from '@mcp/plugin-host';
 import type { PluginSource } from '@mcp/plugin-sdk';
@@ -136,6 +138,19 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
         cwd = proj.root_path;
       }
       return deps.invokePluginTool(namespace, tool, args ?? {}, { projectName, cwd });
+    },
+
+    async *execStream({ namespace, cmd, args, projectId }): AsyncGenerator<PluginExecChunk> {
+      let cwd = process.cwd();
+      if (projectId != null) {
+        const proj = deps.db.getProject(projectId);
+        if (!proj) throw new ApiError('not_found', 404, `project ${projectId} not found`);
+        cwd = proj.root_path;
+      }
+      const p = getInstalledPlugin(namespace);
+      if (!p || !p.enabled) throw new ApiError('not_found', 404, `plugin ${namespace} not enabled`);
+      const granted = (p.permissions_granted as PluginPermissionsShape | null) ?? null;
+      yield* execStream({ cmd, args, cwd, allow: granted?.exec?.allow });
     },
 
     async getPermissions({ namespace }) {

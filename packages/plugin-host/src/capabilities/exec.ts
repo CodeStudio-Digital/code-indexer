@@ -17,6 +17,11 @@ export interface ExecResult {
   code: number | null;
 }
 
+/** A frame of a streamed command's output (live `wrangler tail`, `login`, …). */
+export type ExecChunk =
+  | { type: 'data'; data: string }
+  | { type: 'exit'; code: number | null };
+
 type ExecGrants = PluginPermissions['exec'];
 
 interface ExecPayload {
@@ -80,4 +85,84 @@ export async function handleExec(
       resolvePromise({ stdout: stderr ? `${stdout}${stdout ? '\n' : ''}${stderr}` : stdout, code });
     });
   });
+}
+
+export interface ExecStreamOpts {
+  cmd: string;
+  args: string[];
+  cwd: string;
+  /** The plugin's granted exec allowlist — checked before spawning. */
+  allow: string[] | undefined;
+  env?: Record<string, string>;
+  /** Abort to kill the child (e.g. the webview closed the tail panel). */
+  signal?: AbortSignal;
+}
+
+/**
+ * Stream an allowlisted command's stdout/stderr as it runs, yielding `data`
+ * frames until the process exits (`exit` frame). For long-running / interactive
+ * commands the one-shot `handleExec` can't serve — live `wrangler tail`,
+ * `wrangler login`. Bridges the child's event emitter to an async iterator via
+ * a queue+waiter; the `finally` kills the child if the consumer stops early.
+ */
+export async function* execStream(opts: ExecStreamOpts): AsyncGenerator<ExecChunk> {
+  if (!isExecAllowed(opts.cmd, opts.args, opts.allow)) {
+    throw new Error(
+      `permission_denied: exec not allowed: ${opts.cmd} ${opts.args.join(' ')}`.trim(),
+    );
+  }
+  const child = spawn(opts.cmd, opts.args, {
+    cwd: resolve(opts.cwd),
+    env: cleanEnv(opts.env),
+    shell: false,
+  });
+
+  const queue: ExecChunk[] = [];
+  let wake: (() => void) | null = null;
+  let ended = false;
+  const push = (c: ExecChunk): void => {
+    queue.push(c);
+    if (wake) {
+      wake();
+      wake = null;
+    }
+  };
+
+  child.stdout?.on('data', (d: Buffer) => push({ type: 'data', data: d.toString() }));
+  child.stderr?.on('data', (d: Buffer) => push({ type: 'data', data: d.toString() }));
+  child.on('error', (e) => push({ type: 'data', data: `${e.message}\n` }));
+  child.on('close', (code) => {
+    push({ type: 'exit', code });
+    ended = true;
+    if (wake) {
+      wake();
+      wake = null;
+    }
+  });
+
+  const onAbort = (): void => {
+    try {
+      child.kill();
+    } catch {
+      /* already dead */
+    }
+  };
+  opts.signal?.addEventListener('abort', onAbort, { once: true });
+
+  try {
+    while (true) {
+      while (queue.length) yield queue.shift()!;
+      if (ended) break;
+      await new Promise<void>((r) => {
+        wake = r;
+      });
+    }
+  } finally {
+    opts.signal?.removeEventListener('abort', onAbort);
+    try {
+      child.kill();
+    } catch {
+      /* already dead */
+    }
+  }
 }
