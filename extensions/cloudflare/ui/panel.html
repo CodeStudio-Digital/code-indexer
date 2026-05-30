@@ -6,399 +6,434 @@
       * { box-sizing: border-box; }
       html, body { height: 100%; }
       body {
-        margin: 0;
-        font-family: var(--font-sans, system-ui);
+        margin: 0; font-family: var(--font-sans, system-ui);
         background: var(--background, #fff); color: var(--foreground, #111);
         font-size: 13px; display: flex; flex-direction: column;
       }
-      header {
-        display: flex; align-items: center; gap: 8px;
-        padding: 8px 12px; border-bottom: 1px solid var(--border, #e5e7eb); flex-shrink: 0;
+      header { display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-bottom: 1px solid var(--border, #e5e7eb); flex-shrink: 0; }
+      header .title { font-weight: 600; font-size: 14px; }
+      .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--muted, #eee); color: var(--muted-foreground, #666); }
+      .badge.ok { background: #16a34a22; color: #16a34a; } .badge.no { background: #dc262622; color: #dc2626; }
+      header .acct { margin-left: auto; font-size: 11px; color: var(--muted-foreground, #888); }
+      .shell { flex: 1; min-height: 0; display: flex; }
+      /* sidebar nav */
+      aside { width: 168px; flex-shrink: 0; border-right: 1px solid var(--border, #eee); overflow: auto; padding: 8px 6px; }
+      aside .navitem { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 7px 10px; border: 0; background: transparent; cursor: pointer; color: var(--foreground, #111); border-radius: var(--radius, 6px); font: inherit; }
+      aside .navitem:hover { background: var(--muted, #f1f1f1); }
+      aside .navitem.active { background: var(--accent, #e6efff); color: var(--accent-foreground, #1d4ed8); font-weight: 500; }
+      aside .navitem .ico { width: 16px; text-align: center; opacity: .8; }
+      /* content */
+      main { flex: 1; min-width: 0; overflow: auto; padding: 16px 18px; }
+      h2 { margin: 0 0 2px; font-size: 15px; }
+      .sub { color: var(--muted-foreground, #888); font-size: 12px; margin: 0 0 14px; }
+      .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+      input, select, textarea {
+        padding: 7px 9px; font: inherit; border: 1px solid var(--border, #ccc);
+        border-radius: var(--radius, 6px); background: var(--card, #fff); color: inherit;
       }
-      header .title { font-weight: 600; }
-      .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--muted, #eee); color: var(--muted-foreground, #666); }
-      .badge.ok { background: #16a34a22; color: #16a34a; }
-      .badge.no { background: #dc262622; color: #dc2626; }
-      header .detail { margin-left: auto; font-size: 11px; color: var(--muted-foreground, #888); max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      nav { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--border, #e5e7eb); flex-shrink: 0; }
-      nav button { padding: 6px 12px; border: 0; background: transparent; cursor: pointer; color: var(--muted-foreground, #777); font: inherit; border-bottom: 2px solid transparent; margin-bottom: -1px; }
-      nav button.active { color: var(--foreground, #111); border-bottom-color: var(--primary, #2563eb); font-weight: 500; }
-      main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-      .pane { display: none; flex: 1; min-height: 0; padding: 14px; overflow: auto; }
-      .pane.active { display: block; }
-      .pane.tools { display: none; }
-      .pane.tools.active { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
-      label.fld { display: block; font-size: 11px; color: var(--muted-foreground, #777); margin: 8px 0 3px; }
-      .row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
-      input, select {
-        flex: 1; min-width: 120px; padding: 7px 9px; font: inherit;
-        border: 1px solid var(--border, #ccc); border-radius: var(--radius, 6px);
-        background: var(--card, #fff); color: inherit;
-      }
-      button.act { padding: 7px 14px; font: inherit; cursor: pointer; border: 0; border-radius: var(--radius, 6px); background: var(--primary, #2563eb); color: var(--primary-foreground, #fff); }
-      button.act.secondary { background: var(--secondary, #eee); color: var(--secondary-foreground, #111); }
+      input, select { flex: 1; min-width: 140px; }
+      textarea { width: 100%; min-height: 64px; font-family: var(--font-mono, monospace); resize: vertical; }
+      button.act { padding: 7px 14px; font: inherit; cursor: pointer; border: 0; border-radius: var(--radius, 6px); background: var(--primary, #2563eb); color: var(--primary-foreground, #fff); white-space: nowrap; }
+      button.act.sec { background: var(--secondary, #eee); color: var(--secondary-foreground, #111); }
+      button.act.sm { padding: 4px 10px; font-size: 12px; }
       button.act:disabled { opacity: .5; cursor: default; }
-      .hint { font-size: 11px; color: var(--muted-foreground, #888); margin: -4px 0 12px; }
-      pre.out { background: var(--muted, #f3f3f3); padding: 10px; border-radius: var(--radius, 6px); font-family: var(--font-mono, monospace); font-size: 12px; white-space: pre-wrap; overflow: auto; margin: 10px 0 0; min-height: 48px; max-height: 40vh; }
-      /* tools master-detail */
-      .groups { display: flex; gap: 4px; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--border, #eee); flex-shrink: 0; }
-      .grp { padding: 4px 10px; border-radius: 999px; cursor: pointer; background: var(--muted, #eee); color: var(--muted-foreground, #666); font-size: 12px; border: 0; }
-      .grp.active { background: var(--accent, #e6efff); color: var(--accent-foreground, #1d4ed8); }
-      .split { flex: 1; min-height: 0; display: flex; }
-      .list { width: 200px; flex-shrink: 0; border-right: 1px solid var(--border, #eee); overflow: auto; padding: 6px; }
-      .list button { display: block; width: 100%; text-align: left; padding: 6px 8px; border: 0; background: transparent; cursor: pointer; color: var(--foreground, #111); border-radius: var(--radius, 6px); font: inherit; font-size: 12px; }
-      .list button:hover { background: var(--muted, #f1f1f1); }
-      .list button.sel { background: var(--accent, #e6efff); color: var(--accent-foreground, #1d4ed8); }
-      .list button .dot { color: #dc2626; }
-      .detail { flex: 1; min-width: 0; overflow: auto; padding: 14px; }
-      .detail h4 { margin: 0 0 2px; font-size: 14px; display: flex; align-items: center; gap: 6px; }
-      .detail .risk { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--muted, #eee); color: var(--muted-foreground, #777); }
-      .detail .risk.danger { background: #dc262622; color: #dc2626; }
-      .detail .desc { color: var(--muted-foreground, #777); font-size: 12px; margin: 0 0 6px; }
-      .placeholder { color: var(--muted-foreground, #999); padding: 32px 14px; text-align: center; font-size: 12px; }
-      .empty { color: var(--muted-foreground, #999); text-align: center; padding: 24px 8px; font-size: 12px; }
-      #chat { border: 1px solid var(--border, #eee); border-radius: var(--radius, 8px); padding: 10px; min-height: 120px; max-height: 38vh; overflow: auto; margin-bottom: 10px; }
-      #chat .b { margin: 6px 0; line-height: 1.45; }
-      #chat .role { color: var(--muted-foreground, #888); font-weight: 600; margin-right: 4px; }
+      .cards { display: flex; flex-direction: column; gap: 6px; }
+      .card { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border, #eee); border-radius: var(--radius, 8px); }
+      .card .grow { flex: 1; min-width: 0; }
+      .card .name { font-weight: 500; }
+      .card .meta { font-size: 11px; color: var(--muted-foreground, #888); font-family: var(--font-mono, monospace); margin-top: 1px; }
+      .card.click { cursor: pointer; } .card.click:hover { border-color: var(--primary, #2563eb); }
+      .muted { color: var(--muted-foreground, #888); }
+      .empty { text-align: center; color: var(--muted-foreground, #999); padding: 30px 12px; font-size: 12px; border: 1px dashed var(--border, #ddd); border-radius: var(--radius, 8px); }
+      .err { color: #dc2626; font-size: 12px; padding: 8px 0; white-space: pre-wrap; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border, #eee); white-space: nowrap; }
+      th { color: var(--muted-foreground, #777); font-weight: 600; position: sticky; top: 0; background: var(--background, #fff); }
+      td { font-family: var(--font-mono, monospace); }
+      .grid-wrap { overflow: auto; border: 1px solid var(--border, #eee); border-radius: var(--radius, 8px); max-height: 46vh; }
+      .crumbs { font-size: 12px; color: var(--muted-foreground, #888); margin-bottom: 8px; }
+      .crumbs a { color: var(--primary, #2563eb); cursor: pointer; text-decoration: none; }
+      .stream { background: var(--muted, #f3f3f3); padding: 10px; border-radius: var(--radius, 6px); font-family: var(--font-mono, monospace); font-size: 12px; white-space: pre-wrap; overflow: auto; max-height: 42vh; margin-top: 10px; }
+      #chat { border: 1px solid var(--border, #eee); border-radius: var(--radius, 8px); padding: 10px; min-height: 140px; max-height: 42vh; overflow: auto; margin-bottom: 10px; }
+      #chat .b { margin: 6px 0; line-height: 1.45; } #chat .role { color: var(--muted-foreground, #888); font-weight: 600; margin-right: 4px; }
       #chat .sys { color: var(--muted-foreground, #999); font-size: 11px; font-family: var(--font-mono, monospace); }
-      .nobridge { padding: 24px; text-align: center; color: var(--muted-foreground, #888); }
+      .nobridge { padding: 28px; text-align: center; color: var(--muted-foreground, #888); }
     </style>
   </head>
   <body>
     <header>
       <span class="title">Cloudflare</span>
-      <span class="badge" id="status" data-i18n="status.checking">checking…</span>
-      <span class="detail" id="detail"></span>
+      <span class="badge" id="status">…</span>
+      <span class="acct" id="acct"></span>
     </header>
-    <nav>
-      <button data-pane="setup" class="active" data-i18n="tab.setup">Setup</button>
-      <button data-pane="tools" data-i18n="tab.tools">Tools</button>
-      <button data-pane="logs" data-i18n="tab.logs">Logs</button>
-      <button data-pane="ai" data-i18n="tab.assistant">Assistant</button>
-    </nav>
-    <main>
-      <!-- SETUP -->
-      <div class="pane active" id="pane-setup">
-        <label class="fld" data-i18n="setup.tokenLabel">API token (REST) — stored only for this plugin</label>
-        <div class="row">
-          <input id="token" type="password" data-i18n-ph="setup.tokenPh" placeholder="paste a Cloudflare API token" />
-          <button class="act" id="saveToken" data-i18n="setup.save">Save</button>
-        </div>
-        <p class="hint" data-i18n="setup.hint">A token enables the REST API (whoami, D1, KV, R2…). Live tail/login use wrangler login instead.</p>
-        <div class="row">
-          <button class="act secondary" id="whoami" data-i18n="setup.verify">Verify &amp; list accounts</button>
-        </div>
-        <pre class="out" id="setupOut">—</pre>
-      </div>
-
-      <!-- TOOLS (master-detail) -->
-      <div class="pane tools" id="pane-tools">
-        <div class="groups" id="groups"></div>
-        <div class="split">
-          <div class="list" id="toolList"></div>
-          <div class="detail" id="toolDetail">
-            <div class="placeholder" data-i18n="tools.selectPrompt">Pick a tool from the list.</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- LOGS -->
-      <div class="pane" id="pane-logs">
-        <p class="hint" data-i18n="logs.hint">Streamed via wrangler (uses your wrangler login credentials).</p>
-        <div class="row">
-          <button class="act secondary" id="login" data-i18n="logs.login">Login</button>
-          <button class="act" id="tail" data-i18n="logs.tail">Tail logs</button>
-          <button class="act secondary" id="stop" disabled data-i18n="logs.stop">Stop</button>
-        </div>
-        <pre class="out" id="logsOut">—</pre>
-      </div>
-
-      <!-- ASSISTANT -->
-      <div class="pane" id="pane-ai">
-        <div class="row"><select id="model"><option>…</option></select></div>
-        <div id="chat"><div class="empty" data-i18n="ai.empty">Ask the Cloudflare-scoped assistant. Off-topic requests are refused.</div></div>
-        <div class="row">
-          <input id="ask" data-i18n-ph="ai.placeholder" placeholder="e.g. list my D1 databases, then deploy" />
-          <button class="act" id="send" data-i18n="ai.send">Send</button>
-          <button class="act secondary" id="cancel" disabled data-i18n="ai.cancel">Cancel</button>
-        </div>
-      </div>
-    </main>
+    <div class="shell">
+      <aside id="nav"></aside>
+      <main id="view"><div class="empty">…</div></main>
+    </div>
 
     <script>
       (function () {
         if (!window.mcp || !window.mcp.invokeTool) {
-          document.querySelector('main').innerHTML =
-            '<div class="nobridge">Plugin bridge unavailable.<br>Restart the IDE (the host server needs this build) and reopen this panel.</div>';
+          document.body.innerHTML = '<div class="nobridge">Plugin bridge unavailable.<br>Restart the IDE and reopen this panel.</div>';
           return;
         }
         var mcp = window.mcp;
-        var NS = (mcp.context && mcp.context.namespace) || 'cloudflare';
-
-        // ── i18n (plugin ships its own catalogs) ──
         var t = mcp.i18n.translator({
           en: {
-            'status.checking': 'checking…', 'status.detected': 'project detected', 'status.none': 'no CF project',
-            'tab.setup': 'Setup', 'tab.tools': 'Tools', 'tab.logs': 'Logs', 'tab.assistant': 'Assistant',
-            'setup.tokenLabel': 'API token (REST) — stored only for this plugin',
-            'setup.tokenPh': 'paste a Cloudflare API token', 'setup.save': 'Save',
-            'setup.hint': 'A token enables the REST API (whoami, D1, KV, R2…). Live tail/login use wrangler login instead.',
-            'setup.verify': 'Verify & list accounts', 'setup.needToken': 'Paste a token first.',
-            'logs.hint': 'Streamed via wrangler (uses your wrangler login credentials).',
-            'logs.login': 'Login', 'logs.tail': 'Tail logs', 'logs.stop': 'Stop',
-            'logs.ended': '[{label} ended]', 'logs.stopped': '[stopped]',
-            'tools.selectPrompt': 'Pick a tool from the list.', 'tools.run': 'Run',
-            'tools.noTools': 'No tools found.', 'tools.loading': 'Loading tools…', 'tools.result': 'Result',
-            'tools.running': 'running…', 'tools.confirmMsg': 'This is a mutating/destructive Cloudflare action. Proceed?', 'tools.confirmRun': 'Run',
-            'ai.empty': 'Ask the Cloudflare-scoped assistant. Off-topic requests are refused.',
-            'ai.placeholder': 'e.g. list my D1 databases, then deploy', 'ai.send': 'Send', 'ai.cancel': 'Cancel',
-            'ai.configure': 'configure a provider in Settings → AI', 'ai.noModels': 'no models',
-            'ai.you': 'you', 'ai.assistant': 'cf', 'ai.cancelled': '[cancelled]',
-            'ai.confirmTitle': 'Run {name}?', 'ai.confirmMsg': 'The assistant wants to run a mutating action:\n{input}', 'ai.allow': 'Allow',
-            'ai.approved': 'approved {name}', 'ai.denied': 'denied {name}'
+            overview: 'Overview', databases: 'Databases', storage: 'Storage', queues: 'Queues',
+            vectorize: 'Vectorize', deploy: 'Deploy', dns: 'DNS', logs: 'Logs', assistant: 'Assistant',
+            settings: 'Settings',
+            connected: 'Connected', notProject: 'Not a Cloudflare project',
+            refresh: 'Refresh', run: 'Run', open: 'Open', back: 'Back', create: 'Create', deleteW: 'Delete',
+            noAccount: 'Connect an account in Settings first.', empty: 'Nothing here yet.',
+            d1Sub: 'Your D1 SQL databases. Click one to browse tables and run queries.',
+            tables: 'Tables', query: 'Query', runQuery: 'Run query', rows: 'rows',
+            kvNs: 'KV namespaces', buckets: 'R2 buckets', objects: 'Objects',
+            tokenLabel: 'Cloudflare API token', tokenPh: 'paste an API token', save: 'Save & connect',
+            tokenHint: 'Stored only for this plugin. Enables the dashboard below.',
+            deploySub: 'Deploy this project and see recent deployments.',
+            deployNow: 'Deploy now', lastDeploys: 'Recent deployments',
+            tail: 'Live logs', login: 'Login (browser)', stop: 'Stop',
+            askPh: 'Ask in plain language — e.g. "list my databases and deploy"',
+            send: 'Send', cancel: 'Cancel', aiEmpty: 'Cloudflare-scoped assistant. Off-topic is refused.',
+            configureAI: 'Configure a provider in Settings → AI', confirmRun: 'Run', loading: 'Loading…'
           },
           'pt-BR': {
-            'status.checking': 'verificando…', 'status.detected': 'projeto detectado', 'status.none': 'sem projeto CF',
-            'tab.setup': 'Configuração', 'tab.tools': 'Ferramentas', 'tab.logs': 'Logs', 'tab.assistant': 'Assistente',
-            'setup.tokenLabel': 'Token de API (REST) — guardado só para este plugin',
-            'setup.tokenPh': 'cole um token de API da Cloudflare', 'setup.save': 'Salvar',
-            'setup.hint': 'Um token habilita a API REST (whoami, D1, KV, R2…). Tail/login ao vivo usam o wrangler login.',
-            'setup.verify': 'Verificar & listar contas', 'setup.needToken': 'Cole um token primeiro.',
-            'logs.hint': 'Transmitido via wrangler (usa as credenciais do wrangler login).',
-            'logs.login': 'Entrar', 'logs.tail': 'Logs ao vivo', 'logs.stop': 'Parar',
-            'logs.ended': '[{label} finalizado]', 'logs.stopped': '[parado]',
-            'tools.selectPrompt': 'Escolha uma ferramenta na lista.', 'tools.run': 'Executar',
-            'tools.noTools': 'Nenhuma ferramenta.', 'tools.loading': 'Carregando ferramentas…', 'tools.result': 'Resultado',
-            'tools.running': 'executando…', 'tools.confirmMsg': 'Esta é uma ação que altera/destrói recursos na Cloudflare. Continuar?', 'tools.confirmRun': 'Executar',
-            'ai.empty': 'Pergunte ao assistente focado em Cloudflare. Pedidos fora do escopo são recusados.',
-            'ai.placeholder': 'ex.: liste meus bancos D1 e faça deploy', 'ai.send': 'Enviar', 'ai.cancel': 'Cancelar',
-            'ai.configure': 'configure um provedor em Configurações → IA', 'ai.noModels': 'sem modelos',
-            'ai.you': 'você', 'ai.assistant': 'cf', 'ai.cancelled': '[cancelado]',
-            'ai.confirmTitle': 'Executar {name}?', 'ai.confirmMsg': 'O assistente quer executar uma ação que altera recursos:\n{input}', 'ai.allow': 'Permitir',
-            'ai.approved': 'aprovado {name}', 'ai.denied': 'negado {name}'
+            overview: 'Visão geral', databases: 'Bancos de dados', storage: 'Armazenamento', queues: 'Filas',
+            vectorize: 'Vectorize', deploy: 'Deploy', dns: 'DNS', logs: 'Logs', assistant: 'Assistente',
+            settings: 'Configuração',
+            connected: 'Conectado', notProject: 'Não é um projeto Cloudflare',
+            refresh: 'Atualizar', run: 'Executar', open: 'Abrir', back: 'Voltar', create: 'Criar', deleteW: 'Excluir',
+            noAccount: 'Conecte uma conta em Configuração primeiro.', empty: 'Nada aqui ainda.',
+            d1Sub: 'Seus bancos SQL D1. Clique num para ver tabelas e rodar queries.',
+            tables: 'Tabelas', query: 'Query', runQuery: 'Rodar query', rows: 'linhas',
+            kvNs: 'Namespaces KV', buckets: 'Buckets R2', objects: 'Objetos',
+            tokenLabel: 'Token de API da Cloudflare', tokenPh: 'cole um token de API', save: 'Salvar & conectar',
+            tokenHint: 'Guardado só para este plugin. Habilita o painel abaixo.',
+            deploySub: 'Faça deploy deste projeto e veja deploys recentes.',
+            deployNow: 'Fazer deploy', lastDeploys: 'Deploys recentes',
+            tail: 'Logs ao vivo', login: 'Entrar (navegador)', stop: 'Parar',
+            askPh: 'Peça em linguagem natural — ex.: "liste meus bancos e faça deploy"',
+            send: 'Enviar', cancel: 'Cancelar', aiEmpty: 'Assistente focado em Cloudflare. Fora do escopo é recusado.',
+            configureAI: 'Configure um provedor em Configuração → IA', confirmRun: 'Executar', loading: 'Carregando…'
           }
         });
-        // Apply translations to static DOM.
-        document.querySelectorAll('[data-i18n]').forEach(function (el) { el.textContent = t(el.getAttribute('data-i18n')); });
-        document.querySelectorAll('[data-i18n-ph]').forEach(function (el) { el.placeholder = t(el.getAttribute('data-i18n-ph')); });
 
-        // ── tabs ──
-        var navBtns = document.querySelectorAll('nav button');
-        navBtns.forEach(function (b) {
-          b.onclick = function () {
-            navBtns.forEach(function (x) { x.classList.remove('active'); });
-            b.classList.add('active');
-            document.querySelectorAll('.pane').forEach(function (p) { p.classList.remove('active'); });
-            document.getElementById('pane-' + b.getAttribute('data-pane')).classList.add('active');
-          };
-        });
-
-        function writeOut(el, label, r) {
-          var ok = !r.isError;
-          el.textContent = (ok ? '✓ ' : '✗ ') + label + '\n' + (r.content || '');
-          el.scrollTop = 0;
+        var view = document.getElementById('view');
+        // Thin wrapper: call a tool, return its structured rows (or throw the error text).
+        function call(tool, args) {
+          return mcp.invokeTool(tool, args || {}).then(function (r) {
+            if (r.isError) throw new Error(r.content || 'error');
+            return r;
+          });
         }
+        function rowsOf(r) { return (r.data && r.data.rows) || []; }
+        function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+        function setView(node) { view.innerHTML = ''; view.appendChild(node); }
+        function loading() { setView(el('div', 'empty', t('loading'))); }
+        function showErr(e) { var d = el('div', 'err', String(e && e.message || e)); setView(d); }
+        function needAccount(node) { setView(el('div', 'empty', t('noAccount'))); }
 
-        // ── detect ──
-        function refreshDetect() {
-          mcp.invokeTool('cf_detect', {}).then(function (r) {
+        // header status
+        function refreshHeader() {
+          call('cf_detect').then(function (r) {
             var isCf = !/Not a Cloudflare/.test(r.content);
             var s = document.getElementById('status');
-            s.textContent = isCf ? t('status.detected') : t('status.none');
+            s.textContent = isCf ? t('connected') : t('notProject');
             s.className = 'badge ' + (isCf ? 'ok' : 'no');
-            document.getElementById('detail').textContent = r.content.replace(/\n/g, ' · ');
-          }).catch(function (e) { document.getElementById('detail').textContent = String(e && e.message || e); });
+          }).catch(function () {});
+          call('cf_whoami').then(function (r) {
+            var rows = rowsOf(r);
+            var sel = rows.filter(function (a) { return a.__selected; })[0] || rows[0];
+            document.getElementById('acct').textContent = sel ? (sel.name || sel.id) : '';
+          }).catch(function () { document.getElementById('acct').textContent = ''; });
         }
 
-        // ── setup ──
-        var setupOut = document.getElementById('setupOut');
-        document.getElementById('saveToken').onclick = function (e) {
-          var v = document.getElementById('token').value.trim();
-          if (!v) { mcp.ui.toast({ kind: 'error', message: t('setup.needToken') }); return; }
-          e.target.disabled = true;
-          mcp.invokeTool('cf_set_token', { token: v })
-            .then(function (r) { writeOut(setupOut, 'cf_set_token', r); })
-            .finally(function () { e.target.disabled = false; });
-        };
-        document.getElementById('whoami').onclick = function (e) {
-          e.target.disabled = true; setupOut.textContent = t('tools.running');
-          mcp.invokeTool('cf_whoami', {})
-            .then(function (r) { writeOut(setupOut, 'cf_whoami', r); })
-            .catch(function (err) { setupOut.textContent = '✗ ' + String(err && err.message || err); })
-            .finally(function () { e.target.disabled = false; });
-        };
-
-        // ── logs (streams) ──
-        var logsOut = document.getElementById('logsOut'), stopBtn = document.getElementById('stop'), activeStream = null;
-        function appendLog(s) { logsOut.textContent += s; logsOut.scrollTop = logsOut.scrollHeight; }
-        function startStream(label, args, btn) {
-          if (activeStream) activeStream();
-          logsOut.textContent = label + '…\n';
-          if (btn) btn.disabled = true; stopBtn.disabled = false;
-          activeStream = mcp.execStream('npx', ['wrangler'].concat(args), {
-            onData: function (c) { if (c && c.type === 'data') appendLog(c.data); },
-            onEnd: function () { appendLog('\n' + t('logs.ended', { label: label }) + '\n'); activeStream = null; if (btn) btn.disabled = false; stopBtn.disabled = true; },
-            onError: function (m) { appendLog('\n[error] ' + m + '\n'); activeStream = null; if (btn) btn.disabled = false; stopBtn.disabled = true; }
+        // ── sections ──
+        var SECTIONS = [
+          { id: 'overview', ico: '◆', render: renderOverview },
+          { id: 'databases', ico: '▤', render: renderDatabases },
+          { id: 'storage', ico: '▣', render: renderStorage },
+          { id: 'queues', ico: '↔', render: renderQueues },
+          { id: 'vectorize', ico: '◈', render: renderVectorize },
+          { id: 'deploy', ico: '▲', render: renderDeploy },
+          { id: 'dns', ico: '◉', render: renderDns },
+          { id: 'logs', ico: '≣', render: renderLogs },
+          { id: 'assistant', ico: '✦', render: renderAssistant },
+          { id: 'settings', ico: '⚙', render: renderSettings }
+        ];
+        var current = 'overview';
+        function buildNav() {
+          var nav = document.getElementById('nav'); nav.innerHTML = '';
+          SECTIONS.forEach(function (s) {
+            var b = el('button', 'navitem' + (s.id === current ? ' active' : ''));
+            b.appendChild(el('span', 'ico', s.ico));
+            b.appendChild(el('span', null, t(s.id)));
+            b.onclick = function () { current = s.id; buildNav(); s.render(); };
+            nav.appendChild(b);
           });
         }
-        document.getElementById('login').onclick = function (e) { startStream('login', ['login'], e.target); };
-        document.getElementById('tail').onclick = function (e) { startStream('tail', ['tail', '--format', 'pretty'], e.target); };
-        stopBtn.onclick = function () { if (activeStream) { activeStream(); activeStream = null; } stopBtn.disabled = true; appendLog('\n' + t('logs.stopped') + '\n'); };
 
-        // ── tools (master-detail) ──
-        var GROUPS = {
-          kv: 'KV', r2: 'R2', secret: 'Secrets', secrets: 'Secrets', queue: 'Queues', queues: 'Queues',
-          vectorize: 'Vectorize', do: 'Durable Obj', ai: 'Workers AI', hyperdrive: 'Hyperdrive', cron: 'Cron',
-          pages: 'Pages', zones: 'DNS', dns: 'DNS', cache: 'Cache', deploy: 'Deploy', deployments: 'Deploy',
-          last: 'Deploy', d1: 'D1', detect: 'Core', set: 'Core', whoami: 'Core'
-        };
-        function groupOf(n) { return GROUPS[n.replace(/^cf_/, '').split('_')[0]] || 'Other'; }
-        var detailEl = document.getElementById('toolDetail');
-
-        function showToolDetail(tool) {
-          var schema = tool.parameters || { properties: {}, required: [] };
-          var keys = Object.keys(schema.properties || {});
-          var danger = tool.riskLevel === 'admin' || tool.riskLevel === 'execute';
-          detailEl.innerHTML = '';
-          var h = document.createElement('h4');
-          h.textContent = tool.name;
-          var risk = document.createElement('span');
-          risk.className = 'risk' + (danger ? ' danger' : '');
-          risk.textContent = tool.riskLevel || 'read';
-          h.appendChild(risk);
-          detailEl.appendChild(h);
-          var desc = document.createElement('p'); desc.className = 'desc'; desc.textContent = tool.description || '';
-          detailEl.appendChild(desc);
-
-          var inputs = {};
-          keys.forEach(function (k) {
-            var p = (schema.properties || {})[k] || {};
-            var req = (schema.required || []).indexOf(k) >= 0;
-            var lab = document.createElement('label'); lab.className = 'fld';
-            lab.textContent = k + (req ? ' *' : '') + (p.type === 'number' ? ' (#)' : '');
-            detailEl.appendChild(lab);
-            var el;
-            if (p.enum) { el = document.createElement('select'); p.enum.forEach(function (o) { var op = document.createElement('option'); op.textContent = o; el.appendChild(op); }); }
-            else { el = document.createElement('input'); if (p.type === 'number') el.inputMode = 'numeric'; }
-            detailEl.appendChild(el);
-            inputs[k] = { el: el, type: p.type };
-          });
-
-          var btn = document.createElement('button');
-          btn.className = 'act' + (tool.mutates ? '' : ' secondary');
-          btn.style.marginTop = '12px';
-          btn.textContent = t('tools.run');
-          detailEl.appendChild(btn);
-
-          var resLabel = document.createElement('label'); resLabel.className = 'fld'; resLabel.textContent = t('tools.result');
-          var res = document.createElement('pre'); res.className = 'out'; res.textContent = '—';
-
-          function run() {
-            var args = {};
-            Object.keys(inputs).forEach(function (k) {
-              var v = inputs[k].el.value; if (v === '') return;
-              args[k] = inputs[k].type === 'number' ? Number(v) : v;
+        // header + section helpers
+        function head(titleKey, subKey, actions) {
+          var wrap = el('div');
+          wrap.appendChild(el('h2', null, t(titleKey)));
+          if (subKey) wrap.appendChild(el('p', 'sub', t(subKey)));
+          if (actions) { var bar = el('div', 'toolbar'); actions.forEach(function (a) { bar.appendChild(a); }); wrap.appendChild(bar); }
+          return wrap;
+        }
+        function listFromTool(tool, opts) {
+          // opts: { name(row), meta(row), onClick(row), actions(row)->[btn] }
+          var box = el('div'); var cards = el('div', 'cards'); box.appendChild(cards);
+          cards.appendChild(el('div', 'muted', t('loading')));
+          call(tool).then(function (r) {
+            var rows = rowsOf(r); cards.innerHTML = '';
+            if (!rows.length) { cards.appendChild(el('div', 'empty', t('empty'))); return; }
+            rows.forEach(function (row) {
+              var c = el('div', 'card' + (opts.onClick ? ' click' : ''));
+              var g = el('div', 'grow');
+              g.appendChild(el('div', 'name', opts.name(row)));
+              if (opts.meta) g.appendChild(el('div', 'meta', opts.meta(row)));
+              c.appendChild(g);
+              if (opts.onClick) c.onclick = function () { opts.onClick(row); };
+              (opts.actions ? opts.actions(row) : []).forEach(function (b) { c.appendChild(b); });
+              cards.appendChild(c);
             });
-            btn.disabled = true; res.textContent = t('tools.running');
-            if (!detailEl.contains(res)) { detailEl.appendChild(resLabel); detailEl.appendChild(res); }
-            mcp.invokeTool(tool.name, args)
-              .then(function (r) { writeOut(res, tool.name, r); })
-              .catch(function (e) { res.textContent = '✗ ' + String(e && e.message || e); })
-              .finally(function () { btn.disabled = false; });
-          }
-          btn.onclick = function () {
-            if (!danger) { run(); return; }
-            mcp.ui.confirm({ title: tool.name, message: t('tools.confirmMsg'), confirmText: t('tools.confirmRun'), danger: true })
-              .then(function (okay) { if (okay) run(); });
+          }).catch(function (e) { cards.innerHTML = ''; cards.appendChild(el('div', 'err', String(e.message || e))); });
+          return box;
+        }
+
+        // ── Overview ──
+        function renderOverview() {
+          var n = el('div'); n.appendChild(head('overview', null, [mkRefresh(renderOverview)]));
+          var grid = el('div', 'cards');
+          [['databases','▤'],['storage','▣'],['queues','↔'],['deploy','▲'],['dns','◉'],['assistant','✦']].forEach(function (p) {
+            var c = el('div', 'card click'); var g = el('div', 'grow');
+            g.appendChild(el('div', 'name', p[1] + '  ' + t(p[0])));
+            c.appendChild(g); c.onclick = function () { current = p[0]; buildNav(); SECTIONS.filter(function(s){return s.id===p[0];})[0].render(); };
+            grid.appendChild(c);
+          });
+          n.appendChild(grid); setView(n);
+        }
+
+        function mkRefresh(fn) { var b = el('button', 'act sec sm', t('refresh')); b.onclick = fn; return b; }
+
+        // ── Databases (list → tables → query) ──
+        function renderDatabases() {
+          var n = head('databases', 'd1Sub', [mkRefresh(renderDatabases)]);
+          n.appendChild(listFromTool('cf_d1_list', {
+            name: function (r) { return r.name; },
+            meta: function (r) { return r.uuid; },
+            onClick: function (r) { openDatabase(r); }
+          }));
+          setView(n);
+        }
+        function openDatabase(db) {
+          var n = el('div');
+          var cr = el('div', 'crumbs'); var a = el('a', null, t('databases')); a.onclick = renderDatabases;
+          cr.appendChild(a); cr.appendChild(document.createTextNode(' / ' + db.name)); n.appendChild(cr);
+          n.appendChild(el('h2', null, db.name));
+          // query box
+          var ta = el('textarea'); ta.value = "SELECT name FROM sqlite_master WHERE type='table'";
+          n.appendChild(ta);
+          var bar = el('div', 'toolbar'); var run = el('button', 'act', t('runQuery'));
+          bar.appendChild(run); n.appendChild(bar);
+          var result = el('div'); n.appendChild(result);
+          run.onclick = function () {
+            run.disabled = true; result.innerHTML = ''; result.appendChild(el('div', 'muted', t('loading')));
+            call('cf_d1_query', { database: db.name, sql: ta.value }).then(function (r) {
+              result.innerHTML = ''; renderGrid(result, r.data || {});
+            }).catch(function (e) { result.innerHTML = ''; result.appendChild(el('div', 'err', String(e.message || e))); })
+            .finally(function () { run.disabled = false; });
           };
+          setView(n); run.onclick();
+        }
+        function renderGrid(parent, data) {
+          var rows = data.rows || []; var cols = data.columns || (rows[0] ? Object.keys(rows[0]) : []);
+          parent.appendChild(el('div', 'sub', rows.length + ' ' + t('rows')));
+          if (!rows.length) { parent.appendChild(el('div', 'empty', t('empty'))); return; }
+          var wrap = el('div', 'grid-wrap'); var table = el('table');
+          var thead = el('tr'); cols.forEach(function (c) { thead.appendChild(el('th', null, c)); }); table.appendChild(thead);
+          rows.forEach(function (row) {
+            var tr = el('tr'); cols.forEach(function (c) { var v = row[c]; tr.appendChild(el('td', null, v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v)))); }); table.appendChild(tr);
+          });
+          wrap.appendChild(table); parent.appendChild(wrap);
         }
 
-        function buildBrowser(tools) {
-          var byGroup = {};
-          tools.forEach(function (tl) { (byGroup[groupOf(tl.name)] = byGroup[groupOf(tl.name)] || []).push(tl); });
-          var groups = Object.keys(byGroup).sort();
-          var groupsEl = document.getElementById('groups'), listEl = document.getElementById('toolList');
-          function selectGroup(g) {
-            [].forEach.call(groupsEl.children, function (c) { c.className = 'grp' + (c.textContent === g ? ' active' : ''); });
-            listEl.innerHTML = '';
-            byGroup[g].forEach(function (tl) {
-              var b = document.createElement('button');
-              var danger = tl.riskLevel === 'admin' || tl.riskLevel === 'execute';
-              b.innerHTML = tl.name.replace(/^cf_/, '') + (danger ? ' <span class="dot">⚠</span>' : '');
-              b.onclick = function () {
-                [].forEach.call(listEl.children, function (c) { c.classList.remove('sel'); });
-                b.classList.add('sel');
-                showToolDetail(tl);
-              };
-              listEl.appendChild(b);
+        // ── Storage (KV + R2) ──
+        function renderStorage() {
+          var n = head('storage', null, [mkRefresh(renderStorage)]);
+          n.appendChild(el('h2', null, t('kvNs')));
+          n.appendChild(listFromTool('cf_kv_list', { name: function (r) { return r.title; }, meta: function (r) { return r.id; } }));
+          n.appendChild(el('div', null, '')).style.height = '14px';
+          n.appendChild(el('h2', null, t('buckets')));
+          n.appendChild(listFromTool('cf_r2_list', {
+            name: function (r) { return r.name; }, meta: function (r) { return r.creation_date || ''; },
+            onClick: function (r) { openBucket(r); }
+          }));
+          setView(n);
+        }
+        function openBucket(b) {
+          var n = el('div');
+          var cr = el('div', 'crumbs'); var a = el('a', null, t('storage')); a.onclick = renderStorage;
+          cr.appendChild(a); cr.appendChild(document.createTextNode(' / ' + b.name)); n.appendChild(cr);
+          n.appendChild(el('h2', null, b.name));
+          var box = el('div', 'cards'); box.appendChild(el('div', 'muted', t('loading'))); n.appendChild(box);
+          call('cf_r2_objects', { bucket: b.name }).then(function (r) {
+            var rows = rowsOf(r); box.innerHTML = '';
+            if (!rows.length) { box.appendChild(el('div', 'empty', t('empty'))); return; }
+            rows.forEach(function (o) { var c = el('div', 'card'); var g = el('div', 'grow'); g.appendChild(el('div', 'name', o.key)); g.appendChild(el('div', 'meta', (o.size != null ? o.size + ' bytes' : ''))); c.appendChild(g); box.appendChild(c); });
+          }).catch(function (e) { box.innerHTML = ''; box.appendChild(el('div', 'err', String(e.message || e))); });
+          setView(n);
+        }
+
+        // ── Queues / Vectorize / DNS (simple lists) ──
+        function renderQueues() {
+          var n = head('queues', null, [mkRefresh(renderQueues)]);
+          n.appendChild(listFromTool('cf_queues_list', { name: function (r) { return r.queue_name || r.name; }, meta: function (r) { return r.queue_id || ''; } }));
+          setView(n);
+        }
+        function renderVectorize() {
+          var n = head('vectorize', null, [mkRefresh(renderVectorize)]);
+          n.appendChild(listFromTool('cf_vectorize_list', { name: function (r) { return r.name; }, meta: function (r) { return (r.config ? ('dim ' + r.config.dimensions + ' · ' + r.config.metric) : ''); } }));
+          setView(n);
+        }
+        function renderDns() {
+          var n = head('dns', null, [mkRefresh(renderDns)]);
+          n.appendChild(listFromTool('cf_zones_list', {
+            name: function (r) { return r.name; }, meta: function (r) { return r.id; },
+            onClick: function (r) { openZone(r); }
+          }));
+          setView(n);
+        }
+        function openZone(z) {
+          var n = el('div');
+          var cr = el('div', 'crumbs'); var a = el('a', null, t('dns')); a.onclick = renderDns;
+          cr.appendChild(a); cr.appendChild(document.createTextNode(' / ' + z.name)); n.appendChild(cr);
+          n.appendChild(el('h2', null, z.name));
+          var box = el('div', 'cards'); box.appendChild(el('div', 'muted', t('loading'))); n.appendChild(box);
+          call('cf_dns_list', { zoneId: z.id }).then(function (r) {
+            var rows = rowsOf(r); box.innerHTML = '';
+            if (!rows.length) { box.appendChild(el('div', 'empty', t('empty'))); return; }
+            rows.forEach(function (d) { var c = el('div', 'card'); var g = el('div', 'grow'); g.appendChild(el('div', 'name', d.type + '  ' + d.name)); g.appendChild(el('div', 'meta', d.content + (d.proxied ? ' · proxied' : ''))); c.appendChild(g); box.appendChild(c); });
+          }).catch(function (e) { box.innerHTML = ''; box.appendChild(el('div', 'err', String(e.message || e))); });
+          setView(n);
+        }
+
+        // ── Deploy ──
+        function renderDeploy() {
+          var n = head('deploy', 'deploySub', []);
+          var bar = el('div', 'toolbar');
+          var dep = el('button', 'act', t('deployNow'));
+          bar.appendChild(dep); bar.appendChild(mkRefresh(renderDeploy)); n.appendChild(bar);
+          var out = el('div', 'stream'); out.style.display = 'none'; n.appendChild(out);
+          dep.onclick = function () {
+            mcp.ui.confirm({ title: t('deployNow'), message: 'wrangler deploy', confirmText: t('confirmRun'), danger: true }).then(function (okv) {
+              if (!okv) return; dep.disabled = true; out.style.display = ''; out.textContent = t('loading');
+              call('cf_deploy').then(function (r) { out.textContent = r.content; }).catch(function (e) { out.textContent = String(e.message || e); }).finally(function () { dep.disabled = false; refreshHeader(); });
             });
-            detailEl.innerHTML = '<div class="placeholder">' + t('tools.selectPrompt') + '</div>';
+          };
+          n.appendChild(el('h2', null, t('lastDeploys')));
+          n.appendChild(listFromTool('cf_deployments', { name: function (r) { return (r.created_on || '?'); }, meta: function (r) { return (r.author_email || '') + ' · ' + (r.id || ''); } }));
+          setView(n);
+        }
+
+        // ── Logs (stream) ──
+        var activeStream = null;
+        function renderLogs() {
+          var n = head('logs', null, []);
+          var bar = el('div', 'toolbar');
+          var login = el('button', 'act sec', t('login'));
+          var tail = el('button', 'act', t('tail'));
+          var stop = el('button', 'act sec', t('stop')); stop.disabled = true;
+          bar.appendChild(login); bar.appendChild(tail); bar.appendChild(stop); n.appendChild(bar);
+          var out = el('div', 'stream'); out.textContent = '—'; n.appendChild(out);
+          function start(label, args, btn) {
+            if (activeStream) activeStream();
+            out.textContent = label + '…\n'; btn.disabled = true; stop.disabled = false;
+            activeStream = mcp.execStream('npx', ['wrangler'].concat(args), {
+              onData: function (c) { if (c && c.type === 'data') { out.textContent += c.data; out.scrollTop = out.scrollHeight; } },
+              onEnd: function () { out.textContent += '\n[done]\n'; activeStream = null; btn.disabled = false; stop.disabled = true; },
+              onError: function (m) { out.textContent += '\n[error] ' + m + '\n'; activeStream = null; btn.disabled = false; stop.disabled = true; }
+            });
           }
-          groupsEl.innerHTML = '';
-          groups.forEach(function (g) {
-            var b = document.createElement('button'); b.className = 'grp'; b.textContent = g;
-            b.onclick = function () { selectGroup(g); }; groupsEl.appendChild(b);
-          });
-          if (groups.length) selectGroup(groups.indexOf('Core') >= 0 ? 'Core' : groups[0]);
-          else listEl.innerHTML = '<div class="empty">' + t('tools.noTools') + '</div>';
+          login.onclick = function () { start('login', ['login'], login); };
+          tail.onclick = function () { start('tail', ['tail', '--format', 'pretty'], tail); };
+          stop.onclick = function () { if (activeStream) { activeStream(); activeStream = null; } stop.disabled = true; out.textContent += '\n[stopped]\n'; };
+          setView(n);
         }
-        mcp.listPlugins().then(function (plugins) {
-          var me = plugins.filter(function (p) { return p.namespace === NS; })[0];
-          buildBrowser((me && me.contributions && me.contributions.tools) || []);
-        }).catch(function (e) {
-          document.getElementById('toolList').innerHTML = '<div class="empty">' + String(e && e.message || e) + '</div>';
-        });
 
-        // ── assistant ──
-        var chatEl = document.getElementById('chat'), askEl = document.getElementById('ask');
-        var sendBtn = document.getElementById('send'), cancelBtn = document.getElementById('cancel'), modelSel = document.getElementById('model');
-        var history = [], closeChat = null, chatStarted = false;
-        function bubble(role, text) {
-          if (!chatStarted) { chatEl.innerHTML = ''; chatStarted = true; }
-          var d = document.createElement('div'); d.className = 'b';
-          var r = document.createElement('span'); r.className = 'role'; r.textContent = role + ':'; d.appendChild(r);
-          var span = document.createElement('span'); span.textContent = text; d.appendChild(span);
-          chatEl.appendChild(d); chatEl.scrollTop = chatEl.scrollHeight; return span;
+        // ── Settings (token + account) ──
+        function renderSettings() {
+          var n = head('settings', null, []);
+          n.appendChild(el('label', 'sub', t('tokenLabel')));
+          var bar = el('div', 'toolbar');
+          var inp = el('input'); inp.type = 'password'; inp.placeholder = t('tokenPh');
+          var save = el('button', 'act', t('save'));
+          bar.appendChild(inp); bar.appendChild(save); n.appendChild(bar);
+          n.appendChild(el('p', 'sub', t('tokenHint')));
+          var out = el('div'); n.appendChild(out);
+          save.onclick = function () {
+            if (!inp.value.trim()) { mcp.ui.toast({ kind: 'error', message: t('tokenPh') }); return; }
+            save.disabled = true;
+            call('cf_set_token', { token: inp.value.trim() })
+              .then(function () { return call('cf_whoami'); })
+              .then(function (r) {
+                out.innerHTML = ''; var box = el('div', 'cards'); out.appendChild(box);
+                rowsOf(r).forEach(function (a) { var c = el('div', 'card'); var g = el('div', 'grow'); g.appendChild(el('div', 'name', a.name || a.id)); g.appendChild(el('div', 'meta', a.id)); c.appendChild(g); box.appendChild(c); });
+                refreshHeader();
+              })
+              .catch(function (e) { out.innerHTML = ''; out.appendChild(el('div', 'err', String(e.message || e))); })
+              .finally(function () { save.disabled = false; });
+          };
+          setView(n);
         }
-        function sysLine(text) {
-          if (!chatStarted) { chatEl.innerHTML = ''; chatStarted = true; }
-          var d = document.createElement('div'); d.className = 'b sys'; d.textContent = text;
-          chatEl.appendChild(d); chatEl.scrollTop = chatEl.scrollHeight;
-        }
-        mcp.assistant.listModels().then(function (models) {
-          modelSel.innerHTML = '';
-          if (!models.length) { modelSel.innerHTML = '<option value="">' + t('ai.configure') + '</option>'; return; }
-          models.forEach(function (m) {
-            var o = document.createElement('option'); o.value = m.providerId + '|' + m.modelId;
-            o.textContent = m.label + (m.isDefault ? ' (default)' : ''); if (m.isDefault) o.selected = true;
-            modelSel.appendChild(o);
-          });
-        }).catch(function () { modelSel.innerHTML = '<option value="">' + t('ai.noModels') + '</option>'; });
 
-        function send() {
-          var msg = askEl.value.trim(); if (!msg || closeChat) return;
-          askEl.value = ''; bubble(t('ai.you'), msg);
-          var sel = (modelSel.value || '').split('|'), assistantSpan = null, turnText = '';
-          sendBtn.disabled = true; cancelBtn.disabled = false;
-          closeChat = mcp.assistant.chat(msg, { providerId: sel[0] || undefined, modelId: sel[1] || undefined, history: history.slice() }, {
-            onData: function (c) {
-              if (c.type === 'text') { if (!assistantSpan) assistantSpan = bubble(t('ai.assistant'), ''); turnText += c.text; assistantSpan.textContent = turnText; chatEl.scrollTop = chatEl.scrollHeight; }
-              else if (c.type === 'tool_use') sysLine('→ ' + c.name + '(' + JSON.stringify(c.input) + ')');
-              else if (c.type === 'tool_result') sysLine('  ' + (c.isError ? '✗ ' : '✓ ') + String(c.content).slice(0, 200));
-              else if (c.type === 'confirm_request') {
-                mcp.ui.confirm({ title: t('ai.confirmTitle', { name: c.name }), message: t('ai.confirmMsg', { input: JSON.stringify(c.input, null, 2) }), confirmText: t('ai.allow'), danger: true })
-                  .then(function (okay) { mcp.assistant.confirm(c.callId, okay); sysLine(t(okay ? 'ai.approved' : 'ai.denied', { name: c.name })); });
-              } else if (c.type === 'error') sysLine('[error] ' + c.message);
-            },
-            onEnd: function () { if (turnText) history.push({ role: 'user', text: msg }, { role: 'assistant', text: turnText }); closeChat = null; sendBtn.disabled = false; cancelBtn.disabled = true; },
-            onError: function (m) { sysLine('[stream error] ' + m); closeChat = null; sendBtn.disabled = false; cancelBtn.disabled = true; }
-          });
-        }
-        sendBtn.onclick = send;
-        askEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') send(); });
-        cancelBtn.onclick = function () { if (closeChat) { closeChat(); closeChat = null; sysLine(t('ai.cancelled')); sendBtn.disabled = false; cancelBtn.disabled = true; } };
+        // ── Assistant ──
+        function renderAssistant() {
+          var n = head('assistant', null, []);
+          var modelSel = el('select'); modelSel.innerHTML = '<option>…</option>';
+          var mbar = el('div', 'toolbar'); mbar.appendChild(modelSel); n.appendChild(mbar);
+          var chat = el('div'); chat.id = 'chat'; chat.appendChild(el('div', 'empty', t('aiEmpty'))); n.appendChild(chat);
+          var bar = el('div', 'toolbar');
+          var ask = el('input'); ask.placeholder = t('askPh');
+          var send = el('button', 'act', t('send'));
+          var cancel = el('button', 'act sec', t('cancel')); cancel.disabled = true;
+          bar.appendChild(ask); bar.appendChild(send); bar.appendChild(cancel); n.appendChild(bar);
+          setView(n);
 
-        refreshDetect();
+          var history = [], closeChat = null, started = false;
+          function bubble(role, txt) { if (!started) { chat.innerHTML = ''; started = true; } var d = el('div', 'b'); var r = el('span', 'role', role + ':'); d.appendChild(r); var s = el('span', null, txt); d.appendChild(s); chat.appendChild(d); chat.scrollTop = chat.scrollHeight; return s; }
+          function sys(txt) { if (!started) { chat.innerHTML = ''; started = true; } chat.appendChild(el('div', 'b sys', txt)); chat.scrollTop = chat.scrollHeight; }
+          mcp.assistant.listModels().then(function (models) {
+            modelSel.innerHTML = '';
+            if (!models.length) { modelSel.innerHTML = '<option value="">' + t('configureAI') + '</option>'; return; }
+            models.forEach(function (m) { var o = el('option'); o.value = m.providerId + '|' + m.modelId; o.textContent = m.label + (m.isDefault ? ' ★' : ''); if (m.isDefault) o.selected = true; modelSel.appendChild(o); });
+          }).catch(function () {});
+          function go() {
+            var msg = ask.value.trim(); if (!msg || closeChat) return;
+            ask.value = ''; bubble('you', msg); var sp = null, txt = ''; var sel = (modelSel.value || '').split('|');
+            send.disabled = true; cancel.disabled = false;
+            closeChat = mcp.assistant.chat(msg, { providerId: sel[0] || undefined, modelId: sel[1] || undefined, history: history.slice() }, {
+              onData: function (c) {
+                if (c.type === 'text') { if (!sp) sp = bubble('cf', ''); txt += c.text; sp.textContent = txt; chat.scrollTop = chat.scrollHeight; }
+                else if (c.type === 'tool_use') sys('→ ' + c.name);
+                else if (c.type === 'tool_result') sys('  ' + (c.isError ? '✗' : '✓'));
+                else if (c.type === 'confirm_request') mcp.ui.confirm({ title: c.name, message: JSON.stringify(c.input), confirmText: t('confirmRun'), danger: true }).then(function (okv) { mcp.assistant.confirm(c.callId, okv); });
+                else if (c.type === 'error') sys('[error] ' + c.message);
+              },
+              onEnd: function () { if (txt) history.push({ role: 'user', text: msg }, { role: 'assistant', text: txt }); closeChat = null; send.disabled = false; cancel.disabled = true; },
+              onError: function (m) { sys('[error] ' + m); closeChat = null; send.disabled = false; cancel.disabled = true; }
+            });
+          }
+          send.onclick = go; ask.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+          cancel.onclick = function () { if (closeChat) { closeChat(); closeChat = null; send.disabled = false; cancel.disabled = true; } };
+        }
+
+        // boot
+        buildNav();
+        renderOverview();
+        refreshHeader();
       })();
     </script>
   </body>
