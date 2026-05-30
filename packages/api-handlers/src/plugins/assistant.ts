@@ -32,7 +32,7 @@ export type ToolInvoker = (
 
 /** Minimal ProviderStore surface the model selector needs. */
 export interface ModelStore {
-  listProviders(filter?: { enabled?: boolean }): Array<{ id: string; kind: string; label: string | null }>;
+  listProviders(filter?: { enabled?: boolean }): Array<{ id: string; kind: string; name: string }>;
   listModels(providerId: string, onlyEnabled?: boolean): Array<{ model_id: string }>;
   getGeneralDefault(): { providerId: string; modelId: string } | null;
 }
@@ -55,7 +55,7 @@ export function listAssistantModels(store: ModelStore): PluginModelOption[] {
       out.push({
         providerId: p.id,
         modelId: m.model_id,
-        label: `${p.label ?? p.kind} · ${m.model_id}`,
+        label: `${p.name || p.kind} · ${m.model_id}`,
         isDefault: def?.providerId === p.id && def?.modelId === m.model_id,
       });
     }
