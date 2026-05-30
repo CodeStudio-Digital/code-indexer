@@ -15,8 +15,8 @@
       .badge.no { background: #dc262622; color: #dc2626; }
       .muted { color: var(--muted-foreground, #777); font-size: 12px; margin: 0 0 12px; }
       .row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
-      input {
-        flex: 1; min-width: 120px; padding: 6px 8px; font: inherit;
+      input, select {
+        flex: 1; min-width: 110px; padding: 6px 8px; font: inherit;
         border: 1px solid var(--border, #ccc); border-radius: var(--radius, 6px);
         background: var(--card, #fff); color: inherit;
       }
@@ -26,14 +26,23 @@
         background: var(--primary, #2563eb); color: var(--primary-foreground, #fff);
       }
       button.secondary { background: var(--secondary, #eee); color: var(--secondary-foreground, #111); }
+      button.ghost { background: transparent; color: var(--muted-foreground, #777); padding: 4px 8px; }
       button:disabled { opacity: .5; cursor: default; }
       section { border-top: 1px solid var(--border, #eee); padding-top: 10px; margin-top: 10px; }
+      label { font-size: 12px; color: var(--muted-foreground, #777); }
       pre {
         background: var(--muted, #f3f3f3); padding: 10px; border-radius: var(--radius, 6px);
         font-family: var(--font-mono, monospace); font-size: 12px; white-space: pre-wrap;
-        max-height: 240px; overflow: auto; margin: 8px 0 0;
+        max-height: 260px; overflow: auto; margin: 8px 0 0;
       }
-      label { font-size: 12px; color: var(--muted-foreground, #777); }
+      .tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 8px 0; }
+      .tab { padding: 4px 10px; border-radius: 999px; cursor: pointer; background: var(--muted, #eee); color: var(--muted-foreground, #666); font-size: 12px; border: 0; }
+      .tab.active { background: var(--accent, #e6efff); color: var(--accent-foreground, #1d4ed8); }
+      .tool { border: 1px solid var(--border, #eee); border-radius: var(--radius, 6px); padding: 8px 10px; margin-bottom: 6px; }
+      .tool h4 { margin: 0 0 2px; font-size: 13px; }
+      .tool .desc { color: var(--muted-foreground, #777); font-size: 11px; margin: 0 0 6px; }
+      .danger { color: #dc2626; }
+      .fields { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     </style>
   </head>
   <body>
@@ -41,23 +50,11 @@
     <p class="muted" id="detail">—</p>
 
     <section>
-      <label>API token (stored only for this plugin)</label>
+      <label>API token (REST) — stored only for this plugin</label>
       <div class="row">
         <input id="token" type="password" placeholder="paste a Cloudflare API token" />
         <button id="saveToken">save</button>
         <button id="whoami" class="secondary">whoami</button>
-      </div>
-    </section>
-
-    <section>
-      <div class="row">
-        <button id="deploy">deploy</button>
-        <button id="d1list" class="secondary">list D1</button>
-      </div>
-      <div class="row">
-        <input id="db" placeholder="D1 database name" />
-        <input id="sql" placeholder="SELECT … " value="SELECT 1 AS ok" />
-        <button id="query" class="secondary">query</button>
       </div>
     </section>
 
@@ -70,14 +67,23 @@
       </div>
     </section>
 
+    <section>
+      <label>All tools</label>
+      <div class="tabs" id="tabs"></div>
+      <div id="tools"></div>
+    </section>
+
     <pre id="out">ready.</pre>
 
     <script>
       var out = document.getElementById('out');
+      var NS = (window.mcp && window.mcp.context && window.mcp.context.namespace) || 'cloudflare';
+
       function show(label, v) {
         out.textContent = label + '\n' + (typeof v === 'string' ? v : JSON.stringify(v, null, 2));
+        out.scrollTop = 0;
       }
-      function run(label, tool, args, btn) {
+      function invoke(label, tool, args, btn) {
         if (btn) btn.disabled = true;
         out.textContent = label + '…';
         window.mcp.invokeTool(tool, args || {})
@@ -86,6 +92,7 @@
           .finally(function () { if (btn) btn.disabled = false; });
       }
 
+      // ── detect status (header) ──
       function refreshDetect() {
         window.mcp.invokeTool('cf_detect', {}).then(function (r) {
           var isCf = !/Not a Cloudflare/.test(r.content);
@@ -93,44 +100,107 @@
           s.textContent = isCf ? 'project detected' : 'not a CF project';
           s.className = 'badge ' + (isCf ? 'ok' : 'no');
           document.getElementById('detail').textContent = r.content.replace(/\n/g, '  ');
-        }).catch(function (e) {
-          document.getElementById('detail').textContent = String(e && e.message || e);
-        });
+        }).catch(function (e) { document.getElementById('detail').textContent = String(e && e.message || e); });
       }
 
+      // ── auth ──
       document.getElementById('saveToken').onclick = function (e) {
         var t = document.getElementById('token').value.trim();
-        if (!t) return;
-        run('save token', 'cf_set_token', { token: t }, e.target);
+        if (t) invoke('save token', 'cf_set_token', { token: t }, e.target);
       };
-      document.getElementById('whoami').onclick = function (e) { run('whoami', 'cf_whoami', {}, e.target); };
-      document.getElementById('deploy').onclick = function (e) { run('deploy', 'cf_deploy', {}, e.target); };
-      document.getElementById('d1list').onclick = function (e) { run('list D1', 'cf_d1_list', {}, e.target); };
-      document.getElementById('query').onclick = function (e) {
-        run('query', 'cf_d1_query', {
-          database: document.getElementById('db').value.trim(),
-          sql: document.getElementById('sql').value
-        }, e.target);
-      };
+      document.getElementById('whoami').onclick = function (e) { invoke('whoami', 'cf_whoami', {}, e.target); };
 
-      // ── Streamed commands (live tail / login) via window.mcp.execStream ──
-      var activeStream = null;
-      var stopBtn = document.getElementById('stop');
+      // ── live streams (tail / login) ──
+      var activeStream = null, stopBtn = document.getElementById('stop');
       function appendLine(s) { out.textContent += s; out.scrollTop = out.scrollHeight; }
       function startStream(label, args, btn) {
         if (activeStream) activeStream();
         out.textContent = label + '…\n';
-        if (btn) btn.disabled = true;
-        stopBtn.disabled = false;
+        if (btn) btn.disabled = true; stopBtn.disabled = false;
         activeStream = window.mcp.execStream('npx', ['wrangler'].concat(args), {
-          onData: function (chunk) { if (chunk && chunk.type === 'data') appendLine(chunk.data); },
+          onData: function (c) { if (c && c.type === 'data') appendLine(c.data); },
           onEnd: function () { appendLine('\n[' + label + ' ended]\n'); activeStream = null; if (btn) btn.disabled = false; stopBtn.disabled = true; },
-          onError: function (msg) { appendLine('\n[error] ' + msg + '\n'); activeStream = null; if (btn) btn.disabled = false; stopBtn.disabled = true; }
+          onError: function (m) { appendLine('\n[error] ' + m + '\n'); activeStream = null; if (btn) btn.disabled = false; stopBtn.disabled = true; }
         });
       }
       document.getElementById('login').onclick = function (e) { startStream('login', ['login'], e.target); };
       document.getElementById('tail').onclick = function (e) { startStream('tail', ['tail', '--format', 'pretty'], e.target); };
       stopBtn.onclick = function () { if (activeStream) { activeStream(); activeStream = null; } stopBtn.disabled = true; appendLine('\n[stopped]\n'); };
+
+      // ── generic tool browser ──
+      // Group cf_<group>_<action> by <group>; render an auto-form per tool from
+      // its JSON-schema parameters. Surfaces every tool with zero per-tool code.
+      var GROUPS = {
+        kv: 'KV', r2: 'R2', secret: 'Secrets', secrets: 'Secrets', queue: 'Queues',
+        queues: 'Queues', vectorize: 'Vectorize', do: 'Durable Obj', ai: 'Workers AI',
+        hyperdrive: 'Hyperdrive', cron: 'Cron', pages: 'Pages', zones: 'DNS', dns: 'DNS',
+        cache: 'Cache', deploy: 'Deploy', deployments: 'Deploy', last: 'Deploy',
+        d1: 'D1', detect: 'Core', set: 'Core', whoami: 'Core'
+      };
+      function groupOf(name) {
+        var part = name.replace(/^cf_/, '').split('_')[0];
+        return GROUPS[part] || 'Other';
+      }
+      function fieldFor(key, schema) {
+        var p = (schema.properties && schema.properties[key]) || {};
+        var req = (schema.required || []).indexOf(key) >= 0;
+        if (p.enum) {
+          var opts = p.enum.map(function (o) { return '<option>' + o + '</option>'; }).join('');
+          return '<select data-k="' + key + '">' + opts + '</select>';
+        }
+        var ph = key + (req ? '*' : '') + (p.type === 'number' ? ' (#)' : '');
+        return '<input data-k="' + key + '" placeholder="' + ph + '"' + (p.type === 'number' ? ' inputmode="numeric"' : '') + ' />';
+      }
+      function renderTool(t) {
+        var schema = t.parameters || { properties: {}, required: [] };
+        var keys = Object.keys(schema.properties || {});
+        var danger = t.riskLevel === 'admin' || t.riskLevel === 'execute';
+        var div = document.createElement('div');
+        div.className = 'tool';
+        div.innerHTML =
+          '<h4 class="' + (danger ? 'danger' : '') + '">' + t.name + (danger ? ' ⚠' : '') + '</h4>' +
+          '<p class="desc">' + (t.description || '') + '</p>' +
+          '<div class="fields">' + keys.map(function (k) { return fieldFor(k, schema); }).join('') +
+          '<button class="' + (t.mutates ? '' : 'secondary') + '">run</button></div>';
+        var btn = div.querySelector('button');
+        btn.onclick = function () {
+          var args = {};
+          div.querySelectorAll('[data-k]').forEach(function (el) {
+            var v = el.value; if (v === '') return;
+            var pdef = (schema.properties || {})[el.getAttribute('data-k')] || {};
+            args[el.getAttribute('data-k')] = pdef.type === 'number' ? Number(v) : v;
+          });
+          if (danger && !confirm(t.name + ' is a mutating/destructive action. Proceed?')) return;
+          invoke(t.name, t.name, args, btn);
+        };
+        return div;
+      }
+      function buildBrowser(tools) {
+        var byGroup = {};
+        tools.forEach(function (t) { (byGroup[groupOf(t.name)] = byGroup[groupOf(t.name)] || []).push(t); });
+        var groups = Object.keys(byGroup).sort();
+        var tabsEl = document.getElementById('tabs'), toolsEl = document.getElementById('tools');
+        function select(g) {
+          [].forEach.call(tabsEl.children, function (c) { c.className = 'tab' + (c.textContent === g ? ' active' : ''); });
+          toolsEl.innerHTML = '';
+          byGroup[g].forEach(function (t) { toolsEl.appendChild(renderTool(t)); });
+        }
+        groups.forEach(function (g) {
+          var b = document.createElement('button'); b.className = 'tab'; b.textContent = g;
+          b.onclick = function () { select(g); }; tabsEl.appendChild(b);
+        });
+        if (groups.length) select(groups.indexOf('Core') >= 0 ? 'Core' : groups[0]);
+      }
+
+      // Load this plugin's own tool list (with JSON-schema params) from its contributions.
+      window.mcp.listPlugins().then(function (plugins) {
+        var me = plugins.filter(function (p) { return p.namespace === NS; })[0];
+        var tools = (me && me.contributions && me.contributions.tools) || [];
+        if (tools.length) buildBrowser(tools);
+        else document.getElementById('tools').innerHTML = '<p class="muted">No tools found.</p>';
+      }).catch(function (e) {
+        document.getElementById('tools').innerHTML = '<p class="muted">Could not load tools: ' + String(e && e.message || e) + '</p>';
+      });
 
       refreshDetect();
     </script>
