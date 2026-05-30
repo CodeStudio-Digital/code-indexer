@@ -57,6 +57,28 @@ export const PLUGIN_IFRAME_RUNTIME = `(function () {
     },
     /** Stream a long-running command. handlers: { onData(chunk), onEnd(), onError(msg) }. Returns close(). */
     execStream: function (cmd, args, handlers) { return openStream('plugins.execStream', { cmd: cmd, args: args || [] }, handlers); },
+    /** The scoped, tool-constrained LLM assistant for this plugin. */
+    assistant: {
+      /** [{ providerId, modelId, label, isDefault }] for a model picker. */
+      listModels: function () { return call('plugins.listModels', {}); },
+      /**
+       * Start a chat turn. opts: { providerId, modelId, history }. handlers:
+       * { onData(chunk), onEnd(), onError(msg) } where chunk is a
+       * PluginAssistantChunk (text / tool_use / confirm_request / tool_result /
+       * done). Returns close() to abort.
+       */
+      chat: function (message, opts, handlers) {
+        opts = opts || {};
+        return openStream('plugins.assistantStream', {
+          message: message,
+          providerId: opts.providerId,
+          modelId: opts.modelId,
+          history: opts.history || []
+        }, handlers);
+      },
+      /** Approve/deny a paused mutating tool call (from a confirm_request chunk). */
+      confirm: function (callId, approved) { return call('plugins.assistantConfirm', { callId: callId, approved: !!approved }); }
+    },
     listPlugins: function () { return call('plugins.list'); },
     readFile: function (path) { return call('files.read', { path: path }); }
   };

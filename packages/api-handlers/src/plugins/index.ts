@@ -29,6 +29,11 @@ import { MarketClient } from '@mcp/plugin-market-client';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { PluginStorageStore } from '@mcp/store/plugin-storage-store.js';
 import type { HandlerDeps } from '../types.js';
+import {
+  runPluginAssistant,
+  resolveAssistantConfirm,
+  listAssistantModels,
+} from './assistant.js';
 
 function marketClient(): MarketClient {
   const url = process.env.MCP_MARKET_URL;
@@ -177,6 +182,36 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
 
     async storageList({ namespace }) {
       return { keys: storage.listKeys(namespace) };
+    },
+
+    async listModels() {
+      return listAssistantModels(deps.providerStore);
+    },
+
+    async *assistantStream({ namespace, message, providerId, modelId, projectId, history }) {
+      let projectName: string | null = null;
+      let cwd = process.cwd();
+      if (projectId != null) {
+        const proj = deps.db.getProject(projectId);
+        if (!proj) throw new ApiError('not_found', 404, `project ${projectId} not found`);
+        projectName = proj.name;
+        cwd = proj.root_path;
+      }
+      yield* runPluginAssistant({
+        namespace,
+        message,
+        providerId,
+        modelId,
+        projectName,
+        cwd,
+        history,
+        invokeTool: deps.invokePluginTool,
+      });
+    },
+
+    async assistantConfirm({ callId, approved }) {
+      resolveAssistantConfirm(callId, approved);
+      return { ok: true as const };
     },
   };
 }

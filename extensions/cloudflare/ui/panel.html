@@ -68,6 +68,19 @@
     </section>
 
     <section>
+      <label>Assistant (Cloudflare-scoped — anything off-topic is refused)</label>
+      <div class="row">
+        <select id="model" title="provider · model"><option>loading models…</option></select>
+      </div>
+      <div id="chat" style="max-height:200px;overflow:auto;margin-bottom:6px"></div>
+      <div class="row">
+        <input id="ask" placeholder="e.g. list my D1 databases, then deploy" />
+        <button id="send">send</button>
+        <button id="cancel" class="secondary" disabled>cancel</button>
+      </div>
+    </section>
+
+    <section>
       <label>All tools</label>
       <div class="tabs" id="tabs"></div>
       <div id="tools"></div>
@@ -201,6 +214,82 @@
       }).catch(function (e) {
         document.getElementById('tools').innerHTML = '<p class="muted">Could not load tools: ' + String(e && e.message || e) + '</p>';
       });
+
+      // ── scoped assistant ──
+      var chatEl = document.getElementById('chat');
+      var askEl = document.getElementById('ask');
+      var sendBtn = document.getElementById('send');
+      var cancelBtn = document.getElementById('cancel');
+      var modelSel = document.getElementById('model');
+      var history = [];
+      var closeChat = null;
+
+      function bubble(role, text) {
+        var d = document.createElement('div');
+        d.style.margin = '4px 0';
+        d.innerHTML = '<b style="color:var(--muted-foreground)">' + role + ':</b> ';
+        var span = document.createElement('span');
+        span.textContent = text;
+        d.appendChild(span);
+        chatEl.appendChild(d);
+        chatEl.scrollTop = chatEl.scrollHeight;
+        return span;
+      }
+      function sysLine(text) {
+        var d = document.createElement('div');
+        d.className = 'muted';
+        d.style.margin = '4px 0';
+        d.textContent = text;
+        chatEl.appendChild(d);
+        chatEl.scrollTop = chatEl.scrollHeight;
+      }
+
+      window.mcp.assistant.listModels().then(function (models) {
+        modelSel.innerHTML = '';
+        if (!models.length) { modelSel.innerHTML = '<option value="">configure a provider in Admin → AI Geral</option>'; return; }
+        models.forEach(function (m) {
+          var o = document.createElement('option');
+          o.value = m.providerId + '|' + m.modelId;
+          o.textContent = m.label + (m.isDefault ? ' (default)' : '');
+          if (m.isDefault) o.selected = true;
+          modelSel.appendChild(o);
+        });
+      }).catch(function () { modelSel.innerHTML = '<option value="">no models</option>'; });
+
+      function send() {
+        var msg = askEl.value.trim();
+        if (!msg || closeChat) return;
+        askEl.value = '';
+        bubble('you', msg);
+        var sel = (modelSel.value || '').split('|');
+        var assistantSpan = null;
+        sendBtn.disabled = true; cancelBtn.disabled = false;
+        var turnText = '';
+        closeChat = window.mcp.assistant.chat(msg, {
+          providerId: sel[0] || undefined,
+          modelId: sel[1] || undefined,
+          history: history.slice()
+        }, {
+          onData: function (c) {
+            if (c.type === 'text') { if (!assistantSpan) assistantSpan = bubble('cf', ''); turnText += c.text; assistantSpan.textContent = turnText; chatEl.scrollTop = chatEl.scrollHeight; }
+            else if (c.type === 'tool_use') sysLine('→ ' + c.name + '(' + JSON.stringify(c.input) + ')');
+            else if (c.type === 'tool_result') sysLine('  ' + (c.isError ? '✗ ' : '✓ ') + String(c.content).slice(0, 200));
+            else if (c.type === 'confirm_request') {
+              var ok = confirm('Allow the assistant to run ' + c.name + '?\n' + JSON.stringify(c.input, null, 2));
+              window.mcp.assistant.confirm(c.callId, ok);
+              sysLine((ok ? 'approved ' : 'denied ') + c.name);
+            } else if (c.type === 'error') sysLine('[error] ' + c.message);
+          },
+          onEnd: function () {
+            if (turnText) history.push({ role: 'user', text: msg }, { role: 'assistant', text: turnText });
+            closeChat = null; sendBtn.disabled = false; cancelBtn.disabled = true;
+          },
+          onError: function (m) { sysLine('[stream error] ' + m); closeChat = null; sendBtn.disabled = false; cancelBtn.disabled = true; }
+        });
+      }
+      sendBtn.onclick = send;
+      askEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') send(); });
+      cancelBtn.onclick = function () { if (closeChat) { closeChat(); closeChat = null; sysLine('[cancelled]'); sendBtn.disabled = false; cancelBtn.disabled = true; } };
 
       refreshDetect();
     </script>

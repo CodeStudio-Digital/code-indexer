@@ -20,6 +20,9 @@ const READ_ONLY = new Set<string>([
   'projects.list',
   'projects.get',
   'files.read',
+  // Global, non-namespaced reads usable by any plugin webview.
+  'plugins.listModels',
+  'plugins.assistantConfirm',
 ]);
 
 const NS_BOUND = new Set<string>([
@@ -31,7 +34,7 @@ const NS_BOUND = new Set<string>([
 ]);
 
 /** Namespace-bound STREAMING methods (iframe `openStream`). */
-const NS_BOUND_STREAM = new Set<string>(['plugins.execStream']);
+const NS_BOUND_STREAM = new Set<string>(['plugins.execStream', 'plugins.assistantStream']);
 
 /** AbortControllers for live iframe streams, per source frame then stream id. */
 const liveStreams = new WeakMap<MessageEventSource, Map<number, AbortController>>();

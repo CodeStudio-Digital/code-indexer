@@ -12,6 +12,23 @@ export type PluginExecChunk =
   | { type: 'data'; data: string }
   | { type: 'exit'; code: number | null };
 
+/** A model the scoped plugin assistant can run on (provider+model pair). */
+export interface PluginModelOption {
+  providerId: string;
+  modelId: string;
+  label: string;
+  isDefault?: boolean;
+}
+
+/** A frame of the scoped plugin assistant's streamed run. */
+export type PluginAssistantChunk =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; callId: string; name: string; input: Record<string, unknown> }
+  | { type: 'confirm_request'; callId: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; callId: string; name: string; content: string; isError?: boolean }
+  | { type: 'error'; message: string }
+  | { type: 'done'; reason: 'stop' | 'max_steps' };
+
 export type PluginInstallSource =
   | { source: 'local'; path: string }
   | { source: 'github'; repo: string; ref?: string }
@@ -126,4 +143,32 @@ export interface PluginsApi {
     ctx: ApiContext,
   ): Promise<{ ok: true }>;
   storageList(input: { namespace: string }, ctx: ApiContext): Promise<{ keys: string[] }>;
+
+  /** Provider+model options for the scoped assistant's model selector. */
+  listModels(input: void, ctx: ApiContext): Promise<PluginModelOption[]>;
+
+  /**
+   * Run the scoped, tool-constrained assistant for a plugin: a mini-agent over
+   * the chosen provider whose ONLY tools are this plugin's, with the plugin's
+   * guardrail system prompt. Streams text + tool activity; mutating tools emit
+   * a `confirm_request` and pause until `assistantConfirm` resolves them.
+   * Namespace-bound by the bridge. `*Stream` → auto-mounts as a stream.
+   */
+  assistantStream(
+    input: {
+      namespace: string;
+      message: string;
+      providerId?: string;
+      modelId?: string;
+      projectId?: number;
+      history?: Array<{ role: 'user' | 'assistant'; text: string }>;
+    },
+    ctx: ApiContext,
+  ): AsyncStream<PluginAssistantChunk>;
+
+  /** Resolve a paused mutating tool call from the assistant stream. */
+  assistantConfirm(
+    input: { callId: string; approved: boolean },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
 }
