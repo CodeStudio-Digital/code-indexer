@@ -17,6 +17,7 @@ export {
   listInstalledPlugins,
   getInstalledPlugin,
   setPluginEnabled,
+  setPluginPermissionsGranted,
 } from './registry.js';
 export type { InstalledPlugin } from './registry.js';
 export { buildPluginTools } from './plugin-tool-bridge.js';

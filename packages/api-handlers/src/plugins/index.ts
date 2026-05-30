@@ -1,7 +1,7 @@
 /**
  * Handlers for the `plugins` namespace. Thin delegation to @mcp/plugin-host;
- * the host functions resolve the DB path via loadConfig() internally, so the
- * handler does not touch `deps`.
+ * host functions resolve the DB path via loadConfig() internally. Permission
+ * grants + per-plugin storage use a dedicated store (also loadConfig-resolved).
  */
 import {
   ApiError,
@@ -10,6 +10,7 @@ import {
   type PluginInstallSource,
   type InstalledPluginInfo,
   type PluginInstallResult,
+  type PluginPermissionsShape,
 } from '@mcp/api-bus';
 import {
   installPlugin,
@@ -17,11 +18,14 @@ import {
   listInstalledPlugins,
   getInstalledPlugin,
   setPluginEnabled,
+  setPluginPermissionsGranted,
   readPluginAsset,
   type InstalledPlugin,
 } from '@mcp/plugin-host';
 import type { PluginSource } from '@mcp/plugin-sdk';
 import { MarketClient } from '@mcp/plugin-market-client';
+import { loadConfig } from '@mcp/shared/utils/config.js';
+import { PluginStorageStore } from '@mcp/store/plugin-storage-store.js';
 import type { HandlerDeps } from '../types.js';
 
 function marketClient(): MarketClient {
@@ -30,6 +34,10 @@ function marketClient(): MarketClient {
     throw new ApiError('market_not_configured', 503, 'hosted market not configured (set MCP_MARKET_URL)');
   }
   return new MarketClient(url);
+}
+
+function declaredPermissions(p: InstalledPlugin | null): PluginPermissionsShape | null {
+  return (p?.contributions as { permissions?: PluginPermissionsShape } | null)?.permissions ?? null;
 }
 
 function toInfo(p: InstalledPlugin): InstalledPluginInfo {
@@ -43,6 +51,7 @@ function toInfo(p: InstalledPlugin): InstalledPluginInfo {
     contributions: p.contributions,
     installed_at: p.installed_at,
     updated_at: p.updated_at,
+    permissions: declaredPermissions(p),
   };
 }
 
@@ -60,6 +69,7 @@ function toSource(s: PluginInstallSource): PluginSource {
 }
 
 export function createPluginsHandlers(_deps: HandlerDeps): PluginsApi {
+  const storage = new PluginStorageStore(loadConfig().dbPath);
   return {
     async list() {
       return listInstalledPlugins().map(toInfo);
@@ -114,6 +124,32 @@ export function createPluginsHandlers(_deps: HandlerDeps): PluginsApi {
 
     async marketInfo({ name }) {
       return marketClient().getInfo(name);
+    },
+
+    async getPermissions({ namespace }) {
+      const p = getInstalledPlugin(namespace);
+      return {
+        declared: declaredPermissions(p),
+        granted: (p?.permissions_granted as PluginPermissionsShape | null) ?? null,
+      };
+    },
+
+    async requestPermission({ namespace, granted }) {
+      setPluginPermissionsGranted(namespace, granted as Record<string, unknown>);
+      return { ok: true as const };
+    },
+
+    async storageGet({ namespace, key }) {
+      return { value: storage.get(namespace, key) };
+    },
+
+    async storageSet({ namespace, key, value }) {
+      storage.set(namespace, key, value);
+      return { ok: true as const };
+    },
+
+    async storageList({ namespace }) {
+      return { keys: storage.listKeys(namespace) };
     },
   };
 }

@@ -24,4 +24,11 @@ export function setPluginEnabled(namespace: string, enabled: boolean): void {
   withStore((s) => s.setEnabled(namespace, enabled));
 }
 
+export function setPluginPermissionsGranted(
+  namespace: string,
+  granted: Record<string, unknown> | null,
+): void {
+  withStore((s) => s.setPermissionsGranted(namespace, granted));
+}
+
 export type { InstalledPlugin };

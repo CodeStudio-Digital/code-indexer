@@ -20,6 +20,13 @@ export interface PluginInstallInput {
   overwrite?: boolean;
 }
 
+/** Capability requirements a plugin declares / the user grants (mirrors the SDK). */
+export interface PluginPermissionsShape {
+  fs?: { read?: string[]; write?: string[] };
+  exec?: { allow: string[] };
+  storage?: boolean;
+}
+
 export interface InstalledPluginInfo {
   namespace: string;
   name: string;
@@ -30,6 +37,8 @@ export interface InstalledPluginInfo {
   contributions: Record<string, unknown> | null;
   installed_at: string;
   updated_at: string;
+  /** Capabilities the plugin declares (drives the permissions UI). */
+  permissions: PluginPermissionsShape | null;
 }
 
 export interface PluginInstallResult {
@@ -74,4 +83,25 @@ export interface PluginsApi {
   searchMarket(input: { query: string }, ctx: ApiContext): Promise<MarketPluginInfo[]>;
   /** Look up one market plugin by name (null if absent). */
   marketInfo(input: { name: string }, ctx: ApiContext): Promise<MarketPluginInfo | null>;
+
+  /** Declared + currently-granted capability subsets (for the approval UI). */
+  getPermissions(
+    input: { namespace: string },
+    ctx: ApiContext,
+  ): Promise<{ declared: PluginPermissionsShape | null; granted: PluginPermissionsShape | null }>;
+  /** Record the capability subset the user approved at install / in settings. */
+  requestPermission(
+    input: { namespace: string; granted: PluginPermissionsShape },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
+  /** Per-plugin key-value storage (also reachable from a plugin's own webview). */
+  storageGet(
+    input: { namespace: string; key: string },
+    ctx: ApiContext,
+  ): Promise<{ value: string | null }>;
+  storageSet(
+    input: { namespace: string; key: string; value: string },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
+  storageList(input: { namespace: string }, ctx: ApiContext): Promise<{ keys: string[] }>;
 }
