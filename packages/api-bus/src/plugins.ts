@@ -110,7 +110,7 @@ export interface PluginsApi {
   invokeTool(
     input: { namespace: string; tool: string; args?: Record<string, unknown>; projectId?: number },
     ctx: ApiContext,
-  ): Promise<{ content: string; isError?: boolean }>;
+  ): Promise<{ content: string; isError?: boolean; data?: unknown }>;
 
   /**
    * Stream a long-running allowlisted command for a plugin (live `wrangler

@@ -37,6 +37,8 @@ export interface InvokeContext {
 interface ToolResult {
   content: string;
   isError?: boolean;
+  /** Structured payload for the plugin's own webview (agent never sees it). */
+  data?: unknown;
 }
 
 export class PluginWorkerHost {
@@ -98,11 +100,16 @@ export class PluginWorkerHost {
 
   private onMessage(m: Record<string, unknown>): void {
     if (m.kind === 'result') {
-      const { id, content, isError } = m as { id: number; content: string; isError?: boolean };
+      const { id, content, isError, data } = m as {
+        id: number;
+        content: string;
+        isError?: boolean;
+        data?: unknown;
+      };
       const p = this.pending.get(id);
       if (p) {
         this.pending.delete(id);
-        p.resolve({ content, isError });
+        p.resolve({ content, isError, data });
       }
     } else if (m.kind === 'host') {
       void this.handleHost(

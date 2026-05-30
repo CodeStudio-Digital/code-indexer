@@ -68,7 +68,13 @@ async function onInvoke(msg: {
     hostInvoke: (method, payload) => hostInvoke(method, payload, msg.namespace, msg.cwd),
   });
   const result = await invokePluginTool(await tools(), msg.namespace, msg.name, msg.args ?? {}, ctx);
-  port!.postMessage({ kind: 'result', id: msg.id, content: result.content, isError: result.isError });
+  port!.postMessage({
+    kind: 'result',
+    id: msg.id,
+    content: result.content,
+    isError: result.isError,
+    data: result.data,
+  });
 }
 
 function onHostResult(msg: { id: number; ok: boolean; value?: unknown; error?: string }): void {

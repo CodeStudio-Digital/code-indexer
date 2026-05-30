@@ -15,7 +15,7 @@ export type PluginToolInvokeFn = (
   tool: string,
   args: Record<string, unknown>,
   ctx: { projectName: string | null; cwd: string },
-) => Promise<{ content: string; isError?: boolean }>;
+) => Promise<{ content: string; isError?: boolean; data?: unknown }>;
 
 let host: PluginWorkerHost | null = null;
 let loadedKey = '';

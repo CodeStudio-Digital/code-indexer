@@ -83,10 +83,17 @@ export async function cfAcct<T = unknown>(
 export const ok = (content: string) => ({ content });
 export const fail = (content: string) => ({ content, isError: true });
 
-/** Pretty-print a list result, or a friendly empty message. */
+/**
+ * A list result: a text summary for the agent PLUS the raw rows as structured
+ * `data` for the plugin's own webview to render as a real list/grid (never the
+ * tool name, never JSON dumped at the user).
+ */
 export function list<T>(items: T[] | null | undefined, render: (x: T) => string, empty: string) {
-  if (!items?.length) return ok(empty);
-  return ok(items.map(render).join('\n'));
+  const rows = items ?? [];
+  return {
+    content: rows.length ? rows.map(render).join('\n') : empty,
+    data: { rows },
+  };
 }
 
 /** Read the wrangler config name field (toml or jsonc) without a full parser. */

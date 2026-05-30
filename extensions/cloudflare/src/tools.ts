@@ -118,8 +118,10 @@ export const tools = [
       const acct = await getAccountId(ctx);
       if (!acct) return err('no account selected — run cf_whoami first');
       const dbs = await cfFetch<D1Database[]>(ctx, `/accounts/${acct}/d1/database`);
-      if (!dbs?.length) return ok('No D1 databases.');
-      return ok(dbs.map((db) => `- ${db.name} (${db.uuid})`).join('\n'));
+      return {
+        content: dbs?.length ? dbs.map((db) => `- ${db.name} (${db.uuid})`).join('\n') : 'No D1 databases.',
+        data: { rows: dbs ?? [] },
+      };
     },
   }),
 
@@ -146,8 +148,12 @@ export const tools = [
         `/accounts/${acct}/d1/database/${db.uuid}/query`,
         { method: 'POST', body: JSON.stringify({ sql }) },
       );
-      const rows = out?.[0]?.results ?? [];
-      return ok(`${rows.length} row(s):\n${JSON.stringify(rows, null, 2)}`);
+      const rows = (out?.[0]?.results ?? []) as Array<Record<string, unknown>>;
+      const columns = rows.length ? Object.keys(rows[0]) : [];
+      return {
+        content: `${rows.length} row(s):\n${JSON.stringify(rows, null, 2)}`,
+        data: { rows, columns },
+      };
     },
   }),
 ];

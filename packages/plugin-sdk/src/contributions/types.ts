@@ -13,8 +13,16 @@ import type {
 
 /** What a plugin tool handler returns. The host maps it to the agent's ToolResult. */
 export interface PluginToolResult {
+  /** Human/agent-readable summary (what the LLM sees). */
   content: string;
   isError?: boolean;
+  /**
+   * Optional STRUCTURED payload for a plugin's OWN webview to render richly
+   * (tables, cards, grids) instead of parsing `content`. The agent never sees
+   * this — it's stripped from the agent-facing ToolResult and only delivered
+   * through `plugins.invokeTool` to the plugin's iframe. JSON-serializable.
+   */
+  data?: unknown;
 }
 
 /** Restricted context handed to a tool handler. Runs inside the plugin worker. */
