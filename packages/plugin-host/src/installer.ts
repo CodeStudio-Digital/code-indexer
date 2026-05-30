@@ -80,6 +80,15 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<Install
         contributions: contributions as unknown as Record<string, unknown> | null,
         enabled: true,
       });
+      // Install == consent (the Claude Code / VS Code model): grant exactly the
+      // capabilities the plugin declared. They're shown + revocable in the
+      // Plugins manager. Without this, ctx.fs/exec/storage stay denied.
+      if (contributions?.permissions) {
+        store.setPermissionsGranted(
+          namespace,
+          contributions.permissions as unknown as Record<string, unknown>,
+        );
+      }
     } finally {
       store.close();
     }

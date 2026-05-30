@@ -9,10 +9,22 @@ import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, Trash2, Download, Search as SearchIcon } from 'lucide-react';
 import { apiCall } from '../../lib/api-client.js';
 import { hydrateContributions } from '../../state/contribution-registry.js';
-import type { InstalledPluginInfo, MarketPluginInfo } from '@mcp/api-bus';
+import type { InstalledPluginInfo, MarketPluginInfo, PluginPermissionsShape } from '@mcp/api-bus';
 
 type Tab = 'installed' | 'market';
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** Human-readable summary of a plugin's granted capabilities (install == consent). */
+function summarizePermissions(p: PluginPermissionsShape | null): string[] {
+  if (!p) return [];
+  const out: string[] = [];
+  const reads = p.fs?.read?.length ?? 0;
+  const writes = p.fs?.write?.length ?? 0;
+  if (reads || writes) out.push(`fs: ${reads} read${writes ? `, ${writes} write` : ''}`);
+  if (p.exec?.allow?.length) out.push(`exec: ${p.exec.allow.join(', ')}`);
+  if (p.storage) out.push('storage');
+  return out;
+}
 
 export function PluginsPanel() {
   const [tab, setTab] = useState<Tab>('installed');
@@ -121,6 +133,19 @@ export function PluginsPanel() {
                       {p.name} <span className="text-muted-foreground">v{p.version}</span>
                     </div>
                     <div className="truncate text-xs text-muted-foreground">{p.namespace} · {p.source}</div>
+                    {summarizePermissions(p.permissions).length > 0 && (
+                      <div className="mt-0.5 flex flex-wrap gap-1">
+                        {summarizePermissions(p.permissions).map((cap) => (
+                          <span
+                            key={cap}
+                            title="Granted at install — uninstall to revoke"
+                            className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                          >
+                            {cap}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <label className="flex items-center gap-1 text-xs text-muted-foreground">
                     <input
