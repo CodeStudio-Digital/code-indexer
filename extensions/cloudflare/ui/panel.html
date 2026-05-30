@@ -240,6 +240,40 @@
         }
 
         function mkRefresh(fn) { var b = el('button', 'act sec sm', t('refresh')); b.onclick = fn; return b; }
+        function mkBtn(label, cls, fn) { var b = el('button', 'act ' + cls, label); b.onclick = fn; return b; }
+        // Run a mutating tool, toast the outcome, then reload the section.
+        function mutate(tool, args, reload) {
+          return call(tool, args)
+            .then(function (r) { mcp.ui.toast({ kind: 'success', message: r.content || 'ok' }); if (reload) reload(); })
+            .catch(function (e) { mcp.ui.toast({ kind: 'error', message: String(e.message || e) }); });
+        }
+        // "+ X" toolbar button: prompts for one field, then calls a create tool.
+        function mkCreate(label, fields, tool, mapArgs, reload) {
+          return mkBtn('+ ' + label, '', function () {
+            promptFields(label, fields).then(function (vals) {
+              if (vals) mutate(tool, mapArgs(vals), reload);
+            });
+          });
+        }
+        // Sequential prompts for N fields → {key:value} or null if cancelled.
+        function promptFields(title, fields) {
+          var out = {}; var i = 0;
+          function next() {
+            if (i >= fields.length) return Promise.resolve(out);
+            var f = fields[i++];
+            return mcp.ui.prompt({ title: title, message: f.label, placeholder: f.ph || '', defaultValue: f.def || '' })
+              .then(function (v) { if (v == null) return null; out[f.key] = v; return next(); });
+          }
+          return next();
+        }
+        // Per-card delete button with confirmation.
+        function mkDelete(name, tool, args, reload) {
+          return mkBtn(t('deleteW'), 'sec sm', function (ev) {
+            ev.stopPropagation();
+            mcp.ui.confirm({ title: t('deleteW') + ' ' + name + '?', message: name, confirmText: t('deleteW'), danger: true })
+              .then(function (okv) { if (okv) mutate(tool, args, reload); });
+          });
+        }
 
         // ── Databases (list → tables → query) ──
         function renderDatabases() {
@@ -285,14 +319,19 @@
 
         // ── Storage (KV + R2) ──
         function renderStorage() {
-          var n = head('storage', null, [mkRefresh(renderStorage)]);
+          var n = head('storage', null, [
+            mkRefresh(renderStorage),
+            mkCreate(t('kvNs'), [{ key: 'title', label: 'name', ph: 'my-namespace' }], 'cf_kv_create', function (v) { return { title: v.title }; }, renderStorage),
+            mkCreate(t('buckets'), [{ key: 'name', label: 'name', ph: 'my-bucket' }], 'cf_r2_create', function (v) { return { name: v.name }; }, renderStorage)
+          ]);
           n.appendChild(el('h2', null, t('kvNs')));
           n.appendChild(listFromTool('cf_kv_list', { name: function (r) { return r.title; }, meta: function (r) { return r.id; } }));
           n.appendChild(el('div', null, '')).style.height = '14px';
           n.appendChild(el('h2', null, t('buckets')));
           n.appendChild(listFromTool('cf_r2_list', {
             name: function (r) { return r.name; }, meta: function (r) { return r.creation_date || ''; },
-            onClick: function (r) { openBucket(r); }
+            onClick: function (r) { openBucket(r); },
+            actions: function (r) { return [mkDelete(r.name, 'cf_r2_delete', { name: r.name }, renderStorage)]; }
           }));
           setView(n);
         }
@@ -312,8 +351,14 @@
 
         // ── Queues / Vectorize / DNS (simple lists) ──
         function renderQueues() {
-          var n = head('queues', null, [mkRefresh(renderQueues)]);
-          n.appendChild(listFromTool('cf_queues_list', { name: function (r) { return r.queue_name || r.name; }, meta: function (r) { return r.queue_id || ''; } }));
+          var n = head('queues', null, [
+            mkRefresh(renderQueues),
+            mkCreate(t('queues'), [{ key: 'name', label: 'name', ph: 'my-queue' }], 'cf_queue_create', function (v) { return { name: v.name }; }, renderQueues)
+          ]);
+          n.appendChild(listFromTool('cf_queues_list', {
+            name: function (r) { return r.queue_name || r.name; }, meta: function (r) { return r.queue_id || ''; },
+            actions: function (r) { return r.queue_id ? [mkDelete(r.queue_name || r.name, 'cf_queue_delete', { queueId: r.queue_id }, renderQueues)] : []; }
+          }));
           setView(n);
         }
         function renderVectorize() {
@@ -334,6 +379,13 @@
           var cr = el('div', 'crumbs'); var a = el('a', null, t('dns')); a.onclick = renderDns;
           cr.appendChild(a); cr.appendChild(document.createTextNode(' / ' + z.name)); n.appendChild(cr);
           n.appendChild(el('h2', null, z.name));
+          var bar = el('div', 'toolbar');
+          bar.appendChild(mkCreate('record', [
+            { key: 'type', label: 'type (A, CNAME, TXT…)', def: 'A' },
+            { key: 'name', label: 'name', ph: 'sub.example.com' },
+            { key: 'content', label: 'content (value)', ph: '1.2.3.4' }
+          ], 'cf_dns_create', function (v) { return { zoneId: z.id, type: v.type, name: v.name, content: v.content }; }, function () { openZone(z); }));
+          n.appendChild(bar);
           var box = el('div', 'cards'); box.appendChild(el('div', 'muted', t('loading'))); n.appendChild(box);
           call('cf_dns_list', { zoneId: z.id }).then(function (r) {
             var rows = rowsOf(r); box.innerHTML = '';
