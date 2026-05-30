@@ -6,7 +6,7 @@
  * window.mcp.invokeTool.
  */
 import { definePlugin, contributeToolWindow } from '@mcp/plugin-sdk/define.js';
-import { tools } from './tools.js';
+import { allTools } from './all-tools.js';
 
 export default definePlugin({
   permissions: {
@@ -17,7 +17,7 @@ export default definePlugin({
     exec: { allow: ['npx', 'wrangler'] },
     storage: true,
   },
-  tools,
+  tools: allTools,
   toolWindows: [
     contributeToolWindow({
       id: 'cf-manage',

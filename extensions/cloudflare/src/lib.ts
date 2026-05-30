@@ -68,6 +68,27 @@ export async function wrangler(
   return ctx.exec.run('npx', ['wrangler', ...args], { cwd: ctx.cwd, env });
 }
 
+/** Account-scoped REST call: prefixes /accounts/:id, erroring if no account picked. */
+export async function cfAcct<T = unknown>(
+  ctx: PluginToolContext,
+  suffix: string,
+  init?: RequestInit,
+): Promise<T> {
+  const acct = await getAccountId(ctx);
+  if (!acct) throw new Error('no account selected — run whoami first');
+  return cfFetch<T>(ctx, `/accounts/${acct}${suffix}`, init);
+}
+
+/** Standard tool results. */
+export const ok = (content: string) => ({ content });
+export const fail = (content: string) => ({ content, isError: true });
+
+/** Pretty-print a list result, or a friendly empty message. */
+export function list<T>(items: T[] | null | undefined, render: (x: T) => string, empty: string) {
+  if (!items?.length) return ok(empty);
+  return ok(items.map(render).join('\n'));
+}
+
 /** Read the wrangler config name field (toml or jsonc) without a full parser. */
 function parseConfigName(text: string): string | null {
   // jsonc: "name": "x"   |   toml: name = "x"
