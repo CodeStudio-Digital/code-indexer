@@ -98,7 +98,7 @@ export const PLUGIN_IFRAME_RUNTIME = `(function () {
      * ships its OWN catalogs and builds a translator over them:
      *   var t = mcp.i18n.translator({ en: {hi:'Hi {n}'}, 'pt-BR': {hi:'Olá {n}'} });
      *   t('hi', { n: 'world' });
-     * Lookup falls back: current locale → en → the key itself. `{var}` interpolated.
+     * Lookup falls back: current locale to en to the key itself, with {var} interpolation.
      */
     i18n: {
       locale: (window.__pluginContext || {}).locale || 'en',

@@ -17,7 +17,7 @@ import { apiCall } from '../../../../lib/api-client.js';
 import { injectIntoHtml } from '../../plugin-iframe-runtime.js';
 import { currentThemeTokens } from '../../theme-apply.js';
 import { registerPluginFrame, unregisterPluginFrame } from '../../webview-bridge.js';
-import { useLocaleStore } from '../../../../state/i18n.js';
+import { useTranslation } from 'react-i18next';
 
 interface WebviewWindowProps {
   namespace: string;
@@ -33,8 +33,9 @@ export function WebviewWindow({ namespace, title, entry, projectId, onClose }: W
   const [error, setError] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   // Subscribe so a language switch re-injects + reloads the frame with the new
-  // locale (plugins read it via window.mcp.i18n).
-  const locale = useLocaleStore((s) => s.locale);
+  // locale (plugins read it via window.mcp.i18n). Uses the app's react-i18next.
+  const { i18n } = useTranslation();
+  const locale = i18n.language;
 
   useEffect(() => {
     let alive = true;
