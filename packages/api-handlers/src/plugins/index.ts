@@ -68,7 +68,7 @@ function toSource(s: PluginInstallSource): PluginSource {
   }
 }
 
-export function createPluginsHandlers(_deps: HandlerDeps): PluginsApi {
+export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
   const storage = new PluginStorageStore(loadConfig().dbPath);
   return {
     async list() {
@@ -124,6 +124,18 @@ export function createPluginsHandlers(_deps: HandlerDeps): PluginsApi {
 
     async marketInfo({ name }) {
       return marketClient().getInfo(name);
+    },
+
+    async invokeTool({ namespace, tool, args, projectId }) {
+      let projectName: string | null = null;
+      let cwd = process.cwd();
+      if (projectId != null) {
+        const proj = deps.db.getProject(projectId);
+        if (!proj) throw new ApiError('not_found', 404, `project ${projectId} not found`);
+        projectName = proj.name;
+        cwd = proj.root_path;
+      }
+      return deps.invokePluginTool(namespace, tool, args ?? {}, { projectName, cwd });
     },
 
     async getPermissions({ namespace }) {

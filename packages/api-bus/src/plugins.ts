@@ -84,6 +84,12 @@ export interface PluginsApi {
   /** Look up one market plugin by name (null if absent). */
   marketInfo(input: { name: string }, ctx: ApiContext): Promise<MarketPluginInfo | null>;
 
+  /** Invoke an installed plugin's own tool from its webview (namespace-bound by the bridge). */
+  invokeTool(
+    input: { namespace: string; tool: string; args?: Record<string, unknown>; projectId?: number },
+    ctx: ApiContext,
+  ): Promise<{ content: string; isError?: boolean }>;
+
   /** Declared + currently-granted capability subsets (for the approval UI). */
   getPermissions(
     input: { namespace: string },

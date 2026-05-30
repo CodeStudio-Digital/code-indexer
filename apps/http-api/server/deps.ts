@@ -105,6 +105,7 @@ import { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import { setGlobalRecentFilesTouchSink } from '@mcp/code-agent/tools/global-recent-files.js';
 import { resolve as pathResolveNode, sep as pathSep } from 'node:path';
 import type { ChromeService } from '@mcp/services/chrome-service/chrome-service.js';
+import { invokePluginTool, type PluginToolInvokeFn } from '../sse/PluginHostSingleton.js';
 
 /**
  * Late-bound ChromeService reference shared with the doc indexer's
@@ -421,6 +422,11 @@ export interface CompanyDeps {
   companyLocalProjectStore: CompanyLocalProjectStore;
 }
 
+export interface PluginRuntimeDeps {
+  /** Invoke an installed plugin's tool from the UI (outside a coder run). */
+  invokePluginTool: PluginToolInvokeFn;
+}
+
 export type ServerDeps = CoreDeps
   & ProviderDeps
   & SearchDeps
@@ -432,7 +438,8 @@ export type ServerDeps = CoreDeps
   & ChromeServiceDeps
   & DesignSystemDeps
   & PipelineDeps
-  & DocCorpusDeps;
+  & DocCorpusDeps
+  & PluginRuntimeDeps;
 
 export function createDeps(): ServerDeps {
   const config = loadConfig();
@@ -892,6 +899,7 @@ export function createDeps(): ServerDeps {
     docHybridSearch,
     indexDocsUseCase,
     docProgressTracker,
+    invokePluginTool,
     mcpBearerResolver: null,
   };
 }
