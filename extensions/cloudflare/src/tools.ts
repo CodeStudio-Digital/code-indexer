@@ -71,7 +71,13 @@ export const tools = [
       const list = accounts
         .map((ac) => `${ac.id === selected ? '●' : '○'} ${ac.name} (${ac.id})`)
         .join('\n');
-      return ok(`Authenticated. Accounts:\n${list}`);
+      return {
+        content: `Authenticated. Accounts:\n${list}`,
+        data: {
+          rows: accounts.map((ac) => ({ id: ac.id, name: ac.name, selected: ac.id === selected })),
+          selected,
+        },
+      };
     },
   }),
 
