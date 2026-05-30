@@ -61,6 +61,15 @@
       </div>
     </section>
 
+    <section>
+      <label>Live (streamed via wrangler — uses wrangler login creds)</label>
+      <div class="row">
+        <button id="login" class="secondary">login</button>
+        <button id="tail">tail logs</button>
+        <button id="stop" class="secondary" disabled>stop</button>
+      </div>
+    </section>
+
     <pre id="out">ready.</pre>
 
     <script>
@@ -103,6 +112,25 @@
           sql: document.getElementById('sql').value
         }, e.target);
       };
+
+      // ── Streamed commands (live tail / login) via window.mcp.execStream ──
+      var activeStream = null;
+      var stopBtn = document.getElementById('stop');
+      function appendLine(s) { out.textContent += s; out.scrollTop = out.scrollHeight; }
+      function startStream(label, args, btn) {
+        if (activeStream) activeStream();
+        out.textContent = label + '…\n';
+        if (btn) btn.disabled = true;
+        stopBtn.disabled = false;
+        activeStream = window.mcp.execStream('npx', ['wrangler'].concat(args), {
+          onData: function (chunk) { if (chunk && chunk.type === 'data') appendLine(chunk.data); },
+          onEnd: function () { appendLine('\n[' + label + ' ended]\n'); activeStream = null; if (btn) btn.disabled = false; stopBtn.disabled = true; },
+          onError: function (msg) { appendLine('\n[error] ' + msg + '\n'); activeStream = null; if (btn) btn.disabled = false; stopBtn.disabled = true; }
+        });
+      }
+      document.getElementById('login').onclick = function (e) { startStream('login', ['login'], e.target); };
+      document.getElementById('tail').onclick = function (e) { startStream('tail', ['tail', '--format', 'pretty'], e.target); };
+      stopBtn.onclick = function () { if (activeStream) { activeStream(); activeStream = null; } stopBtn.disabled = true; appendLine('\n[stopped]\n'); };
 
       refreshDetect();
     </script>
