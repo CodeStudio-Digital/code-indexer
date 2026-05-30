@@ -271,11 +271,14 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // duplicate it here.
   void openFiles;
 
-  // Plugin UI contributions — hydrate once; each contributed tool window
-  // becomes an extra rail tab that renders its sandboxed webview.
+  // Plugin UI contributions — hydrate scoped to THIS project so activation
+  // rules (auto-detection) are evaluated against its root: a plugin's panel
+  // surfaces only when the project matches (e.g. Cloudflare only in a wrangler
+  // repo). Re-runs when the project changes. Each contributed tool window
+  // becomes an extra rail tab / bottom-panel tab rendering its sandboxed webview.
   useEffect(() => {
-    void hydrateContributions();
-  }, []);
+    void hydrateContributions(projectId);
+  }, [projectId]);
   // Honor the author's declared `side`: the Project view has a single
   // vertical rail, so `left` and `right` windows both surface here. `bottom`
   // windows are reserved for the bottom panel and are filtered out (until
