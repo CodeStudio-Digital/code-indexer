@@ -24,4 +24,8 @@ export type { EnabledPlugin, PluginToolInvoker, PluginInvokeContext } from './pl
 export { listEnabledPluginRuntime } from './enabled.js';
 export type { EnabledPluginRuntime, PluginBundleRef } from './enabled.js';
 export { readPluginAsset } from './assets.js';
+export { buildHostInvoke } from './host-invoke.js';
+export type { HostInvoke, HostInvokeDeps } from './host-invoke.js';
+export { handleFs, handleExec, handleStorage, isExecAllowed, scopePath } from './capabilities/index.js';
+export type { ExecResult } from './capabilities/index.js';
 export * from './types.js';

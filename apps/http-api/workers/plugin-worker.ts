@@ -36,11 +36,17 @@ const { bundles } = workerData as PluginWorkerData;
 let hostSeq = 0;
 const pendingHost = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 
-function hostInvoke(method: string, payload?: unknown): Promise<unknown> {
+function hostInvoke(
+  method: string,
+  payload: unknown,
+  namespace: string,
+  cwd: string,
+): Promise<unknown> {
   const id = ++hostSeq;
   return new Promise((resolve, reject) => {
     pendingHost.set(id, { resolve, reject });
-    port!.postMessage({ kind: 'host', id, method, payload });
+    // namespace + cwd ride along so the host can scope + permission-check.
+    port!.postMessage({ kind: 'host', id, method, payload, namespace, cwd });
   });
 }
 
@@ -59,7 +65,7 @@ async function onInvoke(msg: {
     projectName: msg.projectName,
     cwd: msg.cwd,
     log: (message) => port!.postMessage({ kind: 'log', namespace: msg.namespace, message }),
-    hostInvoke,
+    hostInvoke: (method, payload) => hostInvoke(method, payload, msg.namespace, msg.cwd),
   });
   const result = await invokePluginTool(await tools(), msg.namespace, msg.name, msg.args ?? {}, ctx);
   port!.postMessage({ kind: 'result', id: msg.id, content: result.content, isError: result.isError });

@@ -56,6 +56,32 @@ describe('parseAppManifest', () => {
       }),
     ).toThrow();
   });
+
+  it('accepts a valid permissions block', () => {
+    const app = parseAppManifest({
+      permissions: {
+        fs: { read: ['wrangler.toml', 'src/**'], write: ['wrangler.toml'] },
+        exec: { allow: ['npx', 'wrangler'] },
+        storage: true,
+      },
+    });
+    expect(app.permissions?.exec?.allow).toContain('wrangler');
+    expect(app.permissions?.fs?.read).toContain('src/**');
+  });
+
+  it('rejects fs permission paths with traversal', () => {
+    expect(() =>
+      parseAppManifest({ permissions: { fs: { read: ['../etc/passwd'] } } }),
+    ).toThrow();
+  });
+
+  it('rejects unknown permission keys (strict)', () => {
+    expect(() => parseAppManifest({ permissions: { network: true } })).toThrow();
+  });
+
+  it('rejects an empty exec allow list', () => {
+    expect(() => parseAppManifest({ permissions: { exec: { allow: [] } } })).toThrow();
+  });
 });
 
 describe('parseMarketplaceManifest', () => {

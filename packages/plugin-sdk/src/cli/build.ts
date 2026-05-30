@@ -54,6 +54,7 @@ export async function buildPlugin(dir: string): Promise<BuildResult> {
     toolWindows: pm.toolWindows ?? [],
     commands: pm.commands ?? [],
     themes: pm.themes ?? [],
+    ...(pm.permissions ? { permissions: pm.permissions } : {}),
   };
   const appJson = join(root, '.app.json');
   await writeFile(appJson, `${JSON.stringify(app, null, 2)}\n`);

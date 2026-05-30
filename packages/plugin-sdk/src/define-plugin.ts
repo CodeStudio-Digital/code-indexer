@@ -5,12 +5,14 @@ import type {
   ContributedTheme,
   PluginModule,
 } from './contributions/types.js';
+import type { PluginPermissions } from './contributions/capabilities.js';
 
 export interface DefinePluginSpec {
   tools?: ContributedTool[];
   toolWindows?: ContributedToolWindow[];
   commands?: ContributedCommand[];
   themes?: ContributedTheme[];
+  permissions?: PluginPermissions;
 }
 
 /**
@@ -24,5 +26,6 @@ export function definePlugin(spec: DefinePluginSpec): PluginModule {
     toolWindows: spec.toolWindows ?? [],
     commands: spec.commands ?? [],
     themes: spec.themes ?? [],
+    ...(spec.permissions ? { permissions: spec.permissions } : {}),
   };
 }

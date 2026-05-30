@@ -15,7 +15,12 @@ export interface PluginBundleRef {
   file: string;
 }
 
-export type HostInvoke = (method: string, payload?: unknown) => Promise<unknown>;
+export type HostInvoke = (
+  method: string,
+  payload: unknown,
+  namespace: string,
+  cwd: string,
+) => Promise<unknown>;
 
 export interface PluginWorkerHostOpts {
   bundles: PluginBundleRef[];
@@ -100,17 +105,27 @@ export class PluginWorkerHost {
         p.resolve({ content, isError });
       }
     } else if (m.kind === 'host') {
-      void this.handleHost(m as { id: number; method: string; payload?: unknown });
+      void this.handleHost(
+        m as { id: number; method: string; payload?: unknown; namespace: string; cwd: string },
+      );
     } else if (m.kind === 'error') {
       this.failAll(new Error(String((m as { message?: string }).message ?? 'plugin worker error')));
     }
   }
 
-  private async handleHost(m: { id: number; method: string; payload?: unknown }): Promise<void> {
+  private async handleHost(m: {
+    id: number;
+    method: string;
+    payload?: unknown;
+    namespace: string;
+    cwd: string;
+  }): Promise<void> {
     const w = this.worker;
     if (!w) return;
     try {
-      const value = this.opts.hostInvoke ? await this.opts.hostInvoke(m.method, m.payload) : null;
+      const value = this.opts.hostInvoke
+        ? await this.opts.hostInvoke(m.method, m.payload, m.namespace, m.cwd)
+        : null;
       w.postMessage({ kind: 'hostResult', id: m.id, ok: true, value });
     } catch (e) {
       w.postMessage({

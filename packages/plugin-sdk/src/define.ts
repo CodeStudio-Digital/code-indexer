@@ -4,6 +4,13 @@
  * the package barrel for host/CLI convenience.
  */
 export * from './contributions/types.js';
+export type {
+  PluginFs,
+  PluginExec,
+  PluginExecResult,
+  PluginStorage,
+  PluginPermissions,
+} from './contributions/capabilities.js';
 export { contributeTool } from './contributions/tool.js';
 export { contributeToolWindow } from './contributions/tool-window.js';
 export { contributeCommand } from './contributions/command.js';

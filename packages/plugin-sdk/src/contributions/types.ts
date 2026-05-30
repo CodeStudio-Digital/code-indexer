@@ -4,6 +4,12 @@
  * stays lean. The declarative subset of each shape mirrors the `.app.json`
  * manifest schema; the CLI `build` step extracts it (dropping handlers).
  */
+import type {
+  PluginFs,
+  PluginExec,
+  PluginStorage,
+  PluginPermissions,
+} from './capabilities.js';
 
 /** What a plugin tool handler returns. The host maps it to the agent's ToolResult. */
 export interface PluginToolResult {
@@ -22,6 +28,12 @@ export interface PluginToolContext {
   fetch: typeof fetch;
   /** Reverse-RPC to whitelisted host api-bus methods (read-only surface). */
   host: { invoke(method: string, payload?: unknown): Promise<unknown> };
+  /** Project-scoped filesystem — present only if `fs` permission was granted. */
+  fs?: PluginFs;
+  /** Allowlisted one-shot command runner — present only with `exec` permission. */
+  exec?: PluginExec;
+  /** Per-plugin key-value storage — present only with `storage` permission. */
+  storage?: PluginStorage;
 }
 
 export type PluginToolHandler = (
@@ -70,4 +82,6 @@ export interface PluginModule {
   toolWindows: ContributedToolWindow[];
   commands: ContributedCommand[];
   themes: ContributedTheme[];
+  /** Capabilities the plugin requires (fs/exec/storage). Extracted to .app.json. */
+  permissions?: PluginPermissions;
 }

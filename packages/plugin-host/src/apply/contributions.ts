@@ -6,6 +6,7 @@ export interface PluginContributions {
   commands: NonNullable<AppManifest['commands']>;
   themes: NonNullable<AppManifest['themes']>;
   worker: string | null;
+  permissions: NonNullable<AppManifest['permissions']> | null;
 }
 
 /**
@@ -21,5 +22,6 @@ export function buildContributions(app: AppManifest | null): PluginContributions
     commands: app.commands ?? [],
     themes: app.themes ?? [],
     worker: app.worker ?? null,
+    permissions: app.permissions ?? null,
   };
 }

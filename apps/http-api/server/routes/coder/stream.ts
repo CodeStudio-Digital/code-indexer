@@ -22,6 +22,7 @@ import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js'
 import { getGlobalMcpExternalPool } from '../../../sse/McpExternalPool.js';
 import { listEnabledPluginRuntime, buildPluginTools } from '@mcp/plugin-host';
 import { PluginWorkerHost } from '../../../sse/PluginWorkerHost.js';
+import { getPluginHostInvoke } from '../../../sse/pluginHostInvoke.js';
 import {
   getRuntimeEventLog,
   installRuntimeEventLog,
@@ -441,7 +442,7 @@ export function mountCoderStreamRoutes(
         const { toolPlugins, bundles } = listEnabledPluginRuntime();
         let pluginTools: ReturnType<typeof buildPluginTools> | undefined;
         if (toolPlugins.length > 0) {
-          const host = new PluginWorkerHost({ bundles });
+          const host = new PluginWorkerHost({ bundles, hostInvoke: getPluginHostInvoke() });
           pluginHost = host;
           pluginTools = buildPluginTools(toolPlugins, (ns, name, args, ctx) =>
             host.invokeTool(ns, name, args, ctx),
@@ -556,7 +557,7 @@ export function mountCoderStreamRoutes(
         const { toolPlugins, bundles } = listEnabledPluginRuntime();
         let pluginTools: ReturnType<typeof buildPluginTools> | undefined;
         if (toolPlugins.length > 0) {
-          const host = new PluginWorkerHost({ bundles });
+          const host = new PluginWorkerHost({ bundles, hostInvoke: getPluginHostInvoke() });
           pluginHost = host;
           pluginTools = buildPluginTools(toolPlugins, (ns, name, args, ctx) =>
             host.invokeTool(ns, name, args, ctx),

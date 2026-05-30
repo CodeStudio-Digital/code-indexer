@@ -129,6 +129,8 @@ import { installedPlugins112 } from './112_installed_plugins.js';
 import { embeddingFingerprint113 } from './113_embedding_fingerprint.js';
 import { snapshotMemory114 } from './114_snapshot_memory.js';
 import { memoryEnabled115 } from './115_memory_enabled.js';
+import { pluginPermissions116 } from './116_plugin_permissions.js';
+import { pluginStorage117 } from './117_plugin_storage.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -274,6 +276,8 @@ export const MIGRATIONS: Migration[] = [
   embeddingFingerprint113,
   snapshotMemory114,
   memoryEnabled115,
+  pluginPermissions116,
+  pluginStorage117,
 ];
 
 /**

@@ -25,6 +25,7 @@ export interface InstalledPlugin {
   contributions: Json | null;
   enabled: boolean;
   signature: string | null;
+  permissions_granted: Record<string, unknown> | null;
   installed_at: string;
   updated_at: string;
 }
@@ -51,6 +52,7 @@ interface InstalledPluginRaw {
   contributions: string | null;
   enabled: number;
   signature: string | null;
+  permissions_granted: string | null;
   installed_at: string;
   updated_at: string;
 }
@@ -78,6 +80,9 @@ function hydrate(r: InstalledPluginRaw): InstalledPlugin {
     contributions: parseJson<Json>(r.contributions),
     enabled: !!r.enabled,
     signature: r.signature,
+    permissions_granted: r.permissions_granted
+      ? (JSON.parse(r.permissions_granted) as Record<string, unknown>)
+      : null,
     installed_at: r.installed_at,
     updated_at: r.updated_at,
   };
@@ -185,6 +190,15 @@ export class InstalledPluginStore {
         `UPDATE installed_plugins SET enabled = ?, updated_at = datetime('now') WHERE namespace = ?`,
       )
       .run(enabled ? 1 : 0, namespace);
+  }
+
+  /** Persist the capability subset the user approved (JSON blob, or null). */
+  setPermissionsGranted(namespace: string, granted: Record<string, unknown> | null): void {
+    this.db
+      .prepare(
+        `UPDATE installed_plugins SET permissions_granted = ?, updated_at = datetime('now') WHERE namespace = ?`,
+      )
+      .run(granted ? JSON.stringify(granted) : null, namespace);
   }
 
   delete(namespace: string): void {
