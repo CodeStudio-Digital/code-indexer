@@ -17,6 +17,7 @@ import { apiCall } from '../../../../lib/api-client.js';
 import { injectIntoHtml } from '../../plugin-iframe-runtime.js';
 import { currentThemeTokens } from '../../theme-apply.js';
 import { registerPluginFrame, unregisterPluginFrame } from '../../webview-bridge.js';
+import { useLocaleStore } from '../../../../state/i18n.js';
 
 interface WebviewWindowProps {
   namespace: string;
@@ -31,6 +32,9 @@ export function WebviewWindow({ namespace, title, entry, projectId, onClose }: W
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // Subscribe so a language switch re-injects + reloads the frame with the new
+  // locale (plugins read it via window.mcp.i18n).
+  const locale = useLocaleStore((s) => s.locale);
 
   useEffect(() => {
     let alive = true;
@@ -53,7 +57,9 @@ export function WebviewWindow({ namespace, title, entry, projectId, onClose }: W
   }, [html]);
 
   const doc =
-    html === null ? null : injectIntoHtml(html, { namespace, projectId }, currentThemeTokens());
+    html === null
+      ? null
+      : injectIntoHtml(html, { namespace, projectId, locale }, currentThemeTokens());
 
   return (
     <div className="flex h-full flex-col">

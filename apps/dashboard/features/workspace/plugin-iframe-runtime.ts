@@ -93,6 +93,25 @@ export const PLUGIN_IFRAME_RUNTIME = `(function () {
       alert: function (opts) { return call('plugins.ui.alert', opts || {}); },
       toast: function (opts) { return call('plugins.ui.toast', opts || {}); }
     },
+    /**
+     * Internationalization. The host injects the active locale; the plugin
+     * ships its OWN catalogs and builds a translator over them:
+     *   var t = mcp.i18n.translator({ en: {hi:'Hi {n}'}, 'pt-BR': {hi:'Olá {n}'} });
+     *   t('hi', { n: 'world' });
+     * Lookup falls back: current locale → en → the key itself. `{var}` interpolated.
+     */
+    i18n: {
+      locale: (window.__pluginContext || {}).locale || 'en',
+      translator: function (messages) {
+        messages = messages || {};
+        return function (key, vars) {
+          var loc = (window.__pluginContext || {}).locale || 'en';
+          var dict = messages[loc] || messages.en || {};
+          var s = (key in dict) ? dict[key] : ((messages.en && messages.en[key]) || key);
+          return vars ? String(s).replace(/\{(\w+)\}/g, function (m, k) { return (k in vars) ? String(vars[k]) : m; }) : s;
+        };
+      }
+    },
     listPlugins: function () { return call('plugins.list'); },
     readFile: function (path) { return call('files.read', { path: path }); }
   };
@@ -100,7 +119,7 @@ export const PLUGIN_IFRAME_RUNTIME = `(function () {
 
 /** Build the <head> injection (context + theme + shim) prepended to a plugin's HTML. */
 export function buildIframeInjection(
-  context: { namespace: string; projectId?: number },
+  context: { namespace: string; projectId?: number; locale?: string },
   themeTokens: Record<string, string>,
 ): string {
   const vars = Object.entries(themeTokens)
@@ -116,7 +135,7 @@ export function buildIframeInjection(
 /** Splice the injection into a plugin's HTML (before </head>, else prepend). */
 export function injectIntoHtml(
   html: string,
-  context: { namespace: string; projectId?: number },
+  context: { namespace: string; projectId?: number; locale?: string },
   themeTokens: Record<string, string>,
 ): string {
   const injection = buildIframeInjection(context, themeTokens);
