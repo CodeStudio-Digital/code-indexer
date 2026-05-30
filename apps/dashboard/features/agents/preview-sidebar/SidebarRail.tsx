@@ -55,11 +55,17 @@ const BASE_ICONS: RailIcon[] = [
 ];
 
 export function SidebarRail({ active, onToggle, showPreview, pluginWindows = [] }: SidebarRailProps) {
-  const pluginIcons: RailIcon[] = pluginWindows.map((w) => ({
-    id: `plugin:${w.pluginNs}:${w.id}` as SidePanel,
-    Icon: Puzzle,
-    title: w.title,
-  }));
+  // Honor the author's declared `side`: this is the Company session's RIGHT
+  // drawer, so only windows that asked for `side: 'right'` surface here.
+  // `left`/`right` also show in the Project rail; `bottom` belongs to the
+  // bottom panel — neither of those leaks into this drawer.
+  const pluginIcons: RailIcon[] = pluginWindows
+    .filter((w) => w.side === 'right')
+    .map((w) => ({
+      id: `plugin:${w.pluginNs}:${w.id}` as SidePanel,
+      Icon: Puzzle,
+      title: w.title,
+    }));
   const icons: RailIcon[] = [
     ...(showPreview ? [{ id: 'preview' as SidePanel, Icon: Monitor, title: 'Preview' }] : []),
     ...BASE_ICONS,

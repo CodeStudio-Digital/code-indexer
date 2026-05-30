@@ -8,14 +8,25 @@
  */
 
 import { useState } from 'react';
-import { TerminalSquare, AlertCircle, FileText, Search, ChevronDown, ChevronUp, X } from 'lucide-react';
+import {
+  TerminalSquare,
+  AlertCircle,
+  FileText,
+  Search,
+  ChevronDown,
+  ChevronUp,
+  X,
+  Puzzle,
+} from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
 import { WorkspaceTerminal } from './WorkspaceTerminal.js';
+import { WebviewWindow } from './jetbrains/tool-windows/WebviewWindow.js';
+import type { ContribToolWindow } from '../../state/contribution-registry.js';
 
-type TabId = 'terminal' | 'problems' | 'output' | 'search';
+type BuiltinTabId = 'terminal' | 'problems' | 'output' | 'search';
 
-const TABS: Array<{ id: TabId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+const TABS: Array<{ id: BuiltinTabId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'terminal', label: 'Terminal', icon: TerminalSquare },
   { id: 'problems', label: 'Problems', icon: AlertCircle },
   { id: 'output', label: 'Output', icon: FileText },
@@ -27,10 +38,20 @@ interface BottomPanelProps {
   isOpen: boolean;
   onToggle: () => void;
   onClose: () => void;
+  /** Plugin tool windows that declared `side: 'bottom'` — appended as tabs. */
+  pluginWindows?: ContribToolWindow[];
 }
 
-export function BottomPanel({ projectId, isOpen, onToggle, onClose }: BottomPanelProps) {
-  const [tab, setTab] = useState<TabId>('terminal');
+export function BottomPanel({
+  projectId,
+  isOpen,
+  onToggle,
+  onClose,
+  pluginWindows = [],
+}: BottomPanelProps) {
+  // `tab` is an open string so plugin window ids (not in BuiltinTabId) can win.
+  const [tab, setTab] = useState<string>('terminal');
+  const activePlugin = pluginWindows.find((w) => w.id === tab);
 
   return (
     <div className="h-full flex flex-col bg-card/40 border-t min-h-0">
@@ -59,6 +80,29 @@ export function BottomPanel({ projectId, isOpen, onToggle, onClose }: BottomPane
               </button>
             );
           })}
+          {pluginWindows.map((w) => {
+            const active = tab === w.id;
+            return (
+              <button
+                key={w.id}
+                type="button"
+                onClick={() => {
+                  setTab(w.id);
+                  if (!isOpen) onToggle();
+                }}
+                title={w.title}
+                className={cn(
+                  'flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors',
+                  active
+                    ? 'bg-accent text-accent-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+                )}
+              >
+                <Puzzle className="h-3 w-3" />
+                <span className="truncate max-w-[120px]">{w.title}</span>
+              </button>
+            );
+          })}
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
           <Button
@@ -84,7 +128,15 @@ export function BottomPanel({ projectId, isOpen, onToggle, onClose }: BottomPane
       {isOpen && (
         <div className="flex-1 min-h-0 overflow-hidden">
           {tab === 'terminal' && <WorkspaceTerminal projectId={projectId} />}
-          {tab !== 'terminal' && (
+          {activePlugin && (
+            <WebviewWindow
+              namespace={activePlugin.pluginNs}
+              title={activePlugin.title}
+              entry={activePlugin.entry}
+              projectId={projectId}
+            />
+          )}
+          {tab !== 'terminal' && !activePlugin && (
             <div className="h-full grid place-items-center text-xs text-muted-foreground p-2">
               {tab === 'problems' && 'Problems panel coming with LSP diagnostics integration.'}
               {tab === 'output' && 'Tool output / build logs panel.'}

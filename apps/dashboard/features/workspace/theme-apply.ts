@@ -27,3 +27,40 @@ export function clearPluginTheme(): void {
   if (typeof document === 'undefined') return;
   document.getElementById(STYLE_ID)?.remove();
 }
+
+/** Host CSS-variable names a plugin iframe should inherit (null-origin frames
+ *  can't read the parent `:root`, so we snapshot + inject these into srcDoc). */
+const INHERITED_VARS = [
+  '--background',
+  '--foreground',
+  '--card',
+  '--card-foreground',
+  '--primary',
+  '--primary-foreground',
+  '--secondary',
+  '--secondary-foreground',
+  '--muted',
+  '--muted-foreground',
+  '--accent',
+  '--accent-foreground',
+  '--border',
+  '--input',
+  '--ring',
+  '--destructive',
+  '--radius',
+  '--font-sans',
+  '--font-mono',
+];
+
+/** Snapshot the live theme tokens so a sandboxed iframe can mirror the host look. */
+export function currentThemeTokens(): Record<string, string> {
+  if (typeof document === 'undefined') return {};
+  const s = getComputedStyle(document.documentElement);
+  const out: Record<string, string> = {};
+  for (const v of INHERITED_VARS) {
+    const val = s.getPropertyValue(v).trim();
+    if (val) out[v] = val;
+  }
+  out['color-scheme'] = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+  return out;
+}

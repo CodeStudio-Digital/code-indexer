@@ -276,14 +276,25 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   useEffect(() => {
     void hydrateContributions();
   }, []);
+  // Honor the author's declared `side`: the Project view has a single
+  // vertical rail, so `left` and `right` windows both surface here. `bottom`
+  // windows are reserved for the bottom panel and are filtered out (until
+  // that surface is wired).
   const pluginTabs = useMemo<TabDef[]>(
     () =>
-      contribWindows.map((w) => ({
-        id: w.id,
-        label: w.title,
-        icon: Puzzle,
-        group: 'plugins' as const,
-      })),
+      contribWindows
+        .filter((w) => w.side === 'left' || w.side === 'right')
+        .map((w) => ({
+          id: w.id,
+          label: w.title,
+          icon: Puzzle,
+          group: 'plugins' as const,
+        })),
+    [contribWindows],
+  );
+  // `bottom`-side windows go to the bottom panel as extra tabs.
+  const bottomPluginWindows = useMemo(
+    () => contribWindows.filter((w) => w.side === 'bottom'),
     [contribWindows],
   );
 
@@ -325,6 +336,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
                     isOpen={true}
                     onToggle={() => layout.toggleBottom(layout.activeBottom!)}
                     onClose={() => layout.setActiveBottom(null)}
+                    pluginWindows={bottomPluginWindows}
                   />
                 </Panel>
               </>
@@ -586,7 +598,12 @@ function TabContent({
   if (pluginWin) {
     return (
       <div className="h-full overflow-hidden">
-        <WebviewWindow namespace={pluginWin.pluginNs} title={pluginWin.title} entry={pluginWin.entry} />
+        <WebviewWindow
+          namespace={pluginWin.pluginNs}
+          title={pluginWin.title}
+          entry={pluginWin.entry}
+          projectId={projectId}
+        />
       </div>
     );
   }

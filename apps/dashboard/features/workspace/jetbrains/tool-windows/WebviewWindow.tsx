@@ -1,27 +1,36 @@
 /**
  * Renders a plugin-contributed tool window as a SANDBOXED iframe. The HTML is
- * fetched from the plugin dir via `plugins.readAsset` and injected as
- * `srcDoc` with `sandbox="allow-scripts"` (no `allow-same-origin`) — so the
- * frame runs at a null origin with no access to the host DOM, cookies, or
- * storage. Its only channel out is the postMessage bridge (webview-bridge).
+ * fetched from the plugin dir via `plugins.readAsset`, then we splice in the
+ * plugin context (`window.__pluginContext`), the host theme tokens, and the
+ * `window.mcp` runtime shim before injecting it as `srcDoc` with
+ * `sandbox="allow-scripts"` (no `allow-same-origin`) — null origin, no access
+ * to the host DOM/cookies/storage. Its only channel out is the postMessage
+ * bridge (webview-bridge), which binds every privileged call to THIS plugin's
+ * namespace via the frame registration below.
  *
- * Self-contained (inline title bar) so it doesn't depend on the legacy
- * jetbrains workspace helpers — it's mounted in ProjectView / AgentsTab.
+ * Self-contained (inline title bar) — mounted in ProjectView / BottomPanel /
+ * the Company sidebar.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { apiCall } from '../../../../lib/api-client.js';
+import { injectIntoHtml } from '../../plugin-iframe-runtime.js';
+import { currentThemeTokens } from '../../theme-apply.js';
+import { registerPluginFrame, unregisterPluginFrame } from '../../webview-bridge.js';
 
 interface WebviewWindowProps {
   namespace: string;
   title: string;
   entry: string;
+  /** Scopes the plugin's tool calls (cwd) to a project, when known. */
+  projectId?: number;
   onClose?: () => void;
 }
 
-export function WebviewWindow({ namespace, title, entry, onClose }: WebviewWindowProps) {
+export function WebviewWindow({ namespace, title, entry, projectId, onClose }: WebviewWindowProps) {
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -34,6 +43,17 @@ export function WebviewWindow({ namespace, title, entry, onClose }: WebviewWindo
       alive = false;
     };
   }, [namespace, entry]);
+
+  // Drop the frame's bridge registration on unmount / reload.
+  useEffect(() => {
+    return () => {
+      const win = iframeRef.current?.contentWindow;
+      if (win) unregisterPluginFrame(win);
+    };
+  }, [html]);
+
+  const doc =
+    html === null ? null : injectIntoHtml(html, { namespace, projectId }, currentThemeTokens());
 
   return (
     <div className="flex h-full flex-col">
@@ -55,14 +75,19 @@ export function WebviewWindow({ namespace, title, entry, onClose }: WebviewWindo
       <div className="min-h-0 flex-1">
         {error ? (
           <div className="p-3 text-sm text-status-error">{error}</div>
-        ) : html === null ? (
+        ) : doc === null ? (
           <div className="p-3 text-sm text-muted-foreground">Loading…</div>
         ) : (
           <iframe
+            ref={iframeRef}
             title={`plugin:${namespace}:${title}`}
             sandbox="allow-scripts"
-            srcDoc={html}
-            className="h-full w-full border-0 bg-white"
+            srcDoc={doc}
+            onLoad={() => {
+              const win = iframeRef.current?.contentWindow;
+              if (win) registerPluginFrame(win, { namespace, projectId });
+            }}
+            className="h-full w-full border-0"
           />
         )}
       </div>

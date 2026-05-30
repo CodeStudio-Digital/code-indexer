@@ -25,6 +25,7 @@ import { useApi } from './hooks/useApi.js';
 import { AppShell } from './AppShell.js';
 import { buildAgentsDefaultUrl } from './features/agents/routing.js';
 import { OnboardingWizard, isOnboarded, resetOnboarding } from './features/onboarding/OnboardingWizard.js';
+import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 
 // ─── Route components ────────────────────────────────────────
 
@@ -85,6 +86,12 @@ function AppRoot() {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
     navigate(route, { replace: true });
   }, [navigate]);
+
+  // Plugin webview bridge — host side of the postMessage channel for
+  // sandboxed plugin iframes (namespace-bound invokeTool / storage /
+  // permissions). Mounted once here at the app root; the legacy Workspace
+  // mount is dead. Returns a disposer.
+  useEffect(() => installWebviewBridge(), []);
 
   return (
     <>
