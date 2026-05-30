@@ -11,128 +11,122 @@
         background: var(--background, #fff); color: var(--foreground, #111);
         font-size: 13px; display: flex; flex-direction: column;
       }
-      /* ── header ── */
       header {
         display: flex; align-items: center; gap: 8px;
-        padding: 8px 12px; border-bottom: 1px solid var(--border, #e5e7eb);
-        flex-shrink: 0;
+        padding: 8px 12px; border-bottom: 1px solid var(--border, #e5e7eb); flex-shrink: 0;
       }
       header .title { font-weight: 600; }
       .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--muted, #eee); color: var(--muted-foreground, #666); }
       .badge.ok { background: #16a34a22; color: #16a34a; }
       .badge.no { background: #dc262622; color: #dc2626; }
       header .detail { margin-left: auto; font-size: 11px; color: var(--muted-foreground, #888); max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      /* ── tab bar ── */
       nav { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--border, #e5e7eb); flex-shrink: 0; }
-      nav button {
-        padding: 6px 12px; border: 0; background: transparent; cursor: pointer;
-        color: var(--muted-foreground, #777); font: inherit; border-bottom: 2px solid transparent; margin-bottom: -1px;
-      }
+      nav button { padding: 6px 12px; border: 0; background: transparent; cursor: pointer; color: var(--muted-foreground, #777); font: inherit; border-bottom: 2px solid transparent; margin-bottom: -1px; }
       nav button.active { color: var(--foreground, #111); border-bottom-color: var(--primary, #2563eb); font-weight: 500; }
-      /* ── panes ── */
-      main { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
-      .pane { display: none; }
+      main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+      .pane { display: none; flex: 1; min-height: 0; padding: 14px; overflow: auto; }
       .pane.active { display: block; }
-      label { display: block; font-size: 12px; color: var(--muted-foreground, #777); margin-bottom: 4px; }
+      .pane.tools { display: none; }
+      .pane.tools.active { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+      label.fld { display: block; font-size: 11px; color: var(--muted-foreground, #777); margin: 8px 0 3px; }
       .row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
       input, select {
         flex: 1; min-width: 120px; padding: 7px 9px; font: inherit;
         border: 1px solid var(--border, #ccc); border-radius: var(--radius, 6px);
         background: var(--card, #fff); color: inherit;
       }
-      button.act {
-        padding: 7px 14px; font: inherit; cursor: pointer; border: 0;
-        border-radius: var(--radius, 6px);
-        background: var(--primary, #2563eb); color: var(--primary-foreground, #fff);
-      }
+      button.act { padding: 7px 14px; font: inherit; cursor: pointer; border: 0; border-radius: var(--radius, 6px); background: var(--primary, #2563eb); color: var(--primary-foreground, #fff); }
       button.act.secondary { background: var(--secondary, #eee); color: var(--secondary-foreground, #111); }
       button.act:disabled { opacity: .5; cursor: default; }
       .hint { font-size: 11px; color: var(--muted-foreground, #888); margin: -4px 0 12px; }
-      pre.out {
-        background: var(--muted, #f3f3f3); padding: 10px; border-radius: var(--radius, 6px);
-        font-family: var(--font-mono, monospace); font-size: 12px; white-space: pre-wrap;
-        overflow: auto; margin: 12px 0 0; min-height: 60px; max-height: 45vh;
-      }
-      /* ── tool browser ── */
-      .groups { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
+      pre.out { background: var(--muted, #f3f3f3); padding: 10px; border-radius: var(--radius, 6px); font-family: var(--font-mono, monospace); font-size: 12px; white-space: pre-wrap; overflow: auto; margin: 10px 0 0; min-height: 48px; max-height: 40vh; }
+      /* tools master-detail */
+      .groups { display: flex; gap: 4px; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--border, #eee); flex-shrink: 0; }
       .grp { padding: 4px 10px; border-radius: 999px; cursor: pointer; background: var(--muted, #eee); color: var(--muted-foreground, #666); font-size: 12px; border: 0; }
       .grp.active { background: var(--accent, #e6efff); color: var(--accent-foreground, #1d4ed8); }
-      .tool { border: 1px solid var(--border, #eee); border-radius: var(--radius, 8px); padding: 10px 12px; margin-bottom: 8px; }
-      .tool h4 { margin: 0 0 2px; font-size: 13px; }
-      .tool .desc { color: var(--muted-foreground, #777); font-size: 11px; margin: 0 0 8px; }
-      .tool .danger { color: #dc2626; }
-      .fields { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-      .fields input, .fields select { min-width: 90px; padding: 5px 7px; }
-      /* ── assistant ── */
+      .split { flex: 1; min-height: 0; display: flex; }
+      .list { width: 200px; flex-shrink: 0; border-right: 1px solid var(--border, #eee); overflow: auto; padding: 6px; }
+      .list button { display: block; width: 100%; text-align: left; padding: 6px 8px; border: 0; background: transparent; cursor: pointer; color: var(--foreground, #111); border-radius: var(--radius, 6px); font: inherit; font-size: 12px; }
+      .list button:hover { background: var(--muted, #f1f1f1); }
+      .list button.sel { background: var(--accent, #e6efff); color: var(--accent-foreground, #1d4ed8); }
+      .list button .dot { color: #dc2626; }
+      .detail { flex: 1; min-width: 0; overflow: auto; padding: 14px; }
+      .detail h4 { margin: 0 0 2px; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+      .detail .risk { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--muted, #eee); color: var(--muted-foreground, #777); }
+      .detail .risk.danger { background: #dc262622; color: #dc2626; }
+      .detail .desc { color: var(--muted-foreground, #777); font-size: 12px; margin: 0 0 6px; }
+      .placeholder { color: var(--muted-foreground, #999); padding: 32px 14px; text-align: center; font-size: 12px; }
+      .empty { color: var(--muted-foreground, #999); text-align: center; padding: 24px 8px; font-size: 12px; }
       #chat { border: 1px solid var(--border, #eee); border-radius: var(--radius, 8px); padding: 10px; min-height: 120px; max-height: 38vh; overflow: auto; margin-bottom: 10px; }
       #chat .b { margin: 6px 0; line-height: 1.45; }
       #chat .role { color: var(--muted-foreground, #888); font-weight: 600; margin-right: 4px; }
       #chat .sys { color: var(--muted-foreground, #999); font-size: 11px; font-family: var(--font-mono, monospace); }
-      .empty { color: var(--muted-foreground, #999); text-align: center; padding: 24px 8px; font-size: 12px; }
       .nobridge { padding: 24px; text-align: center; color: var(--muted-foreground, #888); }
     </style>
   </head>
   <body>
     <header>
       <span class="title">Cloudflare</span>
-      <span class="badge" id="status">checking…</span>
+      <span class="badge" id="status" data-i18n="status.checking">checking…</span>
       <span class="detail" id="detail"></span>
     </header>
     <nav>
-      <button data-pane="setup" class="active">Setup</button>
-      <button data-pane="tools">Tools</button>
-      <button data-pane="logs">Logs</button>
-      <button data-pane="ai">Assistant</button>
+      <button data-pane="setup" class="active" data-i18n="tab.setup">Setup</button>
+      <button data-pane="tools" data-i18n="tab.tools">Tools</button>
+      <button data-pane="logs" data-i18n="tab.logs">Logs</button>
+      <button data-pane="ai" data-i18n="tab.assistant">Assistant</button>
     </nav>
     <main>
       <!-- SETUP -->
       <div class="pane active" id="pane-setup">
-        <label>API token (REST) — stored only for this plugin</label>
+        <label class="fld" data-i18n="setup.tokenLabel">API token (REST) — stored only for this plugin</label>
         <div class="row">
-          <input id="token" type="password" placeholder="paste a Cloudflare API token" />
-          <button class="act" id="saveToken">Save</button>
+          <input id="token" type="password" data-i18n-ph="setup.tokenPh" placeholder="paste a Cloudflare API token" />
+          <button class="act" id="saveToken" data-i18n="setup.save">Save</button>
         </div>
-        <p class="hint">A token enables the REST API (whoami, D1, KV, R2…). Live tail/login use <code>wrangler login</code> instead.</p>
+        <p class="hint" data-i18n="setup.hint">A token enables the REST API (whoami, D1, KV, R2…). Live tail/login use wrangler login instead.</p>
         <div class="row">
-          <button class="act secondary" id="whoami">Verify &amp; list accounts</button>
+          <button class="act secondary" id="whoami" data-i18n="setup.verify">Verify &amp; list accounts</button>
         </div>
+        <pre class="out" id="setupOut">—</pre>
       </div>
 
-      <!-- TOOLS -->
-      <div class="pane" id="pane-tools">
+      <!-- TOOLS (master-detail) -->
+      <div class="pane tools" id="pane-tools">
         <div class="groups" id="groups"></div>
-        <div id="tools"><div class="empty">Loading tools…</div></div>
+        <div class="split">
+          <div class="list" id="toolList"></div>
+          <div class="detail" id="toolDetail">
+            <div class="placeholder" data-i18n="tools.selectPrompt">Pick a tool from the list.</div>
+          </div>
+        </div>
       </div>
 
       <!-- LOGS -->
       <div class="pane" id="pane-logs">
-        <p class="hint">Streamed via <code>wrangler</code> (uses your <code>wrangler login</code> credentials).</p>
+        <p class="hint" data-i18n="logs.hint">Streamed via wrangler (uses your wrangler login credentials).</p>
         <div class="row">
-          <button class="act secondary" id="login">Login</button>
-          <button class="act" id="tail">Tail logs</button>
-          <button class="act secondary" id="stop" disabled>Stop</button>
+          <button class="act secondary" id="login" data-i18n="logs.login">Login</button>
+          <button class="act" id="tail" data-i18n="logs.tail">Tail logs</button>
+          <button class="act secondary" id="stop" disabled data-i18n="logs.stop">Stop</button>
         </div>
+        <pre class="out" id="logsOut">—</pre>
       </div>
 
       <!-- ASSISTANT -->
       <div class="pane" id="pane-ai">
-        <div class="row"><select id="model"><option>loading models…</option></select></div>
-        <div id="chat"><div class="empty">Ask the Cloudflare-scoped assistant. Off-topic requests are refused.</div></div>
+        <div class="row"><select id="model"><option>…</option></select></div>
+        <div id="chat"><div class="empty" data-i18n="ai.empty">Ask the Cloudflare-scoped assistant. Off-topic requests are refused.</div></div>
         <div class="row">
-          <input id="ask" placeholder="e.g. list my D1 databases, then deploy" />
-          <button class="act" id="send">Send</button>
-          <button class="act secondary" id="cancel" disabled>Cancel</button>
+          <input id="ask" data-i18n-ph="ai.placeholder" placeholder="e.g. list my D1 databases, then deploy" />
+          <button class="act" id="send" data-i18n="ai.send">Send</button>
+          <button class="act secondary" id="cancel" disabled data-i18n="ai.cancel">Cancel</button>
         </div>
       </div>
-
-      <pre class="out" id="out">ready.</pre>
     </main>
 
     <script>
       (function () {
-        var out = document.getElementById('out');
-        // Hard guard: a sandboxed iframe with no bridge means the host isn't
-        // running this session's code (restart the app) — say so plainly.
         if (!window.mcp || !window.mcp.invokeTool) {
           document.querySelector('main').innerHTML =
             '<div class="nobridge">Plugin bridge unavailable.<br>Restart the IDE (the host server needs this build) and reopen this panel.</div>';
@@ -141,18 +135,52 @@
         var mcp = window.mcp;
         var NS = (mcp.context && mcp.context.namespace) || 'cloudflare';
 
-        function show(label, v) {
-          out.textContent = label + '\n' + (typeof v === 'string' ? v : JSON.stringify(v, null, 2));
-          out.scrollTop = 0;
-        }
-        function invoke(label, tool, args, btn) {
-          if (btn) btn.disabled = true;
-          out.textContent = label + '…';
-          mcp.invokeTool(tool, args || {})
-            .then(function (r) { show(label + (r.isError ? ' ✗' : ' ✓'), r.content); })
-            .catch(function (e) { show(label + ' FAILED', String(e && e.message || e)); })
-            .finally(function () { if (btn) btn.disabled = false; });
-        }
+        // ── i18n (plugin ships its own catalogs) ──
+        var t = mcp.i18n.translator({
+          en: {
+            'status.checking': 'checking…', 'status.detected': 'project detected', 'status.none': 'no CF project',
+            'tab.setup': 'Setup', 'tab.tools': 'Tools', 'tab.logs': 'Logs', 'tab.assistant': 'Assistant',
+            'setup.tokenLabel': 'API token (REST) — stored only for this plugin',
+            'setup.tokenPh': 'paste a Cloudflare API token', 'setup.save': 'Save',
+            'setup.hint': 'A token enables the REST API (whoami, D1, KV, R2…). Live tail/login use wrangler login instead.',
+            'setup.verify': 'Verify & list accounts', 'setup.needToken': 'Paste a token first.',
+            'logs.hint': 'Streamed via wrangler (uses your wrangler login credentials).',
+            'logs.login': 'Login', 'logs.tail': 'Tail logs', 'logs.stop': 'Stop',
+            'logs.ended': '[{label} ended]', 'logs.stopped': '[stopped]',
+            'tools.selectPrompt': 'Pick a tool from the list.', 'tools.run': 'Run',
+            'tools.noTools': 'No tools found.', 'tools.loading': 'Loading tools…', 'tools.result': 'Result',
+            'tools.running': 'running…', 'tools.confirmMsg': 'This is a mutating/destructive Cloudflare action. Proceed?', 'tools.confirmRun': 'Run',
+            'ai.empty': 'Ask the Cloudflare-scoped assistant. Off-topic requests are refused.',
+            'ai.placeholder': 'e.g. list my D1 databases, then deploy', 'ai.send': 'Send', 'ai.cancel': 'Cancel',
+            'ai.configure': 'configure a provider in Settings → AI', 'ai.noModels': 'no models',
+            'ai.you': 'you', 'ai.assistant': 'cf', 'ai.cancelled': '[cancelled]',
+            'ai.confirmTitle': 'Run {name}?', 'ai.confirmMsg': 'The assistant wants to run a mutating action:\n{input}', 'ai.allow': 'Allow',
+            'ai.approved': 'approved {name}', 'ai.denied': 'denied {name}'
+          },
+          'pt-BR': {
+            'status.checking': 'verificando…', 'status.detected': 'projeto detectado', 'status.none': 'sem projeto CF',
+            'tab.setup': 'Configuração', 'tab.tools': 'Ferramentas', 'tab.logs': 'Logs', 'tab.assistant': 'Assistente',
+            'setup.tokenLabel': 'Token de API (REST) — guardado só para este plugin',
+            'setup.tokenPh': 'cole um token de API da Cloudflare', 'setup.save': 'Salvar',
+            'setup.hint': 'Um token habilita a API REST (whoami, D1, KV, R2…). Tail/login ao vivo usam o wrangler login.',
+            'setup.verify': 'Verificar & listar contas', 'setup.needToken': 'Cole um token primeiro.',
+            'logs.hint': 'Transmitido via wrangler (usa as credenciais do wrangler login).',
+            'logs.login': 'Entrar', 'logs.tail': 'Logs ao vivo', 'logs.stop': 'Parar',
+            'logs.ended': '[{label} finalizado]', 'logs.stopped': '[parado]',
+            'tools.selectPrompt': 'Escolha uma ferramenta na lista.', 'tools.run': 'Executar',
+            'tools.noTools': 'Nenhuma ferramenta.', 'tools.loading': 'Carregando ferramentas…', 'tools.result': 'Resultado',
+            'tools.running': 'executando…', 'tools.confirmMsg': 'Esta é uma ação que altera/destrói recursos na Cloudflare. Continuar?', 'tools.confirmRun': 'Executar',
+            'ai.empty': 'Pergunte ao assistente focado em Cloudflare. Pedidos fora do escopo são recusados.',
+            'ai.placeholder': 'ex.: liste meus bancos D1 e faça deploy', 'ai.send': 'Enviar', 'ai.cancel': 'Cancelar',
+            'ai.configure': 'configure um provedor em Configurações → IA', 'ai.noModels': 'sem modelos',
+            'ai.you': 'você', 'ai.assistant': 'cf', 'ai.cancelled': '[cancelado]',
+            'ai.confirmTitle': 'Executar {name}?', 'ai.confirmMsg': 'O assistente quer executar uma ação que altera recursos:\n{input}', 'ai.allow': 'Permitir',
+            'ai.approved': 'aprovado {name}', 'ai.denied': 'negado {name}'
+          }
+        });
+        // Apply translations to static DOM.
+        document.querySelectorAll('[data-i18n]').forEach(function (el) { el.textContent = t(el.getAttribute('data-i18n')); });
+        document.querySelectorAll('[data-i18n-ph]').forEach(function (el) { el.placeholder = t(el.getAttribute('data-i18n-ph')); });
 
         // ── tabs ──
         var navBtns = document.querySelectorAll('nav button');
@@ -165,122 +193,170 @@
           };
         });
 
-        // ── detect (header) ──
+        function writeOut(el, label, r) {
+          var ok = !r.isError;
+          el.textContent = (ok ? '✓ ' : '✗ ') + label + '\n' + (r.content || '');
+          el.scrollTop = 0;
+        }
+
+        // ── detect ──
         function refreshDetect() {
           mcp.invokeTool('cf_detect', {}).then(function (r) {
             var isCf = !/Not a Cloudflare/.test(r.content);
             var s = document.getElementById('status');
-            s.textContent = isCf ? 'project detected' : 'no CF project';
+            s.textContent = isCf ? t('status.detected') : t('status.none');
             s.className = 'badge ' + (isCf ? 'ok' : 'no');
             document.getElementById('detail').textContent = r.content.replace(/\n/g, ' · ');
           }).catch(function (e) { document.getElementById('detail').textContent = String(e && e.message || e); });
         }
 
         // ── setup ──
+        var setupOut = document.getElementById('setupOut');
         document.getElementById('saveToken').onclick = function (e) {
-          var t = document.getElementById('token').value.trim();
-          if (!t) { mcp.ui.toast({ kind: 'error', message: 'Paste a token first.' }); return; }
-          invoke('save token', 'cf_set_token', { token: t }, e.target);
+          var v = document.getElementById('token').value.trim();
+          if (!v) { mcp.ui.toast({ kind: 'error', message: t('setup.needToken') }); return; }
+          e.target.disabled = true;
+          mcp.invokeTool('cf_set_token', { token: v })
+            .then(function (r) { writeOut(setupOut, 'cf_set_token', r); })
+            .finally(function () { e.target.disabled = false; });
         };
-        document.getElementById('whoami').onclick = function (e) { invoke('whoami', 'cf_whoami', {}, e.target); };
+        document.getElementById('whoami').onclick = function (e) {
+          e.target.disabled = true; setupOut.textContent = t('tools.running');
+          mcp.invokeTool('cf_whoami', {})
+            .then(function (r) { writeOut(setupOut, 'cf_whoami', r); })
+            .catch(function (err) { setupOut.textContent = '✗ ' + String(err && err.message || err); })
+            .finally(function () { e.target.disabled = false; });
+        };
 
         // ── logs (streams) ──
-        var activeStream = null, stopBtn = document.getElementById('stop');
-        function appendLine(s) { out.textContent += s; out.scrollTop = out.scrollHeight; }
+        var logsOut = document.getElementById('logsOut'), stopBtn = document.getElementById('stop'), activeStream = null;
+        function appendLog(s) { logsOut.textContent += s; logsOut.scrollTop = logsOut.scrollHeight; }
         function startStream(label, args, btn) {
           if (activeStream) activeStream();
-          out.textContent = label + '…\n';
+          logsOut.textContent = label + '…\n';
           if (btn) btn.disabled = true; stopBtn.disabled = false;
           activeStream = mcp.execStream('npx', ['wrangler'].concat(args), {
-            onData: function (c) { if (c && c.type === 'data') appendLine(c.data); },
-            onEnd: function () { appendLine('\n[' + label + ' ended]\n'); activeStream = null; if (btn) btn.disabled = false; stopBtn.disabled = true; },
-            onError: function (m) { appendLine('\n[error] ' + m + '\n'); activeStream = null; if (btn) btn.disabled = false; stopBtn.disabled = true; }
+            onData: function (c) { if (c && c.type === 'data') appendLog(c.data); },
+            onEnd: function () { appendLog('\n' + t('logs.ended', { label: label }) + '\n'); activeStream = null; if (btn) btn.disabled = false; stopBtn.disabled = true; },
+            onError: function (m) { appendLog('\n[error] ' + m + '\n'); activeStream = null; if (btn) btn.disabled = false; stopBtn.disabled = true; }
           });
         }
         document.getElementById('login').onclick = function (e) { startStream('login', ['login'], e.target); };
         document.getElementById('tail').onclick = function (e) { startStream('tail', ['tail', '--format', 'pretty'], e.target); };
-        stopBtn.onclick = function () { if (activeStream) { activeStream(); activeStream = null; } stopBtn.disabled = true; appendLine('\n[stopped]\n'); };
+        stopBtn.onclick = function () { if (activeStream) { activeStream(); activeStream = null; } stopBtn.disabled = true; appendLog('\n' + t('logs.stopped') + '\n'); };
 
-        // ── tool browser ──
+        // ── tools (master-detail) ──
         var GROUPS = {
-          kv: 'KV', r2: 'R2', secret: 'Secrets', secrets: 'Secrets', queue: 'Queues',
-          queues: 'Queues', vectorize: 'Vectorize', do: 'Durable Obj', ai: 'Workers AI',
-          hyperdrive: 'Hyperdrive', cron: 'Cron', pages: 'Pages', zones: 'DNS', dns: 'DNS',
-          cache: 'Cache', deploy: 'Deploy', deployments: 'Deploy', last: 'Deploy',
-          d1: 'D1', detect: 'Core', set: 'Core', whoami: 'Core'
+          kv: 'KV', r2: 'R2', secret: 'Secrets', secrets: 'Secrets', queue: 'Queues', queues: 'Queues',
+          vectorize: 'Vectorize', do: 'Durable Obj', ai: 'Workers AI', hyperdrive: 'Hyperdrive', cron: 'Cron',
+          pages: 'Pages', zones: 'DNS', dns: 'DNS', cache: 'Cache', deploy: 'Deploy', deployments: 'Deploy',
+          last: 'Deploy', d1: 'D1', detect: 'Core', set: 'Core', whoami: 'Core'
         };
-        function groupOf(name) { return GROUPS[name.replace(/^cf_/, '').split('_')[0]] || 'Other'; }
-        function fieldFor(key, schema) {
-          var p = (schema.properties && schema.properties[key]) || {};
-          var req = (schema.required || []).indexOf(key) >= 0;
-          if (p.enum) return '<select data-k="' + key + '">' + p.enum.map(function (o) { return '<option>' + o + '</option>'; }).join('') + '</select>';
-          var ph = key + (req ? '*' : '') + (p.type === 'number' ? ' (#)' : '');
-          return '<input data-k="' + key + '" placeholder="' + ph + '"' + (p.type === 'number' ? ' inputmode="numeric"' : '') + ' />';
-        }
-        function renderTool(t) {
-          var schema = t.parameters || { properties: {}, required: [] };
+        function groupOf(n) { return GROUPS[n.replace(/^cf_/, '').split('_')[0]] || 'Other'; }
+        var detailEl = document.getElementById('toolDetail');
+
+        function showToolDetail(tool) {
+          var schema = tool.parameters || { properties: {}, required: [] };
           var keys = Object.keys(schema.properties || {});
-          var danger = t.riskLevel === 'admin' || t.riskLevel === 'execute';
-          var div = document.createElement('div');
-          div.className = 'tool';
-          div.innerHTML =
-            '<h4 class="' + (danger ? 'danger' : '') + '">' + t.name + (danger ? ' ⚠' : '') + '</h4>' +
-            '<p class="desc">' + (t.description || '') + '</p>' +
-            '<div class="fields">' + keys.map(function (k) { return fieldFor(k, schema); }).join('') +
-            '<button class="act ' + (t.mutates ? '' : 'secondary') + '">Run</button></div>';
-          var btn = div.querySelector('button');
-          btn.onclick = function () {
+          var danger = tool.riskLevel === 'admin' || tool.riskLevel === 'execute';
+          detailEl.innerHTML = '';
+          var h = document.createElement('h4');
+          h.textContent = tool.name;
+          var risk = document.createElement('span');
+          risk.className = 'risk' + (danger ? ' danger' : '');
+          risk.textContent = tool.riskLevel || 'read';
+          h.appendChild(risk);
+          detailEl.appendChild(h);
+          var desc = document.createElement('p'); desc.className = 'desc'; desc.textContent = tool.description || '';
+          detailEl.appendChild(desc);
+
+          var inputs = {};
+          keys.forEach(function (k) {
+            var p = (schema.properties || {})[k] || {};
+            var req = (schema.required || []).indexOf(k) >= 0;
+            var lab = document.createElement('label'); lab.className = 'fld';
+            lab.textContent = k + (req ? ' *' : '') + (p.type === 'number' ? ' (#)' : '');
+            detailEl.appendChild(lab);
+            var el;
+            if (p.enum) { el = document.createElement('select'); p.enum.forEach(function (o) { var op = document.createElement('option'); op.textContent = o; el.appendChild(op); }); }
+            else { el = document.createElement('input'); if (p.type === 'number') el.inputMode = 'numeric'; }
+            detailEl.appendChild(el);
+            inputs[k] = { el: el, type: p.type };
+          });
+
+          var btn = document.createElement('button');
+          btn.className = 'act' + (tool.mutates ? '' : ' secondary');
+          btn.style.marginTop = '12px';
+          btn.textContent = t('tools.run');
+          detailEl.appendChild(btn);
+
+          var resLabel = document.createElement('label'); resLabel.className = 'fld'; resLabel.textContent = t('tools.result');
+          var res = document.createElement('pre'); res.className = 'out'; res.textContent = '—';
+
+          function run() {
             var args = {};
-            div.querySelectorAll('[data-k]').forEach(function (el) {
-              var v = el.value; if (v === '') return;
-              var pdef = (schema.properties || {})[el.getAttribute('data-k')] || {};
-              args[el.getAttribute('data-k')] = pdef.type === 'number' ? Number(v) : v;
+            Object.keys(inputs).forEach(function (k) {
+              var v = inputs[k].el.value; if (v === '') return;
+              args[k] = inputs[k].type === 'number' ? Number(v) : v;
             });
-            if (!danger) { invoke(t.name, t.name, args, btn); return; }
-            mcp.ui.confirm({
-              title: t.name, message: 'This is a mutating/destructive Cloudflare action. Proceed?',
-              confirmText: 'Run', danger: true
-            }).then(function (ok) { if (ok) invoke(t.name, t.name, args, btn); });
+            btn.disabled = true; res.textContent = t('tools.running');
+            if (!detailEl.contains(res)) { detailEl.appendChild(resLabel); detailEl.appendChild(res); }
+            mcp.invokeTool(tool.name, args)
+              .then(function (r) { writeOut(res, tool.name, r); })
+              .catch(function (e) { res.textContent = '✗ ' + String(e && e.message || e); })
+              .finally(function () { btn.disabled = false; });
+          }
+          btn.onclick = function () {
+            if (!danger) { run(); return; }
+            mcp.ui.confirm({ title: tool.name, message: t('tools.confirmMsg'), confirmText: t('tools.confirmRun'), danger: true })
+              .then(function (okay) { if (okay) run(); });
           };
-          return div;
         }
+
         function buildBrowser(tools) {
           var byGroup = {};
-          tools.forEach(function (t) { (byGroup[groupOf(t.name)] = byGroup[groupOf(t.name)] || []).push(t); });
+          tools.forEach(function (tl) { (byGroup[groupOf(tl.name)] = byGroup[groupOf(tl.name)] || []).push(tl); });
           var groups = Object.keys(byGroup).sort();
-          var groupsEl = document.getElementById('groups'), toolsEl = document.getElementById('tools');
-          function select(g) {
+          var groupsEl = document.getElementById('groups'), listEl = document.getElementById('toolList');
+          function selectGroup(g) {
             [].forEach.call(groupsEl.children, function (c) { c.className = 'grp' + (c.textContent === g ? ' active' : ''); });
-            toolsEl.innerHTML = '';
-            byGroup[g].forEach(function (t) { toolsEl.appendChild(renderTool(t)); });
+            listEl.innerHTML = '';
+            byGroup[g].forEach(function (tl) {
+              var b = document.createElement('button');
+              var danger = tl.riskLevel === 'admin' || tl.riskLevel === 'execute';
+              b.innerHTML = tl.name.replace(/^cf_/, '') + (danger ? ' <span class="dot">⚠</span>' : '');
+              b.onclick = function () {
+                [].forEach.call(listEl.children, function (c) { c.classList.remove('sel'); });
+                b.classList.add('sel');
+                showToolDetail(tl);
+              };
+              listEl.appendChild(b);
+            });
+            detailEl.innerHTML = '<div class="placeholder">' + t('tools.selectPrompt') + '</div>';
           }
           groupsEl.innerHTML = '';
           groups.forEach(function (g) {
             var b = document.createElement('button'); b.className = 'grp'; b.textContent = g;
-            b.onclick = function () { select(g); }; groupsEl.appendChild(b);
+            b.onclick = function () { selectGroup(g); }; groupsEl.appendChild(b);
           });
-          if (groups.length) select(groups.indexOf('Core') >= 0 ? 'Core' : groups[0]);
-          else toolsEl.innerHTML = '<div class="empty">No tools found.</div>';
+          if (groups.length) selectGroup(groups.indexOf('Core') >= 0 ? 'Core' : groups[0]);
+          else listEl.innerHTML = '<div class="empty">' + t('tools.noTools') + '</div>';
         }
         mcp.listPlugins().then(function (plugins) {
           var me = plugins.filter(function (p) { return p.namespace === NS; })[0];
           buildBrowser((me && me.contributions && me.contributions.tools) || []);
         }).catch(function (e) {
-          document.getElementById('tools').innerHTML = '<div class="empty">Could not load tools: ' + String(e && e.message || e) + '</div>';
+          document.getElementById('toolList').innerHTML = '<div class="empty">' + String(e && e.message || e) + '</div>';
         });
 
         // ── assistant ──
-        var chatEl = document.getElementById('chat');
-        var askEl = document.getElementById('ask');
-        var sendBtn = document.getElementById('send');
-        var cancelBtn = document.getElementById('cancel');
-        var modelSel = document.getElementById('model');
+        var chatEl = document.getElementById('chat'), askEl = document.getElementById('ask');
+        var sendBtn = document.getElementById('send'), cancelBtn = document.getElementById('cancel'), modelSel = document.getElementById('model');
         var history = [], closeChat = null, chatStarted = false;
-
         function bubble(role, text) {
           if (!chatStarted) { chatEl.innerHTML = ''; chatStarted = true; }
           var d = document.createElement('div'); d.className = 'b';
-          d.innerHTML = '<span class="role">' + role + ':</span>';
+          var r = document.createElement('span'); r.className = 'role'; r.textContent = role + ':'; d.appendChild(r);
           var span = document.createElement('span'); span.textContent = text; d.appendChild(span);
           chatEl.appendChild(d); chatEl.scrollTop = chatEl.scrollHeight; return span;
         }
@@ -289,52 +365,38 @@
           var d = document.createElement('div'); d.className = 'b sys'; d.textContent = text;
           chatEl.appendChild(d); chatEl.scrollTop = chatEl.scrollHeight;
         }
-
         mcp.assistant.listModels().then(function (models) {
           modelSel.innerHTML = '';
-          if (!models.length) { modelSel.innerHTML = '<option value="">configure a provider in Admin → AI Geral</option>'; return; }
+          if (!models.length) { modelSel.innerHTML = '<option value="">' + t('ai.configure') + '</option>'; return; }
           models.forEach(function (m) {
-            var o = document.createElement('option');
-            o.value = m.providerId + '|' + m.modelId;
-            o.textContent = m.label + (m.isDefault ? ' (default)' : '');
-            if (m.isDefault) o.selected = true;
+            var o = document.createElement('option'); o.value = m.providerId + '|' + m.modelId;
+            o.textContent = m.label + (m.isDefault ? ' (default)' : ''); if (m.isDefault) o.selected = true;
             modelSel.appendChild(o);
           });
-        }).catch(function () { modelSel.innerHTML = '<option value="">no models</option>'; });
+        }).catch(function () { modelSel.innerHTML = '<option value="">' + t('ai.noModels') + '</option>'; });
 
         function send() {
-          var msg = askEl.value.trim();
-          if (!msg || closeChat) return;
-          askEl.value = '';
-          bubble('you', msg);
-          var sel = (modelSel.value || '').split('|');
-          var assistantSpan = null, turnText = '';
+          var msg = askEl.value.trim(); if (!msg || closeChat) return;
+          askEl.value = ''; bubble(t('ai.you'), msg);
+          var sel = (modelSel.value || '').split('|'), assistantSpan = null, turnText = '';
           sendBtn.disabled = true; cancelBtn.disabled = false;
-          closeChat = mcp.assistant.chat(msg, {
-            providerId: sel[0] || undefined, modelId: sel[1] || undefined, history: history.slice()
-          }, {
+          closeChat = mcp.assistant.chat(msg, { providerId: sel[0] || undefined, modelId: sel[1] || undefined, history: history.slice() }, {
             onData: function (c) {
-              if (c.type === 'text') { if (!assistantSpan) assistantSpan = bubble('cf', ''); turnText += c.text; assistantSpan.textContent = turnText; chatEl.scrollTop = chatEl.scrollHeight; }
+              if (c.type === 'text') { if (!assistantSpan) assistantSpan = bubble(t('ai.assistant'), ''); turnText += c.text; assistantSpan.textContent = turnText; chatEl.scrollTop = chatEl.scrollHeight; }
               else if (c.type === 'tool_use') sysLine('→ ' + c.name + '(' + JSON.stringify(c.input) + ')');
               else if (c.type === 'tool_result') sysLine('  ' + (c.isError ? '✗ ' : '✓ ') + String(c.content).slice(0, 200));
               else if (c.type === 'confirm_request') {
-                mcp.ui.confirm({
-                  title: 'Run ' + c.name + '?',
-                  message: 'The assistant wants to run a mutating action:\n' + JSON.stringify(c.input, null, 2),
-                  confirmText: 'Allow', danger: true
-                }).then(function (ok) { mcp.assistant.confirm(c.callId, ok); sysLine((ok ? 'approved ' : 'denied ') + c.name); });
+                mcp.ui.confirm({ title: t('ai.confirmTitle', { name: c.name }), message: t('ai.confirmMsg', { input: JSON.stringify(c.input, null, 2) }), confirmText: t('ai.allow'), danger: true })
+                  .then(function (okay) { mcp.assistant.confirm(c.callId, okay); sysLine(t(okay ? 'ai.approved' : 'ai.denied', { name: c.name })); });
               } else if (c.type === 'error') sysLine('[error] ' + c.message);
             },
-            onEnd: function () {
-              if (turnText) history.push({ role: 'user', text: msg }, { role: 'assistant', text: turnText });
-              closeChat = null; sendBtn.disabled = false; cancelBtn.disabled = true;
-            },
+            onEnd: function () { if (turnText) history.push({ role: 'user', text: msg }, { role: 'assistant', text: turnText }); closeChat = null; sendBtn.disabled = false; cancelBtn.disabled = true; },
             onError: function (m) { sysLine('[stream error] ' + m); closeChat = null; sendBtn.disabled = false; cancelBtn.disabled = true; }
           });
         }
         sendBtn.onclick = send;
         askEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') send(); });
-        cancelBtn.onclick = function () { if (closeChat) { closeChat(); closeChat = null; sysLine('[cancelled]'); sendBtn.disabled = false; cancelBtn.disabled = true; } };
+        cancelBtn.onclick = function () { if (closeChat) { closeChat(); closeChat = null; sysLine(t('ai.cancelled')); sendBtn.disabled = false; cancelBtn.disabled = true; } };
 
         refreshDetect();
       })();
