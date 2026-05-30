@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        margin: 0; padding: 16px;
+        font-family: var(--font-sans, system-ui);
+        background: var(--background, #fff); color: var(--foreground, #111);
+        font-size: 13px;
+      }
+      h3 { margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
+      .badge { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--muted, #eee); color: var(--muted-foreground, #666); }
+      .badge.ok { background: #16a34a22; color: #16a34a; }
+      .badge.no { background: #dc262622; color: #dc2626; }
+      .muted { color: var(--muted-foreground, #777); font-size: 12px; margin: 0 0 12px; }
+      .row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+      input {
+        flex: 1; min-width: 120px; padding: 6px 8px; font: inherit;
+        border: 1px solid var(--border, #ccc); border-radius: var(--radius, 6px);
+        background: var(--card, #fff); color: inherit;
+      }
+      button {
+        padding: 6px 12px; font: inherit; cursor: pointer; border: 0;
+        border-radius: var(--radius, 6px);
+        background: var(--primary, #2563eb); color: var(--primary-foreground, #fff);
+      }
+      button.secondary { background: var(--secondary, #eee); color: var(--secondary-foreground, #111); }
+      button:disabled { opacity: .5; cursor: default; }
+      section { border-top: 1px solid var(--border, #eee); padding-top: 10px; margin-top: 10px; }
+      pre {
+        background: var(--muted, #f3f3f3); padding: 10px; border-radius: var(--radius, 6px);
+        font-family: var(--font-mono, monospace); font-size: 12px; white-space: pre-wrap;
+        max-height: 240px; overflow: auto; margin: 8px 0 0;
+      }
+      label { font-size: 12px; color: var(--muted-foreground, #777); }
+    </style>
+  </head>
+  <body>
+    <h3>Cloudflare <span class="badge" id="status">checking…</span></h3>
+    <p class="muted" id="detail">—</p>
+
+    <section>
+      <label>API token (stored only for this plugin)</label>
+      <div class="row">
+        <input id="token" type="password" placeholder="paste a Cloudflare API token" />
+        <button id="saveToken">save</button>
+        <button id="whoami" class="secondary">whoami</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="row">
+        <button id="deploy">deploy</button>
+        <button id="d1list" class="secondary">list D1</button>
+      </div>
+      <div class="row">
+        <input id="db" placeholder="D1 database name" />
+        <input id="sql" placeholder="SELECT … " value="SELECT 1 AS ok" />
+        <button id="query" class="secondary">query</button>
+      </div>
+    </section>
+
+    <pre id="out">ready.</pre>
+
+    <script>
+      var out = document.getElementById('out');
+      function show(label, v) {
+        out.textContent = label + '\n' + (typeof v === 'string' ? v : JSON.stringify(v, null, 2));
+      }
+      function run(label, tool, args, btn) {
+        if (btn) btn.disabled = true;
+        out.textContent = label + '…';
+        window.mcp.invokeTool(tool, args || {})
+          .then(function (r) { show(label + (r.isError ? ' ✗' : ' ✓'), r.content); })
+          .catch(function (e) { show(label + ' FAILED', String(e && e.message || e)); })
+          .finally(function () { if (btn) btn.disabled = false; });
+      }
+
+      function refreshDetect() {
+        window.mcp.invokeTool('cf_detect', {}).then(function (r) {
+          var isCf = !/Not a Cloudflare/.test(r.content);
+          var s = document.getElementById('status');
+          s.textContent = isCf ? 'project detected' : 'not a CF project';
+          s.className = 'badge ' + (isCf ? 'ok' : 'no');
+          document.getElementById('detail').textContent = r.content.replace(/\n/g, '  ');
+        }).catch(function (e) {
+          document.getElementById('detail').textContent = String(e && e.message || e);
+        });
+      }
+
+      document.getElementById('saveToken').onclick = function (e) {
+        var t = document.getElementById('token').value.trim();
+        if (!t) return;
+        run('save token', 'cf_set_token', { token: t }, e.target);
+      };
+      document.getElementById('whoami').onclick = function (e) { run('whoami', 'cf_whoami', {}, e.target); };
+      document.getElementById('deploy').onclick = function (e) { run('deploy', 'cf_deploy', {}, e.target); };
+      document.getElementById('d1list').onclick = function (e) { run('list D1', 'cf_d1_list', {}, e.target); };
+      document.getElementById('query').onclick = function (e) {
+        run('query', 'cf_d1_query', {
+          database: document.getElementById('db').value.trim(),
+          sql: document.getElementById('sql').value
+        }, e.target);
+      };
+
+      refreshDetect();
+    </script>
+  </body>
+</html>

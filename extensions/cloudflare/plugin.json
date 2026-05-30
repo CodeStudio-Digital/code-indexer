@@ -1,0 +1,7 @@
+{
+  "name": "cloudflare",
+  "version": "0.1.0",
+  "description": "Manage Cloudflare from your project — detect, auth, deploy, and query D1",
+  "author": { "name": "mcp" },
+  "apps": ".app.json"
+}
