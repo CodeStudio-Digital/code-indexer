@@ -32,19 +32,49 @@
     </style>
   </head>
   <body>
-    <h3>Plugin smoke test</h3>
-    <p class="muted" id="ctx">context: …</p>
+    <h3 id="title"></h3>
+    <p class="muted" id="ctx"></p>
 
     <div class="row">
-      <input id="text" placeholder="type something…" value="hello capabilities" />
-      <button id="echo">echo</button>
-      <button id="save" class="secondary">save note</button>
-      <button id="read" class="secondary">read note</button>
+      <input id="text" />
+      <button id="echo"></button>
+      <button id="save" class="secondary"></button>
+      <button id="read" class="secondary"></button>
     </div>
-    <pre id="out">ready.</pre>
+    <pre id="out"></pre>
 
     <script>
+      var mcp = window.mcp || {};
+      var t = (mcp.i18n && mcp.i18n.translator) ? mcp.i18n.translator({
+        en: {
+          title: 'Plugin smoke test',
+          context: 'context: {value}',
+          placeholder: 'type something…',
+          defaultText: 'hello capabilities',
+          echo: 'echo',
+          save: 'save note',
+          read: 'read note',
+          ready: 'ready.'
+        },
+        'pt-BR': {
+          title: 'Teste smoke do plugin',
+          context: 'contexto: {value}',
+          placeholder: 'digite algo…',
+          defaultText: 'olá capabilities',
+          echo: 'echo',
+          save: 'salvar nota',
+          read: 'ler nota',
+          ready: 'pronto.'
+        }
+      }) : function (k) { return k; };
       var out = document.getElementById('out');
+      document.getElementById('title').textContent = t('title');
+      document.getElementById('text').placeholder = t('placeholder');
+      document.getElementById('text').value = t('defaultText');
+      document.getElementById('echo').textContent = t('echo');
+      document.getElementById('save').textContent = t('save');
+      document.getElementById('read').textContent = t('read');
+      out.textContent = t('ready');
       function show(label, v) {
         out.textContent = label + '\n' + (typeof v === 'string' ? v : JSON.stringify(v, null, 2));
       }
@@ -52,7 +82,7 @@
 
       // window.mcp + window.__pluginContext are injected by the host.
       document.getElementById('ctx').textContent =
-        'context: ' + JSON.stringify((window.mcp && window.mcp.context) || {});
+        t('context', { value: JSON.stringify((window.mcp && window.mcp.context) || {}) });
 
       document.getElementById('echo').onclick = function () {
         window.mcp.invokeTool('echo', { text: document.getElementById('text').value })

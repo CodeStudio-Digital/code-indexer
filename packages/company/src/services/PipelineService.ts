@@ -151,6 +151,26 @@ export function validatePipelineGraph(
         });
       }
     }
+    if (kind === 'fan-out') {
+      if (node.branchMode && node.branchMode !== 'linear') {
+        errors.push({
+          nodeId: node.id,
+          message: `Fan-out node "${node.id}" must use branchMode='linear' (got '${node.branchMode}').`,
+        });
+      }
+      const fo = node.fanOut;
+      if (!fo || (fo.mode !== 'explicit' && fo.mode !== 'each-project')) {
+        errors.push({ nodeId: node.id, message: `Fan-out node "${node.id}" requires fanOut.mode 'explicit' or 'each-project'.` });
+      } else if (fo.mode === 'explicit') {
+        if (!Array.isArray(fo.branches) || fo.branches.length === 0) {
+          errors.push({ nodeId: node.id, message: `Fan-out node "${node.id}" (explicit) needs at least one branch.` });
+        } else if (fo.branches.some((b) => !b.role || typeof b.role !== 'string')) {
+          errors.push({ nodeId: node.id, message: `Every branch of fan-out node "${node.id}" needs a role.` });
+        }
+      } else if (fo.mode === 'each-project' && (!fo.role || typeof fo.role !== 'string')) {
+        errors.push({ nodeId: node.id, message: `Fan-out node "${node.id}" (each-project) requires fanOut.role.` });
+      }
+    }
   }
 
   const edgeIds = new Set<string>();

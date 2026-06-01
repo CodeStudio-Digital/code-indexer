@@ -4,6 +4,7 @@
  * lib.ts (cfFetch / cfAcct / wrangler / detectCloudflare / ok / fail / list).
  */
 import { tools as coreTools } from './tools.js';
+import { d1Tools } from './tools-d1.js';
 import { kvTools } from './tools-kv.js';
 import { r2Tools } from './tools-r2.js';
 import { secretTools } from './tools-secrets.js';
@@ -17,6 +18,7 @@ import { deployTools } from './tools-deploys.js';
 
 export const allTools = [
   ...coreTools,
+  ...d1Tools,
   ...kvTools,
   ...r2Tools,
   ...secretTools,

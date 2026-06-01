@@ -11,6 +11,7 @@ export interface UpdateProjectInput {
   root_path?: string;
   embeddings_enabled?: number;
   search_mode?: SearchMode;
+  node_version?: string | null;
 }
 
 const VALID_SEARCH_MODES: ReadonlySet<string> = new Set(['fts', 'vector', 'hybrid']);
@@ -71,6 +72,11 @@ export class UpdateProjectService {
         throw new ProjectError('invalid_input', 'search_mode must be one of: fts, vector, hybrid');
       }
       updates.search_mode = patch.search_mode;
+    }
+
+    if (patch.node_version !== undefined) {
+      // Opaque runtime id resolved at spawn time; empty string → system default.
+      updates.node_version = patch.node_version || null;
     }
 
     this.db.updateProject(id, updates);

@@ -18,19 +18,20 @@
 import {
   runCoder,
   type CoderAttachment,
+  type MasterStartResult,
   type RunCoderHandle,
   type RunCoderOptions,
 } from '@mcp/code-agent/index.js';
+import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import { SkillStore } from '@mcp/store/skill-store.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
-import { resolveRoleSkills } from '@mcp/company/types.js';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { AllowedModel } from '@mcp/company/types.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { IBoardPoster } from '@mcp/company/services/ports.js';
 import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
 import { buildMasterPromptInputs } from '@mcp/company/services/master/prompt-builder.js';
+import { configureMasterSkills } from '@mcp/company/services/master/configure-skills.js';
 
 export interface MasterStartOpts {
   userMessage: string;
@@ -70,6 +71,20 @@ export interface MasterStartStateMutators {
   setLastUserAttachments: (atts: CoderAttachment[]) => void;
   setHandle: (handle: RunCoderHandle) => void;
   setRunnerExited: (value: boolean) => void;
+  // ─── Background-start concurrency (shared with the resurrect path) ───
+  /**
+   * In-flight start/resume promise. The slow phase (sandbox provision +
+   * `runCoder` boot) runs in the background so the worker RPC returns within
+   * its 60s deadline; this slot lets concurrent callers reattach instead of
+   * double-starting, and lets `notify`/`sendUserMessage` queue turns that
+   * arrive before the runner is wired.
+   */
+  readonly resumingPromise: Promise<void> | null;
+  setResumingPromise: (p: Promise<void> | null) => void;
+  /** Queue of messages that arrived during the provision window. */
+  readonly resumeQueue: Array<{ message: string; attachments?: CoderAttachment[] }>;
+  /** Splice + clear `resumeQueue`. */
+  drainResumeQueue: () => Array<{ message: string; attachments?: CoderAttachment[] }>;
 }
 
 export interface MasterStartDeps {
@@ -84,22 +99,29 @@ export interface MasterStartDeps {
 export async function startMaster(
   opts: MasterStartOpts,
   deps: MasterStartDeps,
-): Promise<RunCoderHandle> {
+): Promise<MasterStartResult> {
   if (deps.state.hasHandle) throw new Error('Master already started');
+  if (deps.state.resumingPromise) throw new Error('Master start already in progress');
 
   const ctx = deps.ctx;
   const primaryProjectId = ctx.projects[0]?.project_id;
   if (!primaryProjectId) throw new Error('Company session has no linked projects');
 
   const config = loadConfig();
-  const store = new SessionStore(config.dbPath);
 
+  // ── Fast path (awaited inside the RPC): create the session + agent_run,
+  // flip statuses, post the start board messages. All cheap/synchronous. ──
+  // `store` is only used for `createSession` here — `runCoder` opens its own
+  // SessionStore — so close it immediately rather than holding it across the
+  // background phase.
+  const store = new SessionStore(config.dbPath);
   const masterSession = store.createSession({
     project_id: primaryProjectId,
     title: `[Company Master] ${ctx.companySessionId}`,
     provider: opts.provider,
     model: opts.model,
   });
+  store.close();
 
   const masterRun = ctx.companyStore.createAgentRun({
     company_session_id: ctx.companySessionId,
@@ -109,6 +131,7 @@ export async function startMaster(
     provider: opts.provider,
     model: opts.model,
   });
+
   deps.state.setAgentRunId(masterRun.id);
   deps.state.setRoleConfigs((opts.roleConfigs ?? []) as RoleConfig[]);
   // Populate `_allowedModels` from the persisted session config. Must
@@ -120,46 +143,6 @@ export async function startMaster(
   ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'running');
   // P15c — clear the recovery flag set by `recoverStaleAgentRuns()` on boot.
   ctx.companyStore.clearSessionRecoveryFlag(ctx.companySessionId);
-
-  const inputs = await buildMasterPromptInputs(
-    ctx,
-    masterRun.id,
-    deps.state.roleConfigs,
-    deps.state.allowedModels,
-    deps.orchestratorRef,
-    opts.signal,
-    { sddMode: !!opts.sddMode },
-  );
-
-  // Configure skill enablement on the master's coder session — must
-  // happen after `buildMasterPromptInputs` so we know the configured
-  // stack for conditional skill resolution.
-  const masterRoleConfig = deps.state.roleConfigs.find((r) => r.role === 'master');
-  const masterResolvedSkills = resolveRoleSkills(masterRoleConfig?.skills, {
-    stack: inputs.configuredStack ?? undefined,
-  });
-  if (masterResolvedSkills.length > 0) {
-    try {
-      const skillStore = new SkillStore(config.dbPath);
-      const allSkills = skillStore.resolveActiveSkills(masterSession.id, primaryProjectId);
-      for (const skill of allSkills) {
-        skillStore.setSessionSkillEnabled(
-          masterSession.id,
-          skill.id,
-          masterResolvedSkills.includes(skill.id),
-        );
-      }
-      skillStore.close();
-    } catch (e) {
-      console.warn(
-        `[company] Failed to configure skills for master: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-  }
-
-  deps.state.setCompanyContext(inputs.companyContext);
-  deps.state.setPromptBlock(inputs.promptBlock);
-  deps.state.setLastUserAttachments(opts.attachments ?? []);
 
   const startBoardMsg =
     opts.attachments && opts.attachments.length > 0
@@ -173,26 +156,85 @@ export async function startMaster(
     `Master agent started (${opts.provider}/${opts.model}). Analyzing task...`,
   );
 
-  const handle = await runCoder({
-    session: { id: masterSession.id },
-    userMessage: opts.userMessage,
-    attachments: opts.attachments,
-    maxTurns: opts.maxTurns ?? 100,
-    signal: opts.signal,
-    planMode: false,
-    profile: 'full',
-    companyContext: inputs.companyContext,
-    companyPromptBlock: inputs.promptBlock,
-    thinking: opts.thinking,
-    // Wire HumanInTheLoop BEFORE the runner takes turn 1, so a master
-    // that calls `ask_user` immediately is still captured.
-    onRunnerReady: (runner) => deps.wireRunner(runner, masterRun.id),
-  } as RunCoderOptions & { companyPromptBlock: string });
+  const ack: MasterStartResult = { masterSessionId: masterSession.id, indexStatus: null };
+  const masterSessionId = masterSession.id;
+  const agentRunId = masterRun.id;
 
-  deps.state.setHandle(handle);
-  deps.state.setRunnerExited(false);
-  deps.attachCompletion(handle, masterRun.id);
+  // ── Background phase: sandbox provision (cold container build can take
+  // minutes) + runCoder boot. Un-awaited so the RPC returns within its 60s
+  // deadline; provisioning progress streams over the metaBus → SSE. ──
+  const doStart = async (): Promise<void> => {
+    const inputs = await buildMasterPromptInputs(
+      ctx,
+      agentRunId,
+      deps.state.roleConfigs,
+      deps.state.allowedModels,
+      deps.orchestratorRef,
+      opts.signal,
+      { sddMode: !!opts.sddMode },
+    );
 
-  store.close();
-  return handle;
+    // Configure skill enablement on the master's coder session — must
+    // happen after `buildMasterPromptInputs` so we know the configured
+    // stack for conditional skill resolution.
+    configureMasterSkills({
+      roleConfigs: deps.state.roleConfigs,
+      configuredStack: inputs.configuredStack,
+      coderSessionId: masterSessionId,
+      primaryProjectId,
+    });
+
+    deps.state.setCompanyContext(inputs.companyContext);
+    deps.state.setPromptBlock(inputs.promptBlock);
+    deps.state.setLastUserAttachments(opts.attachments ?? []);
+
+    const handle = await runCoder({
+      session: { id: masterSessionId },
+      userMessage: opts.userMessage,
+      attachments: opts.attachments,
+      maxTurns: opts.maxTurns ?? 100,
+      signal: opts.signal,
+      planMode: false,
+      profile: 'full',
+      companyContext: inputs.companyContext,
+      companyPromptBlock: inputs.promptBlock,
+      thinking: opts.thinking,
+      // Wire HumanInTheLoop BEFORE the runner takes turn 1, so a master
+      // that calls `ask_user` immediately is still captured.
+      onRunnerReady: (runner) => deps.wireRunner(runner, agentRunId),
+    } as RunCoderOptions & { companyPromptBlock: string });
+
+    deps.state.setHandle(handle);
+    deps.state.setRunnerExited(false);
+    deps.attachCompletion(handle, agentRunId);
+
+    // Flush any turns that arrived while the sandbox was provisioning.
+    const queued = deps.state.drainResumeQueue();
+    for (const item of queued) {
+      if (item.attachments?.length) {
+        handle.runner.pushUserContent(attachmentsToBlocks(item.message, item.attachments));
+      } else {
+        handle.runner.pushUserMessage(item.message);
+      }
+    }
+  };
+
+  const promise = doStart()
+    .catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[company s=${ctx.companySessionId}] master start background task failed:`, msg);
+      try {
+        deps.board.post('system', null, 'message', `Master start failed: ${msg}`);
+      } catch { /* best-effort */ }
+      try {
+        ctx.companyStore.updateAgentRunStatus(agentRunId, 'error');
+        ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'error');
+      } catch { /* best-effort */ }
+    })
+    .finally(() => {
+      deps.state.setResumingPromise(null);
+    });
+  deps.state.setResumingPromise(promise);
+
+  return ack;
 }

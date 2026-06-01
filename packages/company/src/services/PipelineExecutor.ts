@@ -32,6 +32,7 @@ import type { PipelineService } from '@mcp/company/services/PipelineService.js';
 import { renderNodeTask, resolveStartNode } from '@mcp/company/services/PipelineService.js';
 import { readFinalAssistantText } from '@mcp/company/services/finalText.js';
 import { pickNextEdge, resolveBranchVerdictPure } from '@mcp/code-agent/pipelines/core/PipelineKernel.js';
+import { FanOutRunner, type FanOutBarrier } from './pipeline-fanout.js';
 import type {
   Pipeline,
   PipelineExecution,
@@ -47,7 +48,10 @@ import type {
 export { pickNextEdge };
 
 const DEFAULT_NODE_MAX_ATTEMPTS = 3;
-const GLOBAL_NODE_EXECUTION_CAP = 50;
+// Higher than a single-spawn pipeline would need because a fan-out node
+// creates one row per branch (one per project) — N projects must not trip
+// the cycle guard. Per-branch `maxAttempts` still bounds retries.
+const GLOBAL_NODE_EXECUTION_CAP = 200;
 
 export interface PipelineExecutorDeps {
   ctx: SessionContext;
@@ -67,8 +71,25 @@ interface ActiveListener {
 export class PipelineExecutor {
   /** Per-execution listener so `abort` can detach the attention hook. */
   private readonly activeListeners = new Map<number, ActiveListener>();
+  /** Per-execution fan-out barriers (shared with `FanOutRunner`). */
+  private readonly fanOutBarriers = new Map<number, FanOutBarrier>();
+  private readonly fanOut: FanOutRunner;
 
-  constructor(private readonly deps: PipelineExecutorDeps) {}
+  constructor(private readonly deps: PipelineExecutorDeps) {
+    this.fanOut = new FanOutRunner({
+      ctx: deps.ctx,
+      kanban: deps.kanban,
+      subordinates: deps.subordinates,
+      attention: deps.attention,
+      publisher: deps.publisher,
+      barriers: this.fanOutBarriers,
+      pipelineNameFor: (id) => this.pipelineNameFor(id),
+      onJoin: (executionId, node, aggregated, initialInput) =>
+        this.joinFanOut(executionId, node, aggregated, initialInput),
+      failExecution: (executionId, pipelineId, message) =>
+        this.failExecution(executionId, pipelineId, message),
+    });
+  }
 
   // ─── Public API ───────────────────────────────────────────────
 
@@ -123,6 +144,7 @@ export class PipelineExecutor {
     if (exec.status !== 'running' && exec.status !== 'paused') return false;
 
     this.detachListener(executionId, { abortAgent: true });
+    this.detachFanOut(executionId, { abortAgents: true });
 
     this.deps.ctx.companyStore.updatePipelineExecution(executionId, {
       status: 'aborted',
@@ -167,6 +189,7 @@ export class PipelineExecutor {
       }
     }
     this.detachListener(executionId, { abortAgent: true });
+    this.detachFanOut(executionId, { abortAgents: true });
 
     this.deps.ctx.companyStore.updatePipelineExecution(executionId, { status: 'paused' });
     this.deps.publisher.publish('pipeline_paused', {
@@ -207,6 +230,15 @@ export class PipelineExecutor {
     const previousOutput = lastOutputForResume(exec.context, node.id);
     void this.runNode(executionId, node, exec.initial_input, previousOutput);
     return true;
+  }
+
+  /**
+   * Approve a pause caused by `requires_confirmation`. Runtime semantics
+   * mirror `resume()` (re-run `current_node_id`, which points at the
+   * not-yet-run next node); the distinct verb keeps the audit log clear.
+   */
+  async confirm(executionId: number): Promise<boolean> {
+    return this.resume(executionId);
   }
 
   status(executionId: number): {
@@ -287,6 +319,15 @@ export class PipelineExecutor {
         exec.pipeline_id,
         `Aborted after ${GLOBAL_NODE_EXECUTION_CAP} node executions (global cycle cap).`,
       );
+      return;
+    }
+
+    // Fan-out node: spawn N branches and barrier-join via FanOutRunner,
+    // which calls back into `joinFanOut` to advance. Bypasses the single-
+    // spawn path below (and its per-node attempt guard — branches manage
+    // their own retries).
+    if (node.kind === 'fan-out') {
+      void this.fanOut.run(executionId, node, initialInput, previousOutput);
       return;
     }
 
@@ -455,35 +496,94 @@ export class PipelineExecutor {
       outputPreview: output.slice(0, 240),
     });
 
+    this.advanceToNext(executionId, exec.pipeline_id, node, next, outgoing.length, exec.context.snapshot, initialInput, output, branchMode, verdict);
+  }
+
+  /**
+   * Shared "advance the execution" tail used by both the single-spawn path
+   * and the fan-out join: route to the next node, hit a terminal, or pause
+   * for a `requires_confirmation` gate.
+   */
+  private advanceToNext(
+    executionId: number,
+    pipelineId: number,
+    node: PipelineNode,
+    next: { targetId: string; outcome: string | null } | null,
+    outgoingCount: number,
+    snapshot: PipelineGraph,
+    initialInput: string,
+    output: string,
+    branchMode: NonNullable<PipelineNode['branchMode']>,
+    verdict: string | null,
+  ): void {
     if (!next) {
-      // No matching outgoing edge — terminal node reached, OR a
-      // condition with no fallback. The validator has already rejected
-      // pipelines where this would be a misconfiguration; for runtime
-      // we treat it as 'completed' when the node had zero outgoing
-      // edges, and 'failed' otherwise (so dead-end conditions surface).
-      if (outgoing.length === 0) {
-        this.completeExecution(executionId, exec.pipeline_id);
+      // No matching outgoing edge — terminal node reached, OR a condition
+      // with no fallback. Treat zero-outgoing as 'completed'; a dead-end
+      // condition surfaces as 'failed'.
+      if (outgoingCount === 0) {
+        this.completeExecution(executionId, pipelineId);
       } else {
         this.failExecution(
           executionId,
-          exec.pipeline_id,
+          pipelineId,
           `Node "${node.id}" produced no matching branch (mode=${branchMode}, verdict=${verdict ?? 'none'}).`,
         );
       }
       return;
     }
 
-    const nextNode = exec.context.snapshot.nodes.find((n) => n.id === next.targetId);
+    const nextNode = snapshot.nodes.find((n) => n.id === next.targetId);
     if (!nextNode) {
-      this.failExecution(executionId, exec.pipeline_id, `Edge from "${node.id}" points at missing node "${next.targetId}".`);
+      this.failExecution(executionId, pipelineId, `Edge from "${node.id}" points at missing node "${next.targetId}".`);
       return;
     }
 
-    this.deps.ctx.companyStore.updatePipelineExecution(executionId, {
-      currentNodeId: nextNode.id,
-    });
+    this.deps.ctx.companyStore.updatePipelineExecution(executionId, { currentNodeId: nextNode.id });
+
+    // Human-in-the-loop gate: when the node that just finished asked for
+    // confirmation, pause BEFORE running the next node. `current_node_id`
+    // already points at `nextNode`, so `confirm()` (→ resume) runs it.
+    if (node.requires_confirmation) {
+      this.deps.ctx.companyStore.updatePipelineExecution(executionId, { status: 'paused' });
+      this.deps.publisher.publish('pipeline_paused', {
+        executionId,
+        pipelineId,
+        nodeId: nextNode.id,
+        reason: 'awaiting_confirmation',
+      });
+      return;
+    }
 
     void this.runNode(executionId, nextNode, initialInput, output);
+  }
+
+  /**
+   * Join callback for `FanOutRunner`: the aggregated output of all branches
+   * becomes this node's output. Fan-out nodes are linear, so route the
+   * single outgoing edge and advance (same terminal/confirmation rules).
+   */
+  private joinFanOut(executionId: number, node: PipelineNode, aggregated: string, initialInput: string): void {
+    const exec = this.deps.ctx.companyStore.getPipelineExecution(executionId);
+    if (!exec || exec.status !== 'running') return;
+
+    const outgoing = exec.context.snapshot.edges.filter((e) => e.from === node.id);
+    const next = pickNextEdge(outgoing, 'linear', null);
+
+    const updatedContext: PipelineExecutionContext = {
+      snapshot: exec.context.snapshot,
+      vars: { ...exec.context.vars, [node.id]: { output: aggregated, outcome: next?.outcome ?? 'linear' } },
+    };
+    this.deps.ctx.companyStore.updatePipelineExecution(executionId, { context: updatedContext });
+
+    this.deps.publisher.publish('pipeline_node_completed', {
+      executionId,
+      pipelineId: exec.pipeline_id,
+      nodeId: node.id,
+      outcome: next?.outcome ?? null,
+      outputPreview: aggregated.slice(0, 240),
+    });
+
+    this.advanceToNext(executionId, exec.pipeline_id, node, next, outgoing.length, exec.context.snapshot, initialInput, aggregated, 'linear', null);
   }
 
   /**
@@ -534,6 +634,19 @@ export class PipelineExecutor {
     this.activeListeners.delete(executionId);
     if (opts.abortAgent) {
       try { this.deps.subordinates.abort(listener.agentRunId); } catch { /* best-effort */ }
+    }
+  }
+
+  /** Tear down a fan-out barrier: unsubscribe + abort every in-flight branch. */
+  private detachFanOut(executionId: number, opts: { abortAgents: boolean }): void {
+    const barrier = this.fanOutBarriers.get(executionId);
+    if (!barrier) return;
+    barrier.unsubscribe();
+    this.fanOutBarriers.delete(executionId);
+    if (opts.abortAgents) {
+      for (const agentRunId of barrier.pending) {
+        try { this.deps.subordinates.abort(agentRunId); } catch { /* best-effort */ }
+      }
     }
   }
 

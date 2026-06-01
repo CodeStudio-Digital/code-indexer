@@ -51,6 +51,8 @@
       "@mcp/plugin-host/*": ["packages/plugin-host/src/*"],
       "@mcp/plugin-market-client": ["packages/plugin-market-client/src/index.ts"],
       "@mcp/plugin-market-client/*": ["packages/plugin-market-client/src/*"],
+      "@mcp/podman-core": ["packages/podman-core/src/index.ts"],
+      "@mcp/podman-core/*": ["packages/podman-core/src/*"],
       "@apps/*": ["apps/*"]
     }
   }

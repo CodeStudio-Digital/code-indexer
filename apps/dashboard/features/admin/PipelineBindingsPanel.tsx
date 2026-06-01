@@ -185,7 +185,7 @@ export function PipelineBindingsPanel() {
           catalog: {
             pipelineName: b.pipeline_name,
             bindingRole: b.binding_role,
-            description: '(custom pipeline — not in catalog)',
+            description: t('admin:pipelines.customDescription'),
             introducedInPhase: '-',
           },
           rows: [b],
@@ -193,7 +193,7 @@ export function PipelineBindingsPanel() {
       }
     }
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [bindings, catalog]);
+  }, [bindings, catalog, t]);
 
   const openNew = (entry: PipelineCatalogEntry) => {
     setEditing({
@@ -225,7 +225,7 @@ export function PipelineBindingsPanel() {
       const models = await fetchProviderModels(providerId);
       setEditing((s) => s ? { ...s, modelsByProvider: { ...s.modelsByProvider, [providerId]: models } } : s);
     } catch (e) {
-      setEditing((s) => s ? { ...s, error: `Failed to load models: ${(e as Error).message}` } : s);
+      setEditing((s) => s ? { ...s, error: t('admin:pipelines.loadModelsFailed', { message: (e as Error).message }) } : s);
     }
   };
 
@@ -235,22 +235,22 @@ export function PipelineBindingsPanel() {
     try {
       configParsed = JSON.parse(editing.draft.config_json || '{}');
       if (typeof configParsed !== 'object' || Array.isArray(configParsed) || configParsed === null) {
-        throw new Error('config must be a JSON object');
+        throw new Error(t('admin:pipelines.errors.configNotObject'));
       }
     } catch (e) {
-      setEditing((s) => s ? { ...s, error: `Invalid config JSON: ${(e as Error).message}` } : s);
+      setEditing((s) => s ? { ...s, error: t('admin:pipelines.errors.invalidConfig', { message: (e as Error).message }) } : s);
       return;
     }
     if (!editing.draft.provider_id) {
-      setEditing((s) => s ? { ...s, error: 'Provider is required' } : s);
+      setEditing((s) => s ? { ...s, error: t('admin:pipelines.errors.providerRequired') } : s);
       return;
     }
     if (!editing.draft.model_id) {
-      setEditing((s) => s ? { ...s, error: 'Model is required' } : s);
+      setEditing((s) => s ? { ...s, error: t('admin:pipelines.errors.modelRequired') } : s);
       return;
     }
     if (editing.draft.scope_type !== 'global' && !editing.draft.scope_id) {
-      setEditing((s) => s ? { ...s, error: 'Scope ID is required for non-global scopes' } : s);
+      setEditing((s) => s ? { ...s, error: t('admin:pipelines.errors.scopeIdRequired') } : s);
       return;
     }
 
@@ -286,7 +286,7 @@ export function PipelineBindingsPanel() {
       await patchBinding(binding.id, { enabled: !binding.enabled });
       await load();
     } catch (e) {
-      await notify({ title: 'Toggle failed', description: (e as Error).message, variant: 'destructive' });
+      await notify({ title: t('admin:pipelines.toggleFailed'), description: (e as Error).message, variant: 'destructive' });
     } finally {
       setBusy(null);
     }
@@ -294,7 +294,7 @@ export function PipelineBindingsPanel() {
 
   const onTest = async (binding: PipelineBinding) => {
     setBusy(binding.id);
-    setTestResults((t) => ({ ...t, [binding.id]: { ok: false, reason: 'testing…' } }));
+    setTestResults((prev) => ({ ...prev, [binding.id]: { ok: false, reason: t('admin:pipelines.testing') } }));
     try {
       const result = await testBinding(binding.id);
       setTestResults((t) => ({ ...t, [binding.id]: result }));
@@ -305,10 +305,10 @@ export function PipelineBindingsPanel() {
 
   const onDelete = async (binding: PipelineBinding) => {
     const ok = await confirm({
-      title: `Delete binding?`,
+      title: t('admin:pipelines.delete.title'),
       description: `${binding.pipeline_name}/${binding.binding_role} → ${binding.provider_id}/${binding.model_id}`,
       variant: 'destructive',
-      confirmLabel: 'Delete',
+      confirmLabel: t('admin:pipelines.delete.confirm'),
     });
     if (!ok) return;
     setBusy(binding.id);
@@ -483,7 +483,7 @@ export function PipelineBindingsPanel() {
 
       {loading && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+          <Loader2 className="h-4 w-4 animate-spin" /> {t('admin:pipelines.loading')}
         </div>
       )}
       {error && (
@@ -505,17 +505,21 @@ export function PipelineBindingsPanel() {
                       <span className="text-muted-foreground text-xs">/</span>
                       <span className="font-mono text-sm">{group.catalog.bindingRole}</span>
                       {group.catalog.comingSoon && (
-                        <Badge variant="outline" className="text-xs">Coming soon (Phase {group.catalog.introducedInPhase})</Badge>
+                        <Badge variant="outline" className="text-xs">
+                          {t('admin:pipelines.comingSoonPhase', { phase: group.catalog.introducedInPhase })}
+                        </Badge>
                       )}
                       {!group.catalog.comingSoon && (
-                        <Badge variant="outline" className="text-xs">Phase {group.catalog.introducedInPhase}</Badge>
+                        <Badge variant="outline" className="text-xs">
+                          {t('admin:pipelines.phase', { phase: group.catalog.introducedInPhase })}
+                        </Badge>
                       )}
                     </CardTitle>
                     <div className="text-xs text-muted-foreground">
                       {group.catalog.description}
                       {group.catalog.recommendedDefault && (
                         <div className="mt-0.5">
-                          Suggested:{' '}
+                          {t('admin:pipelines.suggested')}{' '}
                           <span className="font-mono">
                             {group.catalog.recommendedDefault.providerKind} / {group.catalog.recommendedDefault.modelHint}
                           </span>
@@ -525,17 +529,17 @@ export function PipelineBindingsPanel() {
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge variant={enabledCount > 0 ? 'default' : 'outline'} className="text-xs">
-                      {enabledCount} enabled / {group.rows.length} total
+                      {t('admin:pipelines.enabledCount', { enabled: enabledCount, total: group.rows.length })}
                     </Badge>
                     <Button size="sm" variant="outline" onClick={() => openNew(group.catalog)}>
-                      <Plus className="h-3 w-3 mr-1" /> Add binding
+                      <Plus className="h-3 w-3 mr-1" /> {t('admin:pipelines.addBinding')}
                     </Button>
                   </div>
                 </div>
               </CardHeader>
               <CardContent className="pt-0">
                 {group.rows.length === 0 ? (
-                  <div className="text-xs text-muted-foreground italic px-2 py-3">No binding configured.</div>
+                  <div className="text-xs text-muted-foreground italic px-2 py-3">{t('admin:pipelines.noBinding')}</div>
                 ) : (
                   <div className="space-y-2">
                     {group.rows.map((row) => {
@@ -567,7 +571,7 @@ export function PipelineBindingsPanel() {
                           </div>
                           <div className="flex items-center gap-2">
                             <Switch checked={row.enabled} onCheckedChange={() => onToggleEnabled(row)} disabled={busy === row.id} />
-                            <Badge variant="outline" className="text-xs">prio {row.priority}</Badge>
+                            <Badge variant="outline" className="text-xs">{t('admin:pipelines.priorityShort', { priority: row.priority })}</Badge>
                             <Button size="sm" variant="ghost" onClick={() => openEdit(group.catalog, row)} disabled={busy === row.id}>
                               <Pencil className="h-3 w-3" />
                             </Button>
@@ -594,18 +598,18 @@ export function PipelineBindingsPanel() {
           <DialogContent className="max-w-xl">
             <DialogHeader>
               <DialogTitle>
-                {editing.binding ? 'Edit binding' : 'New binding'} — {editing.catalog.pipelineName}/{editing.catalog.bindingRole}
+                {editing.binding ? t('admin:pipelines.dialog.editTitle') : t('admin:pipelines.dialog.newTitle')} — {editing.catalog.pipelineName}/{editing.catalog.bindingRole}
               </DialogTitle>
             </DialogHeader>
             <div className="space-y-3 py-2 text-sm">
               <div>
-                <label className="text-xs font-medium block mb-1">Provider</label>
+                <label className="text-xs font-medium block mb-1">{t('admin:pipelines.dialog.provider')}</label>
                 <select
                   className="w-full border rounded px-2 py-1 bg-background"
                   value={editing.draft.provider_id}
                   onChange={(e) => void onProviderSelected(e.target.value)}
                 >
-                  <option value="">— select provider —</option>
+                  <option value="">{t('admin:pipelines.dialog.providerPlaceholder')}</option>
                   {providers.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name} ({p.kind})
@@ -617,7 +621,7 @@ export function PipelineBindingsPanel() {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-xs font-medium block mb-1">Model</label>
+                  <label className="text-xs font-medium block mb-1">{t('admin:pipelines.dialog.model')}</label>
                   <select
                     className="w-full border rounded px-2 py-1 bg-background"
                     value={editing.draft.model_id}
@@ -626,7 +630,7 @@ export function PipelineBindingsPanel() {
                     }
                     disabled={!editing.draft.provider_id}
                   >
-                    <option value="">— select model —</option>
+                    <option value="">{t('admin:pipelines.dialog.modelPlaceholder')}</option>
                     {(editing.modelsByProvider[editing.draft.provider_id] ?? []).map((m) => (
                       <option key={`${m.model_id}:${m.mode}`} value={m.model_id}>
                         {m.name} {m.mode ? `(${m.mode})` : ''}
@@ -635,7 +639,7 @@ export function PipelineBindingsPanel() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-medium block mb-1">Mode (optional)</label>
+                  <label className="text-xs font-medium block mb-1">{t('admin:pipelines.dialog.mode')}</label>
                   <Input
                     value={editing.draft.model_mode}
                     onChange={(e) =>
@@ -648,7 +652,7 @@ export function PipelineBindingsPanel() {
 
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <label className="text-xs font-medium block mb-1">Scope</label>
+                  <label className="text-xs font-medium block mb-1">{t('admin:pipelines.dialog.scope')}</label>
                   <select
                     className="w-full border rounded px-2 py-1 bg-background"
                     value={editing.draft.scope_type}
@@ -666,7 +670,7 @@ export function PipelineBindingsPanel() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-medium block mb-1">Scope ID</label>
+                  <label className="text-xs font-medium block mb-1">{t('admin:pipelines.dialog.scopeId')}</label>
                   <Input
                     value={editing.draft.scope_id}
                     disabled={editing.draft.scope_type === 'global'}
@@ -677,7 +681,7 @@ export function PipelineBindingsPanel() {
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium block mb-1">Priority</label>
+                  <label className="text-xs font-medium block mb-1">{t('admin:pipelines.dialog.priority')}</label>
                   <Input
                     value={editing.draft.priority}
                     onChange={(e) =>
@@ -688,7 +692,7 @@ export function PipelineBindingsPanel() {
               </div>
 
               <div>
-                <label className="text-xs font-medium block mb-1">Config (JSON)</label>
+                <label className="text-xs font-medium block mb-1">{t('admin:pipelines.dialog.config')}</label>
                 <Textarea
                   rows={5}
                   value={editing.draft.config_json}
@@ -706,7 +710,7 @@ export function PipelineBindingsPanel() {
                     setEditing((s) => s ? { ...s, draft: { ...s.draft, enabled: v } } : s)
                   }
                 />
-                <span className="text-sm">Enabled</span>
+                <span className="text-sm">{t('admin:pipelines.dialog.enabled')}</span>
               </div>
 
               {editing.error && (
@@ -717,11 +721,11 @@ export function PipelineBindingsPanel() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditing(null)} disabled={editing.saving}>
-                Cancel
+                {t('admin:pipelines.dialog.cancel')}
               </Button>
               <Button onClick={() => void onSubmit()} disabled={editing.saving}>
                 {editing.saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-                {editing.binding ? 'Save' : 'Create'}
+                {editing.binding ? t('admin:pipelines.dialog.save') : t('admin:pipelines.dialog.create')}
               </Button>
             </DialogFooter>
           </DialogContent>

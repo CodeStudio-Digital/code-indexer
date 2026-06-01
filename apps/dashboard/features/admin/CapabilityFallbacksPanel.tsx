@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { AlertTriangle, RefreshCw, Search } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -22,6 +23,7 @@ import {
  * a new model manually.
  */
 export function CapabilityFallbacksPanel(): JSX.Element {
+  const { t } = useTranslation('admin');
   const [items, setItems] = useState<CapabilityFallbackEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [previewModel, setPreviewModel] = useState('');
@@ -65,30 +67,30 @@ export function CapabilityFallbacksPanel(): JSX.Element {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
-          <h3 className="text-base font-semibold">Capability fallbacks</h3>
+          <h3 className="text-base font-semibold">{t('capabilityFallbacks.title')}</h3>
           <p className="text-sm text-muted-foreground">
-            Models that resolved via the family heuristic or hardcoded 128K. Lock in explicit
-            <code className="mx-1 px-1 bg-muted rounded">context_window</code> values on those
-            providers below to silence them.
+            {t('capabilityFallbacks.description.before')}
+            <code className="mx-1 px-1 bg-muted rounded">context_window</code>
+            {t('capabilityFallbacks.description.after')}
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
           <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-          Reload
+          {t('capabilityFallbacks.reload')}
         </Button>
       </div>
 
       <div className="flex items-center gap-3 text-sm text-muted-foreground">
-        <Badge variant="secondary">{items.length} total</Badge>
-        <Badge variant="secondary">inferred {inferredCount}</Badge>
+        <Badge variant="secondary">{t('capabilityFallbacks.total', { count: items.length })}</Badge>
+        <Badge variant="secondary">{t('capabilityFallbacks.inferred', { count: inferredCount })}</Badge>
         <Badge variant={fallbackCount > 0 ? 'destructive' : 'secondary'}>
-          fallback {fallbackCount}
+          {t('capabilityFallbacks.fallback', { count: fallbackCount })}
         </Badge>
       </div>
 
       {/* Preview widget */}
       <div className="border rounded-md p-3 space-y-2">
-        <div className="text-sm font-medium">Preview resolution</div>
+        <div className="text-sm font-medium">{t('capabilityFallbacks.previewTitle')}</div>
         <div className="flex gap-2">
           <Input
             value={previewModel}
@@ -104,7 +106,7 @@ export function CapabilityFallbacksPanel(): JSX.Element {
             disabled={previewLoading || !previewModel.trim()}
           >
             <Search className="h-4 w-4 mr-2" />
-            Resolve
+            {t('capabilityFallbacks.resolve')}
           </Button>
         </div>
         {previewError && (
@@ -115,23 +117,25 @@ export function CapabilityFallbacksPanel(): JSX.Element {
         {preview && (
           <div className="text-sm space-y-1 pt-2 border-t">
             <div>
-              <span className="text-muted-foreground">Static chain:</span>{' '}
+              <span className="text-muted-foreground">{t('capabilityFallbacks.staticChain')}</span>{' '}
               <Badge variant={preview.static.source === 'fallback' ? 'destructive' : 'secondary'}>
                 {preview.static.source}
               </Badge>{' '}
               <span className="font-mono">{fmtWindow(preview.static.window)}</span>{' '}
-              <span className="text-muted-foreground">via</span>{' '}
+              <span className="text-muted-foreground">{t('capabilityFallbacks.via')}</span>{' '}
               <code className="text-xs">{preview.static.via}</code>
             </div>
             <div>
-              <span className="text-muted-foreground">Runtime (incl. env/DB):</span>{' '}
+              <span className="text-muted-foreground">{t('capabilityFallbacks.runtime')}</span>{' '}
               <Badge variant={preview.runtime.source === 'fallback' ? 'destructive' : 'secondary'}>
                 {preview.runtime.source}
               </Badge>{' '}
               <span className="font-mono">{fmtWindow(preview.runtime.window)}</span>{' '}
               <span className="text-muted-foreground">
-                (effective {fmtWindow(preview.runtime.effective)}, reserved{' '}
-                {fmtWindow(preview.runtime.reservedOutput)} output)
+                {t('capabilityFallbacks.effective', {
+                  effective: fmtWindow(preview.runtime.effective),
+                  reserved: fmtWindow(preview.runtime.reservedOutput),
+                })}
               </span>
             </div>
           </div>
@@ -141,19 +145,19 @@ export function CapabilityFallbacksPanel(): JSX.Element {
       {/* Recent fallbacks list */}
       {items.length === 0 ? (
         <div className="text-sm text-muted-foreground italic py-6 text-center border rounded-md">
-          {loading ? 'Loading…' : 'No fallback resolutions recorded since server boot. All models in use have explicit context_window values.'}
+          {loading ? t('capabilityFallbacks.loading') : t('capabilityFallbacks.empty')}
         </div>
       ) : (
         <div className="border rounded-md overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
               <tr>
-                <th className="px-3 py-2 text-left">Model</th>
-                <th className="px-3 py-2 text-left">Source</th>
-                <th className="px-3 py-2 text-left">Via</th>
-                <th className="px-3 py-2 text-right">Window</th>
-                <th className="px-3 py-2 text-right">Hits</th>
-                <th className="px-3 py-2 text-left">Last seen</th>
+                <th className="px-3 py-2 text-left">{t('capabilityFallbacks.columns.model')}</th>
+                <th className="px-3 py-2 text-left">{t('capabilityFallbacks.columns.source')}</th>
+                <th className="px-3 py-2 text-left">{t('capabilityFallbacks.columns.via')}</th>
+                <th className="px-3 py-2 text-right">{t('capabilityFallbacks.columns.window')}</th>
+                <th className="px-3 py-2 text-right">{t('capabilityFallbacks.columns.hits')}</th>
+                <th className="px-3 py-2 text-left">{t('capabilityFallbacks.columns.lastSeen')}</th>
               </tr>
             </thead>
             <tbody>

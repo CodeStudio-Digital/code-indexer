@@ -8,6 +8,7 @@
  * - Template builder (per-role fallback)
  */
 import { ChevronRight, Shield, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Badge } from './ui/badge.js';
 import type { ProviderOption, EnrichedProviderModel } from '../features/chat/types.js';
 
@@ -37,6 +38,7 @@ export function FallbackPicker({
   label,
   compact,
 }: FallbackPickerProps) {
+  const { t } = useTranslation('common');
   const currentModels = fallbackProvider ? getModelsForProvider(fallbackProvider) : [];
 
   return (
@@ -44,7 +46,7 @@ export function FallbackPicker({
       {!compact && (
         <label className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
           <Shield className="h-3 w-3" />
-          {label ?? 'Fallback (auto-switch on error)'}
+          {label ?? t('fallback.label')}
         </label>
       )}
 
@@ -60,7 +62,7 @@ export function FallbackPicker({
               type="button"
               className="ml-1 hover:text-destructive transition-colors"
               onClick={() => onChange(null, null)}
-              title="Remover fallback"
+              title={t('fallback.remove')}
             >
               <X className="h-3 w-3" />
             </button>
@@ -84,7 +86,7 @@ export function FallbackPicker({
           }}
           className="rounded-md border bg-background px-2 py-1 text-xs"
         >
-          <option value="">{compact ? '- fallback -' : 'Sem fallback'}</option>
+          <option value="">{compact ? t('fallback.compactNone') : t('fallback.none')}</option>
           {providerOptions.map((p) => (
             <option key={p.id} value={p.id}>{p.label}</option>
           ))}
@@ -107,7 +109,7 @@ export function FallbackPicker({
             <input
               value={fallbackModel ?? ''}
               onChange={(e) => onChange(fallbackProvider, e.target.value || null)}
-              placeholder="model name"
+              placeholder={t('fallback.modelPlaceholder')}
               className="rounded-md border bg-background px-2 py-1 text-xs font-mono"
             />
           )

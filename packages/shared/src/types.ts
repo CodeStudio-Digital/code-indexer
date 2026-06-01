@@ -60,6 +60,8 @@ export interface Project {
   model: string | null;
   embeddings_enabled: number;
   search_mode: SearchMode;
+  /** Chosen Node runtime id (e.g. 'managed:20.11.0'); null = system default. */
+  node_version: string | null;
   created_at: string;
   updated_at: string;
   last_indexed: string | null;

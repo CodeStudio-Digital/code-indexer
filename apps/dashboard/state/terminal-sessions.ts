@@ -47,6 +47,13 @@ export interface TerminalSession {
    * this field — treat as host.
    */
   target?: TerminalSpawnTarget;
+  /**
+   * Shell this PTY was spawned with (executable path + argv). Persisted so
+   * "restart" re-launches the same shell instead of falling back to the
+   * system default. Older rows may lack these — treat as the default shell.
+   */
+  shell?: string;
+  shellArgs?: string[];
 }
 
 interface TerminalSessionsState {
@@ -65,6 +72,7 @@ interface TerminalSessionsState {
     scope: string,
     terminalId: string,
     target?: TerminalSpawnTarget,
+    shell?: { file: string; args?: string[] },
   ) => TerminalSession;
   /**
    * Drop a session from the list (does NOT call the backend kill — the
@@ -151,7 +159,7 @@ function persist(snap: PersistedSnapshot): void {
 export const useTerminalSessions = create<TerminalSessionsState>((set, get) => ({
   ...loadPersisted(),
 
-  addSession: (scope, terminalId, target) => {
+  addSession: (scope, terminalId, target, shell) => {
     const existingList = get().byScope[scope] ?? [];
     const seq = (get().nextSeqByScope[scope] ?? 0) + 1;
     const session: TerminalSession = {
@@ -159,6 +167,8 @@ export const useTerminalSessions = create<TerminalSessionsState>((set, get) => (
       name: `Terminal ${seq}`,
       createdAt: Date.now(),
       target,
+      shell: shell?.file,
+      shellArgs: shell?.args,
     };
     set((s) => {
       const next: PersistedSnapshot = {

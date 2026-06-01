@@ -18,11 +18,13 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, notFound } from '../_helpers.js';
-import { getSandboxManager } from '@mcp/services/sandbox/index.js';
+import { getSandboxManager, resolveDriver } from '@mcp/services/sandbox/index.js';
 import type {
   BuilderStack,
   ProvisionableStack,
 } from '@mcp/services/sandbox/types.js';
+import { defaultLocalShellPort } from '@mcp/code-agent/ports/shell-port.js';
+import { imagesArgs, parseImages } from '@mcp/podman-core';
 import {
   isProvisionableStack,
   resolveExternalProjectSpec,
@@ -58,6 +60,11 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
     // short-circuits on the existing sandbox. Net result: user-chosen
     // limits silently ignored.
     let limits: { memory?: string; cpus?: string; pids?: number } | undefined;
+    // Per-session image + run flags chosen in the company builder UI. Threaded
+    // into provision so the eager-provision path matches what SandboxService
+    // later requests (otherwise the idempotent short-circuit would drop them).
+    let image: string | undefined;
+    let runArgs: string[] | undefined;
     try {
       const cfg = JSON.parse(session.config_json || '{}') as {
         builder?: {
@@ -65,6 +72,8 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
           limits?: { memory?: string; cpus?: string; pids?: number };
           main_project_id?: number;
           main_project_runtime?: ExternalProjectRuntime;
+          image?: string;
+          runArgs?: string[];
         };
       };
       const requested = cfg.builder?.stack;
@@ -74,6 +83,8 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
       // accept it so DS sessions can have their container restarted.
       if (isProvisionableStack(requested)) stack = requested;
       if (cfg.builder?.limits) limits = cfg.builder.limits;
+      if (cfg.builder?.image) image = cfg.builder.image;
+      if (Array.isArray(cfg.builder?.runArgs)) runArgs = cfg.builder.runArgs;
     } catch {
       /* treat as non-builder */
     }
@@ -128,6 +139,8 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
         retry,
         limits,
         hostWorkdirMount,
+        image,
+        runArgs,
         ...externalSpec,
       });
       return c.json({
@@ -142,6 +155,29 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
         { error: e instanceof Error ? e.message : String(e) },
         500,
       );
+    }
+  });
+
+  /**
+   * Host image catalog — lists the local OCI images so the builder UI can
+   * offer a base-image picker. Reuses the SAME @mcp/podman-core parser the IDE
+   * Podman plugin uses, so both surfaces show identical rows. Runtime-agnostic:
+   * runs whichever binary the driver factory resolved (podman/docker).
+   */
+  app.get('/api/company/sandbox/images', async (c) => {
+    const driver = await resolveDriver();
+    if (driver.runtime === 'e2b') return c.json({ runtime: 'e2b', images: [] });
+    try {
+      const r = await defaultLocalShellPort().run(driver.runtime, imagesArgs(), {
+        cwd: process.cwd(),
+        encoding: 'utf-8',
+      });
+      if (r.exitCode !== 0) {
+        return c.json({ error: r.stderr.trim() || `${driver.runtime} images failed` }, 500);
+      }
+      return c.json({ runtime: driver.runtime, images: parseImages(r.stdout) });
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
     }
   });
 

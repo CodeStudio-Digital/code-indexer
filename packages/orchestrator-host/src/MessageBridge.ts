@@ -297,6 +297,23 @@ export class MessageBridge {
       this.port.postMessage(res);
     } catch (err) {
       this.onListenerError(err, 'request');
+      // A successful response whose value can't be structured-cloned (e.g. it
+      // carried a function/class instance/Promise) would otherwise leave the
+      // caller hanging until its request timeout fires. Fail it fast with a
+      // descriptive error on the same id so the caller rejects immediately.
+      if (res.kind === 'res' && res.ok) {
+        try {
+          this.port.postMessage({
+            kind: 'res',
+            id: res.id,
+            ok: false,
+            error: `response not serializable: ${err instanceof Error ? err.message : String(err)}`,
+            code: 'unserializable_response',
+          });
+        } catch {
+          // Port truly broken — dispose() will reject any pending callers.
+        }
+      }
     }
   }
 

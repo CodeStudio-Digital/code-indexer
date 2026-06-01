@@ -52,6 +52,50 @@ function makePortPair(): [MessagePortLike, MessagePortLike] {
   return [makePort('a', 'b'), makePort('b', 'a')];
 }
 
+/**
+ * Like `makePortPair`, but `postMessage` round-trips every value through
+ * `structuredClone` first — mirroring a real `worker_threads.MessagePort`,
+ * which throws `DataCloneError` on functions/class instances/Promises. Used
+ * to exercise the bridge's unserializable-response fast-fail path.
+ */
+function makeCloningPortPair(): [MessagePortLike, MessagePortLike] {
+  const listeners: Record<'a' | 'b', Map<string, Set<(arg: unknown) => void>>> = {
+    a: new Map(),
+    b: new Map(),
+  };
+  function makePort(self: 'a' | 'b', peer: 'a' | 'b'): MessagePortLike {
+    return {
+      postMessage: (value: unknown) => {
+        // Throws synchronously when `value` can't be cloned — exactly what
+        // the bridge's `respond()` catch block has to cope with.
+        const cloned = structuredClone(value);
+        const peerListeners = listeners[peer].get('message');
+        if (!peerListeners) return;
+        queueMicrotask(() => {
+          for (const fn of peerListeners) fn(cloned);
+        });
+      },
+      on: (event, listener) => {
+        let set = listeners[self].get(event);
+        if (!set) {
+          set = new Set();
+          listeners[self].set(event, set);
+        }
+        set.add(listener);
+        return undefined;
+      },
+      off: (event, listener) => {
+        listeners[self].get(event)?.delete(listener);
+        return undefined;
+      },
+      close: () => {
+        listeners[self].get('close')?.forEach((fn) => fn(undefined));
+      },
+    };
+  }
+  return [makePort('a', 'b'), makePort('b', 'a')];
+}
+
 describe('MessageBridge', () => {
   it('routes request → response with `ok: true`', async () => {
     const [a, b] = makePortPair();
@@ -132,6 +176,26 @@ describe('MessageBridge', () => {
     const right = new MessageBridge({ port: b });
     right.handle('slow', async () => new Promise((r) => setTimeout(r, 50)));
     await expect(left.request('slow', {}, { timeoutMs: 5 })).rejects.toThrow(/timed out/);
+    left.dispose();
+    right.dispose();
+  });
+
+  it('fast-fails (does not hang) when a success response is not serializable', async () => {
+    const [a, b] = makeCloningPortPair();
+    const left = new MessageBridge({ port: a });
+    const right = new MessageBridge({ port: b, onListenerError: () => undefined });
+    // Resolves with a value carrying a function — uncloneable, like a live
+    // CoderRunner handle leaking across the worker boundary.
+    right.handle('leaky', () => ({ ok: true, cb: () => undefined }));
+    let caughtCode: string | undefined;
+    try {
+      // Short timeout: if the bridge hung instead of fast-failing, this would
+      // reject with `request_timeout` rather than our error code.
+      await left.request('leaky', {}, { timeoutMs: 200 });
+    } catch (e) {
+      caughtCode = (e as { code?: string }).code;
+    }
+    expect(caughtCode).toBe('unserializable_response');
     left.dispose();
     right.dispose();
   });

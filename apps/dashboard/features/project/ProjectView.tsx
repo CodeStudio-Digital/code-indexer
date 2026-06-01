@@ -59,12 +59,13 @@ import {
   Network,
   PanelBottomClose,
   PanelBottomOpen,
+  Play,
   Puzzle,
   Search,
   TerminalSquare,
   type LucideIcon,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { apiCall } from '../../lib/api-client.js';
 import {
@@ -90,6 +91,7 @@ import { ArchitectureTab } from './tabs/ArchitectureTab.js';
 import { DependenciesTab } from './tabs/DependenciesTab.js';
 import { FilesTab as IndexedFilesTab } from './tabs/FilesTab.js';
 import { RunsTab } from './tabs/RunsTab.js';
+import { RunnersTab } from './tabs/RunnersTab.js';
 import { Button } from '../../components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
@@ -113,6 +115,7 @@ const TABS: TabDef[] = [
   { id: 'search',       label: 'Search',        icon: Search,            group: 'core' },
   { id: 'git',          label: 'Git',           icon: GitBranch,         group: 'core' },
   { id: 'snapshots',    label: 'Snapshots',     icon: BookOpen,          group: 'core' },
+  { id: 'runners',      label: 'Runners',       icon: Play,              group: 'core' },
   // Indexed lives in analytics — it's the per-project file table with
   // sumarização/complexity/layer/flags, distinct from the IDE-style
   // file tree (`files`). The Search tab already exposes the vector
@@ -135,6 +138,7 @@ interface ProjectViewProps {
 
 export function ProjectView({ projectId, projectName, initialSessionId }: ProjectViewProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const layout = useWorkspaceLayout();
   const contribWindows = useContributions((s) => s.toolWindows);
   const openFile = useWorkspaceStore((s) => s.openFile);
@@ -155,6 +159,16 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   useEffect(() => {
     if (initialSessionId) setTab('chat');
   }, [initialSessionId]);
+
+  // Deep link to a specific tab via `?tab=<id>` — used by the global
+  // running-tasks dropdown to jump straight to this project's Runners
+  // tab. Only honour ids we actually know about.
+  useEffect(() => {
+    const requested = new URLSearchParams(location.search).get('tab');
+    if (requested && TABS.some((tabDef) => tabDef.id === requested)) {
+      setTab(requested);
+    }
+  }, [location.search]);
 
   // ─── Open file from the tree → uses the same workspace store as the
   //     legacy Workspace component so tabs persist + the editor sees
@@ -594,6 +608,12 @@ function TabContent({
   // collapse `h-full` propagation.
   if (tab === 'snapshots') {
     return <SnapshotEditor projectId={projectId} />;
+  }
+
+  // Runners owns a full-height split (detected/active list + live xterm
+  // output), so it bypasses the padded scroll container like snapshots.
+  if (tab === 'runners') {
+    return <RunnersTab projectId={projectId} />;
   }
 
   // Plugin-contributed tool window → its sandboxed webview fills the area.

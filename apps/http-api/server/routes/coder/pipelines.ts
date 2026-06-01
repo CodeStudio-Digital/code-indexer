@@ -3,6 +3,7 @@ import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { validatePipelineGraph } from '@mcp/company/services/PipelineService.js';
+import { generateAiPipeline } from '@mcp/api-handlers';
 import { ChatPipelineExecutor } from '@mcp/code-agent/pipelines/ChatPipelineExecutor.js';
 import { createChatPipelineBus } from '@mcp/code-agent/pipelines/lib/eventBus.js';
 import { buildPipelineTools } from '@mcp/code-agent/pipelines/lib/buildPipelineTools.js';
@@ -37,11 +38,114 @@ export function mountCoderPipelineRoutes(
     const sessionId = parseIdParam(c);
     const session = sessionStore.getSession(sessionId);
     if (!session) return notFound(c, 'Session not found');
-    // Pipelines visible to a chat session: globals + any pipeline tied
-    // to a company session that includes this chat's project.
+    // Project scope: pipelines owned by this chat's project + global ones.
+    // Company-owned pipelines are intentionally NOT surfaced here — they
+    // run via the orchestrator, keeping the two worlds separate.
     return c.json(
-      companyStore.listPipelines({ projectIdForChat: session.project_id }),
+      companyStore.listPipelines({ projectId: session.project_id }),
     );
+  });
+
+  // ─── Pipeline CRUD (project-scoped, chat builder) ────────────
+
+  app.post('/api/coder/sessions/:id/pipelines', async (c) => {
+    const sessionId = parseIdParam(c);
+    const session = sessionStore.getSession(sessionId);
+    if (!session) return notFound(c, 'Session not found');
+    const body = await parseJsonBody<{
+      name: string;
+      description?: string;
+      graph: PipelineGraph;
+    }>(c);
+    if (!body.name) return c.json({ error: 'name is required' }, 400);
+    if (!body.graph) return c.json({ error: 'graph is required' }, 400);
+    const validation = validatePipelineGraph(body.graph, null);
+    if (!validation.ok) return c.json({ error: 'invalid graph', issues: validation.errors }, 400);
+    const created = companyStore.createPipeline({
+      name: body.name,
+      description: body.description,
+      graph: body.graph,
+      projectId: session.project_id,
+    });
+    return c.json(created, 201);
+  });
+
+  app.post('/api/coder/sessions/:id/pipelines/validate', async (c) => {
+    const body = await parseJsonBody<{ graph?: PipelineGraph }>(c);
+    if (!body.graph) return c.json({ error: 'graph is required' }, 400);
+    return c.json(validatePipelineGraph(body.graph, null));
+  });
+
+  app.post('/api/coder/sessions/:id/pipelines/generate', async (c) => {
+    const sessionId = parseIdParam(c);
+    const session = sessionStore.getSession(sessionId);
+    if (!session) return notFound(c, 'Session not found');
+    const body = await parseJsonBody<{ intent?: string }>(c);
+    const intent = String(body.intent ?? '').trim();
+    if (!intent) return c.json({ error: 'intent is required' }, 400);
+    const result = await generateAiPipeline(deps, intent, {
+      scope: 'project',
+      availableRoles: [],
+    });
+    if (result.graph) {
+      const validation = validatePipelineGraph(result.graph, null);
+      if (!validation.ok) {
+        return c.json({ summary: result.summary, refusal: 'AI produced an invalid graph.', issues: validation.errors });
+      }
+    }
+    return c.json(result);
+  });
+
+  app.patch('/api/coder/sessions/:id/pipelines/:pid', async (c) => {
+    const sessionId = parseIdParam(c);
+    const pipelineId = parseIdParam(c, 'pid');
+    const session = sessionStore.getSession(sessionId);
+    if (!session) return notFound(c, 'Session not found');
+    const existing = companyStore.getPipeline(pipelineId);
+    if (!existing) return notFound(c, 'Pipeline not found');
+    if (existing.project_id !== session.project_id) {
+      return c.json({ error: 'Pipeline does not belong to this project.' }, 403);
+    }
+    const body = await parseJsonBody<{
+      name?: string;
+      description?: string;
+      graph?: PipelineGraph;
+      expected_version?: number;
+    }>(c);
+    if (body.graph) {
+      const validation = validatePipelineGraph(body.graph, null);
+      if (!validation.ok) return c.json({ error: 'invalid graph', issues: validation.errors }, 400);
+    }
+    try {
+      const updated = companyStore.updatePipeline(
+        pipelineId,
+        { name: body.name, description: body.description, graph: body.graph },
+        { expectedVersion: body.expected_version },
+      );
+      if (!updated) return notFound(c, 'Pipeline not found');
+      return c.json(updated);
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (code === 'PIPELINE_VERSION_MISMATCH') {
+        return c.json({ error: (e as Error).message, code }, 409);
+      }
+      return c.json({ error: (e as Error).message }, 400);
+    }
+  });
+
+  app.delete('/api/coder/sessions/:id/pipelines/:pid', (c) => {
+    const sessionId = parseIdParam(c);
+    const pipelineId = parseIdParam(c, 'pid');
+    const session = sessionStore.getSession(sessionId);
+    if (!session) return notFound(c, 'Session not found');
+    const existing = companyStore.getPipeline(pipelineId);
+    if (!existing) return notFound(c, 'Pipeline not found');
+    if (existing.project_id !== session.project_id) {
+      return c.json({ error: 'Pipeline does not belong to this project.' }, 403);
+    }
+    const ok = companyStore.deletePipeline(pipelineId);
+    if (!ok) return notFound(c, 'Pipeline not found');
+    return c.json({ ok: true });
   });
 
   // ─── Pipeline executions ─────────────────────────────────────
@@ -58,23 +162,15 @@ export function mountCoderPipelineRoutes(
 
     const pipeline = companyStore.getPipeline(pipelineId);
     if (!pipeline) return notFound(c, 'Pipeline not found');
-    // Project gating: a chat session can run a pipeline if it's global
-    // (NULL company_session_id) OR if the chat's project is in the
-    // company session's project set. Stops cross-project leaks without
-    // forcing the orchestrator path on otherwise-compatible pipelines.
-    if (pipeline.company_session_id != null) {
-      const projectsForCs = companyStore
-        .listPipelines({ projectIdForChat: session.project_id })
-        .some((p) => p.id === pipeline.id);
-      if (!projectsForCs) {
-        return c.json(
-          {
-            error:
-              'Pipeline belongs to a company session that does not include this chat project.',
-          },
-          403,
-        );
-      }
+    // Project gating: a chat session may run a pipeline only when it is
+    // global (no owner) or owned by this chat's project. Company-owned
+    // pipelines run via the orchestrator, not chat — keeps scopes clean.
+    const ownedByProject =
+      pipeline.project_id != null && pipeline.project_id === session.project_id;
+    const isGlobal =
+      pipeline.project_id == null && pipeline.company_session_id == null;
+    if (!ownedByProject && !isGlobal) {
+      return c.json({ error: 'Pipeline is not available to this project.' }, 403);
     }
 
     // Re-validate the graph at start time (the graph could have been

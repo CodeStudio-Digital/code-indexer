@@ -110,8 +110,13 @@ export function OnboardingWizard({ onComplete, alreadyHasProjects }: OnboardingW
 // ─── Step indicator (the chip row at the top) ──────────────────────
 
 function StepIndicator({ step }: { step: Step }) {
+  const { t } = useTranslation();
   const idx = step === 'welcome' ? 0 : step === 'provider' ? 1 : 2;
-  const labels = ['Welcome', 'Connect a provider', 'Open a project'];
+  const labels = [
+    t('onboarding.steps.welcome'),
+    t('onboarding.steps.provider'),
+    t('onboarding.steps.project'),
+  ];
   return (
     <div className="border-b bg-card/60 px-8 py-4 flex items-center gap-3">
       {labels.map((label, i) => {
@@ -151,25 +156,25 @@ function StepIndicator({ step }: { step: Step }) {
 // ─── Step 1: Welcome ──────────────────────────────────────────────
 
 function WelcomeStep({ onNext }: { onNext: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="flex-1 flex flex-col items-center justify-center text-center gap-6">
       <div className="h-16 w-16 rounded-2xl bg-primary/10 grid place-items-center">
         <Sparkles className="h-8 w-8 text-primary" />
       </div>
       <div className="space-y-2 max-w-md">
-        <h1 className="text-2xl font-semibold tracking-tight">Welcome to MCP IDE</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{t('onboarding.welcome.title')}</h1>
         <p className="text-[13px] text-muted-foreground leading-relaxed">
-          A local-first IDE that ships with multi-agent coding, hybrid code search,
-          and a real terminal — all running on your machine, with your API keys.
+          {t('onboarding.welcome.description')}
         </p>
       </div>
       <div className="grid grid-cols-3 gap-3 text-left w-full max-w-lg">
-        <Highlight title="Bring your keys" body="OpenAI, Anthropic, Google — pay your providers directly, no platform markup." />
-        <Highlight title="Stays local" body="Code never leaves your machine. The agent runs in-process; sandbox is opt-in." />
-        <Highlight title="No subscription to read" body="Index, search, and ask the agent about your repo on the free plan." />
+        <Highlight title={t('onboarding.welcome.keys.title')} body={t('onboarding.welcome.keys.body')} />
+        <Highlight title={t('onboarding.welcome.local.title')} body={t('onboarding.welcome.local.body')} />
+        <Highlight title={t('onboarding.welcome.free.title')} body={t('onboarding.welcome.free.body')} />
       </div>
       <Button size="lg" onClick={onNext} className="mt-2">
-        Get started
+        {t('onboarding.welcome.cta')}
         <ArrowRight className="h-4 w-4" />
       </Button>
     </div>
@@ -205,7 +210,6 @@ const PROVIDERS: ProviderOption[] = [
 
 function ProviderStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
   const { t } = useTranslation();
-  void t; // reserved for future i18n
   const [providerId, setProviderId] = useState('anthropic');
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
@@ -215,8 +219,8 @@ function ProviderStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
     if (!apiKey.trim()) {
       // Allow skip-with-no-key, but warn so the user knows chat won't work
       // until they add one in Settings.
-      toast.message('Skipping provider', {
-        description: 'You can add an API key later in Settings → Providers.',
+      toast.message(t('onboarding.provider.skipToast.title'), {
+        description: t('onboarding.provider.skipToast.description'),
       });
       onNext();
       return;
@@ -231,12 +235,12 @@ function ProviderStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
         api_key: apiKey.trim(),
         enabled: true,
       });
-      toast.success('Provider connected', {
-        description: `${provider.label} is now available for chat.`,
+      toast.success(t('onboarding.provider.connected.title'), {
+        description: t('onboarding.provider.connected.description', { provider: provider.label }),
       });
       onNext();
     } catch (e) {
-      toast.error('Failed to save provider', {
+      toast.error(t('onboarding.provider.saveFailed'), {
         description: e instanceof Error ? e.message : String(e),
       });
     } finally {
@@ -251,17 +255,16 @@ function ProviderStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
           <Key className="h-5 w-5 text-primary" />
         </div>
         <div>
-          <h2 className="text-lg font-semibold">Connect a provider</h2>
+          <h2 className="text-lg font-semibold">{t('onboarding.provider.title')}</h2>
           <p className="text-[12px] text-muted-foreground">
-            BYOK — your key stays in this app's local SQLite, never sent anywhere except
-            the provider's API.
+            {t('onboarding.provider.description')}
           </p>
         </div>
       </div>
 
       <div className="space-y-3">
         <div className="space-y-1.5">
-          <label className="text-[12px] font-medium text-muted-foreground">Provider</label>
+          <label className="text-[12px] font-medium text-muted-foreground">{t('onboarding.provider.provider')}</label>
           <Select value={providerId} onValueChange={setProviderId}>
             <SelectTrigger className="h-9">
               <SelectValue />
@@ -277,41 +280,39 @@ function ProviderStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-[12px] font-medium text-muted-foreground">API key</label>
+          <label className="text-[12px] font-medium text-muted-foreground">{t('onboarding.provider.apiKey')}</label>
           <Input
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={provider.keyExample ?? 'Paste your key'}
+            placeholder={provider.keyExample ?? t('onboarding.provider.keyPlaceholder')}
             autoComplete="off"
             spellCheck={false}
           />
           {provider.defaultModel && (
             <p className="text-[10.5px] text-muted-foreground">
-              Default model: <span className="font-mono">{provider.defaultModel}</span> — switch in Settings any time.
+              {t('onboarding.provider.defaultModel')} <span className="font-mono">{provider.defaultModel}</span> — {t('onboarding.provider.switchSettings')}
             </p>
           )}
         </div>
       </div>
 
       <div className="rounded-md border bg-muted/30 p-3 text-[11px] text-muted-foreground leading-snug">
-        Don't have a key yet? You can skip this step and add one later from
-        Settings → Providers. The IDE works without it — you just won't be able
-        to start a chat with the agent.
+        {t('onboarding.provider.noKeyHelp')}
       </div>
 
       <div className="mt-auto flex items-center justify-between gap-2">
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ChevronLeft className="h-3.5 w-3.5" />
-          Back
+          {t('onboarding.back')}
         </Button>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={onNext} disabled={saving}>
-            Skip for now
+            {t('onboarding.skip')}
           </Button>
           <Button size="sm" onClick={submit} disabled={saving || !apiKey.trim()}>
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-            Connect &amp; continue
+            {t('onboarding.connectContinue')}
           </Button>
         </div>
       </div>
@@ -330,6 +331,7 @@ function ProjectStep({
   onFinish: () => void;
   alreadyHasProjects?: boolean;
 }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [projectPath, setProjectPath] = useState('');
   const [projectName, setProjectName] = useState('');
@@ -346,8 +348,8 @@ function ProjectStep({
 
   const pickDirectory = async () => {
     if (!isElectron || !window.electronAPI?.openDirectory) {
-      toast.message('Pick a folder', {
-        description: 'Type the full path below. The native picker is Electron-only.',
+      toast.message(t('onboarding.project.pickToast.title'), {
+        description: t('onboarding.project.pickToast.description'),
       });
       return;
     }
@@ -355,7 +357,7 @@ function ProjectStep({
       const dir = await window.electronAPI.openDirectory();
       if (dir) setProjectPath(dir);
     } catch (e) {
-      toast.error('Folder picker failed', {
+      toast.error(t('onboarding.project.pickerFailed'), {
         description: e instanceof Error ? e.message : String(e),
       });
     }
@@ -372,7 +374,7 @@ function ProjectStep({
       onFinish();
       navigate(`/projects/${project.id}`);
     } catch (e) {
-      toast.error('Could not create project', {
+      toast.error(t('onboarding.project.createFailed'), {
         description: e instanceof Error ? e.message : String(e),
       });
     } finally {
@@ -388,11 +390,10 @@ function ProjectStep({
         </div>
         <div>
           <h2 className="text-lg font-semibold">
-            {alreadyHasProjects ? 'Open or create a project' : 'Open your first project'}
+            {alreadyHasProjects ? t('onboarding.project.titleExisting') : t('onboarding.project.titleFirst')}
           </h2>
           <p className="text-[12px] text-muted-foreground">
-            Point MCP at a folder on disk. We'll index it in the background so the agent
-            and search work the moment the Workspace mounts.
+            {t('onboarding.project.description')}
           </p>
         </div>
       </div>
@@ -400,7 +401,7 @@ function ProjectStep({
       <div className="space-y-3">
         <div className="flex items-end gap-2">
           <div className="flex-1 space-y-1.5">
-            <label className="text-[12px] font-medium text-muted-foreground">Project folder</label>
+            <label className="text-[12px] font-medium text-muted-foreground">{t('onboarding.project.folder')}</label>
             <Input
               value={projectPath}
               onChange={(e) => setProjectPath(e.target.value)}
@@ -410,12 +411,12 @@ function ProjectStep({
           </div>
           <Button variant="outline" onClick={pickDirectory} className="shrink-0 h-9">
             <FolderOpen className="h-3.5 w-3.5" />
-            Browse
+            {t('onboarding.project.browse')}
           </Button>
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-[12px] font-medium text-muted-foreground">Project name</label>
+          <label className="text-[12px] font-medium text-muted-foreground">{t('onboarding.project.name')}</label>
           <Input
             value={projectName}
             onChange={(e) => setProjectName(e.target.value)}
@@ -426,19 +427,17 @@ function ProjectStep({
       </div>
 
       <div className="rounded-md border bg-muted/30 p-3 text-[11px] text-muted-foreground leading-snug">
-        First-time indexing runs in the background. You can start typing in the chat
-        and exploring files right away — search results will fill in as the index
-        finishes (usually a few seconds per thousand files).
+        {t('onboarding.project.indexingHelp')}
       </div>
 
       <div className="mt-auto flex items-center justify-between gap-2">
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ChevronLeft className="h-3.5 w-3.5" />
-          Back
+          {t('onboarding.back')}
         </Button>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={onFinish}>
-            {alreadyHasProjects ? 'Pick later from the list' : 'Skip for now'}
+            {alreadyHasProjects ? t('onboarding.project.pickLater') : t('onboarding.skip')}
           </Button>
           <Button
             size="sm"
@@ -446,7 +445,7 @@ function ProjectStep({
             disabled={creating || !projectPath.trim() || !projectName.trim()}
           >
             {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-            Open project
+            {t('onboarding.project.open')}
           </Button>
         </div>
       </div>

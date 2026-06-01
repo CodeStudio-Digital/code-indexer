@@ -63,4 +63,12 @@ describe('dispatchTools — interactive tools are exempt from the timeout', () =
     expect(res.results[0].isError).toBe(false);
     expect(res.results[0].content).toBe('DONE');
   });
+
+  it('does NOT time out send_to_master / send_to_agent (policy-interactive, block on inboxWait)', async () => {
+    for (const name of ['send_to_master', 'send_to_agent']) {
+      const res = await dispatchTools(args(registryWithSlowTool(name, 30), name));
+      expect(res.results[0].isError, name).toBe(false);
+      expect(res.results[0].content, name).toBe('DONE');
+    }
+  });
 });

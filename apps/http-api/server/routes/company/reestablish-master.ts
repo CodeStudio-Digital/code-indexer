@@ -159,7 +159,7 @@ export function mountReestablishMasterRoute(app: Hono, deps: ServerDeps): void {
 
     return c.json({
       ok: true,
-      master_coder_session_id: handle.session.id,
+      master_coder_session_id: handle.masterSessionId,
       company_session_id: id,
       provider,
       model,

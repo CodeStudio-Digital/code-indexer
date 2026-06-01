@@ -34,7 +34,7 @@ export function WebviewWindow({ namespace, title, entry, projectId, onClose }: W
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   // Subscribe so a language switch re-injects + reloads the frame with the new
   // locale (plugins read it via window.mcp.i18n). Uses the app's react-i18next.
-  const { i18n } = useTranslation();
+  const { i18n, t } = useTranslation('plugins');
   const locale = i18n.language;
 
   useEffect(() => {
@@ -72,7 +72,7 @@ export function WebviewWindow({ namespace, title, entry, projectId, onClose }: W
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t('webview.close')}
             className="ml-auto text-muted-foreground hover:text-foreground"
           >
             <X className="h-3.5 w-3.5" />
@@ -83,7 +83,7 @@ export function WebviewWindow({ namespace, title, entry, projectId, onClose }: W
         {error ? (
           <div className="p-3 text-sm text-status-error">{error}</div>
         ) : doc === null ? (
-          <div className="p-3 text-sm text-muted-foreground">Loading…</div>
+          <div className="p-3 text-sm text-muted-foreground">{t('webview.loading')}</div>
         ) : (
           <iframe
             ref={iframeRef}

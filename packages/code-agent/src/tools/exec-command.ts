@@ -468,6 +468,33 @@ function formatAgeMs(ms: number): string {
 }
 
 /**
+ * Detect a `write_stdin` misfire: the model meant to call a different tool
+ * (most often `write_file`) but stuffed the tool name / a path into
+ * `session_id` and the payload into `chars`. Real session ids are 8 lowercase
+ * hex chars (`randomUUID().slice(0, 8)`); a `session_id` that isn't that shape
+ * was never returned by `exec_command`, so retrying it (or polling
+ * `list_sessions`, which is correctly empty) can never succeed. Returns a
+ * redirect hint to append to the "session not active" error, or '' when the id
+ * looks like a genuine (just-expired) session id.
+ */
+function detectMisfireHint(id: string, rawChars: unknown): string {
+  if (/^[0-9a-f]{8}$/.test(id)) return ''; // genuine-shaped id → likely a real stale session
+  const chars = typeof rawChars === 'string' ? rawChars : '';
+  const looksLikeFile = chars.length > 80 || chars.includes('\n');
+  const base =
+    `MISFIRE: '${id}' is not a session_id — those are 8 hex chars (e.g. 'a1b2c3d4') ` +
+    `returned by a prior \`exec_command\`. \`write_stdin\` ONLY writes to a live shell ` +
+    `session's stdin; it does NOT create or edit files.`;
+  const tail = looksLikeFile
+    ? ` It looks like you meant to WRITE A FILE. If \`write_file\` isn't in your tools, ` +
+      `first \`expand_toolset({ tier: 'navigate' })\`, then call ` +
+      `\`write_file({ path, content })\` (or \`create_file\` for a new file).`
+    : ` If you meant to call a different tool (e.g. \`${id}\`), call it directly — and ` +
+      `\`expand_toolset({ tier: 'navigate' })\` first if it isn't visible yet.`;
+  return `${base}${tail}\n\n`;
+}
+
+/**
  * PR 5 — snapshot of the live session registry. Pure read; mutates
  * nothing. Used by `list_sessions` and by the rich error payload of
  * `write_stdin` when an unknown session id is passed.
@@ -580,7 +607,12 @@ export const writeStdin: CoderTool = {
             `  - ${s.id} (${s.status}, ${s.mode}, age ${s.ageStr}, idle ${s.idleStr}): ` +
             (s.cmd.length > 50 ? s.cmd.slice(0, 47) + '...' : s.cmd),
           ).join('\n');
+      // Lead with the misfire redirect when present: it's the actionable
+      // line, and the failure-streak guard only echoes the FIRST ~200 chars
+      // of the error into its refusal — so the fix must come first.
+      const misfire = detectMisfireHint(id, args.chars);
       return err(
+        misfire +
         `write_stdin: session '${id}' is not active (exited / reaped by idle-TTL / never existed).\n` +
         `Active sessions right now:\n${activeStr}\n` +
         `A session that exited cannot be reopened — its stdin is gone. ` +

@@ -14,6 +14,7 @@
  * in that case via the same hook return.
  */
 import React, { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Dialog,
   DialogContent,
@@ -71,6 +72,7 @@ function groupByService(rows: EnvRow[]): ServiceUrls[] {
 }
 
 export function UrlsDrawer({ sessionId }: Props) {
+  const { t } = useTranslation('agents');
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<EnvRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -102,37 +104,31 @@ export function UrlsDrawer({ sessionId }: Props) {
       <DialogTrigger asChild>
         <Button variant="ghost" size="sm" className="text-xs h-7 gap-1">
           <Info className="h-3.5 w-3.5" />
-          URLs
+          {t('qa.urlsButton')}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-[560px]">
         <DialogHeader>
-          <DialogTitle>QA URL routing</DialogTitle>
+          <DialogTitle>{t('qa.urlRouting')}</DialogTitle>
           <p className="text-xs text-muted-foreground">
-            How each microservice is addressed at three layers. The Chrome
-            Service navigates to <code>PLAYWRIGHT_BASE_URL_*</code> via the
-            http-api proxy with an HMAC cookie (auto-injected). Specs use
-            relative paths (<code>page.goto('/login')</code>); the bundled
-            <code> playwright.config.ts</code> wires the rest.
+            {t('qa.urlRoutingDescription')}
           </p>
         </DialogHeader>
         <div className="mt-4 space-y-4 max-h-[60vh] overflow-auto">
-          {loading && <div className="text-xs text-muted-foreground">Loading…</div>}
+          {loading && <div className="text-xs text-muted-foreground">{t('common.loading')}</div>}
           {!loading && groups.length === 0 && (
             <div className="text-xs text-muted-foreground">
-              No managed URLs found for this session yet — provision a sandbox
-              first (and assign a role with the <code>qa-playwright</code>{' '}
-              skill to populate the QA family).
+              {t('qa.noManagedUrls')}
             </div>
           )}
           {groups.map((g) => (
             <section key={g.id} className="border rounded-md p-3 text-xs space-y-2">
               <header className="font-medium uppercase tracking-wide text-muted-foreground">
-                {g.id === 'MAIN' ? 'main (primary)' : g.id.toLowerCase()}
+                {g.id === 'MAIN' ? t('qa.mainPrimary') : g.id.toLowerCase()}
               </header>
-              <UrlRow label="Preview (browser)" value={g.preview} />
-              <UrlRow label="Playwright (QA)" value={g.playwright} accent />
-              <UrlRow label="Service (internal)" value={g.service} />
+              <UrlRow label={t('qa.previewBrowser')} value={g.preview} />
+              <UrlRow label={t('qa.playwrightQa')} value={g.playwright} accent />
+              <UrlRow label={t('qa.serviceInternal')} value={g.service} />
             </section>
           ))}
         </div>
@@ -150,13 +146,14 @@ function UrlRow({
   value: string | undefined;
   accent?: boolean;
 }) {
+  const { t } = useTranslation('agents');
   return (
     <div className="flex items-start justify-between gap-2">
       <span className={`shrink-0 ${accent ? 'text-foreground' : 'text-muted-foreground'}`}>
         {label}:
       </span>
       <code className="flex-1 break-all text-right font-mono text-[11px]">
-        {value ?? <span className="text-muted-foreground italic">not injected</span>}
+        {value ?? <span className="text-muted-foreground italic">{t('qa.notInjected')}</span>}
       </code>
     </div>
   );

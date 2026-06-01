@@ -8,6 +8,7 @@ import type {
 interface ExecutionRow {
   id: number;
   pipeline_id: number;
+  project_id: number | null;
   company_session_id: number | null;
   coder_session_id: number | null;
   status: string;
@@ -33,6 +34,7 @@ function mapExecutionRow(row: ExecutionRow): PipelineExecution {
   return {
     id: row.id,
     pipeline_id: row.pipeline_id,
+    project_id: row.project_id,
     company_session_id: row.company_session_id,
     coder_session_id: row.coder_session_id,
     status: row.status as PipelineExecutionStatus,
@@ -48,6 +50,8 @@ function mapExecutionRow(row: ExecutionRow): PipelineExecution {
 
 export interface CreateExecutionInput {
   pipelineId: number;
+  /** Project that owns a chat/project run; derived from the coder session. */
+  projectId?: number | null;
   companySessionId?: number | null;
   coderSessionId?: number | null;
   initialInput: string;
@@ -76,12 +80,13 @@ export function create(db: DB, input: CreateExecutionInput): PipelineExecution {
   }
   const stmt = db.prepare(`
     INSERT INTO pipeline_executions
-      (pipeline_id, company_session_id, coder_session_id, status, current_node_id,
+      (pipeline_id, project_id, company_session_id, coder_session_id, status, current_node_id,
        initial_input, context_json, started_by)
-    VALUES (?, ?, ?, 'running', ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?)
   `);
   const r = stmt.run(
     input.pipelineId,
+    input.projectId ?? null,
     companyId,
     coderId,
     input.currentNodeId ?? null,

@@ -174,6 +174,10 @@ export interface BuilderSessionConfig {
     };
     main_project_id?: number;
     main_project_runtime?: 'dockerfile' | 'node';
+    /** Per-session base image override (from the company image picker). */
+    image?: string;
+    /** Extra raw `podman/docker run` flags for this session. */
+    runArgs?: string[];
     /** Multi-microservice form; when present, overrides `stack`/`limits` above. */
     services?: BuilderServiceConfig[];
   };
@@ -181,6 +185,14 @@ export interface BuilderSessionConfig {
 
 export class SandboxService {
   private binding: SandboxBinding | null = null;
+  /**
+   * In-flight provision promise. A cold container build can take minutes;
+   * without this guard a duplicate resume (or a sub-session sharing the
+   * parent's binding) would each call `manager.provision`, racing on the
+   * same sandboxId. Concurrent callers share this one promise; cleared in
+   * its `finally` so a later provision (after teardown) starts fresh.
+   */
+  private provisioning: Promise<SandboxBinding | null> | null = null;
   /**
    * Secondary-service bindings keyed by serviceId. The primary sandbox
    * keeps flowing through `binding` for back-compat with the existing
@@ -285,6 +297,15 @@ export class SandboxService {
    * invocation so the returned binding can be woven into its CompanyContext.
    */
   async provisionIfNeeded(opts: { signal?: AbortSignal } = {}): Promise<SandboxBinding | null> {
+    if (this.binding) return this.binding;
+    if (this.provisioning) return this.provisioning;
+    this.provisioning = this.doProvision(opts).finally(() => {
+      this.provisioning = null;
+    });
+    return this.provisioning;
+  }
+
+  private async doProvision(opts: { signal?: AbortSignal } = {}): Promise<SandboxBinding | null> {
     if (this.binding) return this.binding;
 
     const builderCfg = this.readBuilderConfig();
@@ -401,6 +422,8 @@ export class SandboxService {
         limits,
         hostWorkdirMount,
         includeE2e,
+        image: builderCfg.image,
+        runArgs: builderCfg.runArgs,
         ...externalSpec,
       });
     } catch (e) {

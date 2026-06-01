@@ -9,6 +9,7 @@
  * the user wants to see.
  */
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Copy, Globe, Loader2, RefreshCw, ShieldAlert, ShieldCheck, ChevronDown, ChevronRight } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
@@ -37,6 +38,7 @@ function buildClaudeCodeSnippet(endpoint: string, hasAuth: boolean): string {
 }
 
 export function McpHttpStatusPanel() {
+  const { t } = useTranslation(['admin', 'common']);
   const [status, setStatus] = useState<McpHttpStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,12 +90,11 @@ export function McpHttpStatusPanel() {
         <div>
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Globe className="h-4 w-4" />
-            MCP HTTP endpoint
+            {t('admin:mcpHttp.title')}
           </h2>
           <p className="text-sm text-muted-foreground">
-            Expõe as tools nativas do MCP IDE (incluindo <code className="font-mono">rag_search_docs</code>)
-            via HTTP pra outros agentes (Claude Code, Cursor, etc). Aceita só conexões de localhost; o tier
-            do token define quais tools cada cliente enxerga.
+            {t('admin:mcpHttp.description.before')} <code className="font-mono">rag_search_docs</code>
+            {t('admin:mcpHttp.description.after')}
           </p>
         </div>
         <Button variant="ghost" size="sm" onClick={() => void load()} disabled={loading}>
@@ -113,7 +114,7 @@ export function McpHttpStatusPanel() {
             <div className="p-3 flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
-                  Endpoint
+                  {t('admin:mcpHttp.endpoint')}
                 </div>
                 <code className="font-mono text-sm break-all">{status.endpoint}</code>
               </div>
@@ -121,40 +122,40 @@ export function McpHttpStatusPanel() {
                 variant="outline"
                 size="sm"
                 onClick={() => void copyText(status.endpoint)}
-                title="Copy endpoint URL"
+                title={t('admin:mcpHttp.copyEndpoint')}
               >
                 <Copy className="h-3.5 w-3.5 mr-1.5" />
-                Copy
+                {t('admin:mcpHttp.copy')}
               </Button>
             </div>
 
             <div className="p-3 flex items-center gap-4 text-sm">
               <Badge variant={status.enabled ? 'default' : 'destructive'}>
-                {status.enabled ? 'enabled' : 'disabled'}
+                {status.enabled ? t('common:status.enabled') : t('common:status.disabled')}
               </Badge>
               <span className="flex items-center gap-1.5 text-muted-foreground">
                 {status.authEnabled ? (
                   <>
                     <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-                    Auth on
+                    {t('admin:mcpHttp.authOn')}
                   </>
                 ) : (
                   <>
                     <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
-                    Auth off (dev)
+                    {t('admin:mcpHttp.authOff')}
                   </>
                 )}
               </span>
               <span className="text-muted-foreground text-xs">
-                {status.stateful ? 'stateful sessions' : 'stateless'}
+                {status.stateful ? t('admin:mcpHttp.stateful') : t('admin:mcpHttp.stateless')}
               </span>
               <span className="ml-auto text-xs text-muted-foreground">
-                Port {status.port} · path <code className="font-mono">{status.path}</code>
+                {t('admin:mcpHttp.portPath', { port: status.port })} <code className="font-mono">{status.path}</code>
               </span>
             </div>
 
             <div className="p-3 grid grid-cols-4 gap-3 text-sm">
-              <TierStat label="Total" value={status.counts.total} />
+              <TierStat label={t('admin:mcpHttp.total')} value={status.counts.total} />
               <TierStat label="bootstrap" value={status.counts.bootstrap} tone="muted" />
               <TierStat label="navigate" value={status.counts.navigate} tone="muted" />
               <TierStat label="admin" value={status.counts.admin} tone="muted" />
@@ -163,18 +164,18 @@ export function McpHttpStatusPanel() {
 
           <div className="rounded border bg-card/30 p-3 space-y-2">
             <div className="flex items-center justify-between">
-              <div className="text-sm font-medium">Claude Code / Cursor — exemplo de configuração</div>
+              <div className="text-sm font-medium">{t('admin:mcpHttp.configTitle')}</div>
               <Button variant="ghost" size="sm" onClick={() => void copyText(snippet)}>
                 <Copy className="h-3.5 w-3.5 mr-1.5" />
-                Copy JSON
+                {t('admin:mcpHttp.copyJson')}
               </Button>
             </div>
             <pre className="text-[11px] font-mono bg-background border rounded p-2 overflow-x-auto leading-snug">
               {snippet}
             </pre>
             <p className="text-[11px] text-muted-foreground">
-              Crie um token abaixo, cole no campo <code className="font-mono">Authorization</code>,
-              e o cliente terá acesso só às tools do tier escolhido.
+              {t('admin:mcpHttp.tokenHelp.before')} <code className="font-mono">Authorization</code>
+              {t('admin:mcpHttp.tokenHelp.after')}
             </p>
           </div>
 
@@ -190,9 +191,9 @@ export function McpHttpStatusPanel() {
                 ) : (
                   <ChevronRight className="h-3.5 w-3.5" />
                 )}
-                <span className="font-medium">Catálogo de tools expostas</span>
+                <span className="font-medium">{t('admin:mcpHttp.toolsCatalog')}</span>
                 <span className="text-xs text-muted-foreground ml-auto">
-                  {status.counts.total} tools
+                  {t('admin:mcpHttp.toolsCount', { count: status.counts.total })}
                 </span>
               </button>
               {toolsOpen && (
@@ -206,7 +207,7 @@ export function McpHttpStatusPanel() {
                           <Badge variant="secondary" className="font-mono text-[10px]">
                             {tier}
                           </Badge>
-                          <span>{list.length} tools</span>
+                          <span>{t('admin:mcpHttp.toolsCount', { count: list.length })}</span>
                         </div>
                         <div className="grid gap-1">
                           {list.map((tool) => (

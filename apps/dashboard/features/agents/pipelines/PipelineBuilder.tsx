@@ -33,7 +33,7 @@ import {
   type OnConnect,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ChevronLeft, Save, Network, HelpCircle, Trash2 } from 'lucide-react';
+import { ChevronLeft, Save, Network, HelpCircle } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import {
@@ -42,7 +42,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '../../../components/ui/tooltip.js';
-import { apiPost, apiPatch } from '../../../hooks/useApi.js';
 import type {
   KanbanColumn,
   KanbanTag,
@@ -58,6 +57,11 @@ import { PipelineEdgeView, PIPELINE_EDGE_TYPE } from './PipelineEdgeView.js';
 import { PipelineTemplatesPanel } from './PipelineTemplatesPanel.js';
 import type { PipelineTemplate } from './templates.js';
 import {
+  usePipelinePersistence,
+  type PipelineBuilderScope,
+} from './pipeline-builder/usePipelinePersistence.js';
+import { AiGenerateBar } from './pipeline-builder/AiGenerateBar.js';
+import {
   STARTER_GRAPH,
   toFlowNode,
   graphNodesToFlow,
@@ -68,7 +72,7 @@ import {
 } from './pipeline-builder/graph-helpers.js';
 
 interface PipelineBuilderProps {
-  companySessionId: number;
+  scope: PipelineBuilderScope;
   pipeline: Pipeline | null;
   availableRoles: string[];
   availableSkills: string[];
@@ -92,7 +96,7 @@ export function PipelineBuilder(props: PipelineBuilderProps) {
 }
 
 function PipelineBuilderInner({
-  companySessionId,
+  scope,
   pipeline,
   availableRoles,
   availableSkills,
@@ -100,6 +104,8 @@ function PipelineBuilderInner({
   onSaved,
 }: PipelineBuilderProps) {
   const { t } = useTranslation(['agents', 'common']);
+  const persistence = usePipelinePersistence(scope);
+  const companyScope = scope.kind === 'company';
 
   const initial = useMemo(() => {
     const g = pipeline?.graph ?? STARTER_GRAPH;
@@ -308,39 +314,41 @@ function PipelineBuilderInner({
     setSaving(true);
     const graph = buildGraph();
     try {
-      const validation = await apiPost<{
-        ok: boolean;
-        errors: Array<{ nodeId?: string; edgeId?: string; message: string }>;
-      }>(`/company/pipelines/${pipeline?.id ?? 0}/validate`, {
-        graph,
-        session_id: companySessionId,
-      });
+      const validation = await persistence.validate(graph, pipeline?.id ?? null);
       if (!validation.ok) {
         setValidationIssues(validation.errors.map((e) => e.message));
         setSaving(false);
         return;
       }
-      let saved: Pipeline;
-      if (pipeline) {
-        saved = await apiPatch<Pipeline>(`/company/pipelines/${pipeline.id}`, {
-          name,
-          description,
-          graph,
-          expected_version: pipeline.version,
-        });
-      } else {
-        saved = await apiPost<Pipeline>('/company/pipelines', {
-          name,
-          description,
-          graph,
-          company_session_id: companySessionId,
-        });
-      }
+      const saved = await persistence.save({ pipeline, name, description, graph });
       onSaved(saved);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ─── AI generation ───────────────────────────────────────────
+
+  const runGenerate = async (intent: string) => {
+    setError(null);
+    setValidationIssues([]);
+    try {
+      const res = await persistence.generate(intent, availableRoles);
+      if (res.refusal) {
+        setError(res.refusal);
+        if (res.issues?.length) setValidationIssues(res.issues.map((i) => i.message));
+        return;
+      }
+      if (res.graph) {
+        setFlowNodes(graphNodesToFlow(res.graph.nodes));
+        setFlowEdges(graphEdgesToFlow(res.graph.edges));
+        setSelected(null);
+        if (res.summary && !description.trim()) setDescription(res.summary);
+      }
+    } catch (e) {
+      setError((e as Error).message);
     }
   };
 
@@ -464,6 +472,8 @@ function PipelineBuilderInner({
         </div>
       </header>
 
+      <AiGenerateBar onGenerate={runGenerate} />
+
       {validationIssues.length > 0 && (
         <div className="border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
           <div className="font-medium mb-1">{t('agents:pipelines.invalidGraph')}</div>
@@ -535,6 +545,7 @@ function PipelineBuilderInner({
             node={selectedNode.data.pipelineNode}
             availableRoles={availableRoles}
             availableSkills={availableSkills}
+            companyScope={companyScope}
             onChange={(patch) => updateNode(selectedNode.id, patch)}
             onDelete={() => removeNode(selectedNode.id)}
           />

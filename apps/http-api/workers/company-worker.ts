@@ -337,17 +337,6 @@ bridge.handle('stop', async () => {
 // main thread is free to send RPCs.
 bridge.emit('worker.ready', { companySessionId });
 
-// Keep references to satisfy `noUnusedLocals` — these closures stay
-// alive for the worker's lifetime via the bridge handlers.
+// Anchor `dbConn` so `noUnusedLocals` doesn't reject the declaration —
+// the WAL handle must outlive the worker; nothing else references it.
 void dbConn;
-void CoderRunBus_typeOnly;
-void publish_typeOnly;
-void markEnded_typeOnly;
-
-// Type-only references — we don't actually use these at runtime
-// in the worker, but the import keeps the worker's tree-shaker from
-// dropping the bus module (its symbols are reachable through the
-// `subscribe` import either way; this comment documents intent).
-declare const CoderRunBus_typeOnly: CoderRunBus | undefined;
-declare const publish_typeOnly: typeof publish | undefined;
-declare const markEnded_typeOnly: typeof markEnded | undefined;

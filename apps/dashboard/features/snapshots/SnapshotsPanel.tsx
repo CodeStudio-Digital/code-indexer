@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import { ArrowLeft } from 'lucide-react';
 import { useConfirm } from '../../components/ui/dialog-provider.js';
@@ -40,6 +41,7 @@ interface Props {
 }
 
 export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMessage }: Props) {
+  const { t } = useTranslation('projects');
   const confirm = useConfirm();
   const [files, setFiles] = useState<SnapshotFileSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -148,7 +150,7 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     } finally {
       setBusy(false);
     }
-  }, [scope, sessionId, selectedBaselineId, loadDiff, reload]);
+  }, [scope, sessionId, selectedBaselineId, loadDiff, reload, t]);
 
   const handleRevertHunk = useCallback(async (fingerprint: string) => {
     if (selectedBaselineId == null) return;
@@ -156,14 +158,14 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     try {
       const r = await revertHunk(scope, sessionId, selectedBaselineId, fingerprint);
       if (!r.ok && r.reason) {
-        setError(`Could not revert hunk: ${r.reason}`);
+        setError(t('snapshotPanel.revertHunkFailed', { reason: r.reason }));
       }
       await loadDiff(selectedBaselineId);
       await reload();
     } finally {
       setBusy(false);
     }
-  }, [scope, sessionId, selectedBaselineId, loadDiff, reload]);
+  }, [scope, sessionId, selectedBaselineId, loadDiff, reload, t]);
 
   const handleAcceptFile = useCallback(async () => {
     if (selectedBaselineId == null) return;
@@ -180,29 +182,29 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
   const handleRevertFile = useCallback(async () => {
     if (selectedBaselineId == null) return;
     const ok = await confirm({
-      title: 'Revert file?',
-      description: `This will restore ${diff?.baseline.filePath ?? 'this file'} to its session baseline (or delete it if it was created during the session). Cannot be undone from this UI.`,
-      confirmLabel: 'Revert file',
+      title: t('snapshotPanel.revertFile.title'),
+      description: t('snapshotPanel.revertFile.description', { file: diff?.baseline.filePath ?? t('snapshotDiff.file') }),
+      confirmLabel: t('snapshotPanel.revertFile.confirm'),
     });
     if (!ok) return;
     setBusy(true);
     try {
       const r = await revertFile(scope, sessionId, selectedBaselineId);
-      if (!r.ok && r.reason) setError(`Could not revert file: ${r.reason}`);
+      if (!r.ok && r.reason) setError(t('snapshotPanel.revertFile.failed', { reason: r.reason }));
       await reload();
       setSelectedBaselineId(null);
     } finally {
       setBusy(false);
     }
-  }, [scope, sessionId, selectedBaselineId, reload, confirm, diff?.baseline.filePath]);
+  }, [scope, sessionId, selectedBaselineId, reload, confirm, diff?.baseline.filePath, t]);
 
   const handleAcceptAll = useCallback(async () => {
     const activeCount = files.filter((f) => f.status === 'active').length;
     if (activeCount === 0) return;
     const ok = await confirm({
-      title: `Keep all ${activeCount} file change${activeCount === 1 ? '' : 's'}?`,
-      description: 'Closes every active snapshot for this session. Files keep their current on-disk contents.',
-      confirmLabel: 'Keep all',
+      title: t('snapshotPanel.keepAll.title', { count: activeCount }),
+      description: t('snapshotPanel.keepAll.description'),
+      confirmLabel: t('snapshotPanel.keepAll.confirm'),
     });
     if (!ok) return;
     setBusy(true);
@@ -213,15 +215,15 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     } finally {
       setBusy(false);
     }
-  }, [files, scope, sessionId, reload, confirm]);
+  }, [files, scope, sessionId, reload, confirm, t]);
 
   const handleRevertAll = useCallback(async () => {
     const activeCount = files.filter((f) => f.status === 'active').length;
     if (activeCount === 0) return;
     const ok = await confirm({
-      title: `Revert all ${activeCount} file change${activeCount === 1 ? '' : 's'}?`,
-      description: 'Restores every active baseline to disk (files created during the session get deleted). Cannot be undone.',
-      confirmLabel: 'Revert all',
+      title: t('snapshotPanel.revertAll.title', { count: activeCount }),
+      description: t('snapshotPanel.revertAll.description'),
+      confirmLabel: t('snapshotPanel.revertAll.confirm'),
       variant: 'destructive',
     });
     if (!ok) return;
@@ -233,21 +235,21 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     } finally {
       setBusy(false);
     }
-  }, [files, scope, sessionId, reload, confirm]);
+  }, [files, scope, sessionId, reload, confirm, t]);
 
   const handleAddReviewComment = useCallback(async (input: AddReviewCommentInput) => {
     setReviewBusy(true);
     try {
       const r = await createReviewComment(scope, sessionId, input);
       setReviews((prev) => ({ ...prev, comments: [...prev.comments, r.comment] }));
-      setReviewNotice('Review comment added.');
+      setReviewNotice(t('snapshotPanel.reviewCommentAdded'));
       await reloadReviews();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setReviewBusy(false);
     }
-  }, [scope, sessionId, reloadReviews]);
+  }, [scope, sessionId, reloadReviews, t]);
 
   const handleUpdateReviewComment = useCallback(async (
     id: number,
@@ -266,7 +268,7 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     } finally {
       setReviewBusy(false);
     }
-  }, [scope, sessionId, reloadReviews]);
+  }, [scope, sessionId, reloadReviews, t]);
 
   const handleAutoReview = useCallback(async () => {
     setReviewBusy(true);
@@ -274,9 +276,9 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
       const r = await runAutoReview(scope, sessionId);
       if (r.comments.length > 0) {
         setReviews((prev) => ({ ...prev, comments: [...prev.comments, ...r.comments] }));
-        setReviewNotice(`Automatic review created ${r.comments.length} finding${r.comments.length === 1 ? '' : 's'}.`);
+        setReviewNotice(t('snapshotPanel.autoReview.created', { count: r.comments.length }));
       } else {
-        setReviewNotice(r.message ?? 'Automatic review finished with no findings.');
+        setReviewNotice(r.message ?? t('snapshotPanel.autoReview.none'));
       }
       await reloadReviews();
     } catch (e) {
@@ -284,7 +286,7 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     } finally {
       setReviewBusy(false);
     }
-  }, [scope, sessionId, reloadReviews]);
+  }, [scope, sessionId, reloadReviews, t]);
 
   const handleSubmitReview = useCallback(async () => {
     if (!onSubmitReviewMessage) return;
@@ -299,14 +301,14 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     try {
       const r = await submitReviewComments(scope, sessionId, ids);
       await onSubmitReviewMessage(r.message);
-      setReviewNotice(`Sent ${ids.length} review item${ids.length === 1 ? '' : 's'} to the chat.`);
+      setReviewNotice(t('snapshotPanel.reviewSent', { count: ids.length }));
       await reloadReviews();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setReviewBusy(false);
     }
-  }, [scope, sessionId, reviews.comments, onSubmitReviewMessage, reloadReviews]);
+  }, [scope, sessionId, reviews.comments, onSubmitReviewMessage, reloadReviews, t]);
 
   const handleExpandContext = useCallback((side: 'before' | 'after') => {
     if (side === 'before') setContextBefore((v) => v + 10);
@@ -356,13 +358,13 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
               variant="ghost"
               onClick={() => setMobileShowDiff(false)}
               className="lg:hidden h-7 w-7 flex-shrink-0"
-              aria-label="Back to file list"
+              aria-label={t('snapshotPanel.backToList')}
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>
           )}
           <h2 className="font-medium text-sm truncate">
-            Snapshots <span className="text-muted-foreground">({activeCount} active)</span>
+            {t('snapshotPanel.title')} <span className="text-muted-foreground">{t('snapshotPanel.activeCount', { count: activeCount })}</span>
           </h2>
           {projects.length > 1 && (
             <select
@@ -371,9 +373,9 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
               onChange={(e) =>
                 setProjectFilter(e.target.value === '' ? null : Number(e.target.value))
               }
-              title="Filtrar por projeto"
+              title={t('snapshotPanel.filterByProject')}
             >
-              <option value="">Todos os projetos</option>
+              <option value="">{t('snapshotPanel.allProjects')}</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
@@ -388,7 +390,7 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
             onClick={handleAcceptAll}
             className="h-7 text-xs px-2"
           >
-            Keep all
+            {t('snapshotPanel.keepAll')}
           </Button>
           <Button
             size="sm"
@@ -397,20 +399,20 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
             onClick={handleRevertAll}
             className="h-7 text-xs px-2"
           >
-            Revert all
+            {t('snapshotPanel.revertAll')}
           </Button>
         </div>
       </div>
       {error && (
         <div className="px-3 py-1.5 text-xs bg-destructive/10 text-destructive border-b">
           {error}
-          <button onClick={() => setError(null)} className="ml-2 underline">dismiss</button>
+          <button onClick={() => setError(null)} className="ml-2 underline">{t('snapshotPanel.dismiss')}</button>
         </div>
       )}
       {reviewNotice && (
         <div className="px-3 py-1.5 text-xs bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-b">
           {reviewNotice}
-          <button onClick={() => setReviewNotice(null)} className="ml-2 underline">dismiss</button>
+          <button onClick={() => setReviewNotice(null)} className="ml-2 underline">{t('snapshotPanel.dismiss')}</button>
         </div>
       )}
       <SnapshotReviewQueue
@@ -431,7 +433,7 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
           )}
         >
           {loading ? (
-            <div className="p-3 text-xs text-muted-foreground">Loading…</div>
+            <div className="p-3 text-xs text-muted-foreground">{t('snapshotPanel.loading')}</div>
           ) : (
             <SnapshotFileList
               files={filesForList}
@@ -452,10 +454,10 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
         >
           {selectedBaselineId == null ? (
             <div className="flex items-center justify-center h-full text-xs text-muted-foreground italic">
-              Select a file to view its diff.
+              {t('snapshotPanel.selectFile')}
             </div>
           ) : diffLoading || !diff ? (
-            <div className="p-3 text-xs text-muted-foreground">Loading diff…</div>
+            <div className="p-3 text-xs text-muted-foreground">{t('snapshotPanel.loadingDiff')}</div>
           ) : (
             <SnapshotDiffViewer
               diff={diff}

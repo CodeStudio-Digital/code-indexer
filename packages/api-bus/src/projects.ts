@@ -35,6 +35,7 @@ export interface CreateProjectInput {
 export interface UpdateProjectInput {
   name?: string;
   root_path?: string;
+  node_version?: string | null;
 }
 
 export interface IndexProjectInput {

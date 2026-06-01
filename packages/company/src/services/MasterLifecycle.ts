@@ -13,7 +13,7 @@
  * since the watermark so the master doesn't need to call read_board.
  */
 
-import { runCoder, type CoderAttachment, type RunCoderOptions, type RunCoderHandle } from '@mcp/code-agent/index.js';
+import { runCoder, type CoderAttachment, type RunCoderOptions, type RunCoderHandle, type MasterStartResult } from '@mcp/code-agent/index.js';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
@@ -367,7 +367,7 @@ export class MasterLifecycle implements IMasterNotifier {
 
   // ─── Start (fresh) ──────────────────────────────────────────────
 
-  async start(opts: MasterStartOpts): Promise<RunCoderHandle> {
+  async start(opts: MasterStartOpts): Promise<MasterStartResult> {
     return startMaster(opts, {
       ctx: this.deps.ctx,
       board: this.deps.board,
@@ -393,12 +393,18 @@ export class MasterLifecycle implements IMasterNotifier {
       setLastUserAttachments: (atts) => { self._lastUserAttachments = atts; },
       setHandle: (handle) => { self._handle = handle; },
       setRunnerExited: (v) => { self._runnerExited = v; },
+      // Shared with the resurrect path — lets the background provision phase
+      // serialise against concurrent starts and flush queued turns.
+      get resumingPromise() { return self.resumingPromise; },
+      setResumingPromise: (p) => { self.resumingPromise = p; },
+      get resumeQueue() { return self.resumeQueue; },
+      drainResumeQueue: () => self.resumeQueue.splice(0, self.resumeQueue.length),
     };
   }
 
   // ─── Resume existing (cold-start) ───────────────────────────────
 
-  async resumeExisting(opts: MasterResumeOpts): Promise<RunCoderHandle> {
+  async resumeExisting(opts: MasterResumeOpts): Promise<MasterStartResult> {
     return resumeMaster(opts, {
       ctx: this.deps.ctx,
       board: this.deps.board,
@@ -507,6 +513,18 @@ export class MasterLifecycle implements IMasterNotifier {
       } else {
         runner.pushUserMessage(this.enrichWithBoard(message));
       }
+      return { ok: true };
+    }
+    // A start/resume is still provisioning the sandbox — the runner isn't
+    // wired yet, so resurrect would bail (no handle) and drop the message.
+    // Queue it; the background start/resume task flushes the queue once the
+    // runner exists. Enrich the plain-text turn the same way the live branch
+    // does; attachment turns carry their own context.
+    if (this.resumingPromise) {
+      this.resumeQueue.push({
+        message: attachments && attachments.length > 0 ? message : this.enrichWithBoard(message),
+        attachments,
+      });
       return { ok: true };
     }
     try {

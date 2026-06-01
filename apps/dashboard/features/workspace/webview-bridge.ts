@@ -14,6 +14,7 @@
  */
 import { apiCall, apiStream } from '../../lib/api-client.js';
 import { confirm as hostConfirm, prompt as hostPrompt, toast } from '../../components/ui/prompt-dialog.js';
+import i18n from '../../i18n/index.js';
 
 const READ_ONLY = new Set<string>([
   'plugins.list',
@@ -97,12 +98,12 @@ async function runStream(source: WindowProxy, msg: StreamMessage): Promise<void>
     source.postMessage({ __mcpPlugin: 'stream', id: msg.id, ...body }, '*');
   const method = msg.method ?? '';
   if (!NS_BOUND_STREAM.has(method)) {
-    post({ event: 'error', error: `stream method not allowed: ${method}` });
+    post({ event: 'error', error: i18n.t('plugins:bridge.streamMethodNotAllowed', { method }) });
     return;
   }
   const frame = frames.get(source);
   if (!frame) {
-    post({ event: 'error', error: 'frame not registered' });
+    post({ event: 'error', error: i18n.t('plugins:bridge.frameNotRegistered') });
     return;
   }
   const merged: Record<string, unknown> = {
@@ -148,7 +149,7 @@ async function handlePluginUi(method: string, payload: unknown): Promise<unknown
   switch (method) {
     case 'plugins.ui.confirm':
       return hostConfirm({
-        title: str(p.title) ?? 'Confirm',
+        title: str(p.title) ?? i18n.t('plugins:ui.confirmTitle'),
         description: str(p.message),
         confirmLabel: str(p.confirmText),
         cancelLabel: str(p.cancelText),
@@ -156,7 +157,7 @@ async function handlePluginUi(method: string, payload: unknown): Promise<unknown
       });
     case 'plugins.ui.prompt':
       return hostPrompt({
-        title: str(p.title) ?? 'Input',
+        title: str(p.title) ?? i18n.t('plugins:ui.inputTitle'),
         description: str(p.message),
         defaultValue: str(p.defaultValue),
         placeholder: str(p.placeholder),
@@ -166,10 +167,10 @@ async function handlePluginUi(method: string, payload: unknown): Promise<unknown
     case 'plugins.ui.alert':
       // No dedicated alert host — a single-acknowledge confirm reads as a notice.
       await hostConfirm({
-        title: str(p.title) ?? 'Notice',
+        title: str(p.title) ?? i18n.t('plugins:ui.noticeTitle'),
         description: str(p.message),
-        confirmLabel: str(p.confirmText) ?? 'OK',
-        cancelLabel: 'Close',
+        confirmLabel: str(p.confirmText) ?? i18n.t('plugins:ui.ok'),
+        cancelLabel: i18n.t('plugins:ui.close'),
       });
       return null;
     case 'plugins.ui.toast': {
@@ -208,7 +209,7 @@ export function installWebviewBridge(): () => void {
       } else if (NS_BOUND.has(method)) {
         const frame = frames.get(source);
         if (!frame) {
-          reply({ ok: false, error: 'frame not registered' });
+          reply({ ok: false, error: i18n.t('plugins:bridge.frameNotRegistered') });
           return;
         }
         // Force the bound namespace; fill projectId when the frame knows it.
@@ -221,7 +222,7 @@ export function installWebviewBridge(): () => void {
       } else if (READ_ONLY.has(method)) {
         result = await apiCall(method, payload);
       } else {
-        reply({ ok: false, error: `method not allowed: ${method}` });
+        reply({ ok: false, error: i18n.t('plugins:bridge.methodNotAllowed', { method }) });
         return;
       }
       reply({ ok: true, result });

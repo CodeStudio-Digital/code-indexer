@@ -131,6 +131,8 @@ import { snapshotMemory114 } from './114_snapshot_memory.js';
 import { memoryEnabled115 } from './115_memory_enabled.js';
 import { pluginPermissions116 } from './116_plugin_permissions.js';
 import { pluginStorage117 } from './117_plugin_storage.js';
+import { projectNodeVersion118 } from './118_project_node_version.js';
+import { pipelineProjectScope119 } from './119_pipeline_project_scope.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -278,6 +280,8 @@ export const MIGRATIONS: Migration[] = [
   memoryEnabled115,
   pluginPermissions116,
   pluginStorage117,
+  projectNodeVersion118,
+  pipelineProjectScope119,
 ];
 
 /**

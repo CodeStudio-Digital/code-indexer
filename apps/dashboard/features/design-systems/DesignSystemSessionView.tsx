@@ -12,6 +12,7 @@
  * parent CompanySession id — we surface a quick link to it here.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { ArrowLeft, BookOpen, Boxes, Filter, History, Loader2, Play, RefreshCcw, Server, Square, Upload } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import {
@@ -40,6 +41,7 @@ interface Props {
 }
 
 export function DesignSystemSessionView({ sessionId, onBack }: Props) {
+  const { t } = useTranslation('designSystems');
   const [session, setSession] = useState<DesignSystemSession | null>(null);
   const [versions, setVersions] = useState<DesignSystemVersion[]>([]);
   const [latestPublished, setLatestPublished] = useState<DesignSystemVersion | null>(null);
@@ -102,7 +104,7 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
     setError(null);
     try {
       const result = await installDesignSystemMcp(session.id, latestPublished.semver);
-      setError(`✓ MCP instalado com sucesso (${result.mcp_server_config_id}). Disponível em Administração › MCP Servers.`);
+      setError(`✓ ${t('session.mcpInstalledNotice', { id: result.mcp_server_config_id })}`);
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -118,10 +120,15 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
     try {
       const result = await reExtractDesignSystem(session.id, file);
       const skipped = result.extracted.skipped.length;
-      const note = result.zip_replaced ? ' (zip replaced)' : '';
-      const skippedNote = skipped > 0 ? ` · skipped ${skipped} unsafe` : '';
+      const note = result.zip_replaced ? t('session.zipReplaced') : '';
+      const skippedNote = skipped > 0 ? t('session.skippedUnsafe', { count: skipped }) : '';
       // Brief inline confirmation; clears on next refresh.
-      setError(`✓ Re-extracted ${result.extracted.files} file(s), ${(result.extracted.bytes / 1024).toFixed(1)} KB${note}${skippedNote}`);
+      setError(`✓ ${t('session.reExtracted', {
+        files: result.extracted.files,
+        kb: (result.extracted.bytes / 1024).toFixed(1),
+        note,
+        skippedNote,
+      })}`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -157,7 +164,7 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
   if (!session) {
     return (
       <div className="px-3 py-6 sm:px-6 flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading session…
+        <Loader2 className="h-4 w-4 animate-spin" /> {t('session.loading')}
       </div>
     );
   }
@@ -167,7 +174,7 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
       <header className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={onBack}>
-            <ArrowLeft className="h-4 w-4 mr-1" /> All sessions
+            <ArrowLeft className="h-4 w-4 mr-1" /> {t('actions.allSessions')}
           </Button>
           <div>
             <h1 className="text-xl font-semibold flex items-center gap-2">
@@ -175,13 +182,13 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
               <RunningBadge isRunning={isRunning} status={companyStatus} />
             </h1>
             <div className="text-xs text-muted-foreground font-mono">
-              {session.package_name} · {session.stack} · next bump:{' '}
+              {session.package_name} · {session.stack} · {t('session.nextBump')}{' '}
               <span className="font-semibold">{session.next_bump_hint}</span>
             </div>
           </div>
         </div>
         <Button variant="outline" size="sm" onClick={() => void refresh()}>
-          <RefreshCcw className="h-4 w-4 mr-1" /> Refresh
+          <RefreshCcw className="h-4 w-4 mr-1" /> {t('actions.refresh')}
         </Button>
       </header>
 
@@ -191,28 +198,28 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
 
       <div className="border rounded p-3 space-y-2 bg-muted/20">
         <div className="flex items-center justify-between gap-2">
-          <div className="text-sm font-medium">Round controls</div>
+          <div className="text-sm font-medium">{t('session.roundControls')}</div>
           <ReExtractMenu busy={busy || isRunning} onReExtract={(f) => void reExtract(f)} />
         </div>
         <p className="text-xs text-muted-foreground">
-          Each <strong>Start round</strong> aborts any prior agent activity and spins up a fresh autonomous master that runs the pipeline (extract → components → pages → MCP → docs → storybook → publish) and exits. No human-in-loop questions.
+          <Trans i18nKey="session.roundDescription" ns="designSystems" components={{ strong: <strong /> }} />
         </p>
         <textarea
           value={extraInstructions}
           onChange={(e) => setExtraInstructions(e.target.value)}
           disabled={busy || isRunning}
-          placeholder="Optional extra instructions for this round (e.g. 'add a Toast component', 'redesign Button with bigger paddings')"
+          placeholder={t('session.extraInstructionsPlaceholder')}
           className="w-full text-sm border rounded px-2 py-1 font-mono min-h-[60px]"
         />
         <div className="flex items-center gap-2">
           {isRunning ? (
             <Button variant="outline" size="sm" onClick={() => void abortRound()} disabled={busy}>
-              <Square className="h-3.5 w-3.5 mr-1" /> Abort round
+              <Square className="h-3.5 w-3.5 mr-1" /> {t('session.abortRound')}
             </Button>
           ) : (
             <Button size="sm" onClick={() => void startRound()} disabled={busy}>
               <Play className="h-3.5 w-3.5 mr-1" />
-              {versions.length === 0 ? 'Start first round' : 'Start round'}
+              {versions.length === 0 ? t('session.startFirstRound') : t('session.startRound')}
             </Button>
           )}
           {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
@@ -220,7 +227,7 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground mr-1">Set next bump:</span>
+        <span className="text-xs text-muted-foreground mr-1">{t('session.setNextBump')}</span>
         {(['patch', 'minor', 'major'] as DsBumpHint[]).map((h) => (
           <Button
             key={h}
@@ -229,12 +236,14 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
             onClick={() => void setHint(h)}
             disabled={busy}
           >
-            Build {h}
+            {t('session.buildBump', { bump: h })}
           </Button>
         ))}
         <span className="text-xs text-muted-foreground ml-2">
-          The next successful round publishes a {session.next_bump_hint} bump
-          {latestPublished && ` (from v${latestPublished.semver})`}.
+          {t('session.nextSuccessfulRound', {
+            bump: session.next_bump_hint,
+            fromVersion: latestPublished ? t('session.fromVersion', { version: latestPublished.semver }) : '',
+          })}
         </span>
       </div>
 
@@ -242,11 +251,11 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
         <div className="flex items-center gap-3 border rounded p-3 bg-muted/10">
           <Server className="h-4 w-4 text-muted-foreground shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium">MCP Server</div>
+            <div className="text-sm font-medium">{t('session.mcpTitle')}</div>
             <div className="text-xs text-muted-foreground">
               {session.mcp_server_config_id
-                ? `Instalado como ${session.mcp_server_config_id} — disponível em todos os agentes de chat`
-                : 'Não instalado — instale para disponibilizar as ferramentas ds_use_* aos agentes de chat'}
+                ? t('session.mcpInstalled', { id: session.mcp_server_config_id })
+                : t('session.mcpNotInstalled')}
             </div>
           </div>
           <Button
@@ -256,16 +265,16 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
             disabled={busy || isRunning}
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Server className="h-3.5 w-3.5 mr-1" />}
-            {session.mcp_server_config_id ? 'Reinstalar MCP' : 'Instalar MCP'}
+            {session.mcp_server_config_id ? t('session.reinstallMcp') : t('session.installMcp')}
           </Button>
         </div>
       )}
 
       <div className="border-b flex gap-1">
-        <TabButton active={tab === 'versions'} icon={<History className="h-4 w-4" />} label="Versions" onClick={() => setTab('versions')} />
-        <TabButton active={tab === 'components'} icon={<Boxes className="h-4 w-4" />} label="Components" onClick={() => setTab('components')} />
-        <TabButton active={tab === 'docs'} icon={<BookOpen className="h-4 w-4" />} label="Docs" onClick={() => setTab('docs')} />
-        <TabButton active={tab === 'storybook'} icon={<BookOpen className="h-4 w-4" />} label="Storybook" onClick={() => setTab('storybook')} />
+        <TabButton active={tab === 'versions'} icon={<History className="h-4 w-4" />} label={t('tabs.versions')} onClick={() => setTab('versions')} />
+        <TabButton active={tab === 'components'} icon={<Boxes className="h-4 w-4" />} label={t('tabs.components')} onClick={() => setTab('components')} />
+        <TabButton active={tab === 'docs'} icon={<BookOpen className="h-4 w-4" />} label={t('tabs.docs')} onClick={() => setTab('docs')} />
+        <TabButton active={tab === 'storybook'} icon={<BookOpen className="h-4 w-4" />} label={t('tabs.storybook')} onClick={() => setTab('storybook')} />
       </div>
 
       {tab === 'versions' && (
@@ -277,9 +286,9 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
                 onlyMarked ? 'bg-accent border-accent-foreground/30' : 'border-muted-foreground/20'
               }`}
             >
-              <Filter className="h-3 w-3" /> Only marked releases
+              <Filter className="h-3 w-3" /> {t('versions.onlyMarked')}
             </button>
-            <span className="text-xs text-muted-foreground">{versions.length} total</span>
+            <span className="text-xs text-muted-foreground">{t('versions.total', { count: versions.length })}</span>
           </div>
           <VersionsTable versions={filteredVersions} />
         </div>
@@ -303,6 +312,7 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
 function ReExtractMenu({
   busy, onReExtract,
 }: { busy: boolean; onReExtract: (file?: File) => void }) {
+  const { t } = useTranslation('designSystems');
   const fileRef = useRef<HTMLInputElement | null>(null);
   return (
     <div className="flex items-center gap-1">
@@ -322,41 +332,42 @@ function ReExtractMenu({
         size="sm"
         disabled={busy}
         onClick={() => onReExtract(undefined)}
-        title="Re-extract the persisted zip into design_system/ (overwrites current files)"
+        title={t('reExtract.title')}
       >
-        <RefreshCcw className="h-3.5 w-3.5 mr-1" /> Re-extract
+        <RefreshCcw className="h-3.5 w-3.5 mr-1" /> {t('reExtract.action')}
       </Button>
       <Button
         variant="outline"
         size="sm"
         disabled={busy}
         onClick={() => fileRef.current?.click()}
-        title="Upload a new zip and re-extract"
+        title={t('reExtract.replaceTitle')}
       >
-        <Upload className="h-3.5 w-3.5 mr-1" /> Replace zip
+        <Upload className="h-3.5 w-3.5 mr-1" /> {t('reExtract.replace')}
       </Button>
     </div>
   );
 }
 
 function RunningBadge({ isRunning, status }: { isRunning: boolean; status: string }) {
+  const { t } = useTranslation('designSystems');
   if (isRunning) {
     return (
       <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border border-sky-300 bg-sky-50 text-sky-800 uppercase tracking-wider">
-        <Loader2 className="h-3 w-3 animate-spin" /> running
+        <Loader2 className="h-3 w-3 animate-spin" /> {t('status.running')}
       </span>
     );
   }
   if (status === 'error') {
     return (
       <span className="text-[10px] px-2 py-0.5 rounded border border-red-300 bg-red-50 text-red-800 uppercase tracking-wider">
-        error
+        {t('status.error')}
       </span>
     );
   }
   return (
     <span className="text-[10px] px-2 py-0.5 rounded border border-zinc-300 bg-zinc-50 text-zinc-700 uppercase tracking-wider">
-      idle
+      {t('status.idle')}
     </span>
   );
 }
@@ -377,10 +388,11 @@ function TabButton({
 }
 
 function VersionsTable({ versions }: { versions: DesignSystemVersion[] }) {
+  const { t } = useTranslation('designSystems');
   if (versions.length === 0) {
     return (
       <div className="border border-dashed rounded p-6 text-sm text-center text-muted-foreground">
-        No versions yet. The master will publish v1.0.0 once the first round completes.
+        {t('versions.empty')}
       </div>
     );
   }
@@ -389,11 +401,11 @@ function VersionsTable({ versions }: { versions: DesignSystemVersion[] }) {
       <table className="w-full text-sm">
         <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
           <tr>
-            <th className="text-left px-3 py-2">Semver</th>
-            <th className="text-left px-3 py-2">Bump</th>
-            <th className="text-left px-3 py-2">Status</th>
-            <th className="text-left px-3 py-2">Source hash</th>
-            <th className="text-left px-3 py-2">Published</th>
+            <th className="text-left px-3 py-2">{t('versions.semver')}</th>
+            <th className="text-left px-3 py-2">{t('versions.bump')}</th>
+            <th className="text-left px-3 py-2">{t('table.status')}</th>
+            <th className="text-left px-3 py-2">{t('versions.sourceHash')}</th>
+            <th className="text-left px-3 py-2">{t('versions.published')}</th>
           </tr>
         </thead>
         <tbody>
@@ -438,6 +450,7 @@ function StatusBadge({ status }: { status: DesignSystemVersion['status'] }) {
 function ComponentsView({
   sessionId, latestPublished,
 }: { sessionId: number; latestPublished: DesignSystemVersion | null }) {
+  const { t } = useTranslation('designSystems');
   const [components, setComponents] = useState<DesignSystemComponent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -456,7 +469,7 @@ function ComponentsView({
   }, [sessionId, latestPublished]);
 
   if (!latestPublished) {
-    return <Empty>Components appear here after the first published version.</Empty>;
+    return <Empty>{t('components.empty')}</Empty>;
   }
   if (error) return <div className="text-sm text-red-600">{error}</div>;
   if (!components) return <Loading />;
@@ -465,8 +478,8 @@ function ComponentsView({
   const pages = components.filter((c) => c.kind === 'page-template');
   return (
     <div className="space-y-4">
-      <Section title={`Atoms (${atoms.length})`} components={atoms} />
-      <Section title={`Page templates (${pages.length})`} components={pages} />
+      <Section title={t('components.atoms', { count: atoms.length })} components={atoms} />
+      <Section title={t('components.pageTemplates', { count: pages.length })} components={pages} />
     </div>
   );
 }
@@ -493,6 +506,7 @@ function Section({ title, components }: { title: string; components: DesignSyste
 function DocsView({
   sessionId, latestPublished,
 }: { sessionId: number; latestPublished: DesignSystemVersion | null }) {
+  const { t } = useTranslation('designSystems');
   const [md, setMd] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -510,10 +524,10 @@ function DocsView({
     return () => { cancelled = true; };
   }, [sessionId, latestPublished]);
 
-  if (!latestPublished) return <Empty>Docs appear here after the first published version.</Empty>;
+  if (!latestPublished) return <Empty>{t('docs.empty')}</Empty>;
   if (error) return <div className="text-sm text-red-600">{error}</div>;
   if (md == null) return <Loading />;
-  if (md.trim() === '') return <Empty>The docs-writer hasn't produced docs for this version yet.</Empty>;
+  if (md.trim() === '') return <Empty>{t('docs.none')}</Empty>;
   return (
     <pre className="border rounded p-3 text-sm whitespace-pre-wrap break-words bg-muted/20 max-h-[70vh] overflow-auto">
       {md}
@@ -524,9 +538,10 @@ function DocsView({
 function StorybookView({
   sessionId, latestPublished,
 }: { sessionId: number; latestPublished: DesignSystemVersion | null }) {
-  if (!latestPublished) return <Empty>Storybook appears here after the first published version.</Empty>;
+  const { t } = useTranslation('designSystems');
+  if (!latestPublished) return <Empty>{t('storybook.empty')}</Empty>;
   if (!latestPublished.storybook_path) {
-    return <Empty>This version was published without a Storybook build. The storybook-builder may have skipped it.</Empty>;
+    return <Empty>{t('storybook.noBuild')}</Empty>;
   }
   return (
     <iframe
@@ -547,9 +562,10 @@ function Empty({ children }: { children: React.ReactNode }) {
 }
 
 function Loading() {
+  const { t } = useTranslation('designSystems');
   return (
     <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-      <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+      <Loader2 className="h-4 w-4 animate-spin" /> {t('loading')}
     </div>
   );
 }

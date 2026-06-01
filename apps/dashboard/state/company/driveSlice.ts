@@ -103,7 +103,7 @@ export const createDriveSlice: StateCreator<DriveSlice, [], [], DriveSlice> = (s
       drive: withSlot(state.drive, sessionId, (slot) => ({
         ...slot,
         scope,
-        files: new Map(files.map((f) => [f.path, f])),
+        files: new Map((Array.isArray(files) ? files : []).map((f) => [f.path, f])),
         initialized: true,
         error: null,
       })),

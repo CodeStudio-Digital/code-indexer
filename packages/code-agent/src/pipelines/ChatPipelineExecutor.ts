@@ -116,6 +116,7 @@ export class ChatPipelineExecutor {
 
     const execution = this.deps.companyStore.createPipelineExecution({
       pipelineId,
+      projectId: this.deps.sessionStore.getSession(this.deps.coderSessionId)?.project_id ?? null,
       coderSessionId: this.deps.coderSessionId,
       initialInput,
       context,

@@ -14,6 +14,7 @@
  * the only way to diagnose was a manual SQL query against the DB.
  */
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { AlertCircle, BarChart3, RefreshCw, Scissors, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
@@ -82,6 +83,7 @@ export function ToolStatsView({
    *  the panel when it's not the active one. */
   active: boolean;
 }) {
+  const { t } = useTranslation('chat');
   const [data, setData] = useState<ToolStatsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -120,14 +122,14 @@ export function ToolStatsView({
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center gap-2 px-3 py-1.5 border-b shrink-0">
-        <span className="text-[11px] text-muted-foreground">session {sessionId}</span>
+        <span className="text-[11px] text-muted-foreground">{t('toolStats.session', { id: sessionId })}</span>
         <Button
           size="sm"
           variant="ghost"
           className="ml-auto h-6 w-6 p-0"
           onClick={() => setRefreshTick((n) => n + 1)}
           disabled={loading}
-          title="Refresh"
+          title={t('toolStats.refresh')}
         >
           <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
         </Button>
@@ -143,17 +145,17 @@ export function ToolStatsView({
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="p-3 space-y-4">
             {loading && !data && (
-              <div className="text-xs text-muted-foreground">Loading tool stats…</div>
+              <div className="text-xs text-muted-foreground">{t('toolStats.loading')}</div>
             )}
 
             {data && (
               <>
                 <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs">
-                  <span className="text-muted-foreground">Total tool calls:</span>
+                  <span className="text-muted-foreground">{t('toolStats.totalCalls')}</span>
                   <span className="font-mono font-semibold tabular-nums">{data.totalCalls}</span>
                   {dominant && (
                     <>
-                      <span className="text-muted-foreground sm:ml-auto">Dominant:</span>
+                      <span className="text-muted-foreground sm:ml-auto">{t('toolStats.dominant')}</span>
                       <span className="font-mono font-semibold">
                         {dominant.name}{' '}
                         <span className="text-muted-foreground">({dominantPct}%)</span>
@@ -178,16 +180,16 @@ export function ToolStatsView({
                       <div className="flex items-baseline gap-2 text-xs">
                         <Scissors className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                         <span className="font-semibold text-emerald-700 dark:text-emerald-300">
-                          Smart reducer savings
+                          {t('toolStats.savings')}
                         </span>
                         <span className="ml-auto font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
-                          {formatChars(sv.totalSavedChars)} chars
+                          {t('toolStats.chars', { count: formatChars(sv.totalSavedChars) })}
                         </span>
                         <span className="text-[10px] text-muted-foreground tabular-nums">
-                          ≈ {formatChars(sv.totalSavedTokensEst)} tokens
+                          {t('toolStats.tokens', { count: formatChars(sv.totalSavedTokensEst) })}
                         </span>
                         <span className="text-[10px] text-muted-foreground tabular-nums">
-                          ({savedPct}% of raw)
+                          {t('toolStats.rawPercent', { count: savedPct })}
                         </span>
                       </div>
                       {sv.byTool.length > 0 && (
@@ -225,12 +227,12 @@ export function ToolStatsView({
 
                 {data.byName.length === 0 ? (
                   <div className="text-xs text-muted-foreground text-center py-8">
-                    No tool calls recorded for this session.
+                    {t('toolStats.empty')}
                   </div>
                 ) : (
                   <div className="space-y-1.5">
                     <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                      By tool
+                      {t('toolStats.byTool')}
                     </div>
                     {data.byName.map((b) => {
                       const pct = data.totalCalls > 0
@@ -253,7 +255,7 @@ export function ToolStatsView({
                                 variant="outline"
                                 className="text-[9px] px-1 py-0 border-destructive/40 text-destructive"
                               >
-                                {b.errorCount} err
+                                {t('toolStats.errShort', { count: b.errorCount })}
                               </Badge>
                             )}
                           </div>
@@ -274,7 +276,7 @@ export function ToolStatsView({
                 {data.recent.length > 0 && (
                   <div className="space-y-1.5">
                     <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                      Recent calls (newest first)
+                      {t('toolStats.recent')}
                     </div>
                     <div className="space-y-0.5">
                       {data.recent.map((r) => (
@@ -293,7 +295,7 @@ export function ToolStatsView({
                                 variant="outline"
                                 className="text-[9px] px-1 py-0 border-destructive/40 text-destructive shrink-0"
                               >
-                                error
+                                {t('toolStats.error')}
                               </Badge>
                             )}
                             <span className="ml-auto text-[10px] text-muted-foreground tabular-nums shrink-0">
@@ -304,7 +306,7 @@ export function ToolStatsView({
                             </span>
                           </div>
                           <pre className="mt-0.5 max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] text-muted-foreground">
-                            {r.argsPreview || '(no args)'}
+                            {r.argsPreview || t('toolStats.noArgs')}
                           </pre>
                         </div>
                       ))}
@@ -324,6 +326,7 @@ export function ToolStatsView({
  * blocking overlay over a sidebar panel.
  */
 export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps) {
+  const { t } = useTranslation('chat');
   if (!open) return null;
   return (
     <div
@@ -336,8 +339,8 @@ export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps
       >
         <div className="flex items-center gap-2 border-b px-4 py-3">
           <BarChart3 className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold flex-1">Tool stats — session {sessionId}</h2>
-          <Button size="sm" variant="ghost" onClick={onClose} title="Close">
+          <h2 className="text-sm font-semibold flex-1">{t('toolStats.modalTitle', { id: sessionId })}</h2>
+          <Button size="sm" variant="ghost" onClick={onClose} title={t('toolStats.close')}>
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>

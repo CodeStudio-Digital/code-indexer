@@ -273,6 +273,11 @@ export class CliOciDriver implements ISandboxDriver {
     for (const [k, v] of Object.entries(mergedEnv)) {
       args.push('-e', `${k}=${v}`);
     }
+    // Per-session raw run flags (e.g. --cpuset-cpus). Inserted last, right
+    // before the image, so a session can override earlier defaults.
+    if (spec.runArgs?.length) {
+      args.push(...spec.runArgs);
+    }
     if (spec.skipDefaultCommand) {
       args.push(spec.image);
     } else {

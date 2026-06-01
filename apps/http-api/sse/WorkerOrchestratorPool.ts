@@ -245,8 +245,20 @@ export class WorkerOrchestratorPool {
     const bus = createBus(new AbortController());
     const detachRuntimeLog = installRuntimeEventLog(bus, 'company', sessionId);
     const bridge = host.requireBridge();
+    // Keep the pool entry warm while the worker is doing observable work.
+    // The TTL sweep evicts on `lastTouchedAt`, which `getOrSpawn`/`get`/RPC
+    // bump — but a backgrounded master start/resume (sandbox provision +
+    // runCoder boot) emits no RPC from the main thread, only bus events. A
+    // cold container rebuild can outlast the idle TTL, so without this a
+    // long provision could be swept mid-build. Touching on every mirrored
+    // event resets the idle clock as provisioning/run progress streams.
+    const touch = (): void => {
+      const e = this.entries.get(sessionId);
+      if (e) e.lastTouchedAt = Date.now();
+    };
     const offEvent = bridge.on('bus.event', (payload) => {
       const env = payload as { event: string; data: unknown };
+      touch();
       // We don't preserve the worker's seq — `publish` allocates its
       // own monotonic seq on the main bus, which is what SSE clients
       // use as `Last-Event-ID`. Reusing worker seq would conflict

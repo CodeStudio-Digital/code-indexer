@@ -11,207 +11,21 @@
  * of `{type:'data'|'exit', ...}` frames. Hono adapts to SSE (or keeps
  * the existing WS path for now); Electron pumps onto a MessagePort.
  *
- * node-pty is loaded lazily via `createRequire` so a missing prebuild on
- * exotic platforms degrades to a clean ApiError instead of failing
- * module load.
+ * The PTY registry itself lives in `./pty-manager.ts` as a shared
+ * singleton so the `runner` namespace can spawn package-manager scripts
+ * into the same manager (and reuse `terminal.output` to stream them).
  */
 
-import { createRequire } from 'node:module';
-import { randomUUID } from 'node:crypto';
 import { ApiError, type TerminalApi, type TerminalOutputChunk } from '@mcp/api-bus';
 import type { HandlerDeps } from '../types.js';
-
-interface IPty {
-  pid: number;
-  cols: number;
-  rows: number;
-  onData(listener: (data: string) => void): { dispose(): void };
-  onExit(listener: (e: { exitCode: number; signal?: number }) => void): { dispose(): void };
-  write(data: string): void;
-  resize(cols: number, rows: number): void;
-  kill(signal?: string): void;
-}
-
-interface NodePtyModule {
-  spawn(
-    file: string,
-    args: string[] | string,
-    opts: {
-      name?: string;
-      cols?: number;
-      rows?: number;
-      cwd?: string;
-      env?: Record<string, string | undefined>;
-      encoding?: string;
-      /**
-       * Windows-only — force WinPTY backend when running inside
-       * Electron. ConPTY's `conpty_console_list_agent` helper spawns
-       * a child of `process.execPath` and calls AttachConsole on the
-       * parent's console; Electron is GUI-subsystem and has no
-       * console attached, so the helper crashes with "AttachConsole
-       * failed" and tears down the entire renderer. WinPTY uses a
-       * dedicated agent binary and works without console attachment.
-       * Non-Windows platforms ignore this flag.
-       */
-      useConpty?: boolean;
-    },
-  ): IPty;
-}
-
-const nodeRequire = createRequire(import.meta.url);
-let cachedPty: NodePtyModule | null | undefined;
-function loadPty(): NodePtyModule {
-  if (cachedPty !== undefined && cachedPty !== null) return cachedPty;
-  if (cachedPty === null) {
-    throw new ApiError('terminal_unavailable', 503, 'node-pty is not available on this platform');
-  }
-  try {
-    cachedPty = nodeRequire('node-pty') as NodePtyModule;
-    return cachedPty;
-  } catch (err) {
-    cachedPty = null;
-    throw new ApiError(
-      'terminal_unavailable',
-      503,
-      `node-pty failed to load: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-}
-
-/**
- * In-process registry of live PTYs. Keyed by the opaque `terminalId`
- * returned from `spawn`. A buffered fan-out per terminal lets multiple
- * consumers attach (Electron renderer + later debug viewer, e.g.).
- */
-interface PtyEntry {
-  pty: IPty;
-  buffer: TerminalOutputChunk[];
-  listeners: Set<(chunk: TerminalOutputChunk) => void>;
-  exited: boolean;
-  exitChunk?: TerminalOutputChunk;
-}
-
-class PtyManager {
-  private readonly entries = new Map<string, PtyEntry>();
-
-  spawn(opts: {
-    shell?: string;
-    cwd: string;
-    cols: number;
-    rows: number;
-    env?: Record<string, string>;
-  }): { id: string; entry: PtyEntry } {
-    const pty = loadPty();
-    const file = opts.shell ?? defaultShell();
-    const args = defaultShellArgs(file);
-    // Build a CLEAN env for the user's terminal — strip the dev-only
-    // vars our parent process sets (NODE_OPTIONS injects tsx/esm,
-    // ELECTRON_RUN_AS_NODE flags the electron binary as a Node interpreter,
-    // MCP_* are internal flags). Leaking these into the shell breaks
-    // every `npm run dev` / `node script.js` the user runs because their
-    // project's node_modules doesn't have tsx, and the shell's `node`
-    // doesn't expect ELECTRON_RUN_AS_NODE.
-    const baseEnv: Record<string, string | undefined> = { ...process.env };
-    delete baseEnv.NODE_OPTIONS;
-    delete baseEnv.ELECTRON_RUN_AS_NODE;
-    delete baseEnv.MCP_DEV_HTTP;
-    delete baseEnv.MCP_ELECTRON_DEV_URL;
-    const env = { ...baseEnv, ...(opts.env ?? {}) };
-    // Force WinPTY backend on Windows-under-Electron — see the
-    // `useConpty` comment on NodePtyModule above. Detected via
-    // `process.versions.electron` so plain-Node deploys (CLI / standalone
-    // server) still get the faster ConPTY default.
-    const inElectron = !!process.versions.electron;
-    const isWindows = process.platform === 'win32';
-    const child = pty.spawn(file, args, {
-      name: 'xterm-color',
-      cols: opts.cols,
-      rows: opts.rows,
-      cwd: opts.cwd,
-      env,
-      encoding: 'utf8',
-      ...(isWindows && inElectron ? { useConpty: false } : {}),
-    });
-
-    const entry: PtyEntry = {
-      pty: child,
-      buffer: [],
-      listeners: new Set(),
-      exited: false,
-    };
-    const id = randomUUID();
-    this.entries.set(id, entry);
-
-    child.onData((data) => {
-      const chunk: TerminalOutputChunk = { type: 'data', data };
-      entry.buffer.push(chunk);
-      for (const l of entry.listeners) l(chunk);
-    });
-
-    child.onExit((e) => {
-      const chunk: TerminalOutputChunk = {
-        type: 'exit',
-        code: e.exitCode ?? null,
-        signal: typeof e.signal === 'number' ? String(e.signal) : (e.signal ?? null),
-      };
-      entry.exited = true;
-      entry.exitChunk = chunk;
-      for (const l of entry.listeners) l(chunk);
-      entry.listeners.clear();
-      // Keep the entry around briefly so a late consumer still sees
-      // the exit code; reap on the next spawn cycle.
-      setTimeout(() => this.entries.delete(id), 30_000).unref?.();
-    });
-
-    return { id, entry };
-  }
-
-  get(id: string): PtyEntry {
-    const e = this.entries.get(id);
-    if (!e) throw new ApiError('not_found', 404, 'terminal not found (may have exited)');
-    return e;
-  }
-
-  /**
-   * Subscribe to live output, optionally with a replay of buffered chunks.
-   * Returns an unsubscribe fn. The handler's `output()` AsyncIterable
-   * wraps this with backpressure.
-   */
-  subscribe(id: string, onChunk: (c: TerminalOutputChunk) => void): () => void {
-    const entry = this.get(id);
-    for (const c of entry.buffer) onChunk(c);
-    if (entry.exited && entry.exitChunk) {
-      onChunk(entry.exitChunk);
-      return () => undefined;
-    }
-    entry.listeners.add(onChunk);
-    return () => {
-      entry.listeners.delete(onChunk);
-    };
-  }
-}
-
-function defaultShell(): string {
-  if (process.platform === 'win32') {
-    return process.env.COMSPEC ?? 'powershell.exe';
-  }
-  return process.env.SHELL ?? '/bin/bash';
-}
-
-function defaultShellArgs(shell: string): string[] {
-  if (process.platform === 'win32') {
-    // PowerShell with no banner; bypass execution policy is opt-in
-    // and intentionally not enabled by default.
-    if (/powershell\.exe$/i.test(shell)) return ['-NoLogo'];
-    if (/pwsh\.exe$/i.test(shell)) return ['-NoLogo'];
-    return [];
-  }
-  return ['--login'];
-}
+import { ensureDataDir } from '@mcp/shared/utils/config.js';
+import { sharedPtyManager, defaultShell, loadPty, type PtyManager } from './pty-manager.js';
+import { detectShells } from './shells.js';
+import { resolveProjectNodeBinDir } from '../runtime/node-manager.js';
 
 export function createTerminalHandlers(deps: HandlerDeps): TerminalApi {
   const { db } = deps;
-  const manager = new PtyManager();
+  const manager = sharedPtyManager;
 
   function resolveCwd(target: Parameters<TerminalApi['spawn']>[0]['target']): string {
     if (target.kind === 'project') {
@@ -230,9 +44,15 @@ export function createTerminalHandlers(deps: HandlerDeps): TerminalApi {
   }
 
   return {
-    async spawn({ target, cols = 80, rows = 24, shell, cwd: cwdOverride, env }) {
+    async spawn({ target, cols = 80, rows = 24, shell, shellArgs, cwd: cwdOverride, env }) {
       const cwd = cwdOverride ?? resolveCwd(target);
-      const { id } = manager.spawn({ shell, cwd, cols, rows, env });
+      // Per-project Node version → prepend its bin dir to PATH so the
+      // terminal uses the same toolchain as the runner.
+      const nodeBinDir =
+        target.kind === 'project'
+          ? (resolveProjectNodeBinDir(db, target.projectId, ensureDataDir()) ?? undefined)
+          : undefined;
+      const { id } = manager.spawn({ shell, shellArgs, cwd, cols, rows, env, nodeBinDir });
       const entry = manager.get(id);
       return {
         terminalId: id,
@@ -240,6 +60,10 @@ export function createTerminalHandlers(deps: HandlerDeps): TerminalApi {
         shell: shell ?? defaultShell(),
         cwd,
       };
+    },
+
+    async listShells() {
+      return detectShells();
     },
 
     output({ terminalId }) {
@@ -260,6 +84,7 @@ export function createTerminalHandlers(deps: HandlerDeps): TerminalApi {
 
     async diagnose({ target }) {
       try {
+        // Touch the lazy node-pty load — surfaces platform issues early.
         loadPty();
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) };

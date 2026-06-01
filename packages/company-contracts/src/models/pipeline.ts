@@ -43,8 +43,26 @@ export interface PipelineNode {
    * 'spec' = subordinate that authors a specification (agentId='spec') and pauses for human
    * approval before the next node runs. The SDD built-in template wires a 'spec' node
    * followed by an 'agent' implementer and a 'validate' qa-validator.
+   * 'fan-out' = spawns several subordinates in one step (one per `fanOut` branch or per
+   * project), waits for ALL to finish (barrier), aggregates their outputs, then advances.
+   * Company scope only — chat pipelines are single-project.
    */
-  kind?: 'agent' | 'validate' | 'spec';
+  kind?: 'agent' | 'validate' | 'spec' | 'fan-out';
+  /**
+   * Fan-out configuration (required when `kind === 'fan-out'`). The node
+   * uses `branchMode: 'linear'` and a single outgoing edge (the join).
+   *   - `explicit`     — one branch per entry in `branches` (heterogeneous
+   *                      roles/projects/templates).
+   *   - `each-project` — one branch per project in the session, all using
+   *                      `fanOut.role` and the node's `taskTemplate`.
+   * A failed branch retries up to the node's `maxAttempts`; remaining
+   * failures are recorded in the aggregated output (best-effort).
+   */
+  fanOut?: {
+    mode: 'explicit' | 'each-project';
+    branches?: Array<{ role: string; projectId?: number; taskTemplate?: string; label?: string }>;
+    role?: string;
+  };
   /** Per-stage provider/model. When omitted, the executor inherits from the parent session. */
   model_override?: { provider?: string; model?: string } | null;
   /** Required when `kind === 'validate'`. Free-text criteria fed to the validator subagent. */
@@ -84,6 +102,14 @@ export interface Pipeline {
   id: number;
   name: string;
   description: string;
+  /**
+   * Scope of the definition. At most one of `project_id` /
+   * `company_session_id` is set (enforced in the store layer):
+   *   - `project_id` set → chat/project pipeline (V2), owned by one project.
+   *   - `company_session_id` set → company pipeline (V1), multi-project.
+   *   - both NULL → global/template.
+   */
+  project_id: number | null;
   company_session_id: number | null;
   template_id: number | null;
   graph: PipelineGraph;
@@ -108,6 +134,8 @@ export type PipelineExecutionStatus =
 export interface PipelineExecution {
   id: number;
   pipeline_id: number;
+  /** Project that owns this run (chat/project executions). NULL for company runs. */
+  project_id: number | null;
   company_session_id: number | null;
   coder_session_id: number | null;
   status: PipelineExecutionStatus;

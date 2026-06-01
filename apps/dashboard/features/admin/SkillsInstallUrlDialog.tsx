@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link as LinkIcon, Loader2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export function SkillsInstallUrlDialog({ open, onOpenChange, onInstalled }: Props) {
+  const { t } = useTranslation('admin');
   const [url, setUrl] = useState('');
   const [namespace, setNamespace] = useState('');
   const [overwrite, setOverwrite] = useState(false);
@@ -64,18 +66,16 @@ export function SkillsInstallUrlDialog({ open, onOpenChange, onInstalled }: Prop
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <LinkIcon className="h-4 w-4" />
-            Install Agent Skill from URL
+            {t('skillsInstall.url.title')}
           </DialogTitle>
           <DialogDescription>
-            Paste a skill URL from mcp.directory — either the page URL or the
-            direct download link. The server will download, extract, and
-            register the skill.
+            {t('skillsInstall.url.description')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 py-2">
           <div className="space-y-1">
-            <label className="text-xs font-medium">Skill URL</label>
+            <label className="text-xs font-medium">{t('skillsInstall.skillUrl')}</label>
             <Input
               placeholder="https://mcp.directory/skills/<slug>"
               value={url}
@@ -85,9 +85,9 @@ export function SkillsInstallUrlDialog({ open, onOpenChange, onInstalled }: Prop
             />
           </div>
           <div className="space-y-1">
-            <label className="text-xs font-medium">Namespace (optional)</label>
+            <label className="text-xs font-medium">{t('skillsInstall.namespace')}</label>
             <Input
-              placeholder="auto from skill name / slug"
+              placeholder={t('skillsInstall.namespaceUrlPlaceholder')}
               value={namespace}
               onChange={(e) => setNamespace(e.target.value)}
               disabled={busy}
@@ -100,7 +100,7 @@ export function SkillsInstallUrlDialog({ open, onOpenChange, onInstalled }: Prop
               onChange={(e) => setOverwrite(e.target.checked)}
               disabled={busy}
             />
-            Overwrite existing install
+            {t('skillsInstall.overwrite')}
           </label>
 
           {error && (
@@ -112,7 +112,7 @@ export function SkillsInstallUrlDialog({ open, onOpenChange, onInstalled }: Prop
           {result && (
             <div className="text-xs border rounded p-2 space-y-1">
               <div className="font-medium">
-                Installed {result.installed.length} item(s) into namespace{' '}
+                {t('skillsInstall.installed', { count: result.installed.length })}{' '}
                 <Badge variant="secondary">{result.namespace}</Badge>
               </div>
               <div className="text-muted-foreground font-mono text-[11px] break-all">
@@ -120,7 +120,7 @@ export function SkillsInstallUrlDialog({ open, onOpenChange, onInstalled }: Prop
               </div>
               {result.commitSha && (
                 <div className="text-muted-foreground">
-                  ref {result.commitSha.slice(0, 12)}
+                  {t('skillsInstall.refValue', { sha: result.commitSha.slice(0, 12) })}
                 </div>
               )}
               <ul className="max-h-32 overflow-auto space-y-0.5">
@@ -139,7 +139,7 @@ export function SkillsInstallUrlDialog({ open, onOpenChange, onInstalled }: Prop
               {result.mcpServers && result.mcpServers.length > 0 && (
                 <div className="pt-2 border-t mt-2 space-y-1">
                   <div className="font-medium">
-                    MCP servers registrados ({result.mcpServers.length})
+                    {t('skillsInstall.mcpServers', { count: result.mcpServers.length })}
                   </div>
                   <ul className="max-h-24 overflow-auto space-y-0.5">
                     {result.mcpServers.map((s) => (
@@ -152,7 +152,7 @@ export function SkillsInstallUrlDialog({ open, onOpenChange, onInstalled }: Prop
                     ))}
                   </ul>
                   <div className="text-[10px] text-muted-foreground">
-                    ⚠ Servers HTTP podem exigir OAuth — configure em Admin → MCP Servers.
+                    {t('skillsInstall.httpWarning')}
                   </div>
                 </div>
               )}
@@ -170,11 +170,11 @@ export function SkillsInstallUrlDialog({ open, onOpenChange, onInstalled }: Prop
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            Close
+            {t('skillsInstall.close')}
           </Button>
           <Button onClick={handleInstall} disabled={busy || !url.trim()}>
             {busy && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            Install
+            {t('skillsInstall.install')}
           </Button>
         </DialogFooter>
       </DialogContent>

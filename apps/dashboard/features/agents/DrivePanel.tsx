@@ -58,7 +58,8 @@ type DriveFile = DriveFileMeta;
 
 interface DriveListResponse {
   scope: string;
-  files: DriveFile[];
+  files?: DriveFile[];
+  error?: string;
 }
 
 interface DriveReadResponse {
@@ -129,6 +130,11 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
       const res = await fetch(`/api${url}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as DriveListResponse;
+      // The response is untrusted network input — validate before hydrating
+      // so an unexpected payload surfaces the real cause instead of a cryptic
+      // `files.map is not a function` thrown deep in the slice reducer.
+      if (body.error) throw new Error(body.error);
+      if (!Array.isArray(body.files)) throw new Error('Unexpected drive response shape');
       driveHydrate(companySessionId, body.scope, body.files);
     } catch (e) {
       driveSetError(companySessionId, e instanceof Error ? e.message : String(e));

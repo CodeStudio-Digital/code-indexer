@@ -11,7 +11,7 @@
  *      subsequent RPCs (`pushUserMessage`, `isWaitingForInput`,
  *      `interruptWait`, …) can reach it without re-running.
  *   3. Subscribes to the run's bus and forwards every event to main
- *      via `bridge.emit('bus.event', { event, data, seq })`. Main
+ *      via `bridge.emit('bus.event', { runId, event, data, seq })`. Main
  *      mirrors them into a synthetic `CoderRunBus` so the existing
  *      `pumpBusToSSE` pipeline keeps working unchanged.
  *   4. Calls `wireRunnerToBus` against the worker-side bus — same
@@ -53,7 +53,14 @@ import {
   type DocsResearchBridge,
 } from '../../../packages/docs-agent/src/bridges/docs-bridge.js';
 import type { DocsResearchResult } from '../../../packages/docs-agent/src/types.js';
-import { createBus, publish, markEnded, setBusRunner, subscribe } from '../coder-bus.js';
+import {
+  createBus,
+  publish,
+  markEnded,
+  setBusRunner,
+  subscribe,
+  type CoderRunBus,
+} from '../coder-bus.js';
 import { wireRunnerEventsToBus } from '../sse/runnerWiring.js';
 import { RemoteMcpServerManager } from './RemoteMcpServerManager.js';
 
@@ -123,11 +130,75 @@ setGlobalDocsResearcher(docsResearcherShim);
 // process's `McpExternalPool` for every run inside this worker.
 const remoteMcpManager = new RemoteMcpServerManager(bridge);
 
-// Worker-local state for the active run. Re-set on every `runFresh`.
-const ctrl = new AbortController();
-const bus = createBus(ctrl);
-let handle: RunCoderHandle | null = null;
-let runner: CoderRunner | null = null;
+// Worker-local state for the active run. A single worker can handle multiple
+// sequential runs; each run gets a fresh bus + AbortController so completed
+// state from the linger window cannot poison the next `runFresh`.
+interface ActiveRunState {
+  runId: number;
+  ctrl: AbortController;
+  bus: CoderRunBus;
+  handle: RunCoderHandle | null;
+  runner: CoderRunner | null;
+  inProgress: boolean;
+  detachBusSubscription: () => void;
+  detachBusEndListener: () => void;
+}
+let activeRun: ActiveRunState | null = null;
+
+function detachRunForwarders(run: ActiveRunState): void {
+  try { run.detachBusSubscription(); } catch { /* best-effort */ }
+  try { run.detachBusEndListener(); } catch { /* best-effort */ }
+}
+
+function createActiveRun(runId: number): ActiveRunState {
+  const ctrl = new AbortController();
+  const bus = createBus(ctrl);
+  const run: ActiveRunState = {
+    runId,
+    ctrl,
+    bus,
+    handle: null,
+    runner: null,
+    inProgress: true,
+    detachBusSubscription: () => undefined,
+    detachBusEndListener: () => undefined,
+  };
+
+  run.detachBusSubscription = subscribe(
+    bus,
+    (ev) => {
+      // A previous run may still settle a microtask after a new run has been
+      // installed. Only the current run is allowed onto the main-side mirror.
+      if (activeRun !== run) return;
+      // Apêndice 4 Fase 1 — breadcrumb for crash diagnostics. The
+      // crash log includes "ms since last bus event" which is the
+      // fastest way to spot a worker dying mid-stream vs idle.
+      lastBusEventName = ev.event;
+      lastBusEventAt = Date.now();
+      bridge.emit('bus.event', {
+        runId,
+        seq: ev.seq,
+        event: ev.event,
+        data: ev.data,
+      });
+    },
+    -1,
+  );
+
+  const onEnd = () => {
+    if (activeRun !== run) return;
+    run.inProgress = false;
+    if (bus.endReason) {
+      bridge.emit('bus.end', { runId, ...bus.endReason });
+    }
+  };
+  bus.endListeners.add(onEnd);
+  run.detachBusEndListener = () => {
+    bus.endListeners.delete(onEnd);
+  };
+
+  return run;
+}
 
 // ─── Diagnostic state (Apêndice 4 Fase 1) ─────────────────────────
 //
@@ -220,7 +291,8 @@ function recordRecoverableAndCheckEscalation(): CrashClass {
 
 let exitingFromCrash = false;
 function emitCrashToBus(prefix: string, message: string, err?: unknown): void {
-  if (exitingFromCrash || bus.ended) return;
+  const run = activeRun;
+  if (exitingFromCrash || !run || run.bus.ended) return;
   exitingFromCrash = true;
 
   // Apêndice 4 Fase 1 — Structured crash diagnostics. Behind
@@ -232,10 +304,11 @@ function emitCrashToBus(prefix: string, message: string, err?: unknown): void {
     const errorName = err instanceof Error ? err.name : null;
     const stack = err instanceof Error ? err.stack : undefined;
     let runnerWaitingForInput: boolean | null = null;
-    try { runnerWaitingForInput = runner?.isWaitingForInput?.() ?? null; } catch { /* ignore */ }
+    try { runnerWaitingForInput = run.runner?.isWaitingForInput?.() ?? null; } catch { /* ignore */ }
     console.error(
       `[coder-worker] crash ${JSON.stringify({
         sessionId,
+        runId: run.runId,
         kind: prefix,
         errorName,
         message,
@@ -247,15 +320,15 @@ function emitCrashToBus(prefix: string, message: string, err?: unknown): void {
         lastBusEventAt,
         msSinceLastBusEvent: lastBusEventAt ? now - lastBusEventAt : null,
         runnerWaitingForInput,
-        currentTurn: runner?.turn ?? null,
-        busEnded: bus.ended,
+        currentTurn: run.runner?.turn ?? null,
+        busEnded: run.bus.ended,
       })}`,
     );
   }
 
   try {
-    publish(bus, 'error', { message: `${prefix}: ${message}`, sessionId });
-    markEnded(bus, 'error', {
+    publish(run.bus, 'error', { message: `${prefix}: ${message}`, sessionId });
+    markEnded(run.bus, 'error', {
       message: `${prefix}: ${message}`,
       reason: 'worker-uncaught',
       sessionId,
@@ -263,6 +336,21 @@ function emitCrashToBus(prefix: string, message: string, err?: unknown): void {
   } catch (e) {
     console.error(`[coder-worker ${sessionId}] failed to flush crash event:`, e);
   }
+}
+
+function publishRecoverableWarning(
+  kind: 'uncaughtException' | 'unhandledRejection',
+  message: string,
+  errorName: string,
+): void {
+  const run = activeRun;
+  if (!run || run.bus.ended) return;
+  try {
+    publish(run.bus, 'warning', {
+      message: `recoverable ${kind}: ${message}`,
+      errorName,
+    });
+  } catch { /* best-effort */ }
 }
 
 process.on('uncaughtException', (err) => {
@@ -275,12 +363,11 @@ process.on('uncaughtException', (err) => {
       `[coder-worker ${sessionId}] uncaughtException (recoverable, keeping worker alive):`,
       err,
     );
-    try {
-      publish(bus, 'warning', {
-        message: `recoverable uncaughtException: ${message}`,
-        errorName: err instanceof Error ? err.name : 'unknown',
-      });
-    } catch { /* best-effort */ }
+    publishRecoverableWarning(
+      'uncaughtException',
+      message,
+      err instanceof Error ? err.name : 'unknown',
+    );
     return;
   }
   console.error(
@@ -304,12 +391,11 @@ process.on('unhandledRejection', (reason) => {
       `[coder-worker ${sessionId}] unhandledRejection (recoverable, keeping worker alive):`,
       reason,
     );
-    try {
-      publish(bus, 'warning', {
-        message: `recoverable unhandledRejection: ${message}`,
-        errorName: reason instanceof Error ? reason.name : 'unknown',
-      });
-    } catch { /* best-effort */ }
+    publishRecoverableWarning(
+      'unhandledRejection',
+      message,
+      reason instanceof Error ? reason.name : 'unknown',
+    );
     return;
   }
   console.error(
@@ -322,30 +408,10 @@ process.on('unhandledRejection', (reason) => {
   // event before the process dies.
 });
 
-// Forward every bus event to main. `since: -1` replays the buffer so
-// events emitted during runCoder() spin-up don't get lost.
-subscribe(
-  bus,
-  (ev) => {
-    // Apêndice 4 Fase 1 — breadcrumb for crash diagnostics. The
-    // crash log includes "ms since last bus event" which is the
-    // fastest way to spot a worker dying mid-stream vs idle.
-    lastBusEventName = ev.event;
-    lastBusEventAt = Date.now();
-    bridge.emit('bus.event', { seq: ev.seq, event: ev.event, data: ev.data });
-  },
-  -1,
-);
-
-bus.endListeners.add(() => {
-  if (bus.endReason) {
-    bridge.emit('bus.end', bus.endReason);
-  }
-});
-
 // ─── RPC handlers ───────────────────────────────────────────────
 
 interface RunFreshPayload {
+  runId?: number;
   userMessage: string;
   attachments?: CoderAttachment[];
   maxTurns?: number;
@@ -372,7 +438,14 @@ interface RunFreshPayload {
 bridge.handle('runFresh', async (payload) => {
   recordRpc('runFresh');
   const opts = payload as RunFreshPayload;
-  if (handle) throw new Error('coder-worker: run already in progress');
+  if (activeRun?.inProgress) throw new Error('coder-worker: run already in progress');
+  if (activeRun) detachRunForwarders(activeRun);
+  const run = createActiveRun(
+    typeof opts.runId === 'number' && Number.isFinite(opts.runId)
+      ? opts.runId
+      : Date.now(),
+  );
+  activeRun = run;
   try {
     const result = await runCoder({
       session: { id: sessionId },
@@ -390,8 +463,8 @@ bridge.handle('runFresh', async (payload) => {
       preThinkOnToolResults: opts.preThinkOnToolResults,
       selectedSkillIds: opts.selectedSkillIds,
       resume: opts.resume,
-      signal: ctrl.signal,
-      onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
+      signal: run.ctrl.signal,
+      onSnapshotRecorded: (info) => publish(run.bus, 'session_snapshot_changed', info),
       // Mirror the in-process wiring in routes/coder/stream.ts so the
       // docs_deep_research tool appears on turn 1 of every worker-thread
       // run too. Pulls the singleton we installed above; if neither
@@ -408,12 +481,12 @@ bridge.handle('runFresh', async (payload) => {
       // empty and runCoder falls through its "no external tools" path.
       externalMcpManager: remoteMcpManager,
     } as Parameters<typeof runCoder>[0]);
-    handle = result;
-    runner = result.runner;
-    setBusRunner(bus, result.runner);
-    publish(bus, 'session', result.session);
-    publish(bus, 'index_status', result.indexStatus);
-    wireRunnerEventsToBus(result.runner, bus);
+    run.handle = result;
+    run.runner = result.runner;
+    setBusRunner(run.bus, result.runner);
+    publish(run.bus, 'session', result.session);
+    publish(run.bus, 'index_status', result.indexStatus);
+    wireRunnerEventsToBus(result.runner, run.bus);
 
     // Fire the runner's lifecycle awaiter in the background so the
     // RPC returns quickly — caller doesn't want to wait for the
@@ -421,33 +494,41 @@ bridge.handle('runFresh', async (payload) => {
     void result.done
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
-        publish(bus, 'error', { message });
-        markEnded(bus, 'error', { message });
+        publish(run.bus, 'error', { message });
+        markEnded(run.bus, 'error', { message });
       })
       .finally(() => {
-        // Linger the bus state so a late reconnect sees buffered events.
-        // The main side's pool handles eviction TTL — we just keep the
-        // worker alive until it's killed.
-        runner = null;
+        // The main side mirrors the bus and owns linger/replay. Worker-local
+        // state can now be cleared so a later `runFresh` reuses this worker.
+        run.runner = null;
+        run.handle = null;
+        run.inProgress = false;
+        detachRunForwarders(run);
       });
 
     return { ok: true, session: result.session, indexStatus: result.indexStatus };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    publish(bus, 'error', { message });
-    markEnded(bus, 'error', { message });
+    publish(run.bus, 'error', { message });
+    markEnded(run.bus, 'error', { message });
+    run.runner = null;
+    run.handle = null;
+    run.inProgress = false;
+    detachRunForwarders(run);
     throw err;
   }
 });
 
 bridge.handle('isWaitingForInput', () => {
   recordRpc('isWaitingForInput');
+  const runner = activeRun?.runner;
   if (!runner) return false;
   return runner.isWaitingForInput();
 });
 
 bridge.handle('interruptWait', () => {
   recordRpc('interruptWait');
+  const runner = activeRun?.runner;
   if (!runner) return { ok: false, reason: 'no_runner' };
   try {
     runner.interruptWait();
@@ -463,6 +544,7 @@ bridge.handle('pushUserMessage', (payload) => {
     content: string;
     selectedSkillIds?: string[];
   };
+  const runner = activeRun?.runner;
   if (!runner) throw new Error('coder-worker: no runner — call runFresh first');
   runner.pushUserMessage(content, { selectedSkillIds });
   return { ok: true };
@@ -480,6 +562,7 @@ bridge.handle('pushUserMessage', (payload) => {
 bridge.handle('provideUserInput', (payload) => {
   recordRpc('provideUserInput');
   const { value } = payload as { value: string };
+  const runner = activeRun?.runner;
   if (!runner) return { ok: false, reason: 'no_runner' };
   const accepted = runner.provideUserInput(value);
   return { ok: accepted };
@@ -488,6 +571,7 @@ bridge.handle('provideUserInput', (payload) => {
 bridge.handle('setThinking', (payload) => {
   recordRpc('setThinking');
   const { thinking } = payload as { thinking: boolean };
+  const runner = activeRun?.runner;
   if (!runner) return { ok: false, reason: 'no_runner' };
   runner.setThinking(thinking);
   return { ok: true };
@@ -500,6 +584,7 @@ bridge.handle('setDeepThink', (payload) => {
     model?: string;
     provider?: string;
   };
+  const runner = activeRun?.runner;
   if (!runner) return { ok: false, reason: 'no_runner' };
   runner.setDeepThink(deepThink, { model, provider });
   return { ok: true };
@@ -508,9 +593,10 @@ bridge.handle('setDeepThink', (payload) => {
 bridge.handle('abort', () => {
   recordRpc('abort');
   try {
-    ctrl.abort();
-    if (runner) {
-      try { runner.abort(); } catch { /* best-effort */ }
+    const run = activeRun;
+    run?.ctrl.abort();
+    if (run?.runner) {
+      try { run.runner.abort(); } catch { /* best-effort */ }
     }
     return { ok: true };
   } catch (err) {
@@ -521,9 +607,10 @@ bridge.handle('abort', () => {
 bridge.handle('stop', async () => {
   recordRpc('stop');
   try {
-    ctrl.abort();
-    if (runner) {
-      try { runner.abort(); } catch { /* best-effort */ }
+    const run = activeRun;
+    run?.ctrl.abort();
+    if (run?.runner) {
+      try { run.runner.abort(); } catch { /* best-effort */ }
     }
   } catch { /* best-effort */ }
   return { ok: true };

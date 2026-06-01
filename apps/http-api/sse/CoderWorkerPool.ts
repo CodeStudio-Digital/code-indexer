@@ -103,7 +103,9 @@ export interface CoderWorkerPoolOpts {
 interface PoolEntry {
   host: WorkerHost;
   bus: CoderRunBus;
+  currentRunId: number;
   lastTouchedAt: number;
+  detachCurrentBusRuntimeLog: () => void;
   detachBusMirror: () => void;
   /**
    * Scheduled fast-eviction handle, set when `bus.end` arrives. Cleared
@@ -118,8 +120,8 @@ interface PoolEntry {
    * on a fat prompt; session 798 symptom) makes the worker look idle
    * to the sweep even though it is actively doing real work.
    *
-   * Separate from `bus.ended` because the bus object is reused across
-   * runs and `bus.ended` is not reset on the next `runFresh`.
+   * Separate from `bus.ended` because the bus object is swapped between
+   * sequential runs while the worker stays warm.
    */
   runInProgress: boolean;
 }
@@ -159,6 +161,7 @@ export class CoderWorkerPool {
   private readonly postRunLingerMs: number;
   private readonly log: (level: 'info' | 'warn' | 'error', msg: string) => void;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  private nextRunId = 1;
 
   constructor(private readonly opts: CoderWorkerPoolOpts) {
     this.ttlMs = opts.ttlMs ?? 5 * 60 * 1000;
@@ -216,14 +219,34 @@ export class CoderWorkerPool {
    */
   async runFresh(sessionId: number, opts: RunFreshOpts): Promise<CoderRunBus> {
     const entry = await this.ensureEntry(sessionId);
+    if (entry.runInProgress && !entry.bus.ended) {
+      throw new Error(`coder-pool: run already in progress for session ${sessionId}`);
+    }
     this.cancelPostRunEvict(entry);
     entry.lastTouchedAt = Date.now();
+    const runId = this.nextRunId++;
+    this.prepareRunBus(entry, sessionId, runId);
     // (B) — mark the run in-progress so the idle sweep keeps hands off
     // until the worker emits its terminal `done`/`error` via the bus
     // event mirror below.
     entry.runInProgress = true;
     const bridge = entry.host.requireBridge();
-    await bridge.request('runFresh', opts, { timeoutMs: 60_000 });
+    try {
+      await bridge.request('runFresh', { ...opts, runId }, { timeoutMs: 60_000 });
+    } catch (err) {
+      entry.runInProgress = false;
+      if (!entry.bus.ended) {
+        const message = err instanceof Error ? err.message : String(err);
+        publish(entry.bus, 'error', { message, reason: 'worker-runFresh-failed', sessionId });
+        markEnded(entry.bus, 'error', {
+          message,
+          reason: 'worker-runFresh-failed',
+          sessionId,
+        });
+        this.schedulePostRunEvict(entry, sessionId);
+      }
+      throw err;
+    }
     return entry.bus;
   }
 
@@ -252,6 +275,34 @@ export class CoderWorkerPool {
     if (!entry.postRunEvictTimer) return;
     clearTimeout(entry.postRunEvictTimer);
     entry.postRunEvictTimer = null;
+  }
+
+  private prepareRunBus(entry: PoolEntry, sessionId: number, runId: number): void {
+    if (entry.currentRunId !== 0 || entry.bus.ended) {
+      try { entry.detachCurrentBusRuntimeLog(); } catch { /* best-effort */ }
+      entry.bus = createBus(new AbortController());
+      entry.detachCurrentBusRuntimeLog = installRuntimeEventLog(entry.bus, 'coder', sessionId);
+    }
+    entry.currentRunId = runId;
+  }
+
+  private schedulePostRunEvict(entry: PoolEntry, sessionId: number): void {
+    if (entry.postRunEvictTimer) clearTimeout(entry.postRunEvictTimer);
+    entry.postRunEvictTimer = setTimeout(() => {
+      // Re-check: a fresh run might have already cleared the timer
+      // and bumped lastTouchedAt. Don't evict if so.
+      const still = this.entries.get(sessionId);
+      if (!still) return;
+      if (still.postRunEvictTimer === null) return;
+      this.log(
+        'info',
+        `[coder-pool] post-run linger expired — evicting session=${sessionId}`,
+      );
+      void this.evict(sessionId);
+    }, this.postRunLingerMs);
+    if (typeof (entry.postRunEvictTimer as { unref?: () => void }).unref === 'function') {
+      (entry.postRunEvictTimer as { unref: () => void }).unref();
+    }
   }
 
   async isWaitingForInput(sessionId: number): Promise<boolean> {
@@ -501,7 +552,9 @@ export class CoderWorkerPool {
     });
 
     const offEvent = bridge.on('bus.event', (payload) => {
-      const env = payload as { event: string; data: unknown };
+      const env = payload as { runId?: number; event: string; data: unknown };
+      const e = this.entries.get(sessionId);
+      if (!e || env.runId !== e.currentRunId) return;
       // (A) — worker activity refreshes the idle timer. Without this, a
       // slow provider (LLM thinking 6+ min on a fat prompt) looks idle
       // to the sweep and gets evicted mid-turn (session 798 symptom).
@@ -509,18 +562,20 @@ export class CoderWorkerPool {
       // work (heartbeats every 10s, text/tool deltas, dispatch
       // progress) — so any single such event resets `lastTouchedAt`
       // far below the 5-min TTL.
-      const e = this.entries.get(sessionId);
-      if (e) e.lastTouchedAt = Date.now();
-      publish(bus, env.event, env.data);
+      e.lastTouchedAt = Date.now();
+      publish(e.bus, env.event, env.data);
     });
     const offEnd = bridge.on('bus.end', (payload) => {
-      const env = payload as { event: 'done' | 'error'; data: unknown };
-      markEnded(bus, env.event, env.data);
+      const env = payload as { runId?: number; event: 'done' | 'error'; data: unknown };
+      const e = this.entries.get(sessionId);
+      if (!e || env.runId !== e.currentRunId) return;
+      if (!e.bus.ended) {
+        markEnded(e.bus, env.event, env.data);
+      }
       // (B) — terminal event: run is no longer in progress; sweep may
       // now consider this entry for eviction once ttlMs elapses without
       // a follow-up `runFresh`/`pushUserMessage`.
-      const eEnd = this.entries.get(sessionId);
-      if (eEnd) eEnd.runInProgress = false;
+      e.runInProgress = false;
       // Fast-evict on run completion. We can't synchronously evict
       // here because a follow-up `/messages` POST may arrive within
       // a few seconds and would have to pay the cold-start cost
@@ -528,30 +583,16 @@ export class CoderWorkerPool {
       // and the user time to chain another turn through the same
       // worker. Any `runFresh` / `pushUserMessage` during that
       // window cancels the timer.
-      const e = this.entries.get(sessionId);
-      if (!e) return;
-      if (e.postRunEvictTimer) clearTimeout(e.postRunEvictTimer);
-      e.postRunEvictTimer = setTimeout(() => {
-        // Re-check: a fresh run might have already cleared the timer
-        // and bumped lastTouchedAt. Don't evict if so.
-        const still = this.entries.get(sessionId);
-        if (!still) return;
-        if (still.postRunEvictTimer === null) return;
-        this.log(
-          'info',
-          `[coder-pool] post-run linger expired — evicting session=${sessionId}`,
-        );
-        void this.evict(sessionId);
-      }, this.postRunLingerMs);
-      if (typeof (e.postRunEvictTimer as { unref?: () => void }).unref === 'function') {
-        (e.postRunEvictTimer as { unref: () => void }).unref();
-      }
+      this.schedulePostRunEvict(e, sessionId);
     });
 
-    const entry: PoolEntry = {
+    let entry: PoolEntry;
+    entry = {
       host,
       bus,
+      currentRunId: 0,
       lastTouchedAt: Date.now(),
+      detachCurrentBusRuntimeLog: detachRuntimeLog,
       postRunEvictTimer: null,
       // Fresh entries are inert until the first `runFresh`. The sweep
       // never sees them in this state because `lastTouchedAt` was just
@@ -559,7 +600,7 @@ export class CoderWorkerPool {
       // intent.
       runInProgress: false,
       detachBusMirror: () => {
-        try { detachRuntimeLog(); } catch { /* best-effort */ }
+        try { entry.detachCurrentBusRuntimeLog(); } catch { /* best-effort */ }
         try { offEvent(); } catch { /* best-effort */ }
         try { offEnd(); } catch { /* best-effort */ }
         try { offDocSearch(); } catch { /* best-effort */ }

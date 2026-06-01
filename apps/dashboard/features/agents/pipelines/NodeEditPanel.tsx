@@ -26,6 +26,12 @@ interface NodeEditPanelProps {
   node: PipelineNode;
   availableRoles: string[];
   availableSkills: string[];
+  /**
+   * Company scope shows orchestrator-only fields (role, kanban routing,
+   * projectId). Chat/project pipelines ignore those at runtime, so the
+   * project builder hides them to keep the panel focused on `kind`.
+   */
+  companyScope?: boolean;
   onChange: (patch: Partial<PipelineNode>) => void;
   onDelete: () => void;
 }
@@ -34,6 +40,7 @@ export function NodeEditPanel({
   node,
   availableRoles,
   availableSkills,
+  companyScope = true,
   onChange,
   onDelete,
 }: NodeEditPanelProps) {
@@ -131,7 +138,7 @@ export function NodeEditPanel({
           </div>
         </Field>
 
-        {!isValidator && (
+        {!isValidator && companyScope && (
           <Field
             label={t('agents:pipelines.node.role')}
             hint={t('agents:pipelines.node.roleTip', {
@@ -277,41 +284,45 @@ export function NodeEditPanel({
           )}
         </Field>
 
-        <Field label={t('agents:pipelines.node.kanbanTag')}>
-          <select
-            value={node.kanbanTag ?? ''}
-            onChange={(e) =>
-              onChange({ kanbanTag: (e.target.value || null) as KanbanTag | null })
-            }
-            className="w-full h-7 rounded border bg-background px-2"
-          >
-            <option value="">—</option>
-            {KANBAN_TAGS.map((tag) => (
-              <option key={tag} value={tag}>
-                {tag}
-              </option>
-            ))}
-          </select>
-        </Field>
+        {companyScope && (
+          <Field label={t('agents:pipelines.node.kanbanTag')}>
+            <select
+              value={node.kanbanTag ?? ''}
+              onChange={(e) =>
+                onChange({ kanbanTag: (e.target.value || null) as KanbanTag | null })
+              }
+              className="w-full h-7 rounded border bg-background px-2"
+            >
+              <option value="">—</option>
+              {KANBAN_TAGS.map((tag) => (
+                <option key={tag} value={tag}>
+                  {tag}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
 
-        <Field label={t('agents:pipelines.node.kanbanColumnTarget')}>
-          <select
-            value={node.kanbanColumnTarget ?? ''}
-            onChange={(e) =>
-              onChange({
-                kanbanColumnTarget: (e.target.value || undefined) as KanbanColumn | undefined,
-              })
-            }
-            className="w-full h-7 rounded border bg-background px-2"
-          >
-            <option value="">—</option>
-            {KANBAN_COLUMNS.map((col) => (
-              <option key={col} value={col}>
-                {col}
-              </option>
-            ))}
-          </select>
-        </Field>
+        {companyScope && (
+          <Field label={t('agents:pipelines.node.kanbanColumnTarget')}>
+            <select
+              value={node.kanbanColumnTarget ?? ''}
+              onChange={(e) =>
+                onChange({
+                  kanbanColumnTarget: (e.target.value || undefined) as KanbanColumn | undefined,
+                })
+              }
+              className="w-full h-7 rounded border bg-background px-2"
+            >
+              <option value="">—</option>
+              {KANBAN_COLUMNS.map((col) => (
+                <option key={col} value={col}>
+                  {col}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
 
         <Field label={t('agents:pipelines.node.maxAttempts')}>
           <Input
@@ -338,18 +349,20 @@ export function NodeEditPanel({
           />
         </Field>
 
-        <Field label={t('agents:pipelines.node.projectId')}>
-          <Input
-            type="number"
-            placeholder="—"
-            value={node.projectId ?? ''}
-            onChange={(e) => {
-              const n = parseInt(e.target.value, 10);
-              onChange({ projectId: Number.isFinite(n) ? n : undefined });
-            }}
-            className="h-7"
-          />
-        </Field>
+        {companyScope && (
+          <Field label={t('agents:pipelines.node.projectId')}>
+            <Input
+              type="number"
+              placeholder="—"
+              value={node.projectId ?? ''}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                onChange({ projectId: Number.isFinite(n) ? n : undefined });
+              }}
+              className="h-7"
+            />
+          </Field>
+        )}
       </div>
     </aside>
     </TooltipProvider>

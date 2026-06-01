@@ -173,7 +173,7 @@ describe('code_exec — sandbox + tool proxy', () => {
     const exec = buildCodeExecTool(makeRegistry([]));
     const r = await exec.handler({ code: '   ' }, ctx);
     expect(r.isError).toBe(true);
-    expect(r.content).toContain('cannot be empty');
+    expect(r.content).toContain('`code` is required and non-empty');
   });
 
   it('enforces the per-script tool-call cap', async () => {
@@ -209,6 +209,23 @@ describe('code_exec — sandbox + tool proxy', () => {
     const r = await exec.handler({ code: 'return typeof require + "," + typeof process + "," + typeof Buffer;' }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain('undefined,undefined,undefined');
+  });
+
+  it('hints toward write_file when a script calls require()', async () => {
+    const exec = buildCodeExecTool(makeRegistry([]));
+    const r = await exec.handler({ code: "const fs = require('fs'); return fs;" }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('require is not defined');
+    expect(r.content).toContain('node:vm sandbox');
+    expect(r.content).toContain('write_file');
+  });
+
+  it('hints for other absent Node builtins (process)', async () => {
+    const exec = buildCodeExecTool(makeRegistry([]));
+    const r = await exec.handler({ code: 'return process.env;' }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('process is not defined');
+    expect(r.content).toContain('Node builtins');
   });
 
   it('rejects tool calls when called with too many arguments via tool registry', async () => {

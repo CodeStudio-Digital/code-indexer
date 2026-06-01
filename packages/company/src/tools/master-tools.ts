@@ -230,6 +230,31 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
 
 // ─── wait_for_subordinates ─────────────────────────────────────
 
+/** Statuses that mean a subordinate ended in a non-clean state: the master
+ *  must pick a recovery action (retry / discard) instead of treating it done. */
+const FAILED_SUB_STATUSES = new Set<string>(['error', 'aborted', 'interrupted', 'blocked']);
+
+/**
+ * Render the live subordinate roster, calling out failed runs with the recovery
+ * tool to use. Keeps failures from hiding inside a flat status list — shared by
+ * the soft-timeout continuation and the all-done summary.
+ */
+export function summarizeSubordinates(orchestrator: CompanyOrchestrator): string {
+  const subs = orchestrator.listSubordinates();
+  const lines = subs.map((s) => {
+    const hint = FAILED_SUB_STATUSES.has(s.status)
+      ? ' ⚠ recover with resume_subordinate (retry) or abort_subordinate_agent (discard)'
+      : '';
+    return `  - ${s.role} (run=${s.agentRunId}): ${s.status}${hint}`;
+  });
+  const failedCount = subs.filter((s) => FAILED_SUB_STATUSES.has(s.status)).length;
+  const header =
+    failedCount > 0
+      ? `${failedCount} subordinate(s) ended in a failed state — review before synthesizing:`
+      : 'All subordinates finished:';
+  return `${header}\n${lines.join('\n')}`;
+}
+
 function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
   return {
     name: 'wait_for_subordinates',
@@ -248,6 +273,12 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
       required: [],
     },
     source: 'native',
+    // Event-driven, idempotent poll-wait with its OWN internal deadline
+    // (timeout_minutes, default 30). Like `wait_agents`, it must opt OUT of
+    // the runner's 5-min NORMAL timeout — otherwise the runner kills the wait
+    // at 300000ms while subordinates are still running healthily, and the
+    // master gets a false failure. Re-calling it just reconciles live state.
+    repeatable: true,
     handler: async (args) => {
       const timeoutMs = ((args.timeout_minutes as number | undefined) ?? 30) * 60 * 1000;
       const deadline = Date.now() + timeoutMs;
@@ -264,10 +295,18 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
       while (orchestrator.hasRunningSubordinates()) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) {
-          const subs = orchestrator.listSubordinates().filter((s) => s.status === 'running');
-          return err(
-            `Timed out after ${args.timeout_minutes ?? 30}min. Still running: ${subs.map((s) => s.role).join(', ')}. ` +
-            `Use list_subordinates to check status or abort_subordinate_agent if needed.`,
+          // Soft continuation, NOT an error: the subordinates are still running
+          // healthily — only OUR internal wait window elapsed. Returning `err`
+          // reads to the model as "broken"; `ok` keeps the loop retomável so
+          // the master simply calls wait_for_subordinates again.
+          const stillRunning = orchestrator
+            .listSubordinates()
+            .filter((s) => s.status === 'running')
+            .map((s) => s.role)
+            .join(', ');
+          return ok(
+            `Still running after ${args.timeout_minutes ?? 30}min (this is not a failure): ${stillRunning}. ` +
+            `Call wait_for_subordinates again to keep waiting, or list_subordinates / abort_subordinate_agent to intervene.`,
           );
         }
 
@@ -305,11 +344,10 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
         // 'finished' or 'timeout' → re-check the loop condition.
       }
 
-      const summary = orchestrator
-        .listSubordinates()
-        .map((s) => `  - ${s.role} (run=${s.agentRunId}): ${s.status}`)
-        .join('\n');
-      return ok(`All subordinates finished:\n${summary}\nCheck the board for their deliverables, then synthesize results.`);
+      return ok(
+        `${summarizeSubordinates(orchestrator)}\n` +
+        `Check the board for their deliverables, then synthesize results.`,
+      );
     },
   };
 }

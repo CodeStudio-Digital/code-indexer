@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import type { SessionProject } from './useSessionProjects.js';
 
 interface Props {
@@ -13,10 +14,11 @@ interface Props {
  * component avoids duplicating the styling + select logic in each tab.
  */
 export function ProjectSelect({ projects, value, onChange }: Props) {
+  const { t } = useTranslation('workspace');
   if (projects.length === 0) {
     return (
       <span className="text-xs text-muted-foreground">
-        Nenhum projeto atrelado
+        {t('projectSelect.noLinked')}
       </span>
     );
   }
@@ -25,7 +27,7 @@ export function ProjectSelect({ projects, value, onChange }: Props) {
       className="text-xs bg-background border rounded px-1.5 py-1 max-w-[220px]"
       value={value ?? ''}
       onChange={(e) => onChange(Number(e.target.value))}
-      title="Projeto ativo"
+      title={t('projectSelect.activeTitle')}
     >
       {projects.map((p) => (
         <option key={p.project_id} value={p.project_id}>

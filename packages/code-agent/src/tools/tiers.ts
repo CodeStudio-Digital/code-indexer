@@ -155,6 +155,20 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'web_fetch',
   'web_search',
   'run_command',
+  // Persistent-shell session trio (exec_command / write_stdin / list_sessions).
+  // These are `execute`-risk and mutating — they belong alongside run_command,
+  // NOT in bootstrap. They previously fell through getToolTier's `bootstrap`
+  // fallback (never added to any set), which exposed `write_stdin` on turn 1 of
+  // a read-only session while `write_file` stayed gated behind this tier. A
+  // model that wanted to create a file then misfired write_stdin
+  // (session_id="write_file", chars=<file body>), looped on "session not
+  // active", and list_sessions — correctly empty — never pointed it back to
+  // write_file. Co-locating them here removes that trap: bootstrap is pure
+  // read/interaction again, and once navigate unlocks, the shell tools and
+  // write_file arrive together.
+  'exec_command',
+  'write_stdin',
+  'list_sessions',
   'get_diagnostics',
   'lsp_definition',
   'lsp_references',
@@ -420,9 +434,11 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   web_fetch: 'Fetch a URL and extract content',
   web_search: 'Search the web for information',
   run_command: 'Run a shell command (sandboxed to project)',
-  // PR 5 — list_sessions for the persistent exec_command session
-  // registry. Bootstrap tier (no unlock); pairs with write_stdin's rich
-  // error to let the model self-correct after a stale session_id.
+  // Persistent exec_command session registry. Navigate tier (with
+  // exec_command / write_stdin); pairs with write_stdin's rich error to let
+  // the model self-correct after a stale session_id.
+  exec_command: 'Spawn a persistent shell session (REPLs, interactive CLIs) — drive it with write_stdin.',
+  write_stdin: 'Write to a live exec_command session\'s stdin — does NOT create files (use write_file for that).',
   list_sessions: 'List active exec_command sessions (id, status, age) — call before write_stdin if unsure.',
   get_diagnostics: 'Get LSP diagnostics for a file',
   lsp_definition: 'Go to definition of a symbol',

@@ -149,6 +149,8 @@ const STREAMING_METHOD_PATHS: ReadonlySet<string> = new Set([
   // same port). Implemented by apps/electron/src/terminal-ipc.ts.
   'terminal:open',
   'terminal:output',
+  'runner:events',
+  'runtime:download',
   'docs:sources:createUrlStream',
   'docs:sources:createPdfStream',
   'docs:sources:createFolderStream',

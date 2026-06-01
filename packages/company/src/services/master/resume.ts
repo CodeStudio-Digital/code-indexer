@@ -17,12 +17,11 @@
 import {
   runCoder,
   type CoderAttachment,
+  type MasterStartResult,
   type RunCoderHandle,
   type RunCoderOptions,
 } from '@mcp/code-agent/index.js';
-import { SkillStore } from '@mcp/store/skill-store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
-import { resolveRoleSkills } from '@mcp/company/types.js';
+import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { IBoardPoster } from '@mcp/company/services/ports.js';
@@ -30,6 +29,7 @@ import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
 import {
   buildMasterPromptInputs,
 } from '@mcp/company/services/master/prompt-builder.js';
+import { configureMasterSkills } from '@mcp/company/services/master/configure-skills.js';
 import type { MasterStartStateMutators } from '@mcp/company/services/master/start.js';
 
 export interface MasterResumeOpts {
@@ -53,7 +53,7 @@ export interface MasterResumeDeps {
 export async function resumeMaster(
   opts: MasterResumeOpts,
   deps: MasterResumeDeps,
-): Promise<RunCoderHandle> {
+): Promise<MasterStartResult> {
   if (deps.state.hasHandle) throw new Error('Master already started');
 
   const ctx = deps.ctx;
@@ -61,6 +61,21 @@ export async function resumeMaster(
   const masterRun = agentRuns.filter((r) => r.role === 'master').pop();
   if (!masterRun) throw new Error('No master agent_run found — use start instead');
 
+  // The ack returns the existing master coder-session id; `indexStatus` is
+  // unknown until the background `runCoder` boots, and no company-path caller
+  // reads it.
+  const ack: MasterStartResult = { masterSessionId: masterRun.coder_session_id, indexStatus: null };
+
+  // A previous start/resume is still provisioning. Don't double-start — queue
+  // this turn so the in-flight task flushes it once the runner is wired, and
+  // return the same ids (the worker's metaBus → SSE pipeline already carries
+  // the in-progress events).
+  if (deps.state.resumingPromise) {
+    deps.state.resumeQueue.push({ message: opts.userMessage, attachments: opts.attachments });
+    return ack;
+  }
+
+  // ── Fast path (awaited inside the RPC): cheap DB writes + board post ──
   deps.state.setAgentRunId(masterRun.id);
   deps.state.setRoleConfigs((opts.roleConfigs ?? []) as RoleConfig[]);
   deps.state.loadConfigFromDb();
@@ -70,45 +85,6 @@ export async function resumeMaster(
   // P15c — clear the recovery flag set by `recoverStaleAgentRuns()` on boot.
   ctx.companyStore.clearSessionRecoveryFlag(ctx.companySessionId);
 
-  const inputs = await buildMasterPromptInputs(
-    ctx,
-    masterRun.id,
-    deps.state.roleConfigs,
-    deps.state.allowedModels,
-    deps.orchestratorRef,
-  );
-
-  const masterRoleConfigResume = deps.state.roleConfigs.find((r) => r.role === 'master');
-  const masterResolvedSkillsResume = resolveRoleSkills(masterRoleConfigResume?.skills, {
-    stack: inputs.configuredStack ?? undefined,
-  });
-  if (masterResolvedSkillsResume.length > 0) {
-    const resumeConfig = loadConfig();
-    const primaryProjectIdResume = ctx.projects[0]?.project_id;
-    if (primaryProjectIdResume) {
-      try {
-        const skillStore = new SkillStore(resumeConfig.dbPath);
-        const allSkills = skillStore.resolveActiveSkills(masterRun.coder_session_id, primaryProjectIdResume);
-        for (const skill of allSkills) {
-          skillStore.setSessionSkillEnabled(
-            masterRun.coder_session_id,
-            skill.id,
-            masterResolvedSkillsResume.includes(skill.id),
-          );
-        }
-        skillStore.close();
-      } catch (e) {
-        console.warn(
-          `[company] Failed to configure skills for master (resume): ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-    }
-  }
-
-  deps.state.setCompanyContext(inputs.companyContext);
-  deps.state.setPromptBlock(inputs.promptBlock);
-  deps.state.setLastUserAttachments(opts.attachments ?? []);
-
   deps.board.post(
     'system',
     null,
@@ -116,22 +92,75 @@ export async function resumeMaster(
     `Master resumed from existing session (${masterRun.provider}/${masterRun.model}).`,
   );
 
-  const handle = await runCoder({
-    session: { id: masterRun.coder_session_id },
-    userMessage: opts.userMessage,
-    attachments: opts.attachments,
-    maxTurns: opts.maxTurns ?? 100,
-    planMode: false,
-    profile: 'full',
-    companyContext: inputs.companyContext,
-    companyPromptBlock: inputs.promptBlock,
-    thinking: opts.thinking,
-    onRunnerReady: (runner) => deps.wireRunner(runner, masterRun.id),
-  } as RunCoderOptions & { companyPromptBlock: string });
+  // ── Background phase: sandbox provision (can be a multi-minute cold
+  // container rebuild) + runCoder boot. Runs un-awaited so the RPC returns
+  // well within its 60s deadline; progress streams over the metaBus → SSE.
+  const doResume = async (): Promise<void> => {
+    const inputs = await buildMasterPromptInputs(
+      ctx,
+      masterRun.id,
+      deps.state.roleConfigs,
+      deps.state.allowedModels,
+      deps.orchestratorRef,
+    );
 
-  deps.state.setHandle(handle);
-  deps.state.setRunnerExited(false);
-  deps.attachCompletion(handle, masterRun.id);
+    configureMasterSkills({
+      roleConfigs: deps.state.roleConfigs,
+      configuredStack: inputs.configuredStack,
+      coderSessionId: masterRun.coder_session_id,
+      primaryProjectId: ctx.projects[0]?.project_id,
+    });
 
-  return handle;
+    deps.state.setCompanyContext(inputs.companyContext);
+    deps.state.setPromptBlock(inputs.promptBlock);
+    deps.state.setLastUserAttachments(opts.attachments ?? []);
+
+    const handle = await runCoder({
+      session: { id: masterRun.coder_session_id },
+      userMessage: opts.userMessage,
+      attachments: opts.attachments,
+      maxTurns: opts.maxTurns ?? 100,
+      planMode: false,
+      profile: 'full',
+      companyContext: inputs.companyContext,
+      companyPromptBlock: inputs.promptBlock,
+      thinking: opts.thinking,
+      onRunnerReady: (runner) => deps.wireRunner(runner, masterRun.id),
+    } as RunCoderOptions & { companyPromptBlock: string });
+
+    deps.state.setHandle(handle);
+    deps.state.setRunnerExited(false);
+    deps.attachCompletion(handle, masterRun.id);
+
+    // Flush any turns that arrived while the sandbox was provisioning.
+    const queued = deps.state.drainResumeQueue();
+    for (const item of queued) {
+      if (item.attachments?.length) {
+        handle.runner.pushUserContent(attachmentsToBlocks(item.message, item.attachments));
+      } else {
+        handle.runner.pushUserMessage(item.message);
+      }
+    }
+  };
+
+  const promise = doResume()
+    .catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[company s=${ctx.companySessionId}] master resume background task failed:`, msg);
+      // Surface as a board message instead of an unhandled rejection — the
+      // RPC already returned 200, so failures travel over the SSE stream.
+      try {
+        deps.board.post('system', null, 'message', `Master resume failed: ${msg}`);
+      } catch { /* best-effort */ }
+      try {
+        ctx.companyStore.updateAgentRunStatus(masterRun.id, 'error');
+        ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'error');
+      } catch { /* best-effort */ }
+    })
+    .finally(() => {
+      deps.state.setResumingPromise(null);
+    });
+  deps.state.setResumingPromise(promise);
+
+  return ack;
 }

@@ -361,7 +361,13 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         } else {
           const msg = err instanceof Error ? err.message : String(err);
           console.error(`[company s=${id}] Resume failed:`, msg);
-          deleteCompanyOrchestrator(id);
+          // Do NOT evict the worker here. Post-decoupling the slow sandbox
+          // provision + runCoder boot run in the background (off this RPC),
+          // so a synchronous throw here is a fast-path/spawn error — killing
+          // a worker that may be mid-provision (its build streams over SSE)
+          // would just force a wasteful cold rebuild on retry. `port_closed`
+          // (handled above) is the only case where the worker is already
+          // dead and an evict + retry is warranted.
           return { kind: 'reject', status: 500, body: { error: `Resume failed: ${msg}` } };
         }
       }

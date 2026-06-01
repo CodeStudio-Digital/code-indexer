@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Activity,
@@ -30,7 +30,8 @@ import { CopilotConnectionDialog } from './CopilotConnectionDialog.js';
 import { GoogleConnectionDialog } from './GoogleConnectionDialog.js';
 import { KimiCodeConnectionDialog } from './KimiCodeConnectionDialog.js';
 import { EditDialog } from './EditDialog.js';
-import { ProviderCard } from './ProviderCard.js';
+import { ProviderTile } from './providers/ProviderTile.js';
+import { ProviderModal } from './providers/ProviderModal.js';
 import { McpServersPanel } from './McpServersPanel.js';
 import { McpHttpStatusPanel } from './McpHttpStatusPanel.js';
 import { AppSettingsPanel } from './AppSettingsPanel.js';
@@ -105,6 +106,22 @@ export default function Admin() {
     setKimiCodeThinkingMode,
     setFallback,
   } = useAdminProviders();
+
+  // Pre-fetch the model list for every provider so the grid tile can
+  // render its "models count" badge on first paint instead of after
+  // the user opens the modal. Parallel — each `loadModels` call hits
+  // its own row of `provider_models`, so concurrency is safe and the
+  // worst-case is N parallel cached fetches.
+  useEffect(() => {
+    if (!providers.length) return;
+    for (const p of providers) {
+      if (!models[p.id]) void loadModels(p.id);
+    }
+    // We intentionally don't depend on `models` — re-running on every
+    // mutation would loop. Re-running on `providers` is enough to pick
+    // up newly added providers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providers]);
 
   const [section, setSection] = useState<SectionId>('providers');
   const [editing, setEditing] = useState<Partial<AdminProvider> | null>(null);
@@ -290,52 +307,82 @@ export default function Admin() {
 
               {loading && <div className="text-sm text-muted-foreground">{t('common:actions.loading')}</div>}
 
-              <div className="grid gap-3">
-                {providers.map((p) => (
-                  <ProviderCard
-                    key={p.id}
-                    provider={p}
-                    allProviders={providers}
-                    isExpanded={expanded === p.id}
-                    models={models[p.id] ?? []}
-                    testResult={testResults[p.id]}
-                    refreshing={refreshing === p.id}
-                    providerModelsById={models}
-                    onTest={() => test(p.id)}
-                    onToggleExpand={async () => {
-                      const next = expanded === p.id ? null : p.id;
-                      setExpanded(next);
-                      if (next && !models[p.id]) await loadModels(p.id);
-                    }}
-                    onLoadProviderModels={loadModels}
-                    onRefresh={() => refresh(p.id)}
-                    onEdit={() => setEditing(p)}
-                    onConnect={
-                      p.kind === 'kimi-code'
-                        ? () => setKimiCodeOpen(true)
-                        : p.kind === 'claude-code'
-                          ? () => {
-                              setClaudeCodeProviderId(p.id);
-                              setClaudeCodeOpen(true);
-                            }
-                          : undefined
-                    }
-                    onRemove={() => remove(p.id)}
-                    onToggleModel={(modelId, mode, enabled) => toggleModel(p.id, modelId, mode, enabled)}
-                    onSetModelEffort={(modelId, mode, level) => setModelEffort(p.id, modelId, mode, level)}
-                    onSetModelContextWindow={(modelId, mode, value) => setModelContextWindow(p.id, modelId, mode, value)}
-                    onBackfillContextWindows={backfillContextWindows}
-                    onSetFallback={setFallback}
-                    onSetSubagentTarget={setSubagentTarget}
-                    onSetKimiCodeThinkingMode={setKimiCodeThinkingMode}
-                  />
-                ))}
+              {/* Grid de tiles quadrados — flex-wrap pra quebra automática.
+                  Click no tile abre `ProviderModal` (renderizado abaixo do
+                  grid) com todos os controles avançados do provider. A
+                  contagem de modelos no badge precisa ter sido carregada
+                  ao menos uma vez — fazemos lazy-load no primeiro hover/
+                  open. Pra o badge inicial, `models[p.id]` pode ser
+                  `undefined`; nesse caso o tile mostra `?`. */}
+              <div className="flex flex-wrap gap-3">
+                {providers.map((p) => {
+                  const known = models[p.id];
+                  return (
+                    <ProviderTile
+                      key={p.id}
+                      provider={p}
+                      modelCount={known ? known.length : null}
+                      testResult={testResults[p.id]}
+                      onOpen={async () => {
+                        setExpanded(p.id);
+                        if (!known) await loadModels(p.id);
+                      }}
+                    />
+                  );
+                })}
                 {!loading && providers.length === 0 && (
-                  <div className="text-sm text-muted-foreground border rounded-lg p-6 text-center">
+                  <div className="text-sm text-muted-foreground border rounded-lg p-6 text-center w-full">
                     {t('admin:noProviders')}
                   </div>
                 )}
               </div>
+
+              <ProviderModal
+                provider={expanded ? (providers.find((p) => p.id === expanded) ?? null) : null}
+                allProviders={providers}
+                models={expanded ? (models[expanded] ?? []) : []}
+                providerModelsById={models}
+                testResult={expanded ? testResults[expanded] : undefined}
+                refreshing={refreshing === expanded}
+                onClose={() => setExpanded(null)}
+                onTest={() => expanded && test(expanded)}
+                onLoadProviderModels={loadModels}
+                onRefresh={() => expanded && refresh(expanded)}
+                onEdit={() => {
+                  const p = providers.find((x) => x.id === expanded);
+                  if (p) setEditing(p);
+                }}
+                onConnect={(() => {
+                  const p = providers.find((x) => x.id === expanded);
+                  if (!p) return undefined;
+                  if (p.kind === 'kimi-code') return () => setKimiCodeOpen(true);
+                  if (p.kind === 'claude-code') {
+                    return () => {
+                      setClaudeCodeProviderId(p.id);
+                      setClaudeCodeOpen(true);
+                    };
+                  }
+                  return undefined;
+                })()}
+                onRemove={() => {
+                  if (!expanded) return;
+                  void remove(expanded);
+                  setExpanded(null);
+                }}
+                onToggleModel={(modelId, mode, enabled) =>
+                  expanded && toggleModel(expanded, modelId, mode, enabled)
+                }
+                onSetModelEffort={(modelId, mode, level) =>
+                  expanded && setModelEffort(expanded, modelId, mode, level)
+                }
+                onSetModelContextWindow={(modelId, mode, value) =>
+                  expanded && setModelContextWindow(expanded, modelId, mode, value)
+                }
+                onBackfillContextWindows={backfillContextWindows}
+                onSetFallback={setFallback}
+                onSetSubagentTarget={setSubagentTarget}
+                onSetKimiCodeThinkingMode={setKimiCodeThinkingMode}
+              />
             </div>
           )}
 

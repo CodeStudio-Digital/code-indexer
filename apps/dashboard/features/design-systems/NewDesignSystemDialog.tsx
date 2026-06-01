@@ -7,6 +7,7 @@
  * here yet (v1 takes hand-typed values; v1.1 adds dropdowns).
  */
 import React, { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Loader2, Upload, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { useProviders } from '../../hooks/useProviders.js';
@@ -17,13 +18,14 @@ interface Props {
   onCreated: (sessionId: number) => void;
 }
 
-const STACKS: Array<{ value: DsStack; label: string; help: string }> = [
-  { value: 'react-ts', label: 'React + TS', help: 'Typed components with CSS Modules and tsup build.' },
-  { value: 'vue-ts', label: 'Vue 3 + TS', help: '<script setup> SFCs with scoped CSS.' },
-  { value: 'angular', label: 'Angular', help: 'Standalone components with ng-packagr.' },
+const STACKS: Array<{ value: DsStack; label: string; helpKey: string }> = [
+  { value: 'react-ts', label: 'React + TS', helpKey: 'stack.reactHelp' },
+  { value: 'vue-ts', label: 'Vue 3 + TS', helpKey: 'stack.vueHelp' },
+  { value: 'angular', label: 'Angular', helpKey: 'stack.angularHelp' },
 ];
 
 export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
+  const { t } = useTranslation('designSystems');
   const { providerOptions, getModelsForProvider, getDefaultModel, loading: providersLoading } = useProviders();
 
   const [name, setName] = useState('');
@@ -90,23 +92,23 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between px-4 py-3 border-b">
-          <h2 className="font-semibold">New Design System session</h2>
-          <button onClick={onClose} aria-label="Close" className="text-muted-foreground hover:text-foreground">
+          <h2 className="font-semibold">{t('dialog.title')}</h2>
+          <button onClick={onClose} aria-label={t('dialog.close')} className="text-muted-foreground hover:text-foreground">
             <X className="h-4 w-4" />
           </button>
         </header>
 
         <div className="p-4 space-y-3">
-          <Field label="Session name">
+          <Field label={t('dialog.sessionName')}>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="w-full text-sm border rounded px-2 py-1"
-              placeholder='e.g. "Acme UI v2"'
+              placeholder={t('dialog.sessionNamePlaceholder')}
             />
           </Field>
 
-          <Field label="Package name (npm)">
+          <Field label={t('dialog.packageName')}>
             <input
               value={packageName}
               onChange={(e) => setPackageName(e.target.value)}
@@ -115,7 +117,7 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
             />
           </Field>
 
-          <Field label="Stack">
+          <Field label={t('dialog.stack')}>
             <div className="grid grid-cols-3 gap-2">
               {STACKS.map((s) => (
                 <button
@@ -128,14 +130,14 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
                   }`}
                 >
                   <div className="font-medium">{s.label}</div>
-                  <div className="text-xs text-muted-foreground mt-0.5">{s.help}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">{t(s.helpKey)}</div>
                 </button>
               ))}
             </div>
           </Field>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Master provider">
+            <Field label={t('dialog.masterProvider')}>
               {providerOptions.length > 0 ? (
                 <select
                   value={provider}
@@ -149,11 +151,11 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
                 </select>
               ) : (
                 <div className="text-xs text-muted-foreground italic px-2 py-1 border rounded">
-                  {providersLoading ? 'Loading providers…' : 'No provider configured. Set one up in Admin → Providers first.'}
+                  {providersLoading ? t('dialog.loadingProviders') : t('dialog.noProvider')}
                 </div>
               )}
             </Field>
-            <Field label="Master model">
+            <Field label={t('dialog.masterModel')}>
               {availableModels.length > 0 ? (
                 <select
                   value={model}
@@ -178,7 +180,7 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
             </Field>
           </div>
 
-          <Field label="Theme zip">
+          <Field label={t('dialog.themeZip')}>
             <label className="block border-2 border-dashed rounded p-4 text-center cursor-pointer hover:bg-muted/30">
               <input
                 type="file"
@@ -193,7 +195,7 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
                 </div>
               ) : (
                 <div className="text-sm text-muted-foreground flex items-center justify-center gap-2">
-                  <Upload className="h-4 w-4" /> Click to choose a .zip file
+                  <Upload className="h-4 w-4" /> {t('dialog.chooseZip')}
                 </div>
               )}
             </label>
@@ -207,9 +209,9 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
         </div>
 
         <footer className="px-4 py-3 border-t flex justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>{t('actions.cancel')}</Button>
           <Button size="sm" onClick={() => void submit()} disabled={!valid || busy}>
-            {busy ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Creating…</> : 'Create session'}
+            {busy ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> {t('actions.creating')}</> : t('actions.createSession')}
           </Button>
         </footer>
       </div>
@@ -217,7 +219,7 @@ export function NewDesignSystemDialog({ onClose, onCreated }: Props) {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
       <label className="text-xs font-medium block mb-1">{label}</label>

@@ -112,6 +112,12 @@ const BUILTIN_CLASSIFICATION: Record<
   ask_master:               { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   submit_plan_to_master:    { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   submit_tasks_to_master:   { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
+  // send_to_master / send_to_agent block on `inboxWait` (own 20-min deadline)
+  // when wait=true — same "block for a reply" nature as ask_master, so they
+  // must opt OUT of the runner's 5-min NORMAL timeout. With wait=false they
+  // return immediately, so the Infinity timeout is a harmless no-op.
+  send_to_master:           { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
+  send_to_agent:            { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
 };
 
 /**

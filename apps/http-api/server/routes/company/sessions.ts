@@ -95,7 +95,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
    *                         "standby" badge
    *   - `pendingMasterInboxCount`: drives the "wake master" CTA
    */
-  app.get('/api/company/sessions/:id/state-snapshot', (c) => {
+  app.get('/api/company/sessions/:id/state-snapshot', async (c) => {
     const id = parseIdParam(c);
     try {
       companyStore.pruneOrphanCompanySessionProjects(id);
@@ -116,12 +116,28 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
 
     const orchestrator = getCompanyOrchestrator(id);
     const liveOrchestrator = !!orchestrator;
-    // `isMasterAlive` is a thin getter on CompanyOrchestrator that
-    // forwards `master.isAlive`. False when the master has either never
-    // started OR finished and is sitting in standby — both cases are
-    // safe to render WITHOUT the loader, which is exactly the bug fix.
-    const masterAlive = orchestrator?.isMasterAlive ?? false;
-    const masterEndedAt = orchestrator?.masterEndedAt ?? null;
+    // Master liveness lives in the worker. Reading `orchestrator.isMasterAlive`
+    // / `.masterEndedAt` directly off the worker-backed proxy returns a nested
+    // proxy (not a value), which would blow up when `c.json` serializes it.
+    // Fetch them through the awaited `getMasterStatus()` RPC instead. False /
+    // null when the master never started, is mid-provision, or finished and is
+    // sitting in standby — all safe to render WITHOUT the loader (the loader is
+    // driven by `sandbox.provisioning` SSE frames, not these flags).
+    let masterAlive = false;
+    let masterEndedAt: string | null = null;
+    if (orchestrator) {
+      try {
+        const status = await orchestrator.getMasterStatus();
+        masterAlive = status.alive;
+        masterEndedAt = status.endedAt;
+      } catch (e) {
+        // Worker may be mid-boot or evicting — degrade to "not alive" rather
+        // than failing the whole snapshot.
+        console.warn(
+          `[company s=${id}] getMasterStatus failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
     const pendingMasterInboxCount = companyStore.listInboxMessages({
       companySessionId: id,
       toRole: '__master__',

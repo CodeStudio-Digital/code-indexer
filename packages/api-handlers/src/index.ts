@@ -15,6 +15,8 @@ import type { Api } from '@mcp/api-bus';
 import { createProjectsHandlers } from './projects/index.js';
 import { createFilesHandlers } from './files/index.js';
 import { createTerminalHandlers } from './terminal/index.js';
+import { createRunnerHandlers } from './runner/index.js';
+import { createRuntimeHandlers } from './runtime/index.js';
 import { createCoderHandlers } from './coder/index.js';
 import { createLspHandlers } from './lsp/index.js';
 import { createSnapshotsHandlers } from './snapshots/index.js';
@@ -29,6 +31,8 @@ export { createContext, createInternalContext } from './context.js';
 export { createProjectsHandlers } from './projects/index.js';
 export { createFilesHandlers } from './files/index.js';
 export { createTerminalHandlers } from './terminal/index.js';
+export { createRunnerHandlers } from './runner/index.js';
+export { createRuntimeHandlers } from './runtime/index.js';
 export { createCoderHandlers } from './coder/index.js';
 export { createLspHandlers } from './lsp/index.js';
 export { createSnapshotsHandlers } from './snapshots/index.js';
@@ -36,6 +40,7 @@ export { createRunsHandlers } from './runs/index.js';
 export { createSearchHandlers } from './search/index.js';
 export { createProjectGitHandlers } from './projectGit/index.js';
 export { createPluginsHandlers } from './plugins/index.js';
+export { generateAiPipeline, type GeneratePipelineResult } from './projectPipeline/generate.js';
 
 /**
  * Aggregate factory. As more namespaces are extracted, add them here so
@@ -51,6 +56,8 @@ export function createHandlers(deps: HandlerDeps): Partial<Api> {
     projects: createProjectsHandlers(deps),
     files: createFilesHandlers(deps),
     terminal: createTerminalHandlers(deps),
+    runner: createRunnerHandlers(deps),
+    runtime: createRuntimeHandlers(deps),
     coder: createCoderHandlers(deps),
     lsp: createLspHandlers(deps),
     snapshots: createSnapshotsHandlers(deps),

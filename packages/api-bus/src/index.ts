@@ -18,6 +18,8 @@ import type { ProjectsApi } from './projects.js';
 import type { FilesApi } from './files.js';
 import type { LspApi } from './lsp.js';
 import type { TerminalApi } from './terminal.js';
+import type { RunnerApi } from './runner.js';
+import type { RuntimeApi } from './runtime.js';
 import type { SnapshotsApi } from './snapshots.js';
 import type { RunsApi } from './runs.js';
 import type { SearchApi } from './search.js';
@@ -51,6 +53,8 @@ export * from './projects.js';
 export * from './files.js';
 export * from './lsp.js';
 export * from './terminal.js';
+export * from './runner.js';
+export * from './runtime.js';
 export * from './snapshots.js';
 export * from './runs.js';
 export * from './search.js';
@@ -78,6 +82,8 @@ export interface Api {
   files: FilesApi;
   lsp: LspApi;
   terminal: TerminalApi;
+  runner: RunnerApi;
+  runtime: RuntimeApi;
 
   // Project artifacts
   snapshots: SnapshotsApi;

@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from '../../components/ui/select.js';
 import { apiDelete, apiPatch } from '../../hooks/useApi.js';
+import { NodeVersionSelect } from './runtime/NodeVersionSelect.js';
 
 interface Project {
   id: number;
@@ -30,6 +31,7 @@ interface Project {
   group_name?: string | null;
   embeddings_enabled?: number;
   search_mode?: string;
+  node_version?: string | null;
 }
 
 interface ProjectEditDialogProps {
@@ -56,6 +58,7 @@ export default function ProjectEditDialog({
   const [groupName, setGroupName] = useState(project.group_name ?? '');
   const [embeddingsEnabled, setEmbeddingsEnabled] = useState(project.embeddings_enabled !== 0);
   const [searchMode, setSearchMode] = useState(project.search_mode ?? 'hybrid');
+  const [nodeVersion, setNodeVersion] = useState<string | null>(project.node_version ?? null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -92,6 +95,7 @@ export default function ProjectEditDialog({
       const newEmbeddings = embeddingsEnabled ? 1 : 0;
       if (newEmbeddings !== (project.embeddings_enabled ?? 1)) body.embeddings_enabled = newEmbeddings;
       if (searchMode !== (project.search_mode ?? 'hybrid')) body.search_mode = searchMode;
+      if (nodeVersion !== (project.node_version ?? null)) body.node_version = nodeVersion;
 
       if (Object.keys(body).length === 0) {
         onOpenChange(false);
@@ -199,6 +203,16 @@ export default function ProjectEditDialog({
                 {t('projects:edit.searchModeHint')}
               </p>
             </div>
+          </div>
+
+          {/* ── Runtime / Node ── */}
+          <div className="border-t pt-4 space-y-1.5">
+            <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              {t('projects:runtime.sectionTitle')}
+            </h4>
+            <label className="text-sm font-medium">{t('projects:runtime.nodeLabel')}</label>
+            <NodeVersionSelect value={nodeVersion} onChange={setNodeVersion} />
+            <p className="text-xs text-muted-foreground">{t('projects:runtime.nodeHint')}</p>
           </div>
 
           {error && <div className="text-sm text-destructive">{error}</div>}

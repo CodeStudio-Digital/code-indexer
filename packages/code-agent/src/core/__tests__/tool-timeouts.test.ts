@@ -48,6 +48,20 @@ describe('resolveToolMetadata — interactive classification (policy)', () => {
     expect(resolveToolMetadata(t({ name: 'ask_user' })).interactive).toBe(true);
   });
 
+  it('classifies the master-directed blocking tools as interactive', () => {
+    // ask_master + submit_*_to_master plus the inbox-wait pair: all block for a
+    // reply (own 20-min deadline) and must opt out of the 5-min NORMAL timeout.
+    for (const name of [
+      'ask_master',
+      'submit_plan_to_master',
+      'submit_tasks_to_master',
+      'send_to_master',
+      'send_to_agent',
+    ]) {
+      expect(resolveToolMetadata(t({ name })).interactive, name).toBe(true);
+    }
+  });
+
   it('leaves a normal tool non-interactive', () => {
     expect(resolveToolMetadata(t({ name: 'read_file' })).interactive).toBe(false);
   });

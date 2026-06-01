@@ -3,7 +3,8 @@ import type { DB } from './types.js';
 
 type ProjectUpdates = Partial<Pick<Project,
   'name' | 'description' | 'group_name' | 'root_path' | 'provider' | 'model' |
-  'last_indexed' | 'file_count' | 'symbol_count' | 'embeddings_enabled' | 'search_mode'
+  'last_indexed' | 'file_count' | 'symbol_count' | 'embeddings_enabled' | 'search_mode' |
+  'node_version'
 >>;
 
 export function create(db: DB, name: string, rootPath: string, description?: string): Project {

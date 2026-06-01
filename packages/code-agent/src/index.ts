@@ -108,10 +108,11 @@ import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type {
   CoderAttachment,
   IndexStatus,
+  MasterStartResult,
   RunCoderHandle,
   RunCoderOptions,
 } from './index/types.js';
-export type { CoderAttachment, IndexStatus, RunCoderHandle, RunCoderOptions };
+export type { CoderAttachment, IndexStatus, MasterStartResult, RunCoderHandle, RunCoderOptions };
 import { extractFilePathsFromText, defaultModelFor } from './index/helpers.js';
 
 // (Type bodies moved to './index/types.ts'.)

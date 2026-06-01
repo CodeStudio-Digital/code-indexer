@@ -5,6 +5,7 @@
  * from.
  */
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Loader2, Play, Square, RotateCcw, Check, AlertCircle, Copy } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { copyText } from '../../lib/clipboard.js';
@@ -19,6 +20,7 @@ import {
 const REFRESH_INTERVAL_MS = 5_000;
 
 export function VerdaccioPanel() {
+  const { t } = useTranslation('admin');
   const [state, setState] = useState<VerdaccioState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -89,15 +91,15 @@ export function VerdaccioPanel() {
   if (loading && !state) {
     return (
       <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading Verdaccio…
+        <Loader2 className="h-4 w-4 animate-spin" /> {t('service.loading', { name: 'Verdaccio' })}
       </div>
     );
   }
   if (!state) {
     return (
       <div className="p-4 text-sm text-red-600">
-        Failed to load: {error ?? 'unknown'}
-        <button onClick={() => void refresh()} className="ml-2 underline">Retry</button>
+        {t('service.failed')} {error ?? t('service.unknown')}
+        <button onClick={() => void refresh()} className="ml-2 underline">{t('service.retry')}</button>
       </div>
     );
   }
@@ -110,9 +112,9 @@ export function VerdaccioPanel() {
   return (
     <div className="space-y-4">
       <header>
-        <h2 className="text-lg font-semibold">Verdaccio (npm registry)</h2>
+        <h2 className="text-lg font-semibold">{t('verdaccio.title')}</h2>
         <p className="text-sm text-muted-foreground">
-          Embedded npm registry used by the Design System Creator pipeline. Company sessions install published packages from this registry.
+          {t('verdaccio.description')}
         </p>
       </header>
 
@@ -120,7 +122,7 @@ export function VerdaccioPanel() {
         <div className="border border-red-300 bg-red-50 text-red-800 text-sm p-3 rounded flex items-start gap-2">
           <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
           <pre className="whitespace-pre-wrap text-xs flex-1">{error}</pre>
-          <button onClick={() => setError(null)} className="text-xs underline">dismiss</button>
+          <button onClick={() => setError(null)} className="text-xs underline">{t('service.dismiss')}</button>
         </div>
       )}
 
@@ -128,7 +130,7 @@ export function VerdaccioPanel() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 border rounded p-4">
         <div>
-          <label className="text-xs font-medium block mb-1">Image</label>
+          <label className="text-xs font-medium block mb-1">{t('service.image')}</label>
           <input
             type="text"
             value={editingImage}
@@ -138,7 +140,7 @@ export function VerdaccioPanel() {
           />
         </div>
         <div>
-          <label className="text-xs font-medium block mb-1">Host port</label>
+          <label className="text-xs font-medium block mb-1">{t('service.hostPort')}</label>
           <input
             type="number"
             min={1}
@@ -150,7 +152,7 @@ export function VerdaccioPanel() {
           />
         </div>
         <div>
-          <label className="text-xs font-medium block mb-1">Max patch versions per minor</label>
+          <label className="text-xs font-medium block mb-1">{t('verdaccio.maxPatch')}</label>
           <input
             type="number"
             min={1}
@@ -161,27 +163,27 @@ export function VerdaccioPanel() {
             className="w-full text-sm border rounded px-2 py-1 font-mono"
           />
           <p className="text-[11px] text-muted-foreground mt-1">
-            Older auto-patches beyond this count are unpublished. Minor/major releases are never removed.
+            {t('verdaccio.maxPatchHelp')}
           </p>
         </div>
         <div className="md:col-span-2 flex items-center gap-2">
           {state.enabled ? (
             <Button variant="outline" onClick={() => void toggle(false)} disabled={busy} size="sm">
-              <Square className="h-3.5 w-3.5 mr-1" /> Disable
+              <Square className="h-3.5 w-3.5 mr-1" /> {t('service.disable')}
             </Button>
           ) : (
             <Button onClick={() => void toggle(true)} disabled={busy} size="sm">
-              <Play className="h-3.5 w-3.5 mr-1" /> Enable
+              <Play className="h-3.5 w-3.5 mr-1" /> {t('service.enable')}
             </Button>
           )}
           <Button variant="outline" onClick={() => void restart()} disabled={busy || !state.enabled} size="sm">
-            <RotateCcw className="h-3.5 w-3.5 mr-1" /> Restart
+            <RotateCcw className="h-3.5 w-3.5 mr-1" /> {t('service.restart')}
           </Button>
           <Button variant="outline" onClick={() => void test()} disabled={busy} size="sm">
-            <Check className="h-3.5 w-3.5 mr-1" /> Test
+            <Check className="h-3.5 w-3.5 mr-1" /> {t('service.test')}
           </Button>
           <Button onClick={() => void applyConfig()} disabled={busy || !dirty} size="sm">
-            Apply config
+            {t('service.applyConfig')}
           </Button>
         </div>
       </div>
@@ -213,11 +215,12 @@ function StatusBadge({ state }: { state: VerdaccioState }) {
 }
 
 function RegistryPanel({ state }: { state: VerdaccioState }) {
+  const { t } = useTranslation('admin');
   const [copied, setCopied] = useState(false);
   if (state.status !== 'running' || !state.registryUrl) {
     return (
       <div className="border rounded p-3 text-sm text-muted-foreground">
-        Registry URL appears here once Verdaccio is running.
+        {t('verdaccio.registryPending')}
       </div>
     );
   }
@@ -231,17 +234,17 @@ function RegistryPanel({ state }: { state: VerdaccioState }) {
   }
   return (
     <div className="border rounded p-3">
-      <div className="text-xs font-medium mb-1">Sibling sandbox containers install from:</div>
+      <div className="text-xs font-medium mb-1">{t('verdaccio.registryLabel')}</div>
       <div className="flex items-center gap-2">
         <code className="flex-1 bg-muted px-2 py-1 rounded text-sm font-mono break-all">
           {state.registryUrl}
         </code>
         <Button variant="outline" size="sm" onClick={copy}>
-          <Copy className="h-3 w-3 mr-1" /> {copied ? 'copied!' : 'copy'}
+          <Copy className="h-3 w-3 mr-1" /> {copied ? t('service.copied') : t('service.copy')}
         </Button>
       </div>
       <p className="text-xs text-muted-foreground mt-2">
-        Add this to a sandbox's <code>.npmrc</code> as <code>registry=…</code> for company sessions to consume the published Design System packages.
+        {t('verdaccio.registryHelp')}
       </p>
     </div>
   );

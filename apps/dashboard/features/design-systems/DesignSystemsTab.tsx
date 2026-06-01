@@ -6,6 +6,7 @@
  * Agents tab → CompanySessionView flow.
  */
 import React, { useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { Loader2, Palette, Plus, Trash2, RefreshCcw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import {
@@ -17,6 +18,7 @@ import { NewDesignSystemDialog } from './NewDesignSystemDialog.js';
 import { DesignSystemSessionView } from './DesignSystemSessionView.js';
 
 export function DesignSystemsTab() {
+  const { t } = useTranslation('designSystems');
   const [sessions, setSessions] = useState<DesignSystemSessionListEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -48,18 +50,18 @@ export function DesignSystemsTab() {
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">
-            <Palette className="h-5 w-5" /> Design Systems
+            <Palette className="h-5 w-5" /> {t('title')}
           </h1>
           <p className="text-sm text-muted-foreground">
-            Multi-agent pipeline that turns a HTML/CSS theme into a versioned npm package with bundled MCP server.
+            {t('description')}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => void refresh()}>
-            <RefreshCcw className="h-4 w-4 mr-1" /> Refresh
+            <RefreshCcw className="h-4 w-4 mr-1" /> {t('actions.refresh')}
           </Button>
           <Button size="sm" onClick={() => setShowNew(true)}>
-            <Plus className="h-4 w-4 mr-1" /> New session
+            <Plus className="h-4 w-4 mr-1" /> {t('actions.newSession')}
           </Button>
         </div>
       </header>
@@ -72,22 +74,22 @@ export function DesignSystemsTab() {
 
       {sessions === null ? (
         <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading sessions…
+          <Loader2 className="h-4 w-4 animate-spin" /> {t('sessions.loading')}
         </div>
       ) : sessions.length === 0 ? (
         <div className="border border-dashed rounded p-8 text-center text-sm text-muted-foreground">
-          No Design System sessions yet. Click <strong>New session</strong> to upload a theme zip.
+          <Trans i18nKey="sessions.empty" ns="designSystems" components={{ strong: <strong /> }} />
         </div>
       ) : (
         <div className="border rounded overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
               <tr>
-                <th className="text-left px-3 py-2">Name</th>
-                <th className="text-left px-3 py-2">Package</th>
-                <th className="text-left px-3 py-2">Stack</th>
-                <th className="text-left px-3 py-2">Latest version</th>
-                <th className="text-left px-3 py-2">Status</th>
+                <th className="text-left px-3 py-2">{t('table.name')}</th>
+                <th className="text-left px-3 py-2">{t('table.package')}</th>
+                <th className="text-left px-3 py-2">{t('table.stack')}</th>
+                <th className="text-left px-3 py-2">{t('table.latestVersion')}</th>
+                <th className="text-left px-3 py-2">{t('table.status')}</th>
                 <th className="text-right px-3 py-2"></th>
               </tr>
             </thead>
@@ -113,7 +115,7 @@ export function DesignSystemsTab() {
                       variant="ghost"
                       size="sm"
                       onClick={async () => {
-                        if (!confirm(`Delete "${s.name}"? This cascades through the company session.`)) return;
+                        if (!confirm(t('sessions.deleteConfirm', { name: s.name }))) return;
                         await deleteDesignSystemSession(s.id);
                         await refresh();
                       }}

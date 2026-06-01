@@ -5,6 +5,7 @@ interface PipelineRow {
   id: number;
   name: string;
   description: string;
+  project_id: number | null;
   company_session_id: number | null;
   template_id: number | null;
   graph_json: string;
@@ -21,6 +22,7 @@ function mapPipelineRow(row: PipelineRow): Pipeline {
     id: row.id,
     name: row.name,
     description: row.description,
+    project_id: row.project_id,
     company_session_id: row.company_session_id,
     template_id: row.template_id,
     graph,
@@ -34,6 +36,8 @@ export interface CreatePipelineInput {
   name: string;
   description?: string;
   graph: PipelineGraph;
+  /** Chat/project scope. Mutually exclusive with `companySessionId`. */
+  projectId?: number | null;
   companySessionId?: number | null;
   templateId?: number | null;
 }
@@ -42,22 +46,36 @@ export interface ListPipelinesOptions {
   companySessionId?: number | null;
   templateId?: number | null;
   /**
-   * Chat-mode filter: list pipelines that are EITHER global
-   * (`company_session_id IS NULL`) OR bound to a company session that
-   * includes this project. Mutually exclusive with `companySessionId`.
+   * Project scope: list pipelines owned by this project OR global ones
+   * (both owners NULL). This is the clean per-project filter used by the
+   * chat builder/picker.
+   */
+  projectId?: number;
+  /**
+   * Legacy chat-mode filter: list pipelines that are EITHER global OR bound
+   * to a company session that includes this project. Kept for callers that
+   * still want company pipelines surfaced in a chat. Prefer `projectId`.
    */
   projectIdForChat?: number;
 }
 
 export function create(db: DB, input: CreatePipelineInput): Pipeline {
+  const projectId = input.projectId ?? null;
+  const companySessionId = input.companySessionId ?? null;
+  if (projectId !== null && companySessionId !== null) {
+    const err = new Error('Pipeline scope must be project OR company, not both');
+    (err as { code?: string }).code = 'PIPELINE_SCOPE_CONFLICT';
+    throw err;
+  }
   const stmt = db.prepare(`
-    INSERT INTO pipelines (name, description, company_session_id, template_id, graph_json, version)
-    VALUES (?, ?, ?, ?, ?, 1)
+    INSERT INTO pipelines (name, description, project_id, company_session_id, template_id, graph_json, version)
+    VALUES (?, ?, ?, ?, ?, ?, 1)
   `);
   const r = stmt.run(
     input.name,
     input.description ?? '',
-    input.companySessionId ?? null,
+    projectId,
+    companySessionId,
     input.templateId ?? null,
     JSON.stringify(input.graph),
   );
@@ -79,6 +97,12 @@ export function list(db: DB, opts?: ListPipelinesOptions): Pipeline[] {
       where.push('(company_session_id = ? OR company_session_id IS NULL)');
       params.push(opts.companySessionId);
     }
+  }
+  if (opts && typeof opts.projectId === 'number') {
+    where.push(
+      '(project_id = ? OR (project_id IS NULL AND company_session_id IS NULL))',
+    );
+    params.push(opts.projectId);
   }
   if (opts && typeof opts.projectIdForChat === 'number') {
     where.push(

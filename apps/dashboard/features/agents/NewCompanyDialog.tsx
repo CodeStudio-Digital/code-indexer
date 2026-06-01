@@ -25,6 +25,11 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   const { t } = useTranslation(['agents', 'common']);
   const { data: templates, loading: templatesLoading } = useApi<Template[]>('/company/templates');
   const { data: projects } = useApi<Project[]>('/projects');
+  // Host OCI image catalog for the builder base-image picker.
+  const { data: imageCatalog } = useApi<{ runtime: string; images: { reference: string }[] }>(
+    '/company/sandbox/images',
+  );
+  const availableImages = imageCatalog?.images?.map((i) => i.reference) ?? [];
   const { providerOptions, getModelsForProvider, getDefaultModel } = useProviders();
 
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
@@ -49,6 +54,9 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   const [customMemory, setCustomMemory] = useState('1g');
   const [customCpus, setCustomCpus] = useState('1');
   const [customPids, setCustomPids] = useState('256');
+  // Per-session base image + raw run flags. Empty image = server default.
+  const [customImage, setCustomImage] = useState('');
+  const [customRunArgs, setCustomRunArgs] = useState('');
   // Curated pool of (provider, model) tuples the master can spawn
   // subordinates with. Empty list = no restriction (backward compat).
   // Non-empty list = server-side enforcement; master gets an error if
@@ -195,6 +203,12 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
                         customPids,
                       )!,
                     }
+                  : {}),
+                // Base image + raw run flags — only when set, so non-builder
+                // and default-image sessions keep the legacy payload shape.
+                ...(customImage.trim() ? { image: customImage.trim() } : {}),
+                ...(customRunArgs.trim()
+                  ? { runArgs: customRunArgs.split('\n').map((s) => s.trim()).filter(Boolean) }
                   : {}),
               },
             }
@@ -448,6 +462,11 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
             setCustomCpus={setCustomCpus}
             customPids={customPids}
             setCustomPids={setCustomPids}
+            availableImages={availableImages}
+            customImage={customImage}
+            setCustomImage={setCustomImage}
+            customRunArgs={customRunArgs}
+            setCustomRunArgs={setCustomRunArgs}
           />
 
           {/* Master fallback provider+model */}

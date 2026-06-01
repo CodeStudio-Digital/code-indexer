@@ -55,6 +55,8 @@ function isStreamingLeaf(path: string[], fnName: string): boolean {
   if (/Stream$/.test(fnName)) return true;
   if (path[0] === 'coder' && path[1] === 'stream') return true;
   if (path[0] === 'terminal' && fnName === 'output') return true;
+  if (path[0] === 'runner' && fnName === 'events') return true;
+  if (path[0] === 'runtime' && fnName === 'download') return true;
   if (path[0] === 'company' && fnName === 'stream') return true;
   return false;
 }

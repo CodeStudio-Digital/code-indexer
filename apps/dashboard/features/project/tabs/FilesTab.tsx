@@ -176,7 +176,9 @@ export function FilesTab({ projectId }: FilesTabProps) {
           <span className="tabular-nums">
             {(safePage * PAGE_SIZE + 1).toLocaleString()}–{Math.min((safePage + 1) * PAGE_SIZE, sorted.length).toLocaleString()}
             {' · '}
-            <span className="opacity-70">page {safePage + 1} of {pageCount}</span>
+            <span className="opacity-70">
+              {t('projects:files.pageOf', { page: safePage + 1, count: pageCount })}
+            </span>
           </span>
           <div className="flex items-center gap-1">
             <Button
@@ -186,7 +188,7 @@ export function FilesTab({ projectId }: FilesTabProps) {
               className="h-7 w-7"
               disabled={safePage === 0}
               onClick={() => setPage((p) => Math.max(0, p - 1))}
-              title="Previous page"
+              title={t('projects:files.previousPage')}
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </Button>
@@ -197,7 +199,7 @@ export function FilesTab({ projectId }: FilesTabProps) {
               className="h-7 w-7"
               disabled={safePage >= pageCount - 1}
               onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-              title="Next page"
+              title={t('projects:files.nextPage')}
             >
               <ChevronRight className="h-3.5 w-3.5" />
             </Button>

@@ -11,6 +11,9 @@ import costsPtBR from './locales/pt-BR/costs.json';
 import searchPtBR from './locales/pt-BR/search.json';
 import telemetryPtBR from './locales/pt-BR/telemetry.json';
 import docsPtBR from './locales/pt-BR/docs.json';
+import designSystemsPtBR from './locales/pt-BR/designSystems.json';
+import workspacePtBR from './locales/pt-BR/workspace.json';
+import pluginsPtBR from './locales/pt-BR/plugins.json';
 
 import commonEn from './locales/en/common.json';
 import adminEn from './locales/en/admin.json';
@@ -21,6 +24,9 @@ import costsEn from './locales/en/costs.json';
 import searchEn from './locales/en/search.json';
 import telemetryEn from './locales/en/telemetry.json';
 import docsEn from './locales/en/docs.json';
+import designSystemsEn from './locales/en/designSystems.json';
+import workspaceEn from './locales/en/workspace.json';
+import pluginsEn from './locales/en/plugins.json';
 
 i18n
   .use(LanguageDetector)
@@ -37,6 +43,9 @@ i18n
         search: searchPtBR,
         telemetry: telemetryPtBR,
         docs: docsPtBR,
+        designSystems: designSystemsPtBR,
+        workspace: workspacePtBR,
+        plugins: pluginsPtBR,
       },
       en: {
         common: commonEn,
@@ -48,6 +57,9 @@ i18n
         search: searchEn,
         telemetry: telemetryEn,
         docs: docsEn,
+        designSystems: designSystemsEn,
+        workspace: workspaceEn,
+        plugins: pluginsEn,
       },
     },
     fallbackLng: 'pt-BR',

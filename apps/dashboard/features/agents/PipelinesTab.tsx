@@ -27,6 +27,26 @@ interface SkillsResponse {
   skills: Array<{ id: string; name: string; enabled: boolean }>;
 }
 
+type PipelinesResponse = Pipeline[] | { pipelines?: Pipeline[]; error?: string };
+type PipelineExecutionsResponse = PipelineExecution[] | { executions?: PipelineExecution[]; error?: string };
+
+function normalizePipelines(data: PipelinesResponse | null): Pipeline[] {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.pipelines)) return data.pipelines;
+  return [];
+}
+
+function normalizeExecutions(data: PipelineExecutionsResponse | null): PipelineExecution[] {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.executions)) return data.executions;
+  return [];
+}
+
+function responseError(data: PipelinesResponse | PipelineExecutionsResponse | null): string | null {
+  if (data && !Array.isArray(data) && typeof data.error === 'string') return data.error;
+  return null;
+}
+
 /**
  * V1 of the Pipelines tab. Lists pipelines visible to the session, lets
  * the operator open a visual drag-drop builder (`PipelineBuilder`),
@@ -40,8 +60,8 @@ interface SkillsResponse {
 export function PipelinesTab({ companySessionId }: PipelinesTabProps) {
   const { t } = useTranslation(['agents', 'common']);
 
-  const pipelinesApi = useApi<Pipeline[]>(`/company/pipelines?company_session_id=${companySessionId}`);
-  const executionsApi = useApi<PipelineExecution[]>(
+  const pipelinesApi = useApi<PipelinesResponse>(`/company/pipelines?company_session_id=${companySessionId}`);
+  const executionsApi = useApi<PipelineExecutionsResponse>(
     `/company/sessions/${companySessionId}/pipelines/executions`,
   );
   const sessionApi = useApi<SessionFullData>(`/company/sessions/${companySessionId}`);
@@ -49,6 +69,10 @@ export function PipelinesTab({ companySessionId }: PipelinesTabProps) {
 
   const [editing, setEditing] = useState<Pipeline | null | undefined>(undefined);
   const [selectedExecutionId, setSelectedExecutionId] = useState<number | null>(null);
+  const pipelines = useMemo(() => normalizePipelines(pipelinesApi.data), [pipelinesApi.data]);
+  const pipelineListError = responseError(pipelinesApi.data);
+  const executions = useMemo(() => normalizeExecutions(executionsApi.data), [executionsApi.data]);
+  const executionListError = responseError(executionsApi.data);
 
   // Refetch executions every 4s so progress updates land without SSE.
   useEffect(() => {
@@ -81,7 +105,7 @@ export function PipelinesTab({ companySessionId }: PipelinesTabProps) {
   if (editing !== undefined) {
     return (
       <PipelineBuilder
-        companySessionId={companySessionId}
+        scope={{ kind: 'company', companySessionId }}
         pipeline={editing}
         availableRoles={availableRoles}
         availableSkills={availableSkills}
@@ -109,7 +133,7 @@ export function PipelinesTab({ companySessionId }: PipelinesTabProps) {
         <TabsContent value="list" className="mt-0 flex-1 overflow-auto">
           <div className="flex items-center justify-between border-b px-3 py-2">
             <div className="text-xs text-muted-foreground">
-              {pipelinesApi.data?.length ?? 0} {t('agents:pipelines.pipelinesAvailable')}
+              {pipelines.length} {t('agents:pipelines.pipelinesAvailable')}
             </div>
             <div className="flex gap-2">
               <Button size="sm" variant="ghost" onClick={() => pipelinesApi.refetch()}>
@@ -121,14 +145,20 @@ export function PipelinesTab({ companySessionId }: PipelinesTabProps) {
             </div>
           </div>
 
-          {pipelinesApi.data && pipelinesApi.data.length === 0 && (
+          {pipelineListError && (
+            <div className="mx-3 mt-3 rounded border border-destructive/40 bg-destructive/10 p-2 text-xs">
+              {pipelineListError}
+            </div>
+          )}
+
+          {pipelines.length === 0 && !pipelineListError && (
             <div className="px-6 py-12 text-center text-sm text-muted-foreground">
               {t('agents:pipelines.empty')}
             </div>
           )}
 
           <ul className="divide-y">
-            {pipelinesApi.data?.map((p) => (
+            {pipelines.map((p) => (
               <PipelineRow
                 key={p.id}
                 pipeline={p}
@@ -149,14 +179,19 @@ export function PipelinesTab({ companySessionId }: PipelinesTabProps) {
             <div className="w-72 border-r overflow-auto">
               <div className="border-b px-3 py-2 flex items-center justify-between">
                 <div className="text-xs text-muted-foreground">
-                  {executionsApi.data?.length ?? 0} {t('agents:pipelines.runs')}
+                  {executions.length} {t('agents:pipelines.runs')}
                 </div>
                 <Button size="sm" variant="ghost" onClick={() => executionsApi.refetch()}>
                   <RefreshCw className="h-3.5 w-3.5" />
                 </Button>
               </div>
+              {executionListError && (
+                <div className="mx-3 mt-3 rounded border border-destructive/40 bg-destructive/10 p-2 text-xs">
+                  {executionListError}
+                </div>
+              )}
               <ul className="divide-y">
-                {executionsApi.data?.map((ex) => (
+                {executions.map((ex) => (
                   <li
                     key={ex.id}
                     onClick={() => setSelectedExecutionId(ex.id)}

@@ -6,7 +6,7 @@
  * keeps `metaBus`, exposes service handles, and delegates the public API so
  * tools / HTTP routes / CompanyContext consumers keep working unchanged.
  */
-import type { RunCoderHandle } from '@mcp/code-agent/index.js';
+import type { RunCoderHandle, MasterStartResult } from '@mcp/code-agent/index.js';
 import type { CoderRunBus } from '@apps/http-api/coder-bus.js';
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
@@ -148,6 +148,19 @@ export class CompanyOrchestrator {
   get masterHandle(): RunCoderHandle | null { return this.master.handle; }
   getMasterAgentRunId(): number | null { return this.master.agentRunId; }
 
+  /**
+   * POJO master-status snapshot for the MAIN thread. The worker-backed
+   * orchestrator proxy can't read `isMasterAlive`/`masterEndedAt`
+   * synchronously — a property GET returns a nested proxy, not a value, so
+   * `JSON.stringify`-ing them (e.g. in a route's `c.json`) dispatches a bogus
+   * `.toJSON` RPC. Main-side callers fetch these through this awaited method
+   * instead (the apply-trap dispatches a real RPC; the getters resolve to
+   * actual values here inside the worker).
+   */
+  async getMasterStatus(): Promise<{ alive: boolean; endedAt: string | null }> {
+    return { alive: this.isMasterAlive, endedAt: this.masterEndedAt };
+  }
+
   /** Dashboard "Acordar Master" entry — idempotent inbox delivery. */
   async tryDeliverMasterInboxNow(): Promise<void> {
     if (!this.masterInbox) return;
@@ -164,12 +177,19 @@ export class CompanyOrchestrator {
      * built-in SDD pipeline. Threaded into `MasterPromptContext.sddMode`.
      */
     sddMode?: boolean;
-  }): Promise<RunCoderHandle> { return this.master.start(opts); }
+  }): Promise<MasterStartResult> {
+    // The lifecycle returns the ack as soon as the run is registered; the
+    // sandbox provision + runCoder boot run in the background (so this RPC
+    // stays well under its 60s deadline even on a cold container rebuild).
+    return this.master.start(opts);
+  }
 
   async resumeExistingMaster(opts: {
     userMessage: string; maxTurns?: number; roleConfigs?: RoleConfig[];
     attachments?: import('@mcp/code-agent/index.js').CoderAttachment[]; thinking?: boolean;
-  }): Promise<RunCoderHandle> { return this.master.resumeExisting(opts); }
+  }): Promise<MasterStartResult> {
+    return this.master.resumeExisting(opts);
+  }
 
   notifyMasterAboutSubordinate(message: string): void { this.master.notify(message); }
   /** Force the master's runner to release a pending `waitForUserInput`. */
@@ -388,6 +408,8 @@ export class CompanyOrchestrator {
   pipelineAbort(executionId: number, reason?: string): boolean { return this.pipelineExecutor.abort(executionId, reason); }
   pipelinePause(executionId: number): boolean { return this.pipelineExecutor.pause(executionId); }
   async pipelineResume(executionId: number): Promise<boolean> { return this.pipelineExecutor.resume(executionId); }
+  /** Approve a `requires_confirmation` pause (re-runs the gated next node). */
+  async pipelineConfirm(executionId: number): Promise<boolean> { return this.pipelineExecutor.confirm(executionId); }
   /** Boot-time recovery: any run still `running` in DB has no in-memory listener → flip to `paused` and emit. */
   async pipelineRecoverRunning(): Promise<{ paused: number }> { return this.pipelineExecutor.recoverRunning(); }
   pipelineStatus(executionId: number): { execution: PipelineExecution; nodes: PipelineNodeExecution[] } | null { return this.pipelineExecutor.status(executionId); }

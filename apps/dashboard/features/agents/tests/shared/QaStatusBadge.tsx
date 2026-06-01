@@ -5,6 +5,7 @@
  * of magic strings.
  */
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   formatRunStatus,
   formatTestStatus,
@@ -18,18 +19,20 @@ interface Props {
 }
 
 export function QaStatusBadge({ kind, status, size = 'sm' }: Props) {
+  const { t } = useTranslation('agents');
   const visual =
     kind === 'run'
       ? formatRunStatus(status as QaRunStatus)
       : formatTestStatus(status as QaTestStatus);
   const padding = size === 'sm' ? 'px-1.5 py-0.5 text-[11px]' : 'px-2 py-0.5 text-xs';
+  const label = t(`qa.status.${kind}.${status}`);
   return (
     <span
       className={`inline-flex items-center gap-1 rounded font-medium ${visual.toneClass} ${padding}`}
-      title={visual.label}
+      title={label}
     >
       <span aria-hidden="true">{visual.icon}</span>
-      <span>{visual.label}</span>
+      <span>{label}</span>
     </span>
   );
 }

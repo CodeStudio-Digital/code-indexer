@@ -192,3 +192,21 @@ export interface RunCoderHandle {
   /** Whether the project is indexed and MCP tools were registered. */
   indexStatus: IndexStatus;
 }
+
+/**
+ * Structured-clone-safe projection of `RunCoderHandle`. A live handle holds a
+ * `runner` (EventEmitter) and a `done` Promise that can't survive
+ * `structuredClone`, so methods that cross a worker boundary (e.g.
+ * `CompanyOrchestrator.startMaster`) return this POJO summary instead.
+ */
+export interface MasterStartResult {
+  masterSessionId: number;
+  /**
+   * Null when the master's `runCoder` hasn't booted yet — the company
+   * start/resume path returns this ack as soon as the run is *registered*
+   * and provisions the sandbox + boots the runner in the background, so
+   * the index status isn't known at ack time. No company-path caller
+   * reads it; the coder path computes its own status from the live handle.
+   */
+  indexStatus: IndexStatus | null;
+}

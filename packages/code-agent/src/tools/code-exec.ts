@@ -30,6 +30,17 @@ const MAX_TOOL_CALLS = 50;
 const MAX_OUTPUT_BYTES = 50_000;
 
 /**
+ * Node globals the sandbox intentionally omits (see the `sandbox` object's
+ * trailing comment). A script reaching for one of these gets a bare
+ * `ReferenceError: <name> is not defined`; we recognize the name to emit a
+ * precise nudge toward the registered tools instead of an opaque failure.
+ */
+const ABSENT_NODE_GLOBALS = new Set([
+  'require', 'import', 'module', 'exports', 'process', 'Buffer',
+  '__dirname', '__filename', 'global', 'globalThis', 'fetch',
+]);
+
+/**
  * Promises returned by an active code_exec toolsProxy. The module-level
  * `unhandledRejection` listener below swallows ONLY rejections whose promise
  * sits in this set — anything outside code_exec keeps Node's default
@@ -67,6 +78,7 @@ const CODE_EXEC_DESC =
   '  - `log(...)` — appends to the captured output. JSON-friendly.\n' +
   '  - `JSON`, `Math`, `String`, `Number`, `Boolean`, `Array`, `Object`, `Promise`, `Set`, `Map` are available.\n' +
   '  - The snippet runs as an async IIFE; use top-level `await` and `return` the result.\n' +
+  '  - NO Node runtime: `require`/`import`/`process`/`fs`/`path`/`Buffer` are NOT available (this is a node:vm sandbox, not Node). For file I/O call the registered `write_file`/`create_file` tools; for shell, `exec_command`.\n' +
   '\n' +
   'Policy: every tool call inside the script goes through the same plan-mode / task-scope policy as a direct call. ' +
   'Mutating tools (write_file, edit_file, multi_edit, create_file, manage_path, apply_patch, git_add/commit/branch) work only when the plan is approved (or the active task scope unlocks the touched paths). ' +
@@ -322,18 +334,31 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         const msg = e instanceof Error ? e.message : String(e);
         // Defense-in-depth hint: a ReferenceError on a name that IS a
         // registered tool means the model wrote the wrong call shape (e.g.
-        // shadowed by a `let` / typo). With Fix 2a the bare alias should
-        // make this rare, but still surface a precise nudge so the next
-        // turn corrects itself instead of guessing.
+        // shadowed by a `let` / typo); on an absent Node builtin it means the
+        // script reached for a runtime that isn't there. We match on the
+        // message text rather than `instanceof ReferenceError`: errors thrown
+        // inside node:vm carry the sandbox realm's constructors, so they are
+        // NOT instances of the host's ReferenceError/Error — `msg` is then the
+        // String(e) form, e.g. "ReferenceError: require is not defined".
         let hint = '';
-        if (e instanceof ReferenceError) {
-          const refMatch = /^([A-Za-z_$][\w$]*) is not defined/.exec(msg);
+        {
+          const refMatch = /(?:^|ReferenceError:\s*)([A-Za-z_$][\w$]*) is not defined/.exec(msg);
           if (refMatch) {
             const name = refMatch[1];
             if (exposedNames.includes(name)) {
               hint =
                 `\n\nHint: \`${name}\` is a registered tool. Call it as ` +
                 `\`await ${name}(args)\` or \`await tools.${name}(args)\`.`;
+            } else if (ABSENT_NODE_GLOBALS.has(name)) {
+              // code_exec runs in a node:vm sandbox with NO Node builtins —
+              // not a bug, by design. Steer the model to the registered tools
+              // instead of arbitrary Node I/O.
+              hint =
+                `\n\nHint: \`${name}\` and other Node builtins (require/import/fs/path/process) ` +
+                `are not available — code_exec runs in a node:vm sandbox that only exposes the ` +
+                `\`tools\` proxy plus JSON/Math/etc., not a Node runtime. To write a file, call the ` +
+                `registered tool: \`await write_file({ path, content })\` (or \`create_file\`). ` +
+                `To run a shell command, use \`exec_command\`. code_exec only orchestrates tool calls.`;
             } else {
               const close = exposedNames.find((t) => t.toLowerCase() === name.toLowerCase());
               if (close) {

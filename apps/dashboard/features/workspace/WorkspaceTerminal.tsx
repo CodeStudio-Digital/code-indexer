@@ -23,6 +23,7 @@ import {
 } from '../../state/terminal-sessions.js';
 import { SingleTerminal } from '../shared/terminal/SingleTerminal.js';
 import { TerminalTabBar } from '../shared/terminal/TerminalTabBar.js';
+import { useShellPicker } from '../shared/terminal/use-shell-picker.js';
 
 interface WorkspaceTerminalProps {
   projectId: number;
@@ -54,26 +55,37 @@ export function WorkspaceTerminal({ projectId }: WorkspaceTerminalProps) {
   const hasElectron = !!electronApi();
   const [spawnError, setSpawnError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { shells, activeShell, selectShell, addCustomShell } = useShellPicker();
 
-  /** Spawn a fresh PTY scoped to this project and add it to the store. */
-  const spawnNew = useCallback(async () => {
-    if (busy) return;
-    setBusy(true);
-    setSpawnError(null);
-    try {
-      const target = { kind: 'project' as const, projectId };
-      const spawn = await apiCall<SpawnResult>('terminal.spawn', {
-        target,
-        cols: 80,
-        rows: 24,
-      });
-      addSession(scope, spawn.terminalId, target);
-    } catch (err) {
-      setSpawnError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }, [scope, projectId, busy, addSession]);
+  /**
+   * Spawn a fresh PTY scoped to this project and add it to the store.
+   * `shellOverride` lets restart re-launch the exact shell the dead tab
+   * used; otherwise we spawn the currently-selected shell.
+   */
+  const spawnNew = useCallback(
+    async (shellOverride?: { file: string; args?: string[] }) => {
+      if (busy) return;
+      setBusy(true);
+      setSpawnError(null);
+      try {
+        const target = { kind: 'project' as const, projectId };
+        const shell = shellOverride ?? activeShell ?? undefined;
+        const spawn = await apiCall<SpawnResult>('terminal.spawn', {
+          target,
+          cols: 80,
+          rows: 24,
+          shell: shell?.file,
+          shellArgs: shell?.args,
+        });
+        addSession(scope, spawn.terminalId, target, shell);
+      } catch (err) {
+        setSpawnError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [scope, projectId, busy, addSession, activeShell],
+  );
 
   /**
    * Mount probe: prune dead persisted entries (PTYs that no longer
@@ -121,12 +133,13 @@ export function WorkspaceTerminal({ projectId }: WorkspaceTerminalProps) {
     [scope, removeSession],
   );
 
-  /** Restart the active terminal: kill + spawn replacement in its slot. */
+  /** Restart the active terminal: kill + spawn replacement with the same shell. */
   const restartActive = useCallback(async () => {
     if (!activeId) return;
+    const current = sessions.find((s) => s.id === activeId);
     await closeTab(activeId);
-    await spawnNew();
-  }, [activeId, closeTab, spawnNew]);
+    await spawnNew(current?.shell ? { file: current.shell, args: current.shellArgs } : undefined);
+  }, [activeId, sessions, closeTab, spawnNew]);
 
   if (!hasElectron) {
     return (
@@ -147,6 +160,10 @@ export function WorkspaceTerminal({ projectId }: WorkspaceTerminalProps) {
         onAdd={() => void spawnNew()}
         onRestart={() => void restartActive()}
         addDisabled={busy}
+        shellOptions={shells}
+        activeShellId={activeShell?.id}
+        onSelectShell={selectShell}
+        onAddCustomShell={() => void addCustomShell()}
       />
       {spawnError && (
         <div className="px-2 py-1 text-[10px] text-red-400 border-b bg-red-500/10 shrink-0">

@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ArchiveRestore,
   ArrowLeft,
@@ -58,11 +59,12 @@ interface CoderSessionRow {
 type Filter = 'active' | 'archived';
 
 export function ChatWindow({ projectId, projectName, initialSessionId, onClose }: ChatWindowProps) {
+  const { t } = useTranslation('workspace');
   const [activeSessionId, setActiveSessionId] = useState<number | undefined>(initialSessionId);
 
   if (activeSessionId == null) {
     return (
-      <ToolWindowFrame title="Agent chat" onClose={onClose}>
+      <ToolWindowFrame title={t('chat.title')} onClose={onClose}>
         <SessionsView
           projectId={projectId}
           projectName={projectName}
@@ -80,13 +82,13 @@ export function ChatWindow({ projectId, projectName, initialSessionId, onClose }
           size="icon"
           className="h-5 w-5 text-muted-foreground hover:text-foreground"
           onClick={() => setActiveSessionId(undefined)}
-          aria-label="Back to sessions list"
-          title="Back to sessions"
+          aria-label={t('chat.backToList')}
+          title={t('chat.backToSessions')}
         >
           <ArrowLeft className="h-3 w-3" />
         </Button>
         <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em] flex-1 truncate">
-          Chat session #{activeSessionId}
+          {t('chat.sessionTitle', { id: activeSessionId })}
         </span>
         {onClose && (
           <Button
@@ -94,7 +96,7 @@ export function ChatWindow({ projectId, projectName, initialSessionId, onClose }
             size="icon"
             className="h-5 w-5 text-muted-foreground hover:text-foreground"
             onClick={onClose}
-            aria-label="Close panel"
+            aria-label={t('chat.closePanel')}
           >
             <ChevronRight className="h-3 w-3" />
           </Button>
@@ -120,6 +122,7 @@ interface SessionsViewProps {
 }
 
 function SessionsView({ projectId, projectName, onPickSession }: SessionsViewProps) {
+  const { t } = useTranslation('workspace');
   const [filter, setFilter] = useState<Filter>('active');
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
@@ -157,7 +160,7 @@ function SessionsView({ projectId, projectName, onPickSession }: SessionsViewPro
       });
       onPickSession(created.id);
     } catch (err) {
-      toast.error('Failed to create session', {
+      toast.error(t('chat.createFailed'), {
         description: err instanceof Error ? err.message : String(err),
       });
     } finally {
@@ -172,11 +175,11 @@ function SessionsView({ projectId, projectName, onPickSession }: SessionsViewPro
           <Tabs value={filter} onValueChange={(v) => setFilter(v as Filter)} className="flex-1">
             <TabsList className="h-6 p-0.5 bg-muted/40">
               <TabsTrigger value="active" className="text-[10.5px] px-2 h-5">
-                Active
+                {t('chat.tabs.active')}
               </TabsTrigger>
               <TabsTrigger value="archived" className="text-[10.5px] px-2 h-5">
                 <ArchiveRestore className="h-2.5 w-2.5 mr-1" />
-                Archived
+                {t('chat.tabs.archived')}
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -187,7 +190,7 @@ function SessionsView({ projectId, projectName, onPickSession }: SessionsViewPro
             disabled={creating}
           >
             {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-            New
+            {t('chat.new')}
           </Button>
         </div>
         <div className="relative">
@@ -195,14 +198,14 @@ function SessionsView({ projectId, projectName, onPickSession }: SessionsViewPro
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Filter sessions…"
+            placeholder={t('chat.filterPlaceholder')}
             className="h-6 text-[11px] pl-7"
           />
         </div>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto">
         {loading && (
-          <div className="px-3 py-3 text-[11px] text-muted-foreground">Loading…</div>
+          <div className="px-3 py-3 text-[11px] text-muted-foreground">{t('chat.loading')}</div>
         )}
         {error && (
           <div className="px-3 py-3 text-[11px] text-destructive">{error}</div>
@@ -225,7 +228,7 @@ function SessionsView({ projectId, projectName, onPickSession }: SessionsViewPro
               'group w-full text-left px-2.5 py-1.5 border-b last:border-b-0',
               'hover:bg-muted/40 transition-colors flex flex-col gap-0.5',
             )}
-            title={`${s.provider} / ${s.model || 'default'}`}
+            title={`${s.provider} / ${s.model || t('chat.defaultModel')}`}
           >
             <div className="flex items-center gap-1.5 min-w-0">
               <MessageSquare className="h-3 w-3 shrink-0 text-muted-foreground/70" />
@@ -235,7 +238,7 @@ function SessionsView({ projectId, projectName, onPickSession }: SessionsViewPro
             <div className="text-[10px] text-muted-foreground flex items-center gap-1.5">
               <span className="font-mono truncate">{s.model || s.provider}</span>
               <span className="opacity-40">·</span>
-              <span>{(s.total_input_tokens + s.total_output_tokens).toLocaleString()} tok</span>
+              <span>{t('chat.tokensShort', { count: (s.total_input_tokens + s.total_output_tokens).toLocaleString() })}</span>
               <span className="opacity-40">·</span>
               <span title={s.updated_at}>{relativeTime(s.updated_at)}</span>
             </div>
@@ -255,10 +258,11 @@ interface EmptySessionsProps {
 }
 
 function EmptySessions({ projectName, filter, hasQuery, onCreate, creating }: EmptySessionsProps) {
+  const { t } = useTranslation('workspace');
   if (hasQuery) {
     return (
       <div className="px-3 py-6 text-center text-[11px] text-muted-foreground">
-        No sessions match your filter.
+        {t('chat.empty.filtered')}
       </div>
     );
   }
@@ -266,7 +270,7 @@ function EmptySessions({ projectName, filter, hasQuery, onCreate, creating }: Em
     return (
       <div className="px-3 py-6 text-center text-[11px] text-muted-foreground gap-2 grid place-items-center">
         <ArchiveRestore className="h-4 w-4 opacity-50" />
-        <span>No archived sessions yet.</span>
+        <span>{t('chat.empty.archived')}</span>
       </div>
     );
   }
@@ -276,9 +280,9 @@ function EmptySessions({ projectName, filter, hasQuery, onCreate, creating }: Em
         <Inbox className="h-4 w-4 text-primary/70" />
       </div>
       <div>
-        <p className="text-[12px] font-medium text-foreground">No sessions yet</p>
+        <p className="text-[12px] font-medium text-foreground">{t('chat.empty.activeTitle')}</p>
         <p className="text-[10.5px] text-muted-foreground mt-0.5">
-          Start the first conversation about {projectName}.
+          {t('chat.empty.activeDescription', { projectName })}
         </p>
       </div>
       <Button
@@ -288,7 +292,7 @@ function EmptySessions({ projectName, filter, hasQuery, onCreate, creating }: Em
         disabled={creating}
       >
         {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-        New session
+        {t('chat.empty.newSession')}
       </Button>
     </div>
   );

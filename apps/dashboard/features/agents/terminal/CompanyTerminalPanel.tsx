@@ -27,6 +27,7 @@ import {
 } from '../../../state/terminal-sessions.js';
 import { SingleTerminal } from '../../shared/terminal/SingleTerminal.js';
 import { TerminalTabBar, type SpawnTargetOption } from '../../shared/terminal/TerminalTabBar.js';
+import { useShellPicker } from '../../shared/terminal/use-shell-picker.js';
 
 interface CompanyTerminalPanelProps {
   companySessionId: number;
@@ -78,6 +79,7 @@ export function CompanyTerminalPanel({
    * projects are configured.
    */
   const [lastTargetId, setLastTargetId] = useState<string>(HOST_OPTION_ID);
+  const { shells, activeShell, selectShell, addCustomShell } = useShellPicker();
 
   const spawnOptions: SpawnTargetOption[] = useMemo(() => {
     const opts: SpawnTargetOption[] = [
@@ -116,7 +118,7 @@ export function CompanyTerminalPanel({
   );
 
   const spawnWith = useCallback(
-    async (optionId: string) => {
+    async (optionId: string, shellOverride?: { file: string; args?: string[] }) => {
       if (busy) return;
       const target = resolveTarget(optionId);
       if (!target) {
@@ -126,12 +128,15 @@ export function CompanyTerminalPanel({
       setBusy(true);
       setSpawnError(null);
       try {
+        const shell = shellOverride ?? activeShell ?? undefined;
         const spawn = await apiCall<SpawnResult>('terminal.spawn', {
           target,
           cols: 80,
           rows: 24,
+          shell: shell?.file,
+          shellArgs: shell?.args,
         });
-        addSession(scope, spawn.terminalId, target);
+        addSession(scope, spawn.terminalId, target, shell);
         setLastTargetId(optionId);
       } catch (err) {
         setSpawnError(err instanceof Error ? err.message : String(err));
@@ -139,7 +144,7 @@ export function CompanyTerminalPanel({
         setBusy(false);
       }
     },
-    [scope, busy, addSession, resolveTarget],
+    [scope, busy, addSession, resolveTarget, activeShell],
   );
 
   /** Default "+" click — spawn against the last target the user picked. */
@@ -195,7 +200,11 @@ export function CompanyTerminalPanel({
     const optionForCurrent = current?.target
       ? optionIdForTarget(current.target)
       : lastTargetId;
-    await spawnWith(optionForCurrent);
+    // Reuse the dead tab's shell too, not just its target.
+    await spawnWith(
+      optionForCurrent,
+      current?.shell ? { file: current.shell, args: current.shellArgs } : undefined,
+    );
   }, [activeId, sessions, closeTab, spawnWith, lastTargetId]);
 
   if (!hasElectron) {
@@ -219,6 +228,10 @@ export function CompanyTerminalPanel({
         onAddWithTarget={(id) => void spawnWith(id)}
         onRestart={() => void restartActive()}
         addDisabled={busy}
+        shellOptions={shells}
+        activeShellId={activeShell?.id}
+        onSelectShell={selectShell}
+        onAddCustomShell={() => void addCustomShell()}
       />
       {spawnError && (
         <div className="px-2 py-1 text-[10px] text-red-400 border-b bg-red-500/10 shrink-0">

@@ -4,11 +4,12 @@
  * status visuals + duration display.
  */
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   formatDurationMs,
-  summariseRun,
 } from '@mcp/services/qa/parsers/run-status-format.js';
 import { QaStatusBadge } from '../shared/QaStatusBadge.js';
+import { summariseRunI18n } from '../shared/qa-i18n.js';
 import type { QaRun } from '../shared/types.js';
 import { useRunHistory } from './useRunHistory.js';
 import { RunDetailModal } from './RunDetailModal.js';
@@ -19,6 +20,7 @@ interface Props {
 }
 
 export function RunHistoryTable({ sessionId, serviceId }: Props) {
+  const { t } = useTranslation('agents');
   const { runs, loading, error, refresh } = useRunHistory(sessionId, {
     pollWhenActive: true,
     serviceId,
@@ -28,7 +30,7 @@ export function RunHistoryTable({ sessionId, serviceId }: Props) {
   if (loading && runs.length === 0) {
     return (
       <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-        Loading runs…
+        {t('qa.loadingRuns')}
       </div>
     );
   }
@@ -36,9 +38,9 @@ export function RunHistoryTable({ sessionId, serviceId }: Props) {
   if (error) {
     return (
       <div className="p-4 text-sm text-red-600">
-        Failed to load runs: {error}
+        {t('qa.failedRuns', { error })}
         <button onClick={() => void refresh()} className="ml-2 underline">
-          Retry
+          {t('qa.retry')}
         </button>
       </div>
     );
@@ -47,7 +49,7 @@ export function RunHistoryTable({ sessionId, serviceId }: Props) {
   if (runs.length === 0) {
     return (
       <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-        No QA runs yet. The QA agent publishes results here as soon as it runs `npx playwright test`.
+        {t('qa.noRunsYet')}
       </div>
     );
   }
@@ -58,12 +60,12 @@ export function RunHistoryTable({ sessionId, serviceId }: Props) {
         <table className="w-full text-sm">
           <thead className="text-xs text-muted-foreground border-b">
             <tr>
-              <th className="text-left px-3 py-2">When</th>
-              <th className="text-left px-3 py-2">Suite</th>
-              <th className="text-left px-3 py-2">Status</th>
-              <th className="text-left px-3 py-2">Result</th>
-              <th className="text-left px-3 py-2">Duration</th>
-              <th className="text-left px-3 py-2">Trigger</th>
+              <th className="text-left px-3 py-2">{t('qa.when')}</th>
+              <th className="text-left px-3 py-2">{t('qa.suite')}</th>
+              <th className="text-left px-3 py-2">{t('qa.statusColumn')}</th>
+              <th className="text-left px-3 py-2">{t('qa.result')}</th>
+              <th className="text-left px-3 py-2">{t('qa.duration')}</th>
+              <th className="text-left px-3 py-2">{t('qa.trigger')}</th>
             </tr>
           </thead>
           <tbody>
@@ -85,6 +87,7 @@ export function RunHistoryTable({ sessionId, serviceId }: Props) {
 }
 
 function RunRow({ run, onClick }: { run: QaRun; onClick: () => void }) {
+  const { t } = useTranslation('agents');
   const startedShort = new Date(run.started_at + 'Z').toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',
@@ -102,7 +105,7 @@ function RunRow({ run, onClick }: { run: QaRun; onClick: () => void }) {
         <QaStatusBadge kind="run" status={run.status} />
       </td>
       <td className="px-3 py-2 text-xs">
-        {summariseRun(run.passed, run.failed, run.skipped)}
+        {summariseRunI18n(t, run.passed, run.failed, run.skipped)}
       </td>
       <td className="px-3 py-2 text-xs text-muted-foreground">
         {formatDurationMs(run.duration_ms)}

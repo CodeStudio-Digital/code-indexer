@@ -60,6 +60,13 @@ export interface SandboxCreateSpec {
   /** When true, run the image's own CMD/ENTRYPOINT instead of MCP's idle command. */
   skipDefaultCommand?: boolean;
   /**
+   * Extra raw flags appended to the `run` invocation right before the image
+   * (e.g. `['--cpuset-cpus=0-3', '--add-host=db:10.0.0.5']`). Lets a session
+   * tune the container beyond the structured limits/isolation fields. Drivers
+   * that can't honor arbitrary CLI flags (E2B) ignore them.
+   */
+  runArgs?: string[];
+  /**
    * Absolute HOST path to bind-mount onto `workdir` inside the container.
    * When set, the workspace lives on the host filesystem and survives
    * any runtime-level death of the container (SIGKILL, Docker restart,

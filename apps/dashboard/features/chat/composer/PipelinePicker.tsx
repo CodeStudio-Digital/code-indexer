@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Network, X } from 'lucide-react';
+import { Network, X, Plus, Pencil } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/popover.js';
 import { Button } from '../../../components/ui/button.js';
 import { useApi } from '../../../hooks/useApi.js';
+import { PipelineBuilder } from '../../agents/pipelines/PipelineBuilder.js';
+import type { Pipeline } from '@mcp/company/types.js';
 
 /**
  * Lightweight pipeline picker for the Composer toolbar.
@@ -43,8 +45,19 @@ export const PipelinePicker = React.memo(function PipelinePicker({
 }: PipelinePickerProps) {
   const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
+  // `undefined` = builder closed; `null` = creating a new pipeline; a
+  // Pipeline = editing that one.
+  const [editing, setEditing] = useState<Pipeline | null | undefined>(undefined);
   const url = sessionId ? `/coder/sessions/${sessionId}/pipelines` : '';
-  const { data: pipelines } = useApi<PipelineSummary[]>(url);
+  const { data: pipelines, refetch } = useApi<Pipeline[]>(url);
+
+  // Global skills feed the builder's per-node extraSkills picker (same
+  // source the company builder uses).
+  const skillsApi = useApi<{ skills: Array<{ id: string; enabled: boolean }> }>('/admin/skills');
+  const availableSkills = useMemo(
+    () => (skillsApi.data?.skills ?? []).filter((s) => s.enabled).map((s) => s.id),
+    [skillsApi.data],
+  );
 
   // If the selected pipeline disappears (deleted by user, scope filter
   // changed), clear selection so the send button flips back to chat mode.
@@ -57,6 +70,7 @@ export const PipelinePicker = React.memo(function PipelinePicker({
   const selected = pipelines?.find((p) => p.id === selectedPipelineId) ?? null;
 
   return (
+    <>
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         {compact ? (
@@ -148,22 +162,58 @@ export const PipelinePicker = React.memo(function PipelinePicker({
                     onChange(p.id);
                     setOpen(false);
                   }}
-                  className={`w-full text-left px-2 py-1.5 rounded text-xs flex flex-col gap-0.5 ${
+                  className={`group w-full text-left px-2 py-1.5 rounded text-xs flex items-center gap-1.5 ${
                     isActive ? 'bg-info/15 text-info' : 'hover:bg-muted'
                   }`}
                 >
-                  <span className="font-medium truncate">{p.name}</span>
-                  {p.description && (
-                    <span className="text-muted-foreground truncate text-[11px]">
-                      {p.description}
-                    </span>
-                  )}
+                  <span className="flex flex-col gap-0.5 min-w-0 flex-1">
+                    <span className="font-medium truncate">{p.name}</span>
+                    {p.description && (
+                      <span className="text-muted-foreground truncate text-[11px]">
+                        {p.description}
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    role="button"
+                    aria-label={t('pipelinePicker.edit', { defaultValue: 'Edit' })}
+                    title={t('pipelinePicker.edit', { defaultValue: 'Edit' })}
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditing(p);
+                      setOpen(false);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setEditing(p);
+                        setOpen(false);
+                      }
+                    }}
+                    className="shrink-0 inline-flex items-center justify-center h-5 w-5 rounded opacity-0 group-hover:opacity-100 hover:bg-muted-foreground/20 cursor-pointer"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </span>
                 </button>
               );
             })}
           </div>
         )}
-        <div className="border-t mt-2 pt-2">
+        <div className="border-t mt-2 pt-2 space-y-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="w-full text-xs justify-start"
+            onClick={() => {
+              setEditing(null);
+              setOpen(false);
+            }}
+          >
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            {t('pipelinePicker.newPipeline', { defaultValue: 'New pipeline' })}
+          </Button>
           <Button
             size="sm"
             variant="ghost"
@@ -179,5 +229,23 @@ export const PipelinePicker = React.memo(function PipelinePicker({
         </div>
       </PopoverContent>
     </Popover>
+
+    {editing !== undefined && sessionId != null && (
+      <div className="fixed inset-0 z-50">
+        <PipelineBuilder
+          scope={{ kind: 'project', coderSessionId: sessionId }}
+          pipeline={editing}
+          availableRoles={[]}
+          availableSkills={availableSkills}
+          onClose={() => setEditing(undefined)}
+          onSaved={(saved) => {
+            setEditing(undefined);
+            refetch();
+            onChange(saved.id);
+          }}
+        />
+      </div>
+    )}
+    </>
   );
 });

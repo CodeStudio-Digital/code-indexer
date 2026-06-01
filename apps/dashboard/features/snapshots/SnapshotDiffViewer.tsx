@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Bot, Check, MessageSquarePlus, Send, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
@@ -73,6 +74,7 @@ function InlineReviewComment({
   onUpdate: Props['onUpdateComment'];
   busy: boolean;
 }) {
+  const { t } = useTranslation('projects');
   return (
     <div className="ml-[72px] mr-3 my-1 rounded border bg-background/95 px-3 py-2 text-xs font-sans whitespace-normal">
       <div className="flex items-center gap-1.5 mb-1">
@@ -94,11 +96,11 @@ function InlineReviewComment({
         <div className="mt-2 flex gap-1">
           <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={() => onUpdate(comment.id, { status: 'accepted' })}>
             <Check className="h-3.5 w-3.5 mr-1" />
-            Accept
+            {t('snapshotDiff.accept')}
           </Button>
           <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={busy} onClick={() => onUpdate(comment.id, { status: 'dismissed' })}>
             <X className="h-3.5 w-3.5 mr-1" />
-            Dismiss
+            {t('snapshotDiff.dismiss')}
           </Button>
         </div>
       )}
@@ -115,12 +117,13 @@ function ReviewCommentList({
   onUpdate: Props['onUpdateComment'];
   busy: boolean;
 }) {
+  const { t } = useTranslation('projects');
   const visible = comments.filter((c) => c.status !== 'dismissed' && c.status !== 'sent');
   if (visible.length === 0) return null;
   return (
     <div className="border rounded-md bg-card overflow-hidden">
       <div className="px-3 py-1.5 border-b bg-muted/30 text-[11px] font-medium">
-        Review comments
+        {t('snapshotDiff.reviewComments')}
       </div>
       <div className="divide-y">
         {visible.map((comment) => (
@@ -135,7 +138,7 @@ function ReviewCommentList({
                 </Badge>
               )}
               <span className="text-muted-foreground font-mono">
-                {comment.new_line ?? comment.old_line ?? 'file'}
+                {comment.new_line ?? comment.old_line ?? t('snapshotDiff.file')}
               </span>
               <span className="ml-auto text-muted-foreground">{comment.status}</span>
             </div>
@@ -149,11 +152,11 @@ function ReviewCommentList({
               <div className="flex gap-1">
                 <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={() => onUpdate(comment.id, { status: 'accepted' })}>
                   <Check className="h-3.5 w-3.5 mr-1" />
-                  Accept
+                  {t('snapshotDiff.accept')}
                 </Button>
                 <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={busy} onClick={() => onUpdate(comment.id, { status: 'dismissed' })}>
                   <X className="h-3.5 w-3.5 mr-1" />
-                  Dismiss
+                  {t('snapshotDiff.dismiss')}
                 </Button>
               </div>
             )}
@@ -183,6 +186,7 @@ function HunkBlock({
   onExpandContext: (side: 'before' | 'after') => void;
   busy: boolean;
 }) {
+  const { t } = useTranslation('projects');
   const decided = hunk.decision !== 'pending';
   const hunkComments = comments.filter((comment) =>
     isVisibleComment(comment) &&
@@ -199,11 +203,11 @@ function HunkBlock({
         <div className="flex items-center gap-1.5">
           <span className="text-emerald-700 dark:text-emerald-400">+{hunk.addedCount}</span>
           <span className="text-rose-700 dark:text-rose-400">-{hunk.removedCount}</span>
-          <Button size="icon" variant="ghost" className="h-6 w-6" disabled={busy} onClick={() => void onAddComment()} title="Comment hunk">
+          <Button size="icon" variant="ghost" className="h-6 w-6" disabled={busy} onClick={() => void onAddComment()} title={t('snapshotDiff.commentHunk')}>
             <MessageSquarePlus className="h-3.5 w-3.5" />
           </Button>
-          {hunk.decision === 'kept' && <Badge variant="outline" className="text-[9px]">kept</Badge>}
-          {hunk.decision === 'reverted' && <Badge variant="outline" className="text-[9px]">reverted</Badge>}
+          {hunk.decision === 'kept' && <Badge variant="outline" className="text-[9px]">{t('snapshotDiff.kept')}</Badge>}
+          {hunk.decision === 'reverted' && <Badge variant="outline" className="text-[9px]">{t('snapshotDiff.reverted')}</Badge>}
         </div>
       </div>
       {hunkComments.length > 0 && (
@@ -226,7 +230,7 @@ function HunkBlock({
             onClick={() => onExpandContext('before')}
             className="block min-w-full w-max text-left px-3 py-1 text-[11px] text-muted-foreground bg-muted/20 hover:bg-muted/40"
           >
-            Show 10 lines above ({hunk.hiddenBefore} hidden)
+            {t('snapshotDiff.showLinesAbove', { count: hunk.hiddenBefore })}
           </button>
         )}
           {hunk.lines.map((line, i) => {
@@ -251,7 +255,7 @@ function HunkBlock({
                     disabled={busy}
                     onClick={() => void onAddComment(line)}
                     className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground px-1"
-                    title="Comment line"
+                    title={t('snapshotDiff.commentLine')}
                   >
                     <MessageSquarePlus className="h-3.5 w-3.5" />
                   </button>
@@ -273,7 +277,7 @@ function HunkBlock({
             onClick={() => onExpandContext('after')}
             className="block min-w-full w-max text-left px-3 py-1 text-[11px] text-muted-foreground bg-muted/20 hover:bg-muted/40"
           >
-            Show 10 lines below ({hunk.hiddenAfter} hidden)
+            {t('snapshotDiff.showLinesBelow', { count: hunk.hiddenAfter })}
           </button>
         )}
         </div>
@@ -281,10 +285,10 @@ function HunkBlock({
       {!decided && (
         <div className="flex items-center justify-end gap-1 px-3 py-1.5 bg-muted/20 border-t">
           <Button size="sm" variant="ghost" onClick={onAccept} disabled={busy} className="h-7 text-xs">
-            Keep hunk
+            {t('snapshotDiff.keepHunk')}
           </Button>
           <Button size="sm" variant="ghost" onClick={onRevert} disabled={busy} className="h-7 text-xs">
-            Undo hunk
+            {t('snapshotDiff.undoHunk')}
           </Button>
         </div>
       )}
@@ -308,6 +312,7 @@ export function SnapshotDiffViewer({
   reviewBusy,
   canSubmitReview,
 }: Props) {
+  const { t } = useTranslation('projects');
   const [localBusy, setLocalBusy] = useState(false);
   const isBusy = busy || localBusy || reviewBusy;
   const fileComments = useMemo(
@@ -326,10 +331,10 @@ export function SnapshotDiffViewer({
 
   const addComment = async (hunk: SnapshotHunk | null, line?: SnapshotHunkLine) => {
     const text = await prompt({
-      title: line ? 'Comment line' : hunk ? 'Comment hunk' : 'Comment file',
-      placeholder: 'Review feedback...',
-      confirmLabel: 'Add comment',
-      validate: (value) => (value.trim().length ? null : 'Comment is required'),
+      title: line ? t('snapshotDiff.commentLine') : hunk ? t('snapshotDiff.commentHunk') : t('snapshotDiff.commentFile'),
+      placeholder: t('snapshotDiff.reviewFeedbackPlaceholder'),
+      confirmLabel: t('snapshotDiff.addComment'),
+      validate: (value) => (value.trim().length ? null : t('snapshotDiff.commentRequired')),
     });
     if (!text) return;
     setLocalBusy(true);
@@ -352,21 +357,21 @@ export function SnapshotDiffViewer({
     <div className="flex gap-1.5 flex-shrink-0 overflow-x-auto">
       <Button size="sm" variant="ghost" disabled={isBusy} onClick={() => void addComment(null)} className="h-7 text-xs">
         <MessageSquarePlus className="h-3.5 w-3.5 mr-1" />
-        File comment
+        {t('snapshotDiff.fileComment')}
       </Button>
       <Button size="sm" variant="outline" disabled={isBusy} onClick={() => { setLocalBusy(true); onAutoReview().finally(() => setLocalBusy(false)); }} className="h-7 text-xs">
         <Bot className="h-3.5 w-3.5 mr-1" />
-        Auto review
+        {t('snapshotDiff.autoReview')}
       </Button>
       <Button size="sm" variant="default" disabled={isBusy || !canSubmitReview} onClick={() => { setLocalBusy(true); onSubmitReview().finally(() => setLocalBusy(false)); }} className="h-7 text-xs">
         <Send className="h-3.5 w-3.5 mr-1" />
-        Send review
+        {t('snapshotDiff.sendReview')}
       </Button>
       <Button size="sm" variant="outline" disabled={isBusy} onClick={() => { setLocalBusy(true); onAcceptFile().finally(() => setLocalBusy(false)); }} className="h-7 text-xs">
-        Keep file
+        {t('snapshotDiff.keepFile')}
       </Button>
       <Button size="sm" variant="outline" disabled={isBusy} onClick={() => { setLocalBusy(true); onRevertFile().finally(() => setLocalBusy(false)); }} className="h-7 text-xs">
-        Revert file
+        {t('snapshotDiff.revertFile')}
       </Button>
     </div>
   );
@@ -384,8 +389,8 @@ export function SnapshotDiffViewer({
           </div>
         )}
         <div className="flex flex-col items-center justify-center h-full text-center p-6 gap-3 text-sm text-muted-foreground">
-          <span>This file is too large or binary to diff hunk-by-hunk.</span>
-          <span>You can still revert the whole file or accept it as-is.</span>
+          <span>{t('snapshotDiff.tooLarge')}</span>
+          <span>{t('snapshotDiff.largeFileHint')}</span>
         </div>
       </div>
     );
@@ -404,8 +409,8 @@ export function SnapshotDiffViewer({
           </div>
         )}
         <div className="flex flex-col items-center justify-center h-full text-center p-6 gap-3 text-sm text-muted-foreground">
-          <span>No remaining changes for <code className="font-mono">{diff.baseline.filePath}</code>.</span>
-          <span>File matches its baseline.</span>
+          <span>{t('snapshotDiff.noRemainingChanges', { file: diff.baseline.filePath })}</span>
+          <span>{t('snapshotDiff.matchesBaseline')}</span>
         </div>
       </div>
     );

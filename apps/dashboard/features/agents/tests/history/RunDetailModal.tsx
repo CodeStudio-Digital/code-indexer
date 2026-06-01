@@ -9,15 +9,16 @@
  * images and videos via `ArtifactPreview`.
  */
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ExternalLink, Camera, Film, FileText, Bug } from 'lucide-react';
 import { fetchRunDetail } from '../api/qa-api.js';
 import {
   formatDurationMs,
-  summariseRun,
 } from '@mcp/services/qa/parsers/run-status-format.js';
 import { QaStatusBadge } from '../shared/QaStatusBadge.js';
 import { TraceLinkButton } from '../shared/TraceLinkButton.js';
 import { ArtifactPreview } from '../shared/ArtifactPreview.js';
+import { summariseRunI18n } from '../shared/qa-i18n.js';
 import type { QaRun, QaTestResultWithUrls } from '../shared/types.js';
 
 interface Props {
@@ -33,6 +34,7 @@ interface RunDetail {
 }
 
 export function RunDetailModal({ sessionId, runId, onClose }: Props) {
+  const { t } = useTranslation('agents');
   const [data, setData] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,7 +66,7 @@ export function RunDetailModal({ sessionId, runId, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between px-4 py-3 border-b gap-3">
-          <h2 className="text-sm font-semibold">QA run detail</h2>
+          <h2 className="text-sm font-semibold">{t('qa.runDetailTitle')}</h2>
           <div className="flex items-center gap-3 text-xs">
             {data?.report_url && (
               <a
@@ -72,25 +74,25 @@ export function RunDetailModal({ sessionId, runId, onClose }: Props) {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-primary hover:underline"
-                title="Open the full Playwright HTML report"
+                title={t('qa.openHtmlReportTitle')}
               >
                 <ExternalLink className="h-3 w-3" />
-                Open full HTML report
+                {t('qa.openHtmlReport')}
               </a>
             )}
             <button
               onClick={onClose}
               className="text-muted-foreground hover:text-foreground"
-              aria-label="Close"
+              aria-label={t('common.close')}
             >
-              Close (Esc)
+              {t('qa.closeEsc')}
             </button>
           </div>
         </header>
         <div className="flex-1 overflow-auto p-4 space-y-4">
-          {error && <p className="text-sm text-red-600">Failed: {error}</p>}
+          {error && <p className="text-sm text-red-600">{t('qa.failed', { error })}</p>}
           {!data && !error && (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
           )}
           {data && <RunDetailBody run={data.run} results={data.results} />}
         </div>
@@ -100,6 +102,7 @@ export function RunDetailModal({ sessionId, runId, onClose }: Props) {
 }
 
 function RunDetailBody({ run, results }: { run: QaRun; results: QaTestResultWithUrls[] }) {
+  const { t } = useTranslation('agents');
   return (
     <>
       <div className="space-y-1">
@@ -113,14 +116,14 @@ function RunDetailBody({ run, results }: { run: QaRun; results: QaTestResultWith
           )}
         </div>
         <div className="text-xs text-muted-foreground">
-          {summariseRun(run.passed, run.failed, run.skipped)} ·{' '}
+          {summariseRunI18n(t, run.passed, run.failed, run.skipped)} ·{' '}
           {formatDurationMs(run.duration_ms)} · {run.trigger}
         </div>
       </div>
 
       {results.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No individual test rows captured for this run.
+          {t('qa.noRows')}
         </p>
       ) : (
         <ul className="space-y-2">
@@ -140,6 +143,7 @@ function ResultRow({
   sessionId: number;
   result: QaTestResultWithUrls;
 }) {
+  const { t } = useTranslation('agents');
   const [preview, setPreview] = useState<
     | { kind: 'screenshot'; url: string; path: string }
     | { kind: 'video'; url: string; path: string }
@@ -179,9 +183,9 @@ function ResultRow({
                 })
               }
               className="inline-flex items-center gap-1 text-primary hover:underline"
-              title={`Preview ${result.screenshot_path}`}
+              title={t('qa.previewTitle', { path: result.screenshot_path })}
             >
-              <Camera className="h-3 w-3" /> screenshot
+              <Camera className="h-3 w-3" /> {t('qa.screenshot')}
             </button>
           )}
           {result.video_url && result.video_path && (
@@ -194,9 +198,9 @@ function ResultRow({
                 })
               }
               className="inline-flex items-center gap-1 text-primary hover:underline"
-              title={`Preview ${result.video_path}`}
+              title={t('qa.previewTitle', { path: result.video_path })}
             >
-              <Film className="h-3 w-3" /> video
+              <Film className="h-3 w-3" /> {t('qa.video')}
             </button>
           )}
           {result.trace_path && (
@@ -208,7 +212,7 @@ function ResultRow({
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-primary hover:underline"
-              title={`Open ${result.summary_md_path ?? 'summary.md'}`}
+              title={t('qa.openTitle', { path: result.summary_md_path ?? 'summary.md' })}
             >
               <FileText className="h-3 w-3" /> summary.md
             </a>
@@ -217,9 +221,9 @@ function ResultRow({
             <a
               href={`#/kanban?card=${result.kanban_card_id}`}
               className="inline-flex items-center gap-1 text-red-600 hover:underline"
-              title="Open the auto-created bug card"
+              title={t('qa.openBugCardTitle')}
             >
-              <Bug className="h-3 w-3" /> bug card #{result.kanban_card_id}
+              <Bug className="h-3 w-3" /> {t('qa.bugCard', { id: result.kanban_card_id })}
             </a>
           )}
         </div>

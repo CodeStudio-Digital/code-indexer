@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Archive,
   Check,
@@ -81,6 +82,7 @@ function fileKind(state: string): { letter: string; color: string } {
 }
 
 export function GitWindow({ projectId, onClose }: GitWindowProps) {
+  const { t } = useTranslation('workspace');
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -101,17 +103,19 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
           kind: 'diff',
           projectId,
           path: `diff:${file.staged ? 'staged' : 'unstaged'}:${file.path}`,
-          title: `${file.staged ? 'Staged' : 'Diff'}: ${file.path.split('/').pop() ?? file.path}`,
+          title: file.staged
+            ? t('git.stagedDiffTitle', { file: file.path.split('/').pop() ?? file.path })
+            : t('git.diffTitle', { file: file.path.split('/').pop() ?? file.path }),
           patch: r.patch,
           source: file.staged ? 'git-staged' : 'git-unstaged',
         });
       } catch (err) {
-        toast.error('Diff failed', {
+        toast.error(t('git.diffFailed'), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
     },
-    [projectId, openDiff],
+    [projectId, openDiff, t],
   );
 
   const reload = useCallback(async () => {
@@ -148,7 +152,7 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
       await apiCall('projectGit.stage', { projectId, paths });
       await reload();
     } catch (err) {
-      toast.error('Stage failed', {
+      toast.error(t('git.stageFailed'), {
         description: err instanceof Error ? err.message : String(err),
       });
     }
@@ -158,30 +162,30 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
       await apiCall('projectGit.unstage', { projectId, paths });
       await reload();
     } catch (err) {
-      toast.error('Unstage failed', {
+      toast.error(t('git.unstageFailed'), {
         description: err instanceof Error ? err.message : String(err),
       });
     }
   };
   const onDiscard = async (paths: string[]) => {
     const ok = await confirm({
-      title: `Discard ${paths.length === 1 ? 'change' : `${paths.length} changes`}?`,
+      title: t(paths.length === 1 ? 'git.discardTitle_one' : 'git.discardTitle_other', { count: paths.length }),
       description:
         paths.length === 1
-          ? `Local edits to "${paths[0]}" will be reverted to HEAD. This cannot be undone.`
-          : `Local edits to ${paths.length} files will be reverted to HEAD. This cannot be undone.`,
-      confirmLabel: 'Discard',
+          ? t('git.discardDescription_one', { path: paths[0] })
+          : t('git.discardDescription_other', { count: paths.length }),
+      confirmLabel: t('git.discard'),
       tone: 'destructive',
     });
     if (!ok) return;
     try {
       await apiCall('projectGit.discard', { projectId, paths });
       await reload();
-      toast.success('Discarded', {
-        description: paths.length === 1 ? paths[0] : `${paths.length} files reverted`,
+      toast.success(t('git.discarded'), {
+        description: paths.length === 1 ? paths[0] : t('git.filesReverted', { count: paths.length }),
       });
     } catch (err) {
-      toast.error('Discard failed', {
+      toast.error(t('git.discardFailed'), {
         description: err instanceof Error ? err.message : String(err),
       });
     }
@@ -193,9 +197,9 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
         <div className="h-full grid place-items-center px-6 text-center text-muted-foreground gap-2">
           <GitBranch className="h-5 w-5 opacity-50" />
           <p className="text-[11.5px]">
-            This project's root isn't a git repository yet.
+            {t('git.notRepo')}
             <br />
-            Run <code className="font-mono text-foreground/80">git init</code> in the terminal to start.
+            {t('git.initHint')}
           </p>
         </div>
       </ToolWindowFrame>
@@ -214,7 +218,7 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
               size="icon"
               className="h-5 w-5 text-muted-foreground hover:text-foreground"
               onClick={() => void reload()}
-              aria-label="Refresh"
+              aria-label={t('git.refresh')}
             >
               {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
             </Button>
@@ -224,8 +228,8 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
               className="h-5 w-5 text-muted-foreground hover:text-foreground"
               onClick={() => setCommitOpen(true)}
               disabled={groups.staged.length === 0}
-              aria-label="Commit"
-              title="Commit staged changes"
+              aria-label={t('git.commit')}
+              title={t('git.commitStaged')}
             >
               <GitCommitIcon className="h-3 w-3" />
             </Button>
@@ -240,7 +244,7 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
           {status && (
             <div className="shrink-0 px-2.5 py-1.5 border-b text-[11px] flex items-center gap-2">
               <GitBranch className="h-3 w-3 text-primary" />
-              <span className="font-medium truncate">{status.branch ?? '(detached HEAD)'}</span>
+              <span className="font-medium truncate">{status.branch ?? t('git.detachedHead')}</span>
               {status.upstream && (
                 <span className="text-muted-foreground/70 truncate">→ {status.upstream}</span>
               )}
@@ -317,12 +321,13 @@ interface GitTabNavProps {
  * "I don't know the git command" escape hatch.
  */
 function GitTabNav({ active, onChange }: GitTabNavProps) {
+  const { t } = useTranslation('workspace');
   const tabs: { id: GitTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-    { id: 'changes', label: 'Changes', icon: GitCommitIcon },
-    { id: 'branches', label: 'Branches', icon: GitBranch },
-    { id: 'history', label: 'History', icon: History },
-    { id: 'stash', label: 'Stash', icon: Archive },
-    { id: 'ai', label: 'AI', icon: Sparkles },
+    { id: 'changes', label: t('git.tabs.changes'), icon: GitCommitIcon },
+    { id: 'branches', label: t('git.tabs.branches'), icon: GitBranch },
+    { id: 'history', label: t('git.tabs.history'), icon: History },
+    { id: 'stash', label: t('git.tabs.stash'), icon: Archive },
+    { id: 'ai', label: t('git.tabs.ai'), icon: Sparkles },
   ];
   return (
     <div className="shrink-0 flex items-stretch border-b bg-card/30">
@@ -387,6 +392,7 @@ function ChangesPane({
   onUnstage,
   onDiscard,
 }: ChangesPaneProps) {
+  const { t } = useTranslation('workspace');
   const total =
     groups.staged.length + groups.unstaged.length + groups.untracked.length;
 
@@ -401,7 +407,7 @@ function ChangesPane({
     return (
       <div className="flex-1 grid place-items-center px-6 text-center text-muted-foreground gap-2">
         <Check className="h-5 w-5 opacity-50" />
-        <p className="text-[11.5px]">Working tree is clean.</p>
+        <p className="text-[11.5px]">{t('git.cleanTree')}</p>
       </div>
     );
   }
@@ -410,7 +416,7 @@ function ChangesPane({
     <div className="flex-1 min-h-0 overflow-y-auto">
       {groups.staged.length > 0 && (
         <Section
-          title={`Staged (${groups.staged.length})`}
+          title={t('git.staged', { count: groups.staged.length })}
           open={openSections.staged}
           onToggle={() => setOpenSections((s) => ({ ...s, staged: !s.staged }))}
           bulkAction={
@@ -418,9 +424,9 @@ function ChangesPane({
               type="button"
               onClick={() => void onUnstage(groups.staged.map((f) => f.path))}
               className="text-[10px] text-muted-foreground hover:text-foreground"
-              title="Unstage all"
+              title={t('git.unstageAll')}
             >
-              Unstage all
+              {t('git.unstageAll')}
             </button>
           }
         >
@@ -432,7 +438,7 @@ function ChangesPane({
               actions={
                 <RowButton
                   icon={Minus}
-                  title="Unstage"
+                  title={t('git.unstage')}
                   onClick={() => void onUnstage([f.path])}
                 />
               }
@@ -443,7 +449,7 @@ function ChangesPane({
 
       {groups.unstaged.length > 0 && (
         <Section
-          title={`Changes (${groups.unstaged.length})`}
+          title={t('git.changes', { count: groups.unstaged.length })}
           open={openSections.unstaged}
           onToggle={() => setOpenSections((s) => ({ ...s, unstaged: !s.unstaged }))}
           bulkAction={
@@ -452,17 +458,17 @@ function ChangesPane({
                 type="button"
                 onClick={() => void onDiscard(groups.unstaged.map((f) => f.path))}
                 className="text-[10px] text-muted-foreground hover:text-destructive"
-                title="Discard all unstaged changes"
+                title={t('git.discardAllUnstaged')}
               >
-                Discard all
+                {t('git.discardAll')}
               </button>
               <button
                 type="button"
                 onClick={() => void onStage(groups.unstaged.map((f) => f.path))}
                 className="text-[10px] text-muted-foreground hover:text-foreground"
-                title="Stage all"
+                title={t('git.stageAll')}
               >
-                Stage all
+                {t('git.stageAll')}
               </button>
             </div>
           }
@@ -476,13 +482,13 @@ function ChangesPane({
                 <>
                   <RowButton
                     icon={Undo2}
-                    title="Discard"
+                    title={t('git.discard')}
                     destructive
                     onClick={() => void onDiscard([f.path])}
                   />
                   <RowButton
                     icon={Plus}
-                    title="Stage"
+                    title={t('git.stage')}
                     onClick={() => void onStage([f.path])}
                   />
                 </>
@@ -494,7 +500,7 @@ function ChangesPane({
 
       {groups.untracked.length > 0 && (
         <Section
-          title={`Untracked (${groups.untracked.length})`}
+          title={t('git.untracked', { count: groups.untracked.length })}
           open={openSections.untracked}
           onToggle={() =>
             setOpenSections((s) => ({ ...s, untracked: !s.untracked }))
@@ -505,17 +511,17 @@ function ChangesPane({
                 type="button"
                 onClick={() => void onDiscard(groups.untracked.map((f) => f.path))}
                 className="text-[10px] text-muted-foreground hover:text-destructive"
-                title="Delete all untracked files"
+                title={t('git.deleteAllUntracked')}
               >
-                Delete all
+                {t('git.deleteAll')}
               </button>
               <button
                 type="button"
                 onClick={() => void onStage(groups.untracked.map((f) => f.path))}
                 className="text-[10px] text-muted-foreground hover:text-foreground"
-                title="Stage all untracked"
+                title={t('git.stageAllUntracked')}
               >
-                Stage all
+                {t('git.stageAll')}
               </button>
             </div>
           }
@@ -528,13 +534,13 @@ function ChangesPane({
                 <>
                   <RowButton
                     icon={Trash2}
-                    title="Delete file"
+                    title={t('git.deleteFile')}
                     destructive
                     onClick={() => void onDiscard([f.path])}
                   />
                   <RowButton
                     icon={Plus}
-                    title="Stage"
+                    title={t('git.stage')}
                     onClick={() => void onStage([f.path])}
                   />
                 </>
@@ -583,6 +589,7 @@ function FileRow({
   actions: React.ReactNode;
   onClick?: () => void;
 }) {
+  const { t } = useTranslation('workspace');
   const k = fileKind(file.state);
   return (
     <div
@@ -591,7 +598,7 @@ function FileRow({
         onClick ? 'cursor-pointer hover:bg-muted/40' : 'hover:bg-muted/40',
       )}
       onClick={onClick}
-      title={onClick ? `Open diff for ${file.path}` : file.path}
+      title={onClick ? t('git.openDiffFor', { path: file.path }) : file.path}
     >
       <span className={cn('font-mono text-[10px] w-3 shrink-0 text-center', k.color)}>
         {k.letter}

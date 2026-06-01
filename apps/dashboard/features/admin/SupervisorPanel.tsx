@@ -17,6 +17,7 @@
  * via SSE for near-real-time updates.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -44,12 +45,12 @@ import {
 
 const POLL_MS = 5_000;
 
-function formatMsAgo(ms: number): string {
+function formatMsAgo(ms: number, t: (key: string, options?: Record<string, unknown>) => string): string {
   if (!Number.isFinite(ms)) return '—';
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}min ago`;
-  return `${Math.floor(s / 3600)}h ago`;
+  if (s < 60) return t('supervisor.time.secondsAgo', { count: s });
+  if (s < 3600) return t('supervisor.time.minutesAgo', { count: Math.floor(s / 60) });
+  return t('supervisor.time.hoursAgo', { count: Math.floor(s / 3600) });
 }
 
 function severityColor(kind: string): 'red' | 'orange' | 'yellow' | 'gray' {
@@ -75,6 +76,7 @@ export interface SupervisorPanelProps {
 type StreamState = 'connecting' | 'live' | 'reconnecting';
 
 export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.Element {
+  const { t } = useTranslation('admin');
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -171,12 +173,12 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
       const r = await releaseRoleQuarantine(sessionId, role);
       setActionMsg(
         r.released
-          ? `Released role ${role} in session ${sessionId}`
-          : `Role ${role} was not quarantined`,
+          ? t('supervisor.roleReleased', { role, sessionId })
+          : t('supervisor.roleNotQuarantined', { role }),
       );
       void loadStatus();
     } catch (e) {
-      setActionMsg(`Release failed: ${(e as Error).message}`);
+      setActionMsg(t('supervisor.releaseFailed', { message: (e as Error).message }));
     }
   }
 
@@ -186,12 +188,12 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
       const r = await releaseReadOnlyMode(sessionId);
       setActionMsg(
         r.released
-          ? `Released read-only in session ${sessionId}`
-          : `Session ${sessionId} not in read-only mode`,
+          ? t('supervisor.readOnlyReleased', { sessionId })
+          : t('supervisor.notReadOnly', { sessionId }),
       );
       void loadStatus();
     } catch (e) {
-      setActionMsg(`Release failed: ${(e as Error).message}`);
+      setActionMsg(t('supervisor.releaseFailed', { message: (e as Error).message }));
     }
   }
 
@@ -218,14 +220,20 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
           ) : (
             <ShieldOff className="h-5 w-5 flex-shrink-0" />
           )}
-          <h2 className="text-sm font-semibold truncate">Agent Supervisor</h2>
+          <h2 className="text-sm font-semibold truncate">{t('supervisor.title')}</h2>
           {status?.enabled === false && (
             <Badge variant="outline" className="ml-1 text-[10px]">
-              disabled
+              {t('supervisor.disabled')}
             </Badge>
           )}
         </div>
-        <Button variant="outline" size="sm" onClick={() => void loadStatus()} disabled={loading}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void loadStatus()}
+          disabled={loading}
+          title={t('supervisor.refresh')}
+        >
           <RefreshCcw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
         </Button>
       </div>
@@ -249,9 +257,9 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
               key={s.sessionId}
               sessionId={s.sessionId}
               status={s.status}
-              onReleaseQuarantine={handleReleaseQuarantine}
-              onReleaseReadOnly={handleReleaseReadOnly}
-            />
+            onReleaseQuarantine={handleReleaseQuarantine}
+            onReleaseReadOnly={handleReleaseReadOnly}
+          />
           ))}
         </div>
       )}
@@ -261,7 +269,7 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
         <CardHeader className="py-2 px-3 flex-shrink-0">
           <CardTitle className="text-xs font-medium flex items-center gap-2 text-muted-foreground">
             <AlertTriangle className="h-3.5 w-3.5" />
-            <span>Incidents</span>
+            <span>{t('supervisor.incidents')}</span>
             <div className="ml-auto flex items-center gap-1">
               {totalIncidents > 0 && (
                 <Badge variant="secondary" className="text-[10px] h-4 px-1">
@@ -309,30 +317,29 @@ export function SupervisorPanel({ sessionId }: SupervisorPanelProps = {}): JSX.E
 }
 
 function EmptySessionsHint(): JSX.Element {
+  const { t } = useTranslation('admin');
   return (
     <div className="rounded-md border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground space-y-2 flex-shrink-0">
       <div className="flex items-center gap-2">
         <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-        <span className="font-medium text-foreground">Nothing to supervise yet</span>
+        <span className="font-medium text-foreground">{t('supervisor.emptySessions.title')}</span>
       </div>
-      <p>
-        No agents are currently being tracked. The supervisor starts watching as soon as a
-        subordinate spawns or a master session boots.
-      </p>
+      <p>{t('supervisor.emptySessions.description')}</p>
     </div>
   );
 }
 
 function StreamStateBadge({ state }: { state: StreamState }): JSX.Element {
+  const { t } = useTranslation('admin');
   if (state === 'live') {
     return (
       <Badge
         variant="outline"
         className="text-[10px] h-4 px-1 flex items-center gap-1 border-emerald-500/40 text-emerald-500"
-        title="Connected to the supervisor live stream"
+        title={t('supervisor.stream.liveTitle')}
       >
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-        live
+        {t('supervisor.stream.live')}
       </Badge>
     );
   }
@@ -341,10 +348,10 @@ function StreamStateBadge({ state }: { state: StreamState }): JSX.Element {
       <Badge
         variant="outline"
         className="text-[10px] h-4 px-1 flex items-center gap-1 text-muted-foreground"
-        title="Opening connection to the supervisor stream"
+        title={t('supervisor.stream.openingTitle')}
       >
         <RadioTower className="h-2.5 w-2.5 animate-pulse" />
-        opening
+        {t('supervisor.stream.opening')}
       </Badge>
     );
   }
@@ -352,22 +359,22 @@ function StreamStateBadge({ state }: { state: StreamState }): JSX.Element {
     <Badge
       variant="outline"
       className="text-[10px] h-4 px-1 flex items-center gap-1 border-amber-500/40 text-amber-500"
-      title="Backend not reachable — retrying with backoff"
+      title={t('supervisor.stream.reconnectingTitle')}
     >
       <RadioTower className="h-2.5 w-2.5 animate-pulse" />
-      reconnecting
+      {t('supervisor.stream.reconnecting')}
     </Badge>
   );
 }
 
 function EmptyIncidentsHint(): JSX.Element {
+  const { t } = useTranslation('admin');
   return (
     <div className="h-full flex flex-col items-center justify-center text-center p-4 gap-2">
       <ShieldCheck className="h-8 w-8 text-emerald-500/70" />
-      <p className="text-sm font-medium text-foreground">All clear</p>
+      <p className="text-sm font-medium text-foreground">{t('supervisor.emptyIncidents.title')}</p>
       <p className="text-xs text-muted-foreground max-w-[24ch]">
-        No incidents detected. The supervisor is listening for stuck states, illegal transitions,
-        and circuit-breaker trips.
+        {t('supervisor.emptyIncidents.description')}
       </p>
     </div>
   );
@@ -386,6 +393,7 @@ function SessionStatusCard({
   onReleaseQuarantine,
   onReleaseReadOnly,
 }: SessionStatusCardProps): JSX.Element {
+  const { t } = useTranslation('admin');
   const readOnlyActive = status?.breakers.readOnlyUntilMs != null;
   const quarantinedRoles =
     status?.breakers.roles.filter((r) => r.quarantinedUntilMs != null) ?? [];
@@ -404,16 +412,16 @@ function SessionStatusCard({
           ) : (
             <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
           )}
-          <span>Session #{sessionId}</span>
+          <span>{t('supervisor.sessionTitle', { sessionId })}</span>
           <div className="ml-auto flex gap-1">
             {readOnlyActive && (
               <Badge variant="destructive" className="text-[10px] h-4 px-1">
-                <Lock className="h-2.5 w-2.5 mr-1" /> read-only
+                <Lock className="h-2.5 w-2.5 mr-1" /> {t('supervisor.readOnly')}
               </Badge>
             )}
             {(status?.stuckCount ?? 0) > 0 && (
               <Badge variant="secondary" className="text-[10px] h-4 px-1">
-                {status?.stuckCount} stuck
+                {t('supervisor.stuck', { count: status?.stuckCount ?? 0 })}
               </Badge>
             )}
           </div>
@@ -421,15 +429,15 @@ function SessionStatusCard({
       </CardHeader>
       <CardContent className="px-3 pb-3 pt-0 text-xs space-y-2">
         {!status ? (
-          <p className="text-muted-foreground">No data</p>
+          <p className="text-muted-foreground">{t('supervisor.noData')}</p>
         ) : (
           <>
             <div className="flex gap-1 flex-wrap text-[10px] text-muted-foreground">
-              <span>{status.trackedCount} tracked</span>
+              <span>{t('supervisor.tracked', { count: status.trackedCount })}</span>
               <span>·</span>
-              <span>{status.totalIncidents} incidents</span>
+              <span>{t('supervisor.incidentCount', { count: status.totalIncidents })}</span>
               <span>·</span>
-              <span>{status.tickCount} ticks</span>
+              <span>{t('supervisor.ticks', { count: status.tickCount })}</span>
             </div>
             {Object.keys(status.byState).length > 0 && (
               <div className="flex gap-1 flex-wrap">
@@ -443,7 +451,7 @@ function SessionStatusCard({
             {quarantinedRoles.length > 0 && (
               <div className="space-y-1 pt-1 border-t">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wide">
-                  Quarantined roles
+                  {t('supervisor.quarantinedRoles')}
                 </p>
                 {quarantinedRoles.map((r) => (
                   <div key={r.role} className="flex items-center gap-2">
@@ -451,7 +459,7 @@ function SessionStatusCard({
                       {r.role}
                     </Badge>
                     <span className="text-[10px] text-muted-foreground">
-                      until {new Date(r.quarantinedUntilMs ?? 0).toLocaleTimeString()}
+                      {t('supervisor.untilTime', { time: new Date(r.quarantinedUntilMs ?? 0).toLocaleTimeString() })}
                     </span>
                     <Button
                       size="sm"
@@ -460,7 +468,7 @@ function SessionStatusCard({
                       onClick={() => void onReleaseQuarantine(sessionId, r.role)}
                     >
                       <Unlock className="h-2.5 w-2.5 mr-1" />
-                      Release
+                      {t('supervisor.release')}
                     </Button>
                   </div>
                 ))}
@@ -474,7 +482,7 @@ function SessionStatusCard({
                 onClick={() => void onReleaseReadOnly(sessionId)}
               >
                 <Unlock className="h-2.5 w-2.5 mr-1" />
-                Release read-only mode
+                {t('supervisor.releaseReadOnly')}
               </Button>
             )}
           </>
@@ -494,6 +502,7 @@ interface IncidentRowProps {
 }
 
 function IncidentRowView(props: IncidentRowProps): JSX.Element {
+  const { t } = useTranslation('admin');
   const color = severityColor(props.kind);
   const colorClass =
     color === 'red'
@@ -509,14 +518,14 @@ function IncidentRowView(props: IncidentRowProps): JSX.Element {
         <span className="font-mono text-foreground">{props.kind}</span>
         {props.live && (
           <Badge variant="outline" className="text-[9px] h-3.5 px-1 leading-none">
-            live
+            {t('supervisor.stream.live')}
           </Badge>
         )}
-        <span className="ml-auto text-muted-foreground">{formatMsAgo(props.detectedAtMs)}</span>
+        <span className="ml-auto text-muted-foreground">{formatMsAgo(props.detectedAtMs, t)}</span>
       </div>
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-        <span>session={props.sessionId}</span>
-        {props.agentRunId != null && <span>agent={props.agentRunId}</span>}
+        <span>{t('supervisor.sessionMeta', { sessionId: props.sessionId })}</span>
+        {props.agentRunId != null && <span>{t('supervisor.agentMeta', { agentRunId: props.agentRunId })}</span>}
       </div>
       <p className="text-muted-foreground break-words">{props.detail}</p>
     </div>

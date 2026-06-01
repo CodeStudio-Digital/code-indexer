@@ -140,6 +140,41 @@ describe('exec_command + write_stdin', () => {
     expect(result.content).toContain('not active');
   });
 
+  it('redirects to write_file when session_id is a tool name + chars look like a file', async () => {
+    // Repro of the real loop: model meant `write_file`, fired write_stdin with
+    // session_id="write_file" and a file body in chars.
+    const result = await writeStdin.handler(
+      { session_id: 'write_file', chars: 'export const x = 1\nexport const y = 2\n' },
+      makeCtx(),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('MISFIRE');
+    expect(result.content).toContain('WRITE A FILE');
+    expect(result.content).toContain('write_file');
+    // The redirect leads the error so it survives the failure-streak excerpt.
+    expect(result.content.indexOf('MISFIRE')).toBeLessThan(result.content.indexOf('not active'));
+  });
+
+  it('flags a non-hex session_id as a misfire even without file-ish chars', async () => {
+    const result = await writeStdin.handler(
+      { session_id: 'some_tool', chars: '' },
+      makeCtx(),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('MISFIRE');
+    expect(result.content).toContain('expand_toolset');
+  });
+
+  it('does NOT flag a genuine (hex-shaped) but expired session_id as a misfire', async () => {
+    const result = await writeStdin.handler(
+      { session_id: 'a1b2c3d4', chars: '' },
+      makeCtx(),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('not active');
+    expect(result.content).not.toContain('MISFIRE');
+  });
+
   it('PR 5: write_stdin error lists active sessions for self-correction', async () => {
     // Spawn one long-running session so the error has something to list.
     const r1 = await execCommand.handler(

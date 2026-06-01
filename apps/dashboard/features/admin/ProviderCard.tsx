@@ -89,7 +89,11 @@ export function ProviderCard({
   }, [isExpanded, onLoadProviderModels, providerModelsById, subagentTargetProviderId]);
 
   return (
-    <Card className="overflow-hidden">
+    // `provider-card-shell` is a sentinel class that the new
+    // `ProviderModal` uses to strip the outer border/shadow when the
+    // card renders inside the dialog body — see `ProviderModal.tsx`.
+    // Standalone (grid view) consumers still get the default Card chrome.
+    <Card className="provider-card-shell overflow-hidden">
       <CardHeader className="py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">

@@ -18,6 +18,13 @@ export const pluginInterfaceSchema = z.object({
   privacyPolicyURL: httpsUrl.optional(),
   termsOfServiceURL: httpsUrl.optional(),
   defaultPrompt: z.array(z.string().max(128)).max(3).optional(),
+  /**
+   * Persona/guidance lines appended to the scoped assistant's system prompt
+   * (the host's `plugins.assistantStream`). Lets a plugin steer its assistant
+   * toward domain best-practices without a host change. Kept short and
+   * bounded so it can't crowd out the safety guardrail.
+   */
+  assistantGuidance: z.array(z.string().max(240)).max(12).optional(),
   brandColor: z.string().optional(),
   composerIcon: relPath.optional(),
   logo: relPath.optional(),

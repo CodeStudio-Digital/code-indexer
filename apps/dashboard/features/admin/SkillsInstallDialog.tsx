@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Download, Loader2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export function SkillsInstallDialog({ open, onOpenChange, onInstalled }: Props) {
+  const { t } = useTranslation('admin');
   const [repo, setRepo] = useState('cloudflare/skills');
   const [ref, setRef] = useState('');
   const [namespace, setNamespace] = useState('');
@@ -69,19 +71,18 @@ export function SkillsInstallDialog({ open, onOpenChange, onInstalled }: Props) 
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Download className="h-4 w-4" />
-            Install Agent Skills from GitHub
+            {t('skillsInstall.github.title')}
           </DialogTitle>
           <DialogDescription>
-            Fetches SKILL.md and commands from a repo following the Agent Skills
-            standard (Claude Code / Codex / Cursor).
+            {t('skillsInstall.github.description')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 py-2">
           <div className="space-y-1">
-            <label className="text-xs font-medium">Repository</label>
+            <label className="text-xs font-medium">{t('skillsInstall.repository')}</label>
             <Input
-              placeholder="owner/repo"
+              placeholder={t('skillsInstall.repoPlaceholder')}
               value={repo}
               onChange={(e) => setRepo(e.target.value)}
               disabled={busy}
@@ -89,18 +90,18 @@ export function SkillsInstallDialog({ open, onOpenChange, onInstalled }: Props) 
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-xs font-medium">Ref (optional)</label>
+              <label className="text-xs font-medium">{t('skillsInstall.ref')}</label>
               <Input
-                placeholder="HEAD / branch / sha"
+                placeholder={t('skillsInstall.refPlaceholder')}
                 value={ref}
                 onChange={(e) => setRef(e.target.value)}
                 disabled={busy}
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium">Namespace (optional)</label>
+              <label className="text-xs font-medium">{t('skillsInstall.namespace')}</label>
               <Input
-                placeholder="auto from repo"
+                placeholder={t('skillsInstall.namespaceRepoPlaceholder')}
                 value={namespace}
                 onChange={(e) => setNamespace(e.target.value)}
                 disabled={busy}
@@ -114,7 +115,7 @@ export function SkillsInstallDialog({ open, onOpenChange, onInstalled }: Props) 
               onChange={(e) => setOverwrite(e.target.checked)}
               disabled={busy}
             />
-            Overwrite existing install
+            {t('skillsInstall.overwrite')}
           </label>
 
           {error && (
@@ -126,11 +127,11 @@ export function SkillsInstallDialog({ open, onOpenChange, onInstalled }: Props) 
           {result && (
             <div className="text-xs border rounded p-2 space-y-1">
               <div className="font-medium">
-                Installed {result.installed.length} item(s) into namespace{' '}
+                {t('skillsInstall.installed', { count: result.installed.length })}{' '}
                 <Badge variant="secondary">{result.namespace}</Badge>
               </div>
               <div className="text-muted-foreground">
-                commit {result.commitSha.slice(0, 7)}
+                {t('skillsInstall.commit', { sha: result.commitSha.slice(0, 7) })}
               </div>
               <ul className="max-h-32 overflow-auto space-y-0.5">
                 {result.installed.map((i) => (
@@ -148,7 +149,7 @@ export function SkillsInstallDialog({ open, onOpenChange, onInstalled }: Props) 
               {result.mcpServers && result.mcpServers.length > 0 && (
                 <div className="pt-2 border-t mt-2 space-y-1">
                   <div className="font-medium">
-                    MCP servers registrados ({result.mcpServers.length})
+                    {t('skillsInstall.mcpServers', { count: result.mcpServers.length })}
                   </div>
                   <ul className="max-h-24 overflow-auto space-y-0.5">
                     {result.mcpServers.map((s) => (
@@ -161,7 +162,7 @@ export function SkillsInstallDialog({ open, onOpenChange, onInstalled }: Props) 
                     ))}
                   </ul>
                   <div className="text-[10px] text-muted-foreground">
-                    ⚠ Servers HTTP podem exigir OAuth — configure em Admin → MCP Servers.
+                    {t('skillsInstall.httpWarning')}
                   </div>
                 </div>
               )}
@@ -183,11 +184,11 @@ export function SkillsInstallDialog({ open, onOpenChange, onInstalled }: Props) 
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >
-            Close
+            {t('skillsInstall.close')}
           </Button>
           <Button onClick={handleInstall} disabled={busy || !repo.trim()}>
             {busy && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            Install
+            {t('skillsInstall.install')}
           </Button>
         </DialogFooter>
       </DialogContent>

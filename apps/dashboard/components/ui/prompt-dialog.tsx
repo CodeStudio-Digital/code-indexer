@@ -28,6 +28,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { create } from 'zustand';
+import { useTranslation } from 'react-i18next';
 import {
   AlertCircle,
   CheckCircle2,
@@ -332,6 +333,8 @@ export function ToastHost() {
 }
 
 function ToastView({ toast: t, onDismiss }: { toast: Toast; onDismiss: () => void }) {
+  const { t: translate } = useTranslation('common');
+
   useEffect(() => {
     if (!t.duration) return;
     const id = setTimeout(onDismiss, t.duration);
@@ -376,7 +379,7 @@ function ToastView({ toast: t, onDismiss }: { toast: Toast; onDismiss: () => voi
         type="button"
         onClick={onDismiss}
         className="text-muted-foreground hover:text-foreground h-4 w-4 grid place-items-center rounded-sm hover:bg-muted shrink-0"
-        aria-label="Dismiss notification"
+        aria-label={translate('toast.dismiss')}
       >
         <XIcon className="h-3 w-3" />
       </button>

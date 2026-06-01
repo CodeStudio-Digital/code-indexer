@@ -12,6 +12,7 @@
  * fetch logic lives in `chrome-service-api.ts`.
  */
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Loader2, Play, Square, RotateCcw, Check, AlertCircle, Copy } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { copyText } from '../../lib/clipboard.js';
@@ -26,6 +27,7 @@ import {
 const REFRESH_INTERVAL_MS = 5_000;
 
 export function ChromeServicePanel() {
+  const { t } = useTranslation('admin');
   const [state, setState] = useState<ChromeServiceState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +98,7 @@ export function ChromeServicePanel() {
   if (loading && !state) {
     return (
       <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading Chrome Service…
+        <Loader2 className="h-4 w-4 animate-spin" /> {t('service.loading', { name: t('chrome.title') })}
       </div>
     );
   }
@@ -104,8 +106,8 @@ export function ChromeServicePanel() {
   if (!state) {
     return (
       <div className="p-4 text-sm text-red-600">
-        Failed to load: {error ?? 'unknown'}
-        <button onClick={() => void refresh()} className="ml-2 underline">Retry</button>
+        {t('service.failed')} {error ?? t('service.unknown')}
+        <button onClick={() => void refresh()} className="ml-2 underline">{t('service.retry')}</button>
       </div>
     );
   }
@@ -115,9 +117,9 @@ export function ChromeServicePanel() {
   return (
     <div className="space-y-4">
       <header>
-        <h2 className="text-lg font-semibold">Chrome Service</h2>
+        <h2 className="text-lg font-semibold">{t('chrome.title')}</h2>
         <p className="text-sm text-muted-foreground">
-          Shared Playwright/Chromium container that QA agents from any session connect to via WebSocket.
+          {t('chrome.description')}
         </p>
       </header>
 
@@ -125,7 +127,7 @@ export function ChromeServicePanel() {
         <div className="border border-red-300 bg-red-50 text-red-800 text-sm p-3 rounded flex items-start gap-2">
           <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
           <pre className="whitespace-pre-wrap text-xs flex-1">{error}</pre>
-          <button onClick={() => setError(null)} className="text-xs underline">dismiss</button>
+          <button onClick={() => setError(null)} className="text-xs underline">{t('service.dismiss')}</button>
         </div>
       )}
 
@@ -133,7 +135,7 @@ export function ChromeServicePanel() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 border rounded p-4">
         <div>
-          <label className="text-xs font-medium block mb-1">Image</label>
+          <label className="text-xs font-medium block mb-1">{t('service.image')}</label>
           <input
             type="text"
             value={editingImage}
@@ -143,7 +145,7 @@ export function ChromeServicePanel() {
           />
         </div>
         <div>
-          <label className="text-xs font-medium block mb-1">Host port</label>
+          <label className="text-xs font-medium block mb-1">{t('service.hostPort')}</label>
           <input
             type="number"
             min={1}
@@ -157,21 +159,21 @@ export function ChromeServicePanel() {
         <div className="md:col-span-2 flex items-center gap-2">
           {state.enabled ? (
             <Button variant="outline" onClick={() => void toggle(false)} disabled={busy} size="sm">
-              <Square className="h-3.5 w-3.5 mr-1" /> Disable
+              <Square className="h-3.5 w-3.5 mr-1" /> {t('service.disable')}
             </Button>
           ) : (
             <Button onClick={() => void toggle(true)} disabled={busy} size="sm">
-              <Play className="h-3.5 w-3.5 mr-1" /> Enable
+              <Play className="h-3.5 w-3.5 mr-1" /> {t('service.enable')}
             </Button>
           )}
           <Button variant="outline" onClick={() => void restart()} disabled={busy || !state.enabled} size="sm">
-            <RotateCcw className="h-3.5 w-3.5 mr-1" /> Restart
+            <RotateCcw className="h-3.5 w-3.5 mr-1" /> {t('service.restart')}
           </Button>
           <Button variant="outline" onClick={() => void test()} disabled={busy} size="sm">
-            <Check className="h-3.5 w-3.5 mr-1" /> Test
+            <Check className="h-3.5 w-3.5 mr-1" /> {t('service.test')}
           </Button>
           <Button onClick={() => void applyConfig()} disabled={busy || !dirty} size="sm">
-            Apply config
+            {t('service.applyConfig')}
           </Button>
         </div>
       </div>
@@ -205,11 +207,12 @@ function StatusBadge({ state }: { state: ChromeServiceState }) {
 }
 
 function EndpointPanel({ state }: { state: ChromeServiceState }) {
+  const { t } = useTranslation('admin');
   const [copied, setCopied] = useState(false);
   if (state.status !== 'running' || !state.wsEndpoint) {
     return (
       <div className="border rounded p-3 text-sm text-muted-foreground">
-        Endpoint will appear here once the service is running.
+        {t('chrome.endpointPending')}
       </div>
     );
   }
@@ -223,18 +226,17 @@ function EndpointPanel({ state }: { state: ChromeServiceState }) {
   }
   return (
     <div className="border rounded p-3">
-      <div className="text-xs font-medium mb-1">QA agent connects to:</div>
+      <div className="text-xs font-medium mb-1">{t('chrome.endpointLabel')}</div>
       <div className="flex items-center gap-2">
         <code className="flex-1 bg-muted px-2 py-1 rounded text-sm font-mono break-all">
           {state.wsEndpoint}
         </code>
         <Button variant="outline" size="sm" onClick={copy}>
-          <Copy className="h-3 w-3 mr-1" /> {copied ? 'copied!' : 'copy'}
+          <Copy className="h-3 w-3 mr-1" /> {copied ? t('service.copied') : t('service.copy')}
         </Button>
       </div>
       <p className="text-xs text-muted-foreground mt-2">
-        Sandbox containers receive this as <code>PLAYWRIGHT_WS_ENDPOINT</code> in their env.
-        The bundled <code>playwright.config.ts</code> reads it via <code>connectOptions.wsEndpoint</code>.
+        {t('chrome.endpointHelp')}
       </p>
     </div>
   );

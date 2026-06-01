@@ -284,7 +284,10 @@ export async function provisionPrimarySandbox(
     }
 
     const sharedEnvs = resolveSessionEnvs(deps.envStore, req.sessionId);
-    const image = imageSource === 'project_dockerfile' ? builtImageTag! : deps.nodeImage;
+    // Project Dockerfiles always run their freshly-built tag; otherwise honor a
+    // per-session `image` override, falling back to the manager's node image.
+    const image =
+      imageSource === 'project_dockerfile' ? builtImageTag! : req.image ?? deps.nodeImage;
     if (imageSource === 'project_dockerfile') {
       deps.recordStep(seed, 'creating-container', 'Building image from Dockerfile…');
       await deps.driver.build({
@@ -317,6 +320,7 @@ export async function provisionPrimarySandbox(
       hostWorkdirMount: hostWorkdirMount ?? undefined,
       nodeModulesVolumeName,
       skipDefaultCommand: req.skipDefaultCommand ?? imageSource === 'project_dockerfile',
+      runArgs: req.runArgs,
     });
     seed.containerId = containerId;
     seed.hostWorkdirMount = hostWorkdirMount ?? undefined;

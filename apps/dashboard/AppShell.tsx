@@ -34,6 +34,8 @@ import {
   DropdownMenuTrigger,
 } from './components/ui/dropdown-menu.js';
 import { LanguageSwitcher } from './components/LanguageSwitcher.js';
+import { RunningTasksDropdown } from './components/RunningTasksDropdown.js';
+import { initRunningTasks } from './state/running-tasks.js';
 import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
@@ -129,6 +131,12 @@ export function AppShell() {
     localStorage.setItem('theme', dark ? 'dark' : 'light');
   }, [dark]);
 
+  // Open the runner events stream once so the topbar indicator (and the
+  // project Runners tab) reflect live task state across navigation.
+  useEffect(() => {
+    initRunningTasks();
+  }, []);
+
   // NOTE: ProjectView (the unified project IDE at /projects/:id) lives
   // INSIDE AppShell now — chrome stays visible so the user can jump to
   // Agentes / Configurações / etc. without leaving the project. Earlier
@@ -160,7 +168,7 @@ export function AppShell() {
           type="button"
           onClick={() => navigate('/')}
           className="h-7 inline-flex items-center gap-1.5 px-2 rounded text-[12px] font-semibold text-foreground hover:bg-muted"
-          aria-label="MCP IDE — home"
+          aria-label={t('brand.homeAria')}
         >
           <span className="h-5 w-5 rounded-md bg-primary text-primary-foreground grid place-items-center">
             <Boxes className="h-3 w-3" />
@@ -172,7 +180,7 @@ export function AppShell() {
         </button>
         <span className="h-4 w-px bg-border mx-0.5" />
         {/* Nav */}
-        <nav className="flex items-center gap-0.5" aria-label="Primary">
+        <nav className="flex items-center gap-0.5" aria-label={t('nav.primaryAria')}>
           {nav.map((item) => (
             <NavButton
               key={item.id}
@@ -184,6 +192,7 @@ export function AppShell() {
         </nav>
         {/* Right cluster */}
         <div className="ml-auto flex items-center gap-0.5">
+          <RunningTasksDropdown />
           <RecentSessionsDropdown
             activeSessionId={view.sessionId}
             onSelect={(projectId, sessionId) =>
@@ -249,6 +258,7 @@ function RecentSessionsDropdown({
   activeSessionId: number | null;
   onSelect: (projectId: number, sessionId: number) => void;
 }) {
+  const { t } = useTranslation();
   // RecentCoderSession = CoderSession + project_name (see @mcp/code-agent
   // sessions/types). The store query joins projects on project_id.
   const { data } = useApi<
@@ -260,20 +270,22 @@ function RecentSessionsDropdown({
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Recent sessions">
+            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={t('recentSessions.tooltip')}>
               <Clock className="h-3.5 w-3.5" />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent>Recent sessions</TooltipContent>
+        <TooltipContent>{t('recentSessions.tooltip')}</TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end" className="w-72">
         <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">
-          Recent
+          {t('recentSessions.label')}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         {(!data || data.length === 0) && (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">No recent sessions yet.</div>
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            {t('recentSessions.empty')}
+          </div>
         )}
         {data?.map((s) => {
           const active = s.id === activeSessionId;

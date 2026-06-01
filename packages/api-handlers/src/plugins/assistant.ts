@@ -63,9 +63,9 @@ export function listAssistantModels(store: ModelStore): PluginModelOption[] {
   return out;
 }
 
-function guardrail(pluginName: string, tools: ToolDecl[]): string {
+function guardrail(pluginName: string, tools: ToolDecl[], guidance: string[]): string {
   const names = tools.map((t) => t.name).join(', ');
-  return [
+  const base = [
     `You are the ${pluginName} assistant, scoped STRICTLY to ${pluginName}.`,
     `You may ONLY use these tools: ${names}.`,
     `If a request needs anything outside ${pluginName} — other clouds, the local`,
@@ -73,6 +73,16 @@ function guardrail(pluginName: string, tools: ToolDecl[]): string {
     `are limited to ${pluginName}. Never invent tools. Prefer a read/list tool to`,
     `inspect state before a mutating one. Be concise.`,
   ].join(' ');
+  // Plugin-declared persona (interface.assistantGuidance). Appended AFTER the
+  // safety guardrail so domain advice can't relax the tool/scope limits.
+  return guidance.length ? `${base}\n\n${guidance.join(' ')}` : base;
+}
+
+/** Read `interface.assistantGuidance` from a stored plugin manifest, defensively. */
+function manifestGuidance(manifest: unknown): string[] {
+  const iface = (manifest as { interface?: { assistantGuidance?: unknown } } | null)?.interface;
+  const lines = iface?.assistantGuidance;
+  return Array.isArray(lines) ? lines.filter((x): x is string => typeof x === 'string') : [];
 }
 
 export interface AssistantRunInput {
@@ -132,7 +142,7 @@ export async function* runPluginAssistant(
   // MiniDelta is structurally identical to PluginAssistantChunk.
   yield* runMiniAgent({
     provider,
-    system: guardrail(plugin.name, decls),
+    system: guardrail(plugin.name, decls, manifestGuidance(plugin.manifest)),
     tools,
     messages,
     signal: input.signal,

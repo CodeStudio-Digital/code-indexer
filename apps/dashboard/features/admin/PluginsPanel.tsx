@@ -6,6 +6,7 @@
  * change so rail icons / palette themes update live.
  */
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { RefreshCw, Trash2, Download, Search as SearchIcon } from 'lucide-react';
 import { apiCall } from '../../lib/api-client.js';
 import { hydrateContributions } from '../../state/contribution-registry.js';
@@ -15,18 +16,27 @@ type Tab = 'installed' | 'market';
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** Human-readable summary of a plugin's granted capabilities (install == consent). */
-function summarizePermissions(p: PluginPermissionsShape | null): string[] {
+function summarizePermissions(
+  p: PluginPermissionsShape | null,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string[] {
   if (!p) return [];
   const out: string[] = [];
   const reads = p.fs?.read?.length ?? 0;
   const writes = p.fs?.write?.length ?? 0;
-  if (reads || writes) out.push(`fs: ${reads} read${writes ? `, ${writes} write` : ''}`);
+  if (reads || writes) {
+    out.push(t('panel.fsPermission', {
+      reads,
+      writesText: writes ? t('panel.fsWrites', { writes }) : '',
+    }));
+  }
   if (p.exec?.allow?.length) out.push(`exec: ${p.exec.allow.join(', ')}`);
-  if (p.storage) out.push('storage');
+  if (p.storage) out.push(t('panel.storage'));
   return out;
 }
 
 export function PluginsPanel() {
+  const { t } = useTranslation('plugins');
   const [tab, setTab] = useState<Tab>('installed');
   const [installed, setInstalled] = useState<InstalledPluginInfo[]>([]);
   const [results, setResults] = useState<MarketPluginInfo[]>([]);
@@ -90,18 +100,18 @@ export function PluginsPanel() {
   return (
     <div className="space-y-4 text-sm">
       <div className="flex items-center gap-2">
-        {(['installed', 'market'] as const).map((t) => (
+        {(['installed', 'market'] as const).map((tabId) => (
           <button
-            key={t}
-            onClick={() => setTab(t)}
+            key={tabId}
+            onClick={() => setTab(tabId)}
             className={`rounded-md px-3 py-1.5 text-xs font-medium capitalize ${
-              tab === t ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'
+              tab === tabId ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            {t}
+            {tabId === 'installed' ? t('panel.tabs.installed') : t('panel.tabs.market')}
           </button>
         ))}
-        <button onClick={() => void run(async () => undefined)} title="Refresh" className="ml-auto text-muted-foreground hover:text-foreground">
+        <button onClick={() => void run(async () => undefined)} title={t('panel.refresh')} className="ml-auto text-muted-foreground hover:text-foreground">
           <RefreshCw className="h-4 w-4" />
         </button>
       </div>
@@ -115,15 +125,15 @@ export function PluginsPanel() {
               value={source}
               onChange={(e) => setSource(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && installFrom()}
-              placeholder="Install from a folder path or owner/repo"
+              placeholder={t('panel.installSourcePlaceholder')}
               className={input}
             />
             <button onClick={installFrom} disabled={busy} className="rounded-md bg-primary px-3 py-1.5 text-xs text-white disabled:opacity-50">
-              Install
+              {t('panel.install')}
             </button>
           </div>
           {installed.length === 0 ? (
-            <div className="rounded-md border p-6 text-center text-xs text-muted-foreground">No plugins installed.</div>
+            <div className="rounded-md border p-6 text-center text-xs text-muted-foreground">{t('panel.noInstalled')}</div>
           ) : (
             <div className="grid gap-2">
               {installed.map((p) => (
@@ -133,12 +143,12 @@ export function PluginsPanel() {
                       {p.name} <span className="text-muted-foreground">v{p.version}</span>
                     </div>
                     <div className="truncate text-xs text-muted-foreground">{p.namespace} · {p.source}</div>
-                    {summarizePermissions(p.permissions).length > 0 && (
+                    {summarizePermissions(p.permissions, t).length > 0 && (
                       <div className="mt-0.5 flex flex-wrap gap-1">
-                        {summarizePermissions(p.permissions).map((cap) => (
+                        {summarizePermissions(p.permissions, t).map((cap) => (
                           <span
                             key={cap}
-                            title="Granted at install — uninstall to revoke"
+                            title={t('panel.permissionTitle')}
                             className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
                           >
                             {cap}
@@ -154,10 +164,10 @@ export function PluginsPanel() {
                       disabled={busy}
                       onChange={() => void run(() => apiCall('plugins.setEnabled', { namespace: p.namespace, enabled: !p.enabled }))}
                     />
-                    enabled
+                    {t('panel.enabled')}
                   </label>
                   <button
-                    title="Uninstall"
+                    title={t('panel.uninstall')}
                     disabled={busy}
                     onClick={() => void run(() => apiCall('plugins.uninstall', { namespace: p.namespace }))}
                     className="text-muted-foreground hover:text-status-error disabled:opacity-50"
@@ -176,7 +186,7 @@ export function PluginsPanel() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && search()}
-              placeholder="Search the market…"
+              placeholder={t('panel.marketSearchPlaceholder')}
               className={input}
             />
             <button onClick={search} disabled={busy} className="rounded-md border px-3 py-1.5 text-xs disabled:opacity-50">
@@ -185,7 +195,7 @@ export function PluginsPanel() {
           </div>
           {results.length === 0 ? (
             <div className="rounded-md border p-6 text-center text-xs text-muted-foreground">
-              No results. The hosted Market requires <code>MCP_MARKET_URL</code>.
+              {t('panel.noResults')} <code>MCP_MARKET_URL</code>.
             </div>
           ) : (
             <div className="grid gap-2">
@@ -198,12 +208,12 @@ export function PluginsPanel() {
                     <div className="truncate text-xs text-muted-foreground">{r.description ?? r.name} · ↓{r.downloads}</div>
                   </div>
                   <button
-                    title="Install"
+                    title={t('panel.install')}
                     disabled={busy}
                     onClick={() => void run(() => apiCall('plugins.install', { source: { source: 'market', name: r.name } }))}
                     className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-xs text-white disabled:opacity-50"
                   >
-                    <Download className="h-3.5 w-3.5" /> Install
+                    <Download className="h-3.5 w-3.5" /> {t('panel.install')}
                   </button>
                 </div>
               ))}

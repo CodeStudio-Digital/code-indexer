@@ -80,6 +80,18 @@ export interface ProvisionRequest {
   containerPortOverride?: number;
   skipDefaultCommand?: boolean;
   /**
+   * Explicit base image to run instead of the manager's default node image.
+   * Ignored when `imageSource === 'project_dockerfile'` (that path runs the
+   * freshly-built tag). Lets a session pick a custom image from the host's
+   * local catalog (see the company image picker).
+   */
+  image?: string;
+  /**
+   * Extra raw `run` flags forwarded to the driver's `create` (see
+   * `SandboxCreateSpec.runArgs`).
+   */
+  runArgs?: string[];
+  /**
    * When true the session has at least one role with the `qa-playwright`
    * skill, so the scaffolder writes a Playwright client config + reporter
    * and the caller provisions a separate `playwright-sidecar` container.

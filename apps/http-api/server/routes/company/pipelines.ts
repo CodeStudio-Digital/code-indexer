@@ -3,6 +3,7 @@ import type { ServerDeps } from '../../deps.js';
 import { activeOrchestrators } from './stream.js';
 import { parseIdParam, parseJsonBody, notFound, resolveRootSessionId } from '../_helpers.js';
 import { validatePipelineGraph } from '@mcp/company/services/PipelineService.js';
+import { generateAiPipeline } from '@mcp/api-handlers';
 import type {
   PipelineGraph,
   PipelineExecutionStatus,
@@ -120,6 +121,23 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     const ok = companyStore.deletePipeline(id);
     if (!ok) return notFound(c, 'Pipeline not found');
     return c.json({ ok: true });
+  });
+
+  app.post('/api/company/pipelines/generate', async (c) => {
+    const body = await parseJsonBody<{ intent?: string; available_roles?: string[] }>(c);
+    const intent = String(body.intent ?? '').trim();
+    if (!intent) return c.json({ error: 'intent is required' }, 400);
+    const result = await generateAiPipeline(deps, intent, {
+      scope: 'company',
+      availableRoles: Array.isArray(body.available_roles) ? body.available_roles : [],
+    });
+    if (result.graph) {
+      const validation = validatePipelineGraph(result.graph, null);
+      if (!validation.ok) {
+        return c.json({ summary: result.summary, refusal: 'AI produced an invalid graph.', issues: validation.errors });
+      }
+    }
+    return c.json(result);
   });
 
   app.post('/api/company/pipelines/:id/validate', async (c) => {
@@ -247,6 +265,22 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const ok = await orchestrator.pipelineResume(execId);
       if (!ok) return c.json({ error: 'Only paused executions can be resumed.' }, 409);
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 400);
+    }
+  });
+
+  app.post('/api/company/sessions/:id/pipelines/executions/:execId/confirm', async (c) => {
+    const sessionId = parseIdParam(c);
+    const execId = parseIdParam(c, 'execId');
+    const orchestrator = activeOrchestrators.get(sessionId);
+    if (!orchestrator) {
+      return c.json({ error: 'Session is not running.' }, 409);
+    }
+    try {
+      const ok = await orchestrator.pipelineConfirm(execId);
+      if (!ok) return c.json({ error: 'Execution is not paused awaiting confirmation.' }, 409);
       return c.json({ ok: true });
     } catch (e) {
       return c.json({ error: (e as Error).message }, 400);
