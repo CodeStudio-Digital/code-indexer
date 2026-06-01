@@ -11,10 +11,21 @@ import { allTools } from './all-tools.js';
 export default definePlugin({
   permissions: {
     fs: {
-      read: ['wrangler.toml', 'wrangler.jsonc', 'wrangler.json', 'package.json'],
+      read: [
+        'wrangler.toml',
+        'wrangler.jsonc',
+        'wrangler.json',
+        'package.json',
+        // OpenNext config — read to classify the deploy model.
+        'open-next.config.ts',
+        'open-next.config.js',
+        'open-next.config.mjs',
+      ],
       write: ['wrangler.toml', 'wrangler.jsonc', 'wrangler.json'],
     },
-    exec: { allow: ['npx', 'wrangler'] },
+    // `opennextjs-cloudflare` (+ alias `open-next`) so OpenNext build/deploy/
+    // preview pass the exec allowlist; without these the host denies them.
+    exec: { allow: ['npx', 'wrangler', 'opennextjs-cloudflare', 'open-next'] },
     storage: true,
   },
   tools: allTools,
@@ -24,11 +35,18 @@ export default definePlugin({
       title: 'Cloudflare',
       side: 'bottom',
       entry: 'ui/panel.html',
-      // Auto-detect: only surface this panel in a Cloudflare project — a
-      // wrangler config at the root, or the `wrangler` dep in package.json.
+      // Auto-detect: surface this panel in any Cloudflare project — a wrangler
+      // config or OpenNext config at the root, or a CF/OpenNext dep.
       activation: {
-        whenFiles: ['wrangler.toml', 'wrangler.jsonc', 'wrangler.json'],
-        whenPackageDep: ['wrangler', '@cloudflare/workers-types'],
+        whenFiles: [
+          'wrangler.toml',
+          'wrangler.jsonc',
+          'wrangler.json',
+          'open-next.config.ts',
+          'open-next.config.js',
+          'open-next.config.mjs',
+        ],
+        whenPackageDep: ['wrangler', '@cloudflare/workers-types', '@opennextjs/cloudflare'],
       },
     }),
   ],

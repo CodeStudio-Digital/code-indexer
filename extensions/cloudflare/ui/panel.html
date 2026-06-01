@@ -267,10 +267,10 @@
     <div class="app">
       <div class="topbar">
         <div class="brand">Cloudflare</div>
-        <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">Checking project</span></div>
+        <div class="status"><span id="statusDot" class="dot"></span><span id="statusText"></span></div>
         <div class="top-spacer"></div>
-        <select id="accountSelect" class="account-select"><option>Set token in Settings</option></select>
-        <button id="refreshAccounts" class="btn sm">Refresh</button>
+        <select id="accountSelect" class="account-select"><option></option></select>
+        <button id="refreshAccounts" class="btn sm"></button>
       </div>
       <div class="shell">
         <nav id="rail" class="rail"></nav>
@@ -322,6 +322,205 @@
             'logs.login': 'Entrar', 'logs.tail': 'Tail', 'logs.stop': 'Parar', 'logs.ready': 'Pronto.', 'logs.stopped': '[parado]'
           }
         }) : function (k) { return k; };
+        var ui = (mcp.i18n && mcp.i18n.translator) ? mcp.i18n.translator({
+          en: {},
+          'pt-BR': {
+            'Checking project': 'Verificando projeto',
+            'Set token in Settings': 'Defina o token em Configuração',
+            'Refresh': 'Atualizar',
+            'Project detected': 'Projeto detectado',
+            'Not a Cloudflare project': 'Não é um projeto Cloudflare',
+            'Detection failed': 'Detecção falhou',
+            'Cloudflare tool failed': 'Ferramenta Cloudflare falhou',
+            'Data': 'Dados',
+            'Compute': 'Computação',
+            'Network': 'Rede',
+            'AI': 'IA',
+            'Tools': 'Ferramentas',
+            'Databases, tables, rows and SQL': 'Bancos, tabelas, linhas e SQL',
+            'Namespaces and keys': 'Namespaces e chaves',
+            'Buckets and text objects': 'Buckets e objetos de texto',
+            'Messages, leases, metrics and consumers': 'Mensagens, leases, métricas e consumidores',
+            'Namespaces and object IDs exposed by REST': 'Namespaces e object IDs expostos pela REST',
+            'Scripts, deployments, secrets and cron': 'Scripts, deployments, secrets e cron',
+            'Projects and deployments': 'Projetos e deployments',
+            'Zones and records': 'Zonas e registros',
+            'Indexes, vectors and metadata indexes': 'Índices, vetores e índices de metadata',
+            'AI and Hyperdrive': 'IA e Hyperdrive',
+            'Models, Hyperdrive and cache purge': 'Modelos, Hyperdrive e purge de cache',
+            'Logs': 'Logs',
+            'Wrangler login and live tail': 'Login do Wrangler e live tail',
+            'Assistant': 'Assistente',
+            'Cloudflare-scoped tool assistant': 'Assistente com escopo Cloudflare',
+            'Settings': 'Configuração',
+            'Token and account': 'Token e conta',
+            'Filter {name}': 'Filtrar {name}',
+            'Reload': 'Recarregar',
+            'Create': 'Criar',
+            'Loading...': 'Carregando...',
+            'Nothing selected.': 'Nada selecionado.',
+            'No matching resources.': 'Nenhum recurso encontrado.',
+            'Create or refresh resources from the list toolbar.': 'Crie ou atualize recursos pela barra da lista.',
+            'Untitled': 'Sem título',
+            'No rows.': 'Nenhuma linha.',
+            'Actions': 'Ações',
+            'Cancel': 'Cancelar',
+            'Run': 'Executar',
+            'Save': 'Salvar',
+            'OK': 'OK',
+            'Create D1 database': 'Criar banco D1',
+            'Database name': 'Nome do banco',
+            'Export': 'Exportar',
+            'Bookmark': 'Bookmark',
+            'Restore': 'Restaurar',
+            'Restore D1 database': 'Restaurar banco D1',
+            'Restore database': 'Restaurar banco',
+            'Delete': 'Excluir',
+            'Delete D1 database': 'Excluir banco D1',
+            'Tables': 'Tabelas',
+            'Loading tables...': 'Carregando tabelas...',
+            'Rows': 'Linhas',
+            'Schema': 'Schema',
+            'Back to tables': 'Voltar para tabelas',
+            'Insert row': 'Inserir linha',
+            'Insert row into {name}': 'Inserir linha em {name}',
+            'Row JSON object': 'Objeto JSON da linha',
+            'Prev': 'Anterior',
+            'Next': 'Próxima',
+            'Loading rows...': 'Carregando linhas...',
+            'Edit': 'Editar',
+            'Update row {id}': 'Atualizar linha {id}',
+            'Patch JSON object': 'Objeto JSON de patch',
+            'Delete row': 'Excluir linha',
+            'Run read': 'Executar leitura',
+            'Run write': 'Executar escrita',
+            'Run mutating SQL': 'Executar SQL mutante',
+            'Running SQL...': 'Executando SQL...',
+            'Create KV namespace': 'Criar namespace KV',
+            'Namespace name': 'Nome do namespace',
+            'Put key': 'Gravar chave',
+            'Rename': 'Renomear',
+            'Delete namespace': 'Excluir namespace',
+            'Delete KV namespace': 'Excluir namespace KV',
+            'Key prefix': 'Prefixo da chave',
+            'Load keys': 'Carregar chaves',
+            'Rename KV namespace': 'Renomear namespace KV',
+            'New name': 'Novo nome',
+            'Put KV key': 'Gravar chave KV',
+            'Key': 'Chave',
+            'Value': 'Valor',
+            'TTL seconds (optional)': 'TTL em segundos (opcional)',
+            'Loading keys...': 'Carregando chaves...',
+            'Read': 'Ler',
+            'Delete KV key': 'Excluir chave KV',
+            'Create R2 bucket': 'Criar bucket R2',
+            'Bucket name': 'Nome do bucket',
+            'Location hint (optional)': 'Location hint (opcional)',
+            'Put object': 'Gravar objeto',
+            'Lifecycle': 'Lifecycle',
+            'Delete bucket': 'Excluir bucket',
+            'Delete R2 bucket': 'Excluir bucket R2',
+            'Object prefix': 'Prefixo do objeto',
+            'Load objects': 'Carregar objetos',
+            'Put R2 text object': 'Gravar objeto de texto R2',
+            'Object key': 'Chave do objeto',
+            'Content type': 'Content type',
+            'Text value': 'Valor de texto',
+            'Loading objects...': 'Carregando objetos...',
+            'Delete R2 object': 'Excluir objeto R2',
+            'Create Queue': 'Criar Queue',
+            'Queue name': 'Nome da Queue',
+            'Metrics': 'Métricas',
+            'Push': 'Enviar',
+            'Pull protected': 'Pull protegido',
+            'Consumers': 'Consumers',
+            'Purge': 'Purge',
+            'Purge queue': 'Esvaziar queue',
+            'Delete queue': 'Excluir queue',
+            'Pulling messages creates leases. Ack removes a message; retry with delay 0 releases it back to the queue.': 'Fazer pull de mensagens cria leases. Ack remove uma mensagem; retry com delay 0 devolve a mensagem para a queue.',
+            'Push message': 'Enviar mensagem',
+            'Message body': 'Corpo da mensagem',
+            'Content type (optional)': 'Content type (opcional)',
+            'Delay seconds (optional)': 'Delay em segundos (opcional)',
+            'Protected pull': 'Pull protegido',
+            'Batch size': 'Tamanho do lote',
+            'Lease milliseconds': 'Lease em milissegundos',
+            'Pulling messages...': 'Fazendo pull de mensagens...',
+            'Ack': 'Ack',
+            'Ack message': 'Ack da mensagem',
+            'Retry': 'Tentar novamente',
+            'Retry or release message': 'Tentar novamente ou liberar mensagem',
+            'Loading consumers...': 'Carregando consumers...',
+            'Cloudflare REST exposes namespace and object IDs here. It does not expose Durable Object storage editing.': 'A REST da Cloudflare expõe namespace e object IDs aqui. Ela não expõe edição do storage de Durable Object.',
+            'Deploy project': 'Deploy do projeto',
+            'Run wrangler deploy': 'Executar wrangler deploy',
+            'Delete script': 'Excluir script',
+            'Delete Worker script': 'Excluir script Worker',
+            'Deployments': 'Deployments',
+            'Secrets': 'Secrets',
+            'Cron': 'Cron',
+            'Loading deployments...': 'Carregando deployments...',
+            'Delete deployment': 'Excluir deployment',
+            'Set secret': 'Definir secret',
+            'Set Worker secret': 'Definir secret do Worker',
+            'Name': 'Nome',
+            'Delete secret': 'Excluir secret',
+            'Replace schedules': 'Substituir schedules',
+            'Schedules JSON array': 'Array JSON de schedules',
+            'Replace cron schedules': 'Substituir cron schedules',
+            'Delete project': 'Excluir projeto',
+            'Delete Pages project': 'Excluir projeto Pages',
+            'Rollback': 'Rollback',
+            'Rollback Pages deployment': 'Rollback do deployment Pages',
+            'Delete Pages deployment': 'Excluir deployment Pages',
+            'Add record': 'Adicionar registro',
+            'Scan': 'Scan',
+            'Record search': 'Buscar registro',
+            'Load records': 'Carregar registros',
+            'Create DNS record': 'Criar registro DNS',
+            'Type': 'Tipo',
+            'Content': 'Conteúdo',
+            'TTL (optional)': 'TTL (opcional)',
+            'Loading records...': 'Carregando registros...',
+            'Patch DNS record': 'Patch do registro DNS',
+            'Patch JSON': 'JSON de patch',
+            'Delete DNS record': 'Excluir registro DNS',
+            'Create Vectorize index': 'Criar índice Vectorize',
+            'Dimensions': 'Dimensões',
+            'Metric': 'Métrica',
+            'Info': 'Info',
+            'List vectors': 'Listar vetores',
+            'Query': 'Query',
+            'Delete index': 'Excluir índice',
+            'Delete Vectorize index': 'Excluir índice Vectorize',
+            'Loading vectors...': 'Carregando vetores...',
+            'Vectorize query': 'Query Vectorize',
+            'Query JSON body': 'Corpo JSON da query',
+            'AI models': 'Modelos de IA',
+            'Cache purge': 'Purge de cache',
+            'Choose AI models, Hyperdrive, or cache purge above.': 'Escolha modelos de IA, Hyperdrive ou purge de cache acima.',
+            'Workers AI models': 'Modelos Workers AI',
+            'Loading models...': 'Carregando modelos...',
+            'Create from JSON': 'Criar por JSON',
+            'Create Hyperdrive config': 'Criar config Hyperdrive',
+            'Config JSON': 'JSON da config',
+            'Delete Hyperdrive config': 'Excluir config Hyperdrive',
+            'Leave URLs empty to purge the whole zone. Use URL array for a targeted purge.': 'Deixe URLs vazio para limpar a zona inteira. Use um array de URLs para purge direcionado.',
+            'Purge zone cache': 'Limpar cache da zona',
+            'Purge cache': 'Purge de cache',
+            'Zone ID': 'Zone ID',
+            'URLs JSON array (optional)': 'Array JSON de URLs (opcional)'
+          }
+        }) : function (k) { return k; };
+        function uiText(text, vars) {
+          if (text == null) return '';
+          var s = String(text);
+          var m = /^Insert row into (.+)$/.exec(s);
+          if (m) return ui('Insert row into {name}', { name: m[1] });
+          m = /^Update row (.+)$/.exec(s);
+          if (m) return ui('Update row {id}', { id: m[1] });
+          return ui(s, vars);
+        }
         var rail = document.getElementById('rail');
         var listTitle = document.getElementById('listTitle');
         var listSub = document.getElementById('listSub');
@@ -330,6 +529,9 @@
         var detail = document.getElementById('detail');
         var modalRoot = document.getElementById('modalRoot');
         var accountSelect = document.getElementById('accountSelect');
+        document.getElementById('statusText').textContent = uiText('Checking project');
+        accountSelect.options[0].textContent = uiText('Set token in Settings');
+        document.getElementById('refreshAccounts').textContent = uiText('Refresh');
 
         var state = {
           resource: 'd1',
@@ -360,7 +562,7 @@
         function detailsOf(result) { return result && result.data && (result.data.details || result.data) || {}; }
         function call(tool, args) {
           return mcp.invokeTool(tool, args || {}).then(function (r) {
-            if (r.isError) throw new Error(r.content || 'Cloudflare tool failed');
+            if (r.isError) throw new Error(r.content || uiText('Cloudflare tool failed'));
             return r;
           });
         }
@@ -371,7 +573,7 @@
           return node;
         }
         function button(label, cls, fn) {
-          var b = el('button', 'btn ' + (cls || ''), label);
+          var b = el('button', 'btn ' + (cls || ''), uiText(label));
           b.onclick = fn;
           return b;
         }
@@ -379,7 +581,7 @@
         function clear(node) { node.innerHTML = ''; }
         function setDetail(node) { clear(detail); detail.appendChild(node); }
         function errorBox(message) { return el('div', 'error', String(message)); }
-        function emptyBox(message) { return el('div', 'empty', message || 'Nothing selected.'); }
+        function emptyBox(message) { return el('div', 'empty', uiText(message || 'Nothing selected.')); }
         function jsonPre(value) { return el('pre', null, typeof value === 'string' ? value : JSON.stringify(value || {}, null, 2)); }
         function valueText(v) {
           if (v == null) return '';
@@ -402,11 +604,11 @@
           resources.forEach(function (r) {
             if (r.group !== group) {
               group = r.group;
-              rail.appendChild(el('div', 'rail-group', group));
+              rail.appendChild(el('div', 'rail-group', uiText(group)));
             }
             var b = el('button', 'nav' + (state.resource === r.id ? ' active' : ''));
             b.appendChild(el('span', 'nav-k', r.k));
-            b.appendChild(el('span', null, r.title));
+            b.appendChild(el('span', null, uiText(r.title)));
             b.onclick = function () {
               state.resource = r.id;
               state.selectedKey = null;
@@ -427,8 +629,8 @@
           detail.classList.toggle('chat', r.id === 'assistant');
           if (r.solo) { r.detail(); return; }
 
-          listTitle.textContent = r.title;
-          listSub.textContent = r.sub;
+          listTitle.textContent = uiText(r.title);
+          listSub.textContent = uiText(r.sub);
           clear(listToolbar);
           clear(listRows);
 
@@ -439,7 +641,7 @@
           }
 
           var search = el('input', 'search');
-          search.placeholder = 'Filter ' + r.title;
+          search.placeholder = uiText('Filter {name}', { name: uiText(r.title) });
           search.value = state.filter;
           search.oninput = function () { state.filter = search.value; renderList(r); };
           listToolbar.appendChild(search);
@@ -500,7 +702,7 @@
           var wrap = el('div');
           var head = el('div', 'detail-head');
           var left = el('div');
-          left.appendChild(el('h2', 'detail-title', title || 'Untitled'));
+          left.appendChild(el('h2', 'detail-title', title || uiText('Untitled')));
           if (sub) left.appendChild(el('div', 'detail-sub', sub));
           head.appendChild(left);
           var act = el('div', 'actions');
@@ -524,7 +726,7 @@
           var t = el('table');
           var h = el('tr');
           cols.forEach(function (c) { h.appendChild(el('th', null, c)); });
-          if (actions) h.appendChild(el('th', null, 'Actions'));
+          if (actions) h.appendChild(el('th', null, uiText('Actions')));
           t.appendChild(h);
           rows.forEach(function (row) {
             var tr = el('tr');
@@ -545,20 +747,20 @@
             var backdrop = el('div', 'modal-backdrop');
             var modal = el('div', 'modal');
             var head = el('div', 'modal-head');
-            head.appendChild(el('h3', null, title));
+            head.appendChild(el('h3', null, uiText(title)));
             var body = el('form', 'modal-body');
             var inputs = {};
             fields.forEach(function (f) {
               var label = el('label', 'field');
-              label.appendChild(el('span', null, f.label));
+              label.appendChild(el('span', null, uiText(f.label)));
               var input = f.type === 'textarea' ? el('textarea') : f.type === 'select' ? el('select') : el('input');
               if (f.type && f.type !== 'textarea' && f.type !== 'select') input.type = f.type;
-              if (f.placeholder) input.placeholder = f.placeholder;
+              if (f.placeholder) input.placeholder = uiText(f.placeholder);
               if (f.value != null) input.value = f.value;
               if (f.options) f.options.forEach(function (opt) {
                 var o = el('option');
                 o.value = opt.value;
-                o.textContent = opt.label;
+                o.textContent = uiText(opt.label);
                 input.appendChild(o);
               });
               label.appendChild(input);
@@ -609,10 +811,52 @@
           });
         }
 
+        // Run a sequence of `npx <cmd> <args...>` steps with LIVE output in a
+        // modal (build can take minutes). Stops the chain on a non-zero exit.
+        // `steps` is an array of arg-arrays, e.g. [['opennextjs-cloudflare','build'],['...','deploy']].
+        function streamDeploy(steps, title) {
+          confirmModal(title, steps.map(function (s) { return 'npx ' + s.join(' '); }).join('\n')).then(function (okv) {
+            if (!okv) return;
+            var backdrop = el('div', 'modal-backdrop');
+            var modal = el('div', 'modal');
+            var head = el('div', 'modal-head');
+            head.appendChild(el('h3', null, uiText(title)));
+            var body = el('div', 'modal-body');
+            var out = el('pre', 'stream');
+            out.style.minHeight = '260px';
+            out.textContent = '';
+            body.appendChild(out);
+            var foot = el('div', 'modal-foot');
+            var closeBtn = button('Stop', 'danger', function () { stop(); });
+            foot.appendChild(closeBtn);
+            modal.appendChild(head); modal.appendChild(body); modal.appendChild(foot);
+            backdrop.appendChild(modal); modalRoot.appendChild(backdrop);
+
+            var i = 0, active = null, done = false;
+            function append(s) { out.textContent += s; out.scrollTop = out.scrollHeight; }
+            function stop() {
+              if (active) { active(); active = null; }
+              if (!done) { done = true; closeBtn.textContent = uiText('logs.close') === 'logs.close' ? 'Close' : uiText('logs.close'); closeBtn.className = 'btn'; }
+              closeBtn.onclick = function () { modalRoot.innerHTML = ''; };
+            }
+            function next() {
+              if (i >= steps.length) { append('\n[done]\n'); stop(); return; }
+              var args = steps[i++];
+              append((i > 1 ? '\n' : '') + '$ npx ' + args.join(' ') + '\n');
+              active = mcp.execStream('npx', args, {
+                onData: function (c) { if (c && c.type === 'data') append(c.data); },
+                onEnd: function () { active = null; next(); },
+                onError: function (m) { append('\n[error] ' + m + '\n'); active = null; stop(); }
+              });
+            }
+            next();
+          });
+        }
+
         function tabs(items, active, onPick) {
           var node = el('div', 'tabs');
           items.forEach(function (it) {
-            var b = el('button', 'tab' + (it.id === active ? ' active' : ''), it.label);
+            var b = el('button', 'tab' + (it.id === active ? ' active' : ''), uiText(it.label));
             b.onclick = function () { onPick(it.id); };
             node.appendChild(b);
           });
@@ -733,7 +977,7 @@
             button('Delete namespace', 'danger sm', function () { mutate('cf_kv_delete', { namespaceId: ns.id }, function () { state.rows.kv = null; state.selectedKey = null; render(); }, 'Delete KV namespace'); })
           ]);
           var tools = el('div', 'toolbar tight');
-          var prefix = el('input'); prefix.placeholder = 'Key prefix'; prefix.style.flex = '1';
+          var prefix = el('input'); prefix.placeholder = uiText('Key prefix'); prefix.style.flex = '1';
           tools.appendChild(prefix);
           tools.appendChild(button('Load keys', 'sm', load));
           wrap.appendChild(tools);
@@ -785,7 +1029,7 @@
             button('Delete bucket', 'danger sm', function () { mutate('cf_r2_delete', { name: bucket.name }, function () { state.rows.r2 = null; state.selectedKey = null; render(); }, 'Delete R2 bucket'); })
           ]);
           var tools = el('div', 'toolbar tight');
-          var prefix = el('input'); prefix.placeholder = 'Object prefix'; prefix.style.flex = '1';
+          var prefix = el('input'); prefix.placeholder = uiText('Object prefix'); prefix.style.flex = '1';
           tools.appendChild(prefix);
           tools.appendChild(button('Load objects', 'sm', load));
           wrap.appendChild(tools);
@@ -837,7 +1081,7 @@
             button('Purge', 'danger sm', function () { mutate('cf_queue_purge', { queueId: id }, null, 'Purge queue'); }),
             button('Delete queue', 'danger sm', function () { mutate('cf_queue_delete', { queueId: id }, function () { state.rows.queues = null; state.selectedKey = null; render(); }, 'Delete queue'); })
           ]);
-          wrap.appendChild(el('div', 'notice', 'Pulling messages creates leases. Ack removes a message; retry with delay 0 releases it back to the queue.'));
+          wrap.appendChild(el('div', 'notice', uiText('Pulling messages creates leases. Ack removes a message; retry with delay 0 releases it back to the queue.')));
           var grid = el('div');
           wrap.appendChild(grid);
           setDetail(wrap);
@@ -884,7 +1128,7 @@
 
         function detailDO(ns) {
           var wrap = detailShell(ns.name, ns.id, []);
-          wrap.appendChild(el('div', 'notice', 'Cloudflare REST exposes namespace and object IDs here. It does not expose Durable Object storage editing.'));
+          wrap.appendChild(el('div', 'notice', uiText('Cloudflare REST exposes namespace and object IDs here. It does not expose Durable Object storage editing.')));
           var grid = el('div');
           wrap.appendChild(grid);
           setDetail(wrap);
@@ -895,10 +1139,19 @@
         function detailWorker(w) {
           var script = w.id || w.name || w.script_name;
           var tab = 'deployments';
-          var wrap = detailShell(script, w.modified_on || '', [
-            button('Deploy project', 'primary sm', function () { mutate('cf_deploy', {}, null, 'Run wrangler deploy'); }),
-            button('Delete script', 'danger sm', function () { mutate('cf_worker_delete', { script: script }, function () { state.rows.workers = null; state.selectedKey = null; render(); }, 'Delete Worker script'); })
-          ]);
+          var on = state.deployKind === 'opennext';
+          var headActions = [
+            button(on ? 'Build + Deploy' : 'Deploy project', 'primary sm', function () {
+              streamDeploy(on
+                ? [['opennextjs-cloudflare', 'build'], ['opennextjs-cloudflare', 'deploy']]
+                : [['wrangler', 'deploy']], on ? 'Build + Deploy (OpenNext)' : 'wrangler deploy');
+            })
+          ];
+          if (on) headActions.push(button('Preview', 'sm', function () {
+            streamDeploy([['opennextjs-cloudflare', 'build'], ['opennextjs-cloudflare', 'preview']], 'Build + Preview (OpenNext)');
+          }));
+          headActions.push(button('Delete script', 'danger sm', function () { mutate('cf_worker_delete', { script: script }, function () { state.rows.workers = null; state.selectedKey = null; render(); }, 'Delete Worker script'); }));
+          var wrap = detailShell(script, (on ? 'Next.js · OpenNext' : 'Worker') + (w.modified_on ? ' · ' + w.modified_on : ''), headActions);
           var body = el('div');
           wrap.appendChild(tabs([
             { id: 'deployments', label: 'Deployments' },
@@ -983,7 +1236,7 @@
             button('Scan', 'sm', function () { mutate('cf_dns_scan_trigger', { zoneId: zone.id }); })
           ]);
           var tools = el('div', 'toolbar tight');
-          var search = el('input'); search.placeholder = 'Record search'; search.style.flex = '1';
+          var search = el('input'); search.placeholder = uiText('Record search'); search.style.flex = '1';
           tools.appendChild(search);
           tools.appendChild(button('Load records', 'sm', load));
           wrap.appendChild(tools);
@@ -1071,7 +1324,7 @@
 
         function detailMore() {
           var mode = state.selectedKey || 'ai';
-          var wrap = detailShell(mode === 'ai' ? 'Workers AI models' : mode === 'hyperdrive' ? 'Hyperdrive' : 'Cache purge', '', []);
+          var wrap = detailShell(uiText(mode === 'ai' ? 'Workers AI models' : mode === 'hyperdrive' ? 'Hyperdrive' : 'Cache purge'), '', []);
           var body = el('div');
           wrap.appendChild(body);
           setDetail(wrap);
@@ -1094,7 +1347,7 @@
               });
             }).catch(function (e) { grid.appendChild(errorBox(e.message || e)); });
           } else {
-            body.appendChild(el('div', 'notice', 'Leave URLs empty to purge the whole zone. Use URL array for a targeted purge.'));
+            body.appendChild(el('div', 'notice', uiText('Leave URLs empty to purge the whole zone. Use URL array for a targeted purge.')));
             body.appendChild(button('Purge zone cache', 'danger', function () {
               fieldsModal('Purge cache', [
                 { name: 'zoneId', label: 'Zone ID' },
@@ -1241,12 +1494,18 @@
 
         function refreshHeader() {
           call('cf_detect').then(function (r) {
+            var d = detailsOf(r) || {};
             var ok = !/Not a Cloudflare/.test(r.content);
+            state.deployKind = d.deployKind || null;
             document.getElementById('statusDot').className = 'dot ' + (ok ? 'ok' : 'no');
-            document.getElementById('statusText').textContent = ok ? 'Project detected' : 'Not a Cloudflare project';
+            var label = !ok ? uiText('Not a Cloudflare project')
+              : d.deployKind === 'opennext' ? 'Next.js · OpenNext'
+              : d.deployKind === 'pages' ? uiText('Project detected') + ' · Pages'
+              : uiText('Project detected');
+            document.getElementById('statusText').textContent = label;
           }).catch(function () {
             document.getElementById('statusDot').className = 'dot no';
-            document.getElementById('statusText').textContent = 'Detection failed';
+            document.getElementById('statusText').textContent = uiText('Detection failed');
           });
           call('cf_whoami').then(function (r) {
             accountSelect.innerHTML = '';
@@ -1258,7 +1517,7 @@
               accountSelect.appendChild(o);
             });
           }).catch(function () {
-            accountSelect.innerHTML = '<option value="">Set token in Settings</option>';
+            accountSelect.innerHTML = '<option value="">' + uiText('Set token in Settings') + '</option>';
           });
         }
 
