@@ -119,6 +119,17 @@ export function wireSupervisorToRunner(
 
   on('tool_progress', () => { supervisor.heartbeat(agentRunId); });
 
+  // Insistent-loop enforcement — the runner injected a break-the-loop
+  // reminder after refusing the same tool+args across planning cycles.
+  // Record it (dashboard incident + abort backstop). Other intervention
+  // kinds (dup-call-cap, failure-streak, …) are handled by their own guards.
+  on('tool_loop_intervention', (...args: unknown[]) => {
+    const payload = args[0] as { kind?: string; toolName?: string } | undefined;
+    if (payload?.kind === 'loop-enforced') {
+      supervisor.recordLoopEnforced(agentRunId, payload.toolName ?? 'unknown');
+    }
+  });
+
   on('tool_call_result', (...args: unknown[]) => {
     // Signature: emit('tool_call_result', toolUseId, result, ...)
     const toolUseId = typeof args[0] === 'string' ? args[0] : null;

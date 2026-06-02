@@ -16,6 +16,7 @@ import { FilesTab as BuilderFilesTab } from '../../../builder/preview/files/File
 import { GitTab as BuilderGitTab } from '../../../builder/preview/git/GitTab.js';
 import { CompanyApiReferenceTab } from '../../CompanyApiReferenceTab.js';
 import { CompanyTerminalPanel } from '../../terminal/CompanyTerminalPanel.js';
+import { RunnersTab as BuilderRunnersTab } from './RunnersTab.js';
 import { useSessionProjects } from '../../../builder/preview/useSessionProjects.js';
 import { useSandboxStatus } from '../../../builder/useSandboxStatus.js';
 import type { BuildTab } from '../types.js';
@@ -58,6 +59,9 @@ export function BuildZone({ sessionId, tab }: BuildZoneProps) {
   }
   if (tab === 'files') {
     return <BuilderFilesTab sessionId={sessionId} projects={projects} />;
+  }
+  if (tab === 'runners') {
+    return <BuilderRunnersTab sessionId={sessionId} projects={projects} />;
   }
   return <BuilderGitTab sessionId={sessionId} projects={projects} />;
 }

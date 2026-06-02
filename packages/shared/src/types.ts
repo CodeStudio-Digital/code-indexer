@@ -62,6 +62,8 @@ export interface Project {
   search_mode: SearchMode;
   /** Chosen Node runtime id (e.g. 'managed:20.11.0'); null = system default. */
   node_version: string | null;
+  /** Shell id the runner launches commands with (e.g. 'git-bash'); null = system default. */
+  runner_shell: string | null;
   created_at: string;
   updated_at: string;
   last_indexed: string | null;

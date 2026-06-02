@@ -7,6 +7,7 @@ import type {
 } from '@mcp/shared/types.js';
 import { Database, type DB, type PathAlias } from './db/types.js';
 import { initSchema } from './db/schema/index.js';
+import { repairCodeFtsIndexes } from './db/schema/fts.js';
 import * as projects from './db/projects.js';
 import * as files from './db/files.js';
 import * as symbols from './db/symbols.js';
@@ -52,6 +53,10 @@ export class CodeIndexDB {
   listProjects(): Project[] { return projects.list(this.db); }
   updateProject(id: number, updates: Parameters<typeof projects.update>[2]): void { projects.update(this.db, id, updates); }
   deleteProject(id: number): void { projects.del(this.db, id); }
+  /** Wipe a project's data (index/sessions/snapshots/runs/costs) but KEEP its row. */
+  clearProjectData(id: number): void { projects.clearData(this.db, id); }
+  /** Rebuild the code FTS5 indexes from the base tables — recovers SQLITE_CORRUPT_VTAB. */
+  repairFtsIndexes(): void { repairCodeFtsIndexes(this.db); }
   resolveProject(name?: string, rootPath?: string): Project { return projects.resolve(this.db, name, rootPath); }
 
   // ─── Files ──────────────────────────────────────────────────────

@@ -439,6 +439,24 @@ export interface RunnerEvents {
          * in the dashboard's counts. When `severity: 'informational'`
          * the runner did NOT block the call; when `'refused'`, it did.
          */
+        kind: 'loop-enforced';
+        turn: number;
+        toolName: string;
+        /**
+         * Cross-cycle hard-refusal count for this exact tool+args. Counts
+         * refusals that survive the per-Planning dedup reset, so it only
+         * fires for genuinely insistent loops (e.g. ≥2 refused cycles).
+         */
+        count: number;
+        /**
+         * `'enforced'` — the runner injected a strong <system-reminder>
+         * (available tools + "break out of the loop"). The supervisor
+         * records a `loop_enforced` incident and may escalate.
+         */
+        severity: 'enforced';
+        reason: string;
+      }
+    | {
         kind: 'dup-result-marker';
         severity: 'informational' | 'refused';
         /** Three-tier escalation indicator — drives dashboard render. */

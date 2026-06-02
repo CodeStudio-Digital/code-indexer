@@ -19,6 +19,9 @@ export async function deleteAndCleanup(
   vectorStore: VectorStore | null,
   collectVectorRefs: () => Array<{ vector_id: string; provider: string }>,
   runSqliteDelete: () => void,
+  /** Doc collection namespace — required for backends with namespace-scoped
+   *  ids (Pinecone); ignored by id-keyed backends. */
+  namespace?: string,
 ): Promise<DeleteResult> {
   const refs = collectVectorRefs();
   runSqliteDelete();
@@ -29,7 +32,7 @@ export async function deleteAndCleanup(
 
   const ids = refs.map((r) => r.vector_id);
   try {
-    const removed = await vectorStore.deleteByIds(ids);
+    const removed = await vectorStore.deleteByIds(ids, namespace);
     if (removed >= ids.length) {
       console.log(`[doc-indexer] vector cleanup: removed ${removed}/${ids.length} vector(s) remotely`);
       return { remote_deleted: removed, queued_for_retry: 0 };

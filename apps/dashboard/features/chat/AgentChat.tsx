@@ -1003,21 +1003,6 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 selectedPipelineId={selectedPipelineId}
                 setSelectedPipelineId={setSelectedPipelineId}
                 onRunPipeline={handleRunPipeline}
-                onInvokeSkill={async (skillId, input) => {
-                  if (!selectedId) return;
-                  try {
-                    const r = await fetch(`/api/coder/sessions/${selectedId}/invoke-skill`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ skill_id: skillId, input }),
-                    });
-                    const data = (await r.json()) as { message: string; skill_name: string };
-                    handleSend(data.message, []);
-                  } catch {
-                    // Fallback: send as regular message
-                    handleSend(`/${skillId} ${input}`.trim(), []);
-                  }
-                }}
               />
             </main>
           )}

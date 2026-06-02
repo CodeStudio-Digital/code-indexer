@@ -46,6 +46,15 @@ import {
   type SupervisionPersistence,
 } from '../../../packages/company/src/services/supervisor/index.js';
 import { subordinateCompletionBus } from '../../../packages/company/src/services/subordinate/completion-events.js';
+import {
+  setGlobalDocSearch,
+  type DocSearchBackend,
+} from '../../../packages/code-agent/src/tools/rag-search-docs.js';
+import {
+  setGlobalDocsResearcher,
+  type DocsResearchBridge,
+} from '../../../packages/docs-agent/src/bridges/docs-bridge.js';
+import type { DocsResearchResult } from '../../../packages/docs-agent/src/types.js';
 import { subscribe, publish, markEnded, type CoderRunBus } from '../coder-bus.js';
 
 interface CompanyWorkerData {
@@ -85,6 +94,40 @@ const bridge = new MessageBridge({
     console.warn(`[company-worker ${companySessionId}] listener error in ${context}:`, err);
   },
 });
+
+// ─── Doc-corpus shim: route to the main process via RPC ──────────────
+// `worker_threads` don't share module state, so the `setGlobalDocSearch`
+// + `setGlobalDocsResearcher` singletons populated in server.ts on the
+// main thread are NULL here. Without this shim, `rag_search_docs` from a
+// subordinate runner inside THIS worker errors with "doc corpus backend
+// is not wired into this process". We install a thin proxy that forwards
+// every `search` / `runResearch` call back to the main thread via
+// `bridge.request`; the corresponding handlers live in
+// `apps/http-api/sse/WorkerOrchestratorPool.ts`. The actual
+// `DocHybridSearch` + `DocsResearchBridge` instances live ONCE in the
+// main process — zero duplication. Mirrors the coder-worker wiring.
+//
+// NOTE: `docs_deep_research` additionally needs a per-runner
+// `installDocsDeepResearch(runner)` call (it's not a always-registered
+// bootstrap tool like `rag_search_docs`). That lives in the company
+// runner path (spawn.ts / start.ts) and is a separate follow-up — until
+// then this singleton is wired but the tool won't surface for
+// subordinates. `rag_search_docs` works the moment this shim is set.
+const docSearchShim: DocSearchBackend = {
+  search: async (input) =>
+    bridge.request<Awaited<ReturnType<DocSearchBackend['search']>>>(
+      'docSearch',
+      input,
+      { timeoutMs: 60_000 },
+    ),
+};
+setGlobalDocSearch(docSearchShim);
+
+const docsResearcherShim = {
+  runResearch: (input: Parameters<DocsResearchBridge['runResearch']>[0]): Promise<DocsResearchResult> =>
+    bridge.request<DocsResearchResult>('docsResearch', input, { timeoutMs: 10 * 60_000 }),
+} as unknown as DocsResearchBridge;
+setGlobalDocsResearcher(docsResearcherShim);
 
 // Build the stores. Both wrap better-sqlite3 internally — we let
 // them open their own handles to keep the construction unchanged.

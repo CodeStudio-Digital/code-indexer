@@ -82,6 +82,34 @@ export async function pruneQuality(cutoff?: string): Promise<{ deleted: number; 
   return (await r.json()) as { deleted: number; cutoff: string };
 }
 
+/** Wipe ALL quality rows (classifications + interventions). */
+export async function clearAllQuality(): Promise<{ deleted: number }> {
+  const r = await fetch('/api/admin/quality/prune', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ all: true }),
+  });
+  return (await r.json()) as { deleted: number };
+}
+
+/** Read whether the per-turn quality classifiers are currently running. */
+export async function fetchQualityEnabled(): Promise<boolean> {
+  const r = await fetch('/api/admin/quality/enabled');
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return ((await r.json()) as { enabled: boolean }).enabled;
+}
+
+/** Turn the per-turn quality classifiers on/off at runtime (no restart). */
+export async function setQualityEnabled(enabled: boolean): Promise<boolean> {
+  const r = await fetch('/api/admin/quality/enabled', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return ((await r.json()) as { enabled: boolean }).enabled;
+}
+
 export async function fetchCounterfactuals(opts: {
   pipelineName?: string;
   shadowVariant?: string;

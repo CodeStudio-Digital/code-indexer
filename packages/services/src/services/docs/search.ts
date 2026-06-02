@@ -20,10 +20,7 @@ import type { ResolveContext } from '../../pipelines/index.js';
 import type { QueryRewriter } from './query-rewriter.js';
 import type { DocReranker, RerankCandidate } from './reranker.js';
 import { applyThreshold, type RelevanceSource } from './relevance-policy.js';
-
-/** Metadata filter values stored on the vector store side. */
-const VECTOR_FILTER_CORPUS = 'docs';
-const VECTOR_FILTER_TYPE = 'doc_chunk';
+import { docNamespace } from '@mcp/shared/vector-namespace.js';
 
 /** Default top-K expanded for rerank — gives the reranker headroom. */
 const DEFAULT_RERANK_TOP_K = 20;
@@ -161,7 +158,6 @@ export class DocHybridSearch {
 
     // Resolve collection filter (name → id).
     let collectionId: number | undefined;
-    let collectionName: string | undefined;
     if (input.collection) {
       const found = this.collectionLookup(input.collection);
       if (found == null) {
@@ -179,7 +175,6 @@ export class DocHybridSearch {
         };
       }
       collectionId = found;
-      collectionName = input.collection;
     }
 
     const forcedMode = input.mode;
@@ -210,7 +205,7 @@ export class DocHybridSearch {
       queries.map(async (q) => {
         const [fts, vec] = await Promise.all([
           useFts ? this.runFts(q, collectionId, ftsBudget) : Promise.resolve([] as RankedHit[]),
-          useVector ? this.runVector(q, collectionName, vectorBudget) : Promise.resolve([] as RankedHit[]),
+          useVector ? this.runVector(q, collectionId, vectorBudget) : Promise.resolve([] as RankedHit[]),
         ]);
         return { fts, vec };
       }),
@@ -345,7 +340,7 @@ export class DocHybridSearch {
     return hits.map((h) => ({ candidateId: String(h.chunk_id), score: -h.rank }));
   }
 
-  private async runVector(query: string, collectionName: string | undefined, budget: number): Promise<RankedHit[]> {
+  private async runVector(query: string, collectionId: number | undefined, budget: number): Promise<RankedHit[]> {
     if (!this.embeddingService || !this.vectorStore) return [];
     let queryVec: number[];
     try {
@@ -354,44 +349,43 @@ export class DocHybridSearch {
     } catch {
       return [];
     }
-    // We do NOT pass any metadata filter to the vector store —
-    // Cloudflare Vectorize requires `createMetadataIndex` to be called
-    // BEFORE any upsert for a metadata key to be filterable, and the
-    // common provisioning path doesn't declare ANY indexes. The result
-    // is "filter present → 0 hits, no error" (silent). The
-    // `/api/docs/vectors/diagnose` endpoint surfaced this on
-    // 2026-05-20: unfiltered returned the right top-K; ANY filter
-    // returned 0. We over-fetch and post-filter by `corpus / type /
-    // collection` in memory — cheap and correct under all provisioning
-    // shapes (declared or not).
-    //
-    // Risk: if the same Vectorize index also holds NON-doc vectors
-    // (e.g., code chunks from the regular indexer), they pollute the
-    // initial top-K. We over-fetch ~10x to leave headroom; if a non-doc
-    // candidate dominates the head, the `corpus` post-filter drops it
-    // and downstream RRF still finds doc hits via FTS.
-    const remoteTopK = Math.min(Math.max(budget * 10, 50), 500);
+
+    // Doc vectors are isolated PER COLLECTION via a namespace (docNamespace).
+    // A specific collection → one namespaced query: no foreign (code) vectors
+    // pollute the top-K, so no over-fetch and no in-memory post-filter needed.
+    // "All collections" → fan-out one namespaced query per collection and merge
+    // by score (collections are few). This replaces the old "fetch 10× and
+    // filter in memory" hack that existed only because code+docs shared a
+    // single unfiltered index.
+    if (collectionId != null) {
+      return this.searchNamespace(queryVec, docNamespace(collectionId), budget);
+    }
+    const collections = this.docStore.listCollections();
+    const perCollection = await Promise.all(
+      collections.map((c) => this.searchNamespace(queryVec, docNamespace(c.id), budget)),
+    );
+    return perCollection
+      .flat()
+      .sort((a, b) => b.score - a.score)
+      .slice(0, budget);
+  }
+
+  /** One namespaced vector query → ranked chunk hits. */
+  private async searchNamespace(queryVec: number[], namespace: string, budget: number): Promise<RankedHit[]> {
     let matches: Awaited<ReturnType<VectorStore['search']>>;
     try {
-      matches = await this.vectorStore.search(queryVec, { topK: remoteTopK });
+      matches = await this.vectorStore!.search(queryVec, { topK: budget, namespace });
     } catch {
       return [];
     }
     const hits: RankedHit[] = [];
     for (const m of matches) {
-      // Vector ids encode the chunk id; the metadata also carries it as
-      // a fallback in case we ever rotate id formats.
+      // Vector ids encode the chunk id; metadata carries it as a fallback in
+      // case the id format ever rotates.
       const chunkIdStr = m.metadata?.chunk_id ?? extractChunkIdFromVectorId(m.id);
       const chunkId = chunkIdStr ? Number(chunkIdStr) : NaN;
       if (!Number.isFinite(chunkId)) continue;
-      // Apply the corpus/type/collection filters in-memory (see comment
-      // above). Skips foreign vectors (code chunks, etc.) sharing the
-      // same Vectorize index, plus narrows to the requested collection.
-      if (m.metadata?.corpus !== VECTOR_FILTER_CORPUS) continue;
-      if (m.metadata?.type !== VECTOR_FILTER_TYPE) continue;
-      if (collectionName && m.metadata?.collection !== collectionName) continue;
       hits.push({ candidateId: String(chunkId), score: m.score });
-      if (hits.length >= budget) break;
     }
     return hits;
   }

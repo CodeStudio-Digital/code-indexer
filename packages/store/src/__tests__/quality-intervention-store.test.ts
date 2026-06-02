@@ -269,4 +269,17 @@ describe('QualityInterventionStore — pruneOlderThan', () => {
     expect(deleted).toBe(1);
     expect(h.store.get(oldId)).toBeNull();
   });
+
+  it('clearAll drops every row regardless of age', () => {
+    const id1 = h.store.insert({
+      session_id: 1, turn_fired: 1, intervention_type: 'nudge', triggering_verdicts: [snap('flagged')],
+    });
+    const id2 = h.store.insert({
+      session_id: 1, turn_fired: 2, intervention_type: 'nudge', triggering_verdicts: [snap('flagged')],
+    });
+    const deleted = h.store.clearAll();
+    expect(deleted).toBe(2);
+    expect(h.store.get(id1)).toBeNull();
+    expect(h.store.get(id2)).toBeNull();
+  });
 });

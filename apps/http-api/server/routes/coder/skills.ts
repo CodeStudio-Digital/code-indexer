@@ -1,12 +1,10 @@
 /**
  * Session-level skill routes — resolve active skills per session,
- * toggle skills on/off per session, slash command list, and skill invocation.
+ * toggle skills on/off per session, and the slash command list.
  */
 import type { Hono } from 'hono';
 import { SkillStore } from '@mcp/store/skill-store.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
-import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js';
-import type { SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseIdParam, notFound } from '../_helpers.js';
@@ -99,56 +97,6 @@ export function mountCoderSkillsRoutes(
           context_mode: s.context_mode,
         }));
       return c.json({ commands });
-    } finally {
-      store.close();
-    }
-  });
-
-  /**
-   * POST /api/coder/sessions/:id/invoke-skill — invoke a skill via slash command.
-   * Wraps the skill prompt as a user message with a skill prefix.
-   */
-  app.post('/api/coder/sessions/:id/invoke-skill', async (c) => {
-    const sessionId = parseIdParam(c);
-    if (!Number.isFinite(sessionId)) return c.json({ error: 'invalid session id' }, 400);
-
-    const session = sessionStore.getSession(sessionId);
-    if (!session) return c.json({ error: 'session not found' }, 404);
-
-    const body = await c.req.json<{ skill_id: string; input?: string }>();
-    if (!body.skill_id) return c.json({ error: 'skill_id required' }, 400);
-
-    const store = getSkillStore();
-    try {
-      const skill = store.getSkill(body.skill_id);
-      if (!skill) return c.json({ error: 'skill not found' }, 404);
-
-      // Log usage
-      store.logSkillUsage({
-        session_id: sessionId,
-        skill_id: body.skill_id,
-        invoked_by: 'user',
-        input_text: body.input,
-      });
-
-      const project = deps.db.getProject(session.project_id);
-      const templateCtx: SkillTemplateContext = {
-        SESSION_ID: String(sessionId),
-        PROJECT_NAME: project?.name ?? '',
-        PROJECT_ROOT: project?.root_path ?? '',
-        OS: process.platform,
-        TIMESTAMP: new Date().toISOString(),
-        USER_INPUT: body.input ?? '',
-      };
-      const interpolated = interpolateSkillVars(skill.prompt_body, templateCtx);
-
-      // Return the skill-wrapped message for the frontend to send via the
-      // normal stream endpoint. The frontend composes this into the user message.
-      const message = body.input
-        ? `[Skill: ${skill.name}]\n\n${interpolated}\n\nUser input: ${body.input}`
-        : `[Skill: ${skill.name}]\n\n${interpolated}`;
-
-      return c.json({ message, skill_name: skill.name });
     } finally {
       store.close();
     }

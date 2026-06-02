@@ -27,7 +27,7 @@ import { VerdaccioStore } from '@mcp/store/verdaccio-store.js';
 import { PipelineTelemetryStore } from '@mcp/store/pipeline-telemetry-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
-import { SqliteTelemetrySink } from '@mcp/candidate-pipeline/sqlite-sink.js';
+import { NoopTelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import type { TelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import {
   InMemoryToolEmbeddingStore,
@@ -477,12 +477,20 @@ export function createDeps(): ServerDeps {
   // reused below as the SearchDeps `pipelineTelemetryStore` so the
   // admin panel sees a unified view.
   const pipelineTelemetryStore = new PipelineTelemetryStore(db.raw());
-  const pipelineTelemetrySink = new SqliteTelemetrySink(pipelineTelemetryStore);
+  // Pipeline telemetry is disabled — a no-op sink drops every event so the
+  // doc_search rewriter/reranker + quality/search pipelines stop hammering
+  // `pipeline_telemetry` (the dashboard tab that read it was removed). The
+  // store is kept only so the (now dead) admin routes still typecheck.
+  const pipelineTelemetrySink = new NoopTelemetrySink();
+  // Single reranker instance shared by code search (HybridSearch) and the doc
+  // RAG cross-encoder below — a LocalReranker lazily loads a ~hundreds-of-MB
+  // ONNX model, so we must NOT construct it twice.
+  const codeReranker = createReranker(providerStore);
   const { embeddingService, vectorStore, searchableVectorStore, hybridSearch } =
     createSearchBundle(
       db,
       providerStore,
-      createReranker(providerStore),
+      codeReranker,
       recentFilesSource,
       pipelineTelemetrySink,
     );
@@ -634,23 +642,33 @@ export function createDeps(): ServerDeps {
   const docQueryRewriter = new QueryRewriter({
     resolver: pipelineProviderResolver,
     cache: subAgentResultCacheStore,
-    telemetry: pipelineTelemetryStore,
+    // telemetry disabled (pipeline_telemetry tab removed)
   });
-  // Reranker selection. Default: the LLM-as-judge `Reranker` (GLM via the
-  // doc_search/reranker binding). Set DOCS_RERANK_CROSS_ENCODER=1 to use a
-  // real cross-encoder (bge-reranker-v2-m3) over the worker /rerank instead
-  // — its native score is better-calibrated and feeds DocSearchResult
-  // .relevance directly. Reuses the indexer's reranker client/config; with
-  // none configured it degrades to uncalibrated (no false confidence).
+  // Reranker selection. A real cross-encoder (local ONNX, Cohere, or the
+  // bge-reranker-v2-m3 worker) emits a NATIVE relevance score that's
+  // better-calibrated than the LLM-as-judge `Reranker` and feeds
+  // DocSearchResult.relevance directly. Since the desktop install now seeds a
+  // LOCAL cross-encoder by default (offline, free), prefer it automatically
+  // whenever one is configured — no env flag needed.
+  //   DOCS_RERANK_CROSS_ENCODER=1 → force the cross-encoder.
+  //   DOCS_RERANK_CROSS_ENCODER=0 → force the LLM-as-judge fallback.
+  // With no reranker configured (NullReranker), fall back to the LLM judge
+  // rather than trusting uncalibrated RRF order.
   const docLlmReranker = new Reranker({
     resolver: pipelineProviderResolver,
     db: db.raw(),
-    telemetry: pipelineTelemetryStore,
+    // telemetry disabled (pipeline_telemetry tab removed)
   });
-  const docReranker =
-    process.env.DOCS_RERANK_CROSS_ENCODER === '1'
-      ? new CrossEncoderReranker(createReranker(providerStore))
-      : docLlmReranker;
+  // `codeReranker` is the single shared instance created above (before
+  // createSearchBundle) — reused here so the ONNX model loads at most once.
+  const crossEncoderFlag = process.env.DOCS_RERANK_CROSS_ENCODER;
+  const useCrossEncoder =
+    crossEncoderFlag === '0'
+      ? false
+      : crossEncoderFlag === '1' || codeReranker.name !== 'null';
+  const docReranker = useCrossEncoder
+    ? new CrossEncoderReranker(codeReranker)
+    : docLlmReranker;
   const docHybridSearch = new DocHybridSearch(
     docStore,
     embeddingService,

@@ -114,7 +114,7 @@ export class PtyManager {
     const pty = loadPty();
     const shell = opts.shell ?? defaultShell();
     const { file, args } = opts.command
-      ? commandInvocation(shell, opts.command)
+      ? commandInvocation(shell, opts.shellArgs, opts.command)
       : { file: shell, args: opts.shellArgs ?? defaultShellArgs(shell) };
     // Build a CLEAN env for the user's process — strip the dev-only
     // vars our parent process sets (NODE_OPTIONS injects tsx/esm,
@@ -260,16 +260,34 @@ export function defaultShellArgs(shell: string): string[] {
  * Build the `{file, args}` that runs a single command string to completion
  * inside `shell`, so the PTY exits (with the command's code) when the
  * command finishes — giving the runner a clear running→exited transition.
+ *
+ * Dispatches on the shell's basename (not the host platform) so the runner
+ * honours a per-project shell choice — Git Bash on Windows runs `-lc`, a
+ * WSL distro runs the command inside that distro, etc. `shellArgs` carries
+ * the interactive launch args (e.g. WSL's `-d <distro>`) so we can prefix
+ * them before the command.
  */
-function commandInvocation(shell: string, command: string): { file: string; args: string[] } {
-  if (process.platform === 'win32') {
-    if (/powershell\.exe$/i.test(shell) || /pwsh(\.exe)?$/i.test(shell)) {
-      return { file: shell, args: ['-NoLogo', '-NoProfile', '-Command', command] };
-    }
-    // cmd.exe — /d skip AutoRun, /s preserve quotes, /c run-and-exit.
+function commandInvocation(
+  shell: string,
+  shellArgs: string[] | undefined,
+  command: string,
+): { file: string; args: string[] } {
+  const base = shell.toLowerCase();
+  // PowerShell / PowerShell 7.
+  if (/(powershell|pwsh)(\.exe)?$/.test(base)) {
+    return { file: shell, args: ['-NoLogo', '-NoProfile', '-Command', command] };
+  }
+  // cmd.exe — /d skip AutoRun, /s preserve quotes, /c run-and-exit.
+  if (/cmd(\.exe)?$/.test(base)) {
     return { file: shell, args: ['/d', '/s', '/c', command] };
   }
-  // POSIX shells — login shell so the user's PATH/nvm/etc. are present.
+  // WSL — run inside the selected distro's shell. `--` ends wsl's own
+  // options; we invoke bash -lc so PATH/profile are loaded.
+  if (/wsl(\.exe)?$/.test(base)) {
+    return { file: shell, args: [...(shellArgs ?? []), '--', 'bash', '-lc', command] };
+  }
+  // POSIX-style shells (bash/zsh/sh/dash, incl. Git Bash on Windows) —
+  // login shell so the user's PATH/nvm/etc. are present.
   return { file: shell, args: ['-lc', command] };
 }
 

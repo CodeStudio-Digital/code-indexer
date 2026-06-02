@@ -125,7 +125,7 @@ export interface VectorStoreConfigRow {
  * embedding/vector kinds because a user can embed locally yet rerank via a
  * Cloudflare Worker, or use Cohere independently of either.
  */
-export type RerankerKind = 'cloudflare' | 'cohere' | 'null';
+export type RerankerKind = 'local' | 'cloudflare' | 'cohere' | 'null';
 
 export interface RerankerConfigRow {
   id: string;

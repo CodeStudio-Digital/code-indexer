@@ -73,7 +73,6 @@ interface ComposerProps {
   unrestrictedOutput?: boolean;
   setUnrestrictedOutput?: (v: boolean) => void;
   sessionId?: number | null;
-  onInvokeSkill?: (skillId: string, input: string) => void;
   /** Thinking mode toggle — only shown when provider supports it. */
   thinking?: boolean;
   setThinking?: (v: boolean) => void;
@@ -211,18 +210,21 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
         return;
       }
 
-      // Intercept slash commands: /command args → invoke skill
-      if (text.startsWith('/') && props.onInvokeSkill && props.sessionId) {
+      // Intercept slash commands: /command args → attach the skill instead of
+      // inlining its expanded prompt. The typed `/command args` stays visible
+      // as the user message; the skill body is injected as <active_skills> by
+      // the runner each turn (same path as a manual skill pick).
+      if (text.startsWith('/') && props.sessionId) {
         const spaceIdx = text.indexOf(' ');
         const cmd = spaceIdx > 0 ? text.slice(1, spaceIdx) : text.slice(1);
-        const args = spaceIdx > 0 ? text.slice(spaceIdx + 1).trim() : '';
         const match = slashCommands.find((c) => c.command.toLowerCase() === cmd.toLowerCase());
         if (match) {
           setInput('');
           setAttachments([]);
           props.onClearPicks?.();
           props.onClearSkillPicks?.();
-          props.onInvokeSkill(match.id, args);
+          const merged = [match.id, ...skillIds.filter((s) => s !== match.id)];
+          props.onSend(text, [], merged);
           return;
         }
       }
@@ -236,7 +238,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onSend(finalText, atts, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, attachments, slashCommands, props.agent, props.onSend, props.onInvokeSkill, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline, confirm]);
+    }, [input, attachments, slashCommands, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline, confirm]);
 
     const filePicks = props.filePicks ?? [];
     const PICKS_VISIBLE = 3;

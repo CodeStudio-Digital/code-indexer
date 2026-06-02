@@ -19,6 +19,7 @@
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import type { VectorRecord, VectorMatch } from '@mcp/shared/types.js';
+import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import type { VectorStore } from './vectors.js';
 
 const require = createRequire(import.meta.url);
@@ -69,16 +70,66 @@ export class SqliteVecVectorStore implements VectorStore {
       .get(TABLE);
   }
 
-  /** Ensure the vec0 table exists for `dim`. CREATE IF NOT EXISTS is a no-op
-   *  when a table already exists; a wrong dimension then throws from vec0 on
-   *  insert/query — the loud failure that tells the caller to re-index. */
+  /** True when the existing table predates the `namespace` column. */
+  private isLegacySchema(): boolean {
+    const cols = this.db.prepare(`PRAGMA table_info(${TABLE})`).all() as Array<{ name: string }>;
+    return cols.length > 0 && !cols.some((c) => c.name === 'namespace');
+  }
+
+  /**
+   * One-time migration of a pre-namespace table. We preserve CODE vectors by
+   * copying their raw embedding into the new schema and deriving the namespace
+   * from `project_name` (the only tenant key those rows ever stored). DOC rows
+   * (`doc_chunk:*`) carry no resolvable collection here — they're dropped and
+   * re-ingestion re-embeds them. Best-effort: any failure falls back to drop +
+   * re-index (the relational hashes still drive incremental re-embed).
+   */
+  private migrateLegacyTable(dim: number): void {
+    const legacy = `${TABLE}_legacy_ns`;
+    try {
+      this.db.exec(`ALTER TABLE ${TABLE} RENAME TO ${legacy}`);
+      this.db.exec(
+        `CREATE VIRTUAL TABLE ${TABLE} USING vec0(
+           vid TEXT PRIMARY KEY, embedding float[${dim}],
+           namespace TEXT, project_name TEXT, type TEXT, ref_id TEXT
+         )`,
+      );
+      const ins = this.db.prepare(
+        `INSERT INTO ${TABLE}(vid, embedding, namespace, project_name, type, ref_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      const rows = this.db
+        .prepare(`SELECT vid, embedding, project_name, type, ref_id FROM ${legacy}`)
+        .all() as Array<{ vid: string; embedding: unknown; project_name: string | null; type: string | null; ref_id: string | null }>;
+      const tx = this.db.transaction(() => {
+        for (const r of rows) {
+          if (r.vid.startsWith('doc_chunk:')) continue; // can't resolve collection → re-ingest
+          if (!r.project_name) continue;
+          ins.run(r.vid, r.embedding as Buffer, codeNamespace(r.project_name), r.project_name, r.type, r.ref_id);
+        }
+      });
+      tx();
+      this.db.exec(`DROP TABLE ${legacy}`);
+      console.warn('[sqlite-vec] migrated to namespaced schema; doc vectors need re-ingestion.');
+    } catch (e) {
+      console.warn(`[sqlite-vec] namespace migration failed (${(e as Error).message}); dropping legacy table — re-index required.`);
+      this.db.exec(`DROP TABLE IF EXISTS ${legacy}`);
+      this.db.exec(`DROP TABLE IF EXISTS ${TABLE}`);
+    }
+  }
+
+  /** Ensure the vec0 table exists for `dim`, migrating a legacy (no-namespace)
+   *  table first. CREATE IF NOT EXISTS is a no-op when up-to-date; a wrong
+   *  dimension throws from vec0 on insert/query — the loud "re-index" signal. */
   private async ensureTable(dim: number): Promise<void> {
     await this.loadExt();
     if (this.dim === dim) return;
+    if (this.tableExists() && this.isLegacySchema()) this.migrateLegacyTable(dim);
     this.db.exec(
       `CREATE VIRTUAL TABLE IF NOT EXISTS ${TABLE} USING vec0(
          vid TEXT PRIMARY KEY,
          embedding float[${dim}],
+         namespace TEXT,
          project_name TEXT,
          type TEXT,
          ref_id TEXT
@@ -87,12 +138,12 @@ export class SqliteVecVectorStore implements VectorStore {
     this.dim = dim;
   }
 
-  async upsert(records: VectorRecord[]): Promise<number> {
+  async upsert(records: VectorRecord[], namespace?: string): Promise<number> {
     if (records.length === 0) return 0;
     await this.ensureTable(records[0].values.length);
     const del = this.db.prepare(`DELETE FROM ${TABLE} WHERE vid = ?`);
     const ins = this.db.prepare(
-      `INSERT INTO ${TABLE}(vid, embedding, project_name, type, ref_id) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO ${TABLE}(vid, embedding, namespace, project_name, type, ref_id) VALUES (?, ?, ?, ?, ?, ?)`,
     );
     // vec0 has no UPSERT; delete-then-insert keeps re-embedding idempotent.
     const tx = this.db.transaction((rows: VectorRecord[]) => {
@@ -101,6 +152,7 @@ export class SqliteVecVectorStore implements VectorStore {
         ins.run(
           r.id,
           new Float32Array(r.values),
+          namespace ?? null,
           r.metadata.project_name ?? null,
           r.metadata.type ?? null,
           r.metadata.ref_id ?? null,
@@ -113,15 +165,19 @@ export class SqliteVecVectorStore implements VectorStore {
 
   async search(
     queryVector: number[],
-    options?: { topK?: number; filter?: Record<string, string> },
+    options?: { topK?: number; filter?: Record<string, string>; namespace?: string },
   ): Promise<VectorMatch[]> {
     await this.loadExt();
-    if (!this.tableExists()) return [];
+    if (!this.tableExists() || this.isLegacySchema()) return [];
     const topK = options?.topK ?? 20;
     const filter = options?.filter ?? {};
 
     const where: string[] = ['embedding MATCH ?', 'k = ?'];
     const params: unknown[] = [new Float32Array(queryVector), topK];
+    if (options?.namespace) {
+      where.push('namespace = ?');
+      params.push(options.namespace);
+    }
     for (const key of META_KEYS) {
       if (filter[key] !== undefined) {
         where.push(`${key} = ?`);
@@ -153,7 +209,7 @@ export class SqliteVecVectorStore implements VectorStore {
     });
   }
 
-  async deleteByIds(ids: string[]): Promise<number> {
+  async deleteByIds(ids: string[], _namespace?: string): Promise<number> {
     if (ids.length === 0) return 0;
     await this.loadExt();
     if (!this.tableExists()) return 0;
@@ -163,6 +219,14 @@ export class SqliteVecVectorStore implements VectorStore {
     });
     tx(ids);
     return ids.length;
+  }
+
+  /** Drop every vector in a namespace — O(rows-in-namespace), no re-embed. */
+  async deleteNamespace(namespace: string): Promise<number> {
+    await this.loadExt();
+    if (!this.tableExists() || this.isLegacySchema()) return 0;
+    const info = this.db.prepare(`DELETE FROM ${TABLE} WHERE namespace = ?`).run(namespace);
+    return info.changes;
   }
 
   async isAvailable(): Promise<boolean> {

@@ -1,29 +1,53 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { activeOrchestrators } from './stream.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
+import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
+import { getWorkerOrchestratorPool } from '../../../sse/workerPoolSingleton.js';
+import { publish as busPublish } from '../../../coder-bus.js';
 
 /**
  * HTTP routes for the company shared drive.
  *
- * The drive is just a metadata table + file pool, so reads and writes
- * never need a live orchestrator: when the session is running we reuse
- * the orchestrator's `driveStore` (so any future in-memory caches stay
- * coherent), otherwise we instantiate a fresh `CompanyDriveStore` from
- * the same DB + companyStore deps. Either way the storage is identical.
+ * The drive is just a metadata table (`company_drive_files`) + an on-disk
+ * file pool — fully coherent across processes via SQLite (WAL) + the
+ * filesystem. So we ALWAYS operate it through a fresh in-process
+ * `CompanyDriveStore`.
+ *
+ * Critically, we must NOT reuse the live orchestrator's `driveStore`: the
+ * orchestrator now runs in a worker thread and `getCompanyOrchestrator`
+ * returns a `WorkerBackedOrchestrator` RPC proxy whose every method call
+ * returns a *Promise* (see WorkerOrchestratorPool's proxy). Calling
+ * `orchestrator.driveStore.list()` synchronously yielded a Promise that
+ * Hono serialized as `{}`, so the dashboard saw `files: {}` and threw
+ * "Unexpected drive response shape" for any running session.
+ *
+ * When the session IS live we still want dashboard-initiated mutations to
+ * broadcast over SSE, so we attach a publisher bound to the session's
+ * main-side mirrored bus (same bus the SSE routes pump from).
  *
  * Manual operator workflow: the dashboard's "Drive" tab uses POST
  * /upload to attach documents the user wants the agents to see, GET
  * /file?path=… to inspect contents, and DELETE to remove stale files.
  */
 function getDriveStore(deps: ServerDeps, sessionId: number): CompanyDriveStore {
-  const orchestrator = activeOrchestrators.get(sessionId);
-  if (orchestrator) return orchestrator.driveStore;
+  const entry = getWorkerOrchestratorPool().get(sessionId);
+  const publisher: IMetaBusPublisher | undefined = entry
+    ? {
+        bus: entry.bus,
+        publish: (event, data) => {
+          busPublish(entry.bus, event, data);
+        },
+        markEnded: () => {
+          /* drive mutations never end the session bus */
+        },
+      }
+    : undefined;
   return new CompanyDriveStore({
     db: deps.db,
     companyStore: deps.companyStore,
     companySessionId: sessionId,
+    publisher,
   });
 }
 

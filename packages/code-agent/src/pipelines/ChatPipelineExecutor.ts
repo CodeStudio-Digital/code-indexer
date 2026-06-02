@@ -414,6 +414,25 @@ export class ChatPipelineExecutor {
       context: updatedContext,
     });
 
+    // First-class: mirror the stage output into the chat transcript as a
+    // real assistant turn so the conversation isn't empty, the user can
+    // continue with context, and the session's Mensagens/Turnos counters
+    // reflect the pipeline. `usage: null` — tokens were already rolled onto
+    // the session via bumpUsage above (avoid double-counting). Best-effort.
+    try {
+      this.deps.sessionStore.persistAssistantTurn({
+        session_id: this.deps.coderSessionId,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `**Pipeline · ${node.label}**\n\n${stageOutcome.finalText}` }],
+        },
+        usage: null,
+        tool_calls: [],
+      });
+    } catch (e) {
+      console.warn('[pipeline] persist stage message failed:', e);
+    }
+
     this.deps.bus.publish({
       name: 'pipeline_node_completed',
       coderSessionId: this.deps.coderSessionId,
@@ -430,19 +449,51 @@ export class ChatPipelineExecutor {
     this.detachStage(executionId, { abort: false });
 
     if (!next) {
-      // No matching outgoing edge — terminal node OR misrouted condition.
-      // Validator already rejects misconfiguration; treat zero-outgoing as
-      // success and conditional-with-no-match as failure (so dead ends
-      // surface).
+      // Zero outgoing → terminal node, completed.
       if (outgoing.length === 0) {
         this.completeExecution(executionId, exec.pipeline_id);
-      } else {
-        this.failExecution(
-          executionId,
-          exec.pipeline_id,
-          `Node "${node.id}" produced no matching branch (mode=${branchMode}, verdict=${verdict ?? 'none'}).`,
-        );
+        return;
       }
+      // 'review' verdict with no 'review' edge: pause for HUMAN review
+      // instead of failing the run. Approving continues down the 'pass'
+      // edge (optimistic); aborting stops. Reuses the confirmation gate.
+      if (branchMode === 'pass-fail' && verdict === 'review') {
+        const passEdge = pickNextEdge(outgoing, 'pass-fail', 'pass');
+        const passNode = passEdge
+          ? exec.context.snapshot.nodes.find((n) => n.id === passEdge.targetId)
+          : null;
+        if (passNode) {
+          const ctxReview: PipelineExecutionContext = {
+            snapshot: updatedContext.snapshot,
+            vars: {
+              ...updatedContext.vars,
+              _pending_confirmation: {
+                outcome: 'awaiting_confirmation',
+                output: JSON.stringify({ from: node.id, to: passNode.id, review: true }),
+              },
+            },
+          };
+          this.deps.companyStore.updatePipelineExecution(executionId, {
+            currentNodeId: passNode.id,
+            context: ctxReview,
+            status: 'paused',
+          });
+          this.deps.bus.publish({
+            name: 'pipeline_paused',
+            coderSessionId: this.deps.coderSessionId,
+            executionId,
+            pipelineId: exec.pipeline_id,
+            payload: { nodeId: passNode.id, fromNodeId: node.id, awaitingConfirmation: true, review: true },
+          });
+          return;
+        }
+      }
+      // Genuine dead-end — surface an actionable message (which edge to add).
+      this.failExecution(
+        executionId,
+        exec.pipeline_id,
+        `Node "${node.id}" has no '${verdict ?? branchMode}' edge (mode=${branchMode}). Add an outgoing '${verdict ?? ''}' edge from "${node.id}" in the builder.`,
+      );
       return;
     }
 

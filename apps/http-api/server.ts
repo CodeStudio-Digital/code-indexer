@@ -109,6 +109,7 @@ import {
   setGlobalDocsResearcher,
 } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { setCoderWorkerDocDeps, setCoderWorkerMcpPool } from './sse/coderWorkerPoolSingleton.js';
+import { setCompanyWorkerDocDeps } from './sse/workerPoolSingleton.js';
 import { McpExternalPool, setGlobalMcpExternalPool } from './sse/McpExternalPool.js';
 // Frente E — periodic watchdog for stuck coder_sessions. Started during
 // server bootstrap below; auto-`unref()` so it never holds process exit.
@@ -722,6 +723,11 @@ export function createApp() {
   });
   setGlobalDocsResearcher(docsResearchBridge);
   setCoderWorkerDocDeps({ docSearch: docSearchBackend, docsResearch: docsResearchBridge });
+  // Same wire-up for the COMPANY worker pool — master + subordinates run
+  // inside `company-worker.ts`, which installs the matching RPC shims. Without
+  // this, `rag_search_docs` from a company subordinate errors with "doc corpus
+  // backend is not wired into this process". Reuses the same backends.
+  setCompanyWorkerDocDeps({ docSearch: docSearchBackend, docsResearch: docsResearchBridge });
   mountDocsAgentRoutes(app, deps, docsResearchBridge);
 
   // External-MCP connection pool. Boots async so the dashboard

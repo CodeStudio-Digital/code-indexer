@@ -96,3 +96,30 @@ export function purgeProjects(projectIds: number[]): Promise<{
 export function runGlobalSqlCleanup(): Promise<SqlSweepResult> {
   return postJson<SqlSweepResult>('/api/hygiene/global/sql-cleanup');
 }
+
+export interface ClearAllDataResult {
+  ok: boolean;
+  projects_cleared: number;
+  vectors_deleted_remote: number;
+  errors: Array<{ project: string; error: string }>;
+}
+
+/**
+ * Wipe ALL projects' data (index, sessions, snapshots, runs, costs) + remote
+ * vectors, keeping the project rows so the user only re-indexes. Destructive.
+ */
+export function clearAllProjectData(): Promise<ClearAllDataResult> {
+  return postJson<ClearAllDataResult>('/api/projects/clear-all-data');
+}
+
+export interface ClearOneResult {
+  ok: boolean;
+  vectors_known: number;
+  vectors_deleted_remote: number;
+  remote_error: string | null;
+}
+
+/** Wipe ONE project's data + remote vectors, keeping its row. Destructive. */
+export function clearProjectData(id: number): Promise<ClearOneResult> {
+  return postJson<ClearOneResult>(`/api/projects/${id}/clear-data`);
+}

@@ -42,6 +42,7 @@ export {
   durationToBucket,
   sizeToBucket,
   InMemoryTelemetrySink,
+  NoopTelemetrySink,
   CompositeTelemetrySink,
   measure,
 } from './stats.js';

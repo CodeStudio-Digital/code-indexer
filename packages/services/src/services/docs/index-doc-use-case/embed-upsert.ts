@@ -2,6 +2,7 @@ import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import type { DocCollection, DocStore } from '@mcp/store/doc-store.js';
 import type { VectorRecord } from '@mcp/shared/types.js';
+import { docNamespace } from '@mcp/shared/vector-namespace.js';
 import { vectorIdForChunk } from '../search.js';
 import { buildEmbeddingText, hashEmbeddingInput } from './utils.js';
 import {
@@ -68,8 +69,9 @@ export async function embedAndUpsert(
       // we MUST NOT register the mapping in `doc_chunk_vectors` — otherwise
       // the badge says "✓ embedded" while remote search returns 0 forever.
       // Leaving `embedding_hash=NULL` lets `retryEmbeddings` pick these up.
+      // All chunks here belong to ONE collection → one namespace.
       let upserted = 0;
-      if (records.length > 0) upserted = await vectorStore.upsert(records);
+      if (records.length > 0) upserted = await vectorStore.upsert(records, docNamespace(collection.id));
       if (upserted < records.length) {
         console.warn(
           `[doc-indexer] vector upsert returned ${upserted}/${records.length} — leaving these chunks pending for retry`,
@@ -154,41 +156,51 @@ export async function retryEmbeddings(
       const texts = batch.map((c) => buildEmbeddingText(c.heading_path, c.summary, c.content));
       const { vectors, tokens } = await embeddingService.embed(texts);
       totalTokens += tokens;
-      const records: VectorRecord[] = [];
+      // A retry batch can span MULTIPLE collections → group by collection so
+      // each upsert targets exactly one namespace (docs are isolated per
+      // collection). Registration is per-group: only register a group's chunks
+      // when that group's remote upsert actually accepted them.
+      type Entry = { chunkId: number; text: string; record: VectorRecord };
+      const byCollection = new Map<number, Entry[]>();
       for (let i = 0; i < batch.length; i++) {
         const chunk = batch[i]!;
         const collection = getCollection(chunk.collection_id);
         if (!collection) continue;
         const vec = vectors[i];
         if (!vec) continue;
-        records.push({
-          id: vectorIdForChunk(chunk.id),
-          values: vec,
-          metadata: {
-            corpus: 'docs',
-            type: 'doc_chunk',
-            collection: collection.name,
-            chunk_id: String(chunk.id),
-            source_id: String(chunk.source_id),
-            heading_path: chunk.heading_path ?? '',
+        const entry: Entry = {
+          chunkId: chunk.id,
+          text: texts[i]!,
+          record: {
+            id: vectorIdForChunk(chunk.id),
+            values: vec,
+            metadata: {
+              corpus: 'docs',
+              type: 'doc_chunk',
+              collection: collection.name,
+              chunk_id: String(chunk.id),
+              source_id: String(chunk.source_id),
+              heading_path: chunk.heading_path ?? '',
+            },
           },
-        });
+        };
+        const arr = byCollection.get(collection.id) ?? [];
+        arr.push(entry);
+        byCollection.set(collection.id, arr);
       }
-      // Same rule as embedAndUpsert: only register mapping when remote
-      // actually accepted.
-      let upserted = 0;
-      if (records.length > 0) upserted = await vectorStore.upsert(records);
-      if (upserted < records.length) {
-        console.warn(
-          `[doc-indexer] retry vector upsert returned ${upserted}/${records.length} — leaving these chunks pending`,
-        );
-      }
-      if (upserted > 0) {
-        for (let i = 0; i < batch.length; i++) {
-          const chunk = batch[i]!;
-          if (!vectors[i]) continue;
-          docStore.recordChunkVector(chunk.id, vectorIdForChunk(chunk.id), 'default');
-          docStore.updateChunkEmbedding(chunk.id, hashEmbeddingInput(texts[i]!), 'default');
+      for (const [collectionId, entries] of byCollection) {
+        const recs = entries.map((e) => e.record);
+        const upserted = recs.length > 0 ? await vectorStore.upsert(recs, docNamespace(collectionId)) : 0;
+        if (upserted < recs.length) {
+          console.warn(
+            `[doc-indexer] retry vector upsert returned ${upserted}/${recs.length} (collection ${collectionId}) — leaving these chunks pending`,
+          );
+        }
+        if (upserted > 0) {
+          for (const e of entries) {
+            docStore.recordChunkVector(e.chunkId, vectorIdForChunk(e.chunkId), 'default');
+            docStore.updateChunkEmbedding(e.chunkId, hashEmbeddingInput(e.text), 'default');
+          }
         }
       }
       embedded += batch.length;

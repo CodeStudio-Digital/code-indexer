@@ -12,7 +12,7 @@ import { Markdown } from './Markdown.js';
 import { TaskExecutionBlock } from './TaskExecutionBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
-import { ActivityLineBlock } from './ActivityLineBlock.js';
+import { ActivityLineBlock } from '../../../components/stream/ActivityLineBlock.js';
 
 function LiveThinkingBlock({ text }: { text: string }) {
   const { t } = useTranslation('chat');

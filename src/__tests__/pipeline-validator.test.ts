@@ -117,6 +117,78 @@ describe('validatePipelineGraph', () => {
     expect(result2.ok).toBe(true);
   });
 
+  it('accepts a valid each-project fan-out node', () => {
+    const graph: PipelineGraph = {
+      version: 1,
+      nodes: [
+        { ...baseNode('fan'), kind: 'fan-out', branchMode: 'linear', fanOut: { mode: 'each-project', role: 'backend' } },
+        baseNode('done'),
+      ],
+      edges: [{ kind: 'linear', id: 'e1', from: 'fan', to: 'done' }],
+    };
+    expect(validatePipelineGraph(graph, null).ok).toBe(true);
+  });
+
+  it('accepts a valid explicit fan-out node', () => {
+    const graph: PipelineGraph = {
+      version: 1,
+      nodes: [
+        {
+          ...baseNode('fan'),
+          kind: 'fan-out',
+          branchMode: 'linear',
+          fanOut: { mode: 'explicit', branches: [{ role: 'backend', projectId: 1 }, { role: 'frontend', projectId: 2 }] },
+        },
+      ],
+      edges: [],
+    };
+    expect(validatePipelineGraph(graph, null).ok).toBe(true);
+  });
+
+  it('rejects a fan-out node with non-linear branchMode', () => {
+    const graph: PipelineGraph = {
+      version: 1,
+      nodes: [{ ...baseNode('fan'), kind: 'fan-out', branchMode: 'pass-fail', fanOut: { mode: 'each-project', role: 'backend' } }],
+      edges: [],
+    };
+    const result = validatePipelineGraph(graph, null);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => /must use branchMode='linear'/.test(e.message))).toBe(true);
+  });
+
+  it('rejects each-project fan-out without a role', () => {
+    const graph: PipelineGraph = {
+      version: 1,
+      nodes: [{ ...baseNode('fan'), kind: 'fan-out', branchMode: 'linear', fanOut: { mode: 'each-project' } }],
+      edges: [],
+    };
+    const result = validatePipelineGraph(graph, null);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => /requires fanOut\.role/.test(e.message))).toBe(true);
+  });
+
+  it('rejects explicit fan-out with an empty branch list', () => {
+    const graph: PipelineGraph = {
+      version: 1,
+      nodes: [{ ...baseNode('fan'), kind: 'fan-out', branchMode: 'linear', fanOut: { mode: 'explicit', branches: [] } }],
+      edges: [],
+    };
+    const result = validatePipelineGraph(graph, null);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => /at least one branch/.test(e.message))).toBe(true);
+  });
+
+  it('rejects a fan-out node missing fanOut config', () => {
+    const graph: PipelineGraph = {
+      version: 1,
+      nodes: [{ ...baseNode('fan'), kind: 'fan-out', branchMode: 'linear' }],
+      edges: [],
+    };
+    const result = validatePipelineGraph(graph, null);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => /requires fanOut\.mode/.test(e.message))).toBe(true);
+  });
+
   it('rejects more than one pass branch from the same node', () => {
     const graph: PipelineGraph = {
       version: 1,

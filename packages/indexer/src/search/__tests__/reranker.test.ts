@@ -11,6 +11,7 @@ import {
   CohereReranker,
   CloudflareReranker,
 } from '../reranker.js';
+import { LocalReranker } from '../local-reranker.js';
 
 type RerankerCfg = { kind: string; config: Record<string, unknown> } | null;
 
@@ -46,6 +47,19 @@ describe('createReranker', () => {
   it('returns NullReranker when there is no store and no env', () => {
     expect(createReranker()).toBeInstanceOf(NullReranker);
     expect(createReranker(null)).toBeInstanceOf(NullReranker);
+  });
+
+  it('builds a LocalReranker from a local store config', () => {
+    const r = createReranker(
+      storeWith({ kind: 'local', config: { model: 'Xenova/bge-reranker-base' } }),
+    );
+    expect(r).toBeInstanceOf(LocalReranker);
+    expect(r.name).toBe('local');
+  });
+
+  it('builds a LocalReranker even with empty config (model defaulted)', () => {
+    const r = createReranker(storeWith({ kind: 'local', config: {} }));
+    expect(r).toBeInstanceOf(LocalReranker);
   });
 
   it('builds a CohereReranker from a cohere store config', () => {

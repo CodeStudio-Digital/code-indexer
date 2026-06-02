@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Bot, Check, Clock, Loader2, X, Wrench, Crown, Pause, Eye, AlertTriangle, MessageCircle, ListChecks } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { cn } from '../../lib/utils.js';
+import { ActivityLineBlock } from '../../components/stream/ActivityLineBlock.js';
 import type { AgentStreamState } from '../../hooks/useCompanyStream.js';
 
 interface AgentPaneProps {
@@ -68,16 +69,22 @@ export function AgentPane({ agent, onClick }: AgentPaneProps) {
           <p className="text-muted-foreground italic truncate">{agent.statusMessage}</p>
         )}
 
-        {/* Active tool call */}
-        {activeToolCalls.length > 0 && (
-          <div className="flex items-center gap-1 text-warning truncate">
-            <Loader2 className="h-2.5 w-2.5 animate-spin shrink-0" />
-            <span className="font-mono truncate">{activeToolCalls[0].name}</span>
-          </div>
+        {/* Live activity pill — what the agent is doing RIGHT NOW (provider
+            call / tool / operation) with a ticking "running Ns" counter.
+            Reuses the exact chat pill so liveness is obvious at a glance. */}
+        {agent.activity ? (
+          <ActivityLineBlock activity={agent.activity} />
+        ) : (
+          activeToolCalls.length > 0 && (
+            <div className="flex items-center gap-1 text-warning truncate">
+              <Loader2 className="h-2.5 w-2.5 animate-spin shrink-0" />
+              <span className="font-mono truncate">{activeToolCalls[0].name}</span>
+            </div>
+          )
         )}
 
         {/* Current text (very short preview) */}
-        {currentText && !activeToolCalls.length && (
+        {currentText && !agent.activity && !activeToolCalls.length && (
           <p className="text-foreground/70 truncate">
             {currentText.length > 80 ? `...${currentText.slice(-80)}` : currentText}
           </p>

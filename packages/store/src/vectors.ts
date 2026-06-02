@@ -10,12 +10,25 @@ import { SqliteVecVectorStore, defaultSqliteVecPath } from './sqlite-vec-store.j
  * fallback for backwards compatibility.
  */
 export interface VectorStore {
-  upsert(records: VectorRecord[]): Promise<number>;
+  /**
+   * Upsert records into `namespace` (code-per-project / docs-per-collection —
+   * see `@mcp/shared/vector-namespace`). `undefined` = the shared/default
+   * namespace (legacy behavior), so callers that don't namespace keep working.
+   */
+  upsert(records: VectorRecord[], namespace?: string): Promise<number>;
   search(
     queryVector: number[],
-    options?: { topK?: number; filter?: Record<string, string> }
+    options?: { topK?: number; filter?: Record<string, string>; namespace?: string }
   ): Promise<VectorMatch[]>;
-  deleteByIds(ids: string[]): Promise<number>;
+  deleteByIds(ids: string[], namespace?: string): Promise<number>;
+  /**
+   * Drop EVERY vector in a namespace in one shot. Optional — only backends with
+   * a native primitive implement it (sqlite-vec column delete, Qdrant
+   * drop-collection, Pinecone delete-namespace). Backends without one (e.g.
+   * Cloudflare Vectorize, which has no delete-by-metadata) omit it; callers
+   * fall back to per-id `deleteByIds` using DB-tracked vector ids.
+   */
+  deleteNamespace?(namespace: string): Promise<number>;
   isAvailable(): Promise<boolean>;
 }
 
@@ -43,13 +56,21 @@ export class CloudflareVectorStore implements VectorStore {
     this.authToken = authToken;
   }
 
-  async upsert(records: VectorRecord[]): Promise<number> {
+  async upsert(records: VectorRecord[], namespace?: string): Promise<number> {
     if (records.length === 0) return 0;
+
+    // Vectorize has no native namespaces; we stamp `namespace` into each
+    // vector's metadata and filter on it at query time. Requires a metadata
+    // index on `namespace` in Vectorize:
+    //   wrangler vectorize create-metadata-index <index> --propertyName namespace --type string
+    const stamped = namespace
+      ? records.map((r) => ({ ...r, metadata: { ...r.metadata, namespace } }))
+      : records;
 
     let totalCount = 0;
 
-    for (let i = 0; i < records.length; i += this.upsertBatchSize) {
-      const batch = records.slice(i, i + this.upsertBatchSize);
+    for (let i = 0; i < stamped.length; i += this.upsertBatchSize) {
+      const batch = stamped.slice(i, i + this.upsertBatchSize);
 
       const response = await fetch(`${this.workerUrl}/upsert`, {
         method: 'POST',
@@ -73,8 +94,11 @@ export class CloudflareVectorStore implements VectorStore {
 
   async search(
     queryVector: number[],
-    options?: { topK?: number; filter?: Record<string, string> }
+    options?: { topK?: number; filter?: Record<string, string>; namespace?: string }
   ): Promise<VectorMatch[]> {
+    const filter = options?.namespace
+      ? { ...(options.filter ?? {}), namespace: options.namespace }
+      : options?.filter;
     const response = await fetch(`${this.workerUrl}/search`, {
       method: 'POST',
       headers: {
@@ -84,7 +108,7 @@ export class CloudflareVectorStore implements VectorStore {
       body: JSON.stringify({
         vector: queryVector,
         topK: options?.topK ?? 20,
-        filter: options?.filter,
+        filter,
       }),
     });
 
@@ -96,7 +120,10 @@ export class CloudflareVectorStore implements VectorStore {
     return data.matches;
   }
 
-  async deleteByIds(ids: string[]): Promise<number> {
+  // Namespace is ignored: Vectorize ids are globally unique and it has no
+  // delete-by-metadata, so per-id delete is the only path (callers pass
+  // DB-tracked ids). No deleteNamespace() for the same reason.
+  async deleteByIds(ids: string[], _namespace?: string): Promise<number> {
     if (ids.length === 0) return 0;
 
     let totalCount = 0;
@@ -191,16 +218,18 @@ export class QdrantVectorStore implements VectorStore {
     this.ensured = true;
   }
 
-  async upsert(records: VectorRecord[]): Promise<number> {
+  async upsert(records: VectorRecord[], namespace?: string): Promise<number> {
     if (records.length === 0) return 0;
     await this.ensureCollection(records[0].values.length);
 
     // Qdrant requires numeric or UUID ids. We keep the string id in the
-    // payload and hash it to a stable u64 for the point id.
+    // payload and hash it to a stable u64 for the point id. The `namespace`
+    // rides in the payload and is filtered/deleted natively — one collection,
+    // no per-id-delete-needs-collection foot-gun.
     const points = records.map((r) => ({
       id: stableU64(r.id),
       vector: r.values,
-      payload: { ...r.metadata, _id: r.id },
+      payload: { ...r.metadata, _id: r.id, ...(namespace ? { namespace } : {}) },
     }));
 
     const resp = await fetch(`${this.baseUrl}/collections/${this.collection}/points?wait=true`, {
@@ -216,21 +245,19 @@ export class QdrantVectorStore implements VectorStore {
 
   async search(
     queryVector: number[],
-    options?: { topK?: number; filter?: Record<string, string> }
+    options?: { topK?: number; filter?: Record<string, string>; namespace?: string }
   ): Promise<VectorMatch[]> {
+    const must: Array<{ key: string; match: { value: string } }> = [];
+    if (options?.filter) {
+      for (const [key, value] of Object.entries(options.filter)) must.push({ key, match: { value } });
+    }
+    if (options?.namespace) must.push({ key: 'namespace', match: { value: options.namespace } });
     const body: Record<string, unknown> = {
       vector: queryVector,
       limit: options?.topK ?? 20,
       with_payload: true,
     };
-    if (options?.filter && Object.keys(options.filter).length > 0) {
-      body.filter = {
-        must: Object.entries(options.filter).map(([key, value]) => ({
-          key,
-          match: { value },
-        })),
-      };
-    }
+    if (must.length > 0) body.filter = { must };
 
     const resp = await fetch(`${this.baseUrl}/collections/${this.collection}/points/search`, {
       method: 'POST',
@@ -256,7 +283,9 @@ export class QdrantVectorStore implements VectorStore {
     });
   }
 
-  async deleteByIds(ids: string[]): Promise<number> {
+  // Point ids are globally unique within the collection, so per-id delete is
+  // namespace-agnostic (unlike Pinecone where ids are namespace-scoped).
+  async deleteByIds(ids: string[], _namespace?: string): Promise<number> {
     if (ids.length === 0) return 0;
     const points = ids.map((id) => stableU64(id));
     const resp = await fetch(
@@ -271,6 +300,23 @@ export class QdrantVectorStore implements VectorStore {
       throw new Error(`Qdrant delete failed: ${resp.status} ${await resp.text()}`);
     }
     return ids.length;
+  }
+
+  /** Drop every point in a namespace via Qdrant's native filter-delete. */
+  async deleteNamespace(namespace: string): Promise<number> {
+    const resp = await fetch(
+      `${this.baseUrl}/collections/${this.collection}/points/delete?wait=true`,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ filter: { must: [{ key: 'namespace', match: { value: namespace } }] } }),
+      }
+    );
+    if (resp.status === 404) return 0;
+    if (!resp.ok) {
+      throw new Error(`Qdrant namespace delete failed: ${resp.status} ${await resp.text()}`);
+    }
+    return 1;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -313,6 +359,7 @@ interface OpenSearchClientShape {
     body: { hits: { hits: Array<{ _id: string; _score: number; _source: Record<string, unknown> }> } };
   }>;
   delete: (args: { index: string; id: string }) => Promise<unknown>;
+  deleteByQuery?: (args: { index: string; body: unknown }) => Promise<unknown>;
   ping: () => Promise<unknown>;
 }
 
@@ -421,6 +468,7 @@ export class OpenSearchVectorStore implements VectorStore {
                 project_name: { type: 'keyword' },
                 type: { type: 'keyword' },
                 ref_id: { type: 'keyword' },
+                namespace: { type: 'keyword' },
               },
             },
           },
@@ -435,7 +483,7 @@ export class OpenSearchVectorStore implements VectorStore {
     }
   }
 
-  async upsert(records: VectorRecord[]): Promise<number> {
+  async upsert(records: VectorRecord[], namespace?: string): Promise<number> {
     if (records.length === 0) return 0;
     await this.ensureIndex(records[0].values.length);
     const client = await this.getClient();
@@ -445,7 +493,7 @@ export class OpenSearchVectorStore implements VectorStore {
     const body: unknown[] = [];
     for (const r of records) {
       body.push({ index: { _index: this.indexName, _id: r.id } });
-      body.push({ vector: r.values, ...r.metadata });
+      body.push({ vector: r.values, ...r.metadata, ...(namespace ? { namespace } : {}) });
     }
 
     const resp = await client.bulk({ body });
@@ -457,19 +505,21 @@ export class OpenSearchVectorStore implements VectorStore {
 
   async search(
     queryVector: number[],
-    options?: { topK?: number; filter?: Record<string, string> }
+    options?: { topK?: number; filter?: Record<string, string>; namespace?: string }
   ): Promise<VectorMatch[]> {
     const client = await this.getClient();
     const topK = options?.topK ?? 20;
 
-    // k-NN query with optional boolean filter by project/type. We use the
-    // filter inside the knn clause (post-filter pattern) because pre-filter
+    // k-NN query with optional boolean filter by project/type/namespace. We use
+    // the filter inside the knn clause (post-filter pattern) because pre-filter
     // requires the `lucene` engine which isn't universally available.
+    const effectiveFilter: Record<string, string> = { ...(options?.filter ?? {}) };
+    if (options?.namespace) effectiveFilter.namespace = options.namespace;
     const knnQuery: Record<string, unknown> = { vector: queryVector, k: topK };
-    if (options?.filter && Object.keys(options.filter).length > 0) {
+    if (Object.keys(effectiveFilter).length > 0) {
       knnQuery.filter = {
         bool: {
-          must: Object.entries(options.filter).map(([key, value]) => ({
+          must: Object.entries(effectiveFilter).map(([key, value]) => ({
             term: { [key]: value },
           })),
         },
@@ -496,7 +546,7 @@ export class OpenSearchVectorStore implements VectorStore {
     });
   }
 
-  async deleteByIds(ids: string[]): Promise<number> {
+  async deleteByIds(ids: string[], _namespace?: string): Promise<number> {
     if (ids.length === 0) return 0;
     const client = await this.getClient();
     // Serverless does not support `delete_by_query`; per-id delete is the
@@ -511,6 +561,26 @@ export class OpenSearchVectorStore implements VectorStore {
       }
     }
     return count;
+  }
+
+  /**
+   * Drop a namespace via delete_by_query on the `namespace` keyword. Only
+   * available on managed OpenSearch ('es'); Serverless ('aoss') doesn't
+   * support delete_by_query, so callers there fall back to per-id deleteByIds.
+   */
+  async deleteNamespace(namespace: string): Promise<number> {
+    if (this.serviceName === 'aoss') {
+      throw new Error('OpenSearch Serverless (aoss) has no delete_by_query; use deleteByIds');
+    }
+    const client = await this.getClient();
+    if (!client.deleteByQuery) {
+      throw new Error('OpenSearch client lacks deleteByQuery');
+    }
+    await client.deleteByQuery({
+      index: this.indexName,
+      body: { query: { term: { namespace } } },
+    });
+    return 1;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -561,7 +631,14 @@ export class PineconeVectorStore implements VectorStore {
     };
   }
 
-  async upsert(records: VectorRecord[]): Promise<number> {
+  /** Effective Pinecone namespace: the per-call namespace wins; the
+   *  constructor namespace (if any) is kept as a prefix for shared indexes. */
+  private ns(namespace?: string): string {
+    if (!namespace) return this.namespace;
+    return this.namespace ? `${this.namespace}__${namespace}` : namespace;
+  }
+
+  async upsert(records: VectorRecord[], namespace?: string): Promise<number> {
     if (records.length === 0) return 0;
     // Pinecone caps a single upsert request at 2MB / ~100 vectors for large
     // dims. Batch to 100 to stay well under the limit.
@@ -578,7 +655,7 @@ export class PineconeVectorStore implements VectorStore {
       const resp = await fetch(`${this.host}/vectors/upsert`, {
         method: 'POST',
         headers: this.headers(),
-        body: JSON.stringify({ vectors, namespace: this.namespace }),
+        body: JSON.stringify({ vectors, namespace: this.ns(namespace) }),
       });
       if (!resp.ok) {
         throw new Error(`Pinecone upsert failed: ${resp.status} ${await resp.text()}`);
@@ -591,14 +668,14 @@ export class PineconeVectorStore implements VectorStore {
 
   async search(
     queryVector: number[],
-    options?: { topK?: number; filter?: Record<string, string> }
+    options?: { topK?: number; filter?: Record<string, string>; namespace?: string }
   ): Promise<VectorMatch[]> {
     const body: Record<string, unknown> = {
       vector: queryVector,
       topK: options?.topK ?? 20,
       includeMetadata: true,
       includeValues: false,
-      namespace: this.namespace,
+      namespace: this.ns(options?.namespace),
     };
     if (options?.filter && Object.keys(options.filter).length > 0) {
       // Pinecone uses Mongo-style filter expressions: {field: {$eq: value}}.
@@ -630,7 +707,7 @@ export class PineconeVectorStore implements VectorStore {
     });
   }
 
-  async deleteByIds(ids: string[]): Promise<number> {
+  async deleteByIds(ids: string[], namespace?: string): Promise<number> {
     if (ids.length === 0) return 0;
     // Pinecone accepts up to 1000 ids per delete call.
     const batchSize = 1000;
@@ -639,13 +716,28 @@ export class PineconeVectorStore implements VectorStore {
       const resp = await fetch(`${this.host}/vectors/delete`, {
         method: 'POST',
         headers: this.headers(),
-        body: JSON.stringify({ ids: batch, namespace: this.namespace }),
+        body: JSON.stringify({ ids: batch, namespace: this.ns(namespace) }),
       });
       if (!resp.ok) {
         throw new Error(`Pinecone delete failed: ${resp.status} ${await resp.text()}`);
       }
     }
     return ids.length;
+  }
+
+  /** Delete every vector in a namespace (Pinecone's native deleteAll). */
+  async deleteNamespace(namespace: string): Promise<number> {
+    const resp = await fetch(`${this.host}/vectors/delete`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ deleteAll: true, namespace: this.ns(namespace) }),
+    });
+    // 404 = namespace doesn't exist → nothing to delete.
+    if (resp.status === 404) return 0;
+    if (!resp.ok) {
+      throw new Error(`Pinecone deleteAll failed: ${resp.status} ${await resp.text()}`);
+    }
+    return 1;
   }
 
   async isAvailable(): Promise<boolean> {

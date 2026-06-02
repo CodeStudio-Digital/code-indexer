@@ -15,6 +15,7 @@ import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
 import { SessionSnapshotService, type FileSummary } from '@mcp/services/services/session-snapshots.js';
 import { mountSnapshotReviewRoutes } from '../snapshot-review-routes.js';
+import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 
 interface AgentRunRow {
   coder_session_id: number | null;
@@ -149,5 +150,11 @@ export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
     scope: 'company',
     listCoderSessionIds: (companySessionId) =>
       listCoderSessionIdsForCompany(sessionStore.getDb(), companySessionId),
+    // Organizational reviews route to the MASTER (same channel as
+    // POST /api/company/sessions/:id/message); the master then decides to
+    // fix directly or forward to subordinates via the inbox. `{ ok: false }`
+    // when no worker is spawned so the UI can flag a non-delivery.
+    deliverMessage: (sessionId, message) =>
+      getCompanyOrchestrator(sessionId)?.sendMessageToMaster(message) ?? { ok: false },
   });
 }

@@ -92,6 +92,21 @@ export const PIPELINE_TEMPLATES: PipelineTemplate[] = [
     },
   },
 
+  {
+    key: 'fan-out-all-projects',
+    category: 'implementation',
+    icon: 'git-merge',
+    spec: {
+      label: 'Fix across all projects',
+      role: 'backend',
+      kind: 'fan-out',
+      taskTemplate:
+        'Apply the change below in THIS project. Verify with tests/build/lint when relevant. Stop with a concise final summary.\n\n{{previous_output}}',
+      branchMode: 'linear',
+      fanOut: { mode: 'each-project', role: 'backend' },
+    },
+  },
+
   // ─── Validation ──────────────────────────────────────────────
   {
     key: 'validate-output',

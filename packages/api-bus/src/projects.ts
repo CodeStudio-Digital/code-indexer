@@ -36,6 +36,7 @@ export interface UpdateProjectInput {
   name?: string;
   root_path?: string;
   node_version?: string | null;
+  runner_shell?: string | null;
 }
 
 export interface IndexProjectInput {
@@ -78,6 +79,30 @@ export interface ProjectsApi {
     input: { id: number },
     ctx: ApiContext,
   ): Promise<{ ok: true; vectors_known: number; vectors_deleted_remote: number; remote_error: string | null }>;
+
+  /**
+   * Wipe ONE project's data (index, sessions, snapshots, runs, costs) and its
+   * remote vectors, KEEPING the project row so the user only re-indexes.
+   */
+  clearData(
+    input: { id: number },
+    ctx: ApiContext,
+  ): Promise<{ ok: true; vectors_known: number; vectors_deleted_remote: number; remote_error: string | null }>;
+
+  /**
+   * Wipe ALL projects' data (index, sessions, snapshots, runs, costs) and their
+   * remote vectors, KEEPING each project row so the user only re-indexes — not
+   * re-creates. Per-project errors are collected, not fatal.
+   */
+  clearAllData(
+    input: void,
+    ctx: ApiContext,
+  ): Promise<{
+    ok: true;
+    projects_cleared: number;
+    vectors_deleted_remote: number;
+    errors: Array<{ project: string; error: string }>;
+  }>;
 
   stats(input: { id: number }, ctx: ApiContext): Promise<ProjectStats>;
 

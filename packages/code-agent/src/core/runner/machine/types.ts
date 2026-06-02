@@ -74,6 +74,19 @@ export interface RunContext {
   recovery: Map<RecoveryKind, number>;
   /** Tuple-hash dedup table. Key = `${name}|${stableArgsKey(input)}`. */
   dupCalls: Map<string, DupCallEntry>;
+  /**
+   * Cross-cycle loop-refusal counter. Key = same as `dupCalls`
+   * (`${name}|${stableArgsKey(input)}`), value = how many times this exact
+   * call has been HARD-refused by the tuple-hash guard across the whole run.
+   *
+   * Unlike `dupCalls`, this is NEVER cleared by `resetDupCalls` (the Planning
+   * reset). That's the point: it remembers that a refused call keeps coming
+   * back after each clean slate, so the Executing node can escalate from a
+   * passive text refusal to an ACTIVE enforcement <system-reminder> (tool
+   * list + "break out of the loop"). Without this, an insistent loop
+   * (refuse → planning resets → retry → refuse → …) never escalates.
+   */
+  loopRefusals: Map<string, number>;
   autoContinues: number;
   /**
    * Consecutive pre-emit compaction routings since the last turn that
@@ -308,6 +321,13 @@ export interface BridgeCallbacks {
    * Implemented in `runner.ts:runViaBehaviorTree`; no-op when unset.
    */
   flushPendingMessages?: () => void;
+  /**
+   * Inject a steering `<system-reminder>` as a user message that lands at
+   * the START of the next turn (wraps `runner.pushUserMessage`). Used by the
+   * Executing node to deliver loop-enforcement text when the same call has
+   * been refused across multiple planning cycles. No-op when unset.
+   */
+  injectSystemReminder?: (text: string) => void;
   /**
    * Per-turn telemetry persistence — wraps the pure
    * `core/runner/telemetry/persist-turn.ts` helper with class-bound side

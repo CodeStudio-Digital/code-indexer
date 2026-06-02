@@ -55,6 +55,50 @@ export function createFtsTables(db: DB): void {
   `);
 }
 
+const CODE_FTS_TRIGGERS = [
+  'files_ai', 'files_ad', 'symbols_ai', 'symbols_ad', 'snapshots_ai', 'snapshots_ad',
+] as const;
+const CODE_FTS_TABLES = ['files_fts', 'symbols_fts', 'snapshots_fts'] as const;
+
+/** Force-drop a (possibly corrupt) FTS5 vtab. DROP TABLE usually works even on
+ *  a malformed index; if the vtab module can't open it, remove its sqlite_master
+ *  entry + shadow tables directly (the documented FTS5 corruption recovery). */
+function dropFtsHard(db: DB, name: string): void {
+  try {
+    db.exec(`DROP TABLE IF EXISTS ${name}`);
+    return;
+  } catch {
+    // Corrupt vtab — bypass the module via writable_schema.
+  }
+  try {
+    db.pragma('writable_schema = ON');
+    db.prepare('DELETE FROM sqlite_master WHERE name = ?').run(name);
+    for (const s of ['data', 'idx', 'docsize', 'config', 'content']) {
+      try { db.exec(`DROP TABLE IF EXISTS ${name}_${s}`); } catch { /* ignore */ }
+    }
+  } finally {
+    db.pragma('writable_schema = OFF');
+  }
+}
+
+/**
+ * Rebuild the code-side FTS5 indexes (files/symbols/snapshots) from scratch.
+ * Used to recover from `SQLITE_CORRUPT_VTAB` — drops the triggers + (corrupt)
+ * virtual tables, recreates them, then repopulates from the external content
+ * tables. Safe: the base tables hold the source of truth; only the derived
+ * index is rebuilt.
+ */
+export function repairCodeFtsIndexes(db: DB): void {
+  for (const t of CODE_FTS_TRIGGERS) {
+    try { db.exec(`DROP TRIGGER IF EXISTS ${t}`); } catch { /* ignore */ }
+  }
+  for (const t of CODE_FTS_TABLES) dropFtsHard(db, t);
+  createFtsTables(db); // recreate vtabs + triggers
+  for (const t of CODE_FTS_TABLES) {
+    try { db.exec(`INSERT INTO ${t}(${t}) VALUES('rebuild')`); } catch { /* base table empty/absent */ }
+  }
+}
+
 export function createDocChunksFtsIfReady(db: DB): void {
   try {
     db.exec(`SELECT 1 FROM doc_chunks LIMIT 1`);

@@ -14,6 +14,7 @@
  * ONNX runtime only loads when local embeddings are actually selected.
  */
 import type { EmbeddingService } from './embeddings.js';
+import { resolveModelCacheDir } from './model-cache.js';
 
 const DEFAULT_MODEL = 'Xenova/multilingual-e5-small';
 const BATCH = 32;
@@ -31,11 +32,9 @@ export class LocalEmbeddingService implements EmbeddingService {
 
   constructor(opts?: { model?: string; cacheDir?: string }) {
     this.model = opts?.model || DEFAULT_MODEL;
-    // Fall back to MCP_MODEL_CACHE_DIR so the Electron host can point the
-    // model cache at a stable per-user dir (userData/models) without the
-    // admin having to set it per config — survives app updates, never
-    // written into the read-only asar bundle.
-    this.cacheDir = opts?.cacheDir || process.env.MCP_MODEL_CACHE_DIR;
+    // Only the explicit admin override is stored; the auto default
+    // (~/.mcp/models) is resolved lazily at load time via resolveModelCacheDir.
+    this.cacheDir = opts?.cacheDir;
   }
 
   private async getExtractor(): Promise<FeatureExtractor> {
@@ -54,9 +53,9 @@ export class LocalEmbeddingService implements EmbeddingService {
               `Install it with: pnpm add @huggingface/transformers (${(e as Error).message})`,
           );
         }
-        // Pin the model cache to a stable location when configured (Electron
-        // packaging sets this so models survive app updates).
-        if (this.cacheDir && mod.env) (mod.env as { cacheDir?: string }).cacheDir = this.cacheDir;
+        // Auto-resolve (and create) ~/.mcp/models unless overridden. No env
+        // var or manual folder setup required.
+        if (mod.env) (mod.env as { cacheDir?: string }).cacheDir = resolveModelCacheDir(this.cacheDir);
         return (await mod.pipeline('feature-extraction', this.model)) as unknown as FeatureExtractor;
       })();
     }

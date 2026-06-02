@@ -12,6 +12,7 @@ export interface UpdateProjectInput {
   embeddings_enabled?: number;
   search_mode?: SearchMode;
   node_version?: string | null;
+  runner_shell?: string | null;
 }
 
 const VALID_SEARCH_MODES: ReadonlySet<string> = new Set(['fts', 'vector', 'hybrid']);
@@ -77,6 +78,11 @@ export class UpdateProjectService {
     if (patch.node_version !== undefined) {
       // Opaque runtime id resolved at spawn time; empty string → system default.
       updates.node_version = patch.node_version || null;
+    }
+
+    if (patch.runner_shell !== undefined) {
+      // Opaque shell id resolved at spawn time; empty string → system default.
+      updates.runner_shell = patch.runner_shell || null;
     }
 
     this.db.updateProject(id, updates);

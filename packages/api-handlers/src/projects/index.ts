@@ -15,6 +15,7 @@ import {
   type IndexProjectInput,
 } from '@mcp/services/services/projects/index.js';
 import { makeHybridSearchCacheInvalidator } from '@mcp/indexer/search/cache-invalidator.js';
+import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import type { HandlerDeps } from '../types.js';
 
 /**
@@ -67,6 +68,34 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       : undefined,
   });
 
+  // Clear a project's REMOTE vectors. Prefers a wholesale namespace drop
+  // (sqlite-vec / Qdrant / Pinecone); falls back to per-id snapshot delete on
+  // Cloudflare Vectorize (no delete-by-metadata). Shared by delete + clearAllData.
+  async function clearProjectVectors(
+    project: { id: number; name: string },
+  ): Promise<{ known: number; deleted: number; error: string | null }> {
+    const vectorIds = db.snapshotVectorIdsForProject(project.id);
+    let deleted = 0;
+    let error: string | null = null;
+    if (typeof vectorStore.deleteNamespace === 'function') {
+      try {
+        deleted = await vectorStore.deleteNamespace(codeNamespace(project.name));
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+      }
+    } else if (vectorIds.length > 0) {
+      try {
+        deleted = await vectorStore.deleteByIds(vectorIds);
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+        db.enqueuePendingVectorDeletes(
+          vectorIds.map((vid) => ({ vector_id: vid, project_name: project.name, error: error! })),
+        );
+      }
+    }
+    return { known: vectorIds.length, deleted, error };
+  }
+
   return {
     async list(_input, _ctx: ApiContext) {
       return db.listProjects();
@@ -92,31 +121,52 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       const project = db.getProject(id);
       if (!project) throw new ApiError('not_found', 404, 'project not found');
 
-      const vectorIds = db.snapshotVectorIdsForProject(id);
-      let remoteDeleted = 0;
-      let remoteError: string | null = null;
-
-      if (vectorIds.length > 0) {
-        try {
-          remoteDeleted = await vectorStore.deleteByIds(vectorIds);
-        } catch (err) {
-          remoteError = err instanceof Error ? err.message : String(err);
-          db.enqueuePendingVectorDeletes(
-            vectorIds.map((vid) => ({
-              vector_id: vid,
-              project_name: project.name,
-              error: remoteError!,
-            })),
-          );
-        }
-      }
-
+      const v = await clearProjectVectors(project);
       db.deleteProject(id);
       return {
         ok: true as const,
-        vectors_known: vectorIds.length,
-        vectors_deleted_remote: remoteDeleted,
-        remote_error: remoteError,
+        vectors_known: v.known,
+        vectors_deleted_remote: v.deleted,
+        remote_error: v.error,
+      };
+    },
+
+    async clearData({ id }) {
+      const project = db.getProject(id);
+      if (!project) throw new ApiError('not_found', 404, 'project not found');
+      const v = await clearProjectVectors(project);
+      db.clearProjectData(id);
+      deps.hybridSearch?.invalidateCache?.();
+      return {
+        ok: true as const,
+        vectors_known: v.known,
+        vectors_deleted_remote: v.deleted,
+        remote_error: v.error,
+      };
+    },
+
+    async clearAllData() {
+      // Wipe every project's data (index, sessions, snapshots, runs, costs) +
+      // its remote vectors, but KEEP each project row so the user only has to
+      // re-index — not re-create. Errors per project are collected, not fatal.
+      const all = db.listProjects();
+      let projectsCleared = 0;
+      let vectorsDeleted = 0;
+      const errors: Array<{ project: string; error: string }> = [];
+      for (const project of all) {
+        const v = await clearProjectVectors(project);
+        if (v.error) errors.push({ project: project.name, error: v.error });
+        vectorsDeleted += v.deleted;
+        db.clearProjectData(project.id);
+        projectsCleared++;
+      }
+      // Drop the in-memory search caches so stale results don't linger.
+      deps.hybridSearch?.invalidateCache?.();
+      return {
+        ok: true as const,
+        projects_cleared: projectsCleared,
+        vectors_deleted_remote: vectorsDeleted,
+        errors,
       };
     },
 

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CodeIndexDB } from '@mcp/store/db.js';
@@ -150,6 +150,27 @@ describe('SnapshotRecordingFilesystemPort', () => {
       // On-disk content must reflect the latest write.
       expect(readFileSync(join(ctx.workDir, 'x.txt'), 'utf8')).toBe('new-x\n');
       expect(readFileSync(join(ctx.workDir, 'y.txt'), 'utf8')).toBe('new-y\n');
+    } finally {
+      ctx.cleanup();
+    }
+  });
+
+  it('treats a baseline whose path became a directory as missing content (no crash)', async () => {
+    const ctx = setup();
+    try {
+      const p = join(ctx.workDir, 'turned-dir');
+      writeFileSync(p, 'was a file\n');
+      await ctx.fsPort.writeFile(p, 'changed\n'); // records the baseline
+      // The file is later replaced by a directory at the same path → reading
+      // current content throws EISDIR, which must be swallowed (treated as null)
+      // so the whole listing/diff doesn't crash.
+      rmSync(p, { force: true });
+      mkdirSync(p);
+      const files = await ctx.service.listFiles('coder', ctx.session.id);
+      const entry = files.find((f) => f.filePath === 'turned-dir');
+      expect(entry).toBeDefined();
+      const diff = await ctx.service.getDiff(entry!.baselineId);
+      expect(diff).not.toBeNull();
     } finally {
       ctx.cleanup();
     }

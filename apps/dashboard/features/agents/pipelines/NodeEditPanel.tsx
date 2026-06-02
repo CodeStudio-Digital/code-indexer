@@ -18,6 +18,7 @@ import {
 import type { KanbanColumn, KanbanTag } from '@mcp/company/types.js';
 import { KANBAN_COLUMNS } from '@mcp/company/types.js';
 import type { PipelineNode } from './PipelineBuilder.js';
+import { FanOutEditor } from './node-edit/FanOutEditor.js';
 
 const KANBAN_TAGS: KanbanTag[] = ['bug', 'feature', 'refactor', 'documentation'];
 const BRANCH_MODES: NonNullable<PipelineNode['branchMode']>[] = ['linear', 'pass-fail', 'by-tag', 'by-text-match'];
@@ -48,17 +49,23 @@ export function NodeEditPanel({
 
   const kind = node.kind ?? 'agent';
   const isValidator = kind === 'validate';
+  const isFanOut = kind === 'fan-out';
 
-  // Validators are forced into pass-fail branching; the executor's
-  // verdict ('pass'/'fail'/'review') only routes via that mode. Switching
-  // kind=validate also patches branchMode so the saved graph stays
-  // valid even if the user doesn't touch the branchMode dropdown.
-  const switchKind = (next: 'agent' | 'validate') => {
+  // Validators are forced into pass-fail branching; fan-out into linear.
+  // Switching kind also patches branchMode (and seeds fanOut) so the saved
+  // graph stays valid even if the user doesn't touch other fields.
+  const switchKind = (next: 'agent' | 'validate' | 'fan-out') => {
     if (next === 'validate') {
       onChange({
         kind: 'validate',
         branchMode: 'pass-fail',
         validatorPrompt: node.validatorPrompt ?? '',
+      });
+    } else if (next === 'fan-out') {
+      onChange({
+        kind: 'fan-out',
+        branchMode: 'linear',
+        fanOut: node.fanOut ?? { mode: 'each-project', role: node.role },
       });
     } else {
       onChange({ kind: 'agent' });
@@ -72,7 +79,11 @@ export function NodeEditPanel({
         <div className="flex items-center gap-1.5">
           <span className="font-medium text-sm">{t('agents:pipelines.node.title')}</span>
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground px-1.5 py-0.5 rounded bg-muted">
-            {kind === 'validate' ? t('agents:pipelines.node.kindValidate') : t('agents:pipelines.node.kindAgent')}
+            {isFanOut
+              ? t('agents:pipelines.node.kindFanOut', { defaultValue: 'Fan-out' })
+              : isValidator
+                ? t('agents:pipelines.node.kindValidate')
+                : t('agents:pipelines.node.kindAgent')}
           </span>
         </div>
         <Tooltip>
@@ -130,6 +141,14 @@ export function NodeEditPanel({
               label={t('agents:pipelines.node.kindValidate')}
               onSelect={() => switchKind('validate')}
             />
+            {companyScope && (
+              <KindRadio
+                value="fan-out"
+                current={kind}
+                label={t('agents:pipelines.node.kindFanOut', { defaultValue: 'Fan-out' })}
+                onSelect={() => switchKind('fan-out')}
+              />
+            )}
           </div>
           <div className="text-[10px] text-muted-foreground mt-1">
             {isValidator
@@ -138,7 +157,7 @@ export function NodeEditPanel({
           </div>
         </Field>
 
-        {!isValidator && companyScope && (
+        {kind === 'agent' && companyScope && (
           <Field
             label={t('agents:pipelines.node.role')}
             hint={t('agents:pipelines.node.roleTip', {
@@ -187,6 +206,14 @@ export function NodeEditPanel({
               </div>
             </Field>
           </>
+        )}
+
+        {isFanOut && companyScope && (
+          <FanOutEditor
+            fanOut={node.fanOut}
+            availableRoles={availableRoles}
+            onChange={onChange}
+          />
         )}
 
         <Field
@@ -265,7 +292,7 @@ export function NodeEditPanel({
         <Field label={t('agents:pipelines.node.branchMode')}>
           <select
             value={node.branchMode ?? 'linear'}
-            disabled={isValidator}
+            disabled={isValidator || isFanOut}
             onChange={(e) =>
               onChange({ branchMode: e.target.value as PipelineNode['branchMode'] })
             }
@@ -456,8 +483,8 @@ function KindRadio({
   label,
   onSelect,
 }: {
-  value: 'agent' | 'validate';
-  current: 'agent' | 'validate';
+  value: 'agent' | 'validate' | 'fan-out';
+  current: string;
   label: string;
   onSelect: () => void;
 }) {

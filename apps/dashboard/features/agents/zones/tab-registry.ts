@@ -27,6 +27,7 @@ import {
   MessageCircle,
   MessageSquare,
   Network,
+  Play,
   Sparkles,
   TerminalSquare,
   type LucideIcon,
@@ -54,6 +55,7 @@ export const TAB_REGISTRY: readonly TabDef[] = [
   { zone: 'build', tab: 'files', Icon: FolderTree, labelKey: 'company.files', fallbackLabel: 'Files' },
   { zone: 'build', tab: 'git', Icon: GitBranch, labelKey: 'company.git', fallbackLabel: 'Git' },
   { zone: 'build', tab: 'api', Icon: BookOpen, labelKey: 'company.apiReference', fallbackLabel: 'API' },
+  { zone: 'build', tab: 'runners', Icon: Play, labelKey: 'company.runners', fallbackLabel: 'Runners' },
   // Terminal moved out of the build zone — it's now a global bottom
   // panel toggled from SessionHeader (Ctrl+J), so it's always
   // reachable regardless of which zone/tab is active.

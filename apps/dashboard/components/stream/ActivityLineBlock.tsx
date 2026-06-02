@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Activity, Check, Clock, Loader2, X } from 'lucide-react';
-import type { StreamActivityBlock } from '../../../hooks/agent-stream/types.js';
-import { cn } from '../../../lib/utils.js';
+import type { StreamActivityBlock } from '../../hooks/agent-stream/types.js';
+import { cn } from '../../lib/utils.js';
 
 interface ActivityLineBlockProps {
   activity: StreamActivityBlock;

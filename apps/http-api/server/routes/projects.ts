@@ -42,6 +42,16 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  // Collection-level danger action — wipes every project's data but keeps the
+  // rows. Registered before the `:id` routes; it's a distinct literal segment.
+  app.post('/api/projects/clear-all-data', async (c) => {
+    try {
+      return c.json(await h.clearAllData(undefined, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
   app.get('/api/projects/:id', async (c) => {
     try {
       return c.json(await h.get({ id: parseIdParam(c) }, createContext()));
@@ -64,6 +74,15 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
   app.delete('/api/projects/:id', async (c) => {
     try {
       return c.json(await h.delete({ id: parseIdParam(c) }, createContext()));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return notFound(c);
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/projects/:id/clear-data', async (c) => {
+    try {
+      return c.json(await h.clearData({ id: parseIdParam(c) }, createContext()));
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) return notFound(c);
       return mapApiError(c, err);

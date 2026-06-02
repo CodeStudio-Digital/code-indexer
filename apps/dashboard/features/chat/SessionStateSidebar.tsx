@@ -124,24 +124,21 @@ export function SessionStateSidebar({
   const todosTotal = effectiveTodos.length;
   const todosPercent = todosTotal === 0 ? 0 : Math.round((todosCompleted / todosTotal) * 100);
 
-  const Wrapper = embedded
-    ? (({ children }: { children: React.ReactNode }) => (
-        <div className="h-full w-full overflow-y-auto">{children}</div>
-      ))
-    : (({ children }: { children: React.ReactNode }) => (
-        <aside className="border-l bg-card/50 w-64 shrink-0 overflow-y-auto hidden lg:block">
-          {children}
-        </aside>
-      ));
-
-  return (
-    <Wrapper>
-      {pipelineRuntime && (
-        <PipelineRuntimeSection
-          sessionId={sessionId}
-          pipelineRuntime={pipelineRuntime}
-        />
-      )}
+  // NOTE: choose a *stable host element* by the `embedded` flag instead of
+  // defining a `Wrapper` component inside render. An inline component is a
+  // new type every render, which makes React unmount+remount the whole
+  // subtree each render — that remount storm (with the always-mounted,
+  // useApi-driven PipelineRuntimeSection below) tripped React's
+  // "Maximum update depth exceeded" guard.
+  const sections = (
+    <>
+      {/* Always mounted: self-hides when the session has no pipeline run.
+          DB-driven so past/running executions persist across reload/restart
+          even when no live SSE runtime exists. */}
+      <PipelineRuntimeSection
+        sessionId={sessionId}
+        pipelineRuntime={pipelineRuntime ?? null}
+      />
       {goal && (
         <CollapsibleSection
           id="goal"
@@ -324,7 +321,15 @@ export function SessionStateSidebar({
         selected={skillPicks}
         onToggleSelect={onToggleSkillPick}
       />
-    </Wrapper>
+    </>
+  );
+
+  return embedded ? (
+    <div className="h-full w-full overflow-y-auto">{sections}</div>
+  ) : (
+    <aside className="border-l bg-card/50 w-64 shrink-0 overflow-y-auto hidden lg:block">
+      {sections}
+    </aside>
   );
 }
 

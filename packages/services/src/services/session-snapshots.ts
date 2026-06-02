@@ -72,7 +72,10 @@ async function readCurrentContent(absPath: string): Promise<string | null> {
     return await fs.readFile(absPath, 'utf8');
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') return null;
+    // Treat "no readable regular file here" as missing content (null) rather
+    // than throwing — a single bad path must not crash the whole snapshot
+    // listing/diff. ENOENT: gone. EISDIR: the path is now a directory.
+    if (code === 'ENOENT' || code === 'EISDIR') return null;
     throw e;
   }
 }

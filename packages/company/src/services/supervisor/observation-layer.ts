@@ -52,7 +52,10 @@ export type IncidentEmitter = (incident: {
     /** Circuit breakers — role spawn limit reached. */
     | 'role_quarantined'
     /** Circuit breakers — read-only mode entered or exited. */
-    | 'read_only_mode';
+    | 'read_only_mode'
+    /** Runner injected an enforcement reminder into an agent stuck in an
+     *  insistent tool-call loop (same tool+args refused across cycles). */
+    | 'loop_enforced';
   agentRunId: number | null;
   fromState?: SupervisionState;
   attemptedTo?: SupervisionState;

@@ -4,6 +4,7 @@ import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import type { CostTracker } from '@mcp/services/services/costs.js';
 import type { VectorRecord } from '@mcp/shared/types.js';
+import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import type { LshIndexingSink } from '@mcp/indexer/indexer/lsh-indexing-sink.js';
 import type { LLMFileAnalysis } from '@mcp/shared/types.js';
 
@@ -29,7 +30,7 @@ export interface EmbedExecutorDeps {
  */
 export async function executeEmbedding(
   deps: EmbedExecutorDeps,
-  project: { id: number },
+  project: { id: number; name: string },
   runId: number | null,
   candidates: EmbeddingCandidate[],
 ): Promise<number> {
@@ -54,7 +55,9 @@ export async function executeEmbedding(
     metadata: c.metadata,
   }));
 
-  await deps.vectorStore.upsert(vectorRecords);
+  // Isolate by project namespace so another project's code never pollutes
+  // this project's search top-K (and a project delete can drop it wholesale).
+  await deps.vectorStore.upsert(vectorRecords, codeNamespace(project.name));
 
   deps.db.saveVectorIds(
     project.id,

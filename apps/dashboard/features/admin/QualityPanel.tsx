@@ -8,6 +8,7 @@ import { Loader2, RefreshCcw, Trash2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
+import { Switch } from '../../components/ui/switch.js';
 import { useConfirm, useNotify } from '../../components/ui/dialog-provider.js';
 import {
   type CounterfactualStats,
@@ -15,11 +16,14 @@ import {
   type QualityRow,
   type QualityVerdict,
   type VerdictDistribution,
+  clearAllQuality,
   fetchCounterfactualStats,
   fetchInterventionEffectiveness,
   fetchQualityDistribution,
+  fetchQualityEnabled,
   fetchQualityRows,
   pruneQuality,
+  setQualityEnabled,
 } from './quality-api.js';
 
 const CLASSIFIERS = ['off_topic', 'completeness', 'code_quality', 'policy', 'tool_misuse'];
@@ -50,6 +54,8 @@ export function QualityPanel() {
   const [rows, setRows] = useState<QualityRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [qualityEnabled, setQualityEnabledState] = useState<boolean | null>(null);
+  const [togglingEnabled, setTogglingEnabled] = useState(false);
 
   async function loadAggregates() {
     setLoading(true);
@@ -84,6 +90,9 @@ export function QualityPanel() {
 
   useEffect(() => { void loadAggregates(); }, []);
   useEffect(() => { void loadRows(selected); }, [selected]);
+  useEffect(() => {
+    void fetchQualityEnabled().then(setQualityEnabledState).catch(() => setQualityEnabledState(null));
+  }, []);
 
   const perClassifier = useMemo(() => {
     const map = new Map<string, Record<QualityVerdict, number>>();
@@ -143,6 +152,48 @@ export function QualityPanel() {
     }
   }
 
+  async function onToggleEnabled(next: boolean) {
+    setTogglingEnabled(true);
+    try {
+      setQualityEnabledState(await setQualityEnabled(next));
+    } catch (e) {
+      await notify({
+        title: t('telemetry:quality.toasts.toggleFailed', { defaultValue: 'Falha ao alternar Qualidade' }),
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    } finally {
+      setTogglingEnabled(false);
+    }
+  }
+
+  async function onClearAll() {
+    const ok = await confirm({
+      title: t('telemetry:quality.confirmClearAll.title', { defaultValue: 'Limpar TUDO da Qualidade?' }),
+      description: t('telemetry:quality.confirmClearAll.description', {
+        defaultValue: 'Apaga todas as classificações e intervenções (não só >30d). Irreversível.',
+      }),
+      variant: 'destructive',
+      confirmLabel: t('telemetry:quality.confirmClearAll.confirm', { defaultValue: 'Limpar tudo' }),
+    });
+    if (!ok) return;
+    try {
+      const res = await clearAllQuality();
+      await notify({
+        title: t('telemetry:quality.toasts.pruned.title'),
+        description: t('telemetry:quality.toasts.pruned.description', { deleted: res.deleted }),
+      });
+      await loadAggregates();
+      await loadRows(selected);
+    } catch (e) {
+      await notify({
+        title: t('telemetry:quality.toasts.pruneFailed'),
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="text-sm text-muted-foreground">
@@ -150,12 +201,31 @@ export function QualityPanel() {
       </div>
 
       <div className="flex items-center gap-2">
+        {/* Runtime kill switch — stops the per-turn classifier LLM calls. */}
+        <div className="flex items-center gap-2 rounded border px-2.5 py-1">
+          <Switch
+            checked={qualityEnabled === true}
+            disabled={qualityEnabled === null || togglingEnabled}
+            onCheckedChange={(v) => void onToggleEnabled(v)}
+          />
+          <span className="text-xs text-muted-foreground">
+            {qualityEnabled === null
+              ? '…'
+              : qualityEnabled
+                ? t('telemetry:quality.actions.enabled', { defaultValue: 'Qualidade: ativa' })
+                : t('telemetry:quality.actions.disabled', { defaultValue: 'Qualidade: desativada' })}
+          </span>
+        </div>
         <Button size="sm" variant="outline" onClick={() => { void loadAggregates(); void loadRows(selected); }} disabled={loading}>
           {loading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCcw className="h-3 w-3 mr-1" />}
           {t('telemetry:quality.actions.refresh')}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => void onPrune()}>
           <Trash2 className="h-3 w-3 mr-1 text-red-500" /> {t('telemetry:quality.actions.prune')}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => void onClearAll()}>
+          <Trash2 className="h-3 w-3 mr-1 text-red-500" />
+          {t('telemetry:quality.actions.clearAll', { defaultValue: 'Limpar tudo' })}
         </Button>
       </div>
 

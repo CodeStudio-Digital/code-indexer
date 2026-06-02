@@ -29,6 +29,8 @@ import { accumulateUsage } from '../machine/context.js';
 import { envTunables } from '@mcp/code-agent/core/tunables.js';
 import { assembleMessagesForChat } from '../assembly/messages.js';
 import { buildTools } from '../assembly/tools.js';
+import { filterByTiers } from '@mcp/code-agent/tools/tiers.js';
+import { buildLoopEnforcementMarker } from '../markers.js';
 import { shouldCompact90 } from '../compaction/threshold.js';
 // PR-F integration — Codex BodyAfterPrefix (post-response, prefix-cache-aware
 // trigger) + Kimi pre-emit (pre-provider-call estimate so the request that
@@ -54,6 +56,25 @@ import { withAbort, isAbortError } from './executing-abort.js';
 const DEBUG = process.env.CODER_BT_DEBUG === '1';
 function dbg(...args: unknown[]): void {
   if (DEBUG) console.log('[bt-debug]', ...args);
+}
+
+/**
+ * Concise list of the tools this agent can call right now — registry filtered
+ * by the active tiers (the same set the model is advertised), each with a
+ * one-line description. Feeds the loop-enforcement reminder so the agent is
+ * reminded what to do INSTEAD of the call it keeps repeating.
+ */
+function availableTools(ctx: RunContext): Array<{ name: string; description: string }> {
+  const all = ctx.opts.registry.list();
+  const visible = ctx.activeTiers ? filterByTiers(all, ctx.activeTiers) : all;
+  return visible
+    .map((t) => ({ name: t.name, description: firstLine(t.description) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function firstLine(desc: string): string {
+  const line = (desc ?? '').split('\n', 1)[0].trim();
+  return line.length > 80 ? `${line.slice(0, 77)}...` : line;
 }
 
 /** Latest user-message text — the "current task" signal for memory retrieval. */
@@ -554,6 +575,7 @@ export class ExecutingNode implements BehaviorNode {
       toolContext: ctx.opts.toolContext,
       turn: ctx.turn,
       dupCalls: ctx.dupCalls,
+      loopRefusals: ctx.loopRefusals,
       toolGate: ctx.bridge?.toolGate,
       enforcePreRead: ctx.bridge?.enforcePreRead,
       enforceTaskMode: ctx.bridge?.enforceTaskMode,
@@ -622,6 +644,28 @@ export class ExecutingNode implements BehaviorNode {
 
     // Fire-and-forget quality classifier. Errors must NOT block the turn.
     runQualityCheck(ctx, joinText(result.textBlocks), dispatch.results, result.toolUses);
+
+    // Insistent-loop enforcement — the same tool+args got hard-refused across
+    // multiple planning cycles. A passive refusal alone never breaks it (the
+    // dedup table resets each cycle), so inject an ACTIVE steering reminder
+    // that re-lists the available tools and orders a strategy change, then let
+    // the normal ToolLoopDetected routing send us to Planning.
+    if (dispatch.loopEnforcement) {
+      const { toolName, count } = dispatch.loopEnforcement;
+      ctx.bridge?.injectSystemReminder?.(
+        buildLoopEnforcementMarker({ toolName, count, tools: availableTools(ctx) }),
+      );
+      ctx.emit('tool_loop_intervention', {
+        kind: 'loop-enforced',
+        turn: ctx.turn,
+        toolName,
+        count,
+        severity: 'enforced',
+        reason:
+          `Tool '${toolName}' was refused ${count}x across planning cycles — ` +
+          `injected an enforcement reminder (available tools + break-the-loop order).`,
+      });
+    }
 
     if (dispatch.toolLoopDetected) {
       return events.toolLoopDetected({ guard: dispatch.loopGuard ?? 'tuple-hash' });

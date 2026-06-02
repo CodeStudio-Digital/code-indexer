@@ -23,6 +23,7 @@ import {
   ShieldCheck,
   Cpu,
   GitBranch,
+  GitFork,
   Hand,
   CheckCheck,
   AlertTriangle,
@@ -46,6 +47,12 @@ export function PipelineNodeView(
   const node = props.data.pipelineNode;
   const kind = node.kind ?? 'agent';
   const isValidator = kind === 'validate';
+  const isFanOut = kind === 'fan-out';
+  const fanOutCount = isFanOut
+    ? node.fanOut?.mode === 'explicit'
+      ? node.fanOut.branches?.length ?? 0
+      : null // each-project → resolved at runtime
+    : 0;
   const branchMode = node.branchMode ?? 'linear';
   // Three-handle layout applies whenever the routing emits the
   // pass / fail / review triplet — that's both validator nodes (which
@@ -60,13 +67,17 @@ export function PipelineNodeView(
       ((node.validatorPrompt ?? '').length > 80 ? '…' : '')
     : '';
 
-  const KindIcon = isValidator ? ShieldCheck : Bot;
-  const accentClass = isValidator
-    ? 'border-amber-400/70 bg-amber-50/50 dark:bg-amber-950/30'
-    : 'border-sky-400/70 bg-sky-50/50 dark:bg-sky-950/30';
-  const headerClass = isValidator
-    ? 'bg-amber-100/80 text-amber-900 dark:bg-amber-900/50 dark:text-amber-100'
-    : 'bg-sky-100/80 text-sky-900 dark:bg-sky-900/50 dark:text-sky-100';
+  const KindIcon = isFanOut ? GitFork : isValidator ? ShieldCheck : Bot;
+  const accentClass = isFanOut
+    ? 'border-violet-400/70 bg-violet-50/50 dark:bg-violet-950/30'
+    : isValidator
+      ? 'border-amber-400/70 bg-amber-50/50 dark:bg-amber-950/30'
+      : 'border-sky-400/70 bg-sky-50/50 dark:bg-sky-950/30';
+  const headerClass = isFanOut
+    ? 'bg-violet-100/80 text-violet-900 dark:bg-violet-900/50 dark:text-violet-100'
+    : isValidator
+      ? 'bg-amber-100/80 text-amber-900 dark:bg-amber-900/50 dark:text-amber-100'
+      : 'bg-sky-100/80 text-sky-900 dark:bg-sky-900/50 dark:text-sky-100';
 
   return (
     <div
@@ -97,16 +108,27 @@ export function PipelineNodeView(
           {node.label || <span className="opacity-50">(unnamed)</span>}
         </span>
         <span className="text-[9px] uppercase tracking-wider opacity-70">
-          {isValidator ? 'validator' : 'agent'}
+          {isFanOut ? 'fan-out' : isValidator ? 'validator' : 'agent'}
         </span>
       </div>
 
       {/* Body */}
       <div className="px-2 py-1.5 space-y-1">
-        {!isValidator && (
+        {kind === 'agent' && (
           <Row
             icon={<GitBranch className="h-3 w-3 opacity-60" />}
             value={`@${node.role || 'unset'}`}
+            mono
+          />
+        )}
+        {isFanOut && (
+          <Row
+            icon={<GitFork className="h-3 w-3 opacity-60" />}
+            value={
+              node.fanOut?.mode === 'explicit'
+                ? `${fanOutCount} branch${fanOutCount === 1 ? '' : 'es'}`
+                : `each project · @${node.fanOut?.role || 'unset'}`
+            }
             mono
           />
         )}

@@ -50,4 +50,34 @@ describe('SqliteVecVectorStore', () => {
     expect(await store.isAvailable()).toBe(true);
     expect(await store.search([1, 2, 3], { topK: 5 })).toEqual([]);
   });
+
+  it('isolates by namespace: a query in one namespace never sees another', async () => {
+    const store = new SqliteVecVectorStore({ path: ':memory:' });
+    // Same vector space, different namespaces (project A vs project B vs docs).
+    await store.upsert([rec('a', [1, 0, 0], { project_name: 'A', type: 'symbol_body', ref_id: '1' })], 'code:A');
+    await store.upsert([rec('b', [1, 0, 0], { project_name: 'B', type: 'symbol_body', ref_id: '2' })], 'code:B');
+    await store.upsert([rec('d', [1, 0, 0], { type: 'doc_chunk', ref_id: '3' } as Record<string, string>)], 'docs:c5');
+
+    const inA = await store.search([1, 0, 0], { topK: 10, namespace: 'code:A' });
+    expect(inA.map((r) => r.id)).toEqual(['a']);
+
+    const inDocs = await store.search([1, 0, 0], { topK: 10, namespace: 'docs:c5' });
+    expect(inDocs.map((r) => r.id)).toEqual(['d']);
+
+    // No namespace → sees everything (legacy/aggregate behavior).
+    const all = await store.search([1, 0, 0], { topK: 10 });
+    expect(all.map((r) => r.id).sort()).toEqual(['a', 'b', 'd']);
+  });
+
+  it('deleteNamespace drops only the target namespace', async () => {
+    const store = new SqliteVecVectorStore({ path: ':memory:' });
+    await store.upsert([rec('a', [1, 0, 0], { project_name: 'A', type: 'file', ref_id: '1' })], 'code:A');
+    await store.upsert([rec('b', [0, 1, 0], { project_name: 'B', type: 'file', ref_id: '2' })], 'code:B');
+
+    const removed = await store.deleteNamespace('code:A');
+    expect(removed).toBe(1);
+
+    expect((await store.search([1, 0, 0], { topK: 10, namespace: 'code:A' })).length).toBe(0);
+    expect((await store.search([0, 1, 0], { topK: 10, namespace: 'code:B' })).map((r) => r.id)).toEqual(['b']);
+  });
 });

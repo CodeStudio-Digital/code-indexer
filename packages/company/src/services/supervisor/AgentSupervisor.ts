@@ -86,6 +86,13 @@ export interface AgentSupervisorDeps {
 
 const DEFAULT_TICK_INTERVAL_MS = 15_000;
 const DEFAULT_GHOST_STALE_THRESHOLD_MS = 5 * 60_000; // 5min
+/**
+ * How many loop-enforcement reminders an agent may receive before the
+ * supervisor aborts it. The runner injects a break-the-loop reminder each
+ * time; if the agent ignores it this many times, the in-band nudge clearly
+ * isn't landing, so we cut the loop off at the orchestrator level.
+ */
+const LOOP_ENFORCEMENT_ABORT_AFTER = 2;
 
 /**
  * Diagnostic snapshot for dashboards / admin endpoints. Read-only;
@@ -123,6 +130,9 @@ export class AgentSupervisor {
   /** Tracks read-only mode entries we've already announced so we
    *  don't spam `read_only_mode` incidents on every tick. */
   private readOnlyAnnouncedUntilMs: number | null = null;
+  /** Per-agent count of loop-enforcement events (runner injected a
+   *  break-the-loop reminder). Drives the abort backstop. */
+  private loopEnforcementCounts = new Map<number, number>();
 
   constructor(deps: AgentSupervisorDeps) {
     this.tracker = new HeartbeatTracker();
@@ -322,6 +332,40 @@ export class AgentSupervisor {
    */
   setStateTimeoutOverride(agentRunId: number, ms: number | null): boolean {
     return this.tracker.setStateTimeoutOverride(agentRunId, ms);
+  }
+
+  /**
+   * Record that the runner injected a loop-enforcement reminder into an agent
+   * stuck in an insistent tool-call loop (same tool+args refused across
+   * planning cycles). Fed by `wireSupervisorToRunner` on the
+   * `tool_loop_intervention { kind: 'loop-enforced' }` event.
+   *
+   * Surfaces a `loop_enforced` incident on the dashboard and, once an agent
+   * crosses {@link LOOP_ENFORCEMENT_ABORT_AFTER}, aborts it — the in-band
+   * reminder clearly isn't landing, so we cut the loop off at the orchestrator.
+   */
+  recordLoopEnforced(agentRunId: number, toolName: string): void {
+    const n = (this.loopEnforcementCounts.get(agentRunId) ?? 0) + 1;
+    this.loopEnforcementCounts.set(agentRunId, n);
+    const record = this.tracker.get(agentRunId);
+    this.emitIncident({
+      kind: 'loop_enforced',
+      agentRunId,
+      detail:
+        `agent ${agentRunId}${record ? ` (${record.role})` : ''} looped on \`${toolName}\` ` +
+        `— enforcement reminder injected (#${n}).`,
+      detectedAtMs: Date.now(),
+    });
+    if (n >= LOOP_ENFORCEMENT_ABORT_AFTER) {
+      void Promise.resolve(
+        this.recoveryContext?.subordinates?.abort(
+          agentRunId,
+          `supervisor: insistent loop on ${toolName} survived ${n} enforcement reminders`,
+        ),
+      ).catch(() => {
+        /* best-effort — abort is a backstop, never throw from telemetry path */
+      });
+    }
   }
 
   /**

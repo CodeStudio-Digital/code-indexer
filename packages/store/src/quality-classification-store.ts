@@ -207,4 +207,10 @@ export class QualityClassificationStore {
       .run(cutoff);
     return Number(result.changes);
   }
+
+  /** Drop ALL rows (the dashboard "Limpar tudo" action). */
+  clearAll(): number {
+    const result = this.db.prepare('DELETE FROM quality_classifications').run();
+    return Number(result.changes);
+  }
 }

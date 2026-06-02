@@ -60,6 +60,14 @@ export interface DispatchArgs {
   turn: number;
   dupCalls: Map<string, DupCallEntry>;
   /**
+   * Cross-cycle loop-refusal counter (`ctx.loopRefusals`). Survives the
+   * per-Planning `dupCalls` reset, so it remembers a refused call that keeps
+   * coming back. When a tool+args crosses `ENFORCE_AFTER_REFUSALS`, the
+   * result's `loopEnforcement` is set so the Executing node injects an active
+   * enforcement reminder. Omit to disable (tests / subagent paths).
+   */
+  loopRefusals?: Map<string, number>;
+  /**
    * Optional pre-dispatch gate. Returning a non-null string blocks the
    * invocation and synthesises an error tool_result carrying that text
    * (plan/spec mode + mutating tool, sandbox required, etc.). Runs
@@ -170,7 +178,23 @@ export interface DispatchResult {
    * one did).
    */
   loopGuard?: 'tuple-hash' | 'failure-streak';
+  /**
+   * Set when a tool+args was hard-refused enough times across planning
+   * cycles (≥ `ENFORCE_AFTER_REFUSALS`) to count as an INSISTENT loop. The
+   * Executing node reacts by injecting an active enforcement
+   * `<system-reminder>` (available tools + "stop looping") and emitting
+   * `tool_loop_intervention { kind: 'loop-enforced' }`. Last one in the
+   * batch wins (mirrors `loopGuard`).
+   */
+  loopEnforcement?: { toolName: string; count: number };
 }
+
+/**
+ * How many cross-cycle hard refusals of the same tool+args trigger active
+ * enforcement. 2 ≈ ~6 identical calls (each refuse follows a 2nd reminder),
+ * i.e. the agent burned two full clean-slate cycles still repeating itself.
+ */
+const ENFORCE_AFTER_REFUSALS = 2;
 
 export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult> {
   const results: DispatchedToolResult[] = [];
@@ -178,6 +202,9 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
   // PR 5 — which guard fired last. Tracked so the Executing node can
   // surface the correct guard kind to the orchestrator.
   let loopGuard: DispatchResult['loopGuard'] | undefined;
+  // Insistent-loop enforcement signal (last refused call that crossed the
+  // cross-cycle threshold wins).
+  let loopEnforcement: DispatchResult['loopEnforcement'];
 
   for (const tu of args.toolUses) {
     const tool = lookupTool(args.registry, tu.name);
@@ -261,6 +288,14 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       });
       toolLoopDetected = true;
       loopGuard = 'tuple-hash';
+      // Cross-cycle memory: the Planning reset clears `dupCalls`, so without
+      // this the loop never escalates past one passive refusal. Count refusals
+      // that survive the reset; once they pile up, flag active enforcement.
+      if (args.loopRefusals) {
+        const n = (args.loopRefusals.get(verdict.key) ?? 0) + 1;
+        args.loopRefusals.set(verdict.key, n);
+        if (n >= ENFORCE_AFTER_REFUSALS) loopEnforcement = { toolName: tu.name, count: n };
+      }
       continue;
     }
 
@@ -459,7 +494,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     });
   }
 
-  return { results, toolLoopDetected, loopGuard };
+  return { results, toolLoopDetected, loopGuard, loopEnforcement };
 }
 
 /** Compact error-to-string for the guarded bridge-callback warnings. */

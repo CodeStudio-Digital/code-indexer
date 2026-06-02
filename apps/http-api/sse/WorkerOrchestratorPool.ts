@@ -28,6 +28,9 @@
  */
 import { WorkerHost } from '@mcp/orchestrator-host';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
+import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
+import type { CoderWorkerDocDeps } from './CoderWorkerPool.js';
 import {
   createBus,
   publish,
@@ -66,6 +69,15 @@ export interface WorkerOrchestratorPoolOpts {
   ttlMs?: number;
   /** Logger for diagnostic output. */
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
+  /**
+   * Mutable doc-corpus deps box. Mutated by the singleton wire-up
+   * (`setCompanyWorkerDocDeps` in `workerPoolSingleton.ts`); each `spawn()`
+   * wires bridge handlers that route `rag_search_docs` / `docs_deep_research`
+   * from inside the company-worker BACK to these main-thread singletons via
+   * MessageBridge RPC. Worker-side shims live in
+   * `apps/http-api/workers/company-worker.ts`. Mirrors `CoderWorkerPool`.
+   */
+  docDeps?: CoderWorkerDocDeps;
 }
 
 /**
@@ -245,6 +257,41 @@ export class WorkerOrchestratorPool {
     const bus = createBus(new AbortController());
     const detachRuntimeLog = installRuntimeEventLog(bus, 'company', sessionId);
     const bridge = host.requireBridge();
+
+    // ─── Doc-corpus RPC bridges from worker → main ───────────────
+    // The company-worker boot installs `DocSearchBackend` /
+    // `DocsResearchBridge` shims that call `bridge.request('docSearch' /
+    // 'docsResearch', ...)`. The corresponding handlers live HERE — they
+    // route the request to the main-process singletons. Without this,
+    // `rag_search_docs` / `docs_deep_research` from inside the company
+    // worker fail with "doc corpus backend is not wired into this process"
+    // — the singleton set via `setGlobalDocSearch` in server.ts lives in
+    // the main-thread module instance and worker_threads don't share
+    // module state. Mirrors `CoderWorkerPool` for the chat path.
+    //
+    // Handlers degrade gracefully when the deps box is empty (tests,
+    // headless runs) — they throw an error whose message matches the
+    // in-process "not configured" message so the worker shim can forward
+    // it verbatim.
+    const offDocSearch = bridge.handle('docSearch', async (payload) => {
+      const backend = this.opts.docDeps?.docSearch;
+      if (!backend) {
+        throw new Error(
+          'rag_search_docs is not configured: the doc corpus backend is not wired into this process. Ask the user to ensure the Documentação feature is enabled.',
+        );
+      }
+      return backend.search(payload as Parameters<DocSearchBackend['search']>[0]);
+    });
+    const offDocsResearch = bridge.handle('docsResearch', async (payload) => {
+      const researcher = this.opts.docDeps?.docsResearch;
+      if (!researcher) {
+        throw new Error(
+          'docs_deep_research is not configured: no DocsResearchBridge installed. Use rag_search_docs as a fallback.',
+        );
+      }
+      return researcher.runResearch(payload as Parameters<DocsResearchBridge['runResearch']>[0]);
+    });
+
     // Keep the pool entry warm while the worker is doing observable work.
     // The TTL sweep evicts on `lastTouchedAt`, which `getOrSpawn`/`get`/RPC
     // bump — but a backgrounded master start/resume (sandbox provision +
@@ -302,6 +349,8 @@ export class WorkerOrchestratorPool {
       try { offEnd(); } catch { /* best-effort */ }
       try { offSupervisorBoot(); } catch { /* best-effort */ }
       try { offSupervisorIncident(); } catch { /* best-effort */ }
+      try { offDocSearch(); } catch { /* best-effort */ }
+      try { offDocsResearch(); } catch { /* best-effort */ }
     };
 
     const orchestrator = createOrchestratorProxy(host, sessionId, bus);

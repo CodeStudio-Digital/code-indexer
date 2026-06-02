@@ -48,6 +48,7 @@ import {
   type TelemetrySink,
 } from '@mcp/candidate-pipeline';
 import { rrfMerge as cpRrfMerge, RRF_DEFAULT_K } from '@mcp/candidate-pipeline/scorers/rrf.js';
+import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
@@ -128,8 +129,12 @@ interface RawSearchInputs {
   embeddingService: EmbeddingService;
   hyde: HyDEService | null;
   recentFilesSource: RecentFilesSource | null;
-  /** Reuse the legacy method's FTS sanitization to keep parity. */
-  ftsSanitize: (q: string) => string;
+  /**
+   * Reuse the legacy method's FTS sanitization to keep parity. Takes a
+   * boolean connector so the source can run AND-first (precision) then fall
+   * back to OR (recall) — mirroring `HybridSearch.ftsSearch`.
+   */
+  ftsSanitize: (q: string, connector: 'AND' | 'OR') => string;
 }
 
 export class FtsSource implements Source<HybridSearchPipelineQuery, HybridSearchPipelineCandidate> {
@@ -141,8 +146,21 @@ export class FtsSource implements Source<HybridSearchPipelineQuery, HybridSearch
   }
 
   async source(q: HybridSearchPipelineQuery): Promise<HybridSearchPipelineCandidate[]> {
-    const ftsQuery = this.deps.ftsSanitize(q.query);
+    // Precision-first (AND); widen to OR only when AND finds nothing — mirrors
+    // HybridSearch.ftsSearch so the V2 path stays consistent with legacy.
+    const andQuery = this.deps.ftsSanitize(q.query, 'AND');
+    let results = this.runFts(q, andQuery);
+    if (results.length === 0) {
+      const orQuery = this.deps.ftsSanitize(q.query, 'OR');
+      if (orQuery !== andQuery) results = this.runFts(q, orQuery);
+    }
+    q.diag.ftsCount = results.length;
+    return results;
+  }
+
+  private runFts(q: HybridSearchPipelineQuery, ftsQuery: string): HybridSearchPipelineCandidate[] {
     const results: HybridSearchPipelineCandidate[] = [];
+    if (ftsQuery.length === 0) return results;
 
     if (q.type === 'files' || q.type === 'all') {
       const files = this.deps.db.searchFiles(q.projectId, ftsQuery, q.overFetch);
@@ -176,8 +194,6 @@ export class FtsSource implements Source<HybridSearchPipelineQuery, HybridSearch
         results.push(c);
       }
     }
-
-    q.diag.ftsCount = results.length;
     return results;
   }
 }
@@ -198,7 +214,9 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
       const variants = await this.buildVariants(q.query);
       q.diag.queryVariants = variants;
 
-      const filter: Record<string, string> = { project_name: q.projectName };
+      // Project isolation rides on the namespace; `type` stays a metadata filter.
+      const namespace = codeNamespace(q.projectName);
+      const filter: Record<string, string> = {};
       if (q.type === 'files') filter.type = 'file';
       else if (q.type === 'symbols') filter.type = 'symbol';
 
@@ -208,7 +226,7 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
         variants.map(async (v) => {
           const { vector } = await this.deps.embeddingService.embedQuery(v);
           if (vector.length === 0) return [];
-          const matches = await this.deps.vectorStore!.search(vector, { topK: perVariant, filter });
+          const matches = await this.deps.vectorStore!.search(vector, { topK: perVariant, filter, namespace });
           totalRaw += matches.length;
           return this.rehydrate(matches);
         }),
@@ -545,8 +563,8 @@ export interface CreateHybridPipelineOptions {
   hyde: HyDEService | null;
   reranker: RerankerService;
   recentFilesSource: RecentFilesSource | null;
-  /** Sanitization helper from HybridSearch — keeps FTS parity. */
-  ftsSanitize: (q: string) => string;
+  /** Sanitization helper from HybridSearch — keeps FTS parity (connector-aware). */
+  ftsSanitize: (q: string, connector: 'AND' | 'OR') => string;
   /** Optional telemetry sink (e.g. SqliteTelemetrySink). */
   telemetry?: TelemetrySink;
   /** Optional cache writeback. */

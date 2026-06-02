@@ -289,7 +289,9 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
   }, [scope, sessionId, reloadReviews, t]);
 
   const handleSubmitReview = useCallback(async () => {
-    if (!onSubmitReviewMessage) return;
+    // Coder forwards via the chat stream callback; company has no callback
+    // and relies on server-side delivery to the master (response.delivered).
+    if (!onSubmitReviewMessage && scope !== 'company') return;
     const ids = reviews.comments
       .filter((c) =>
         (c.source === 'manual' && c.status === 'open') ||
@@ -300,8 +302,16 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     setReviewBusy(true);
     try {
       const r = await submitReviewComments(scope, sessionId, ids);
-      await onSubmitReviewMessage(r.message);
-      setReviewNotice(t('snapshotPanel.reviewSent', { count: ids.length }));
+      if (onSubmitReviewMessage) {
+        await onSubmitReviewMessage(r.message);
+        setReviewNotice(t('snapshotPanel.reviewSent', { count: ids.length }));
+      } else if (r.pending === 'interactive_wait') {
+        setReviewNotice(t('snapshotPanel.reviewPending'));
+      } else if (r.delivered) {
+        setReviewNotice(t('snapshotPanel.reviewSentMaster', { count: ids.length }));
+      } else {
+        setReviewNotice(t('snapshotPanel.reviewUndelivered'));
+      }
       await reloadReviews();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -318,12 +328,13 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
   const activeCount = useMemo(() => files.filter((f) => f.status === 'active').length, [files]);
   const canSubmitReview = useMemo(
     () =>
-      !!onSubmitReviewMessage &&
+      // Coder needs the chat callback; company delivers server-side to the master.
+      (!!onSubmitReviewMessage || scope === 'company') &&
       reviews.comments.some((c) =>
         (c.source === 'manual' && c.status === 'open') ||
         (c.source === 'auto' && c.status === 'accepted'),
       ),
-    [reviews.comments, onSubmitReviewMessage],
+    [reviews.comments, onSubmitReviewMessage, scope],
   );
   // Distinct projects across the loaded files. Stable order by name.
   const projects = useMemo(() => {

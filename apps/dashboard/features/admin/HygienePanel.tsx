@@ -5,6 +5,8 @@ import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
 import {
   cleanupProject,
+  clearAllProjectData,
+  clearProjectData,
   fetchHygieneStatus,
   purgeProjects,
   retryPendingVectorDeletes,
@@ -125,6 +127,44 @@ export function HygienePanel() {
     });
   }
 
+  async function clearAll() {
+    if (!status) return;
+    const n = status.projects.length;
+    if (n === 0) {
+      setLastResult('Nenhum projeto para limpar.');
+      return;
+    }
+    if (
+      !confirm(
+        `Limpar TODOS os dados de ${n} projeto(s)?\n\n` +
+          `Apaga índice, sessões, snapshots, runs, custos e vetores — mas MANTÉM os ` +
+          `projetos cadastrados (você só precisa re-indexar). Irreversível.`,
+      )
+    ) {
+      return;
+    }
+    await withBusy('clear-all', clearAllProjectData, (r) => {
+      const errs = r.errors.length > 0 ? `, ${r.errors.length} com erro` : '';
+      return `${r.projects_cleared} projeto(s) limpo(s), ${r.vectors_deleted_remote} vetores removidos no remoto${errs}. Re-indexe quando quiser.`;
+    });
+  }
+
+  async function clearOne(p: HygieneProject) {
+    if (
+      !confirm(
+        `Limpar TODOS os dados do projeto "${p.name}"?\n\n` +
+          `Apaga índice, sessões, snapshots, runs, custos e vetores — mas MANTÉM o ` +
+          `projeto cadastrado (você só precisa re-indexar). Irreversível.`,
+      )
+    ) {
+      return;
+    }
+    await withBusy(`clear-${p.id}`, () => clearProjectData(p.id), (r) =>
+      `"${p.name}" limpo: ${r.vectors_deleted_remote} vetores removidos no remoto` +
+      `${r.remote_error ? ` (erro: ${r.remote_error})` : ''}. Re-indexe quando quiser.`,
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
@@ -227,6 +267,22 @@ export function HygienePanel() {
             </Badge>
           )}
         </Button>
+        <Button
+          variant="destructive"
+          size="sm"
+          disabled={!!busy || !status || status.projects.length === 0}
+          onClick={() => void clearAll()}
+          title="Zera índice/sessões/snapshots/vetores de todos os projetos, mantendo os projetos cadastrados. Use antes de re-indexar do zero."
+        >
+          {busy === 'clear-all' && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+          <Trash2 className="h-3.5 w-3.5 mr-1" />
+          Limpar dados de TODOS os projetos
+          {status && status.projects.length > 0 && (
+            <Badge variant="secondary" className="ml-2 h-4 text-[10px]">
+              {status.projects.length}
+            </Badge>
+          )}
+        </Button>
       </div>
 
       {lastResult && (
@@ -274,17 +330,30 @@ export function HygienePanel() {
                         <Badge variant="secondary" className="h-4 text-[10px]">limpo</Badge>
                       )}
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={!!busy}
-                      onClick={() =>
-                        void withBusy(`cleanup-${p.id}`, () => cleanupProject(p.id), summarizeCleanup)
-                      }
-                    >
-                      {busy === `cleanup-${p.id}` && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
-                      Cleanup
-                    </Button>
+                    <div className="flex gap-1.5 shrink-0">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!!busy}
+                        onClick={() =>
+                          void withBusy(`cleanup-${p.id}`, () => cleanupProject(p.id), summarizeCleanup)
+                        }
+                      >
+                        {busy === `cleanup-${p.id}` && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+                        Cleanup
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        disabled={!!busy}
+                        onClick={() => void clearOne(p)}
+                        title="Zera índice/sessões/snapshots/vetores deste projeto, mantendo o cadastro. Use antes de re-indexar do zero."
+                      >
+                        {busy === `clear-${p.id}` && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+                        <Trash2 className="h-3.5 w-3.5 mr-1" />
+                        Limpar
+                      </Button>
+                    </div>
                   </CardTitle>
                   <p className="text-[11px] text-muted-foreground font-mono truncate">{p.root_path}</p>
                 </CardHeader>

@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { Activity, AlertTriangle, DollarSign, Loader2, Scissors } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
-import { PipelineTelemetryPanel } from '../admin/PipelineTelemetryPanel.js';
 import { QualityPanel } from '../admin/QualityPanel.js';
 import { SupervisorPanel } from '../admin/SupervisorPanel.js';
 import { SINCE_PRESETS, sinceForKey } from './since.js';
@@ -132,7 +131,6 @@ export function TelemetryDashboard() {
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">{t('telemetry:tabs.overview', { defaultValue: 'Overview' })}</TabsTrigger>
-          <TabsTrigger value="pipeline">{t('telemetry:tabs.pipeline', { defaultValue: 'Pipeline Telemetry' })}</TabsTrigger>
           <TabsTrigger value="prices">{t('telemetry:tabs.prices', { defaultValue: 'Preços' })}</TabsTrigger>
           <TabsTrigger value="quality">{t('telemetry:tabs.quality', { defaultValue: 'Quality' })}</TabsTrigger>
           <TabsTrigger value="supervisor">{t('telemetry:tabs.supervisor', { defaultValue: 'Supervisor' })}</TabsTrigger>
@@ -140,10 +138,6 @@ export function TelemetryDashboard() {
 
         <TabsContent value="overview" className="space-y-4">
           <TelemetryOverview />
-        </TabsContent>
-
-        <TabsContent value="pipeline">
-          <PipelineTelemetryPanel />
         </TabsContent>
 
         <TabsContent value="prices">

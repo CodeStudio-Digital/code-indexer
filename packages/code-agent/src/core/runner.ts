@@ -2057,6 +2057,11 @@ export class CoderRunner extends EventEmitter {
         // same boundary; the BT now delegates back here so the queue's
         // ownership stays on the runner class.
         flushPendingMessages: () => this.flushPendingMessages(),
+        // Loop-enforcement steering — the Executing node calls this when a
+        // tool+args got refused across multiple planning cycles. Wraps
+        // `pushUserMessage` so the reminder lands at the next turn (after the
+        // ToolLoopDetected → Planning hop) via the same drain as above.
+        injectSystemReminder: (text: string) => this.pushUserMessage(text),
         // Per-turn telemetry persistence. The pure insert lives in
         // `core/runner/telemetry/persist-turn.ts`; the class-bound
         // side-effects (quality classifier dispatch + tool-selection

@@ -135,6 +135,21 @@ function findOnPath(exe: string): string | null {
   return null;
 }
 
+/**
+ * Resolve a stored shell id (from the picker) back to a spawnable
+ * `{ file, args }`. Custom shells encode their path in the id
+ * (`custom:<path>`), so they resolve without the renderer's localStorage.
+ * Returns null for the system default (no override) or an unknown id.
+ */
+export function resolveShellById(id: string | null | undefined): TerminalShell | null {
+  if (!id || id === 'system') return null;
+  if (id.startsWith('custom:')) {
+    const file = id.slice('custom:'.length);
+    return { id, label: file.split(/[\\/]/).pop() || file, file };
+  }
+  return detectShells().find((s) => s.id === id) ?? null;
+}
+
 function fallbackShell(): TerminalShell {
   if (process.platform === 'win32') {
     return { id: 'powershell', label: 'Windows PowerShell', file: 'powershell.exe', args: ['-NoLogo'] };

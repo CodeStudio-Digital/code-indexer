@@ -13,9 +13,32 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
+import {
+  isGlobalQualityClassifierEnabled,
+  setGlobalQualityClassifierPipeline,
+} from '@mcp/services/quality/index.js';
 
 export function mountAdminQualityRoutes(app: Hono, deps: ServerDeps): void {
   const { qualityClassificationStore, qualityInterventionStore, counterfactualLogStore } = deps;
+
+  // ─── Runtime on/off toggle ─────────────────────────────────────────────
+  // The classifiers run in THIS (main) process — the global is only ever set
+  // here, never in the coder/company workers — so toggling it here is enough;
+  // no worker RPC needed. Persists only for the process lifetime (the boot
+  // default is the MCP_PIPELINES_QUALITY_CLASSIFIERS env flag).
+  app.get('/api/admin/quality/enabled', (c) =>
+    c.json({ enabled: isGlobalQualityClassifierEnabled() }),
+  );
+
+  app.post('/api/admin/quality/enabled', async (c) => {
+    let body: { enabled?: boolean } = {};
+    try { body = (await c.req.json()) as { enabled?: boolean }; } catch { /* */ }
+    if (typeof body.enabled !== 'boolean') {
+      return c.json({ error: 'enabled (boolean) required' }, 400);
+    }
+    setGlobalQualityClassifierPipeline(deps.qualityClassifierPipeline, body.enabled);
+    return c.json({ enabled: isGlobalQualityClassifierEnabled() });
+  });
 
   // ─── Quality classifications ────────────────────────────────────────
   app.get('/api/admin/quality', (c) => {
@@ -51,8 +74,14 @@ export function mountAdminQualityRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/admin/quality/prune', async (c) => {
-    let body: { cutoff?: string } = {};
-    try { body = (await c.req.json()) as { cutoff?: string }; } catch { /* */ }
+    let body: { cutoff?: string; all?: boolean } = {};
+    try { body = (await c.req.json()) as { cutoff?: string; all?: boolean }; } catch { /* */ }
+    // "Limpar tudo" — wipe both quality tables regardless of age.
+    if (body.all) {
+      const deleted =
+        qualityClassificationStore.clearAll() + qualityInterventionStore.clearAll();
+      return c.json({ deleted, all: true });
+    }
     const cutoff = body.cutoff ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const deleted = qualityClassificationStore.pruneOlderThan(cutoff);
     return c.json({ deleted, cutoff });

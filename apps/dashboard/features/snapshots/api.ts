@@ -132,7 +132,12 @@ export const submitReviewComments = (
   sessionId: number,
   commentIds: number[],
 ) =>
-  apiPost<{ message: string; comments: SnapshotReviewComment[] }>(
+  apiPost<{
+    message: string;
+    comments: SnapshotReviewComment[];
+    delivered?: boolean | null;
+    pending?: string | null;
+  }>(
     `${base(scope, sessionId)}/reviews/submit`,
     { commentIds },
   );

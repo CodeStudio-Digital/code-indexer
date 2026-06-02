@@ -16,6 +16,17 @@ type Scope = 'coder' | 'company';
 interface MountOptions {
   scope: Scope;
   listCoderSessionIds?: (companySessionId: number) => number[];
+  /**
+   * Optional server-side delivery of the compiled review feedback. When
+   * provided (company scope), `/submit` injects the message straight into
+   * the master via the orchestrator instead of relying on a frontend chat
+   * callback. Coder scope omits this and forwards via the chat stream, so
+   * the two paths never double-deliver the same review.
+   */
+  deliverMessage?: (
+    sessionId: number,
+    message: string,
+  ) => { ok: boolean; pending?: 'interactive_wait' };
 }
 
 interface CommentBody {
@@ -313,6 +324,12 @@ export function mountSnapshotReviewRoutes(
     if (comments.length === 0) return c.json({ error: 'no comments to submit' }, 400);
     const message = buildFeedbackMessage(comments);
     reviewStore.markSent(comments.map((cmt) => cmt.id));
-    return c.json({ message, comments: reviewStore.listCommentsByIds(comments.map((cmt) => cmt.id)) });
+    const delivery = opts.deliverMessage?.(sessionId, message);
+    return c.json({
+      message,
+      comments: reviewStore.listCommentsByIds(comments.map((cmt) => cmt.id)),
+      delivered: delivery ? delivery.ok : null,
+      pending: delivery?.pending ?? null,
+    });
   });
 }

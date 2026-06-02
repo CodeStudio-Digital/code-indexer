@@ -6,34 +6,19 @@
  * dramatically improves precision over independent scoring.
  *
  * Supports:
+ *   - Local cross-encoder (transformers.js ONNX, offline — see ./local-reranker.ts)
  *   - Cloudflare Workers AI (@cf/baai/bge-reranker-v2-m3)
  *   - Cohere Rerank API (rerank-v3.5)
  *   - Null (passthrough, for when no reranker is configured)
  */
 
-export interface RerankCandidate {
-  /** Unique identifier (e.g., "file:42" or "symbol:78") */
-  id: string;
-  /** Text content to score against the query */
-  text: string;
-  /** Original score from RRF (preserved for tie-breaking) */
-  originalScore: number;
-}
+import { LocalReranker } from './local-reranker.js';
+import type { RerankCandidate, RerankResult, RerankerService } from './reranker-types.js';
 
-export interface RerankResult {
-  id: string;
-  score: number;
-  originalScore: number;
-}
-
-export interface RerankerService {
-  readonly name: string;
-  /**
-   * Re-rank candidates by relevance to the query.
-   * Returns candidates sorted by score descending.
-   */
-  rerank(query: string, candidates: RerankCandidate[], topK?: number): Promise<RerankResult[]>;
-}
+// Re-export the contract types so existing importers (`@mcp/indexer/search/reranker.js`)
+// keep working after the extraction to ./reranker-types.ts (avoids an import cycle
+// with ./local-reranker.ts, which implements the interface).
+export type { RerankCandidate, RerankResult, RerankerService } from './reranker-types.js';
 
 // ─── Cloudflare Workers AI Reranker ──────────────────────────────
 
@@ -178,6 +163,10 @@ interface RerankerConfigSource {
 export function createReranker(store?: RerankerConfigSource | null): RerankerService {
   const cfg = store?.getDefaultReranker?.() ?? null;
   if (cfg) {
+    if (cfg.kind === 'local') {
+      const c = cfg.config as { model?: string; cacheDir?: string };
+      return new LocalReranker({ model: c.model, cacheDir: c.cacheDir });
+    }
     if (cfg.kind === 'cohere') {
       const c = cfg.config as { apiKey?: string; model?: string };
       if (c.apiKey) return new CohereReranker({ apiKey: c.apiKey, model: c.model });

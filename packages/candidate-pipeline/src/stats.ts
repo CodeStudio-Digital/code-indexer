@@ -68,11 +68,18 @@ export interface TelemetrySink {
   flush?(): Promise<void> | void;
 }
 
-/** In-memory sink used by tests and as a no-op fallback. */
+/** In-memory sink used by TESTS. NOT for production — `events` grows
+ *  unbounded, so a long-running host must use {@link NoopTelemetrySink}. */
 export class InMemoryTelemetrySink implements TelemetrySink {
   readonly events: TelemetryEvent[] = [];
   emit(event: TelemetryEvent): void { this.events.push(event); }
   clear(): void { this.events.length = 0; }
+}
+
+/** True no-op sink — drops every event. Use this to disable pipeline
+ *  telemetry persistence on a long-running server without leaking memory. */
+export class NoopTelemetrySink implements TelemetrySink {
+  emit(_event: TelemetryEvent): void { /* intentionally discarded */ }
 }
 
 /**

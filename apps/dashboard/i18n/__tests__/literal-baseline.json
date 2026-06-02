@@ -714,7 +714,7 @@
     "apps/dashboard/features/chat/composer/ComposerToolbar.tsx|attr:placeholder|Provider": 1,
     "apps/dashboard/features/chat/ExecutionMapPanel.tsx|jsxText|related event(s)": 1,
     "apps/dashboard/features/chat/ExecutionMapPanel.tsx|jsxText|Select a node to inspect status and related events.": 1,
-    "apps/dashboard/features/chat/messages/ActivityLineBlock.tsx|jsxText|left": 1,
+    "apps/dashboard/components/stream/ActivityLineBlock.tsx|jsxText|left": 1,
     "apps/dashboard/features/chat/messages/AgentsGroupBlock.tsx|jsxText|tool": 1,
     "apps/dashboard/features/chat/messages/MessageList.tsx|jsxText|All available messages loaded": 1,
     "apps/dashboard/features/chat/messages/MessageList.tsx|jsxText|loaded": 1,

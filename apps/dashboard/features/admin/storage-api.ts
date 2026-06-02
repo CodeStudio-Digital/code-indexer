@@ -15,7 +15,7 @@ export type VectorStoreKind =
   | 'sqlite-vec'
   | 'null';
 
-export type RerankerKind = 'cloudflare' | 'cohere' | 'null';
+export type RerankerKind = 'local' | 'cloudflare' | 'cohere' | 'null';
 
 export interface EmbeddingConfig {
   id: string;
@@ -186,6 +186,10 @@ export const VECTOR_STORE_FIELDS: Record<VectorStoreKind, FieldSpec[]> = {
 };
 
 export const RERANKER_FIELDS: Record<RerankerKind, FieldSpec[]> = {
+  local: [
+    { key: 'model', label: 'Model', type: 'text', placeholder: 'Xenova/bge-reranker-base' },
+    { key: 'cacheDir', label: 'Model Cache Dir (optional)', type: 'text' },
+  ],
   cloudflare: [
     { key: 'workerUrl', label: 'Worker URL', type: 'text', placeholder: 'https://mcp-indexer.you.workers.dev', required: true },
     { key: 'workerToken', label: 'Worker Token', type: 'password' },

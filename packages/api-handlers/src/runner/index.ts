@@ -14,6 +14,7 @@ import { ensureDataDir } from '@mcp/shared/utils/config.js';
 import { ApiError, type RunnerApi, type RunnerTask } from '@mcp/api-bus';
 import type { HandlerDeps } from '../types.js';
 import { sharedPtyManager } from '../terminal/pty-manager.js';
+import { resolveShellById } from '../terminal/shells.js';
 import { resolveProjectNodeBinDir } from '../runtime/node-manager.js';
 import { detectRunners } from './detect.js';
 
@@ -31,7 +32,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
     bus.push(snapshot());
   }
 
-  function project(projectId: number): { root_path: string; name: string } {
+  function project(projectId: number) {
     const p = db.getProject(projectId);
     if (!p) throw new ApiError('not_found', 404, 'project not found');
     return p;
@@ -45,12 +46,17 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
   }): RunnerTask {
     const p = project(input.projectId);
     const nodeBinDir = resolveProjectNodeBinDir(db, input.projectId, ensureDataDir()) ?? undefined;
+    // Per-project runner shell — resolve the stored id to a spawnable
+    // {file,args}; null falls back to the system default shell.
+    const shellSel = resolveShellById(p.runner_shell);
     const { id: terminalId } = manager.spawn({
       command: input.command,
       cwd: p.root_path,
       cols: 80,
       rows: 24,
       nodeBinDir,
+      shell: shellSel?.file,
+      shellArgs: shellSel?.args,
     });
     const task: RunnerTask = {
       taskId: randomUUID(),

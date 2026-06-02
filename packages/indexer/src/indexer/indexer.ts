@@ -7,6 +7,7 @@ import type { VectorStore } from '@mcp/store/vectors.js';
 import type { CostTracker } from '@mcp/services/services/costs.js';
 import type { IndexerConfig } from '@mcp/shared/utils/config.js';
 import type { IndexResult, ProgressCallback, ScannedFile } from '@mcp/shared/types.js';
+import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import { FileScanner } from '@mcp/indexer/indexer/scanner.js';
 import { TreeSitterExtractor, type TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js';
 import { getIndexJobPool, isIndexWorkersEnabled } from '@mcp/indexer/workers/indexJob/client.js';
@@ -284,10 +285,14 @@ export class IndexAgent {
   }
 
   private async removeDeletedFiles(projectId: number, paths: readonly string[]): Promise<void> {
+    // Namespace is needed for backends where ids are namespace-scoped (Pinecone);
+    // harmless on the others. Resolve the project name once for the batch.
+    const projectName = this.db.getProject(projectId)?.name;
+    const namespace = projectName ? codeNamespace(projectName) : undefined;
     for (const path of paths) {
       const vectorIds = this.db.deleteVectorIdsByFile(projectId, path);
       if (vectorIds.length > 0 && this.vectorStore) {
-        try { await this.vectorStore.deleteByIds(vectorIds); } catch { /* ignore */ }
+        try { await this.vectorStore.deleteByIds(vectorIds, namespace); } catch { /* ignore */ }
       }
       this.db.deleteFile(projectId, path);
     }

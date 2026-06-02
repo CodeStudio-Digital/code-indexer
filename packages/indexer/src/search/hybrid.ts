@@ -8,6 +8,7 @@ import { planQuery } from '@mcp/indexer/search/planner.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import type { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import type { HybridSearchResult, SearchMode, SearchType, DBFile, DBSymbol, ContextSnapshot } from '@mcp/shared/types.js';
+import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import { rrfMerge as cpRrfMerge } from '@mcp/candidate-pipeline/scorers/rrf.js';
 import type { CandidatePipeline, TelemetrySink } from '@mcp/candidate-pipeline';
 import {
@@ -137,7 +138,7 @@ export class HybridSearch {
         hyde: this.hydeService,
         reranker: this.reranker,
         recentFilesSource: this.recentFilesSource,
-        ftsSanitize: (q) => this.sanitizeFtsQuery(q),
+        ftsSanitize: (q, connector) => this.sanitizeFtsQuery(q, connector),
         telemetry: this.pipelineTelemetry ?? undefined,
         cacheWrite: cacheSetter,
       });
@@ -310,10 +311,29 @@ export class HybridSearch {
   }
 
   private async ftsSearch(projectId: number, query: string, type: SearchType, limit: number): Promise<HybridSearchResult[]> {
-    const results: HybridSearchResult[] = [];
+    // Precision-first: require ALL terms (FTS5 AND). A multi-word query like
+    // "user service create" should not match every doc mentioning just one of
+    // them. If AND finds nothing, fall back to OR so a paraphrase that shares
+    // only some terms is still recoverable (single-term queries are identical
+    // either way, so the fallback is a no-op there).
+    const results = this.runFtsQuery(projectId, query, type, limit, 'AND');
+    if (results.length === 0 && this.ftsTerms(query).length > 1) {
+      return this.runFtsQuery(projectId, query, type, limit, 'OR');
+    }
+    return results;
+  }
 
-    // Escape FTS5 special chars
-    const ftsQuery = this.sanitizeFtsQuery(query);
+  /** Run one FTS pass with a fixed boolean connector. */
+  private runFtsQuery(
+    projectId: number,
+    query: string,
+    type: SearchType,
+    limit: number,
+    connector: 'AND' | 'OR',
+  ): HybridSearchResult[] {
+    const results: HybridSearchResult[] = [];
+    const ftsQuery = this.sanitizeFtsQuery(query, connector);
+    if (ftsQuery.length === 0) return results;
 
     if (type === 'files' || type === 'all') {
       const files = this.db.searchFiles(projectId, ftsQuery, limit);
@@ -383,7 +403,10 @@ export class HybridSearch {
       }
       diag.queryVariants = variants;
 
-      const filter: Record<string, string> = { project_name: projectName };
+      // Project isolation rides on the namespace now; `type` stays a metadata
+      // filter to pick files vs symbols within the project.
+      const namespace = codeNamespace(projectName);
+      const filter: Record<string, string> = {};
       if (type === 'files') filter.type = 'file';
       else if (type === 'symbols') filter.type = 'symbol';
 
@@ -395,7 +418,7 @@ export class HybridSearch {
         variants.map(async (v) => {
           const { vector } = await this.embeddingService.embedQuery(v);
           if (vector.length === 0) return [];
-          const matches = await this.vectorStore!.search(vector, { topK: perVariant, filter });
+          const matches = await this.vectorStore!.search(vector, { topK: perVariant, filter, namespace });
           totalRawMatches += matches.length;
           return this.rehydrateVectorMatches(matches);
         }),
@@ -701,7 +724,8 @@ export class HybridSearch {
           // snapshot — dedup here keeps RRF ranks one-per-snapshot.
           const matches = await this.vectorStore.search(vector, {
             topK: limit * 4,
-            filter: { project_name: projectName, type: 'snapshot' },
+            filter: { type: 'snapshot' },
+            namespace: codeNamespace(projectName),
           });
           const seen = new Set<number>();
           for (const m of matches) {
@@ -740,13 +764,21 @@ export class HybridSearch {
       .map((e) => e.snap);
   }
 
-  private sanitizeFtsQuery(query: string): string {
-    // Remove FTS5 special characters and wrap terms in quotes for phrase matching
+  /** Sanitized FTS terms — FTS5 special chars stripped, empties dropped. */
+  private ftsTerms(query: string): string[] {
     return query
       .replace(/[-*"(){}[\]^~\\:]/g, ' ')
       .trim()
       .split(/\s+/)
-      .filter(Boolean)
-      .join(' OR ');
+      .filter(Boolean);
+  }
+
+  /**
+   * Build an FTS5 MATCH expression. Defaults to AND (every term must appear)
+   * for precision; callers fall back to OR when AND returns nothing so recall
+   * is preserved. Single-term queries are identical under either connector.
+   */
+  private sanitizeFtsQuery(query: string, connector: 'AND' | 'OR' = 'AND'): string {
+    return this.ftsTerms(query).join(` ${connector} `);
   }
 }

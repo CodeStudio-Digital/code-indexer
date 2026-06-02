@@ -293,4 +293,10 @@ export class QualityInterventionStore {
       .run(cutoff);
     return Number(result.changes);
   }
+
+  /** Drop ALL rows (the dashboard "Limpar tudo" action). */
+  clearAll(): number {
+    const result = this.db.prepare(`DELETE FROM quality_interventions`).run();
+    return Number(result.changes);
+  }
 }

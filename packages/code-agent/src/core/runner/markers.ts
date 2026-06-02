@@ -188,3 +188,36 @@ export function buildDupMediumMarker(args: {
     `need the elided body. To force-fetch: \`force_reread: true\`.]`
   );
 }
+
+/**
+ * Active loop-enforcement reminder. Injected as a user `<system-reminder>`
+ * when the SAME tool+args has been hard-refused across multiple planning
+ * cycles (the dedup table resets each cycle, so a passive refusal alone never
+ * breaks an insistent loop). It (a) names the loop, (b) re-lists the tools the
+ * agent can actually call right now, and (c) orders a concrete strategy change.
+ *
+ * Deterministic — `tools` is pre-sorted by the caller — to keep the prompt
+ * prefix cache stable across turns.
+ */
+export function buildLoopEnforcementMarker(args: {
+  toolName: string;
+  count: number;
+  tools: ReadonlyArray<{ name: string; description: string }>;
+}): string {
+  const toolLines = args.tools
+    .map((t) => `  - ${t.name}${t.description ? `: ${t.description}` : ''}`)
+    .join('\n');
+  return (
+    `<system-reminder>\n` +
+    `LOOP DETECTED: you have called \`${args.toolName}\` with identical arguments ` +
+    `and been refused ${args.count} times across separate planning turns. ` +
+    `This is NOT progress — repeating it will keep being refused.\n\n` +
+    `Tools available to you right now:\n${toolLines}\n\n` +
+    `STOP calling \`${args.toolName}\`. Break the loop now by doing ONE of:\n` +
+    `  1. Do the real work the task needs with a DIFFERENT tool from the list above.\n` +
+    `  2. If you are blocked or unsure, ask for help (ask_master / ask_user).\n` +
+    `  3. If the work is genuinely done, submit your deliverable / finish.\n` +
+    `Pick one and act. Do not repeat \`${args.toolName}\` again.\n` +
+    `</system-reminder>`
+  );
+}

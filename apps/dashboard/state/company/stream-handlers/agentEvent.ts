@@ -17,6 +17,18 @@ import type {
   StreamState,
   ToolCallState,
 } from '../types.js';
+import type { StreamBlock } from '../../../hooks/agent-stream/types.js';
+import {
+  activityPatchFromOperation,
+  activityPatchFromProviderCall,
+  activityPatchFromToolProgress,
+  finishActivity,
+  upsertActivity,
+  type ActivityPatch,
+  type OperationPayload,
+  type ProviderCallPayload,
+  type ToolProgressPayload,
+} from '../../../hooks/agent-stream/activity-blocks.js';
 
 export interface AgentEventEnvelope {
   agent: string;
@@ -68,17 +80,57 @@ function reduceInner(state: AgentStreamState, ae: AgentEventEnvelope): AgentStre
   switch (ae.event) {
     case 'text_delta':
       return appendTextDelta(state, ae.data as TextDeltaData);
-    case 'tool_call_start':
-      return startToolCall(state, ae.data as ToolCallStartData);
-    case 'tool_call_result':
-      return finishToolCall(state, ae.data as ToolCallResultData);
+    case 'tool_call_start': {
+      const d = ae.data as ToolCallStartData;
+      const withTool = startToolCall(state, d);
+      return withActivityPatch(withTool, { id: d.id, kind: 'tool', label: d.name, status: 'running' });
+    }
+    case 'tool_call_result': {
+      const d = ae.data as ToolCallResultData;
+      const withTool = finishToolCall(state, d);
+      return withActivityPatch(
+        withTool,
+        { id: d.id, status: d.status === 'error' ? 'failed' : 'completed', elapsedMs: d.duration_ms },
+        true,
+      );
+    }
+    case 'provider_call':
+      return withActivityPatch(state, activityPatchFromProviderCall(ae.data as ProviderCallPayload));
+    case 'tool_progress':
+      return withActivityPatch(state, activityPatchFromToolProgress(ae.data as ToolProgressPayload));
+    case 'operation_started':
+    case 'operation_progress':
+      return withActivityPatch(state, activityPatchFromOperation(ae.data as OperationPayload));
+    case 'operation_finished':
+      return withActivityPatch(state, activityPatchFromOperation(ae.data as OperationPayload), true);
     case 'message_complete':
-      return completeMessage(state, ae.data as MessageCompleteData);
+      return clearActivity(completeMessage(state, ae.data as MessageCompleteData));
     case 'done':
-      return markDone(state, ae.data as DoneData);
+      return clearActivity(markDone(state, ae.data as DoneData));
     default:
       return state;
   }
+}
+
+/**
+ * Update the agent's single live activity by reusing the chat block helpers
+ * over a 1-element scratch array. `upsertActivity` matches by id (so the same
+ * provider/tool action is updated in place) or pushes a new one (latest action
+ * wins) — we keep the last block as the current pill.
+ */
+function withActivityPatch(state: AgentStreamState, patch: ActivityPatch, finish = false): AgentStreamState {
+  const arr: StreamBlock[] = state.activity ? [state.activity] : [];
+  if (finish) finishActivity(arr, patch);
+  else upsertActivity(arr, patch);
+  const last = arr.length ? arr[arr.length - 1] : null;
+  const activity = last && last.type === 'activity' ? last : state.activity ?? null;
+  return { ...state, activity };
+}
+
+/** Drop the live pill between turns / on terminal states. */
+function clearActivity(state: AgentStreamState): AgentStreamState {
+  if (state.activity == null) return state;
+  return { ...state, activity: null };
 }
 
 function appendTextDelta(state: AgentStreamState, d: TextDeltaData): AgentStreamState {

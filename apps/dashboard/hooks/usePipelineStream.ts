@@ -1,8 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
+import { apiBaseUrl } from '../lib/api-client.js';
 import type {
   PipelineNodeRuntimeStatus,
   PipelineRuntimeState,
 } from './agent-stream/types.js';
+
+const TERMINAL_PIPELINE_EVENTS = new Set([
+  'pipeline_completed',
+  'pipeline_aborted',
+  'pipeline_failed',
+]);
+
+const pipelineStreamBackoff = {
+  nextDelay(attempt: number): number {
+    return Math.min(2000 * Math.pow(1.5, attempt), 30_000);
+  },
+};
 
 /**
  * Subscribe to chat pipeline events for a session over a long-lived SSE
@@ -22,7 +36,7 @@ export function usePipelineStream(sessionId: number | null): {
   reset: () => void;
 } {
   const [runtime, setRuntime] = useState<PipelineRuntimeState | null>(null);
-  const sourceRef = useRef<EventSource | null>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
   const openStreamRef = useRef<() => void>(() => {});
 
   const reset = useCallback(() => setRuntime(null), []);
@@ -34,70 +48,51 @@ export function usePipelineStream(sessionId: number | null): {
     if (sessionId == null) return;
 
     let cancelled = false;
-    let backoffMs = 2000;
     let hasOpened = false;
+    let lastSeenSeq = -1;
 
-    const connect = () => {
-      if (cancelled) return;
-      if (sourceRef.current) return;
-      const url = `/api/coder/sessions/${sessionId}/pipelines/stream`;
-      const src = new EventSource(url);
-      sourceRef.current = src;
-
-      const handle = (
-        eventName: string,
-        handler: (data: Record<string, unknown>) => void,
-      ) => {
-        src.addEventListener(eventName, (ev: MessageEvent) => {
-          let data: Record<string, unknown>;
-          try {
-            data = JSON.parse(ev.data);
-          } catch {
-            return;
-          }
-          handler(data);
-        });
-      };
-
-      handle('pipeline_started', (d) => {
-        const data = d as { executionId: number; pipelineId: number; startNodeId?: string };
+    const handleEvent = (eventName: string, data: Record<string, unknown>) => {
+      if (eventName === 'pipeline_started') {
+        const d = data as { executionId: number; pipelineId: number; startNodeId?: string };
         setRuntime({
-          executionId: data.executionId,
-          pipelineId: data.pipelineId,
+          executionId: d.executionId,
+          pipelineId: d.pipelineId,
           status: 'running',
-          currentNodeId: data.startNodeId ?? null,
-          nodes: data.startNodeId ? { [data.startNodeId]: { status: 'pending' } } : {},
+          currentNodeId: d.startNodeId ?? null,
+          nodes: d.startNodeId ? { [d.startNodeId]: { status: 'pending' } } : {},
           error: null,
         });
-      });
+        return;
+      }
 
-      handle('pipeline_node_started', (d) => {
-        const data = d as {
+      if (eventName === 'pipeline_node_started') {
+        const d = data as {
           executionId: number;
           nodeId: string;
           nodeLabel?: string;
           kind?: 'agent' | 'validate';
         };
         setRuntime((cur) => {
-          if (!cur || cur.executionId !== data.executionId) return cur;
+          if (!cur || cur.executionId !== d.executionId) return cur;
           return {
             ...cur,
-            currentNodeId: data.nodeId,
+            currentNodeId: d.nodeId,
             nodes: {
               ...cur.nodes,
-              [data.nodeId]: {
-                ...(cur.nodes[data.nodeId] ?? {}),
+              [d.nodeId]: {
+                ...(cur.nodes[d.nodeId] ?? {}),
                 status: 'running' as PipelineNodeRuntimeStatus,
-                label: data.nodeLabel ?? cur.nodes[data.nodeId]?.label,
-                kind: data.kind ?? cur.nodes[data.nodeId]?.kind,
+                label: d.nodeLabel ?? cur.nodes[d.nodeId]?.label,
+                kind: d.kind ?? cur.nodes[d.nodeId]?.kind,
               },
             },
           };
         });
-      });
+        return;
+      }
 
-      handle('pipeline_node_completed', (d) => {
-        const data = d as {
+      if (eventName === 'pipeline_node_completed') {
+        const d = data as {
           executionId: number;
           nodeId: string;
           outcome?: string | null;
@@ -105,124 +100,149 @@ export function usePipelineStream(sessionId: number | null): {
           outputPreview?: string;
         };
         setRuntime((cur) => {
-          if (!cur || cur.executionId !== data.executionId) return cur;
+          if (!cur || cur.executionId !== d.executionId) return cur;
           return {
             ...cur,
             nodes: {
               ...cur.nodes,
-              [data.nodeId]: {
-                ...(cur.nodes[data.nodeId] ?? {}),
+              [d.nodeId]: {
+                ...(cur.nodes[d.nodeId] ?? {}),
                 status: 'completed',
-                verdict: data.verdict ?? null,
-                outcome: data.outcome ?? null,
-                outputPreview: data.outputPreview,
+                verdict: d.verdict ?? null,
+                outcome: d.outcome ?? null,
+                outputPreview: d.outputPreview,
               },
             },
           };
         });
-      });
+        return;
+      }
 
-      handle('pipeline_node_failed', (d) => {
-        const data = d as { executionId: number; nodeId: string; error?: string };
+      if (eventName === 'pipeline_node_failed') {
+        const d = data as { executionId: number; nodeId: string; error?: string };
         setRuntime((cur) => {
-          if (!cur || cur.executionId !== data.executionId) return cur;
+          if (!cur || cur.executionId !== d.executionId) return cur;
           return {
             ...cur,
             nodes: {
               ...cur.nodes,
-              [data.nodeId]: {
-                ...(cur.nodes[data.nodeId] ?? {}),
+              [d.nodeId]: {
+                ...(cur.nodes[d.nodeId] ?? {}),
                 status: 'failed',
-                error: data.error,
+                error: d.error,
               },
             },
           };
         });
-      });
+        return;
+      }
 
-      handle('pipeline_paused', (d) => {
-        const data = d as {
+      if (eventName === 'pipeline_paused') {
+        const d = data as {
           executionId: number;
           nodeId?: string | null;
           awaitingConfirmation?: boolean;
         };
         setRuntime((cur) => {
-          if (!cur || cur.executionId !== data.executionId) return cur;
+          if (!cur || cur.executionId !== d.executionId) return cur;
           return {
             ...cur,
             status: 'paused',
-            currentNodeId: data.nodeId ?? cur.currentNodeId,
-            awaitingConfirmation: !!data.awaitingConfirmation,
+            currentNodeId: d.nodeId ?? cur.currentNodeId,
+            awaitingConfirmation: !!d.awaitingConfirmation,
           };
         });
-      });
+        return;
+      }
 
-      handle('pipeline_resumed', (d) => {
-        const data = d as { executionId: number; nodeId?: string };
+      if (eventName === 'pipeline_resumed') {
+        const d = data as { executionId: number; nodeId?: string };
         setRuntime((cur) => {
-          if (!cur || cur.executionId !== data.executionId) return cur;
+          if (!cur || cur.executionId !== d.executionId) return cur;
           return {
             ...cur,
             status: 'running',
-            currentNodeId: data.nodeId ?? cur.currentNodeId,
+            currentNodeId: d.nodeId ?? cur.currentNodeId,
             awaitingConfirmation: false,
           };
         });
-      });
+        return;
+      }
 
-      handle('pipeline_completed', (d) => {
-        const data = d as { executionId: number };
+      if (eventName === 'pipeline_completed') {
+        const d = data as { executionId: number };
         setRuntime((cur) => {
-          if (!cur || cur.executionId !== data.executionId) return cur;
+          if (!cur || cur.executionId !== d.executionId) return cur;
           return { ...cur, status: 'completed', currentNodeId: null };
         });
-      });
+        return;
+      }
 
-      handle('pipeline_aborted', (d) => {
-        const data = d as { executionId: number; reason?: string | null };
+      if (eventName === 'pipeline_aborted') {
+        const d = data as { executionId: number; reason?: string | null };
         setRuntime((cur) => {
-          if (!cur || cur.executionId !== data.executionId) return cur;
+          if (!cur || cur.executionId !== d.executionId) return cur;
           return {
             ...cur,
             status: 'aborted',
             currentNodeId: null,
-            error: data.reason ?? null,
+            error: d.reason ?? null,
           };
         });
-      });
+        return;
+      }
 
-      handle('pipeline_failed', (d) => {
-        const data = d as { executionId: number; error?: string };
+      if (eventName === 'pipeline_failed') {
+        const d = data as { executionId: number; error?: string };
         setRuntime((cur) => {
-          if (!cur || cur.executionId !== data.executionId) return cur;
+          if (!cur || cur.executionId !== d.executionId) return cur;
           return {
             ...cur,
             status: 'failed',
             currentNodeId: null,
-            error: data.error ?? null,
+            error: d.error ?? null,
           };
         });
+      }
+    };
+
+    const connect = () => {
+      if (cancelled) return;
+      if (streamAbortRef.current) return;
+
+      const ctrl = new AbortController();
+      streamAbortRef.current = ctrl;
+      const url = `${apiBaseUrl()}/api/coder/sessions/${sessionId}/pipelines/stream`;
+      const client = new ReconnectingSSEClient({
+        url,
+        method: 'GET',
+        signal: ctrl.signal,
+        getLastEventId: () => lastSeenSeq,
+        backoff: pipelineStreamBackoff,
+        isTerminal: (ev) => TERMINAL_PIPELINE_EVENTS.has(ev.event),
+        onPhase: (phase) => {
+          if (phase === 'live') hasOpened = true;
+        },
+        onEvent: (ev) => {
+          if (ev.id !== undefined && ev.id > lastSeenSeq) lastSeenSeq = ev.id;
+          if (!ev.data) return;
+          let data: Record<string, unknown>;
+          try {
+            data = JSON.parse(ev.data);
+          } catch {
+            return;
+          }
+          handleEvent(ev.event, data);
+        },
       });
 
-      src.onerror = () => {
-        src.close();
-        sourceRef.current = null;
+      void client.run().catch((err: unknown) => {
         if (cancelled) return;
-        // Reconnect only when the stream actually opened at least once.
-        // The "never opened" case is the 404 from a session with no
-        // executor yet — bail out and wait for a fresh `openStream()`
-        // (called by the caller after a successful pipeline start)
-        // instead of spamming the Network tab with retries.
-        if (!hasOpened) return;
-        const next = Math.min(backoffMs, 30_000);
-        backoffMs = Math.min(backoffMs * 1.5, 30_000);
-        setTimeout(connect, next);
-      };
-
-      src.onopen = () => {
-        hasOpened = true;
-        backoffMs = 2000;
-      };
+        if ((err as { status?: number }).status === 404 && !hasOpened) return;
+        console.warn('[pipeline] stream failed:', err);
+      }).finally(() => {
+        if (streamAbortRef.current === ctrl) streamAbortRef.current = null;
+      });
     };
 
     openStreamRef.current = connect;
@@ -230,7 +250,7 @@ export function usePipelineStream(sessionId: number | null): {
     // Probe once for a persisted execution. The /executions endpoint
     // falls through to the durable store when no in-memory executor
     // exists, so a non-empty result means the SSE will succeed.
-    fetch(`/api/coder/sessions/${sessionId}/pipelines/executions`)
+    fetch(`${apiBaseUrl()}/api/coder/sessions/${sessionId}/pipelines/executions`)
       .then((r) => (r.ok ? r.json() : []))
       .then((execs: unknown) => {
         if (cancelled) return;
@@ -243,8 +263,8 @@ export function usePipelineStream(sessionId: number | null): {
     return () => {
       cancelled = true;
       openStreamRef.current = () => {};
-      sourceRef.current?.close();
-      sourceRef.current = null;
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
     };
   }, [sessionId]);
 

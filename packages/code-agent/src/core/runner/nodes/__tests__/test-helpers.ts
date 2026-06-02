@@ -87,6 +87,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     activeTiers: overrides.tiers ?? new Set<ToolTier>(['bootstrap']),
     recovery: new Map(),
     dupCalls: new Map(),
+    loopRefusals: new Map(),
     autoContinues: 0,
     preEmitCompactions: 0,
     runId: 'test-run',

@@ -35,6 +35,7 @@ import {
   dryRunUrl as dryRunUrlFn,
 } from './index-doc-use-case/strategies.js';
 import { DEFAULT_DRY_RUN_TOKEN_COST_USD_PER_1K } from './index-doc-use-case/types.js';
+import { docNamespace } from '@mcp/shared/vector-namespace.js';
 import type {
   DocIngestEstimate,
   DocIngestResult,
@@ -92,11 +93,15 @@ export class IndexDocumentationUseCase {
    * (source gone) is always fulfilled even when the remote store is down.
    */
   async deleteSource(sourceId: number): Promise<DeleteResult> {
+    // Resolve the collection BEFORE the delete cascades it away — its namespace
+    // lets backends with namespace-scoped ids (Pinecone) target the right one.
+    const collectionId = this.deps.docStore.getSource(sourceId)?.collection_id;
     return deleteAndCleanup(
       this.deps.docStore,
       this.deps.vectorStore,
       () => this.deps.docStore.listVectorIdsForSource(sourceId),
       () => { this.deps.docStore.deleteSource(sourceId); },
+      collectionId != null ? docNamespace(collectionId) : undefined,
     );
   }
 
@@ -107,6 +112,7 @@ export class IndexDocumentationUseCase {
       this.deps.vectorStore,
       () => this.deps.docStore.listVectorIdsForCollection(collectionId),
       () => { this.deps.docStore.deleteCollection(collectionId); },
+      docNamespace(collectionId),
     );
   }
 

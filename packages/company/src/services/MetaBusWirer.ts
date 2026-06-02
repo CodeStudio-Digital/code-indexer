@@ -19,6 +19,12 @@ import type { IMetaBusPublisher, IMetaBusWirer } from '@mcp/company/services/por
 export const FORWARDED_EVENTS: readonly string[] = [
   // Turn streaming
   'text_delta', 'tool_call_start', 'tool_call_result', 'message_complete',
+  // Live activity pill — `provider_call` gives the `provider:model` + "calling
+  // provider with N tools" line; `tool_progress` refines elapsed/note; the
+  // `operation_*` trio covers nested sub-agent / task ops. The dashboard
+  // builds a per-agent activity block from these (mirrors the chat pill).
+  'provider_call', 'tool_progress',
+  'operation_started', 'operation_progress', 'operation_finished',
   // Plan / question / tasks
   'plan_posted', 'question_posted', 'tasks_posted',
   'task_started', 'task_finished',

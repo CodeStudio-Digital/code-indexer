@@ -57,7 +57,7 @@ function severityColor(kind: string): 'red' | 'orange' | 'yellow' | 'gray' {
   if (kind === 'agent_quarantined' || kind === 'role_quarantined' || kind === 'read_only_mode') {
     return 'red';
   }
-  if (kind === 'stuck_detected') return 'orange';
+  if (kind === 'stuck_detected' || kind === 'loop_enforced') return 'orange';
   if (kind === 'illegal_transition' || kind === 'observation_error') return 'yellow';
   return 'gray';
 }

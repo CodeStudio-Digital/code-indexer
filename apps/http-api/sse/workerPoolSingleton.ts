@@ -19,9 +19,18 @@
  */
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { WorkerOrchestratorPool } from './WorkerOrchestratorPool.js';
+import type { CoderWorkerDocDeps } from './CoderWorkerPool.js';
 import { resolveWorkerFile, type ResolvedWorker } from './workerFileResolution.js';
 
 let cachedPool: WorkerOrchestratorPool | null = null;
+/**
+ * Mutable box for doc-corpus deps. Server.ts populates it during boot via
+ * `setCompanyWorkerDocDeps(...)`; `getWorkerOrchestratorPool()` passes the
+ * SAME object into the pool, which reads it per-spawn — so deps wired
+ * after the first spawn still reach subsequently-spawned workers. Mirrors
+ * `coderWorkerPoolSingleton.ts` for the company path.
+ */
+const docDeps: CoderWorkerDocDeps = {};
 
 function tryResolve(): ResolvedWorker | null {
   return resolveWorkerFile(import.meta.url, 'company-worker');
@@ -80,8 +89,31 @@ export function getWorkerOrchestratorPool(): WorkerOrchestratorPool {
       else if (level === 'warn') console.warn(msg);
       else console.log(msg);
     },
+    // Shared deps BOX (not a snapshot) — `setCompanyWorkerDocDeps` mutates
+    // this same object the pool reads inside `spawn()`, so docs wiring that
+    // lands after the first spawn still benefits later worker spawns.
+    docDeps,
   });
   return cachedPool;
+}
+
+/**
+ * Wire main-thread doc-corpus deps into the company worker pool. Called by
+ * `server.ts` right after `DocHybridSearch` + `DocsResearchBridge` are
+ * built so when the pool spawns company-workers, their `rag_search_docs`
+ * and `docs_deep_research` tools can RPC back to these instances via
+ * MessageBridge. Without this wire-up the company worker has no
+ * `setGlobalDocSearch` singleton populated and both tools error out with
+ * "not configured" at the first agent call. Mirrors `setCoderWorkerDocDeps`.
+ *
+ * Safe to call multiple times — fields are updated in-place. Pass `null`
+ * to detach (tests).
+ */
+export function setCompanyWorkerDocDeps(
+  deps: { docSearch?: CoderWorkerDocDeps['docSearch']; docsResearch?: CoderWorkerDocDeps['docsResearch'] },
+): void {
+  if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
+  if (deps.docsResearch !== undefined) docDeps.docsResearch = deps.docsResearch;
 }
 
 /** Force-shutdown the pool — called from process shutdown hooks. */

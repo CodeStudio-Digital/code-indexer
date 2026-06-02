@@ -200,6 +200,7 @@
   "role.thinking.anthropicOnly": "Somente Anthropic",
   "company.docs": "Documentos",
   "company.apiReference": "API",
+  "company.runners": "Runners",
   "company.env": "Env",
   "company.databases": "Bancos",
   "company.archived": "Arquivadas",

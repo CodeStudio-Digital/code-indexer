@@ -18,6 +18,7 @@ import { DetectedList } from './runners/DetectedList.js';
 import { ActiveList } from './runners/ActiveList.js';
 import { RunnerOutput } from './runners/RunnerOutput.js';
 import { NodeChip } from './runners/NodeChip.js';
+import { RunnerShellChip } from './runners/RunnerShellChip.js';
 
 interface RunnersTabProps {
   projectId: number;
@@ -75,6 +76,7 @@ export function RunnersTab({ projectId }: RunnersTabProps) {
             </button>
           </div>
           <NodeChip projectId={projectId} />
+          <RunnerShellChip projectId={projectId} />
         </div>
         <ActiveList tasks={tasks} selectedId={selectedId} onSelect={setSelectedId} />
         <DetectedList

@@ -120,7 +120,23 @@ function seedReranker(db: DB, env: NodeJS.ProcessEnv): void {
         workerToken: env.MCP_RERANK_WORKER_TOKEN ?? env.MCP_INDEX_WORKER_TOKEN ?? '',
       },
     });
+    return;
   }
+
+  // Desktop default: no paid/online reranker keys present. Seed the local
+  // ONNX cross-encoder (transformers.js, offline, zero per-query cost) as the
+  // enabled default. Without ANY reranker, `mode='hybrid'` is measurably worse
+  // than FTS on code queries (R@5 0.64 vs 0.80 — see http-api/server/deps.ts),
+  // so an offline reranker is the highest-leverage default for a desktop IDE.
+  // The model downloads lazily on first use into MCP_MODEL_CACHE_DIR.
+  reranker.upsert(db, {
+    id: 'local',
+    kind: 'local',
+    name: 'Local Reranker (offline)',
+    enabled: true,
+    is_default: true,
+    config: { model: 'Xenova/bge-reranker-base' },
+  });
 }
 
 function seedEmbeddingAndVectorStore(db: DB, env: NodeJS.ProcessEnv): void {

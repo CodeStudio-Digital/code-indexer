@@ -15,6 +15,7 @@ import type {
   MasterPrompt,
   AgentRunStatus,
 } from '@mcp/company-contracts';
+import type { StreamActivityBlock } from '../../hooks/agent-stream/types.js';
 
 // ─── Agents ───────────────────────────────────────────────────
 
@@ -28,6 +29,9 @@ export interface AgentStreamState {
   statusMessage?: string;
   usage?: AgentUsage;
   doneReason?: string;
+  /** Live "currently doing X" pill (provider call / tool / operation). Null
+   *  between actions and on terminal states. Reuses the chat activity block. */
+  activity?: StreamActivityBlock | null;
 }
 
 export interface ToolCallState {

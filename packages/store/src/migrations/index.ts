@@ -133,6 +133,7 @@ import { pluginPermissions116 } from './116_plugin_permissions.js';
 import { pluginStorage117 } from './117_plugin_storage.js';
 import { projectNodeVersion118 } from './118_project_node_version.js';
 import { pipelineProjectScope119 } from './119_pipeline_project_scope.js';
+import { projectRunnerShell120 } from './120_project_runner_shell.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -282,6 +283,7 @@ export const MIGRATIONS: Migration[] = [
   pluginStorage117,
   projectNodeVersion118,
   pipelineProjectScope119,
+  projectRunnerShell120,
 ];
 
 /**

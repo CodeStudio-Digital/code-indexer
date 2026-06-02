@@ -92,6 +92,21 @@ describe('findRecentBySession', () => {
   });
 });
 
+describe('clearAll', () => {
+  let h: Handle;
+  beforeEach(() => { h = setup(); });
+  afterEach(() => teardown(h));
+
+  it('drops every row regardless of age', () => {
+    h.store.insert({ session_id: 1, classifier_name: 'off_topic', verdict: 'ok' });
+    h.store.insert({ session_id: 2, classifier_name: 'policy', verdict: 'flagged' });
+    const deleted = h.store.clearAll();
+    expect(deleted).toBe(2);
+    expect(h.store.findRecentBySession(1)).toEqual([]);
+    expect(h.store.findRecentBySession(2)).toEqual([]);
+  });
+});
+
 describe('findRecentByAgentRunIds', () => {
   let h: Handle;
   beforeEach(() => { h = setup(); });

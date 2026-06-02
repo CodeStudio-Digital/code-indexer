@@ -56,6 +56,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     activeTiers: ensureBootstrap(args.initialTiers),
     recovery: new Map(),
     dupCalls: new Map(),
+    loopRefusals: new Map(),
     autoContinues: 0,
     preEmitCompactions: 0,
     runId: randomUUID(),

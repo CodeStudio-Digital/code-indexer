@@ -23,12 +23,15 @@ import {
   type AgentProgressPayload,
 } from './agents-blocks.js';
 import {
+  activityPatchFromOperation,
+  activityPatchFromProviderCall,
+  activityPatchFromToolProgress,
   clearProviderActivities,
   finishActivity,
-  kindFromOperation,
   removeActivity,
-  statusFromOperation,
   upsertActivity,
+  type OperationPayload,
+  type ProviderCallPayload,
 } from './activity-blocks.js';
 
 interface HandlerContext {
@@ -201,15 +204,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       const idx = toolIndex.get(d.id);
       if (idx === undefined) {
         if (isSubagentToolProgress(d)) return;
-        upsertActivity(blocks, {
-          id: d.id,
-          kind: activityKindFromToolProgress(d.id, d.name),
-          label: d.name,
-          phase: d.name === 'provider.chat' ? 'awaiting provider' : 'running',
-          note: d.note,
-          elapsedMs: d.elapsedMs,
-          status: 'running',
-        });
+        upsertActivity(blocks, activityPatchFromToolProgress(d));
         flush();
         return;
       }
@@ -227,24 +222,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     },
 
     provider_call: (data) => {
-      const d = data as {
-        runId?: string;
-        turn?: number;
-        provider?: string;
-        model?: string;
-        toolCount?: number;
-        historyChars?: number;
-      };
-      const id = `provider-chat:${String(d.runId ?? 'run')}:${String(d.turn ?? 0)}`;
-      const label = `${String(d.provider ?? 'provider')}:${String(d.model ?? 'model')}`;
-      upsertActivity(blocks, {
-        id,
-        kind: 'provider',
-        label,
-        phase: 'provider_call',
-        note: `calling provider${d.toolCount != null ? ` with ${d.toolCount} tools` : ''}`,
-        status: 'running',
-      });
+      upsertActivity(blocks, activityPatchFromProviderCall(data as ProviderCallPayload));
       flush();
     },
 
@@ -643,44 +621,6 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       updateSession(sid, { error: message });
     },
   };
-}
-
-interface OperationPayload {
-  opId?: string;
-  parentOpId?: string;
-  kind?: string;
-  label?: string;
-  phase?: string;
-  status?: string;
-  startedAt?: number;
-  elapsedMs?: number;
-  idleMs?: number;
-  deadlineMs?: number;
-  note?: string;
-}
-
-function activityPatchFromOperation(d: OperationPayload) {
-  const opId = String(d.opId ?? 'operation');
-  return {
-    id: opId,
-    kind: kindFromOperation(d.kind),
-    label: String(d.label ?? opId),
-    phase: d.phase,
-    note: d.note,
-    status: statusFromOperation(d.status),
-    startedAt: typeof d.startedAt === 'number' ? d.startedAt : undefined,
-    elapsedMs: typeof d.elapsedMs === 'number' ? d.elapsedMs : undefined,
-    idleMs: typeof d.idleMs === 'number' ? d.idleMs : undefined,
-    deadlineMs: typeof d.deadlineMs === 'number' ? d.deadlineMs : undefined,
-    parentOpId: typeof d.parentOpId === 'string' ? d.parentOpId : undefined,
-  };
-}
-
-function activityKindFromToolProgress(id: string, name: string) {
-  if (name === 'provider.chat' || id.startsWith('provider-chat:') || id.startsWith('pre-think:')) return 'provider';
-  if (name.startsWith('subagent:')) return 'subagent';
-  if (name === 'execute_tasks') return 'task';
-  return 'operation';
 }
 
 function isSubagentToolProgress(d: { id: string; name: string; note?: string }): boolean {

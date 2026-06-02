@@ -40,6 +40,7 @@ const VECTOR_STORE_KINDS: Array<{ value: VectorStoreKind; label: string }> = [
 ];
 
 const RERANKER_KINDS: Array<{ value: RerankerKind; label: string }> = [
+  { value: 'local', label: 'Local (offline, transformers.js)' },
   { value: 'cloudflare', label: 'Cloudflare Workers AI (bge-reranker)' },
   { value: 'cohere', label: 'Cohere Rerank' },
   { value: 'null', label: 'None (RRF order only)' },
