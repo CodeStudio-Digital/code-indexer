@@ -110,10 +110,15 @@ export function getWorkerOrchestratorPool(): WorkerOrchestratorPool {
  * to detach (tests).
  */
 export function setCompanyWorkerDocDeps(
-  deps: { docSearch?: CoderWorkerDocDeps['docSearch']; docsResearch?: CoderWorkerDocDeps['docsResearch'] },
+  deps: {
+    docSearch?: CoderWorkerDocDeps['docSearch'];
+    docsResearch?: CoderWorkerDocDeps['docsResearch'];
+    vision?: CoderWorkerDocDeps['vision'];
+  },
 ): void {
   if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
   if (deps.docsResearch !== undefined) docDeps.docsResearch = deps.docsResearch;
+  if (deps.vision !== undefined) docDeps.vision = deps.vision;
 }
 
 /** Force-shutdown the pool — called from process shutdown hooks. */

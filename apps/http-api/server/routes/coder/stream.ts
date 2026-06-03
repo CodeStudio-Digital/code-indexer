@@ -59,6 +59,12 @@ interface SendMessageBody {
   /** When false (default), skip pre-think on tool_result turns. */
   pre_think_on_tool_results?: boolean;
   /**
+   * Composer "Describe images" flag — FORCE the vision-fallback (image → text
+   * description) even when the active model can see images. Auto-fallback (when
+   * the model lacks the 'image' input modality) happens regardless of this.
+   */
+  describe_images?: boolean;
+  /**
    * Opt-in: when there is already a live run for this session AND it is
    * blocked inside an interactive tool (ask_user / submit_plan / submit_tasks),
    * interrupt that wait and inject this message instead of returning 409.
@@ -95,6 +101,8 @@ interface ContinueBody {
   max_turns?: number;
   agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
+  /** Force the vision fallback (image → text) on a resumed run. */
+  describe_images?: boolean;
 }
 
 export function mountCoderStreamRoutes(
@@ -128,6 +136,43 @@ export function mountCoderStreamRoutes(
       deepThinkProvider: body.deep_think_provider ?? admin?.provider ?? undefined,
       preThinkOnToolResults: body.pre_think_on_tool_results ?? admin?.preThinkOnToolResults ?? undefined,
     };
+  }
+
+  /**
+   * Whether the session's active model can consume images. Reads the cached
+   * ProviderModel row: `input_modalities` includes 'image' (live providers
+   * populate it) → vision; null modalities → fall back to the legacy
+   * `supports_attachments` flag; no row at all → `undefined` (unknown — the
+   * runner's strict `=== false` gate then never auto-describes, no surprise
+   * cost). Drives the vision-fallback auto path in runCoder.
+   */
+  function resolveModelSupportsVision(id: number): boolean | undefined {
+    const session = sessionStore.getSession(id);
+    if (!session?.provider || !session?.model) return undefined;
+    const row = providerStore
+      .listModels(session.provider)
+      .find((m) => m.model_id === session.model);
+    if (!row) return undefined;
+    if (row.input_modalities && row.input_modalities.length > 0) {
+      return row.input_modalities.includes('image');
+    }
+    return row.supports_attachments;
+  }
+
+  /**
+   * Whether the `preview` DevTools tier should auto-activate for this session.
+   * True for builder sessions/projects (the live in-app preview is the whole
+   * point) — those get preview_* on turn 1. Everyone else (generic chat,
+   * company) leaves it `undefined` and unlocks on demand via
+   * `find_tools` → `expand_toolset('preview')`. Avoids shipping 16 tools to
+   * every session.
+   */
+  function resolvePreviewAvailable(id: number): boolean | undefined {
+    const session = sessionStore.getSession(id);
+    if (!session) return undefined;
+    if (session.builder_json) return true;
+    const project = session.project_id != null ? deps.db.getProject(session.project_id) : null;
+    return project?.builder_json ? true : undefined;
   }
 
   /**
@@ -318,6 +363,9 @@ export function mountCoderStreamRoutes(
           profile: body.profile,
           worktree: body.worktree,
           thinking: body.thinking,
+          modelSupportsVision: resolveModelSupportsVision(id),
+          describeImages: body.describe_images,
+          previewAvailable: resolvePreviewAvailable(id),
           ...resolveDeepThinkForRequest(body),
           selectedSkillIds,
           // Apêndice 4 Fase 2 — when the dashboard is resuming via the
@@ -458,6 +506,9 @@ export function mountCoderStreamRoutes(
           profile: body.profile,
           worktree: body.worktree,
           thinking: body.thinking,
+          modelSupportsVision: resolveModelSupportsVision(id),
+          describeImages: body.describe_images,
+          previewAvailable: resolvePreviewAvailable(id),
           ...resolveDeepThinkForRequest(body),
           selectedSkillIds,
           pluginTools,
@@ -571,6 +622,9 @@ export function mountCoderStreamRoutes(
           agent: body.agent,
           profile: body.profile,
           resume: true,
+          modelSupportsVision: resolveModelSupportsVision(id),
+          describeImages: body.describe_images,
+          previewAvailable: resolvePreviewAvailable(id),
           pluginTools,
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,

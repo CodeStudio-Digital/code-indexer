@@ -174,6 +174,13 @@ export interface BuilderSessionConfig {
     };
     main_project_id?: number;
     main_project_runtime?: 'dockerfile' | 'node';
+    /**
+     * Builder studio mode (the focused, V0-style 2-pane builder). When
+     * true the scaffolder instruments the project for element selection
+     * (Tailwind + shadcn + source-stamp) and the dashboard renders the
+     * studio shell instead of the full company board.
+     */
+    studio?: boolean;
     /** Per-session base image override (from the company image picker). */
     image?: string;
     /** Extra raw `podman/docker run` flags for this session. */
@@ -422,6 +429,7 @@ export class SandboxService {
         limits,
         hostWorkdirMount,
         includeE2e,
+        studio: builderCfg.studio,
         image: builderCfg.image,
         runArgs: builderCfg.runArgs,
         ...externalSpec,

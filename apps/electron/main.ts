@@ -23,6 +23,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createApp } from '@apps/http-api/server.js';
 import { mountIpcHandlers } from './src/handlers-mount.js';
+import { setGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
+import { PreviewWindowService } from './src/preview-window/service.js';
 import { startOptionalDevHttp } from './src/dev-http.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
 import type { Hono } from 'hono';
@@ -110,6 +112,13 @@ async function bootstrap() {
   registerWindowIpc();
   registerMcpProtocol(honoApp);
 
+  // Agent preview/devtools: wire the main-process service so the `preview_*`
+  // tools (coder + company) can open a dedicated window + read CDP. Reaches
+  // the runner workers via the bridge handler in the worker pools.
+  const previewService = new PreviewWindowService();
+  setGlobalPreviewDevtools(previewService);
+  app.on('before-quit', () => previewService.closeAll());
+
   await createAppWindow();
 
   app.on('window-all-closed', () => {
@@ -137,6 +146,10 @@ function isInternalUrl(rawUrl: string): boolean {
   if (rawUrl.startsWith('mcp://')) return true;
   if (rawUrl.startsWith('file://')) return true;
   if (DEV_URL && rawUrl.startsWith(DEV_URL)) return true;
+  // Local dev-server previews (the project preview pane's "open in new
+  // window"). Restricted to loopback hosts so only local dev servers can
+  // open inside our shell — never an arbitrary remote URL.
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(rawUrl)) return true;
   return false;
 }
 
@@ -270,6 +283,14 @@ function registerNativeIpc() {
     // against `javascript:` / `file:` payloads regardless of intent.
     if (/^https?:\/\//i.test(url)) {
       void shell.openExternal(url);
+    }
+  });
+
+  // Reveal a local folder/file in the OS file manager (Explorer/Finder/…).
+  // Used by the projects list context menu ("Open in file explorer").
+  ipcMain.on('shell:openPath', (_event, targetPath: string) => {
+    if (typeof targetPath === 'string' && targetPath.length > 0) {
+      void shell.openPath(targetPath);
     }
   });
 

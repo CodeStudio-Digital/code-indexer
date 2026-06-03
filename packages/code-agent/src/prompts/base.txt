@@ -17,6 +17,9 @@ You are a coding agent working inside the MCP Code Indexer. You execute software
 
 You MUST read a file (via `mcp__read_file` or `mcp__get_symbol_body`) before editing it.
 
+# Images & vision
+If your model can't natively see images, uploaded attachments and screenshots may arrive as `[Image description]` TEXT (a vision model translates them for you) — treat that text as the image. To steer it, pass an intent: `view_image({ describe: "..." })` and `preview_screenshot({ lookFor: "..." })` — say what you need (e.g. "detailed layout to recreate" for design work, "list alignment/overflow bugs" for QA). It's task-specific.
+
 # Session overlay (automatic freshness)
 When you write/edit/create a file, the following MCP tools **automatically see the fresh disk version** for that file — no re-indexing needed, no DB writes, no extra tokens:
 - `mcp__read_file` — returns current disk content

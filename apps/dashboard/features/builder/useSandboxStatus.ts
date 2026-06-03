@@ -51,7 +51,7 @@ export interface SandboxLogLine {
 }
 
 export interface SandboxSnapshot {
-  builder: { stack: 'react-ts' | 'vue-ts' } | null;
+  builder: { stack: 'react-ts' | 'vue-ts'; studio?: boolean } | null;
   sandbox:
     | {
         status: SandboxPollStatus;

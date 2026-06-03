@@ -18,7 +18,20 @@ import { parseIdParam, parseIntQuery, parseJsonBody, notFound } from '../_helper
  */
 const TRIM_TOOL_RESULT = 4000;
 function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(messages: M[]): M[] {
-  return messages.map((m) => ({
+  return messages.map((m) => {
+    // Synthetic tool-image plumbing message (view_image / preview_screenshot →
+    // a user/image block). The dashboard renders this image INLINE under the
+    // tool call on reload, so keep its base64 (no upload endpoint to re-fetch
+    // a tool screenshot, unlike a user upload).
+    const isToolImageMsg =
+      m.role !== 'assistant' &&
+      m.content.some(
+        (b) =>
+          (b as Record<string, unknown>).type === 'text' &&
+          String((b as Record<string, unknown>).text ?? '').trim() ===
+            '(Image(s) attached from the tool call above.)',
+      );
+    return {
     ...m,
     content: m.content.map((block) => {
       const b = block as Record<string, unknown>;
@@ -34,11 +47,13 @@ function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(mess
       // results from Codex). Stripping their base64 would lose the image on
       // session reload — there's no upload endpoint to re-fetch them from.
       // User-side image/document uploads still get trimmed: they're stored
-      // verbatim and the dashboard fetches them on demand.
+      // verbatim and the dashboard fetches them on demand. Tool-produced images
+      // (isToolImageMsg) are kept too — rendered inline, no re-fetch path.
       if (
         (b.type === 'image' || b.type === 'document') &&
         typeof b.base64 === 'string' &&
-        m.role !== 'assistant'
+        m.role !== 'assistant' &&
+        !isToolImageMsg
       ) {
         const { base64: _omit, ...rest } = b;
         void _omit;
@@ -46,7 +61,8 @@ function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(mess
       }
       return b;
     }),
-  }));
+    };
+  });
 }
 
 type GenerateTitleBody = {
@@ -365,12 +381,15 @@ export function mountCoderSessionsRoutes(
     if (!body.project_id || !body.title || !body.provider) {
       return c.json({ error: 'project_id, title, provider required' }, 400);
     }
+    // Builder projects (projects.builder_json set) default the chat agent to
+    // `builder` (persona + scope) unless the caller passed an explicit agent.
+    const isBuilderProject = !!deps.db.getProject(body.project_id)?.builder_json;
     const session = sessionStore.createSession({
       project_id: body.project_id,
       title: body.title,
       provider: body.provider,
       model: body.model ?? '',
-      agent: body.agent ?? null,
+      agent: body.agent ?? (isBuilderProject ? 'builder' : null),
       phase_profile_id: body.phase_profile_id ?? null,
     });
     // Best-effort base_commit_sha capture for Camada 4's reviewer subagent.

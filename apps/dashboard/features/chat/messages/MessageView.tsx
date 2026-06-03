@@ -29,7 +29,7 @@ interface MessageViewProps {
   /** Session id — needed to lazy-fetch attachment base64 stripped from the
    *  list payload (see sessions.ts trimMessageBlocks). */
   sessionId?: number;
-  toolResultsById: Map<string, { content: string; isError: boolean }>;
+  toolResultsById: Map<string, { content: string; isError: boolean; image?: { mediaType: string; base64: string } }>;
   usage?: MessageRow;
   providerId: string;
   onAnswer: PromptHandlers['onAnswer'];
@@ -401,7 +401,7 @@ export function renderAssistantBlock(
   b: ContentBlock,
   i: number,
   handlers: PromptHandlers,
-  toolResultsById: Map<string, { content: string; isError: boolean }>,
+  toolResultsById: Map<string, { content: string; isError: boolean; image?: { mediaType: string; base64: string } }>,
   tasksState: PersistedTasksState | null | undefined,
 ) {
   if (b.type === 'thinking') {
@@ -538,7 +538,9 @@ export function renderAssistantBlock(
     id: b.id ?? '',
     name: b.name ?? '',
     input: b.input,
-    result: result ? { content: result.content, isError: result.isError } : undefined,
+    result: result
+      ? { content: result.content, isError: result.isError, ...(result.image ? { image: result.image } : {}) }
+      : undefined,
     status: result ? (result.isError ? 'error' : 'done') : 'running',
   };
   // Goal tools get a richer block — they're session-wide events that the

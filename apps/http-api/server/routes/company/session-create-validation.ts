@@ -35,6 +35,9 @@ export interface CreateSessionBody {
    */
   builder?: {
     stack: BuilderStack;
+    /** Builder studio mode (focused V0-style 2-pane builder with element
+     *  selection). Enables the instrumented scaffolder + studio shell. */
+    studio?: boolean;
     /** Per-session CPU/memory/pids override. Partial — any missing field
      *  falls back to process-level defaults (MCP_SANDBOX_* env). */
     limits?: {

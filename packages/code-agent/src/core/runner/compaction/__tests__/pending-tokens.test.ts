@@ -28,6 +28,16 @@ function toolResultMsg(content: string): AgentMessage {
   };
 }
 
+function imageMsg(base64: string): AgentMessage {
+  return {
+    role: 'user',
+    content: [
+      { type: 'text', text: 'use o mcp vision para ver a imagem' },
+      { type: 'image', mediaType: 'image/png', base64 },
+    ],
+  };
+}
+
 describe('estimateMessagesTokens', () => {
   it('returns near-zero for empty array', () => {
     expect(estimateMessagesTokens([])).toBe(0);
@@ -46,6 +56,28 @@ describe('estimateMessagesTokens', () => {
       toolResultMsg('long tool output '.repeat(50)),
     ]);
     expect(userPlusTool).toBeGreaterThan(justUser);
+  });
+
+  it('costs an image by fixed per-tile overhead, NOT its base64 length', () => {
+    // Regression: a ~1.6MB base64 image (the dashboard screenshot) used to be
+    // counted as ~417K tokens via the JSON.stringify fallback, falsely tripping
+    // the pre-emit gate into `compact_exhausted`. It must now cost a few
+    // thousand tokens at most (image overhead + the short text block).
+    const bigBase64 = 'A'.repeat(1_600_000);
+    const t = estimateMessagesTokens([imageMsg(bigBase64)]);
+    expect(t).toBeLessThan(5_000);
+  });
+
+  it('costs a base64-only document by the 0.3 heuristic, not raw length', () => {
+    const base64 = 'A'.repeat(100_000);
+    const t = estimateMessagesTokens([
+      { role: 'user', content: [{ type: 'document', name: 'f.pdf', mediaType: 'application/pdf', base64 }] },
+    ]);
+    // 0.3 * 100K = ~30K tokens — far below the ~25K-token raw-length/4 count
+    // would imply for arbitrary text, but specifically the base64 must not be
+    // counted as plain text (which would be 25K) — it uses the PDF heuristic.
+    expect(t).toBeGreaterThan(25_000);
+    expect(t).toBeLessThan(40_000);
   });
 
   it('handles tool_use content blocks', () => {
@@ -110,6 +142,15 @@ describe('shouldCompactPreEmit', () => {
     const d = shouldCompactPreEmit({ messages, model });
     expect(d.shouldCompact).toBe(true);
     expect(d.ratio).toBeGreaterThanOrEqual(0.9);
+  });
+
+  it('does NOT pre-empt for a huge-base64 image (the compact_exhausted bug)', () => {
+    // 200K-window model; a single attached image must keep the ratio tiny.
+    const bigBase64 = 'A'.repeat(1_600_000);
+    const messages = [userMsg('seed'), imageMsg(bigBase64)];
+    const d = shouldCompactPreEmit({ messages, model });
+    expect(d.shouldCompact).toBe(false);
+    expect(d.ratio).toBeLessThan(0.1);
   });
 
   it('returns shouldCompact=false when well under cap', () => {

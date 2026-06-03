@@ -64,6 +64,13 @@ export interface Project {
   node_version: string | null;
   /** Shell id the runner launches commands with (e.g. 'git-bash'); null = system default. */
   runner_shell: string | null;
+  /**
+   * Builder-project config — JSON `{"stack":"react-ts","port":5180}`. When
+   * set, this project was scaffolded as a V0-style builder (instrumented for
+   * element selection); the project view shows the live-preview pane and
+   * defaults the chat agent to `builder`. Null for ordinary projects.
+   */
+  builder_json: string | null;
   created_at: string;
   updated_at: string;
   last_indexed: string | null;

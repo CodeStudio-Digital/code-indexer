@@ -208,7 +208,7 @@ const createGoal: CoderTool = {
     // once a goal is in_progress, so the model can't see it on the next
     // turn anyway — no nudge needed in the result body.
     return ok(
-      `${supersededNote}Goal set. Status: in_progress${budget ? ` (budget: ${budget} tokens)` : ' IMPORANT! THE GOAL HAS BEEN SET WITH SUCCESS'}.`,
+      `${supersededNote}Goal set. Status: in_progress${budget ? ` (budget: ${budget} tokens)` : ''}.`,
     );
   },
 };

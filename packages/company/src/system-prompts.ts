@@ -5,6 +5,7 @@
  */
 
 import { buildSddMasterBlock } from '@mcp/company/prompts/sdd-master-block.js';
+import { BUILDER_STUDIO_RULES } from '@mcp/company/prompts/builder-studio-rules.js';
 
 /**
  * Builder-mode context. When present, the prompt gets a dedicated
@@ -22,6 +23,11 @@ export interface BuilderPromptContext {
   workdir?: string;
   /** Stack name (`react-ts`, `vue-ts`, etc.). */
   stack: string;
+  /**
+   * Builder studio mode — appends the design-first, element-targeted,
+   * self-healing studio rules. Set when `config_json.builder.studio` is on.
+   */
+  studio?: boolean;
   /**
    * Public URL of the live preview iframe. Optional for the same reason
    * as `workdir` — may be absent when the container is down.
@@ -248,7 +254,7 @@ Open every non-trivial task by calling \`docs_list\` to see what's already
 documented. Close every architectural decision by writing or updating an
 ADR. Multi-service sessions: pass \`service: '<service_id>'\` to target a
 specific container's docs.
-`;
+${b.studio ? BUILDER_STUDIO_RULES : ''}`;
 }
 
 /**

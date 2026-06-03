@@ -25,7 +25,7 @@
  * unlocks on-demand via `expand_toolset`. ToolTier is widened to `string` so
  * the runner, filter, and promotion logic work generically with any tier name.
  */
-export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master';
+export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master' | 'preview';
 export type ToolTier = string;
 
 /** The set of built-in core tier names. Custom tiers must not collide. */
@@ -34,6 +34,36 @@ export const CORE_TIER_NAMES: ReadonlySet<string> = new Set<CoreTier>([
   'navigate',
   'admin',
   'master',
+  'preview',
+]);
+
+/**
+ * Preview DevTools tools — the dedicated `preview` tier. Activated only when
+ * the preview backend is available (the desktop app) — see runCoder. Listed
+ * explicitly so the bootstrap fallback in `getToolTier` never exposes them.
+ */
+export const PREVIEW_TOOLS: ReadonlySet<string> = new Set<string>([
+  'preview_open',
+  'preview_navigate',
+  'preview_viewport',
+  'preview_close',
+  'preview_console',
+  'preview_network',
+  'preview_eval',
+  'preview_screenshot',
+  'preview_inspect_css',
+  'preview_performance',
+  'preview_memory',
+  'preview_storage',
+  'preview_click',
+  'preview_fill',
+  'preview_type',
+  'preview_press',
+  'preview_wait_for',
+  'preview_scroll',
+  'preview_hover',
+  'preview_double_click',
+  'preview_right_click',
 ]);
 
 /**
@@ -177,6 +207,11 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'git_status',
   'git_diff',
   'git_log',
+  // create_skill authors/updates skills in the DB (mutating). Lives in
+  // navigate alongside write_file — the /skill builtin expands to this tier
+  // before calling it. MUST be listed explicitly: getToolTier falls back to
+  // bootstrap for unlisted tools, which would expose it on turn 1.
+  'create_skill',
   // spawn_agent moved to BOOTSTRAP_TOOLS — orchestration tools live there
   // alongside expand_toolset/find_tools so any session can delegate.
   // execute_tasks (plural) is the new wave-based orchestrator (PR 3) —
@@ -297,6 +332,7 @@ export function getToolTier(
   if (NAVIGATE_TOOLS.has(name)) return 'navigate';
   if (ADMIN_TOOLS.has(name)) return 'admin';
   if (MASTER_TOOLS.has(name)) return 'master';
+  if (PREVIEW_TOOLS.has(name)) return 'preview';
   return 'bootstrap';
 }
 

@@ -183,7 +183,7 @@ function hydrate(r: SkillRaw): SkillDefinition {
   };
 }
 
-function toResolved(def: SkillDefinition): ResolvedSkill {
+export function toResolved(def: SkillDefinition): ResolvedSkill {
   // Treat tags prefixed with `trigger:` as inline trigger tags (e.g.
   // `trigger:design-system`). This keeps frontmatter terse while letting
   // the matcher reuse a single field.

@@ -22,6 +22,11 @@ import { PROVIDERS } from '@mcp/company/database-providers.js';
 import { getDriver, type TableInfo } from '@mcp/company/tools/database-driver.js';
 
 const MAX_RESULT_CHARS = 50_000;
+// Cap the number of rows we render into the result string. A `SELECT *` on a
+// large table would otherwise build a multi-megabyte markdown body before the
+// char-level `truncate()` runs — needless memory pressure. We render at most
+// this many rows and tell the model how many were elided.
+const MAX_RENDER_ROWS = 500;
 
 // ─── Module-level bindings (setter pattern) ──────────────────────
 
@@ -264,10 +269,16 @@ function renderQueryResult(result: {
       : Object.keys(result.rows[0]);
   const header = columnNames.join(' | ');
   const sep = columnNames.map(() => '---').join(' | ');
-  const body = result.rows
+  const renderRows = result.rows.slice(0, MAX_RENDER_ROWS);
+  const body = renderRows
     .map((row) => columnNames.map((name) => stringifyCell(row[name])).join(' | '))
     .join('\n');
-  return `rows=${result.rows.length} rowCount=${result.rowCount}\n${header}\n${sep}\n${body}`;
+  const elided = result.rows.length - renderRows.length;
+  const elidedNote =
+    elided > 0
+      ? `\n[${elided} more row(s) not shown — add a LIMIT or a WHERE filter to narrow the result]`
+      : '';
+  return `rows=${result.rows.length} rowCount=${result.rowCount}\n${header}\n${sep}\n${body}${elidedNote}`;
 }
 
 function stringifyCell(v: unknown): string {

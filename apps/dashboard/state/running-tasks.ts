@@ -34,6 +34,18 @@ export function tasksForProject(tasks: RunnerTask[], projectId: number): RunnerT
   return tasks.filter((t) => t.projectId === projectId);
 }
 
+/**
+ * Heuristic: does this runner task look like a long-running dev/preview
+ * server (so the project view should surface a live preview)? Covers the
+ * common script names across npm/yarn/wrangler/vite/next/angular. Broad on
+ * purpose — a false positive just shows an empty preview with a manual URL
+ * field, never breaks anything.
+ */
+const DEV_SERVER_RE = /(^|[\s:/])(dev|serve|preview|start|watch|wrangler|vite|http-server|live-server)([\s:]|$)/i;
+export function isDevServerTask(task: RunnerTask): boolean {
+  return DEV_SERVER_RE.test(task.command) || DEV_SERVER_RE.test(task.label ?? '');
+}
+
 /** Count of currently-running tasks (across all projects). */
 export function runningCount(tasks: RunnerTask[]): number {
   return tasks.filter((t) => t.status === 'running').length;

@@ -246,6 +246,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openDuplexStream: (channel: string, payload: unknown) => openDuplex(`api:${channel}`, payload),
   openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
   openExternal: (url: string) => ipcRenderer.send('shell:openExternal', url),
+  openPath: (path: string) => ipcRenderer.send('shell:openPath', path),
   /**
    * Spawn a new Electron window pointing at `route` (e.g. `/projects/42`).
    * Returns `{ ok, windowId? , error? }`. The new window inherits the

@@ -67,6 +67,7 @@ export * from './projectGit.js';
 export * from './auth.js';
 export * from './billing.js';
 export * from './plugins.js';
+export * from './training.js';
 export * from './misc.js';
 
 /**

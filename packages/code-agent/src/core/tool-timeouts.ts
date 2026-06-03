@@ -52,12 +52,16 @@ const SLOW_NATIVE_NAMES = new Set<string>([
   // those caps instead of the 5-min NORMAL default that was killing them.
   'spawn_agent',
   'execute_tasks',
+  // code_exec batches nested tool calls — including long shell installs. Its
+  // own timeout now measures only JS-active time (PAUSED while a nested tool
+  // runs, codex `code_mode` model; see code-exec.ts), so the runner backstop
+  // must sit ABOVE the longest nested tool (run_command = 10 min) instead of
+  // the 5-min NORMAL default that would otherwise cut a multi-install batch.
+  'code_exec',
 ]);
-// NOTE: code_exec and run_command are deliberately NOT here. code_exec
-// self-caps at 30s (node:vm Promise.race in code-exec.ts), so a runner
-// timeout is moot — NORMAL is a harmless backstop. run_command declares an
-// explicit 10-min `timeoutMs` on its own tool definition (shell.ts), which
-// wins over this tier; a one-shot command should not get the 30-min budget.
+// NOTE: run_command is deliberately NOT here — it declares an explicit 10-min
+// `timeoutMs` on its own tool definition (shell.ts), which wins over this tier;
+// a one-shot command should not get the 30-min budget.
 
 /**
  * Name-pattern fallback for tools that do vector search or documentation

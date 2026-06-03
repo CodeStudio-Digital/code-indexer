@@ -4,7 +4,8 @@
  * apps/http-api/server/routes/projects.ts now delegate here.
  */
 
-import { ApiError, type ApiContext, type AsyncStream, type ProjectsApi, type IndexStreamEvent } from '@mcp/api-bus';
+import { ApiError, type ApiContext, type AsyncStream, type ProjectsApi, type IndexStreamEvent, type ScaffoldStreamEvent } from '@mcp/api-bus';
+import { runScaffoldStream } from './scaffold.js';
 import {
   CreateProjectService,
   UpdateProjectService,
@@ -213,8 +214,17 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
         }),
       );
     },
+
+    scaffold(input): AsyncStream<ScaffoldStreamEvent> {
+      return streamFromCallbacks<ScaffoldStreamEvent>((emit) => runScaffoldStream(deps, input, emit));
+    },
   };
 }
+
+// Re-exported so the Hono SSE route can reuse the same producer→iterable
+// bridge the handlers use internally (keeps the scaffold route signal-aware
+// without duplicating the queue logic).
+export { streamFromCallbacks };
 
 /**
  * Bridge between the legacy callback-based use-cases (`onStart`,

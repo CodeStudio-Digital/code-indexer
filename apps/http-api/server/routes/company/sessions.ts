@@ -318,6 +318,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
           ? {
               builder: {
                 stack: body.builder.stack,
+                ...(body.builder.studio ? { studio: true } : {}),
                 ...(body.builder.limits ? { limits: body.builder.limits } : {}),
                 ...(body.builder.main_project_id
                   ? { main_project_id: body.builder.main_project_id }

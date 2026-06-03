@@ -253,10 +253,14 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
     let stack: ProvisionableStack | null = null;
+    let studio = false;
     try {
-      const cfg = JSON.parse(session.config_json || '{}') as { builder?: { stack?: string } };
+      const cfg = JSON.parse(session.config_json || '{}') as {
+        builder?: { stack?: string; studio?: boolean };
+      };
       const requested = cfg.builder?.stack;
       if (isProvisionableStack(requested)) stack = requested;
+      studio = !!cfg.builder?.studio;
     } catch {
       // Legacy sessions have arbitrary config_json — treat as non-builder.
     }
@@ -274,7 +278,7 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
     // ~10s once ready, so the sliding 30-min TTL is in practice always
     // fresh for an active user — idle tabs naturally lose access.
     const response = c.json({
-      builder: stack ? { stack } : null,
+      builder: stack ? { stack, studio } : null,
       sandbox: sandbox
         ? {
             status: sandbox.status,

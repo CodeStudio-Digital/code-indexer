@@ -10,6 +10,13 @@ export interface AgentChatProps {
   /** Optional session to pre-select on mount, set when the user clicks a
    *  recent-session entry in the global sidebar. */
   initialSessionId?: number;
+  /**
+   * Builder studio: when set, each outgoing message is prefixed with the
+   * element the user selected in the preview (consumed + cleared from the
+   * studio-context-store, keyed by this session id). Absent for normal
+   * workspace chat.
+   */
+  selectionPrefixSessionId?: number;
 }
 
 export interface CoderSession {

@@ -21,7 +21,8 @@ export type BindingRole =
   | 'compaction_llm'
   | 'link_extractor'
   | 'rewriter'
-  | 'reviewer';
+  | 'reviewer'
+  | 'vision';
 
 export interface PipelineCatalogEntry {
   pipelineName: string;
@@ -279,6 +280,26 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
       config: { temperature: 0, max_tokens: 4000 },
     },
     introducedInPhase: '9',
+  },
+
+  // ─── Vision fallback (image → text) ──────────────────────────────────────
+  // When the active chat model cannot see images (no 'image' input modality)
+  // OR the composer "Describe images" flag is on, uploaded attachments and
+  // tool screenshots (view_image / preview_screenshot) are routed through
+  // THIS model, which emits an agent-directed semantic description that is
+  // substituted for the image before the blind model is called. Pick a
+  // strong vision model (GPT-4o, Gemini Flash, Claude Sonnet).
+  {
+    pipelineName: 'code-agent',
+    bindingRole: 'vision',
+    description:
+      'Vision model that turns images into agent-directed text descriptions when the active model cannot see them (auto-fallback) or when the composer "Describe images" flag is on. The describing prompt is supplied by the agent (view_image.describe / preview_screenshot.lookFor) or, for composer attachments, taken from the user message.',
+    recommendedDefault: {
+      providerKind: 'openai',
+      modelHint: 'gpt-4o-mini',
+      config: { temperature: 0.2, max_tokens: 1200 },
+    },
+    introducedInPhase: 'vision-fallback',
   },
 ];
 

@@ -77,6 +77,7 @@ import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { todoTools, generateTodoId } from '@mcp/code-agent/tools/todo.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
+import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
 import { goalTools } from '@mcp/code-agent/tools/goal.js';
 import { buildCodeExecTool } from '@mcp/code-agent/tools/code-exec.js';
 import { listAgentsTools } from '@mcp/code-agent/tools/list-agents.js';
@@ -88,6 +89,7 @@ import { worktreeTools, createProjectWorktree } from '@mcp/code-agent/tools/work
 import { SkillStore } from '@mcp/store/skill-store.js';
 import type { ResolvedSkill, SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
 import { buildInvokeSkillTool, buildSkillDiscoveryTools } from '@mcp/code-agent/skills/skill-tool-builder.js';
+import { buildCreateSkillTool } from '@mcp/code-agent/tools/create-skill.js';
 import { listInstalledNamespaces } from '@mcp/code-agent/skills/agent-skills-installer.js';
 import {
   buildCompactSkillsSection,
@@ -286,6 +288,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(ragSearchDocsTools);
   registry.registerAll(todoTools);
   registry.registerAll(viewImageTools);
+  registry.registerAll(previewTools);
   registry.registerAll(goalTools);
   registry.registerAll(listAgentsTools);
   registry.registerAll(waitAgentsTools);
@@ -559,7 +562,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // on transparently talks to the container — no conditional in the
   // tool code. The host `project.root_path` is ignored because there
   // is no host-side project in builder mode (yet).
-  const sandboxBinding = opts.companyContext?.sandbox;
+  const sandboxBinding = opts.sandbox ?? opts.companyContext?.sandbox;
   // Defense-in-depth: if this is a builder-mode session (project sits
   // under `data/virtual-projects/`) but the companyContext has no
   // sandbox binding, something dropped it between orchestrator and
@@ -727,6 +730,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     },
     companyContext: opts.companyContext,
+    // Coder session id — keys per-agent resources (preview/devtools window).
+    sessionId: session.id,
     // Surface indexing status to tools so DB-dependent paths can fall back
     // to disk/regex/tree-sitter instead of returning empty results.
     projectIndexed: undefined, // set after isIndexed is computed (see below)
@@ -830,6 +835,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       );
     }
   }
+
+  // create_skill — registered unconditionally (navigate tier) so the agent can
+  // author the FIRST skill in an empty catalog. Captures dbPath + registry for
+  // tool-name validation and the trigger eval.
+  registry.register(
+    buildCreateSkillTool({ dbPath: config.dbPath, registry, projectId: session.project_id }),
+  );
 
   // Detect indexing status — used for prompt conditioning and dashboard feedback.
   const projectStats = db.getStats(project.id);
@@ -1002,6 +1014,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // via `expand_toolset('master')`.
   if (opts.companyContext?.isMaster) {
     activeTiers.add('master');
+  }
+  // Auto-activate the `preview` tier (DevTools tools) ONLY when the caller
+  // says preview is contextually relevant (`opts.previewAvailable` — set for
+  // builder / dev-server project sessions in stream.ts). We deliberately do
+  // NOT fall back to `getGlobalPreviewDevtools()`: the worker installs the
+  // bridge shim unconditionally, so that would make the tier always-on and
+  // ship 16 tools to every session. Other sessions (generic chat, company)
+  // unlock it on demand via `find_tools` → `expand_toolset('preview')`.
+  if (opts.previewAvailable) {
+    activeTiers.add('preview');
   }
   if (process.env.CODER_LOG_TOOLS_COUNT === '1') {
     console.log(
@@ -1187,6 +1209,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     specMode: opts.specMode ?? (effectiveAgentId === 'spec'),
     thinking: opts.thinking,
     thinkingBudgetTokens: opts.thinkingBudgetTokens,
+    modelSupportsVision: opts.modelSupportsVision,
+    describeImages: opts.describeImages,
     deepThink: opts.deepThink,
     deepThinkModel: opts.deepThinkModel,
     deepThinkProvider: opts.deepThinkProvider,

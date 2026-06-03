@@ -99,6 +99,13 @@ export interface ProvisionRequest {
    * The legacy env var `MCP_SANDBOX_INCLUDE_E2E=1` works as a global override.
    */
   includeE2e?: boolean;
+  /**
+   * Builder studio mode. When true and the stack has a `SourceStampPlugin`,
+   * the manager uses the instrumented `BuilderScaffolder` (Tailwind +
+   * shadcn + element-selection stamp) and persists the resulting
+   * `viteStamp` on the sandbox so it survives dev-server restarts.
+   */
+  studio?: boolean;
 }
 
 /**

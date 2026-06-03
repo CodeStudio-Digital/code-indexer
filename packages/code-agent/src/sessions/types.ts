@@ -36,6 +36,13 @@ export interface CoderSession {
   /** Selected agent preset (explore | plan | build | admin). Sticky across turns so resume paths honour the user's choice. */
   agent: string | null;
   /**
+   * Decoupled Builder config — JSON `{"stack":"react-ts","studio":true}`.
+   * When set, this is a Builder session: a coder session bound to a
+   * sandbox container, run by the `builder` agent. Null for ordinary
+   * coder sessions.
+   */
+  builder_json: string | null;
+  /**
    * Last `response.id` returned by the Responses API for this session, used as
    * `previous_response_id` on the next turn. Only populated for ChatGPT/Codex
    * sessions running with `store: true`. Null for other providers.

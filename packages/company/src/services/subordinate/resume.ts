@@ -37,6 +37,7 @@ import {
   type SubordinateCompletionDeps,
 } from '@mcp/company/services/subordinate/completion-handler.js';
 import { wireSubordinateInterceptionsForRunner } from '@mcp/company/services/subordinate/runner-wiring.js';
+import { tryAcquireResume, releaseResume } from '@mcp/company/services/subordinate/resume-guard.js';
 
 export interface ResumeSubordinateDeps {
   ctx: SessionContext;
@@ -62,7 +63,42 @@ interface ResumeResult {
   status: AgentRunStatus;
 }
 
+/**
+ * Resume entry point. Serialises per `agentRunId` so overlapping callers
+ * (inbox drain after a mutex-timeout reset, `forward_to_agent` racing a drain,
+ * a manual `resume_subordinate`, auto-retry) can't start two `runCoder` runs on
+ * the same coder session — which would interleave writes and corrupt the turn
+ * history. The acquire is synchronous (before any `await`), so the race is
+ * impossible; the loser throws and its caller degrades gracefully.
+ */
 export async function resumeSubordinate(
+  agentRunId: number,
+  message: string | undefined,
+  roleOverride: string | undefined,
+  attachments: CoderAttachment[] | undefined,
+  thinking: boolean | undefined,
+  deps: ResumeSubordinateDeps,
+): Promise<ResumeResult> {
+  if (!tryAcquireResume(agentRunId)) {
+    throw new Error(
+      `Agent run ${agentRunId} is already being resumed/reactivated — refusing concurrent resume`,
+    );
+  }
+  try {
+    return await resumeSubordinateInner(
+      agentRunId,
+      message,
+      roleOverride,
+      attachments,
+      thinking,
+      deps,
+    );
+  } finally {
+    releaseResume(agentRunId);
+  }
+}
+
+async function resumeSubordinateInner(
   agentRunId: number,
   message: string | undefined,
   roleOverride: string | undefined,
@@ -82,6 +118,14 @@ export async function resumeSubordinate(
       `Agent run ${agentRunId} status is ${agentRun.status}, not resumable (need: ${resumableStatuses.join('/')})`,
     );
   }
+
+  // Drop any pending plan/question/tasks left over from the previous run. Its
+  // `resolve` closure points at the OLD runner handle we are about to replace;
+  // a master approval landing before the resumed run re-submits would resolve
+  // into the void (no-op delivery) yet report success — a silently lost
+  // approval. `abort.ts` already does this on abort; resume must too. The
+  // resumed run re-submits and creates a fresh entry if it still needs input.
+  deps.humanInLoop.clearForAgent(agentRunId);
 
   const config = loadConfig();
   const store = new SessionStore(config.dbPath);

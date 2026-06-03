@@ -46,6 +46,7 @@ export function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) 
       labels: {
         open: t('projects:contextMenu.open', 'Open'),
         openInNewWindow: t('projects:contextMenu.openInNewWindow', 'Open in new window'),
+        openInExplorer: t('projects:contextMenu.openInExplorer', 'Open in file explorer'),
         copyPath: t('projects:contextMenu.copyPath', 'Copy path'),
         edit: t('projects:contextMenu.edit', 'Edit'),
         copied: t('projects:contextMenu.copied', 'Copied'),

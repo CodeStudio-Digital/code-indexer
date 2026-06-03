@@ -12,7 +12,10 @@ const VIEW_IMAGE_DESC =
   "USE: when the user asked about a screenshot, design asset, or test artifact stored in the project tree.\n" +
   "USE: to inspect a chart/figure your tools just generated.\n" +
   "DON'T: load the same image twice in a session — once it's in the thread you keep seeing it.\n" +
-  "DON'T: load images outside the project root. The path argument is project-relative and validated.";
+  "DON'T: load images outside the project root. The path argument is project-relative and validated.\n" +
+  'VISION FALLBACK: if your own model can\'t see images, set `describe` to say what you need ' +
+  '(e.g. "describe the layout to recreate it" or "list visual bugs / misalignments") — a vision ' +
+  'model translates the image to text for you. Ignored when you can already see images.';
 
 const IMAGE_EXT_TO_MEDIA: Record<string, string> = {
   png: 'image/png',
@@ -35,6 +38,11 @@ export const viewImage: CoderTool = {
     type: 'object',
     properties: {
       path: { type: 'string', description: 'Project-relative path to a PNG/JPEG/WebP/GIF file.' },
+      describe: {
+        type: 'string',
+        description:
+          'Optional. What you want described / looked for if your model can\'t see the image (vision fallback). Task-specific, e.g. "detailed layout to recreate" or "evaluate alignment bugs".',
+      },
     },
     required: ['path'],
     additionalProperties: false,
@@ -64,7 +72,8 @@ export const viewImage: CoderTool = {
     }
 
     const base64 = buf.toString('base64');
-    const block: ImageBlock = { type: 'image', mediaType, base64 };
+    const describeHint = typeof args.describe === 'string' && args.describe.trim() ? args.describe.trim() : undefined;
+    const block: ImageBlock = { type: 'image', mediaType, base64, describeHint };
 
     return {
       content: `Loaded ${path} (${mediaType}, ${(buf.length / 1024).toFixed(1)} KB). The image is now visible to you on the next turn.`,

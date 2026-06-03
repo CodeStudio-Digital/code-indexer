@@ -123,6 +123,13 @@ function ToolCallBlockInner({ call }: ToolCallBlockProps) {
               >
                 {call.result.content}
               </pre>
+              {call.result.image && (
+                <img
+                  src={`data:${call.result.image.mediaType};base64,${call.result.image.base64}`}
+                  alt="Tool screenshot"
+                  className="mt-2 max-w-full rounded-md border"
+                />
+              )}
             </div>
           )}
         </div>

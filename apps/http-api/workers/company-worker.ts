@@ -51,6 +51,16 @@ import {
   type DocSearchBackend,
 } from '../../../packages/code-agent/src/tools/rag-search-docs.js';
 import {
+  setGlobalPreviewDevtools,
+  type IPreviewDevtools,
+  type PreviewInvoke,
+} from '../../../packages/code-agent/src/tools/preview/index.js';
+import {
+  setGlobalVisionDescriber,
+  type IVisionDescriber,
+  type VisionDescribeRequest,
+} from '../../../packages/code-agent/src/core/vision-describer.js';
+import {
   setGlobalDocsResearcher,
   type DocsResearchBridge,
 } from '../../../packages/docs-agent/src/bridges/docs-bridge.js';
@@ -122,6 +132,24 @@ const docSearchShim: DocSearchBackend = {
     ),
 };
 setGlobalDocSearch(docSearchShim);
+
+// Preview DevTools shim → forwards to the main process (WorkerOrchestratorPool
+// registers the `previewDevtools` handler). Lets company subordinates use the
+// preview/devtools tools, each scoped to its own window key.
+const previewShim: IPreviewDevtools = {
+  invoke: async (req: PreviewInvoke) =>
+    bridge.request<unknown>('previewDevtools', req, { timeoutMs: 30_000 }),
+};
+setGlobalPreviewDevtools(previewShim);
+
+// Vision describer shim → forwards to the main process (WorkerOrchestratorPool
+// registers the `visionDescribe` handler), so company subordinates also get
+// the image→text fallback when their model can't see.
+const visionShim: IVisionDescriber = {
+  describe: async (req: VisionDescribeRequest) =>
+    bridge.request<string>('visionDescribe', req, { timeoutMs: 60_000 }),
+};
+setGlobalVisionDescriber(visionShim);
 
 const docsResearcherShim = {
   runResearch: (input: Parameters<DocsResearchBridge['runResearch']>[0]): Promise<DocsResearchResult> =>

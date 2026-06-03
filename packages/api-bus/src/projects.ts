@@ -70,6 +70,50 @@ export type IndexStreamEvent =
   | { event: 'done'; data: IndexResult | unknown }
   | { event: 'error'; data: { message: string } };
 
+/**
+ * Stacks the New Project wizard can scaffold on the host (under
+ * `~/.mcp-code-indexer/projects/<slug>`). Kept as a string union mirroring the
+ * host-scaffold registry; api-handlers validates the concrete value.
+ */
+export type ScaffoldTemplateId =
+  | 'react-vite'
+  | 'vue'
+  | 'angular'
+  | 'vite-api'
+  | 'cf-worker'
+  | 'nextjs'
+  | 'opennext-cf'
+  | 'vite-react-cf'
+  | 'git-clone'
+  | 'empty';
+
+export interface ScaffoldProjectInput {
+  template: ScaffoldTemplateId;
+  /** Display name; slugified into the folder name. */
+  name: string;
+  description?: string;
+  /** Required when template === 'git-clone'. */
+  repoUrl?: string;
+  /** `git init` an `empty` project. */
+  gitInit?: boolean;
+  /** Builder mode — scaffold a V0-style builder project (react-vite only):
+   *  Tailwind + shadcn + element-selection instrumentation + builder flag. */
+  builder?: boolean;
+}
+
+/**
+ * Progress frames for a host scaffold. `done` carries the freshly
+ * registered Project (so the UI can navigate straight to it); `error`
+ * carries a message + optional stderr tail. Mirrors the SSE route in
+ * apps/http-api/server/routes/projects-scaffold.ts.
+ */
+export type ScaffoldStreamEvent =
+  | { event: 'start'; data: { template: string; slug: string; targetPath: string } }
+  | { event: 'phase'; data: { phase: string; label: string } }
+  | { event: 'log'; data: { stream: 'stdout' | 'stderr'; chunk: string } }
+  | { event: 'done'; data: { project: Project } }
+  | { event: 'error'; data: { message: string; stderrTail?: string } };
+
 export interface ProjectsApi {
   list(input: void, ctx: ApiContext): Promise<Project[]>;
   get(input: { id: number }, ctx: ApiContext): Promise<Project>;
@@ -114,4 +158,11 @@ export interface ProjectsApi {
 
   /** Retry embeddings for files that previously failed embedding. */
   retryEmbeddingsStream(input: { id: number }, ctx: ApiContext): AsyncStream<IndexStreamEvent>;
+
+  /**
+   * Scaffold a brand-new project on the host (`~/.mcp-code-indexer/projects/<slug>`)
+   * from a stack template / git clone / empty, then register it. Streams
+   * progress; the terminal `done` event carries the registered Project.
+   */
+  scaffold(input: ScaffoldProjectInput, ctx: ApiContext): AsyncStream<ScaffoldStreamEvent>;
 }

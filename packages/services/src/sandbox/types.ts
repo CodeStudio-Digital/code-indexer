@@ -89,6 +89,32 @@ export type BuilderStack = (typeof BUILDER_STACKS)[number];
 export const PROVISIONABLE_STACKS = [...BUILDER_STACKS, 'node-only'] as const;
 export type ProvisionableStack = (typeof PROVISIONABLE_STACKS)[number];
 
+/**
+ * Build-time contribution that the Builder mode's source-stamp plugin
+ * splices into the canonical `vite.config.ts` so every rendered DOM
+ * element carries a `data-mcp-loc` attribute (powers element selection).
+ *
+ * Persisted on the `Sandbox` because `renderViteConfig` regenerates the
+ * config from scratch on every dev-server restart/resume — without
+ * re-applying this, the stamp (and therefore selection) would silently
+ * vanish after the first restart. Undefined for normal (non-Builder)
+ * sandboxes, in which case `renderViteConfig` output is byte-identical to
+ * the legacy config.
+ */
+export interface ViteStampContribution {
+  /** Import lines spliced directly below `import { defineConfig } from 'vite'`. */
+  imports: string[];
+  /** Expressions appended to the Vite `plugins: [...]` array. */
+  pluginExprs: string[];
+  /**
+   * Optional `resolve.alias` entries. Keys are alias names (e.g. `"@"`),
+   * values are RAW config expressions emitted verbatim (e.g.
+   * `fileURLToPath(new URL('./src', import.meta.url))`) — not JSON strings.
+   * Persisted so the shadcn `@/*` alias survives config regeneration.
+   */
+  resolveAlias?: Record<string, string>;
+}
+
 export interface SandboxLimits {
   /** Memory limit passed to the OCI runtime (e.g. "1g", "512m"). */
   memory: string;
@@ -283,6 +309,14 @@ export interface Sandbox {
   externalContainerRef?: string;
   /** DNS hostname peer containers use to reach the attached service. */
   attachedHostname?: string;
+  /**
+   * Builder-mode source-stamp contribution for element selection. When
+   * set, `renderViteConfig` splices these into the generated config and
+   * `recoverDevServer` re-applies them on every restart/resume so the
+   * stamp survives config regeneration. Undefined for non-Builder
+   * sandboxes.
+   */
+  viteStamp?: ViteStampContribution;
 }
 
 export interface SandboxLogLine {

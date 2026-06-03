@@ -2,7 +2,9 @@ export interface ToolCallEvent {
   id: string;
   name: string;
   input?: Record<string, unknown>;
-  result?: { content: string; isError?: boolean };
+  /** `image` is set for tools that return a picture (preview_screenshot,
+   *  view_image) so the UI can show it inline under the tool call. */
+  result?: { content: string; isError?: boolean; image?: { mediaType: string; base64: string } };
   durationMs?: number;
   status: 'running' | 'done' | 'error';
   /** `Date.now()` stamped when `tool_call_start` arrived. Used to render

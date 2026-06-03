@@ -48,6 +48,16 @@ import {
   type DocSearchBackend,
 } from '../../../packages/code-agent/src/tools/rag-search-docs.js';
 import {
+  setGlobalPreviewDevtools,
+  type IPreviewDevtools,
+  type PreviewInvoke,
+} from '../../../packages/code-agent/src/tools/preview/index.js';
+import {
+  setGlobalVisionDescriber,
+  type IVisionDescriber,
+  type VisionDescribeRequest,
+} from '../../../packages/code-agent/src/core/vision-describer.js';
+import {
   setGlobalDocsResearcher,
   installDocsDeepResearch,
   type DocsResearchBridge,
@@ -106,6 +116,29 @@ const docSearchShim: DocSearchBackend = {
     ),
 };
 setGlobalDocSearch(docSearchShim);
+
+// ─── Preview DevTools shim: route to the main process via RPC ────────
+// Same rationale as docSearch — the real `PreviewWindowService` (opens a
+// BrowserWindow + attaches CDP) lives ONLY in the Electron main process.
+// Tools call `getGlobalPreviewDevtools().invoke(...)`; here that forwards
+// over the bridge to the `previewDevtools` handler in CoderWorkerPool.ts.
+const previewShim: IPreviewDevtools = {
+  invoke: async (req: PreviewInvoke) =>
+    bridge.request<unknown>('previewDevtools', req, { timeoutMs: 30_000 }),
+};
+setGlobalPreviewDevtools(previewShim);
+
+// ─── Vision describer shim: route image→text describe to the main process ──
+// The real describer (resolves the code-agent/vision Pipelines role + runs a
+// one-off chat) lives in the main process. The vision-fallback transform calls
+// `getGlobalVisionDescriber().describe(...)`; here that forwards over the bridge
+// to the `visionDescribe` handler in CoderWorkerPool.ts. 60s covers a slow
+// vision model on a large screenshot.
+const visionShim: IVisionDescriber = {
+  describe: async (req: VisionDescribeRequest) =>
+    bridge.request<string>('visionDescribe', req, { timeoutMs: 60_000 }),
+};
+setGlobalVisionDescriber(visionShim);
 
 // `DocsResearchBridge` is a CLASS in @mcp/docs-agent; here we only
 // implement the `runResearch` method that `docs_deep_research` actually
@@ -420,6 +453,9 @@ interface RunFreshPayload {
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;
+  modelSupportsVision?: boolean;
+  describeImages?: boolean;
+  previewAvailable?: boolean;
   deepThink?: boolean;
   deepThinkModel?: string;
   deepThinkProvider?: string;
@@ -457,6 +493,9 @@ bridge.handle('runFresh', async (payload) => {
       profile: opts.profile,
       worktree: opts.worktree,
       thinking: opts.thinking,
+      modelSupportsVision: opts.modelSupportsVision,
+      describeImages: opts.describeImages,
+      previewAvailable: opts.previewAvailable,
       deepThink: opts.deepThink,
       deepThinkModel: opts.deepThinkModel,
       deepThinkProvider: opts.deepThinkProvider,

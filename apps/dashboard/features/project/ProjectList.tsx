@@ -8,6 +8,7 @@ import {
   LayoutList,
   Plus,
   Search,
+  Sparkles,
   X,
 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
@@ -24,6 +25,7 @@ import { useApi } from '../../hooks/useApi.js';
 import { cn } from '../../lib/utils.js';
 import ProjectCreateDialog from './ProjectCreateDialog.js';
 import ProjectEditDialog from './ProjectEditDialog.js';
+import { NewProjectWizard } from './new-project/index.js';
 import { ProjectCard, type ProjectCardData } from './list/ProjectCard.js';
 import { ProjectRow } from './list/ProjectRow.js';
 
@@ -55,6 +57,7 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
   const { data: projects, loading, error, refetch } = useApi<Project[]>('/projects');
   const [editing, setEditing] = useState<Project | null>(null);
   const [creating, setCreating] = useState(false);
+  const [scaffolding, setScaffolding] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [grouped, setGrouped] = useState(true);
   const [layout, setLayout] = useState<LayoutMode>(readStoredLayout);
@@ -153,9 +156,14 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
                 {t('projects:empty.description')}
               </p>
             </div>
-            <Button onClick={() => setCreating(true)}>
-              <Plus className="h-4 w-4" /> {t('projects:newProject')}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button onClick={() => setScaffolding(true)}>
+                <Sparkles className="h-4 w-4" /> {t('projects:newProject')}
+              </Button>
+              <Button variant="outline" onClick={() => setCreating(true)}>
+                <FolderGit2 className="h-4 w-4" /> {t('projects:registerExisting', { defaultValue: 'Register folder' })}
+              </Button>
+            </div>
             <p className="text-xs text-muted-foreground">
               {t('projects:empty.cliHint')}{' '}
               <code className="bg-muted px-2 py-1 rounded-md font-mono">
@@ -174,6 +182,14 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
             }}
           />
         )}
+        <NewProjectWizard
+          open={scaffolding}
+          onOpenChange={setScaffolding}
+          onCreated={(p) => {
+            refetch();
+            onSelectProject(p.id, p.name);
+          }}
+        />
       </>
     );
   }
@@ -273,8 +289,12 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
               <LayoutGrid className="h-4 w-4" />
             )}
           </Button>
-          <Button size="sm" onClick={() => setCreating(true)}>
+          <Button variant="outline" size="sm" onClick={() => setCreating(true)} title={t('projects:registerExisting', { defaultValue: 'Register folder' })}>
             <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline ml-1">{t('projects:registerExisting', { defaultValue: 'Register folder' })}</span>
+          </Button>
+          <Button size="sm" onClick={() => setScaffolding(true)}>
+            <Sparkles className="h-4 w-4" />
             <span className="hidden sm:inline ml-1">{t('projects:newProject')}</span>
           </Button>
         </div>
@@ -335,6 +355,14 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
           }}
         />
       )}
+      <NewProjectWizard
+        open={scaffolding}
+        onOpenChange={setScaffolding}
+        onCreated={(p) => {
+          refetch();
+          onSelectProject(p.id, p.name);
+        }}
+      />
     </div>
   );
 }

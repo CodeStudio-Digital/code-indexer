@@ -13,6 +13,12 @@ interface MasterComposerProps {
   disabled?: boolean;
   /** When true, render the brain toggle. Computed by the parent from the master's provider capabilities. */
   supportsThinking?: boolean;
+  /**
+   * Optional prefix builder (Builder studio). Called once per send to
+   * prepend context (e.g. the selected element block) to the message and
+   * clear that pending state. Returns '' when there's nothing to prepend.
+   */
+  buildPrefix?: () => string;
 }
 
 const COLLAPSED_KEY = 'agents.composer.collapsed';
@@ -26,7 +32,7 @@ function readCollapsed(): boolean {
   }
 }
 
-export function MasterComposer({ onSend, placeholder, disabled, supportsThinking }: MasterComposerProps) {
+export function MasterComposer({ onSend, placeholder, disabled, supportsThinking, buildPrefix }: MasterComposerProps) {
   const { t } = useTranslation('agents');
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
@@ -57,7 +63,9 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
     const atts = attachments;
     setInput('');
     setAttachments([]);
-    await onSend(text, atts, { thinking });
+    // Builder studio: prepend the selected-element block (and clear it).
+    const prefix = buildPrefix?.() ?? '';
+    await onSend(prefix ? `${prefix}\n${text}` : text, atts, { thinking });
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {

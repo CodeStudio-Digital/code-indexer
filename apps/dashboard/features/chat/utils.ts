@@ -63,6 +63,27 @@ export function getCurrentTurnText(turn: AssistantTurn | null): string {
 
 // ─── Visual grouping ────────────────────────────────────────────
 
+/**
+ * Sentinel text of the synthetic user message the runner injects after a tool
+ * that returned an image (view_image / preview_screenshot) — see
+ * `executing.ts`. The image is plumbing the MODEL needs as a user/image block;
+ * in the transcript we hide this bubble and instead render the image INLINE
+ * under the tool call (so it survives reload, matching the live stream).
+ */
+export const TOOL_IMAGE_SENTINEL = '(Image(s) attached from the tool call above.)';
+
+/** Tools that emit a tool-result image surfaced via the synthetic user msg. */
+export const IMAGE_PRODUCER_TOOLS = new Set(['preview_screenshot', 'view_image']);
+
+/** True when a message is the synthetic tool-image plumbing bubble. */
+export function isToolImagePlumbing(msg: PersistedMessage): boolean {
+  return (
+    msg.role === 'user' &&
+    msg.content.some((b) => b.type === 'image') &&
+    msg.content.some((b) => b.type === 'text' && (b.text ?? '').trim() === TOOL_IMAGE_SENTINEL)
+  );
+}
+
 function messageHasText(msg: PersistedMessage): boolean {
   return msg.content.some((b) => b.type === 'text' && (b.text ?? '').trim().length > 0);
 }
@@ -101,6 +122,11 @@ export function groupMessages(
     const row = messageRows[i];
 
     if (msg.role === 'tool') continue;
+
+    // Hide the synthetic tool-image plumbing bubble — its image is rendered
+    // inline under the tool call instead (see MessageList resultsById). Skip
+    // WITHOUT flushing so the agent's tool-only group keeps accumulating.
+    if (isToolImagePlumbing(msg)) continue;
 
     if (msg.role === 'user') {
       flushPending();

@@ -25,7 +25,7 @@
  */
 import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 
-export type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec';
+export type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'builder';
 
 export interface AgentDefinition {
   id: AgentId;
@@ -102,10 +102,27 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     maxTurns: 120,
     defaultTemperature: 0.3,
   },
+  builder: {
+    id: 'builder',
+    description:
+      'V0-style frontend builder. Navigate tier, no plan gate. Tailwind + shadcn/ui, element-targeted edits from the live preview, self-healing from console/network errors. Used by the Builder studio.',
+    profile: 'navigate',
+    planMode: false,
+    // Slightly higher than `build` (0.2) — UI work benefits from a touch
+    // more variation in layout/styling choices while staying coherent.
+    defaultTemperature: 0.5,
+  },
 };
 
 export function isAgentId(v: string): v is AgentId {
-  return v === 'explore' || v === 'plan' || v === 'build' || v === 'admin' || v === 'spec';
+  return (
+    v === 'explore' ||
+    v === 'plan' ||
+    v === 'build' ||
+    v === 'admin' ||
+    v === 'spec' ||
+    v === 'builder'
+  );
 }
 
 export function getAgent(id: AgentId): AgentDefinition {

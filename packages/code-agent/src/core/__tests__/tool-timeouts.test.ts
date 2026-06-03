@@ -74,8 +74,11 @@ describe('run_command and code_exec timeout policy', () => {
     expect(resolveToolTimeoutMs(runCommand)).toBe(10 * 60_000);
   });
 
-  it('keeps code_exec out of the SLOW tier (it self-caps at 30s)', () => {
-    expect(resolveToolTimeoutMs(t({ name: 'code_exec' }))).toBe(NORMAL_TIMEOUT_MS);
-    expect(resolveToolTimeoutMs(t({ name: 'code_exec' }))).not.toBe(SLOW_TIMEOUT_MS);
+  it('puts code_exec in the SLOW tier (its own clock pauses during nested tools)', () => {
+    // code_exec's internal timeout now measures only JS-active time and pauses
+    // while a nested tool runs, so the runner backstop must sit above the
+    // longest nested tool (run_command = 10 min) rather than the 5-min NORMAL.
+    expect(resolveToolTimeoutMs(t({ name: 'code_exec' }))).toBe(SLOW_TIMEOUT_MS);
+    expect(resolveToolTimeoutMs(t({ name: 'code_exec' }))).not.toBe(NORMAL_TIMEOUT_MS);
   });
 });

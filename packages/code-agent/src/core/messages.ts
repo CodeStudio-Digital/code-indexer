@@ -38,6 +38,13 @@ export interface ImageBlock {
   type: 'image';
   mediaType: string; // 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
   base64: string;
+  /**
+   * Agent-directed hint for the vision-fallback describer: what to look for /
+   * how to describe this image when the active model can't see it (e.g. a
+   * `view_image.describe` / `preview_screenshot.lookFor` instruction). Ignored
+   * by every provider adapter — consumed ONLY by the vision-fallback transform.
+   */
+  describeHint?: string;
 }
 
 /**

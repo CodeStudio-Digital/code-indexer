@@ -87,6 +87,16 @@ export interface RunCoderOptions {
   /** Enable thinking/reasoning mode for providers that support it. */
   thinking?: boolean;
   /**
+   * Vision fallback (image → text). `modelSupportsVision === false` (strict)
+   * tells the runner the active model can't see images, so image blocks are
+   * routed through the configured `code-agent/vision` Pipelines model for an
+   * agent-directed text description. `describeImages` is the composer
+   * "Describe images" flag forcing the same path even on vision-capable
+   * models. Both default undefined → disabled.
+   */
+  modelSupportsVision?: boolean;
+  describeImages?: boolean;
+  /**
    * Per-request thinking budget (in tokens). Forwarded to the runner via
    * `runner.opts.thinkingBudgetTokens` and into every `ChatRequest`.
    * Anthropic honours this as `thinking.budget_tokens`; other providers
@@ -115,6 +125,20 @@ export interface RunCoderOptions {
   tunables?: import('@mcp/code-agent/core/tunables.js').CoderTunables;
   /** Company orchestrator context — when present, company tools are registered. */
   companyContext?: import('@mcp/company/types.js').CompanyContext;
+  /**
+   * Whether the preview DevTools backend is available (the desktop app wired
+   * a `PreviewWindowService`). When true the `preview` tool tier activates so
+   * the agent can open a dedicated preview window + read console/network/etc.
+   * Set by the caller (http-api) from the main-process service presence.
+   */
+  previewAvailable?: boolean;
+  /**
+   * Standalone sandbox binding (decoupled Builder sessions). When present,
+   * the runner pins `cwd` to the container workdir and swaps in the
+   * sandbox-backed filesystem/shell adapters — WITHOUT requiring a
+   * `companyContext`. Takes precedence over `companyContext.sandbox`.
+   */
+  sandbox?: import('@mcp/company/types.js').SandboxBinding;
   /** Extra system prompt block for company agents (master/subordinate). Appended to base. */
   companyPromptBlock?: string;
   /** Role identity text (from template systemPromptOverride) re-injected after compaction. */

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ExternalLink, RotateCw, Terminal, Zap } from 'lucide-react';
+import { ExternalLink, MousePointerClick, RotateCw, Terminal, Zap } from 'lucide-react';
 import { StatusDot } from './StatusDot.js';
 
 interface Props {
@@ -11,6 +11,11 @@ interface Props {
   onOpenLogs: () => void;
   onReload: () => void;
   serviceSwitcher?: React.ReactNode;
+  /** Builder studio element-selection toggle (optional). */
+  selectMode?: boolean;
+  onToggleSelectMode?: () => void;
+  /** Extra controls (device frames, problems badge) at the toolbar's right. */
+  rightSlot?: React.ReactNode;
 }
 
 export function PreviewToolbar({
@@ -22,6 +27,9 @@ export function PreviewToolbar({
   onOpenLogs,
   onReload,
   serviceSwitcher,
+  selectMode,
+  onToggleSelectMode,
+  rightSlot,
 }: Props) {
   return (
     <div className="h-10 flex items-center gap-2 px-3 border-b">
@@ -32,6 +40,22 @@ export function PreviewToolbar({
           {previewUrl || '—'}
         </span>
       </div>
+      {onToggleSelectMode && (
+        <button
+          onClick={onToggleSelectMode}
+          disabled={status !== 'ready'}
+          className={`p-1.5 rounded-md disabled:opacity-40 ${
+            selectMode
+              ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40'
+              : 'hover:bg-muted'
+          }`}
+          title={selectMode ? 'Selecting elements — click one in the preview (Esc to cancel)' : 'Select an element to edit'}
+          aria-pressed={!!selectMode}
+        >
+          <MousePointerClick className="h-3.5 w-3.5" />
+        </button>
+      )}
+      {rightSlot}
       <button
         onClick={onRestartDev}
         disabled={restartingDev || status === 'paused'}

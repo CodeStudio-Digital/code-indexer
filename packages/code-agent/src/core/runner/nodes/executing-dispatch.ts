@@ -51,6 +51,12 @@ export interface DispatchedToolResult {
   durationMs: number;
   /** True when synthesized by the dedup refusal path (no real invocation). */
   wasRefusedByDedup: boolean;
+  /**
+   * Extra content blocks (e.g. an image from `view_image`/`preview_screenshot`)
+   * the tool wants the model to SEE. Surfaced as a synthetic user message
+   * right after the tool message — provider-agnostic vision.
+   */
+  extraUserBlocks?: ContentBlock[];
 }
 
 export interface DispatchArgs {
@@ -306,6 +312,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     const t0 = Date.now();
     let invocationContent: string;
     let invocationIsError = false;
+    let invocationExtraBlocks: ContentBlock[] | undefined;
 
     // Periodic heartbeat — keeps the dashboard StuckBanner alive during
     // long-running invocations (web_fetch, run_command, spawn_agent
@@ -364,6 +371,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       );
       invocationContent = typeof result.content === 'string' ? result.content : String(result.content);
       invocationIsError = !!result.isError;
+      invocationExtraBlocks = result.extraUserBlocks;
     } catch (e) {
       if (isTimeoutError(e)) {
         if (invocationAbort && !invocationAbort.signal.aborted) {
@@ -491,6 +499,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       isError: finalIsError,
       durationMs: Date.now() - t0,
       wasRefusedByDedup: false,
+      extraUserBlocks: invocationExtraBlocks,
     });
   }
 

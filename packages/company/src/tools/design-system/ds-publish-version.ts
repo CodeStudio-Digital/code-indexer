@@ -28,6 +28,7 @@ import type { CoderTool, JsonSchema, ToolContext } from '@mcp/code-agent/core/to
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { DesignSystemStore } from '@mcp/store/design-system-store.js';
+import { discoverArtifacts } from '@mcp/company/tools/design-system/ds-publish-artifacts.js';
 import { getDesignSystemStore, getSkillStore } from '@mcp/company/tools/design-system/store-binding.js';
 import { tryGetVerdaccioService } from '@mcp/services/verdaccio/verdaccio-service.js';
 import { bumpSemver, resolveBumpKind } from '@mcp/design-system/semver-bump.js';
@@ -495,66 +496,10 @@ export async function packPackage(pkgDir: string): Promise<{
   return { ...res, tarballPath: resolvePath(join(pkgDir, tarballName)) };
 }
 
-/**
- * Best-effort discovery of the four optional artifact fields from the
- * package filesystem. All four are tried; whatever doesn't exist is
- * left as `null` so the caller's chain of fallbacks (explicit arg →
- * disk discovery → previous draft value) keeps working.
- *
- * - `docs_md`        → `pkg/docs.md` (the aggregated single-file docs).
- * - `storybook_path` → `pkg/storybook-static/` directory IF it has an
- *                       `index.html`. Stored as an absolute host path
- *                       so the proxy route (`/storybook/*`) can serve
- *                       files without further resolution.
- * - `manifest_json`  → `pkg/manifest.json` (component manifest).
- * - `mcp_manifest_json` → `pkg/mcp/manifest.json` (auto-MCP manifest).
- */
-export async function discoverArtifacts(pkgDir: string, ctxCwd: string): Promise<{
-  docs_md: string | null;
-  storybook_path: string | null;
-  manifest_json: string | null;
-  mcp_manifest_json: string | null;
-}> {
-  const result = {
-    docs_md: null as string | null,
-    storybook_path: null as string | null,
-    manifest_json: null as string | null,
-    mcp_manifest_json: null as string | null,
-  };
-  void ctxCwd;
-
-  // docs.md (text)
-  try {
-    const p = join(pkgDir, 'docs.md');
-    const buf = await readFile(p, 'utf8');
-    if (buf.length > 0) result.docs_md = buf;
-  } catch { /* missing — keep null */ }
-
-  // storybook-static/index.html — registers the directory
-  try {
-    const sbDir = join(pkgDir, 'storybook-static');
-    const indexHtml = join(sbDir, 'index.html');
-    await stat(indexHtml);
-    result.storybook_path = sbDir;
-  } catch { /* missing — keep null */ }
-
-  // manifest.json (parse-validate before storing so a malformed file
-  // doesn't poison the row — the dashboard expects valid JSON).
-  try {
-    const buf = await readFile(join(pkgDir, 'manifest.json'), 'utf8');
-    JSON.parse(buf);
-    result.manifest_json = buf;
-  } catch { /* missing or invalid — keep null */ }
-
-  // mcp/manifest.json (same validation rule)
-  try {
-    const buf = await readFile(join(pkgDir, 'mcp', 'manifest.json'), 'utf8');
-    JSON.parse(buf);
-    result.mcp_manifest_json = buf;
-  } catch { /* missing or invalid — keep null */ }
-
-  return result;
-}
+// `discoverArtifacts` lives in ./ds-publish-artifacts.js (extracted to keep
+// this file under the LOC cap). Re-exported so existing importers (incl. tests)
+// keep resolving it from this module.
+export { discoverArtifacts };
 
 /**
  * After a successful publish, upsert a global inline skill so that any
@@ -583,10 +528,16 @@ function upsertDesignSystemSkill(
       .replace(/^-+|-+$/g, '');
     const skillId = `ds-ctx-${slug}`;
 
+    // Cap the component list: this prompt_body is injected into every chat
+    // session's system prompt, so an unbounded list would bloat every turn.
+    const MAX_SKILL_COMPONENTS = 80;
     const components = dsStore.listComponents(versionId);
-    const componentLines = components
-      .map((c) => `- \`${c.name}\` (${c.kind})`)
-      .join('\n');
+    const shown = components.slice(0, MAX_SKILL_COMPONENTS);
+    const overflow = components.length - shown.length;
+    const componentLines = [
+      ...shown.map((c) => `- \`${c.name}\` (${c.kind})`),
+      ...(overflow > 0 ? [`- … and ${overflow} more component(s)`] : []),
+    ].join('\n');
 
     const promptBody = [
       `## Design System disponível: \`${packageName}@${semver}\``,

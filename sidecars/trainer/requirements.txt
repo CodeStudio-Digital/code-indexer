@@ -1,0 +1,11 @@
+# QLoRA training sidecar deps. Install inside a WSL2 (Ubuntu) venv with CUDA —
+# see README.md. bitsandbytes wheels are reliable on Linux, not native Windows.
+unsloth
+peft
+trl
+bitsandbytes
+datasets
+transformers
+accelerate
+# torch is pulled by unsloth; pin a CUDA build for your driver if needed:
+# torch --index-url https://download.pytorch.org/whl/cu121

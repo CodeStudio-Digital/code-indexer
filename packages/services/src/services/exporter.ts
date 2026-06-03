@@ -1,6 +1,6 @@
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
+import { mcpDataDir } from '@mcp/shared/utils/config.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { ExportOptions, ExportSection, DBFile, DBSymbol } from '@mcp/shared/types.js';
 import { SnapshotService } from './snapshots.js';
@@ -43,7 +43,7 @@ export class ExportService {
     }
 
     // Write to file
-    const outputPath = options.outputPath ?? join(homedir(), '.mcp-code-indexer', 'exports', `${options.projectName}.md`);
+    const outputPath = options.outputPath ?? join(mcpDataDir(), 'exports', `${options.projectName}.md`);
     const dir = dirname(outputPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(outputPath, output, 'utf-8');
@@ -210,7 +210,7 @@ ${rows.join('\n')}`;
     };
 
     const json = JSON.stringify(data, null, 2);
-    const outputPath = options.outputPath ?? join(homedir(), '.mcp-code-indexer', 'exports', `${options.projectName}.json`);
+    const outputPath = options.outputPath ?? join(mcpDataDir(), 'exports', `${options.projectName}.json`);
     const dir = dirname(outputPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(outputPath, json, 'utf-8');

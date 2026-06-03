@@ -35,6 +35,8 @@ import {
 } from '../coder-bus.js';
 import type { CoderAttachment } from '@mcp/code-agent/index.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
+import { getGlobalPreviewDevtools, type PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
+import type { IVisionDescriber, VisionDescribeRequest } from '@mcp/code-agent/core/vision-describer.js';
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import type { McpExternalPool } from './McpExternalPool.js';
 import { installRuntimeEventLog } from './runtime-event-log.js';
@@ -59,6 +61,8 @@ import { installRuntimeEventLog } from './runtime-event-log.js';
 export interface CoderWorkerDocDeps {
   docSearch?: DocSearchBackend | null;
   docsResearch?: DocsResearchBridge | null;
+  /** Main-side vision describer; worker reaches it via `visionDescribe` RPC. */
+  vision?: IVisionDescriber | null;
 }
 
 export interface CoderWorkerPoolOpts {
@@ -136,6 +140,12 @@ export interface RunFreshOpts {
   /** POJO worktree opts — survives structuredClone across MessagePort. */
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;
+  /** Vision fallback — `modelSupportsVision === false` triggers auto image→text
+   *  describe; `describeImages` (composer flag) forces it. Forwarded to runCoder. */
+  modelSupportsVision?: boolean;
+  describeImages?: boolean;
+  /** Auto-activate the `preview` DevTools tier (builder/dev-server sessions). */
+  previewAvailable?: boolean;
   /** Simulated deepThink (auxiliary cheap model writes a pre-thought
    *  before each main-model turn). Orthogonal to `thinking`. */
   deepThink?: boolean;
@@ -519,6 +529,27 @@ export class CoderWorkerPool {
       }
       return researcher.runResearch(payload as Parameters<DocsResearchBridge['runResearch']>[0]);
     });
+    // Preview DevTools — routes to the main-process PreviewWindowService
+    // (set by the Electron main via setGlobalPreviewDevtools). Unset in
+    // headless → the tool surfaces a friendly "unavailable" error.
+    const offPreviewDevtools = bridge.handle('previewDevtools', async (payload) => {
+      const svc = getGlobalPreviewDevtools();
+      if (!svc) throw new Error('Preview DevTools unavailable — only in the desktop app with a preview open.');
+      return svc.invoke(payload as PreviewInvoke);
+    });
+    // Vision fallback — routes image→text describe to the main-process vision
+    // describer (resolves the code-agent/vision Pipelines role + runs a one-off
+    // chat). Unset/unbound → throws VISION_NOT_CONFIGURED; the worker-side
+    // transform catches it and keeps the raw image + a note.
+    const offVisionDescribe = bridge.handle('visionDescribe', async (payload) => {
+      const v = this.opts.docDeps?.vision;
+      if (!v) {
+        throw new Error(
+          'VISION_NOT_CONFIGURED: no vision model is bound. Set the code-agent / vision role in Settings → Pipelines.',
+        );
+      }
+      return v.describe(payload as VisionDescribeRequest);
+    });
 
     // ─── External-MCP pool bridge ─────────────────────────────────────
     // Worker's `RemoteMcpServerManager` requests a snapshot once per run
@@ -605,6 +636,8 @@ export class CoderWorkerPool {
         try { offEnd(); } catch { /* best-effort */ }
         try { offDocSearch(); } catch { /* best-effort */ }
         try { offDocsResearch(); } catch { /* best-effort */ }
+        try { offPreviewDevtools(); } catch { /* best-effort */ }
+        try { offVisionDescribe(); } catch { /* best-effort */ }
         try { offMcpSnapshot(); } catch { /* best-effort */ }
         try { offMcpCallTool(); } catch { /* best-effort */ }
       },

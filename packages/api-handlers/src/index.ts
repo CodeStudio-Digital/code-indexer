@@ -29,6 +29,7 @@ import type { HandlerDeps } from './types.js';
 export type { HandlerDeps } from './types.js';
 export { createContext, createInternalContext } from './context.js';
 export { createProjectsHandlers } from './projects/index.js';
+export { runScaffoldStream } from './projects/scaffold.js';
 export { createFilesHandlers } from './files/index.js';
 export { createTerminalHandlers } from './terminal/index.js';
 export { createRunnerHandlers } from './runner/index.js';
@@ -40,6 +41,7 @@ export { createRunsHandlers } from './runs/index.js';
 export { createSearchHandlers } from './search/index.js';
 export { createProjectGitHandlers } from './projectGit/index.js';
 export { createPluginsHandlers } from './plugins/index.js';
+export { createTrainingHandlers, MCP_BLOCK_SERVER_KEY } from './training/index.js';
 export { generateAiPipeline, type GeneratePipelineResult } from './projectPipeline/generate.js';
 
 /**

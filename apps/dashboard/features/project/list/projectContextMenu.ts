@@ -10,7 +10,7 @@
  * main process to spawn a window, so we drop the item rather than show
  * a broken affordance.
  */
-import { Copy, ExternalLink, FolderOpen, Pencil } from 'lucide-react';
+import { Copy, ExternalLink, FolderOpen, FolderSymlink, Pencil } from 'lucide-react';
 import type { ContextMenuItem } from '../../../components/ui/context-menu.js';
 import type { ProjectCardData } from './ProjectCard.js';
 
@@ -25,6 +25,7 @@ export interface BuildProjectMenuArgs {
   labels: {
     open: string;
     openInNewWindow: string;
+    openInExplorer: string;
     copyPath: string;
     edit: string;
     copied: string;
@@ -54,6 +55,20 @@ export function buildProjectContextMenuItems({
       icon: ExternalLink,
       onSelect: () => {
         void electronAPI.openInNewWindow!(`/projects/${project.id}`, project.name);
+      },
+    });
+  }
+
+  // Reveal the project's folder in the OS file manager. Electron-only —
+  // a plain-browser dev session can't open native file explorers.
+  if (electronAPI?.openPath) {
+    items.push({
+      id: 'open-in-explorer',
+      label: labels.openInExplorer,
+      icon: FolderSymlink,
+      separatorBefore: true,
+      onSelect: () => {
+        electronAPI.openPath!(project.root_path);
       },
     });
   }

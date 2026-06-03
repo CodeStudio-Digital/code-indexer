@@ -163,12 +163,17 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       toolIndex.set(d.id, blocks.length);
       blocks.push({ type: 'tool', call });
       flush();
+      // Tell the in-project preview pane the agent owns a dedicated CDP window
+      // now → it swaps to a placeholder + pauses its iframe (frees the process),
+      // mirroring the user pop-out. Cleared on preview_close / run end.
+      if (d.name === 'preview_open') dispatchAgentPreview(sid, true);
+      else if (d.name === 'preview_close') dispatchAgentPreview(sid, false);
     },
 
     tool_call_result: (data) => {
       const d = data as {
         id: string;
-        result: { content: string; isError?: boolean };
+        result: { content: string; isError?: boolean; image?: { mediaType: string; base64: string } };
         duration_ms: number;
       };
       const idx = toolIndex.get(d.id);
@@ -608,6 +613,9 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // UI stays silent.
       const d = data as { reason?: string; error?: string };
       flushNow();
+      // Run ended → the pool closes the agent's preview window, so restore the
+      // in-project iframe.
+      dispatchAgentPreview(sid, false);
       updateSession(sid, {
         doneReason: String(d.reason ?? 'completed'),
         ...(d.error ? { error: d.error } : {}),
@@ -618,9 +626,25 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       const message = String((data as { message?: string }).message ?? 'unknown');
       markInFlightBlocksFailed(blocks, message);
       flushNow();
+      dispatchAgentPreview(sid, false);
       updateSession(sid, { error: message });
     },
   };
+}
+
+/**
+ * Notify the in-project preview pane that the agent's dedicated CDP preview
+ * window opened/closed for this session. The pane (ProjectPreview) listens and
+ * swaps to a placeholder while open. Window-level CustomEvent — same bridge
+ * pattern as `coder:session_agent_changed`. Defensive: never crash the stream.
+ */
+function dispatchAgentPreview(sessionId: number, open: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.dispatchEvent(new CustomEvent('coder:agent_preview', { detail: { sessionId, open } }));
+  } catch {
+    /* defensive */
+  }
 }
 
 function isSubagentToolProgress(d: { id: string; name: string; note?: string }): boolean {

@@ -33,6 +33,8 @@ declare global {
     openDirectory?: () => Promise<string | null>;
     /** Open a URL in the user's default browser. */
     openExternal?: (url: string) => void;
+    /** Reveal a local folder/file in the OS file manager. */
+    openPath?: (path: string) => void;
     /**
      * Spawn a new Electron window pointing at `route` (e.g. `/projects/42`
      * or `/company/sessions/7/main/work/chat`). The new window inherits

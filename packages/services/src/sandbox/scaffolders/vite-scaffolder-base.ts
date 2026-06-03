@@ -11,7 +11,7 @@
  */
 
 import type { IScaffolder, ScaffoldContext } from './scaffolder-port.js';
-import type { SandboxStack } from '../types.js';
+import type { SandboxStack, ViteStampContribution } from '../types.js';
 import { POLL_INTERVAL_MS, probeContainerReady, sleep, truncate } from './ready-probe.js';
 import { installPlaywrightTestClient } from './playwright-bootstrap.js';
 
@@ -124,6 +124,7 @@ export abstract class ViteScaffolderBase implements IScaffolder {
       base: ctx.previewPathPrefix,
       hmrPath: `${ctx.previewPathPrefix.replace(/\/$/, '')}/@vite/hmr`,
       devPort: ctx.devServerPort,
+      stamp: this.viteStampContribution(),
     });
     await driver.writeFile(containerId, `${workdir}/vite.config.ts`, viteConfig, {
       recursive: true,
@@ -149,26 +150,11 @@ export abstract class ViteScaffolderBase implements IScaffolder {
       );
     }
 
-    // 3.5. Optional Playwright Agent CLI bootstrap. Non-fatal: if any
-    //      sub-step fails we log a warning and let the dev server boot
-    //      anyway — the QA agent can recover via run_command on first use.
-    //
-    //      `ctx.includeE2e` (set per-session by the manager from
-    //      `role_assignments`) overrides the construct-time
-    //      `this.includeE2e` (set globally via env var fallback). When
-    //      neither is set this branch is skipped.
-    const includeE2e = ctx.includeE2e ?? this.includeE2e;
-    if (includeE2e) {
-      await installPlaywrightTestClient({
-        driver,
-        containerId,
-        workdir,
-        sandboxId,
-        emit,
-        devServerPort: ctx.devServerPort,
-        signal,
-      });
-    }
+    // 3.5. Stack-specific post-install hook (Playwright bootstrap by
+    //      default; Builder scaffolders override to add Tailwind/shadcn +
+    //      the source-stamp plugin/inspector). Runs after `npm install`
+    //      and before the dev server launches.
+    await this.afterInstall(ctx);
 
     // 4. Launch dev server in the background. We detach via `nohup ... &`
     //    so the `exec` call returns immediately; the server keeps running
@@ -208,6 +194,43 @@ export abstract class ViteScaffolderBase implements IScaffolder {
       `dev server did not open port ${ctx.devServerPort} within ${this.readyTimeoutMs}ms.\n${tailRes.stdout}`,
     );
   }
+
+  /**
+   * Stack-specific post-install steps. Runs after `npm install`, before
+   * the dev server launches. Default impl preserves the legacy Playwright
+   * Agent CLI bootstrap (non-fatal: a failed sub-step logs a warning and
+   * lets the dev server boot anyway — the QA agent recovers via
+   * `run_command` on first use).
+   *
+   * `ctx.includeE2e` (set per-session by the manager from
+   * `role_assignments`) overrides the construct-time `this.includeE2e`
+   * (set globally via env var fallback). Builder scaffolders override
+   * this hook to add Tailwind/shadcn + the source-stamp plugin/inspector.
+   */
+  protected async afterInstall(ctx: ScaffoldContext): Promise<void> {
+    const includeE2e = ctx.includeE2e ?? this.includeE2e;
+    if (includeE2e) {
+      await installPlaywrightTestClient({
+        driver: ctx.driver,
+        containerId: ctx.containerId,
+        workdir: ctx.workdir,
+        sandboxId: ctx.sandboxId,
+        emit: ctx.emit,
+        devServerPort: ctx.devServerPort,
+        signal: ctx.signal,
+      });
+    }
+  }
+
+  /**
+   * Source-stamp contribution spliced into the generated `vite.config.ts`.
+   * Default `undefined` keeps the config byte-identical to the legacy
+   * output. Builder scaffolders override this to inject the framework's
+   * `data-mcp-loc` stamping plugin that powers element selection.
+   */
+  protected viteStampContribution(): ViteStampContribution | undefined {
+    return undefined;
+  }
 }
 
 /**
@@ -217,11 +240,40 @@ export abstract class ViteScaffolderBase implements IScaffolder {
  * two call sites stay byte-identical — they MUST, otherwise restart
  * silently diverges from the canonical config.
  */
-export function renderViteConfig(opts: { base: string; hmrPath: string; devPort: number }): string {
+export function renderViteConfig(opts: {
+  base: string;
+  hmrPath: string;
+  devPort: number;
+  /**
+   * Optional Builder-mode source-stamp contribution. When present its
+   * import lines are spliced below the `vite` import and its plugin
+   * expressions populate a `plugins: [...]` array. When absent the output
+   * is byte-identical to the legacy config (the common case).
+   */
+  stamp?: ViteStampContribution;
+}): string {
   // Keep indentation explicit — the rendered file is read by humans in
   // the preview console when debugging.
   const base = JSON.stringify(opts.base);
   const hmrPath = JSON.stringify(opts.hmrPath);
+  // Stamp splices: extra imports below `vite`, and a `plugins: [...]` line
+  // inside defineConfig. Empty arrays when no stamp → no `plugins` key,
+  // preserving the legacy byte-for-byte output.
+  const stampImports = opts.stamp?.imports ?? [];
+  const pluginExprs = opts.stamp?.pluginExprs ?? [];
+  const pluginsLines =
+    pluginExprs.length > 0 ? [`  plugins: [${pluginExprs.join(', ')}],`] : [];
+  const aliasEntries = Object.entries(opts.stamp?.resolveAlias ?? {});
+  const resolveLines =
+    aliasEntries.length > 0
+      ? [
+          `  resolve: {`,
+          `    alias: {`,
+          ...aliasEntries.map(([k, v]) => `      ${JSON.stringify(k)}: ${v},`),
+          `    },`,
+          `  },`,
+        ]
+      : [];
   return [
     `// ─────────────────────────────────────────────────────────────`,
     `//  DO NOT MODIFY THIS FILE FROM AGENT CODE.`,
@@ -238,9 +290,12 @@ export function renderViteConfig(opts: { base: string; hmrPath: string; devPort:
     `//  (e.g. \`vite.user.config.ts\`) and merge — do not overwrite this.`,
     `// ─────────────────────────────────────────────────────────────`,
     `import { defineConfig } from 'vite';`,
+    ...stampImports,
     ``,
     `export default defineConfig({`,
     `  base: ${base},`,
+    ...pluginsLines,
+    ...resolveLines,
     `  server: {`,
     `    // Explicit 0.0.0.0 (not shorthand \`true\`) because some Vite`,
     `    // versions treat \`host: true\` as "first non-loopback interface",`,

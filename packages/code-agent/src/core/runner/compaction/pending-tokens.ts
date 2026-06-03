@@ -16,59 +16,37 @@
  *   - `shouldCompactPreEmit({...})` — gate that fires on the same
  *     0.90 ratio as `shouldCompact90` but using the projected total.
  */
-import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
+import { estimateBlockTokens, estimateMessageTokens } from '@mcp/code-agent/core/token-accounting.js';
 
-const CHARS_PER_TOKEN = 4;
-
-function estimateBlockChars(block: ContentBlock): number {
-  if (block.type === 'text') return (block.text ?? '').length;
-  if (block.type === 'tool_use') {
-    const inputStr = (() => {
-      try { return JSON.stringify(block.input ?? {}); }
-      catch { return ''; }
-    })();
-    return (block.name ?? '').length + inputStr.length + 16;
-  }
-  if (block.type === 'tool_result') {
-    const content = typeof block.content === 'string' ? block.content : JSON.stringify(block.content ?? '');
-    return content.length + 16;
-  }
-  // Unknown block types — defensive: stringify whole.
-  try {
-    const unknownBlock: unknown = block;
-    return (JSON.stringify(unknownBlock) ?? '').length;
-  } catch { return 0; }
-}
-
-function estimateMessageChars(msg: AgentMessage): number {
-  const content: unknown = msg.content;
-  if (typeof content === 'string') return content.length + 16; // role tags + framing
-  if (!Array.isArray(content)) return estimateBlockChars(content as ContentBlock) + 16;
-  let chars = 16;
-  for (const block of content as ContentBlock[]) chars += estimateBlockChars(block);
-  return chars;
-}
-
-/** Sum estimated tokens for a full message array. */
+/**
+ * Sum estimated tokens for a full message array.
+ *
+ * Delegates to `estimateMessageTokens` (token-accounting) so non-text blocks
+ * are costed correctly: an `image` is a fixed per-tile overhead (~1000 tokens),
+ * NOT the length of its base64 payload. Counting base64 chars as text is what
+ * caused a single attached image to project ~417K tokens and falsely trip the
+ * pre-emit gate into `compact_exhausted`.
+ */
 export function estimateMessagesTokens(messages: ReadonlyArray<AgentMessage>): number {
-  let chars = 0;
-  for (const m of messages) chars += estimateMessageChars(m);
-  return Math.ceil(chars / CHARS_PER_TOKEN);
+  let tokens = 0;
+  for (const m of messages) tokens += estimateMessageTokens(m);
+  return tokens;
 }
 
-/** Estimate tokens for a batch of tool_result content strings (pre-emit). */
+/** Estimate tokens for a batch of pending tool_result payloads (pre-emit). */
 export function estimateToolResultsTokens(
   toolResults: ReadonlyArray<{ content: string | unknown }>,
 ): number {
-  let chars = 0;
+  let tokens = 0;
   for (const r of toolResults) {
-    const text = typeof r.content === 'string' ? r.content : (() => {
-      try { return JSON.stringify(r.content ?? ''); } catch { return ''; }
-    })();
-    chars += text.length + 16;
+    const content = typeof r.content === 'string'
+      ? r.content
+      : (() => { try { return JSON.stringify(r.content ?? ''); } catch { return ''; } })();
+    tokens += estimateBlockTokens({ type: 'tool_result', tool_use_id: '', content });
   }
-  return Math.ceil(chars / CHARS_PER_TOKEN);
+  return tokens;
 }
 
 export interface EstimatePendingPayloadArgs {

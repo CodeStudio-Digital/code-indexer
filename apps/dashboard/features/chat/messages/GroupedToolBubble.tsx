@@ -19,7 +19,7 @@ type AssistantGroup = Extract<VisualGroup, { kind: 'assistant' }>;
 
 interface GroupedToolBubbleProps {
   group: AssistantGroup;
-  toolResultsById: Map<string, { content: string; isError: boolean }>;
+  toolResultsById: Map<string, { content: string; isError: boolean; image?: { mediaType: string; base64: string } }>;
   providerId: string;
   handlers: PromptHandlers;
   tasksState: PersistedTasksState | null | undefined;

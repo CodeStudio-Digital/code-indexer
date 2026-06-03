@@ -137,6 +137,9 @@ export async function recoverDevServer(
     base: previewPathPrefix,
     hmrPath: `${previewPathPrefix.replace(/\/$/, '')}/@vite/hmr`,
     devPort: deps.devServerPort,
+    // Re-apply the Builder source-stamp (if any) so element selection
+    // survives config regeneration. Undefined for non-Builder sandboxes.
+    stamp: sb.viteStamp,
   });
   await driver.writeFile(sb.containerId, `${sb.workdir}/vite.config.ts`, cfg, {
     recursive: true,

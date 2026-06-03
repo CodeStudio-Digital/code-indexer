@@ -219,6 +219,12 @@ export interface ToolContext {
   /** Company orchestrator context — present when this runner is part of a company session. */
   companyContext?: import('@mcp/company/types.js').CompanyContext;
   /**
+   * Coder session id (mirrors RunnerOptions.sessionId). Used to key
+   * per-agent resources like the dedicated preview/devtools window. Company
+   * agents key off `companyContext.agentRunId/companySessionId` instead.
+   */
+  sessionId?: number;
+  /**
    * Optional execution ports — when provided, filesystem/shell tools
    * route through these instead of talking to `node:fs` / `child_process`
    * directly. Left undefined, tools fall back to process-wide local

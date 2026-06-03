@@ -1,6 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Loader2, Pause } from 'lucide-react';
 import type { SandboxSnapshot, SandboxStepLabel } from '../../useSandboxStatus.js';
+import {
+  isPreviewMessage,
+  type PreviewToParentMessage,
+} from '@mcp/services/sandbox/builder/protocol.js';
 import { LogTail } from './LogTail.js';
 import { PreviewToolbar } from './PreviewToolbar.js';
 import { DevServerLogOverlay } from './DevServerLogOverlay.js';
@@ -21,6 +25,19 @@ export interface PreviewIframeProps {
     previewStrategy?: 'proxy-prefix' | 'proxy-root' | 'port-direct';
     hostPort?: number;
   }>;
+  /**
+   * Builder studio: when defined, the toolbar renders a "Select" toggle and
+   * the iframe is armed/disarmed for element selection. All optional —
+   * non-studio callers omit them and behave exactly as before.
+   */
+  selectMode?: boolean;
+  onToggleSelectMode?: () => void;
+  /** Receives origin-validated `mcp:*` messages from the preview app. */
+  onPreviewMessage?: (msg: PreviewToParentMessage) => void;
+  /** Constrain the iframe width (device frames). `null`/undefined = fill. */
+  frameWidth?: number | null;
+  /** Extra controls rendered at the right of the preview toolbar. */
+  toolbarRightSlot?: React.ReactNode;
 }
 
 const STEP_LABELS: Record<SandboxStepLabel, string> = {
@@ -41,6 +58,11 @@ export function PreviewIframe({
   sessionId,
   fileChangeTick = 0,
   extraServices = [],
+  selectMode,
+  onToggleSelectMode,
+  onPreviewMessage,
+  frameWidth,
+  toolbarRightSlot,
 }: PreviewIframeProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -82,6 +104,51 @@ export function PreviewIframe({
   const step = sandbox?.step;
   const logs = sandbox?.recentLogs ?? [];
   const previewUrl = effectivePreviewUrl;
+
+  // ── Builder studio: element-selection wiring ──────────────────────
+  // Origin of the loopback dev server — used both to validate inbound
+  // messages and as the targetOrigin for arm/disarm posts. Empty until
+  // the preview URL is known (selection stays disabled then).
+  const previewOrigin = useMemo(() => {
+    try {
+      return previewUrl ? new URL(previewUrl).origin : '';
+    } catch {
+      return '';
+    }
+  }, [previewUrl]);
+
+  const selectModeRef = useRef(!!selectMode);
+  selectModeRef.current = !!selectMode;
+
+  const postToPreview = React.useCallback(
+    (msg: { type: 'mcp:arm' | 'mcp:disarm' }) => {
+      if (!previewOrigin) return;
+      iframeRef.current?.contentWindow?.postMessage(msg, previewOrigin);
+    },
+    [previewOrigin],
+  );
+
+  // Inbound messages from the preview app. STRICT origin check — never
+  // trust `event.origin` blindly (a malicious page could spoof selections).
+  useEffect(() => {
+    if (!onPreviewMessage || !previewOrigin) return;
+    function onMessage(e: MessageEvent) {
+      if (e.origin !== previewOrigin) return;
+      if (!isPreviewMessage(e.data)) return;
+      // Re-arm after a reload (the runtime re-announces readiness).
+      if (e.data.type === 'mcp:ready' && selectModeRef.current) postToPreview({ type: 'mcp:arm' });
+      onPreviewMessage(e.data);
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [onPreviewMessage, previewOrigin, postToPreview]);
+
+  // Arm/disarm whenever select mode toggles (and on (re)mount of the iframe
+  // via reloadKey, once it's ready).
+  useEffect(() => {
+    if (selectMode === undefined) return;
+    postToPreview({ type: selectMode ? 'mcp:arm' : 'mcp:disarm' });
+  }, [selectMode, reloadKey, postToPreview]);
 
   async function handleRetry() {
     setRetrying(true);
@@ -125,17 +192,26 @@ export function PreviewIframe({
         onOpenLogs={() => setLogOverlayOpen(true)}
         onReload={() => { setReloadKey((k) => k + 1); onRefresh(); }}
         serviceSwitcher={serviceSwitcher}
+        selectMode={selectMode}
+        onToggleSelectMode={onToggleSelectMode}
+        rightSlot={toolbarRightSlot}
       />
       <div className="flex-1 relative overflow-hidden flex flex-col">
         {effectiveStatus === 'ready' && previewUrl && !runtimePaused ? (
-          <iframe
-            key={reloadKey}
-            ref={iframeRef}
-            src={previewUrl}
-            className="w-full h-full border-0"
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-            title="Sandbox preview"
-          />
+          <div
+            className="w-full h-full flex justify-center overflow-auto bg-muted/30"
+            style={frameWidth ? undefined : { display: 'block' }}
+          >
+            <iframe
+              key={reloadKey}
+              ref={iframeRef}
+              src={previewUrl}
+              className="h-full border-0 bg-white"
+              style={{ width: frameWidth ? `${frameWidth}px` : '100%', maxWidth: '100%' }}
+              sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+              title="Sandbox preview"
+            />
+          </div>
         ) : effectiveStatus === 'error' ? (
           <div className="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
             <div className="flex items-start gap-3">

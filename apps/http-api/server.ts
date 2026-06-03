@@ -5,12 +5,14 @@ import { loadConfig } from '@mcp/shared/utils/config.js';
 import { createAdminRouter } from './admin/index.js';
 import { createDeps } from './server/deps.js';
 import { mountProjectsRoutes } from './server/routes/projects.js';
+import { mountProjectScaffoldRoute } from './server/routes/projects-scaffold.js';
 import { mountHygieneRoutes } from './server/routes/hygiene.js';
 import { mountSearchRoutes } from './server/routes/search.js';
 import { mountFilesRoutes } from './server/routes/files.js';
 import { mountGraphRoutes } from './server/routes/graph.js';
 import { mountSnapshotsRoutes } from './server/routes/snapshots.js';
 import { mountRunsRoutes } from './server/routes/runs.js';
+import { mountTrainingRoutes } from './server/routes/training.js';
 import { mountDiffRoutes } from './server/routes/diff.js';
 import { mountCostsRoutes } from './server/routes/costs.js';
 import { mountWebhooksRoutes } from './server/routes/webhooks.js';
@@ -104,6 +106,8 @@ import { mountDocsRoutes } from './server/routes/docs/index.js';
 import { mountDocsAgentRoutes } from './server/routes/docs-agent/index.js';
 import { setChromeServiceForDocs } from './server/deps.js';
 import { setGlobalDocSearch } from '@mcp/code-agent/tools/rag-search-docs.js';
+import { setGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
+import { createVisionDescriber } from './server/vision-describer-impl.js';
 import {
   DocsResearchBridge,
   setGlobalDocsResearcher,
@@ -634,12 +638,14 @@ export function createApp() {
   }
 
   mountProjectsRoutes(app, deps);
+  mountProjectScaffoldRoute(app, deps);
   mountHygieneRoutes(app, deps);
   mountSearchRoutes(app, deps);
   mountFilesRoutes(app, deps);
   mountGraphRoutes(app, deps);
   mountSnapshotsRoutes(app, deps);
   mountRunsRoutes(app, deps);
+  mountTrainingRoutes(app, deps);
   mountDiffRoutes(app, deps);
   mountCostsRoutes(app, deps);
   mountWebhooksRoutes(app, deps);
@@ -722,12 +728,21 @@ export function createApp() {
     pipelineResolver: deps.pipelineProviderResolver,
   });
   setGlobalDocsResearcher(docsResearchBridge);
-  setCoderWorkerDocDeps({ docSearch: docSearchBackend, docsResearch: docsResearchBridge });
+
+  // Vision fallback — image→text describer. Resolves the `code-agent/vision`
+  // Pipelines role and runs a one-off chat so a model that can't see images
+  // (or the composer "Describe images" flag) still gets an agent-directed
+  // textual description. In-process coders read it via the global singleton;
+  // worker coders reach it back over the MessageBridge (`vision` doc-dep below).
+  const visionDescriber = createVisionDescriber({ resolver: deps.pipelineProviderResolver });
+  setGlobalVisionDescriber(visionDescriber);
+
+  setCoderWorkerDocDeps({ docSearch: docSearchBackend, docsResearch: docsResearchBridge, vision: visionDescriber });
   // Same wire-up for the COMPANY worker pool — master + subordinates run
   // inside `company-worker.ts`, which installs the matching RPC shims. Without
   // this, `rag_search_docs` from a company subordinate errors with "doc corpus
   // backend is not wired into this process". Reuses the same backends.
-  setCompanyWorkerDocDeps({ docSearch: docSearchBackend, docsResearch: docsResearchBridge });
+  setCompanyWorkerDocDeps({ docSearch: docSearchBackend, docsResearch: docsResearchBridge, vision: visionDescriber });
   mountDocsAgentRoutes(app, deps, docsResearchBridge);
 
   // External-MCP connection pool. Boots async so the dashboard

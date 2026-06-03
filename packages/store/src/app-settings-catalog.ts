@@ -112,6 +112,16 @@ export const APP_SETTINGS: readonly SettingDef[] = [
 
   // ─── MCP ──────────────────────────────────────────────────────────
   {
+    key: 'TRAINING_MCP_BLOCK_SERVER_ID',
+    label: 'Training: block-seed MCP server',
+    description:
+      'Which configured MCP server supplies golden block examples (e.g. shadcn) when generating react-shadcn-vite training datasets. Empty = auto-detect whichever connected server exposes get_block.',
+    type: 'string',
+    category: 'mcp',
+    default: '',
+    advanced: true,
+  },
+  {
     key: 'MCP_DEV_HTTP',
     label: 'Expose Hono dev HTTP listener',
     description:

@@ -78,6 +78,7 @@ export function BuilderView({
     );
   }
 
+
   // Minimal drag handler — converts clientX to a percentage and clamps
   // so neither pane collapses below 20%.
 

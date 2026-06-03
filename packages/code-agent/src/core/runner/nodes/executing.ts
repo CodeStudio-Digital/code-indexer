@@ -45,6 +45,8 @@ import { shouldCompactPreEmit } from '../compaction/pending-tokens.js';
 import { computeDynamicInjection, type DynamicInjectionResult } from '../assembly/dynamic-injection.js';
 import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
+import { applyVisionFallback } from '../vision-fallback.js';
+import { getGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
 import {
   decideTerminal,
   runQualityCheck,
@@ -390,13 +392,27 @@ export class ExecutingNode implements BehaviorNode {
       phase: 'starting',
     });
 
+    // Vision fallback — when the active model can't see images (or the composer
+    // "Describe images" flag forces it), swap image blocks for agent-directed
+    // text descriptions BEFORE the call. Runs on a copy; history keeps the raw
+    // image. `=== false` is strict so unknown capability never pays the cost.
+    const visionGate = !!ctx.opts.describeImages || ctx.opts.modelSupportsVision === false;
+    const chatMessages = visionGate
+      ? await applyVisionFallback({
+          messages: messagesForChat,
+          gate: visionGate,
+          describer: getGlobalVisionDescriber(),
+          signal: ctx.opts.toolContext.signal,
+        })
+      : messagesForChat;
+
     let stream: AsyncIterable<ChatDelta>;
     try {
       dbg(`calling provider.chat() model=${ctx.opts.provider.model}`);
       ctx.operations.progress(providerOpId, { phase: 'provider.chat' });
       stream = ctx.opts.provider.chat({
         system: systemPrompt,
-        messages: messagesForChat,
+        messages: chatMessages,
         tools: toolsBuilt.tools,
         thinking: ctx.opts.thinking,
         thinkingBudgetTokens: ctx.opts.thinkingBudgetTokens,
@@ -621,15 +637,42 @@ export class ExecutingNode implements BehaviorNode {
 
     const toolMessage = buildToolMessage(dispatch.results);
     ctx.messages.push(toolMessage);
+
+    // Vision: tools that returned `extraUserBlocks` (e.g. view_image,
+    // preview_screenshot) get them surfaced as a synthetic user message
+    // right after the tool message, so the model actually SEES the image.
+    // Provider-agnostic (a user-role image block works everywhere).
+    const extraBlocks = dispatch.results.flatMap((r) => r.extraUserBlocks ?? []);
+    if (extraBlocks.length > 0) {
+      ctx.messages.push({
+        role: 'user',
+        content: [
+          ...extraBlocks,
+          { type: 'text', text: '(Image(s) attached from the tool call above.)' },
+        ],
+      });
+    }
+
     for (const r of dispatch.results) {
       ctx.operations.finish(`tool:${r.toolUseId}`, r.isError ? 'failed' : 'completed', {
         phase: r.isError ? 'failed' : 'completed',
       });
+      // Surface a tool image (e.g. preview_screenshot / view_image) in the
+      // result so the dashboard shows it inline under the tool call — the
+      // same image the model receives via the synthetic user message above.
+      const img = r.extraUserBlocks?.find(
+        (b): b is { type: 'image'; mediaType: string; base64: string } =>
+          (b as { type?: string }).type === 'image',
+      );
       ctx.emit(
         'tool_call_result',
         r.toolUseId,
         r.name,
-        { content: r.content, isError: r.isError },
+        {
+          content: r.content,
+          isError: r.isError,
+          ...(img ? { image: { mediaType: img.mediaType, base64: img.base64 } } : {}),
+        },
         r.durationMs,
       );
     }

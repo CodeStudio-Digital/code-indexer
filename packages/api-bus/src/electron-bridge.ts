@@ -23,6 +23,9 @@ export interface ElectronAPI {
   /** Open a URL in the default browser (Stripe checkout, doc links). */
   openExternal(url: string): void;
 
+  /** Reveal a local folder/file in the OS file manager (Explorer/Finder/…). */
+  openPath(path: string): void;
+
   /** App version from electron `app.getVersion()`. */
   getAppVersion(): Promise<string>;
 

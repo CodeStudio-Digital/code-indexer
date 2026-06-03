@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels';
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAgentStream } from '../../hooks/useAgentStream.js';
 import { usePipelineStream } from '../../hooks/usePipelineStream.js';
@@ -43,9 +44,10 @@ import type {
   SessionData,
 } from './types.js';
 import { useAgentChatState } from './useAgentChatState.js';
+import { consumeSelectionPrefix, onStudioSend } from '../builder/studio/studio-context-store.js';
 import type { AgentAttachment } from '../../hooks/useAgentStream.js';
 
-export default function AgentChat({ projectId, projectName, initialSessionId }: AgentChatProps) {
+export default function AgentChat({ projectId, projectName, initialSessionId, selectionPrefixSessionId }: AgentChatProps) {
   const { t } = useTranslation(['chat', 'common']);
   const confirm = useConfirm();
   const [view, setView] = useState<SessionView>('active');
@@ -89,6 +91,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
   const [sessionTemperature, setSessionTemperature] = useState<number | null>(null);
   const [unrestrictedOutput, setUnrestrictedOutput] = useState<boolean>(false);
   const composerRef = useRef<ComposerHandle>(null);
+  const sessionsPanelRef = useRef<ImperativePanelHandle>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const pendingAutoTitle = useRef<Set<number>>(new Set());
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState('');
@@ -139,6 +143,14 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
    * session (mirrors how `thinking` works today — not persisted in DB).
    */
   const [deepThink, setDeepThink] = useState(false);
+  /**
+   * Per-session "Describe images" flag. FORCES the vision fallback (image →
+   * text description via the configured vision model) even when the active
+   * model can see images — handy to get a textual layout spec. Auto-fallback
+   * for blind models happens regardless. Propagated via POST /messages
+   * `{describe_images: true}` → runCoder → runner.opts.describeImages.
+   */
+  const [describeImages, setDescribeImages] = useState(false);
   /** PR-4: when set, the Composer's send button flips to "Run pipeline". */
   const [selectedPipelineId, setSelectedPipelineId] = useState<number | null>(null);
 
@@ -379,7 +391,10 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     if (!text.trim() || !selectedId) return;
     const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
     if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
-    await sendMessage(text, async () => {
+    // Builder studio: prepend the selected-element block (and clear it).
+    const prefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
+    const outgoing = prefix ? `${prefix}\n${text}` : text;
+    await sendMessage(outgoing, async () => {
       refetchSession();
       if (shouldAutoTitle) {
         apiPost<{ title: string }>(`/coder/sessions/${selectedId}/generate-title`, { content: text })
@@ -394,8 +409,15 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
             console.warn('[auto-title] generate-title failed:', err);
           });
       }
-    }, { attachments: atts, agent, maxTurns, thinking, deepThink, selectedSkillIds });
-  }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, deepThink]);
+    }, { attachments: atts, agent, maxTurns, thinking, deepThink, describeImages, selectedSkillIds });
+  }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, deepThink, describeImages, selectionPrefixSessionId]);
+
+  // Builder preview "Fix" / auto-fix → send a message into this chat.
+  // Scoped to the builder key (the project id) so only this chat reacts.
+  useEffect(() => {
+    if (selectionPrefixSessionId == null) return;
+    return onStudioSend(selectionPrefixSessionId, (text) => { void handleSend(text, []); });
+  }, [selectionPrefixSessionId, handleSend]);
 
   const handleSnapshotReviewMessage = useCallback(async (message: string) => {
     if (!message.trim() || !selectedId) return;
@@ -403,8 +425,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
     const reviewAgent = agent === 'explore' || agent === 'plan' ? 'build' : agent;
     await sendMessage(message, async () => {
       refetchSession();
-    }, { agent: reviewAgent, maxTurns, thinking, deepThink });
-  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking, deepThink]);
+    }, { agent: reviewAgent, maxTurns, thinking, deepThink, describeImages });
+  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking, deepThink, describeImages]);
 
   /**
    * Pipeline-mode send: post to `/pipelines/:pid/start` instead of
@@ -866,12 +888,16 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
             squishing the chat header into a wrap. */}
         <PanelGroup direction="horizontal" autoSaveId="agent-chat-cols-v2" className="flex-1 min-h-0">
         <Panel
+          ref={sessionsPanelRef}
           id="sessions-sidebar"
           order={1}
           defaultSize={20}
           minSize={14}
           maxSize={32}
           collapsible
+          collapsedSize={0}
+          onCollapse={() => setSidebarCollapsed(true)}
+          onExpand={() => setSidebarCollapsed(false)}
           className="min-w-0"
         >
         <SessionSidebar
@@ -916,7 +942,19 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
         />
         </Panel>
         <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors hidden lg:block" />
-        <Panel id="chat-main" order={2} minSize={40} className="min-w-0">
+        <Panel id="chat-main" order={2} minSize={40} className="min-w-0 relative">
+          {/* Collapse/expand the sessions sidebar. */}
+          <button
+            onClick={() =>
+              sidebarCollapsed
+                ? sessionsPanelRef.current?.expand()
+                : sessionsPanelRef.current?.collapse()
+            }
+            title={sidebarCollapsed ? 'Show sessions' : 'Hide sessions'}
+            className="absolute top-1.5 left-1.5 z-20 h-6 w-6 flex items-center justify-center rounded-md bg-card/80 border text-muted-foreground hover:text-foreground hover:bg-muted"
+          >
+            {sidebarCollapsed ? <PanelLeftOpen className="h-3.5 w-3.5" /> : <PanelLeftClose className="h-3.5 w-3.5" />}
+          </button>
           {!selectedId ? (
             <main className="flex h-full w-full min-w-0 bg-card overflow-hidden min-h-0">
               <EmptyChatState
@@ -992,6 +1030,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId }: 
                 supportsThinking={providerSupportsThinking(provider, providerOptions, model)}
                 deepThink={deepThink}
                 setDeepThink={setDeepThink}
+                describeImages={describeImages}
+                setDescribeImages={setDescribeImages}
                 fallbackProvider={fallbackProvider}
                 fallbackModel={fallbackModel}
                 onFallbackChange={handleFallbackChange}

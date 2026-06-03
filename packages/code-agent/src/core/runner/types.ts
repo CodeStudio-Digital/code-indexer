@@ -118,6 +118,16 @@ export interface RunnerOptions {
   /** Enable thinking/reasoning mode for providers that support it. */
   thinking?: boolean;
   /**
+   * Vision fallback. `modelSupportsVision === false` (strict) means the active
+   * model can't consume images → the runner routes image blocks through the
+   * configured vision model for a text description. `describeImages` is the
+   * composer "Describe images" flag that FORCES the same path even on a
+   * vision-capable model (e.g. to get a textual layout spec). Both undefined →
+   * disabled (no surprise cost).
+   */
+  modelSupportsVision?: boolean;
+  describeImages?: boolean;
+  /**
    * Per-request thinking budget (in tokens). Only meaningful for providers
    * whose extended-thinking surface accepts a budget (Anthropic).
    */

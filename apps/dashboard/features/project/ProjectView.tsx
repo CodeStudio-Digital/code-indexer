@@ -56,9 +56,11 @@ import {
   Layers,
   LineChart,
   MessageSquareCode,
+  Monitor,
   Network,
   PanelBottomClose,
   PanelBottomOpen,
+  PanelRightOpen,
   Play,
   Puzzle,
   Search,
@@ -68,6 +70,10 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { apiCall } from '../../lib/api-client.js';
+import { useApi } from '../../hooks/useApi.js';
+import type { Project } from '@mcp/shared/types.js';
+import { ProjectPreview } from './builder/ProjectPreview.js';
+import { useRunningTasks, tasksForProject, isDevServerTask } from '../../state/running-tasks.js';
 import {
   loadPersistedTabs,
   savePersistedTabs,
@@ -145,6 +151,29 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const openFiles = useWorkspaceStore((s) => s.openFiles);
   const closeFile = useWorkspaceStore((s) => s.closeFile);
+
+  // Builder project? Read `builder_json` to enable the live-preview pane
+  // beside the chat. Null/parse-fail → ordinary project (no preview).
+  const { data: project } = useApi<Project>(`/projects/${projectId}`);
+  const builderJson = useMemo<{ stack: string; port: number } | null>(() => {
+    if (!project?.builder_json) return null;
+    try {
+      const cfg = JSON.parse(project.builder_json) as { stack?: string; port?: number };
+      return cfg.stack && cfg.port ? { stack: cfg.stack, port: cfg.port } : null;
+    } catch {
+      return null;
+    }
+  }, [project?.builder_json]);
+
+  // Preview availability: builder projects always; any project once a
+  // dev-server runner is active. Drives both the conditional "Preview" rail
+  // tab and the chat-tab split.
+  const hasDevTask = useRunningTasks((s) => tasksForProject(s.tasks, projectId).some(isDevServerTask));
+  const previewEnabled = !!builderJson || hasDevTask;
+  const previewTabs = useMemo<TabDef[]>(
+    () => (previewEnabled ? [{ id: 'preview', label: 'Preview', icon: Monitor, group: 'core' }] : []),
+    [previewEnabled],
+  );
 
   // Default tab: 'chat' so existing users keep the familiar landing
   // surface. If the user opened the project specifically to look at a
@@ -330,7 +359,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
         onOpenAnalytics={() => navigate(`/projects/${projectId}/analytics`)}
       />
       <div className="flex flex-1 min-h-0">
-        <ProjectRail activeTab={tab} onSelect={setTab} layout={layout} pluginTabs={pluginTabs} />
+        <ProjectRail activeTab={tab} onSelect={setTab} layout={layout} pluginTabs={pluginTabs} extraCoreTabs={previewTabs} />
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
           <PanelGroup direction="vertical" autoSaveId="mcp-project-vert">
             <Panel minSize={20}>
@@ -342,6 +371,8 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
                 onOpenFile={handleOpen}
                 activeFilePath={activeFilePath}
                 contribWindows={contribWindows}
+                builderJson={builderJson}
+                previewEnabled={previewEnabled}
               />
             </Panel>
             {layout.activeBottom && (
@@ -433,9 +464,11 @@ interface ProjectRailProps {
   onSelect: (id: ProjectTabId) => void;
   layout: ReturnType<typeof useWorkspaceLayout>;
   pluginTabs: TabDef[];
+  /** Conditional core tabs (e.g. Preview, shown when a dev server runs). */
+  extraCoreTabs?: TabDef[];
 }
 
-function ProjectRail({ activeTab, onSelect, layout, pluginTabs }: ProjectRailProps) {
+function ProjectRail({ activeTab, onSelect, layout, pluginTabs, extraCoreTabs = [] }: ProjectRailProps) {
   const core = TABS.filter((t) => t.group === 'core');
   const analytics = TABS.filter((t) => t.group === 'analytics');
   return (
@@ -444,6 +477,9 @@ function ProjectRail({ activeTab, onSelect, layout, pluginTabs }: ProjectRailPro
       aria-label="Project sections"
     >
       {core.map((tabDef) => (
+        <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
+      ))}
+      {extraCoreTabs.map((tabDef) => (
         <RailButton key={tabDef.id} def={tabDef} active={activeTab === tabDef.id} onSelect={onSelect} />
       ))}
       <span className="h-px w-6 bg-border my-1.5" aria-hidden />
@@ -537,6 +573,10 @@ interface TabContentProps {
   onOpenFile: (path: string) => void;
   activeFilePath: string | null;
   contribWindows: ContribToolWindow[];
+  /** Set for Builder projects → chat tab splits into chat | live preview. */
+  builderJson: { stack: string; port: number } | null;
+  /** Builder OR any project with a running dev server → preview available. */
+  previewEnabled: boolean;
 }
 
 function TabContent({
@@ -547,7 +587,14 @@ function TabContent({
   onOpenFile,
   activeFilePath,
   contribWindows,
+  builderJson,
+  previewEnabled,
 }: TabContentProps) {
+  // Preview pane visibility (builder/preview projects). Hook called
+  // unconditionally at the top to respect the rules of hooks.
+  const previewVisible = useWorkspaceLayout((s) => s.previewVisible);
+  const togglePreview = useWorkspaceLayout((s) => s.togglePreview);
+
   // Files tab gets a sub-PanelGroup so the user can resize the file
   // tree independently of the editor (just like JetBrains/VS Code).
   if (tab === 'files') {
@@ -592,6 +639,58 @@ function TabContent({
   }
 
   if (tab === 'chat') {
+    // Builder projects split the chat tab into chat | live preview (V0).
+    // The selection store + composer threading are keyed by projectId.
+    if (previewEnabled) {
+      const chat = (
+        <AgentChat
+          projectId={projectId}
+          projectName={projectName}
+          initialSessionId={initialSessionId}
+          selectionPrefixSessionId={projectId}
+        />
+      );
+      // STABLE tree across the preview toggle: the chat Panel (id 'builder-chat')
+      // is ALWAYS the first child of the SAME PanelGroup under the SAME wrapper,
+      // so toggling `previewVisible` only adds/removes the preview Panel — React
+      // never unmounts AgentChat (which would drop the open session). The
+      // "show preview" rail renders OUTSIDE the group when hidden.
+      return (
+        <div className="flex h-full min-h-0">
+          <PanelGroup
+            direction="horizontal"
+            autoSaveId="mcp-project-builder-horiz"
+            className="flex-1 min-w-0"
+          >
+            <Panel id="builder-chat" order={1} defaultSize={previewVisible ? 52 : 100} minSize={32}>
+              {chat}
+            </Panel>
+            {previewVisible && (
+              <>
+                <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
+                <Panel id="builder-preview" order={2} defaultSize={48} minSize={28}>
+                  <ProjectPreview
+                    projectId={projectId}
+                    pinnedPort={builderJson?.port}
+                    selectionEnabled={!!builderJson}
+                    onHide={togglePreview}
+                  />
+                </Panel>
+              </>
+            )}
+          </PanelGroup>
+          {!previewVisible && (
+            <button
+              onClick={togglePreview}
+              title="Show preview"
+              className="w-6 shrink-0 border-l flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <PanelRightOpen className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      );
+    }
     return (
       <AgentChat
         projectId={projectId}
@@ -614,6 +713,18 @@ function TabContent({
   // output), so it bypasses the padded scroll container like snapshots.
   if (tab === 'runners') {
     return <RunnersTab projectId={projectId} />;
+  }
+
+  // Preview tab — the live dev-server preview, full-width. Shown for
+  // builder projects and any project with a running dev server.
+  if (tab === 'preview') {
+    return (
+      <ProjectPreview
+        projectId={projectId}
+        pinnedPort={builderJson?.port}
+        selectionEnabled={!!builderJson}
+      />
+    );
   }
 
   // Plugin-contributed tool window → its sandboxed webview fills the area.

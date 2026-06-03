@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import TurndownService from 'turndown';
 // @ts-expect-error — turndown-plugin-gfm ships no TS types.
 import { gfm } from 'turndown-plugin-gfm';
@@ -49,6 +50,61 @@ function cachePut(key: string, text: string): void {
     const firstKey = cache.keys().next().value;
     if (firstKey) cache.delete(firstKey);
   }
+}
+
+/** Block a literal IPv4 octet quad that falls in a private/loopback/special range. */
+function isBlockedIpv4(host: string): boolean {
+  const parts = host.split('.').map((p) => Number(p));
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    return false;
+  }
+  const [a, b] = parts;
+  return (
+    a === 127 || // loopback 127/8
+    a === 10 || // private 10/8
+    a === 0 || // "this host" 0/8 (0.0.0.0 etc.)
+    (a === 172 && b >= 16 && b <= 31) || // private 172.16/12
+    (a === 192 && b === 168) || // private 192.168/16
+    (a === 169 && b === 254) // link-local 169.254/16
+  );
+}
+
+/**
+ * SSRF defense-in-depth: should `web_fetch` REFUSE this hostname? Catches
+ * private/loopback/link-local IPs (v4 + v6), IPv4-mapped IPv6, and obfuscated
+ * numeric/hex IP literals (e.g. `2130706433`, `0x7f000001`) that bypass a naive
+ * dotted-quad regex. This is hostname-level only — it does NOT defeat
+ * DNS-rebinding (a public name resolving to a private IP); that needs
+ * resolve-and-pin, which is out of scope here. Exported for unit tests.
+ */
+export function isBlockedFetchHost(hostname: string): boolean {
+  let host = hostname.trim().toLowerCase();
+  if (!host) return true;
+  // Strip IPv6 zone id and surrounding brackets from `[::1]` style hosts.
+  host = host.replace(/^\[/, '').replace(/\]$/, '').replace(/%.*$/, '');
+
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+
+  const kind = isIP(host);
+  if (kind === 4) return isBlockedIpv4(host);
+  if (kind === 6) {
+    if (host === '::1' || host === '::') return true;
+    // IPv4-mapped / -compatible (`::ffff:127.0.0.1`): check the embedded v4.
+    const v4 = host.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
+    if (v4 && isBlockedIpv4(v4[1])) return true;
+    // Unique-local fc00::/7 (fc.. / fd..) and link-local fe80::/10.
+    if (/^f[cd]/.test(host)) return true;
+    if (/^fe[89ab]/.test(host)) return true;
+    return false;
+  }
+
+  // Not a recognized DNS name or dotted-quad: a bare integer or hex literal
+  // (`2130706433`, `0x7f000001`) is an obfuscated IP — refuse it outright. Also
+  // refuse dotted forms with hex/octal octets that `isIP` rejects.
+  if (/^(0x[0-9a-f]+|\d+)$/i.test(host)) return true;
+  if (/^(0x[0-9a-f]+|\d+)(\.(0x[0-9a-f]+|\d+)){1,3}$/i.test(host)) return true;
+
+  return false;
 }
 
 /**
@@ -154,7 +210,7 @@ export const webFetch: CoderTool = {
     // Guard against obvious internal/private endpoints to avoid SSRF mischief
     // when the agent is persuaded to fetch an attacker-controlled target.
     const host = parsed.hostname;
-    if (/^(127\.|10\.|192\.168\.|169\.254\.|localhost$|::1$)/i.test(host)) {
+    if (isBlockedFetchHost(host)) {
       return err(
         `refusing to fetch private/loopback host '${host}'. If you need local content, use read_file or run_command.`,
       );

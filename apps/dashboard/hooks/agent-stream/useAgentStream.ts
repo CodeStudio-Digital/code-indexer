@@ -63,6 +63,9 @@ export function useAgentStream(sessionId: number | null) {
         /** Enable simulated deepThink (auxiliary cheap model writes a
          *  pre-thought before each main-model turn). Orthogonal to `thinking`. */
         deepThink?: boolean;
+        /** Force the vision fallback (image → text via the configured vision
+         *  model) even on vision-capable models. Auto-applies for blind models. */
+        describeImages?: boolean;
         /**
          * When true and a live run is currently blocked inside an interactive
          * tool, ask the server to break the wait (`interruptWait`) and inject
@@ -98,6 +101,7 @@ export function useAgentStream(sessionId: number | null) {
             max_turns: extras?.maxTurns ?? undefined,
             thinking: extras?.thinking || undefined,
             deep_think: extras?.deepThink || undefined,
+            describe_images: extras?.describeImages || undefined,
             interject: extras?.interject || undefined,
             selected_skill_ids:
               extras?.selectedSkillIds && extras.selectedSkillIds.length > 0

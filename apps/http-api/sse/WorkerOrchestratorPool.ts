@@ -29,6 +29,8 @@
 import { WorkerHost } from '@mcp/orchestrator-host';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
+import { getGlobalPreviewDevtools, type PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
+import type { VisionDescribeRequest } from '@mcp/code-agent/core/vision-describer.js';
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import type { CoderWorkerDocDeps } from './CoderWorkerPool.js';
 import {
@@ -291,6 +293,23 @@ export class WorkerOrchestratorPool {
       }
       return researcher.runResearch(payload as Parameters<DocsResearchBridge['runResearch']>[0]);
     });
+    // Preview DevTools — same main-process service as the coder pool, so
+    // company subordinates get the preview/devtools tools too.
+    const offPreviewDevtools = bridge.handle('previewDevtools', async (payload) => {
+      const svc = getGlobalPreviewDevtools();
+      if (!svc) throw new Error('Preview DevTools unavailable — only in the desktop app with a preview open.');
+      return svc.invoke(payload as PreviewInvoke);
+    });
+    // Vision fallback — same main-process describer as the coder pool.
+    const offVisionDescribe = bridge.handle('visionDescribe', async (payload) => {
+      const v = this.opts.docDeps?.vision;
+      if (!v) {
+        throw new Error(
+          'VISION_NOT_CONFIGURED: no vision model is bound. Set the code-agent / vision role in Settings → Pipelines.',
+        );
+      }
+      return v.describe(payload as VisionDescribeRequest);
+    });
 
     // Keep the pool entry warm while the worker is doing observable work.
     // The TTL sweep evicts on `lastTouchedAt`, which `getOrSpawn`/`get`/RPC
@@ -351,6 +370,8 @@ export class WorkerOrchestratorPool {
       try { offSupervisorIncident(); } catch { /* best-effort */ }
       try { offDocSearch(); } catch { /* best-effort */ }
       try { offDocsResearch(); } catch { /* best-effort */ }
+      try { offPreviewDevtools(); } catch { /* best-effort */ }
+      try { offVisionDescribe(); } catch { /* best-effort */ }
     };
 
     const orchestrator = createOrchestratorProxy(host, sessionId, bus);

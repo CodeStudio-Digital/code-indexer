@@ -36,7 +36,7 @@ export function buildExpandTools(
   // explicitly load orchestration tools — though the runner already
   // auto-activates it whenever `companyContext.isMaster === true`, so
   // most masters never need to call it themselves.
-  const coreExpandable = ['navigate', 'admin', 'master'];
+  const coreExpandable = ['navigate', 'admin', 'master', 'preview'];
   const customNames = customTiers ? [...customTiers.keys()].sort() : [];
   const allTiers = [...coreExpandable, ...customNames];
 
@@ -58,7 +58,11 @@ export function buildExpandTools(
     'wait_for_subordinates, list_subordinates, forward_to_agent, kanban_list_cards, ' +
     'kanban_get_card, kanban_create_card, kanban_move_card, kanban_assign_agent, and ' +
     'related delegation tools. Auto-activated for company-master sessions; call this ' +
-    'explicitly if the master surface looks missing (e.g. after recovery agent boot).';
+    'explicitly if the master surface looks missing (e.g. after recovery agent boot).\n' +
+    '- "preview": live-app DevTools over a dedicated window — preview_open/navigate, ' +
+    'preview_console/network/eval/screenshot/inspect_css/performance/memory/storage, and ' +
+    'preview_click/fill/type/press/wait_for/scroll/hover. Unlock to SEE, inspect, or drive ' +
+    'the running app (open the dev-server URL first). Auto-active for builder/dev-server projects.';
 
   if (customTiers && customTiers.size > 0) {
     description += '\n\nExternal tool groups (on-demand):';

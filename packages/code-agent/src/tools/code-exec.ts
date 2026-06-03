@@ -5,13 +5,20 @@
  * multi-turn exploration into a single turn by writing a script that calls
  * the registry's read/search tools through async function proxies.
  *
- * Scope (v1):
- *  - Read-only and search tools only. Mutating tools (write_file, edit_file,
- *    multi_edit, manage_path, run_command, git_*) are NOT exposed. Direct tool calls
- *    are still the path for those — they go through plan-mode policy.
+ * Scope:
+ *  - Read/search AND mutating/shell tools are exposed (write_file, edit_file,
+ *    multi_edit, manage_path, run_command, exec_command, git_*); each nested
+ *    call goes through the SAME plan-mode / task-scope policy as a direct call.
+ *    Only interactive/orchestration tools are withheld (see `isSafeTool`).
  *  - Sandbox is `node:vm` (NOT a security boundary; the agent is trusted —
- *    same trust level as direct tool calls). Timeout via Promise.race plus
- *    a per-tool-call counter to bound runaway scripts.
+ *    same trust level as direct tool calls).
+ *  - Timeout measures the script's own JS-active time and is PAUSED while a
+ *    nested tool call is in flight (codex `code_mode` model: the script is not
+ *    charged for time spent inside a tool). Each nested tool is bounded by its
+ *    own tier (`resolveToolTimeoutMs`), so a long `run_command` install runs to
+ *    its 10-min budget instead of being killed by the script clock. A tool-free
+ *    spin still trips the JS budget; the node:vm sync timeout guards synchronous
+ *    loops. A per-tool-call counter bounds runaway scripts.
  *
  * Each registered safe tool becomes `await tools.<name>(args)`. Result is
  * the tool's text content, or thrown Error when the tool reports isError.
@@ -22,6 +29,7 @@ import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { evaluateToolInvocation, findScopeViolations, type PolicyContext } from '@mcp/code-agent/core/policy.js';
 import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
+import { resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -84,7 +92,7 @@ const CODE_EXEC_DESC =
   'Mutating tools (write_file, edit_file, multi_edit, create_file, manage_path, apply_patch, git_add/commit/branch) work only when the plan is approved (or the active task scope unlocks the touched paths). ' +
   'Interactive prompts (submit_plan, submit_tasks, ask_user) and orchestration tools (spawn_*, expand_toolset) are NOT exposed — call them directly outside code_exec.\n' +
   '\n' +
-  'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default timeout (max ' + MAX_TIMEOUT_MS + '), ' + MAX_TOOL_CALLS + ' tool calls per script, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB output cap.\n' +
+  'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). ' + MAX_TOOL_CALLS + ' tool calls per script, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB output cap.\n' +
   '\n' +
   'Example — exploration + batched edit (after plan approval):\n' +
   '```\n' +
@@ -150,7 +158,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         },
         timeout_ms: {
           type: 'number',
-          description: `Per-script wall-clock timeout (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}).`,
+          description: `Budget (ms) for the script's OWN JS work (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}). The clock is PAUSED while a nested tool call is in flight, so long installs/builds via run_command/exec_command don't trip it — each nested tool keeps its own timeout.`,
         },
       },
       required: ['code'],
@@ -219,6 +227,38 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         sandboxBound: !!ctx.ports?.fs || !!ctx.ports?.shell,
       });
 
+      // JS-time budget controller. The timeout bounds the script's OWN JS work,
+      // NOT time spent awaiting nested tool calls: while any tool call is in
+      // flight the clock is PAUSED (codex `code_mode` model). A tool-free spin
+      // still trips it; a script awaiting a 3-minute install does not.
+      let budgetRemainingMs = timeout;
+      let inFlight = 0;
+      let clockTimer: ReturnType<typeof setTimeout> | null = null;
+      let clockStartedAt = 0;
+      let rejectTimeout: (e: Error) => void = () => {};
+      const timeoutError = (): Error => new Error(`code_exec: timed out after ${timeout} ms (JS time)`);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        rejectTimeout = reject;
+      });
+      const armClock = (): void => {
+        clockStartedAt = Date.now();
+        clockTimer = setTimeout(() => rejectTimeout(timeoutError()), budgetRemainingMs);
+      };
+      const pauseClock = (): void => {
+        if (clockTimer) {
+          clearTimeout(clockTimer);
+          clockTimer = null;
+          budgetRemainingMs -= Date.now() - clockStartedAt;
+        }
+      };
+      const resumeClock = (): void => {
+        if (budgetRemainingMs <= 0) {
+          rejectTimeout(timeoutError());
+          return;
+        }
+        armClock();
+      };
+
       const toolsProxy: Record<string, (a: unknown) => Promise<string>> = {};
       for (const t of safe) {
         const impl = async (rawArgs: unknown): Promise<string> => {
@@ -252,11 +292,38 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
               throw new Error(`tool ${t.name} blocked: ${decision.detail}`);
             }
           }
-          const result = await registry.invoke(t.name, argObj, ctx);
-          if (result.isError) {
-            throw new Error(`tool ${t.name}: ${result.content}`);
+          // Pause the JS-time budget while this tool runs (the script is not
+          // charged for time inside a tool), and bound the tool by its OWN tier
+          // so a hung tool can't stall the batch — `run_command` gets its 10-min
+          // budget, reads get NORMAL, etc.
+          inFlight += 1;
+          if (inFlight === 1) pauseClock();
+          const perToolMs = resolveToolTimeoutMs(t);
+          let toolTimer: ReturnType<typeof setTimeout> | null = null;
+          try {
+            const invocation = registry.invoke(t.name, argObj, ctx);
+            const guarded =
+              perToolMs === Infinity
+                ? invocation
+                : Promise.race([
+                    invocation,
+                    new Promise<never>((_, rej) => {
+                      toolTimer = setTimeout(
+                        () => rej(new Error(`tool ${t.name} timed out after ${perToolMs} ms`)),
+                        perToolMs,
+                      );
+                    }),
+                  ]);
+            const result = await guarded;
+            if (result.isError) {
+              throw new Error(`tool ${t.name}: ${result.content}`);
+            }
+            return result.content;
+          } finally {
+            if (toolTimer) clearTimeout(toolTimer);
+            inFlight -= 1;
+            if (inFlight === 0) resumeClock();
           }
-          return result.content;
         };
         toolsProxy[t.name] = (rawArgs: unknown): Promise<string> => {
           const p = impl(rawArgs);
@@ -310,6 +377,16 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
 
       // Wrap as async IIFE so user code can use top-level await + return.
       const wrapped = `(async () => {\n${code}\n})()`;
+
+      // Arm the JS-time budget BEFORE running: invoking the async IIFE executes
+      // its synchronous prefix immediately, so a script that opens with
+      // `await tools.foo()` calls `pauseClock()` during `runInNewContext`. The
+      // clock must already be armed for that pause to subtract correctly. The
+      // clock pauses itself while a nested tool call is in flight (see the proxy
+      // `impl` above), so it only fires on the script's own JS work — not on
+      // time spent awaiting tools. The sync `timeout` option covers synchronous
+      // infinite loops, which never reach an await.
+      armClock();
       let scriptPromise: Promise<unknown>;
       try {
         scriptPromise = runInNewContext(wrapped, sandbox, {
@@ -317,15 +394,9 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
           filename: 'code_exec.js',
         }) as Promise<unknown>;
       } catch (e) {
+        if (clockTimer) clearTimeout(clockTimer);
         return err(`code_exec parse/sync error: ${e instanceof Error ? e.message : String(e)}`);
       }
-
-      // Async timeout: races the script against a setTimeout-rejecting promise.
-      // The sync `timeout` option above does not cover async waits.
-      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => reject(new Error(`code_exec: timed out after ${timeout} ms`)), timeout);
-      });
 
       let returnValue: unknown;
       try {
@@ -370,7 +441,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         const stderr = logBuffer.length > 0 ? `\n[output before failure]\n${logBuffer.join('\n')}` : '';
         return err(`code_exec failed: ${msg}${hint}${stderr}`);
       } finally {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (clockTimer) clearTimeout(clockTimer);
       }
 
       const lines: string[] = [];

@@ -66,7 +66,18 @@ export interface IndexerConfig {
   };
 }
 
-const DEFAULT_DATA_DIR = join(homedir(), '.mcp-code-indexer');
+/**
+ * Canonical MCP data directory — holds `index.db`, `exports/`, and
+ * host-scaffolded projects (`projects/`). Single source of truth so the
+ * various features stop re-joining `~/.mcp-code-indexer` independently.
+ * Overridable with `MCP_DATA_DIR`.
+ */
+export function mcpDataDir(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.MCP_DATA_DIR?.trim();
+  return override ? resolve(override) : join(homedir(), '.mcp-code-indexer');
+}
+
+const DEFAULT_DATA_DIR = mcpDataDir();
 
 const DEFAULT_CONFIG: IndexerConfig = {
   dbPath: join(DEFAULT_DATA_DIR, 'index.db'),

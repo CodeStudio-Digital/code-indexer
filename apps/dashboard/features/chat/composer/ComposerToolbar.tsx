@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Network, Repeat, Send, Settings2, Shield, Sparkles, Square, Thermometer } from 'lucide-react';
+import { Brain, Eye, Network, Repeat, Send, Settings2, Shield, Sparkles, Square, Thermometer } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -72,6 +72,14 @@ interface ComposerToolbarProps {
    */
   deepThink?: boolean;
   setDeepThink?: (v: boolean) => void;
+  /**
+   * "Describe images" — FORCE the vision fallback (image → text description
+   * via the configured vision model) even when the active model can see
+   * images. Auto-fallback for blind models happens regardless. Propagates:
+   * AgentChat → POST /messages `{describe_images: true}` → runner.opts.describeImages.
+   */
+  describeImages?: boolean;
+  setDescribeImages?: (v: boolean) => void;
 }
 
 export const ComposerToolbar = React.memo(function ComposerToolbar({
@@ -107,6 +115,8 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   supportsThinking,
   deepThink,
   setDeepThink,
+  describeImages,
+  setDescribeImages,
 }: ComposerToolbarProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Note: the Paperclip (attach), PipelinePicker, think, deepthink, and
@@ -371,6 +381,28 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
                 <span>
                   {t('chat:toolbar.deepThink', { defaultValue: 'deepThink (simulated)' })}
                   {deepThink ? ' • on' : ''}
+                </span>
+              </button>
+            )}
+            {setDescribeImages && (
+              <button
+                type="button"
+                onClick={() => setDescribeImages(!describeImages)}
+                className={`w-full inline-flex items-center justify-center gap-2 h-8 px-3 rounded-md text-xs font-mono transition-colors ${
+                  describeImages
+                    ? 'bg-sky-500/15 text-sky-600 hover:bg-sky-500/25 dark:text-sky-300'
+                    : 'border border-input text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+                aria-pressed={describeImages ?? false}
+                title={t('chat:toolbar.describeImagesHint', {
+                  defaultValue:
+                    'Force the vision model to describe uploaded images as text (auto-applies anyway when the active model can\'t see images).',
+                })}
+              >
+                <Eye className="h-3.5 w-3.5" />
+                <span>
+                  {t('chat:toolbar.describeImages', { defaultValue: 'Describe images' })}
+                  {describeImages ? ' • on' : ''}
                 </span>
               </button>
             )}

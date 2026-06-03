@@ -26,9 +26,14 @@ interface WorkspaceLayoutState {
   rightSize: number; // px
   bottomSize: number; // px
 
+  /** Project preview pane visibility (builder/preview-enabled projects). */
+  previewVisible: boolean;
+
   toggleLeft: (id: LeftToolId) => void;
   toggleRight: (id: RightToolId) => void;
   toggleBottom: (id: BottomToolId) => void;
+  togglePreview: () => void;
+  setPreviewVisible: (visible: boolean) => void;
 
   setActiveLeft: (id: LeftToolId | null) => void;
   setActiveRight: (id: RightToolId | null) => void;
@@ -48,6 +53,7 @@ interface PersistedSnapshot {
   leftSize: number;
   rightSize: number;
   bottomSize: number;
+  previewVisible: boolean;
 }
 
 const DEFAULTS: PersistedSnapshot = {
@@ -57,6 +63,7 @@ const DEFAULTS: PersistedSnapshot = {
   leftSize: 260,
   rightSize: 360,
   bottomSize: 240,
+  previewVisible: true,
 };
 
 function loadPersisted(): PersistedSnapshot {
@@ -103,6 +110,16 @@ export const useWorkspaceLayout = create<WorkspaceLayoutState>((set, get) => {
         persist({ activeBottom: next });
         return { activeBottom: next };
       }),
+    togglePreview: () =>
+      set((s) => {
+        const next = !s.previewVisible;
+        persist({ previewVisible: next });
+        return { previewVisible: next };
+      }),
+    setPreviewVisible: (visible) => {
+      persist({ previewVisible: visible });
+      set({ previewVisible: visible });
+    },
 
     setActiveLeft: (id) => {
       persist({ activeLeft: id });

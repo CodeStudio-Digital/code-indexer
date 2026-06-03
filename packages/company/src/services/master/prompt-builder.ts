@@ -57,6 +57,21 @@ export function buildPromptRoster(
   }));
 }
 
+/** Read `config_json.builder.studio` for the session. Defensive: any parse
+ *  failure or missing field degrades to `false` (non-studio builder). */
+function readBuilderStudioFlag(ctx: SessionContext): boolean {
+  try {
+    const row = ctx.companyStore.getCompanySession(ctx.companySessionId);
+    if (!row) return false;
+    const cfg = JSON.parse(row.config_json || '{}') as {
+      builder?: { studio?: boolean };
+    };
+    return !!cfg.builder?.studio;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Compose the master's `CompanyContext` + system-prompt block from the
  * session context, role configs, allowed_models, and the orchestrator's
@@ -124,6 +139,7 @@ export async function buildMasterPromptInputs(
           workdir: sandboxBinding?.workdir,
           stack: orchestrator.getSandboxStackForService?.() ?? configuredStack,
           previewUrl: sandboxBinding?.previewUrl,
+          studio: readBuilderStudioFlag(ctx),
         }
       : undefined,
     // Curated pool — when non-empty, the master prompt gains a strict

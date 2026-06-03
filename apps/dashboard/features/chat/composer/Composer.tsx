@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, FileText, Maximize2, Paperclip, Sparkles, X } from 'lucide-react';
+import { Brain, Eye, FileText, Maximize2, Paperclip, Sparkles, X } from 'lucide-react';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { useConfirm } from '../../../components/ui/dialog-provider.js';
@@ -81,6 +81,10 @@ interface ComposerProps {
    *  before each main-model turn. Orthogonal to `thinking`. */
   deepThink?: boolean;
   setDeepThink?: (v: boolean) => void;
+  /** "Describe images" — force the vision-fallback (image → text) even on
+   *  vision-capable models. Auto-applies for blind models regardless. */
+  describeImages?: boolean;
+  setDescribeImages?: (v: boolean) => void;
   /** Fallback configuration. */
   fallbackProvider?: string | null;
   fallbackModel?: string | null;
@@ -552,6 +556,35 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
                     </Tooltip>
                   )}
 
+                  {/* Describe images (vision fallback) — force image→text */}
+                  {props.setDescribeImages && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => props.setDescribeImages?.(!props.describeImages)}
+                          aria-pressed={props.describeImages ?? false}
+                          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
+                            props.describeImages
+                              ? 'bg-sky-500/15 text-sky-500 hover:bg-sky-500/25'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                          }`}
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          {props.describeImages && (
+                            <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[260px]">
+                        {t('toolbar.describeImages', {
+                          defaultValue:
+                            'Descrever imagens: força um modelo de visão a traduzir imagens anexadas (e screenshots) para texto. Aplica-se automaticamente quando o modelo atual não enxerga imagens. Configure o modelo em Configurações → Pipelines (papel "vision").',
+                        })}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+
                   {/* Unrestricted-tool-output (cap / full) */}
                   {props.setUnrestrictedOutput && (
                     <Tooltip>
@@ -617,6 +650,8 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             supportsThinking={props.supportsThinking}
             deepThink={props.deepThink}
             setDeepThink={props.setDeepThink}
+            describeImages={props.describeImages}
+            setDescribeImages={props.setDescribeImages}
           />
         </div>
       </div>
