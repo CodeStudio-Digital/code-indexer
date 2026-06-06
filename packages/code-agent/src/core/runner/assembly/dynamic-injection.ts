@@ -57,7 +57,7 @@ export interface DynamicInjectionContext {
    * + ranked by the caller — the provider only formats + dedupes). Each item
    * is a durable memory/snapshot worth surfacing for the current task.
    */
-  relevantMemory?: ReadonlyArray<{ id: string; title: string; content: string }>;
+  relevantMemory?: ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>;
   /** Memory ids already injected in prior reminders — skipped. */
   lastInjectedMemoryIds?: ReadonlySet<string>;
   /** Limit on memory items per reminder. Default 3. */
@@ -143,7 +143,7 @@ export function computeDynamicInjection(
 
   const maxMemory = Math.max(0, ctx.maxMemoryItems ?? DEFAULT_MAX_MEMORY);
   const lastMemoryIds = ctx.lastInjectedMemoryIds ?? new Set<string>();
-  const includedMemory: Array<{ id: string; title: string; content: string }> = [];
+  const includedMemory: Array<{ id: string; title: string; content: string; staleNote?: string }> = [];
   for (const m of ctx.relevantMemory ?? []) {
     if (includedMemory.length >= maxMemory) break;
     if (!lastMemoryIds.has(m.id) && !includedMemory.some((x) => x.id === m.id)) {
@@ -208,7 +208,8 @@ export function computeDynamicInjection(
         const body = m.content.length > MEMORY_CONTENT_CAP
           ? `${m.content.slice(0, MEMORY_CONTENT_CAP)}…`
           : m.content;
-        return `- ${m.title}: ${body.replace(/\s*\n\s*/g, ' ')}`;
+        const stale = m.staleNote ? ` (may be stale: ${m.staleNote})` : '';
+        return `- ${m.title}: ${body.replace(/\s*\n\s*/g, ' ')}${stale}`;
       })
       .join('\n');
     lines.push(`relevant project memory (retrieved — verify against current code before relying on it):\n${items}`);

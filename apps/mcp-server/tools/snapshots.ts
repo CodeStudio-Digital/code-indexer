@@ -42,7 +42,7 @@ const add_snapshot = defineTool({
     properties: {
       project_name: { type: 'string' },
       title: { type: 'string' },
-      category: { type: 'string', enum: ['architecture', 'decision', 'pattern', 'convention', 'todo', 'note'] },
+      category: { type: 'string', enum: ['architecture', 'decision', 'pattern', 'convention', 'todo', 'note', 'gotcha', 'procedure'] },
       content: { type: 'string' },
       tags: { type: 'array', items: { type: 'string' } },
       referenced_files: {
@@ -123,7 +123,7 @@ const update_snapshot = defineTool({
       project_name: { type: 'string' },
       snapshot_id: { type: 'number' },
       title: { type: 'string' },
-      category: { type: 'string', enum: ['architecture', 'decision', 'pattern', 'convention', 'todo', 'note'] },
+      category: { type: 'string', enum: ['architecture', 'decision', 'pattern', 'convention', 'todo', 'note', 'gotcha', 'procedure'] },
       content: { type: 'string' },
       tags: { type: 'array', items: { type: 'string' } },
       referenced_files: { type: 'array', items: { type: 'string' } },
@@ -365,7 +365,7 @@ const get_context_for = defineTool({
 const search_memory = defineTool({
   name: 'search_memory',
   description:
-    'Search PROJECT MEMORY (past decisions, conventions, gotchas, architecture, and auto-indexed facts) by meaning — hybrid FTS+vector. USE before exploring code; many answers are already remembered. DON\'T use for live file contents (use read_file). Pass format="json" for structured results.',
+    'Search PROJECT MEMORY (past decisions, conventions, gotchas, how-to recipes, architecture, and auto-indexed facts) by meaning — hybrid FTS+vector. USE before exploring code or figuring out how to run/build/test/deploy; many answers are already remembered. DON\'T use for live file contents (use read_file). Pass format="json" for structured results.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -405,13 +405,13 @@ const search_memory = defineTool({
 const save_memory = defineTool({
   name: 'save_memory',
   description:
-    'Save a DURABLE fact to PROJECT MEMORY for future sessions — a decision (and why), a convention, a non-obvious gotcha/constraint, or an architecture note. USE for things that stay true beyond the current task. DON\'T use for transient task state. Provide a specific title + 1-4 sentence content.',
+    'Save a DURABLE fact to PROJECT MEMORY for future sessions — a decision (and why), a convention, a non-obvious gotcha/constraint, a reusable how-to recipe, or an architecture note. USE for things that stay true beyond the current task. DON\'T use for transient task state. Provide a specific title + 1-4 sentence content.',
   inputSchema: {
     type: 'object',
     properties: {
       project_name: { type: 'string' },
       title: { type: 'string' },
-      category: { type: 'string', enum: ['architecture', 'decision', 'pattern', 'convention', 'todo', 'note'] },
+      category: { type: 'string', enum: ['architecture', 'decision', 'pattern', 'convention', 'todo', 'note', 'gotcha', 'procedure'] },
       content: { type: 'string' },
       referenced_files: {
         type: 'array', items: { type: 'string' },

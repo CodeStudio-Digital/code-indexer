@@ -14,7 +14,7 @@ import { pickChatFn } from '../quality/chat-dispatcher.js';
 import type { MemoryCandidate, MemoryDistiller, SessionMemoryInput } from './extractor.js';
 
 const CATEGORIES: ReadonlySet<SnapshotCategory> = new Set<SnapshotCategory>([
-  'architecture', 'decision', 'convention', 'pattern', 'todo', 'note',
+  'architecture', 'decision', 'convention', 'pattern', 'todo', 'note', 'gotcha', 'procedure',
 ]);
 
 export interface LlmMemoryDistillerOptions {

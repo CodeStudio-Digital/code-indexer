@@ -263,6 +263,58 @@ export function getFileMap(db: DB, sessionId: number): { read: string[]; changed
   return { read: [...read].slice(0, 200), changed: [...changed].slice(0, 200) };
 }
 
+/** Recent shell commands the agent ran this session (oldest→newest) with each
+ *  command's error flag. Powers procedure-recipe distillation + the run-success
+ *  gate. Reads `coder_tool_calls` with the same JOIN as {@link getFileMap}. */
+export function getCommandTrail(
+  db: DB,
+  sessionId: number,
+  limit = 40,
+): Array<{ command: string; isError: boolean }> {
+  const rows = db.prepare(`
+    SELECT tc.args_json AS args_json, tc.is_error AS is_error
+      FROM coder_tool_calls tc
+      JOIN coder_messages m ON m.id = tc.message_id
+     WHERE m.session_id = ?
+       AND tc.tool_name IN ('run_command','exec_command')
+     ORDER BY tc.id DESC
+     LIMIT ?
+  `).all(sessionId, limit) as Array<{ args_json: string; is_error: number }>;
+  const out: Array<{ command: string; isError: boolean }> = [];
+  for (const row of rows) {
+    const command = commandFromArgs(row.args_json);
+    if (command) out.push({ command, isError: row.is_error === 1 });
+  }
+  return out.reverse(); // oldest → newest
+}
+
+/** run_command stores the command under `command`; exec_command under `cmd`. */
+function commandFromArgs(argsJson: string): string {
+  try {
+    const a = JSON.parse(argsJson) as Record<string, unknown>;
+    const c = a.command ?? a.cmd ?? a.script;
+    return typeof c === 'string' ? c.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+/** True when the session ran ≥1 shell command and the MOST RECENT one did not
+ *  error — a conservative "the run reached a clean terminal state" signal that
+ *  gates procedure-recipe capture (don't mint recipes from a broken run). */
+export function didRunSucceed(db: DB, sessionId: number): boolean {
+  const row = db.prepare(`
+    SELECT tc.is_error AS is_error
+      FROM coder_tool_calls tc
+      JOIN coder_messages m ON m.id = tc.message_id
+     WHERE m.session_id = ?
+       AND tc.tool_name IN ('run_command','exec_command')
+     ORDER BY tc.id DESC
+     LIMIT 1
+  `).get(sessionId) as { is_error: number } | undefined;
+  return row !== undefined && row.is_error !== 1;
+}
+
 // ─── Composition: aggregate + injection payload ──────────────────
 
 export interface DriveAggregate {

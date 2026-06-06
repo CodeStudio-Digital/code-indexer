@@ -29,6 +29,17 @@ export interface SessionMemoryInput {
   decisions?: string[];
   summary?: string;
   filesTouched?: string[];
+  /**
+   * Errors hit and how they were resolved (from the compaction summarizer's
+   * `errors_and_fixes`). Consumed by the failure distiller to mint `gotcha`
+   * lessons; the positive distiller ignores it.
+   */
+  errorsAndFixes?: string[];
+  /**
+   * Ordered shell commands that ran successfully this run. Consumed by the
+   * procedure distiller to mint `procedure` recipes; other distillers ignore it.
+   */
+  toolTrail?: string[];
 }
 
 export interface MemoryDistiller {
@@ -67,6 +78,8 @@ export interface ExtractResult {
 
 const IMPORTANCE_FLOOR: Partial<Record<SnapshotCategory, number>> = {
   decision: 0.7,
+  procedure: 0.7,
+  gotcha: 0.65,
   convention: 0.6,
   architecture: 0.6,
   pattern: 0.5,

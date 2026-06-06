@@ -87,6 +87,42 @@ export function getStaleFiles(db: DB, snapshotId: number, projectId: number): st
   return stale;
 }
 
+/**
+ * Batched staleness for many snapshots in ONE grouped query — avoids the N+1
+ * of calling {@link getStaleFiles} per snapshot during retrieval ranking.
+ * Returns snapshot_id → { stale: changed file paths, total: referenced files }.
+ * Snapshots with no referenced files are absent from the map.
+ */
+export function getStaleFilesBatch(
+  db: DB,
+  snapshotIds: number[],
+  projectId: number,
+): Map<number, { stale: string[]; total: number }> {
+  const out = new Map<number, { stale: string[]; total: number }>();
+  if (snapshotIds.length === 0) return out;
+  const placeholders = snapshotIds.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    SELECT sf.snapshot_id, sf.file_path, sf.file_hash_at_creation, f.content_hash
+    FROM snapshot_files sf
+    LEFT JOIN files f ON f.project_id = ? AND f.path = sf.file_path
+    WHERE sf.snapshot_id IN (${placeholders})
+  `).all(projectId, ...snapshotIds) as {
+    snapshot_id: number;
+    file_path: string;
+    file_hash_at_creation: string;
+    content_hash: string | null;
+  }[];
+  for (const r of rows) {
+    let entry = out.get(r.snapshot_id);
+    if (!entry) { entry = { stale: [], total: 0 }; out.set(r.snapshot_id, entry); }
+    entry.total++;
+    if (r.content_hash === null || r.content_hash !== r.file_hash_at_creation) {
+      entry.stale.push(r.file_path);
+    }
+  }
+  return out;
+}
+
 export function getFiles(db: DB, snapshotId: number): string[] {
   const rows = db.prepare(
     'SELECT file_path FROM snapshot_files WHERE snapshot_id = ? ORDER BY file_path'

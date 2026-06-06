@@ -4,6 +4,7 @@ import { ProviderStore } from '@mcp/store/provider-store.js';
 import { CostTracker } from '@mcp/services/services/costs.js';
 import { SnapshotService } from '@mcp/services/services/snapshots.js';
 import { MemoryRetriever } from '@mcp/services/memory/retriever.js';
+import { createRunEndMemory, type RunEndMemory } from '@mcp/services/memory/run-end.js';
 import { DiffService } from '@mcp/services/services/differ.js';
 import { ExportService } from '@mcp/services/services/exporter.js';
 import { WebhookDispatcher } from '@mcp/services/services/webhooks.js';
@@ -144,6 +145,8 @@ export interface SearchDeps {
   hybridSearch: HybridSearch;
   /** Mem C — project-memory retrieval over snapshots (relevance × importance). */
   memoryRetriever: MemoryRetriever;
+  /** Mem C write-back — end-of-run durable-memory distillation (facts + gotchas). */
+  runEndMemory: RunEndMemory;
   /**
    * I2 — process-wide hot cache of recently-touched files. Always
    * constructed (so tools can `touch()` regardless of feature flag), but
@@ -566,6 +569,14 @@ export function createDeps(): ServerDeps {
   // per-stage telemetry. The references here are the same instances.
   const pipelineBindingsStore = new PipelineProviderBindingsStore(db.raw());
   const pipelineProviderResolver = new PipelineProviderResolver(pipelineBindingsStore, providerStore);
+  // Mem C write-back — distills durable memory (facts + `gotcha` lessons) at
+  // run-end. Reuses the snapshot writer + hybrid dedup + the resolver's
+  // `memory_extraction` binding. Passed into runCoder as `runEndMemory`.
+  const runEndMemory = createRunEndMemory({
+    writer: snapshotService,
+    search: hybridSearch,
+    resolver: pipelineProviderResolver,
+  });
 
   // Tool-selection plumbing. The embed adapter wraps the existing indexer
   // EmbeddingService into a single-text `EmbeddingFn`. ToolEmbeddingStore is
@@ -888,6 +899,7 @@ export function createDeps(): ServerDeps {
     vectorStore,
     hybridSearch,
     memoryRetriever,
+    runEndMemory,
     recentFilesSource,
     sessionStore,
     companyStore,

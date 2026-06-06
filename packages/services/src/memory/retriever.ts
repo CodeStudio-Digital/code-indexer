@@ -1,4 +1,5 @@
 import type { ContextSnapshot } from '@mcp/shared/types.js';
+import { recencyDecay } from '@mcp/candidate-pipeline';
 
 /**
  * Retrieves relevant project memory (snapshots) for the agent's current task,
@@ -27,11 +28,26 @@ export interface AccessMarker {
   markSnapshotAccessed(ids: number[]): void;
 }
 
+/**
+ * Optional staleness dependency — the CodeIndexDB satisfies it. When the
+ * `access` object lacks it (e.g. test fakes), retrieval skips the staleness
+ * discount + note and behaves as before.
+ */
+export interface StaleFilesBatch {
+  getStaleSnapshotFilesBatch(
+    ids: number[],
+    projectId: number,
+  ): Map<number, { stale: string[]; total: number }>;
+}
+
 export interface RetrievedMemory {
   id: string;
   title: string;
   content: string;
   importance: number;
+  /** Set when referenced files changed since the memory was recorded — the
+   *  injector surfaces it so the model treats the memory with suspicion. */
+  staleNote?: string;
 }
 
 export interface MemoryRetrieverOptions {
@@ -43,10 +59,22 @@ export interface MemoryRetrieverOptions {
   minQueryChars?: number;
 }
 
+// Decay/staleness scoring weights. The additive block (base+imp+rec+use) sums
+// to 1.0 — comparable in magnitude to the legacy `0.5 + 0.5*importance` — then
+// a MULTIPLICATIVE staleness discount scales the whole score, so a very-relevant
+// but stale memory drops below a fresh one (the thesis: memory must expire).
+const W_BASE = 0.4;
+const W_IMP = 0.3;
+const W_REC = 0.2;
+const W_USE = 0.1;
+const STALE_MAX = 0.5; // max trust discount when ALL referenced files changed
+const RECENCY_HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const USE_SATURATION = 20; // access_count at which the "frequently useful" term ~saturates
+
 export class MemoryRetriever {
   constructor(
     private readonly search: SnapshotSearch,
-    private readonly access: AccessMarker,
+    private readonly access: AccessMarker & Partial<StaleFilesBatch>,
     private readonly opts: MemoryRetrieverOptions = {},
   ) {}
 
@@ -60,13 +88,31 @@ export class MemoryRetriever {
     const hits = await this.search.searchSnapshotsHybrid(projectId, projectName, q, fetchK);
     if (hits.length === 0) return [];
 
-    // Blend semantic relevance (hybrid rank position) with stored importance,
-    // so a highly-relevant low-importance note can still beat a marginally-
-    // relevant high-importance one, but importance breaks near-ties.
-    const scored = hits.map((snap, i) => ({
-      snap,
-      score: (1 / (i + 1)) * (0.5 + 0.5 * clamp01(snap.importance ?? 0.5)),
-    }));
+    // Batched staleness over all candidates (one grouped query). Optional dep:
+    // when absent (test fakes) the discount + note are simply skipped.
+    let staleMap: Map<number, { stale: string[]; total: number }> | null = null;
+    if (this.access.getStaleSnapshotFilesBatch) {
+      try {
+        staleMap = this.access.getStaleSnapshotFilesBatch(hits.map((h) => h.id), projectId);
+      } catch {
+        staleMap = null; // staleness is best-effort — never fail retrieval over it
+      }
+    }
+
+    // Score = relevance × (importance + recency + frequency-of-use) × staleness
+    // discount. Relevance (hybrid rank) still dominates first-order; the rest
+    // breaks near-ties and lets a fresh memory beat a stale-but-relevant one.
+    const now = Date.now();
+    const scored = hits.map((snap, i) => {
+      const imp = clamp01(snap.importance ?? 0.5);
+      const ms = toMs(snap.last_accessed_at ?? snap.created_at);
+      const rec = ms != null ? recencyDecay(ms, { halfLifeMs: RECENCY_HALF_LIFE_MS, now }) : 0;
+      const use = clamp01(Math.log1p(snap.access_count ?? 0) / Math.log1p(USE_SATURATION));
+      const st = staleMap?.get(snap.id);
+      const staleMult = st && st.total > 0 ? 1 - STALE_MAX * Math.min(1, st.stale.length / st.total) : 1;
+      const relevance = 1 / (i + 1);
+      return { snap, st, score: relevance * (W_BASE + W_IMP * imp + W_REC * rec + W_USE * use) * staleMult };
+    });
     scored.sort((a, b) => b.score - a.score);
 
     const top = scored.slice(0, topK);
@@ -81,6 +127,7 @@ export class MemoryRetriever {
       title: t.snap.title,
       content: t.snap.content,
       importance: clamp01(t.snap.importance ?? 0.5),
+      staleNote: buildStaleNote(t.st?.stale),
     }));
   }
 }
@@ -88,4 +135,19 @@ export class MemoryRetriever {
 function clamp01(n: number): number {
   if (Number.isNaN(n)) return 0.5;
   return Math.max(0, Math.min(1, n));
+}
+
+/** Parse a SQLite `datetime('now')` string to epoch ms; null when unparseable. */
+function toMs(s: string | null): number | null {
+  if (!s) return null;
+  const ms = Date.parse(`${s.replace(' ', 'T')}Z`);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/** Human note for the injector when a memory's referenced files have changed. */
+function buildStaleNote(stale: string[] | undefined): string | undefined {
+  if (!stale || stale.length === 0) return undefined;
+  const shown = stale.slice(0, 3).join(', ');
+  const extra = stale.length > 3 ? ` (+${stale.length - 3} more)` : '';
+  return `${shown}${extra} changed since recorded`;
 }

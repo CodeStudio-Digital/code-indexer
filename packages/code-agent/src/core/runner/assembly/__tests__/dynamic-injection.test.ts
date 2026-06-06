@@ -167,6 +167,15 @@ describe('computeDynamicInjection', () => {
     expect(out!.reminder).toContain('…');
   });
 
+  it('marks a stale memory in the reminder', () => {
+    const out = computeDynamicInjection(baseCtx({
+      relevantMemory: [
+        { id: 'm1', title: 'PricingRule', content: 'rounding logic', staleNote: 'src/x.ts changed since recorded' },
+      ],
+    }));
+    expect(out!.reminder).toContain('(may be stale: src/x.ts changed since recorded)');
+  });
+
   it('returns null when the only memory was already injected', () => {
     expect(computeDynamicInjection(baseCtx({
       relevantMemory: [{ id: 'm1', title: 'Solo', content: 'a' }],

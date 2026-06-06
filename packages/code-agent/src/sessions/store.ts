@@ -150,6 +150,8 @@ export class SessionStore {
   recallInvestigationsByVector(sessionId: number, queryVec: Float32Array, limit?: number): sessionDrive.InvestigationRow[] { return sessionDrive.recallInvestigationsByVector(this.db, sessionId, queryVec, limit); }
   getDriveAggregate(sessionId: number): sessionDrive.DriveAggregate { return sessionDrive.getDriveAggregate(this.db, sessionId); }
   getDriveInjectionPayload(sessionId: number): sessionDrive.DriveInjectionPayload { return sessionDrive.getDriveInjectionPayload(this.db, sessionId); }
+  getCommandTrail(sessionId: number, limit?: number): Array<{ command: string; isError: boolean }> { return sessionDrive.getCommandTrail(this.db, sessionId, limit); }
+  didRunSucceed(sessionId: number): boolean { return sessionDrive.didRunSucceed(this.db, sessionId); }
 
   // ─── Tasks (migration 008) ─────────────────────────────────────
   recordTasks(input: tasks.RecordTasksInput): CoderTasksRow { return tasks.record(this.db, input); }

@@ -193,3 +193,30 @@ describe('session-drive file map + aggregate + injection', () => {
     expect(agg.tasks).toBeNull();
   });
 });
+
+describe('session-drive command trail + success gate', () => {
+  function addShellCall(toolName: string, args: object, isError = false): void {
+    db.prepare(`INSERT INTO coder_messages (session_id, role, content_json) VALUES (?, 'assistant', '[]')`).run(s1);
+    const messageId = Number((db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id);
+    db.prepare(
+      `INSERT INTO coder_tool_calls (message_id, tool_use_id, tool_name, args_json, is_error) VALUES (?, 'u', ?, ?, ?)`,
+    ).run(messageId, toolName, JSON.stringify(args), isError ? 1 : 0);
+  }
+
+  it('getCommandTrail extracts shell commands oldest→newest (ignoring non-shell tools)', () => {
+    addShellCall('run_command', { command: 'pnpm install' });
+    addShellCall('exec_command', { cmd: 'pnpm test' });
+    addShellCall('read_file', { path: 'a.ts' }); // not a shell tool → ignored
+    const trail = drive.getCommandTrail(db, s1);
+    expect(trail.map((c) => c.command)).toEqual(['pnpm install', 'pnpm test']);
+    expect(trail.every((c) => c.isError === false)).toBe(true);
+  });
+
+  it('didRunSucceed reflects the most recent shell command', () => {
+    expect(drive.didRunSucceed(db, s1)).toBe(false); // no commands yet
+    addShellCall('run_command', { command: 'pnpm test' }, false);
+    expect(drive.didRunSucceed(db, s1)).toBe(true);
+    addShellCall('run_command', { command: 'pnpm build' }, true); // last command errored
+    expect(drive.didRunSucceed(db, s1)).toBe(false);
+  });
+});

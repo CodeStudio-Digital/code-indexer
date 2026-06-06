@@ -188,7 +188,7 @@ export interface RunnerOptions {
   getRelevantProjectMemory?: (
     taskText: string,
     turn: number,
-  ) => Promise<ReadonlyArray<{ id: string; title: string; content: string }>>;
+  ) => Promise<ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>>;
   /**
    * True when this session has active (un-kept/un-reverted) file snapshots
    * worth a self-review. Consulted each turn by the dynamic-injection node to

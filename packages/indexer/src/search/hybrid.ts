@@ -17,6 +17,7 @@ import {
   type HybridSearchPipelineCandidate,
   type HybridSearchPipelineQuery,
 } from '@mcp/indexer/search/hybrid-pipeline.js';
+import { expandGraph } from '@mcp/indexer/search/graph-expansion-source.js';
 
 /** Diagnostic info returned alongside search results. */
 export interface SearchDiagnostics {
@@ -37,6 +38,11 @@ export interface SearchDiagnostics {
    * shape for downstream JSON consumers.
    */
   recentFilesCount?: number;
+  /**
+   * Number of neighbors contributed by the 1-hop graph-expansion stream
+   * (hybrid mode, `MCP_PIPELINES_GRAPH_EXPANSION=1`). Unset when off.
+   */
+  graphExpansionCount?: number;
 }
 
 const RRF_K = 60;
@@ -278,8 +284,21 @@ export class HybridSearch {
     hybridDiag.ftsCount = fts.length;
     if (recent.length > 0) hybridDiag.recentFilesCount = recent.length;
 
-    const merged = recent.length > 0
-      ? this.rrfMergeWithRecent(fts, vec, recent, limit * 2)
+    // 1-hop graph expansion (flag-gated, default OFF) — seeds from the primary
+    // FTS+vector union and surfaces callers/importers/imports as an extra stream.
+    const graph = this.runGraphSearch(projectId, [...fts, ...vec], type);
+    if (graph.length > 0) hybridDiag.graphExpansionCount = graph.length;
+
+    const merged = recent.length > 0 || graph.length > 0
+      ? this.rrfMergeStreams(
+          [
+            { name: 'fts', results: fts },
+            { name: 'vector', results: vec },
+            ...(recent.length > 0 ? [{ name: 'recent', results: recent }] : []),
+            ...(graph.length > 0 ? [{ name: 'graph', results: graph }] : []),
+          ],
+          limit * 2,
+        )
       : this.rrfMerge(fts, vec, limit * 2); // Over-fetch for re-ranking
 
     // Re-rank if a cross-encoder is configured
@@ -550,46 +569,35 @@ export class HybridSearch {
    * `HybridSearchResult` yet (it would touch shared types). The `recent`
    * stream's contribution is reflected in `diag.recentFilesCount`.
    */
-  private rrfMergeWithRecent(
-    ftsResults: HybridSearchResult[],
-    vectorResults: HybridSearchResult[],
-    recentResults: HybridSearchResult[],
+  private rrfMergeStreams(
+    streams: Array<{ name: string; results: HybridSearchResult[] }>,
     limit: number,
   ): HybridSearchResult[] {
     type Meta = { fts_rank: number | null; vector_score: number | null; original: HybridSearchResult };
     const meta = new Map<string, Meta>();
-    for (let rank = 0; rank < ftsResults.length; rank++) {
-      const r = ftsResults[rank];
-      const key = `${r.type}:${r.id}`;
-      if (!meta.has(key)) meta.set(key, { fts_rank: rank + 1, vector_score: null, original: r });
-      else meta.get(key)!.fts_rank = rank + 1;
-    }
-    for (let rank = 0; rank < vectorResults.length; rank++) {
-      const r = vectorResults[rank];
-      const key = `${r.type}:${r.id}`;
-      const existing = meta.get(key);
-      if (!existing) meta.set(key, { fts_rank: null, vector_score: r.vector_score, original: r });
-      else existing.vector_score = r.vector_score;
-    }
-    for (let rank = 0; rank < recentResults.length; rank++) {
-      const r = recentResults[rank];
-      const key = `${r.type}:${r.id}`;
-      // Recent doesn't override fts/vector meta — it just ensures a Meta
-      // exists so the merged candidate keeps its `data` reference. When
-      // a recent hit ALSO appears in fts or vector, the existing entry is
-      // preserved (richer metadata).
-      if (!meta.has(key)) meta.set(key, { fts_rank: null, vector_score: null, original: r });
+    // First stream to mention a candidate owns its `original` (richer metadata);
+    // fts/vector contribute their rank/score, other streams (recent, graph) just
+    // ensure the Meta exists so the merged candidate keeps its `data` reference.
+    for (const { name, results } of streams) {
+      for (let rank = 0; rank < results.length; rank++) {
+        const r = results[rank];
+        const key = `${r.type}:${r.id}`;
+        const existing = meta.get(key);
+        if (!existing) {
+          meta.set(key, {
+            fts_rank: name === 'fts' ? rank + 1 : null,
+            vector_score: name === 'vector' ? r.vector_score : null,
+            original: r,
+          });
+        } else {
+          if (name === 'fts' && existing.fts_rank === null) existing.fts_rank = rank + 1;
+          if (name === 'vector' && existing.vector_score === null) existing.vector_score = r.vector_score;
+        }
+      }
     }
 
-    const ftsRankable = ftsResults.map((r) => ({ candidateId: `${r.type}:${r.id}` }));
-    const vecRankable = vectorResults.map((r) => ({ candidateId: `${r.type}:${r.id}` }));
-    const recentRankable = recentResults.map((r) => ({ candidateId: `${r.type}:${r.id}` }));
     const merged = cpRrfMerge(
-      [
-        { name: 'fts', items: ftsRankable },
-        { name: 'vector', items: vecRankable },
-        { name: 'recent', items: recentRankable },
-      ],
+      streams.map((s) => ({ name: s.name, items: s.results.map((r) => ({ candidateId: `${r.type}:${r.id}` })) })),
       { k: RRF_K, limit },
     );
 
@@ -597,6 +605,26 @@ export class HybridSearch {
       const m = meta.get(candidateId)!;
       return { ...m.original, score: rrfScore, fts_rank: m.fts_rank, vector_score: m.vector_score };
     });
+  }
+
+  /**
+   * 1-hop graph-expansion stream (flag-gated). Short-circuits to empty unless
+   * `MCP_PIPELINES_GRAPH_EXPANSION=1`, so the merge stays bit-identical to the
+   * pre-graph path when off. Seeds from the primary FTS+vector union; pure SQL;
+   * best-effort (any error → empty, never breaks search).
+   */
+  private runGraphSearch(
+    projectId: number,
+    primary: HybridSearchResult[],
+    type: SearchType,
+  ): HybridSearchResult[] {
+    if (process.env.MCP_PIPELINES_GRAPH_EXPANSION !== '1') return [];
+    if (primary.length === 0) return [];
+    try {
+      return expandGraph(this.db, projectId, primary, type);
+    } catch {
+      return [];
+    }
   }
 
   /**

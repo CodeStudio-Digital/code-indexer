@@ -15,6 +15,8 @@ export interface Project {
   created_at: string;
   /** Owner — added by the Freemium gating layer (migration 104). */
   user_id?: string;
+  /** Per-project agent-memory toggle (migration 115; default 1 = on). */
+  memory_enabled?: number;
 }
 
 export interface ProjectStats {
@@ -37,6 +39,8 @@ export interface UpdateProjectInput {
   root_path?: string;
   node_version?: string | null;
   runner_shell?: string | null;
+  /** Per-project agent-memory toggle (Mem C write-back + retrieval). */
+  memory_enabled?: boolean;
 }
 
 export interface IndexProjectInput {

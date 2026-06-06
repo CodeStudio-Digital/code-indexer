@@ -63,6 +63,7 @@ export class CodeIndexDB {
   upsertFile(projectId: number, data: files.UpsertFileData): number { return files.upsert(this.db, projectId, data); }
   getFile(projectId: number, path: string): DBFile | undefined { return files.get(this.db, projectId, path); }
   getFileById(id: number): DBFile | undefined { return files.getById(this.db, id); }
+  getFileByPath(projectId: number, path: string): DBFile | undefined { return files.get(this.db, projectId, path); }
   listFiles(projectId: number, language?: string): DBFile[] { return files.list(this.db, projectId, language); }
   deleteFile(projectId: number, path: string): void { files.del(this.db, projectId, path); }
   deleteFilesByProject(projectId: number): void { files.delByProject(this.db, projectId); }
@@ -113,6 +114,7 @@ export class CodeIndexDB {
   }
   setSnapshotFiles(snapshotId: number, projectId: number, filePaths: string[]): { inserted: number; skipped: string[] } { return snapshots.setFiles(this.db, snapshotId, projectId, filePaths); }
   getStaleSnapshotFiles(snapshotId: number, projectId: number): string[] { return snapshots.getStaleFiles(this.db, snapshotId, projectId); }
+  getStaleSnapshotFilesBatch(ids: number[], projectId: number): Map<number, { stale: string[]; total: number }> { return snapshots.getStaleFilesBatch(this.db, ids, projectId); }
   getSnapshotFiles(snapshotId: number): string[] { return snapshots.getFiles(this.db, snapshotId); }
   updateSnapshot(id: number, updates: snapshots.UpdateSnapshotData): void { snapshots.update(this.db, id, updates); }
   updateSnapshotEmbeddingHash(id: number, hash: string): void { snapshots.updateEmbeddingHash(this.db, id, hash); }

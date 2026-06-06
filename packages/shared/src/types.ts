@@ -9,7 +9,7 @@ export type ProviderName =
   | 'zai'
   | 'kimi-code';
 
-export type SnapshotCategory = 'architecture' | 'decision' | 'pattern' | 'convention' | 'todo' | 'note';
+export type SnapshotCategory = 'architecture' | 'decision' | 'pattern' | 'convention' | 'todo' | 'note' | 'gotcha' | 'procedure';
 
 export type ExportFormat = 'markdown' | 'json';
 
@@ -60,6 +60,8 @@ export interface Project {
   model: string | null;
   embeddings_enabled: number;
   search_mode: SearchMode;
+  /** Per-project agent-memory toggle (migration 115; default 1 = on). */
+  memory_enabled: number;
   /** Chosen Node runtime id (e.g. 'managed:20.11.0'); null = system default. */
   node_version: string | null;
   /** Shell id the runner launches commands with (e.g. 'git-bash'); null = system default. */

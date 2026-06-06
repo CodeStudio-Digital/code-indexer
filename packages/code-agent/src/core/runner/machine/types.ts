@@ -218,7 +218,7 @@ export interface RunContext {
      * Project memory retrieved THIS turn (async, before assembly) so the
      * synchronous dynamic injector can include it. Reset each turn.
      */
-    pendingMemory?: ReadonlyArray<{ id: string; title: string; content: string }>;
+    pendingMemory?: ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>;
     /** Task text the pending memory was retrieved for (throttle key). */
     lastMemoryQuery?: string;
   };
@@ -366,7 +366,7 @@ export interface BridgeCallbacks {
   getRelevantProjectMemory?: (
     taskText: string,
     turn: number,
-  ) => Promise<ReadonlyArray<{ id: string; title: string; content: string }>>;
+  ) => Promise<ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>>;
   /**
    * Session Drive injection (migrations 125/126) — synchronous read of the
    * session's working memory: the active plan, pinned/recent notes, and a

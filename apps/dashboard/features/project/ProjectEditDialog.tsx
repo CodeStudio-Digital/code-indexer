@@ -32,6 +32,7 @@ interface Project {
   embeddings_enabled?: number;
   search_mode?: string;
   node_version?: string | null;
+  memory_enabled?: number;
 }
 
 interface ProjectEditDialogProps {
@@ -59,6 +60,7 @@ export default function ProjectEditDialog({
   const [embeddingsEnabled, setEmbeddingsEnabled] = useState(project.embeddings_enabled !== 0);
   const [searchMode, setSearchMode] = useState(project.search_mode ?? 'hybrid');
   const [nodeVersion, setNodeVersion] = useState<string | null>(project.node_version ?? null);
+  const [memoryEnabled, setMemoryEnabled] = useState(project.memory_enabled !== 0);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -85,7 +87,7 @@ export default function ProjectEditDialog({
     setError(null);
     setSaving(true);
     try {
-      const body: Record<string, string | number | null> = {};
+      const body: Record<string, string | number | boolean | null> = {};
       if (name !== project.name) body.name = name;
       if (rootPath !== project.root_path) body.root_path = rootPath;
       if (description !== (project.description ?? '')) body.description = description;
@@ -96,6 +98,7 @@ export default function ProjectEditDialog({
       if (newEmbeddings !== (project.embeddings_enabled ?? 1)) body.embeddings_enabled = newEmbeddings;
       if (searchMode !== (project.search_mode ?? 'hybrid')) body.search_mode = searchMode;
       if (nodeVersion !== (project.node_version ?? null)) body.node_version = nodeVersion;
+      if (memoryEnabled !== (project.memory_enabled !== 0)) body.memory_enabled = memoryEnabled;
 
       if (Object.keys(body).length === 0) {
         onOpenChange(false);
@@ -213,6 +216,20 @@ export default function ProjectEditDialog({
             <label className="text-sm font-medium">{t('projects:runtime.nodeLabel')}</label>
             <NodeVersionSelect value={nodeVersion} onChange={setNodeVersion} />
             <p className="text-xs text-muted-foreground">{t('projects:runtime.nodeHint')}</p>
+          </div>
+
+          {/* ── Agent Memory ── */}
+          <div className="border-t pt-4 space-y-1.5">
+            <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              {t('projects:edit.memorySettingsTitle')}
+            </h4>
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <label className="text-sm font-medium">{t('projects:edit.memoryLabel')}</label>
+                <p className="text-xs text-muted-foreground">{t('projects:edit.memoryHint')}</p>
+              </div>
+              <Switch checked={memoryEnabled} onCheckedChange={setMemoryEnabled} />
+            </div>
           </div>
 
           {error && <div className="text-sm text-destructive">{error}</div>}

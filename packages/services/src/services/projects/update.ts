@@ -13,6 +13,7 @@ export interface UpdateProjectInput {
   search_mode?: SearchMode;
   node_version?: string | null;
   runner_shell?: string | null;
+  memory_enabled?: boolean;
 }
 
 const VALID_SEARCH_MODES: ReadonlySet<string> = new Set(['fts', 'vector', 'hybrid']);
@@ -83,6 +84,12 @@ export class UpdateProjectService {
     if (patch.runner_shell !== undefined) {
       // Opaque shell id resolved at spawn time; empty string → system default.
       updates.runner_shell = patch.runner_shell || null;
+    }
+
+    if (patch.memory_enabled !== undefined) {
+      // Dedicated column setter (not part of the generic `updates` whitelist);
+      // safe alongside an empty `updates` since updateProject no-ops on [].
+      this.db.setProjectMemoryEnabled(id, patch.memory_enabled);
     }
 
     this.db.updateProject(id, updates);

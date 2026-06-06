@@ -34,6 +34,8 @@ export const CATEGORIES = [
   'convention',
   'todo',
   'note',
+  'gotcha',
+  'procedure',
 ] as const;
 
 export type SnapshotCategory = (typeof CATEGORIES)[number];
@@ -50,6 +52,8 @@ export const CATEGORY_COLORS: Record<string, string> = {
   convention: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200',
   todo: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200',
   note: 'bg-gray-100 text-gray-800 dark:bg-gray-700/60 dark:text-gray-200',
+  gotcha: 'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200',
+  procedure: 'bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-200',
 };
 
 /** Parse the JSON-stringified tags column, swallowing malformed payloads. */

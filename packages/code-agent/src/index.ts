@@ -7,6 +7,7 @@ import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { summarizeSpanV2, renderSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
 import { getGlobalToolSelectionFilter } from '@mcp/code-agent/tool-selection/global-filter.js';
 import { buildSystemPrompt } from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
@@ -1749,12 +1750,52 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // are stamped with the right turn number.
   runnerRef = runner;
 
+  // Durable-memory write-back (off the hot path). Reuses the structured
+  // summarizer to assemble the distiller signal from the finished run, then
+  // hands it to the host `runEndMemory` callback (positive facts + `gotcha`
+  // failure lessons). Best-effort; only meaningful when the host wired a
+  // writer and the project has memory enabled.
+  const captureRunEndMemory = async (succeeded: boolean): Promise<void> => {
+    const summary = await summarizeSpanV2(runner.messages, provider);
+    if (!summary) return;
+    // Recipe steps come only from a successful run's clean (non-error) commands.
+    const toolTrail = succeeded
+      ? store.getCommandTrail(session.id).filter((c) => !c.isError).map((c) => c.command)
+      : [];
+    await opts.runEndMemory!.extractAndPersist(project.id, project.name, {
+      primaryRequest: summary.primary_request || undefined,
+      summary: renderSummaryV2(summary),
+      filesTouched: summary.files_and_code.map((f) => f.path).filter(Boolean),
+      errorsAndFixes: summary.errors_and_fixes,
+      toolTrail,
+      succeeded,
+    });
+  };
+
   const donePromise = runner
     .run()
     .then(async (res) => {
       await flushPendingTurn();
       flushToolMessages();
       store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
+      // Distill durable memory BEFORE `.finally` closes the DB handles. Errored-
+      // but-resolved runs are included on purpose — that's where `gotcha`
+      // lessons come from. Time-bounded so a stalled LLM can't pin handles open.
+      if (
+        opts.runEndMemory &&
+        db.getProjectMemoryEnabled(project.id) &&
+        runner.messages.length >= 4 &&
+        (await opts.runEndMemory.isConfigured())
+      ) {
+        const succeeded = res.reason !== 'error' && store.didRunSucceed(session.id);
+        await Promise.race([
+          captureRunEndMemory(succeeded).catch(() => undefined),
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 30_000);
+            (timer as { unref?: () => void }).unref?.();
+          }),
+        ]);
+      }
       return { reason: res.reason, usage: res.totalUsage, error: lastRunnerError?.message };
     })
     .catch(async (e) => {

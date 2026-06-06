@@ -44,4 +44,11 @@ describe('parseMemoryCandidates', () => {
     );
     expect(out[0].referencedFiles).toEqual(['a.ts', 'b.ts']);
   });
+
+  it('accepts the gotcha category (failure lessons survive parsing)', () => {
+    const out = parseMemoryCandidates(
+      '[{"title":"Boom","content":"Symptom… Fix…","category":"gotcha","importance":0.7}]',
+    );
+    expect(out[0].category).toBe('gotcha');
+  });
 });

@@ -516,6 +516,8 @@ export function mountCoderStreamRoutes(
           mcpBearerResolver: deps.mcpBearerResolver,
           // Mem C — proactive project-memory injection (in-process path).
           memoryRetriever: deps.memoryRetriever,
+          // Mem C write-back — distill durable memory at run-end (in-process path).
+          runEndMemory: deps.runEndMemory,
           // Reuse the long-lived McpExternalPool from server boot so we
           // don't reconnect every external MCP server per chat turn.
           // The pool implements IMcpServerManager directly; runCoder
@@ -630,6 +632,8 @@ export function mountCoderStreamRoutes(
           mcpBearerResolver: deps.mcpBearerResolver,
           // Mem C — proactive project-memory injection (in-process path).
           memoryRetriever: deps.memoryRetriever,
+          // Mem C write-back — distill durable memory at run-end (in-process path).
+          runEndMemory: deps.runEndMemory,
           // Same pool reuse as the fresh-run path — `continue` resumes
           // an existing session, but we still spin a fresh runCoder()
           // call which would otherwise rebuild McpServerManager.

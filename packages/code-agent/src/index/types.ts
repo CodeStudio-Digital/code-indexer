@@ -36,7 +36,32 @@ export interface RunCoderOptions {
       projectId: number,
       projectName: string,
       taskText: string,
-    ): Promise<ReadonlyArray<{ id: string; title: string; content: string }>>;
+    ): Promise<ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>>;
+  };
+  /**
+   * Durable-memory write-back — host callback that distills durable project
+   * memory (decisions/conventions/architecture + `gotcha` failure lessons)
+   * from the FINISHED run and persists it, off the hot path. Structural to
+   * avoid a code-agent → services dependency (mirrors `memoryRetriever`).
+   * Invoked once in the run's done-block, gated on `memory_enabled`; the
+   * runner assembles the raw signal via its own summarizer. Best-effort.
+   */
+  runEndMemory?: {
+    extractAndPersist(
+      projectId: number,
+      projectName: string,
+      input: {
+        primaryRequest?: string;
+        summary?: string;
+        filesTouched?: string[];
+        errorsAndFixes?: string[];
+        toolTrail?: string[];
+        succeeded?: boolean;
+      },
+    ): Promise<void>;
+    /** True only when a distiller binding is configured — gate the costly
+     *  end-of-run summary on this so unconfigured projects pay nothing. */
+    isConfigured(): Promise<boolean>;
   };
   /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
   planMode?: boolean;
