@@ -4,6 +4,7 @@ import { mountCompanyTemplateRoutes } from './templates.js';
 import { mountCompanySessionRoutes } from './sessions.js';
 import { mountCompanyChildRoutes } from './children.js';
 import { mountCompanyStreamRoutes } from './stream.js';
+import { mountCompanyAgentControlRoutes } from './agents.js';
 import { mountCompanyBoardRoutes } from './board.js';
 import { mountCompanyKanbanRoutes } from './kanban.js';
 import { mountCompanyArchiveRoutes } from './archives.js';
@@ -29,6 +30,7 @@ export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanySessionRoutes(app, deps);
   mountCompanyChildRoutes(app, deps);
   mountCompanyStreamRoutes(app, deps);
+  mountCompanyAgentControlRoutes(app, deps);
   mountCompanyBoardRoutes(app, deps);
   mountCompanyKanbanRoutes(app, deps);
   mountCompanyArchiveRoutes(app, deps);

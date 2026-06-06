@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Check, ChevronDown, ChevronRight, Loader2, X } from 'lucide-react';
+import { Bot, Check, ChevronDown, ChevronRight, Loader2, Maximize2, X } from 'lucide-react';
 import type { AgentsGroup, ParallelAgent } from '../../../hooks/useAgentStream.js';
 import { Badge } from '../../../components/ui/badge.js';
 import { cn } from '../../../lib/utils.js';
-import { Markdown } from './Markdown.js';
+import { AgentDetailModal } from './AgentDetailModal.js';
 
 interface AgentsGroupBlockProps {
   group: AgentsGroup;
@@ -45,21 +45,13 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
 function AgentsGroupBlockInner({ group }: AgentsGroupBlockProps) {
   const { t } = useTranslation('chat');
   const [expanded, setExpanded] = useState(true);
-  const [expandedAgents, setExpandedAgents] = useState<Set<number>>(new Set());
+  const [openAgent, setOpenAgent] = useState<number | null>(null);
 
   const isRunning = group.status === 'running';
   const completedCount = group.agents.filter((a) => a.status === 'completed').length;
   const totalToolCalls = group.agents.reduce((sum, a) => sum + a.toolCallCount, 0);
   const providerLabel = formatProviderLabel(group.provider, group.model);
-
-  const toggleAgent = (index: number) => {
-    setExpandedAgents((prev) => {
-      const next = new Set(prev);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
-    });
-  };
+  const openAgentEntry = openAgent !== null ? group.agents.find((a) => a.index === openAgent) : undefined;
 
   return (
     <div className="my-2 rounded-lg border bg-muted/30 overflow-hidden text-xs">
@@ -87,7 +79,9 @@ function AgentsGroupBlockInner({ group }: AgentsGroupBlockProps) {
         </div>
         <Bot className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <span className="font-medium text-foreground">
-          {t('agentGroup.parallelAgents', { count: group.agents.length })}
+          {group.agents.length === 1
+            ? t('agentGroup.singleAgent', { defaultValue: 'subagent' })
+            : t('agentGroup.parallelAgents', { count: group.agents.length })}
         </span>
         <Badge variant="outline" className="shrink-0 tabular-nums">
           {t('agentGroup.toolCalls', { count: totalToolCalls })}
@@ -120,11 +114,20 @@ function AgentsGroupBlockInner({ group }: AgentsGroupBlockProps) {
             <AgentRow
               key={agent.index}
               agent={agent}
-              isExpanded={expandedAgents.has(agent.index)}
-              onToggle={() => toggleAgent(agent.index)}
+              onOpen={() => setOpenAgent(agent.index)}
             />
           ))}
         </div>
+      )}
+
+      {openAgentEntry && (
+        <AgentDetailModal
+          agent={openAgentEntry}
+          open
+          onOpenChange={(o) => {
+            if (!o) setOpenAgent(null);
+          }}
+        />
       )}
     </div>
   );
@@ -132,11 +135,10 @@ function AgentsGroupBlockInner({ group }: AgentsGroupBlockProps) {
 
 interface AgentRowProps {
   agent: ParallelAgent;
-  isExpanded: boolean;
-  onToggle: () => void;
+  onOpen: () => void;
 }
 
-function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
+function AgentRow({ agent, onOpen }: AgentRowProps) {
   const StatusIcon =
     agent.status === 'running' || agent.status === 'pending'
       ? Loader2
@@ -157,7 +159,8 @@ function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
   return (
     <div className="border-b last:border-b-0">
       <button
-        onClick={hasSummary ? onToggle : undefined}
+        onClick={hasSummary ? onOpen : undefined}
+        title={hasSummary ? 'Open agent detail' : undefined}
         className={cn(
           'w-full px-3 py-2 flex items-center gap-2 text-left transition-colors',
           hasSummary && 'hover:bg-muted/60 cursor-pointer',
@@ -165,12 +168,7 @@ function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
         )}
       >
         {hasSummary ? (
-          <ChevronRight
-            className={cn(
-              'h-3 w-3 text-muted-foreground transition-transform shrink-0',
-              isExpanded && 'rotate-90',
-            )}
-          />
+          <Maximize2 className="h-3 w-3 text-muted-foreground shrink-0" />
         ) : (
           <span className="w-3 shrink-0" />
         )}
@@ -201,19 +199,6 @@ function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
           </span>
         )}
       </button>
-      {isExpanded && hasSummary && (
-        <div className="px-4 pb-3 pt-1 border-t bg-background/50">
-          {agent.error ? (
-            <pre className="font-mono text-[11px] text-destructive whitespace-pre-wrap break-all">
-              {agent.error}
-            </pre>
-          ) : (
-            <div className="text-[11px] text-foreground/80">
-              <Markdown text={agent.summary!} />
-            </div>
-          )}
-        </div>
-      )}
       {agent.status === 'running' && (agent.progressNote || agent.phase || agent.lastToolName) && (
         <AgentActivityLine agent={agent} runningMeta={runningMeta} />
       )}

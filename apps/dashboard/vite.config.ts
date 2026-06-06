@@ -7,6 +7,15 @@ import { resolve } from 'node:path';
 const repoRoot = resolve(__dirname, '../..');
 const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as { version: string };
 
+// Dev ports live in an uncommon 7xxx range so they don't collide with the
+// usual 5173/3333 every other Vite/Node project grabs. Both stay overridable
+// via env. The proxy target derives from the API port (MCP_INDEX_PORT, same
+// var the backend reads in packages/shared config) so changing the API port
+// keeps the dashboard wired — without this the proxy would silently miss.
+const dashboardPort = Number(process.env.MCP_DASHBOARD_PORT ?? 7317);
+const apiPort = Number(process.env.MCP_INDEX_PORT ?? 7333);
+const apiTarget = `http://localhost:${apiPort}`;
+
 function pkgAliases(name: string, dir: string) {
   const base = resolve(repoRoot, 'packages', dir, 'src');
   return [
@@ -40,11 +49,13 @@ export default defineConfig({
   },
   server: {
     host: true,
-    port: 5173,
-    strictPort: true,
+    port: dashboardPort,
+    // Fall through to the next free port instead of hard-failing if the
+    // chosen port is taken (e.g. a second dashboard on the same machine).
+    strictPort: false,
     proxy: {
       '/api': {
-        target: 'http://localhost:3333',
+        target: apiTarget,
         changeOrigin: true,
         // SSE (text/event-stream) responses must NOT be buffered — http-proxy
         // defaults swallow chunked responses until close. Explicitly clear
@@ -74,7 +85,7 @@ export default defineConfig({
       // above; it's the standalone `/ws/*` routes that need this).
       // `ws: true` is mandatory for upgrade handshakes.
       '/ws': {
-        target: 'http://localhost:3333',
+        target: apiTarget,
         changeOrigin: true,
         ws: true,
       },

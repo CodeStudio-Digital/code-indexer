@@ -7,8 +7,20 @@ import { cn } from '../../../lib/utils.js';
 
 interface ToolCallBlockProps {
   call: ToolCallEvent;
+  /**
+   * Optional rich detail rendered in the expanded body INSTEAD of the raw
+   * input/result JSON. Used by the chat transcript to show answered
+   * interactive tools (submit_plan / ask_user) as their resolved card while
+   * keeping the block collapsed-by-default — the same affordance the image
+   * tools (view_image / preview_screenshot) use for their preview.
+   */
+  children?: React.ReactNode;
 }
 
+// NOTE: the comparator intentionally ignores `children`. It's only passed for
+// historical (resolved) blocks whose data is deterministic, so skipping a
+// re-render is correct. Including it would always differ (fresh JSX each
+// render) and defeat the memo for every tool block.
 export const ToolCallBlock = React.memo(ToolCallBlockInner, (prev, next) => {
   const a = prev.call;
   const b = next.call;
@@ -31,7 +43,7 @@ export const ToolCallBlock = React.memo(ToolCallBlockInner, (prev, next) => {
   );
 });
 
-function ToolCallBlockInner({ call }: ToolCallBlockProps) {
+function ToolCallBlockInner({ call, children }: ToolCallBlockProps) {
   const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
   const isMcp = call.name.startsWith('mcp__');
@@ -102,6 +114,11 @@ function ToolCallBlockInner({ call }: ToolCallBlockProps) {
               {call.progressNote}
             </div>
           )}
+          {/* Rich detail slot — replaces the raw input/result dump when provided. */}
+          {children ? (
+            <div className="mt-1">{children}</div>
+          ) : (
+            <>
           {call.input !== undefined && call.input !== null && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-2 mb-1">{t('messages.toolInput')}</div>
@@ -131,6 +148,8 @@ function ToolCallBlockInner({ call }: ToolCallBlockProps) {
                 />
               )}
             </div>
+          )}
+            </>
           )}
         </div>
       )}

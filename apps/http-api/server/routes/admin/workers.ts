@@ -30,7 +30,7 @@
  *
  * The response is intentionally tiny — purely metadata, no per-event
  * detail. The dashboard doesn't currently consume it; it's for
- * `curl http://localhost:5173/api/admin/workers | jq` during smoke
+ * `curl http://localhost:7317/api/admin/workers | jq` during smoke
  * testing.
  */
 import type { Hono } from 'hono';

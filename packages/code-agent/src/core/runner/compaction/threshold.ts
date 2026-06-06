@@ -36,8 +36,15 @@ export interface CompactionThresholdDecision {
  * pressão real para preservar fidelidade (90% deixava pouco espaço para
  * o LLM auxiliar trabalhar; 75% antecipa o resumo enquanto ainda há
  * 25% de janela disponível para o turno em curso).
+ *
+ * Fix B — desceu 0.75 → 0.70. A degradação de coerência observada na sessão
+ * 887 (gpt-5.5, janela 272k) já estava instalada por volta de ~150k = ~0.60
+ * da janela efetiva; 0.70 antecipa o resumo sem ser um número fixo (continua
+ * RELATIVO à janela: 0.70×272k≈176k, 0.70×1M=700k — escala com o modelo, ao
+ * contrário de um cap absoluto, que seria prematuro em 272k e absurdo em 1M).
+ * Env-ajustável por `triggerRatio` no call-site.
  */
-export const DEFAULT_TRIGGER_RATIO = 0.75;
+export const DEFAULT_TRIGGER_RATIO = 0.70;
 
 export function shouldCompact90(inp: CompactionThresholdInputs): CompactionThresholdDecision {
   const limits = deriveTokenLimits(inp.model);

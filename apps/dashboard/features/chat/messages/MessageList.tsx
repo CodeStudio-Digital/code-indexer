@@ -4,7 +4,7 @@ import type { AssistantTurn } from '../../../hooks/useAgentStream.js';
 import { Alert, AlertDescription } from '../../../components/ui/alert.js';
 import { INITIAL_PAGE_SIZE, LOAD_MORE_SIZE } from '../constants.js';
 import type { PersistedTasksState, PromptHandlers, SessionData } from '../types.js';
-import { groupMessages, isToolImagePlumbing, IMAGE_PRODUCER_TOOLS } from '../utils.js';
+import { groupMessages } from '../utils.js';
 import { AssistantBubble } from './AssistantBubble.js';
 import { GroupedToolBubble } from './GroupedToolBubble.js';
 import { MessageView } from './MessageView.js';
@@ -45,21 +45,12 @@ const PersistedMessages = React.memo(function PersistedMessages({
   streaming: boolean;
   onLoadEarlier?: (beforeId: number, limit?: number) => Promise<number>;
 }) {
-  // Build tool-result map once per sessionData change.
+  // Build tool-result map once per sessionData change. Tool-produced images
+  // (preview_screenshot / view_image) are rendered as their own image bubble
+  // (the synthetic user message), not paired inline here — that path proved
+  // fragile; the attachment renderer is the reliable one.
   const resultsById = useMemo(() => {
-    const m = new Map<
-      string,
-      { content: string; isError: boolean; image?: { mediaType: string; base64: string } }
-    >();
-    // tool_use_id → tool name, so we can map a synthetic tool-image bubble
-    // back onto the image-PRODUCING tool call (preview_screenshot/view_image).
-    const nameById = new Map<string, string>();
-    for (const msg of sessionData.messages) {
-      if (msg.role !== 'assistant') continue;
-      for (const b of msg.content) {
-        if (b.type === 'tool_use' && b.id) nameById.set(b.id, b.name ?? '');
-      }
-    }
+    const m = new Map<string, { content: string; isError: boolean }>();
     for (const msg of sessionData.messages) {
       if (msg.role !== 'tool') continue;
       for (const b of msg.content) {
@@ -72,33 +63,6 @@ const PersistedMessages = React.memo(function PersistedMessages({
             content: (b.content ?? '') + suffix,
             isError: Boolean(b.is_error),
           });
-        }
-      }
-    }
-    // Recover tool-produced images: the synthetic plumbing bubble that follows
-    // a tool message carries the screenshot(s). Pair them, in order, onto the
-    // image-producing tool calls of that preceding tool message so the image
-    // renders inline under the tool block on reload (matching the live stream).
-    const msgs = sessionData.messages;
-    for (let i = 1; i < msgs.length; i++) {
-      const cur = msgs[i];
-      const prev = msgs[i - 1];
-      if (!isToolImagePlumbing(cur) || prev.role !== 'tool') continue;
-      const images = cur.content.filter((b) => b.type === 'image' && b.base64);
-      if (images.length === 0) continue;
-      const producerIds = prev.content
-        .filter(
-          (b) =>
-            b.type === 'tool_result' &&
-            b.tool_use_id &&
-            IMAGE_PRODUCER_TOOLS.has(nameById.get(b.tool_use_id) ?? ''),
-        )
-        .map((b) => b.tool_use_id as string);
-      for (let k = 0; k < producerIds.length && k < images.length; k++) {
-        const entry = m.get(producerIds[k]);
-        const img = images[k];
-        if (entry && img.base64 && img.mediaType) {
-          entry.image = { mediaType: img.mediaType, base64: img.base64 };
         }
       }
     }

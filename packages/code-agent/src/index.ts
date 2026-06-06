@@ -22,6 +22,7 @@ import {
   SnapshotRecordingFilesystemPort,
 } from '@mcp/code-agent/ports/index.js';
 import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
+import { SessionFileReviewStore } from '@mcp/store/session-file-review-store.js';
 import { SandboxFilesystemAdapter } from '@mcp/services/sandbox/adapters/sandbox-filesystem-adapter.js';
 import { SandboxShellAdapter } from '@mcp/services/sandbox/adapters/sandbox-shell-adapter.js';
 import { planTools } from '@mcp/code-agent/tools/plan.js';
@@ -43,6 +44,7 @@ import { interactionTools } from '@mcp/code-agent/tools/interaction.js';
 import { buildExpandTools } from '@mcp/code-agent/tools/expand.js';
 import { buildFindToolsTool } from '@mcp/code-agent/tools/find-tools.js';
 import { buildRequestReviewTool } from '@mcp/code-agent/tools/request-review.js';
+import { buildSelfReviewTool } from '@mcp/code-agent/tools/self-review.js';
 import { McpToolBridge } from '@mcp/code-agent/tools/mcp-bridge.js';
 import { buildMcpResourceTools } from '@mcp/code-agent/tools/mcp-resources.js';
 import { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
@@ -73,12 +75,15 @@ import { diagnosticsTools } from '@mcp/code-agent/tools/diagnostics.js';
 import { lspTools } from '@mcp/code-agent/tools/lsp.js';
 import { execCommandTools } from '@mcp/code-agent/tools/exec-command.js';
 import { webTools } from '@mcp/code-agent/tools/web.js';
+import { httpTools } from '@mcp/code-agent/tools/http.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { todoTools, generateTodoId } from '@mcp/code-agent/tools/todo.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
 import { goalTools } from '@mcp/code-agent/tools/goal.js';
+import { buildSessionDriveTools } from '@mcp/code-agent/tools/session-drive-tools.js';
+import { getInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
 import { buildCodeExecTool } from '@mcp/code-agent/tools/code-exec.js';
 import { listAgentsTools } from '@mcp/code-agent/tools/list-agents.js';
 import { waitAgentsTools } from '@mcp/code-agent/tools/wait-agents.js';
@@ -284,17 +289,27 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(lspTools);
   registry.registerAll(execCommandTools);
   registry.registerAll(webTools);
+  registry.registerAll(httpTools);
   registry.registerAll(globTools);
   registry.registerAll(ragSearchDocsTools);
   registry.registerAll(todoTools);
   registry.registerAll(viewImageTools);
   registry.registerAll(previewTools);
   registry.registerAll(goalTools);
-  registry.registerAll(listAgentsTools);
-  registry.registerAll(waitAgentsTools);
-  registry.registerAll(sendMessageTools);
-  registry.registerAll(sendInputTools);
-  registry.registerAll(followupTaskTools);
+  // Session Drive — single-session working memory (read_plan / remember /
+  // list_memory / recall_investigations). Only outside company context:
+  // company sessions have the shared drive + board instead, and the tools
+  // need `ctx.sessionDrive` which is wired below for real (non-company)
+  // sessions. Bootstrap-tier (see tools/tiers.ts) so any mode can use them.
+  if (!opts.companyContext) {
+    registry.registerAll(buildSessionDriveTools());
+  }
+  // Cross-agent comm tools (list_agents / wait_agents / send_message /
+  // send_input / followup_task) were registered here UNCONDITIONALLY, so they
+  // fell through getToolTier → bootstrap and shipped on turn 1 of every SOLO
+  // session — where each errors or returns just-self (no peer to reach). Moved
+  // into the `if (opts.companyContext)` block below (P1) so solo prompts drop
+  // them entirely. Master/subordinate sessions are unaffected.
   // code_exec — registered last in the native batch so its tools-proxy
   // closes over a registry that already includes fs/git/web/lsp/glob/etc.
   // The proxy itself is rebuilt per invocation (`registry.list()` at call
@@ -497,6 +512,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // visible to master and every subordinate. Lets agents exchange large
     // documents without inflating board posts or inbox messages.
     registry.registerAll(buildSharedDriveTools());
+    // Cross-agent comm tools — available to master AND subordinates. Moved
+    // here from the unconditional native batch (P1): each errors or returns
+    // just-self without a company session, so registering them in solo
+    // sessions only bloated the prompt with peers that can't be reached.
+    registry.registerAll(listAgentsTools);
+    registry.registerAll(waitAgentsTools);
+    registry.registerAll(sendMessageTools);
+    registry.registerAll(sendInputTools);
+    registry.registerAll(followupTaskTools);
     // Subordinate kanban tools: self-service card updates (comment, checklist, move-to-review)
     if (!isMaster && agentRunId != null) {
       registry.registerAll(buildSubordinateKanbanTools(orchestrator, agentRole, agentRunId));
@@ -513,7 +537,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     }
     if (isMaster) {
-      registry.registerAll(buildMasterTools(orchestrator));
+      // review_subordinate_work needs in-process DB access to run the review
+      // pipeline over a subordinate's snapshots — supply the shared handle and
+      // a project-root resolver (same db/store already in scope here).
+      registry.registerAll(
+        buildMasterTools(orchestrator, {
+          dbHandle: store.getDb(),
+          getProjectRoot: (projectId: number) => db.getProject(projectId)?.root_path ?? null,
+        }),
+      );
       registry.registerAll(buildKanbanTools(orchestrator));
       // Master also gets the DS publish/status tools (it owns the publish step).
       if (config.features.designSystemEnabled) {
@@ -622,6 +654,19 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   });
   const fsPort = new SnapshotRecordingFilesystemPort(rawFsPort, recorder);
 
+  // self_review — runs the configured snapshot_review/reviewer pipeline over
+  // THIS session's active snapshots so the agent can validate its own work
+  // before claiming done. Registered after the subagent parentTools snapshot
+  // above so ephemeral subagents don't inherit it. Always available (bootstrap
+  // tier); the CODER_SELF_REVIEW toggle only governs the proactive reminder.
+  registry.register(
+    buildSelfReviewTool({
+      dbHandle: store.getDb(),
+      sessionId: session.id,
+      projectRoot: workspace.rootPath,
+    }),
+  );
+
   const toolContext: ToolContext = {
     cwd: effectiveCwd,
     projectName: workspace.displayName,
@@ -728,6 +773,51 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       } catch {
         return null;
       }
+    },
+    // Session Drive sinks (migrations 125/126) — back the read_plan /
+    // remember / list_memory / recall_investigations tools. Reads/writes
+    // are best-effort; failures degrade to null/empty rather than aborting
+    // the tool call.
+    sessionDrive: {
+      readActivePlan: () => {
+        try {
+          const p = store.listPlans(session.id)[0];
+          return p ? { text: p.plan_text, status: p.status } : null;
+        } catch {
+          return null;
+        }
+      },
+      remember: (input) => {
+        const row = store.rememberMemory(session.id, input);
+        return { title: row.title };
+      },
+      listMemory: (memOpts) => {
+        try {
+          return store.listSessionMemory(session.id, memOpts ?? {});
+        } catch {
+          return [];
+        }
+      },
+      recallInvestigations: async (query, limit) => {
+        // Semantic first (in-process embedder; worker/no-embedder → keyword).
+        try {
+          const embed = getInvestigationEmbedder();
+          if (embed) {
+            const vec = await embed(query);
+            if (vec && vec.length > 0) {
+              const hits = store.recallInvestigationsByVector(session.id, vec, limit);
+              if (hits.length > 0) return hits;
+            }
+          }
+        } catch {
+          /* fall through to keyword */
+        }
+        try {
+          return store.recallInvestigations(session.id, query, limit);
+        } catch {
+          return [];
+        }
+      },
     },
     companyContext: opts.companyContext,
     // Coder session id — keys per-agent resources (preview/devtools window).
@@ -919,6 +1009,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     repoMap,
     agentLoopV2: agentLoopV2EnvFlag,
     agentId: effectiveAgentId ?? undefined,
+    sessionDrive: !opts.companyContext,
   });
 
   // Append company prompt block (master orchestration or subordinate instructions)
@@ -1185,6 +1276,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // to disable.
   const agentLoopV2 = agentLoopV2EnvFlag;
 
+  // Fix A — self_review nudge signals. Reuses `snapshotStore` (active
+  // baselines) + a review store (auto-review runs) so the Executing node only
+  // nudges when there are UNREVIEWED changes — instead of every turn that has
+  // any pending snapshot (forever, since `self_review` never closes them).
+  const reviewStore = new SessionFileReviewStore(store.getDb());
+  // SQLite `datetime('now')` is UTC `YYYY-MM-DD HH:MM:SS` → ms-epoch.
+  const sqliteToMs = (s: string | null): number | null => {
+    if (!s) return null;
+    const ms = Date.parse(`${s.replace(' ', 'T')}Z`);
+    return Number.isNaN(ms) ? null : ms;
+  };
+
   const runner = new CoderRunner({
     provider,
     registry,
@@ -1194,6 +1297,40 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     sessionId: session.id,
     sessionStore: store,
     skillStore,
+    // self_review reminder signal — true when this session has active
+    // (un-kept/un-reverted) snapshots worth validating. Drives the
+    // CODER_SELF_REVIEW system-reminder nudge in the Executing node.
+    hasReviewableChanges: () => {
+      try {
+        return snapshotStore.listActiveBaselineIds('coder', session.id).length > 0;
+      } catch {
+        return false;
+      }
+    },
+    // Fix A — richer self_review signals (pending-change fingerprint + last
+    // auto-review marker) so the nudge fires only for UNREVIEWED changes and
+    // hard-stops after a cap. Best-effort: any read error → null (node falls
+    // back to `hasReviewableChanges`).
+    collectSelfReviewSignals: () => {
+      try {
+        const actives = snapshotStore.listBaselines('coder', session.id);
+        const editMs = actives
+          .map((b) => sqliteToMs(b.last_edited_at))
+          .filter((n): n is number => n != null);
+        const lastEditAt = editMs.length ? Math.max(...editMs) : null;
+        const pendingFingerprint = actives.length ? `${actives.length}:${lastEditAt ?? 0}` : '';
+        const autoCompleted = reviewStore
+          .listRuns('coder', session.id)
+          .filter((r) => r.source === 'auto' && r.status === 'completed');
+        const reviewMs = autoCompleted
+          .map((r) => sqliteToMs(r.completed_at))
+          .filter((n): n is number => n != null);
+        const lastReviewAt = reviewMs.length ? Math.max(...reviewMs) : null;
+        return { pendingFingerprint, lastEditAt, lastReviewAt, totalAutoReviews: autoCompleted.length };
+      } catch {
+        return null;
+      }
+    },
     // Mem C — proactive project-memory retrieval. Wired only when the host
     // provided a retriever AND this project has memory enabled (migration 115);
     // the Executing node awaits it before assembly and injects relevant memory.
@@ -1201,6 +1338,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       opts.memoryRetriever && db.getProjectMemoryEnabled(project.id)
         ? (taskText: string) => opts.memoryRetriever!.retrieve(project.id, project.name, taskText)
         : undefined,
+    // Session Drive injection (migrations 125/126) — non-company sessions
+    // only. Surfaces the active plan + saved notes + investigation count so
+    // they survive compaction. Best-effort: any read error → no injection.
+    getSessionDriveInjection: opts.companyContext
+      ? undefined
+      : () => {
+          try {
+            return store.getDriveInjectionPayload(session.id);
+          } catch {
+            return null;
+          }
+        },
     // (assignment below) — keeps recorder in sync with runner.turn
     // even though the runner is constructed after recorder. The recorder
     // reads `runnerRef?.turn` lazily, so this assignment closes the loop.

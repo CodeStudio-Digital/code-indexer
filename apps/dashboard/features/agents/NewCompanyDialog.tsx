@@ -6,6 +6,7 @@ import { useProviders } from '../../hooks/useProviders.js';
 import { FallbackPicker } from '../../components/FallbackPicker.js';
 import { AllowedModelsEditor } from './new-company-dialog/AllowedModelsEditor.js';
 import { BuilderModeSection } from './new-company-dialog/BuilderModeSection.js';
+import { OperationalRulesField } from './new-company-dialog/OperationalRulesField.js';
 import {
   resolveLimitsFromForm,
   type BuilderStack,
@@ -71,6 +72,9 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
    * spends a turn processing it.
    */
   const [masterBroadcastSubscribe, setMasterBroadcastSubscribe] = useState(false);
+  // Session-level operational rules (free-text markdown) — injected verbatim
+  // into the master and every subordinate prompt. Empty = legacy behavior.
+  const [operationalRules, setOperationalRules] = useState('');
   const [creating, setCreating] = useState(false);
 
   const selectedTemplate = templates?.find((t) => t.id === selectedTemplateId);
@@ -185,6 +189,9 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
         // Phase B "master observer": include only when on; absence keeps
         // the legacy session shape intact.
         ...(masterBroadcastSubscribe ? { master_broadcast_subscribe: true } : {}),
+        // Operational rules — only when non-blank; keeps the legacy payload
+        // shape otherwise.
+        ...(operationalRules.trim() ? { operational_rules: operationalRules.trim() } : {}),
         // Only send `builder` when the user picked a real stack. Leaving
         // the field absent keeps the payload identical to the legacy
         // format, so nothing about non-builder sessions changes server-side.
@@ -510,6 +517,9 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
               </span>
             </span>
           </label>
+
+          {/* Operational rules — session-wide policy injected into every agent */}
+          <OperationalRulesField value={operationalRules} onChange={setOperationalRules} />
         </div>
 
         {/* Footer */}

@@ -15,6 +15,7 @@ import designSystemsPtBR from './locales/pt-BR/designSystems.json';
 import workspacePtBR from './locales/pt-BR/workspace.json';
 import pluginsPtBR from './locales/pt-BR/plugins.json';
 import trainingPtBR from './locales/pt-BR/training.json';
+import settingsPtBR from './locales/pt-BR/settings.json';
 
 import commonEn from './locales/en/common.json';
 import adminEn from './locales/en/admin.json';
@@ -29,6 +30,7 @@ import designSystemsEn from './locales/en/designSystems.json';
 import workspaceEn from './locales/en/workspace.json';
 import pluginsEn from './locales/en/plugins.json';
 import trainingEn from './locales/en/training.json';
+import settingsEn from './locales/en/settings.json';
 
 i18n
   .use(LanguageDetector)
@@ -49,6 +51,7 @@ i18n
         workspace: workspacePtBR,
         plugins: pluginsPtBR,
         training: trainingPtBR,
+        settings: settingsPtBR,
       },
       en: {
         common: commonEn,
@@ -64,6 +67,7 @@ i18n
         workspace: workspaceEn,
         plugins: pluginsEn,
         training: trainingEn,
+        settings: settingsEn,
       },
     },
     fallbackLng: 'pt-BR',

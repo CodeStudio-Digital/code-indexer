@@ -11,6 +11,8 @@ import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { Markdown } from './Markdown.js';
 import { TaskExecutionBlock } from './TaskExecutionBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
+import { TodoWriteBlock } from './TodoWriteBlock.js';
+import { SelfReviewBlock } from './SelfReviewBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 import { ActivityLineBlock } from '../../../components/stream/ActivityLineBlock.js';
 
@@ -112,6 +114,31 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
   if (block.type === 'tool') {
     if (isGoalTool(block.call.name)) {
       return <GoalCallBlock key={`tc-${block.call.id}`} call={block.call} />;
+    }
+    // todo_write / update_todo: render the checklist inside the collapsed tool
+    // block (consistent with the historical transcript) instead of raw JSON.
+    if (
+      (block.call.name === 'todo_write' || block.call.name === 'update_todo') &&
+      block.call.result &&
+      !block.call.result.isError
+    ) {
+      return (
+        <ToolCallBlock key={`tc-${block.call.id}`} call={block.call}>
+          <TodoWriteBlock text={block.call.result.content} />
+        </ToolCallBlock>
+      );
+    }
+    // self_review / review_subordinate_work: render the findings list.
+    if (
+      (block.call.name === 'self_review' || block.call.name === 'review_subordinate_work') &&
+      block.call.result &&
+      !block.call.result.isError
+    ) {
+      return (
+        <ToolCallBlock key={`tc-${block.call.id}`} call={block.call}>
+          <SelfReviewBlock text={block.call.result.content} />
+        </ToolCallBlock>
+      );
     }
     return <ToolCallBlock key={`tc-${block.call.id}`} call={block.call} />;
   }

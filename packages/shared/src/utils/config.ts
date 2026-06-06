@@ -89,7 +89,7 @@ const DEFAULT_CONFIG: IndexerConfig = {
     designSystemEnabled: true,
   },
   dashboard: {
-    port: 3333,
+    port: 7333,
     host: '0.0.0.0',
   },
   mcp: {

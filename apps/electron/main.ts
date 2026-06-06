@@ -32,6 +32,20 @@ import type { Hono } from 'hono';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ─── Main-process safety net ─────────────────────────────────────
+// A stray throw/rejection from a BACKGROUND feature (preview/devtools CDP,
+// an MCP pool, a fire-and-forget task) must never take down the whole IDE.
+// Log loudly (so the real error is visible) but keep the editor alive. This
+// is the desktop-app posture: the user's session is worth far more than
+// crashing on a non-critical async failure. (The coder worker has its own
+// classifier — see coder-worker.ts — this only covers the main process.)
+process.on('uncaughtException', (err) => {
+  console.error('[electron-main] uncaughtException (kept alive):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[electron-main] unhandledRejection (kept alive):', reason);
+});
+
 const DEV_URL = process.env.MCP_ELECTRON_DEV_URL;
 // `.cjs` (not `.js`) because root package.json has "type": "module";
 // Electron's preload loader respects that and would otherwise try to

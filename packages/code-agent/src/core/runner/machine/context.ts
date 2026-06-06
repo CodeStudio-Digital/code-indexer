@@ -16,6 +16,8 @@ import type { RecoveryKind } from '../recovery-config.js';
 import type { BridgeCallbacks, RunContext } from './types.js';
 import { AsyncOperationRegistry } from '../operations.js';
 import { emptyFailureStreakState } from '../guards/failure-streak.js';
+import { createDoomLoopState } from '../guards/doom-loop.js';
+import { createDominanceState } from '../guards/dominance.js';
 
 export interface CreateRunContextArgs {
   opts: RunnerOptions;
@@ -75,6 +77,15 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     // `executing-dispatch.ts` after every tool result; cleared per tool
     // on the first `isError=false`.
     failureStreaks: emptyFailureStreakState(),
+    // P0 — per-turn doom-loop + dominance rolling windows. Mutated by
+    // ExecutingNode after each turn's dispatch; reset only when a guard fires.
+    doomLoop: createDoomLoopState(),
+    dominance: createDominanceState(),
+    // Fix B — loop-aware compaction signals start at zero; ExecutingNode
+    // advances them each turn, CompactingNode checkpoints/resets on collapse.
+    consecutiveNoTextTurns: 0,
+    cumulativeInputTokens: 0,
+    cumulativeAtLastCompaction: 0,
     // PR-F — dynamic-injection state starts empty; Executing/Compacting
     // mutate it as they emit reminders / compact.
     injectionState: {
@@ -82,6 +93,10 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
       lastInjectedFiles: new Set<string>(),
       recentCompactionAt: null,
       lastInjectedMemoryIds: new Set<string>(),
+      lastInjectedSessionMemoryIds: new Set<string>(),
+      // Fix A — self_review nudge gate state (empty = nudge allowed once
+      // there are unreviewed pending changes).
+      selfReview: { suppressed: false },
     },
   };
 }

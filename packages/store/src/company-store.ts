@@ -86,6 +86,7 @@ export class CompanyStore {
   listArchivedAgentRuns(archiveId: number): CompanyAgentRun[] { return agentRuns.listArchived(this.db, archiveId); }
   updateAgentRunProvider(id: number, provider: string, model: string): void { agentRuns.updateProvider(this.db, id, provider, model); }
   updateAgentRunStatus(id: number, status: AgentRunStatus, statusMessage?: string): void { agentRuns.updateStatus(this.db, id, status, statusMessage); }
+  deleteAgentRun(id: number): void { agentRuns.remove(this.db, id); }
   recoverStaleAgentRuns(): { agentRuns: number; companySessions: number } { return agentRuns.recoverStale(this.db); }
 
   // ─── Board ─────────────────────────────────────────────────────

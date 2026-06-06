@@ -7,6 +7,7 @@ import { cn } from '../../../lib/utils.js';
 import { providerAccent } from '../constants.js';
 import { PlanPromptView } from '../prompts/PlanPromptView.js';
 import { QuestionPromptView } from '../prompts/QuestionPromptView.js';
+import { SpecPromptView } from '../prompts/SpecPromptView.js';
 import { TaskListReview } from '../prompts/TaskListReview.js';
 import type {
   ContentBlock,
@@ -20,6 +21,8 @@ import { CopyMarkdownButton } from './CopyMarkdownButton.js';
 import { Markdown } from './Markdown.js';
 import { TaskExecutionBlock, parseExecuteTasksResult } from './TaskExecutionBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
+import { TodoWriteBlock } from './TodoWriteBlock.js';
+import { SelfReviewBlock } from './SelfReviewBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 
 interface MessageViewProps {
@@ -141,7 +144,14 @@ function UserMessage({
   tokenBadge: React.ReactNode;
   onFork?: () => void;
 }) {
-  const text = message.content.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n');
+  // Suppress the synthetic tool-image plumbing caption ("(Image(s) attached
+  // from the tool call above.)") so a tool screenshot renders as a clean image
+  // bubble. The string is the sentinel emitted by executing.ts.
+  const TOOL_IMG_SENTINEL = '(Image(s) attached from the tool call above.)';
+  const text = message.content
+    .filter((b) => b.type === 'text' && (b.text ?? '').trim() !== TOOL_IMG_SENTINEL)
+    .map((b) => b.text ?? '')
+    .join('\n');
   const images = message.content.filter((b) => b.type === 'image');
   const docs = message.content.filter((b) => b.type === 'document');
   const hasStripped = useMemo(
@@ -397,6 +407,12 @@ function AttachmentDoc({
   );
 }
 
+// Resolved (historical) interactive cards render no action buttons, so these
+// handlers are never actually invoked — they just satisfy the required props.
+const noopPlanResponse = async (): Promise<void> => {};
+const noopAnswer = async (): Promise<void> => {};
+const noopSpecResponse = async (): Promise<void> => {};
+
 export function renderAssistantBlock(
   b: ContentBlock,
   i: number,
@@ -435,16 +451,37 @@ export function renderAssistantBlock(
 
   const result = toolResultsById.get(b.id ?? '');
 
-  // Pending native interaction tools (no result yet) → render the
-  // interactive prompt so refresh / tab-switch can resume the flow.
-  if (!result && b.name === 'submit_plan') {
+  // Native interaction tools. While PENDING (no result) → interactive prompt so
+  // refresh / tab-switch can resume the flow. Once ANSWERED → collapsed-by-default
+  // ToolCallBlock whose expanded body is the resolved card (no raw JSON dump).
+  if (b.name === 'submit_plan') {
     const planText = String((b.input as { plan?: unknown })?.plan ?? '');
+    if (!result) {
+      return (
+        <PlanPromptView
+          key={`pl-${b.id}-${i}`}
+          plan={{ id: b.id ?? `pl-${i}`, plan: planText }}
+          onResponse={handlers.onPlanResponse}
+        />
+      );
+    }
+    const resolved: 'approved' | 'rejected' = result.content.startsWith('Plan approved')
+      ? 'approved'
+      : 'rejected';
+    const tc: ToolCallEvent = {
+      id: b.id ?? '',
+      name: b.name ?? '',
+      input: b.input,
+      result: { content: result.content, isError: result.isError },
+      status: result.isError ? 'error' : 'done',
+    };
     return (
-      <PlanPromptView
-        key={`pl-${b.id}-${i}`}
-        plan={{ id: b.id ?? `pl-${i}`, plan: planText }}
-        onResponse={handlers.onPlanResponse}
-      />
+      <ToolCallBlock key={`pl-${b.id}-${i}`} call={tc}>
+        <PlanPromptView
+          plan={{ id: b.id ?? `pl-${i}`, plan: planText, resolved }}
+          onResponse={noopPlanResponse}
+        />
+      </ToolCallBlock>
     );
   }
 
@@ -499,32 +536,136 @@ export function renderAssistantBlock(
     );
   }
 
-  if (!result && b.name === 'ask_user') {
+  if (b.name === 'ask_user') {
     const inp = (b.input ?? {}) as {
       question?: string;
       options?: Array<{ label: string; value: string }>;
       allow_freeform?: boolean;
     };
+    if (!result) {
+      return (
+        <QuestionPromptView
+          key={`qq-${b.id}-${i}`}
+          question={{
+            id: b.id ?? `q-${i}`,
+            question: String(inp.question ?? ''),
+            options: inp.options,
+            allowFreeform: Boolean(inp.allow_freeform),
+          }}
+          onAnswer={handlers.onAnswer}
+        />
+      );
+    }
+    // Answered → collapsed rich block. Result text is `User answered: <answer>`.
+    const answer = result.content.replace(/^User answered:\s*/, '');
+    const tc: ToolCallEvent = {
+      id: b.id ?? '',
+      name: b.name ?? '',
+      input: b.input,
+      result: { content: result.content, isError: result.isError },
+      status: result.isError ? 'error' : 'done',
+    };
     return (
-      <QuestionPromptView
-        key={`qq-${b.id}-${i}`}
-        question={{
-          id: b.id ?? `q-${i}`,
-          question: String(inp.question ?? ''),
-          options: inp.options,
-          allowFreeform: Boolean(inp.allow_freeform),
-        }}
-        onAnswer={handlers.onAnswer}
-      />
+      <ToolCallBlock key={`qq-${b.id}-${i}`} call={tc}>
+        <QuestionPromptView
+          question={{
+            id: b.id ?? `q-${i}`,
+            question: String(inp.question ?? ''),
+            options: inp.options,
+            allowFreeform: Boolean(inp.allow_freeform),
+            resolved: answer,
+          }}
+          onAnswer={noopAnswer}
+        />
+      </ToolCallBlock>
     );
   }
 
+  // submit_spec (SDD mode): same live-vs-history split as submit_plan. Pending →
+  // interactive SpecPromptView; answered → collapsed rich block (no raw JSON).
+  if (b.name === 'submit_spec') {
+    const inp = (b.input ?? {}) as { name?: string; body?: string };
+    const name = String(inp.name ?? '');
+    const body = String(inp.body ?? '');
+    if (!result) {
+      return (
+        <SpecPromptView
+          key={`sp-${b.id}-${i}`}
+          spec={{ id: b.id ?? `sp-${i}`, name, body, spec_path: '' }}
+          onResponse={handlers.onSpecResponse ?? noopSpecResponse}
+        />
+      );
+    }
+    const resolved: 'approved' | 'rejected' = result.content.startsWith('Spec approved')
+      ? 'approved'
+      : 'rejected';
+    // The approved-result text embeds the path: "Spec approved by user at <path>."
+    const specPath = /Spec approved by user at (.+?)\./.exec(result.content)?.[1] ?? '';
+    const tc: ToolCallEvent = {
+      id: b.id ?? '',
+      name: b.name ?? '',
+      input: b.input,
+      result: { content: result.content, isError: result.isError },
+      status: result.isError ? 'error' : 'done',
+    };
+    return (
+      <ToolCallBlock key={`sp-${b.id}-${i}`} call={tc}>
+        <SpecPromptView
+          spec={{ id: b.id ?? `sp-${i}`, name, body, spec_path: specPath, resolved }}
+          onResponse={noopSpecResponse}
+        />
+      </ToolCallBlock>
+    );
+  }
+
+  // todo_write / update_todo: render the checklist instead of raw JSON. Both
+  // tools emit the same list text in the result; parse that. Collapsed by
+  // default like the other rich history blocks.
+  if (b.name === 'todo_write' || b.name === 'update_todo') {
+    const tc: ToolCallEvent = {
+      id: b.id ?? '',
+      name: b.name ?? '',
+      input: b.input,
+      result: result
+        ? { content: result.content, isError: result.isError }
+        : undefined,
+      status: result ? (result.isError ? 'error' : 'done') : 'running',
+    };
+    if (result && !result.isError) {
+      return (
+        <ToolCallBlock key={`td-${b.id}-${i}`} call={tc}>
+          <TodoWriteBlock text={result.content} />
+        </ToolCallBlock>
+      );
+    }
+    // No result yet, or an error → generic block (nothing rich to show).
+    return <ToolCallBlock key={`td-${b.id}-${i}`} call={tc} />;
+  }
+
   // spawn_agents: render the rich parallel-agents group instead of raw JSON.
-  if (b.name === 'spawn_agents') {
+  // The tool is named `spawn_agent` (singular); it dispatches 1 or N agents.
+  // (`spawn_agents` kept for any legacy persisted data.)
+  if (b.name === 'spawn_agent' || b.name === 'spawn_agents') {
     const group = parsePersistedAgentsGroup(b.input, result);
     if (group) {
       return <AgentsGroupBlock key={`ag-${b.id}-${i}`} group={group} />;
     }
+  }
+
+  // Review tools: render the findings list instead of a raw text dump.
+  if ((b.name === 'self_review' || b.name === 'review_subordinate_work') && result && !result.isError) {
+    const tc: ToolCallEvent = {
+      id: b.id ?? '',
+      name: b.name ?? '',
+      input: b.input,
+      result: { content: result.content, isError: result.isError },
+      status: 'done',
+    };
+    return (
+      <ToolCallBlock key={`rv-${b.id}-${i}`} call={tc}>
+        <SelfReviewBlock text={result.content} />
+      </ToolCallBlock>
+    );
   }
 
   if (b.name === 'execute_tasks' && result && !result.isError) {
@@ -711,11 +852,13 @@ function parsePersistedAgentsGroup(
   const agents = (input as { agents?: unknown[] })?.agents;
   if (!Array.isArray(agents) || agents.length === 0) return null;
 
-  // Parse per-agent results from the combined result text.
-  // Format: "### Agent N: <label>\n[reason=... tools=N input=N output=N]\n<summary>"
+  // Per-agent results parsed from the combined result text. Two shapes:
+  //  - parallel (N>1): "### Agent N: <label>\n[type=… reason=… tools=… input=… output=…]\n<summary>"
+  //  - single  (N=1):  "[subagent provider=… model=… type=… reason=… input=… output=… cache_hit=…]\n\n<report>"
   const agentResults = new Map<number, {
     provider?: string;
     model?: string;
+    type?: string;
     reason: string;
     tools: number;
     input: number;
@@ -725,28 +868,52 @@ function parsePersistedAgentsGroup(
   const groupProviderMatch = result?.content?.match(
     /\[parallel agents:[^\]]*provider=([^\s,\]]+)\s+model=([^\s,\]]+)/,
   );
-  const groupProvider = groupProviderMatch?.[1];
-  const groupModel = groupProviderMatch?.[2];
+  let groupProvider = groupProviderMatch?.[1];
+  let groupModel = groupProviderMatch?.[2];
   if (result?.content) {
     const sections = result.content.split(/^---$/m);
     for (const section of sections) {
       const headerMatch = section.match(/###\s+Agent\s+(\d+):\s+(.+)/);
       if (!headerMatch) continue;
       const idx = parseInt(headerMatch[1], 10) - 1;
+      // Per-agent meta is `[type=… reason=… tools=… input=… output=…]`;
+      // provider/model live on the group header, not per-agent.
       const metaMatch = section.match(
-        /\[(?:provider=([^\s\]]+)\s+model=([^\s\]]+)\s+)?reason=(\w+)\s+tools=(\d+)\s+input=(\d+)\s+output=(\d+)\]/,
+        /\[type=(\S+)\s+reason=(\w+)\s+tools=(\d+)\s+input=(\d+)\s+output=(\d+)\]/,
       );
       const summaryStart = section.indexOf('\n', section.indexOf(']') + 1);
       const summary = summaryStart >= 0 ? section.slice(summaryStart).trim() : '';
       agentResults.set(idx, {
-        provider: metaMatch?.[1],
-        model: metaMatch?.[2],
-        reason: metaMatch?.[3] ?? 'unknown',
-        tools: parseInt(metaMatch?.[4] ?? '0', 10),
-        input: parseInt(metaMatch?.[5] ?? '0', 10),
-        output: parseInt(metaMatch?.[6] ?? '0', 10),
+        type: metaMatch?.[1],
+        reason: metaMatch?.[2] ?? 'unknown',
+        tools: parseInt(metaMatch?.[3] ?? '0', 10),
+        input: parseInt(metaMatch?.[4] ?? '0', 10),
+        output: parseInt(metaMatch?.[5] ?? '0', 10),
         summary,
       });
+    }
+
+    // Single-agent format — no `### Agent` sections; one `[subagent …]` header.
+    if (agentResults.size === 0) {
+      const m = result.content.match(
+        /\[subagent provider=(\S+) model=(\S+) type=(\S+) reason=(\w+) input=(\d+) output=(\d+)/,
+      );
+      if (m) {
+        groupProvider = groupProvider ?? m[1];
+        groupModel = groupModel ?? m[2];
+        const bodyStart = result.content.indexOf('\n', result.content.indexOf(']'));
+        const summary = bodyStart >= 0 ? result.content.slice(bodyStart).trim() : '';
+        agentResults.set(0, {
+          provider: m[1],
+          model: m[2],
+          type: m[3],
+          reason: m[4],
+          tools: 0,
+          input: parseInt(m[5], 10),
+          output: parseInt(m[6], 10),
+          summary,
+        });
+      }
     }
   }
 
@@ -764,7 +931,7 @@ function parsePersistedAgentsGroup(
         }
       : undefined,
     agents: agents.map((a, i) => {
-      const raw = a as { label?: string; task?: string };
+      const raw = a as { label?: string; task?: string; type?: string };
       const parsed = agentResults.get(i);
       return {
         index: i,
@@ -782,6 +949,8 @@ function parsePersistedAgentsGroup(
         usage: parsed ? { input_tokens: parsed.input, output_tokens: parsed.output } : undefined,
         summary: parsed?.summary || undefined,
         error: parsed?.reason === 'error' ? parsed.summary : undefined,
+        task: typeof raw.task === 'string' ? raw.task : undefined,
+        agentType: parsed?.type ?? (typeof raw.type === 'string' ? raw.type : undefined),
       };
     }),
   };

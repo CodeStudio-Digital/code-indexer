@@ -50,9 +50,38 @@ interface PoolEntry {
   orchestrator: WorkerBackedOrchestrator;
   bus: CoderRunBus;
   lastTouchedAt: number;
+  /**
+   * Set to a timestamp while the master is blocked on a human
+   * plan/question (`ask_user` / `submit_plan`). A session waiting on the
+   * human is the LEAST idle thing there is, so the idle-TTL sweep must
+   * not evict it — otherwise the human's eventual answer 404s with
+   * "Session is no longer active". Cleared when the prompt resolves or
+   * is cancelled. Bounded by `AWAITING_HUMAN_TTL_MS` so a truly
+   * abandoned session is still reclaimed eventually.
+   */
+  awaitingHumanSince: number | null;
   /** Aggregated subscription cleanup. */
   detachBusMirror: () => void;
 }
+
+/**
+ * Worker bus events that mean the master just blocked on / unblocked from
+ * a human interaction. Used to pin the pool entry against idle eviction
+ * for as long as the human hasn't responded.
+ */
+const AWAIT_HUMAN_START_EVENTS = new Set(['master_question_posted', 'master_plan_posted']);
+const AWAIT_HUMAN_END_EVENTS = new Set([
+  'master_question_resolved',
+  'master_plan_resolved',
+  'master_prompt_cancelled',
+]);
+
+/**
+ * Absolute ceiling on how long a human-blocked worker is kept warm.
+ * Covers virtually any real human response time (think, walk away, come
+ * back) while still reclaiming a session the human silently abandoned.
+ */
+const AWAITING_HUMAN_TTL_MS = 60 * 60 * 1000;
 
 export interface WorkerOrchestratorPoolOpts {
   /** Absolute path Node spawns — built `.js` in prod, dev bootstrap `.mjs` in dev. */
@@ -220,6 +249,16 @@ export class WorkerOrchestratorPool {
   private sweep(): void {
     const now = Date.now();
     for (const [id, entry] of this.entries) {
+      // A master blocked on a human plan/question is not idle — it's
+      // waiting for the user. Keep it warm (up to AWAITING_HUMAN_TTL_MS)
+      // so the answer doesn't 404 when it finally arrives.
+      if (entry.awaitingHumanSince != null) {
+        if (now - entry.awaitingHumanSince <= AWAITING_HUMAN_TTL_MS) continue;
+        this.log(
+          'warn',
+          `[pool] session=${id} awaited human >${Math.round(AWAITING_HUMAN_TTL_MS / 60000)}min with no answer — reclaiming`,
+        );
+      }
       if (now - entry.lastTouchedAt > this.ttlMs) {
         void this.evict(id);
       }
@@ -227,6 +266,11 @@ export class WorkerOrchestratorPool {
   }
 
   private async spawn(sessionId: number): Promise<PoolEntry> {
+    // Create the main-side bus up front so `onCrash` can mark it ended.
+    // Otherwise a worker that dies before emitting `bus.end` leaves any
+    // attached SSE stream blocked in `waitEnded` until the client
+    // disconnects (the heartbeat keeps the socket warm) — a hung tab.
+    const bus = createBus(new AbortController());
     const host = new WorkerHost({
       name: `company-session-${sessionId}`,
       workerFile: this.opts.workerFile,
@@ -243,6 +287,15 @@ export class WorkerOrchestratorPool {
       onCrash: (err) => {
         this.log('error', `[pool] worker session=${sessionId} crashed permanently: ${err.message}`);
         this.entries.delete(sessionId);
+        // Unblock any SSE stream attached to this session so it closes
+        // cleanly instead of hanging until the client disconnects.
+        try {
+          if (!bus.ended) {
+            markEnded(bus, 'error', { reason: 'worker_crashed', message: err.message });
+          }
+        } catch {
+          /* best-effort */
+        }
       },
       onError: (err) => {
         this.log('warn', `[pool] worker session=${sessionId} error: ${err.message}`);
@@ -256,7 +309,7 @@ export class WorkerOrchestratorPool {
     );
 
     // ─── Bus mirror — worker → main ─────────────────────────────
-    const bus = createBus(new AbortController());
+    // (the bus itself is created at the top of spawn so `onCrash` can end it)
     const detachRuntimeLog = installRuntimeEventLog(bus, 'company', sessionId);
     const bridge = host.requireBridge();
 
@@ -325,6 +378,15 @@ export class WorkerOrchestratorPool {
     const offEvent = bridge.on('bus.event', (payload) => {
       const env = payload as { event: string; data: unknown };
       touch();
+      // Pin / unpin the entry against idle eviction while the master is
+      // blocked waiting for a human answer. See PoolEntry.awaitingHumanSince.
+      if (AWAIT_HUMAN_START_EVENTS.has(env.event)) {
+        const e = this.entries.get(sessionId);
+        if (e) e.awaitingHumanSince = Date.now();
+      } else if (AWAIT_HUMAN_END_EVENTS.has(env.event)) {
+        const e = this.entries.get(sessionId);
+        if (e) e.awaitingHumanSince = null;
+      }
       // We don't preserve the worker's seq — `publish` allocates its
       // own monotonic seq on the main bus, which is what SSE clients
       // use as `Last-Event-ID`. Reusing worker seq would conflict
@@ -381,6 +443,7 @@ export class WorkerOrchestratorPool {
       orchestrator,
       bus,
       lastTouchedAt: Date.now(),
+      awaitingHumanSince: null,
       detachBusMirror,
     };
   }

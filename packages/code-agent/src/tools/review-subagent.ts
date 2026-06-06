@@ -5,8 +5,8 @@
  * bugs, regressions, security issues, and missing tests in a diff. The
  * reviewer NEVER inherits the implementer's trajectory — that is exactly the
  * point: a fresh agent without the implementer's bias is far better at
- * spotting issues (Cognition's Devin Review reports ~2 bugs/PR with this
- * pattern, ~58% severe).
+ * spotting issues — a fresh reviewer on a clean context reportedly catches
+ * real bugs the implementer's own pass tends to miss.
  *
  * Cross-family routing: when `subagentTarget` is configured to a different
  * provider family (e.g. implementer=Claude, reviewer=GPT-5/Gemini/DeepSeek),

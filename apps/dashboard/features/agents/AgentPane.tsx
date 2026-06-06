@@ -4,11 +4,20 @@ import { Bot, Check, Clock, Loader2, X, Wrench, Crown, Pause, Eye, AlertTriangle
 import { Badge } from '../../components/ui/badge.js';
 import { cn } from '../../lib/utils.js';
 import { ActivityLineBlock } from '../../components/stream/ActivityLineBlock.js';
+import { AgentActions } from './AgentActions.js';
 import type { AgentStreamState } from '../../hooks/useCompanyStream.js';
 
 interface AgentPaneProps {
   agent: AgentStreamState;
   onClick?: () => void;
+  /**
+   * Per-agent controls (subordinates only — the master uses the
+   * session-wide abort). When `onDelete` is provided the action buttons
+   * render; `onPause`/`onResume` are additionally status-gated.
+   */
+  onPause?: () => void;
+  onResume?: () => void;
+  onDelete?: () => void;
 }
 
 const STATUS_CONFIG: Record<string, { icon: React.FC<{ className?: string }>; color: string; labelKey: string; spin?: boolean }> = {
@@ -24,9 +33,10 @@ const STATUS_CONFIG: Record<string, { icon: React.FC<{ className?: string }>; co
   completed: { icon: Check, color: 'text-success bg-success/10', labelKey: 'status.done' },
   error: { icon: X, color: 'text-destructive bg-destructive/10', labelKey: 'status.error' },
   aborted: { icon: X, color: 'text-muted-foreground bg-muted/50', labelKey: 'status.aborted' },
+  paused: { icon: Pause, color: 'text-amber-400 bg-amber-500/10', labelKey: 'status.paused' },
 };
 
-export function AgentPane({ agent, onClick }: AgentPaneProps) {
+export function AgentPane({ agent, onClick, onPause, onResume, onDelete }: AgentPaneProps) {
   const { t } = useTranslation('agents');
   const statusCfg = STATUS_CONFIG[agent.status] ?? STATUS_CONFIG.idle;
   const StatusIcon = statusCfg.icon;
@@ -60,6 +70,14 @@ export function AgentPane({ agent, onClick }: AgentPaneProps) {
         <Badge variant="outline" className="text-[9px] ml-auto shrink-0">
           {t(statusCfg.labelKey)}
         </Badge>
+        {onDelete && (
+          <AgentActions
+            status={agent.status}
+            onPause={() => onPause?.()}
+            onResume={() => onResume?.()}
+            onDelete={onDelete}
+          />
+        )}
       </div>
 
       {/* Compact content */}

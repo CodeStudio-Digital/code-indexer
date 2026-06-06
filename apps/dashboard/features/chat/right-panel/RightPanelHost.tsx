@@ -15,6 +15,7 @@ import {
   BarChart3,
   Compass,
   Gauge,
+  HardDrive,
   Info,
   ScrollText,
   Sparkles,
@@ -23,6 +24,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { PanelChrome } from './PanelChrome.js';
 import { SessionStateSidebar } from '../SessionStateSidebar.js';
+import { SessionDriveView } from '../SessionDrivePanel.js';
 import { SkillConfigView } from '../SkillConfigDialog.js';
 import { ToolConfigView } from '../ToolConfigDialog.js';
 import { SessionMetricsView } from '../SessionMetricsModal.js';
@@ -81,6 +83,12 @@ export function RightPanelHost(props: RightPanelHostProps) {
             pipelineRuntime={props.pipelineRuntime}
             embedded
           />
+        </PanelChrome>
+      );
+    case 'drive':
+      return (
+        <PanelChrome title={t('chat:rightRail.drive', 'Drive')} icon={HardDrive} onClose={onClose}>
+          <SessionDriveView sessionId={sessionId} active />
         </PanelChrome>
       );
     case 'skills':

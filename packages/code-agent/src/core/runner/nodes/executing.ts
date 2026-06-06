@@ -41,10 +41,13 @@ import {
   computePrefixTokens,
   shouldCompactBodyAfterPrefix,
 } from '../compaction/prefix-window.js';
-import { shouldCompactPreEmit } from '../compaction/pending-tokens.js';
+import { shouldCompactPreEmit, estimateMessagesTokens } from '../compaction/pending-tokens.js';
+import { evaluateLoopAwareCompaction } from '../compaction/loop-aware-trigger.js';
 import { computeDynamicInjection, type DynamicInjectionResult } from '../assembly/dynamic-injection.js';
+import { applySelfReviewDecline, computeSelfReviewNudge } from './executing-self-review.js';
 import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
+import { evaluatePerTurnLoops } from './executing-loop-guards.js';
 import { applyVisionFallback } from '../vision-fallback.js';
 import { getGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
 import {
@@ -118,6 +121,9 @@ export class ExecutingNode implements BehaviorNode {
     ctx.bridge?.flushPendingMessages?.();
     dbg(`Executing turn=${ctx.turn} messages=${ctx.messages.length}`);
 
+    // Fix A — honor an explicit user "stop reviewing" instruction (session 887).
+    applySelfReviewDecline(ctx, latestUserTaskText(ctx.messages));
+
     // Mem C — proactive project-memory retrieval. Async, so it runs HERE
     // (before the synchronous message assembly) and stashes the result in
     // injectionState for the dynamic injector to surface. Throttled: only the
@@ -150,8 +156,26 @@ export class ExecutingNode implements BehaviorNode {
       const signals = ctx.bridge?.collectDynamicInjectionSignals?.() ?? null;
       const recentCompactionAt = ctx.injectionState.recentCompactionAt;
       const pendingMemory = ctx.injectionState.pendingMemory ?? [];
-      // Skip computing when nothing fresh AND no recent compaction AND no memory.
-      if (!signals && recentCompactionAt == null && pendingMemory.length === 0) return null;
+      // self_review nudge — gated (Fix A) so it fires only for UNREVIEWED
+      // pending changes and hard-stops after a cap / explicit user decline,
+      // instead of every turn while any snapshot is pending (the doom-loop).
+      const selfReviewNudge = computeSelfReviewNudge(ctx);
+      // Session Drive (working memory) — active plan, saved notes, available
+      // investigations. computeDynamicInjection gates plan/nudge to turn-1 /
+      // post-compaction and dedups notes, so on steady turns this just yields
+      // null; we only need it to NOT short-circuit when there's any content.
+      const drive = ctx.bridge?.getSessionDriveInjection?.() ?? null;
+      const driveHasContent =
+        !!drive && (!!drive.activePlan || drive.sessionMemory.length > 0 || drive.investigationCount > 0);
+      // Skip computing when nothing fresh AND no recent compaction AND no memory AND no nudge.
+      if (
+        !signals &&
+        recentCompactionAt == null &&
+        pendingMemory.length === 0 &&
+        !selfReviewNudge &&
+        !driveHasContent
+      )
+        return null;
       const result = computeDynamicInjection({
         turn: ctx.turn,
         newlyRegisteredSkillIds: signals?.newlyRegisteredSkillIds ?? [],
@@ -161,6 +185,11 @@ export class ExecutingNode implements BehaviorNode {
         recentCompactionAt,
         relevantMemory: pendingMemory,
         lastInjectedMemoryIds: ctx.injectionState.lastInjectedMemoryIds,
+        hasReviewableChanges: selfReviewNudge,
+        activePlan: drive?.activePlan ?? null,
+        sessionMemory: drive?.sessionMemory ?? [],
+        lastInjectedSessionMemoryIds: ctx.injectionState.lastInjectedSessionMemoryIds,
+        investigationCount: drive?.investigationCount ?? 0,
       });
       // Stash for post-assembly commit so we don't double-update state
       // when the same injection is consulted (e.g. by tests).
@@ -192,6 +221,9 @@ export class ExecutingNode implements BehaviorNode {
       }
       for (const mid of injectionToCommit.includedMemoryIds) {
         ctx.injectionState.lastInjectedMemoryIds.add(mid);
+      }
+      for (const sid of injectionToCommit.includedSessionMemoryIds) {
+        ctx.injectionState.lastInjectedSessionMemoryIds.add(sid);
       }
     }
     if (
@@ -664,6 +696,12 @@ export class ExecutingNode implements BehaviorNode {
         (b): b is { type: 'image'; mediaType: string; base64: string } =>
           (b as { type?: string }).type === 'image',
       );
+      // Diagnostic (terminal-visible): confirms the worker is emitting the
+      // image on tool_call_result. If you see this line but no image in the
+      // chat, the gap is dashboard-side; if absent, the worker build is stale.
+      if (img) {
+        try { console.error(`[preview-img] emit ${r.name} ${img.base64?.length ?? 0}b`); } catch { /* noop */ }
+      }
       ctx.emit(
         'tool_call_result',
         r.toolUseId,
@@ -688,6 +726,16 @@ export class ExecutingNode implements BehaviorNode {
     // Fire-and-forget quality classifier. Errors must NOT block the turn.
     runQualityCheck(ctx, joinText(result.textBlocks), dispatch.results, result.toolUses);
 
+    // Fix B — advance loop-aware compaction signals every turn, BEFORE any
+    // early return below, so `stuck-progress` / `cumulative` work even when the
+    // provider omits `usage` (the ChatGPT backend — why session 887 never
+    // compacted). `cumulativeInputTokens` uses the real prompt-token count when
+    // present, else the tokenizer estimate of what we just sent.
+    const hadText = result.textBlocks.some((t) => t.trim().length > 0);
+    const estPromptTokens = estimateMessagesTokens(messagesForChat) + prefixTokensEstimate;
+    ctx.consecutiveNoTextTurns = hadText ? 0 : ctx.consecutiveNoTextTurns + 1;
+    ctx.cumulativeInputTokens += result.usage?.input_tokens ?? estPromptTokens;
+
     // Insistent-loop enforcement — the same tool+args got hard-refused across
     // multiple planning cycles. A passive refusal alone never breaks it (the
     // dedup table resets each cycle), so inject an ACTIVE steering reminder
@@ -710,43 +758,76 @@ export class ExecutingNode implements BehaviorNode {
       });
     }
 
+    // Per-turn loop backstops (P0): doom-loop (same tool signature recurs
+    // across turns — rotating-args / once-per-turn repeats the per-call guards
+    // can't see) + dominance (one tool grinding a long window with zero
+    // assistant text). Polling/`repeatable` tools are exempted inside the
+    // helper. Evaluated only when the per-call guards didn't already flag a
+    // loop — they're more specific, so they win. On a fire the helper resets
+    // both windows; we route to Planning to break the loop.
+    if (!dispatch.toolLoopDetected) {
+      const perTurnLoop = evaluatePerTurnLoops({
+        toolUses: result.toolUses,
+        hadText,
+        repeatableNames: new Set(
+          ctx.opts.registry.list().filter((t) => t.repeatable).map((t) => t.name),
+        ),
+        doom: ctx.doomLoop,
+        dominance: ctx.dominance,
+      });
+      if (perTurnLoop) {
+        ctx.emit('tool_loop_intervention', {
+          kind: perTurnLoop.interventionKind,
+          turn: ctx.turn,
+          toolName: perTurnLoop.toolName,
+          count: perTurnLoop.count,
+          threshold: perTurnLoop.threshold,
+          window: perTurnLoop.window,
+          severity: 'refused',
+          snapshot: perTurnLoop.snapshot,
+          reason: perTurnLoop.reason,
+        });
+        return events.toolLoopDetected({ guard: perTurnLoop.guard });
+      }
+    }
+
     if (dispatch.toolLoopDetected) {
       return events.toolLoopDetected({ guard: dispatch.loopGuard ?? 'tuple-hash' });
     }
 
-    if (result.usage?.input_tokens) {
-      // PR-F BodyAfterPrefix gate. The legacy `shouldCompact90` (Frente B,
-      // ratio 0.75) treats system+tools as growth axes alongside body. For
-      // providers that cache the prefix (Anthropic + cache header, OpenAI
-      // prefix caching), the body alone bears the real variance — so the
-      // BodyAfterPrefix gate, using body capacity (effective − prefix), is
-      // strictly more accurate.
-      //
-      // Both gates fire on the SAME post-response token count; we OR them
-      // so we get earliest possible trigger. This is intentional: the
-      // BodyAfterPrefix gate uses a higher ratio (0.85) on a smaller
-      // capacity, which sometimes fires AFTER shouldCompact90 — and vice
-      // versa, depending on the prefix:body ratio. Or-ing covers both.
-      const bodyDecision = shouldCompactBodyAfterPrefix({
-        promptTokens: result.usage.input_tokens,
-        prefixTokens: prefixTokensEstimate,
-        model: ctx.opts.provider.model,
-      });
-      const totalDecision = shouldCompact90({
-        promptTokens: result.usage.input_tokens,
-        model: ctx.opts.provider.model,
-      });
-      if (bodyDecision.shouldCompact || totalDecision.shouldCompact) {
-        dbg(
-          `post-response gate fired: body.shouldCompact=${bodyDecision.shouldCompact} ` +
-          `(ratio=${bodyDecision.ratio.toFixed(3)}) total.shouldCompact=${totalDecision.shouldCompact} ` +
-          `(ratio=${totalDecision.ratio.toFixed(3)})`,
-        );
-        // Prefer the higher ratio for the event payload (it's the binding
-        // constraint that triggered the fire).
-        const ratio = Math.max(bodyDecision.ratio, totalDecision.ratio);
-        return events.tokenThresholdHit({ ratio });
-      }
+    // Fix B — compaction decision. Works WITH or WITHOUT provider `usage`:
+    // when usage is absent (the ChatGPT backend) we fall back to the tokenizer
+    // ESTIMATE of what we just sent, which is the reason compaction never fired
+    // for session 887. Three gates, OR-ed for the earliest trigger:
+    //   - shouldCompact90        — total-context ratio (Frente B, 0.70),
+    //   - shouldCompactBodyAfterPrefix — prefix-cache-aware body ratio (0.85),
+    //   - evaluateLoopAwareCompaction  — behavioral (stuck-progress/cumulative)
+    //     + an estimate-based token-budget backstop.
+    const promptTokens = result.usage?.input_tokens ?? estPromptTokens;
+    const usageSource = result.usage?.input_tokens ? 'usage' : 'estimate';
+    const loopAware = evaluateLoopAwareCompaction({
+      model: ctx.opts.provider.model,
+      snapshotTotal: promptTokens,
+      cumulativeInputTokens: ctx.cumulativeInputTokens - ctx.cumulativeAtLastCompaction,
+      consecutiveNoTextTurns: ctx.consecutiveNoTextTurns,
+    });
+    const bodyDecision = shouldCompactBodyAfterPrefix({
+      promptTokens,
+      prefixTokens: prefixTokensEstimate,
+      model: ctx.opts.provider.model,
+    });
+    const totalDecision = shouldCompact90({ promptTokens, model: ctx.opts.provider.model });
+    if (loopAware.shouldCompact || bodyDecision.shouldCompact || totalDecision.shouldCompact) {
+      dbg(
+        `compaction gate fired [${usageSource}=${promptTokens}]: ` +
+        `loop=${loopAware.shouldCompact}(${loopAware.reason}) ` +
+        `body=${bodyDecision.shouldCompact}(${bodyDecision.ratio.toFixed(3)}) ` +
+        `total=${totalDecision.shouldCompact}(${totalDecision.ratio.toFixed(3)})`,
+      );
+      // Prefer the higher size ratio for the event payload; behavioral-only
+      // fires (ratio 0) report 1 so downstream telemetry reads "at cap".
+      const ratio = Math.max(bodyDecision.ratio, totalDecision.ratio);
+      return events.tokenThresholdHit({ ratio: ratio > 0 ? ratio : 1 });
     }
 
     return decideTerminal(ctx);

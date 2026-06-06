@@ -49,6 +49,7 @@ import type {
 } from '@mcp/company/services/ports.js';
 import {
   abortSubordinate,
+  pauseSubordinate,
   abortAllSubordinates,
   finalizeAllSubordinates,
   type SubordinateAbortDeps,
@@ -298,7 +299,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
   async reactivate(agentRunId: number, message: string, attachments?: CoderAttachment[], thinking?: boolean): Promise<boolean> {
     const agentRun = this.deps.ctx.companyStore.getAgentRun(agentRunId);
     if (!agentRun) return false;
-    const resumableStatuses = ['error', 'aborted', 'waiting', 'completed', 'interrupted'];
+    const resumableStatuses = ['error', 'aborted', 'paused', 'waiting', 'completed', 'interrupted'];
     if (!resumableStatuses.includes(agentRun.status)) {
       console.warn(`[company] Cannot reactivate ${agentRun.role}: status is ${agentRun.status}`);
       return false;
@@ -316,6 +317,11 @@ export class SubordinateLifecycle implements ISubordinateQuery {
 
   abort(agentRunId: number): boolean {
     return abortSubordinate(agentRunId, this.abortDeps);
+  }
+
+  /** Pause a running subordinate (resumable). See `pauseSubordinate`. */
+  pause(agentRunId: number): boolean {
+    return pauseSubordinate(agentRunId, this.abortDeps);
   }
 
   abortAll(): void {

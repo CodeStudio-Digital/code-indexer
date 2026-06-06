@@ -100,6 +100,14 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     // PR 5 — tests start with an empty failure-streak state. Tests that
     // need to exercise the guard seed entries directly via the helper.
     failureStreaks: { streaks: new Map() },
+    // P0 — empty doom-loop + dominance windows. Tests that exercise the
+    // per-turn backstops seed these directly.
+    doomLoop: { strict: [], fuzzy: [] },
+    dominance: { window: [] },
+    // Fix B — loop-aware compaction signals start at zero.
+    consecutiveNoTextTurns: 0,
+    cumulativeInputTokens: 0,
+    cumulativeAtLastCompaction: 0,
     // PR-F — every test context carries an empty injection state so
     // Executing's dynamic-injection helper doesn't NPE. Tests that
     // exercise injection seed this explicitly.
@@ -108,6 +116,9 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
       lastInjectedFiles: new Set<string>(),
       recentCompactionAt: null,
       lastInjectedMemoryIds: new Set<string>(),
+      lastInjectedSessionMemoryIds: new Set<string>(),
+      // Fix A — self_review nudge gate state.
+      selfReview: { suppressed: false },
     },
   };
   return { ctx, recordedEvents };

@@ -67,6 +67,17 @@ export function updateStatus(db: DB, id: number, status: AgentRunStatus, statusM
 }
 
 /**
+ * Hard-delete an agent run. FK constraints (enabled in CompanyStore) cascade:
+ * `kanban_card_agents` rows CASCADE away, while `company_board` / `kanban_cards`
+ * / `pipeline_node_executions` / `qa_test_runs` / `company_drive_files`
+ * references are SET NULL. Telemetry tables without an FK (supervision,
+ * watermarks, master_prompts) keep their rows harmlessly orphaned.
+ */
+export function remove(db: DB, id: number): void {
+  db.prepare('DELETE FROM company_agent_runs WHERE id = ?').run(id);
+}
+
+/**
  * Sweep stale agent runs and company sessions left in an active state by a
  * crashed/restarted server. Should be called once at bootstrap, BEFORE the
  * HTTP listener accepts connections.

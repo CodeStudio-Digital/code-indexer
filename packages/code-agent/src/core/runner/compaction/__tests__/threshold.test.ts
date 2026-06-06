@@ -45,6 +45,13 @@ describe('shouldCompact90', () => {
     expect(decision.ratio).toBe(0);
   });
 
+  it('default trigger ratio is 0.70 — window-relative, lowered in Fix B', () => {
+    expect(DEFAULT_TRIGGER_RATIO).toBe(0.7);
+    // Window-relative, not a fixed cap: the trigger scales with the model.
+    const big = shouldCompact90({ promptTokens: 1, model: MODEL });
+    expect(Math.round(big.effective * DEFAULT_TRIGGER_RATIO)).toBeGreaterThan(0);
+  });
+
   it('reports promptTokens and effective in the decision payload', () => {
     const decision = shouldCompact90({ promptTokens: 12345, model: MODEL });
     expect(decision.promptTokens).toBe(12345);

@@ -57,6 +57,7 @@ import {
   type ParallelAgentSpec,
 } from '@mcp/code-agent/tools/implement-subagent.js';
 import { renderCollectedSnapshotForParent } from '@mcp/code-agent/tools/subagent-collector.js';
+import { getInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
 import {
   EXPLORE_SYSTEM_PROMPT,
   IMPLEMENT_SYSTEM_PROMPT,
@@ -96,7 +97,12 @@ interface NormalizedAgent {
 
 const SPAWN_LIMITS: Record<NormalizedAgent['type'], Required<SubagentLimits>> = {
   explore: {
-    maxToolCalls: Number(process.env.CODER_SPAWN_EXPLORE_MAX_TOOLS ?? 40) || 40,
+    // `maxToolCalls` is a budget of tool *CALLS* (invocations), NOT the number
+    // of tools available (the env name is kept for back-compat). Default 0 =
+    // unlimited (codex-style): explore is read-only, so we let it run until it
+    // concludes or trips the time/turn/stall guards below — instead of cutting
+    // an in-flight investigation short. Set the env to a positive N to re-cap.
+    maxToolCalls: Number(process.env.CODER_SPAWN_EXPLORE_MAX_TOOLS ?? 0) || 0,
     timeoutMs: Number(process.env.CODER_SPAWN_EXPLORE_TIMEOUT_MS ?? 10 * 60_000) || 10 * 60_000,
     stallMs: Number(process.env.CODER_SPAWN_EXPLORE_STALL_MS ?? 90_000) || 90_000,
   },
@@ -170,6 +176,58 @@ function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAge
     });
   }
   return { agents: out, error: null };
+}
+
+/**
+ * Auto-capture a finished sub-agent's digest into the project-scoped
+ * investigation ledger (migration 126) so a later session can
+ * `recall_investigations` it instead of re-running the same explore — and
+ * so the `record_memo` trail (which is otherwise discarded after the parent
+ * reads it) gets a durable home. Best-effort; never throws. Skipped in
+ * company sessions (they have the shared drive) and when the sub produced
+ * no summary.
+ */
+function captureInvestigation(
+  deps: SubagentDeps,
+  ctx: ToolContext,
+  agent: NormalizedAgent,
+  finalText: string,
+  trail: string,
+  tokens: number,
+): void {
+  if (ctx.companyContext) return;
+  const sessionId = ctx.runner?.sessionId;
+  if (!deps.sessionStore || sessionId == null || !finalText.trim()) return;
+  try {
+    const topic = agent.task.slice(0, 300);
+    const summary = finalText.slice(0, 1000);
+    const row = deps.sessionStore.recordInvestigation({
+      session_id: sessionId,
+      topic,
+      summary,
+      body: `${finalText}${trail}`.slice(0, 20000),
+      source_label: agent.label,
+      agent_type: agent.type,
+      tokens,
+    });
+    // Live-update the Drive panel.
+    ctx.runner?.emit('session_drive_changed', { kind: 'investigation' });
+    // Semantic recall: embed the digest in the background (in-process only;
+    // worker mode / no embedder → keyword recall still works). Fire-and-forget
+    // so the spawn result isn't blocked on a network/CPU round-trip.
+    const embed = getInvestigationEmbedder();
+    if (embed) {
+      void embed(`${topic}\n${summary}`)
+        .then((vec) => {
+          if (vec && vec.length > 0 && vec.some((x) => x !== 0)) {
+            deps.sessionStore!.setInvestigationEmbedding(row.id, vec);
+          }
+        })
+        .catch(() => { /* embedding is best-effort */ });
+    }
+  } catch (e) {
+    console.warn(`[coder] captureInvestigation failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 async function runSingleEphemeral(
@@ -255,6 +313,8 @@ async function runSingleEphemeral(
   if (isGlobalSubAgentCacheEnabled() && result.finalText) {
     writeGlobalSubAgentResult(cacheKeyInput, { header, body, usage: result.usage }, { sessionId: parentSessionId });
   }
+  // Persist a durable digest into the investigation ledger (non-company).
+  captureInvestigation(deps, ctx, agent, result.finalText ?? '', trail, result.usage.input_tokens + result.usage.output_tokens);
   void extractLastAssistantText; // keep helper referenced for re-exports
   return { ...ok(header + body + trail), subUsage: result.usage };
 }
@@ -359,6 +419,13 @@ async function runParallelEphemeral(
       return `### Agent ${i + 1}: ${r.label}\n${meta}\n${text}${trail}`;
     })
     .join('\n\n---\n\n');
+
+  // Persist each sub-agent's digest into the investigation ledger (non-company).
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    const trail = renderCollectedSnapshotForParent(r.collected ?? emptyCollected());
+    captureInvestigation(deps, ctx, agents[i], r.finalText ?? '', trail, r.usage.input_tokens + r.usage.output_tokens);
+  }
 
   return { ...ok(header + body), subUsage: totalUsage };
 }

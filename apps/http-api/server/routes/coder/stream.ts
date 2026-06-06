@@ -2,6 +2,7 @@ import type { Hono } from 'hono';
 import { runCoder } from '@mcp/code-agent/index.js';
 import type { CoderAttachment } from '@mcp/code-agent/index.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import {
   createBus,
   publish,
@@ -139,40 +140,39 @@ export function mountCoderStreamRoutes(
   }
 
   /**
-   * Whether the session's active model can consume images. Reads the cached
-   * ProviderModel row: `input_modalities` includes 'image' (live providers
-   * populate it) → vision; null modalities → fall back to the legacy
-   * `supports_attachments` flag; no row at all → `undefined` (unknown — the
-   * runner's strict `=== false` gate then never auto-describes, no surprise
-   * cost). Drives the vision-fallback auto path in runCoder.
+   * Whether the session's active model can consume images. Uses the provider's
+   * `input_modalities` when present, else model-family heuristics
+   * (`modelSupportsVision`). Deliberately does NOT use `supports_attachments`
+   * (a document/PDF flag that is `true` for text-only models like GLM, which
+   * silently disabled the vision fallback → blind-model hallucination). Drives
+   * the vision-fallback auto path in runCoder.
    */
   function resolveModelSupportsVision(id: number): boolean | undefined {
     const session = sessionStore.getSession(id);
     if (!session?.provider || !session?.model) return undefined;
+    const providerKind = providerStore.getProvider(session.provider)?.kind;
     const row = providerStore
       .listModels(session.provider)
       .find((m) => m.model_id === session.model);
-    if (!row) return undefined;
-    if (row.input_modalities && row.input_modalities.length > 0) {
-      return row.input_modalities.includes('image');
-    }
-    return row.supports_attachments;
+    return modelSupportsVision({
+      providerKind,
+      modelId: session.model,
+      inputModalities: row?.input_modalities,
+    });
   }
 
   /**
    * Whether the `preview` DevTools tier should auto-activate for this session.
-   * True for builder sessions/projects (the live in-app preview is the whole
-   * point) — those get preview_* on turn 1. Everyone else (generic chat,
-   * company) leaves it `undefined` and unlocks on demand via
-   * `find_tools` → `expand_toolset('preview')`. Avoids shipping 16 tools to
-   * every session.
+   * True for any PROJECT-scoped coder session — opening/inspecting/driving the
+   * project's running app is broadly relevant to project work, and a builder
+   * project always wants it. Non-project / company sessions leave it
+   * `undefined` and unlock on demand via `find_tools` → `expand_toolset('preview')`,
+   * so the multi-agent surface isn't bloated by 16 tools per agent.
    */
   function resolvePreviewAvailable(id: number): boolean | undefined {
     const session = sessionStore.getSession(id);
     if (!session) return undefined;
-    if (session.builder_json) return true;
-    const project = session.project_id != null ? deps.db.getProject(session.project_id) : null;
-    return project?.builder_json ? true : undefined;
+    return session.project_id != null ? true : undefined;
   }
 
   /**

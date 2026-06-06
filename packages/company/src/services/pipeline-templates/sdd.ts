@@ -39,7 +39,7 @@ export function buildSddPipelineTemplate(): PipelineGraph {
         taskTemplate:
           'Implement the approved specification at {{vars.spec.output}}. ' +
           'Read the .mcp/specs/ file first, derive tasks from its "## Implementation Plan" section via submit_tasks, ' +
-          'and execute each inside an execute_task scope.',
+          'and run them with execute_tasks.',
         kind: 'agent',
       },
       {
@@ -61,5 +61,5 @@ export function buildSddPipelineTemplate(): PipelineGraph {
   };
 }
 
-/** Stable name for the built-in template. Used by the master prompt's `start_pipeline(name='SDD', …)`. */
+/** Stable name for the built-in template. The master finds its id via `list_pipelines`, then runs it with `start_pipeline(pipeline_id, …)`. */
 export const SDD_PIPELINE_NAME = 'SDD';

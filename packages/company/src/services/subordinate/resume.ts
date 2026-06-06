@@ -18,6 +18,7 @@ import { createBus } from '@apps/http-api/coder-bus.js';
 import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { buildSubordinateCompanyBlock } from '@mcp/company/system-prompts.js';
+import { readOperationalRules } from '@mcp/company/services/master/config-loader.js';
 import type {
   AgentRunStatus,
   CompanyContext,
@@ -182,6 +183,11 @@ async function resumeSubordinateInner(
         }
       : undefined,
     overridePrompt: roleOverride,
+    // Re-inject operational rules on every resume — keeps policy present after
+    // plan/question pauses and across compaction (lives in the system prompt).
+    operationalRules: readOperationalRules(
+      ctx.companyStore.getCompanySession(ctx.companySessionId)?.config_json,
+    ),
   });
 
   const resumeMessage =

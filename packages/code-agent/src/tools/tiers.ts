@@ -146,9 +146,29 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // mutations beyond that stay with the orchestrator.
   'update_task',
   'request_review',
+  // self_review — pipeline-based review of the session's own snapshots; always on.
+  'self_review',
+  // Session Drive — single-session working notes (migrations 125/126).
+  // Registered only outside company context (index.ts); listed here so they
+  // are visible from bootstrap without needing a tier unlock.
+  // (Session-scoped notes — distinct from project-wide mcp__save_memory.)
+  'read_plan',
+  'save_note',
+  'list_notes',
+  'recall_investigations',
   'get_tool_output',
   'glob',
   'todo_write',
+  // update_todo patches a single todo by id — companion to todo_write's
+  // full-list write. Was a silent bootstrap fallback (unlisted in any tier)
+  // until P1; the contract test in __tests__/tiers.test.ts now enforces it.
+  'update_todo',
+  // Goal tools — session objective state (set / read / complete). Always
+  // registered (goalTools, index.ts:295); were silent bootstrap fallbacks
+  // until P1 listed them explicitly.
+  'create_goal',
+  'get_goal',
+  'update_goal',
   'invoke_skill',
   // RAG over the user-managed documentation corpus (Documentação sidebar).
   // Read-only, parallel-safe; always available so any agent mode can fall
@@ -184,6 +204,7 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'apply_patch',
   'web_fetch',
   'web_search',
+  'http_request',
   'run_command',
   // Persistent-shell session trio (exec_command / write_stdin / list_sessions).
   // These are `execute`-risk and mutating — they belong alongside run_command,
@@ -432,9 +453,17 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   expand_toolset: 'Unlock higher-tier tools (navigate/admin)',
   find_tools: 'Search the full tool catalog by description',
   request_review: 'Spawn a reviewer subagent to second-opinion the diff',
+  read_plan: 'Re-read your submitted plan and its approval status',
+  save_note: 'Save a session note that survives compaction (vs project-wide save_memory)',
+  list_notes: 'List the notes you saved with save_note this session',
+  recall_investigations: 'Find a past sub-agent exploration before re-running it',
   get_tool_output: 'Retrieve truncated output from a prior tool call',
   glob: 'Find files matching a glob pattern',
   todo_write: 'Update the lightweight todo list sidebar',
+  update_todo: 'Patch a single todo by id (status/content) — companion to todo_write',
+  create_goal: 'Record the session objective at the start of a task',
+  get_goal: 'Read the current session goal and its status',
+  update_goal: 'Update or complete the session goal',
   invoke_skill: 'Invoke a reusable skill by ID',
   rag_search_docs: 'Search the indexed documentation corpus (Documentação)',
   // ─── Subordinate kanban ──────────────────────────────────────

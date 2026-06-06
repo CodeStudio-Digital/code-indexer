@@ -10,6 +10,7 @@
  */
 export type RightPanelId =
   | 'meta'        // Goal / tasks / files / skills picker (was SessionStateSidebar)
+  | 'drive'       // Session Drive: working memory (map/notes/investigations/plans)
   | 'skills'      // Per-session skill enable/disable (was SkillConfigDialog)
   | 'tools'       // Per-session tool enable/disable (was ToolConfigDialog)
   | 'metrics'     // Token / cost / turn metrics (was SessionMetricsModal)

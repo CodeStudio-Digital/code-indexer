@@ -59,6 +59,32 @@ export function abortSubordinate(agentRunId: number, deps: SubordinateAbortDeps)
 }
 
 /**
+ * Pause one subordinate. Like `abortSubordinate`, it stops the current
+ * turn (`runner.abort()` flushes pending tool calls) — there's no
+ * cooperative mid-turn freeze — but marks the run `paused` (a resumable
+ * status) instead of `aborted`, so the user can continue it later via
+ * `reactivateSubordinate`.
+ *
+ * Writes `paused` to the DB here; the orchestrator's `pauseSubordinate`
+ * wrapper emits the live `agent_status` event (via `setAgentStatus`) so
+ * the dashboard badge flips immediately. The completion-handler guard
+ * skips the failure path when it sees a `paused`/`aborted` status, so the
+ * runner's `.done` settling after this call won't clobber `paused` back
+ * to `error`.
+ *
+ * Returns false when the id is unknown (nothing running to pause).
+ */
+export function pauseSubordinate(agentRunId: number, deps: SubordinateAbortDeps): boolean {
+  const sub = deps.subordinates.get(agentRunId);
+  if (!sub) return false;
+  sub.runner.abort();
+  deps.humanInLoop.clearForAgent(agentRunId);
+  deps.status.setStatus(agentRunId, 'paused', 'Paused by user');
+  deps.attention.signal({ kind: 'finished', agentRunId, role: sub.role });
+  return true;
+}
+
+/**
  * Abort every subordinate this lifecycle currently owns. Unlike
  * `finalizeAll`, this consults only the in-memory map — used by the
  * orchestrator's session-end / abort path where the runner state is

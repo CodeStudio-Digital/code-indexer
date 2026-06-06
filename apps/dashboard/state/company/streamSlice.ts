@@ -57,6 +57,8 @@ export interface StreamSlice {
     agentRunId: number,
     status: 'waiting_plan' | 'waiting_question' | 'waiting_tasks',
   ) => void;
+  /** Drop a subordinate from the live map (after the user deletes it). */
+  streamRemoveSubordinate: (sessionId: number, agentRunId: number) => void;
   streamApplyBoardEntry: (sessionId: number, entry: BoardMessage) => void;
   streamApplyMasterPrompt: (sessionId: number, prompt: MasterPrompt) => void;
   streamApplySessionIdle: (sessionId: number, payload: SessionIdlePayload) => void;
@@ -138,7 +140,12 @@ export const createStreamSlice: StateCreator<StreamSlice, [], [], StreamSlice> =
 
   streamApplyAgentEvent: (sessionId, ev) =>
     set((state) => ({
-      streams: withSlot(state.streams, sessionId, (slot) => applyAgentEvent(slot, ev)),
+      // Live agent activity means the session is no longer stalled — clear
+      // the stall banner so it doesn't linger after work resumes (the
+      // backend watchdog only emits `session_stalled`, never an "un-stall").
+      streams: withSlot(state.streams, sessionId, (slot) =>
+        clearSessionStalled(applyAgentEvent(slot, ev)),
+      ),
     })),
 
   streamApplyAgentStatus: (sessionId, payload) =>
@@ -153,9 +160,22 @@ export const createStreamSlice: StateCreator<StreamSlice, [], [], StreamSlice> =
       ),
     })),
 
+  streamRemoveSubordinate: (sessionId, agentRunId) =>
+    set((state) => ({
+      streams: withSlot(state.streams, sessionId, (slot) => {
+        if (!slot.subordinateStates.has(agentRunId)) return slot;
+        const subs = new Map(slot.subordinateStates);
+        subs.delete(agentRunId);
+        return { ...slot, subordinateStates: subs };
+      }),
+    })),
+
   streamApplyBoardEntry: (sessionId, entry) =>
     set((state) => ({
-      streams: withSlot(state.streams, sessionId, (slot) => applyBoardEntry(slot, entry)),
+      // A new board post is activity too — clear any stall banner.
+      streams: withSlot(state.streams, sessionId, (slot) =>
+        clearSessionStalled(applyBoardEntry(slot, entry)),
+      ),
     })),
 
   streamApplyMasterPrompt: (sessionId, prompt) =>

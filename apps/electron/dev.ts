@@ -1,7 +1,7 @@
 /**
  * Dev launcher — spawns Electron pointing at the Vite dev server.
  * Main process runs via `tsx`, no build step. The dashboard's Vite
- * server should already be running on :5173 (npm run dev:dashboard).
+ * server should already be running on :7317 (npm run dev:dashboard).
  *
  * Preload pre-build: Electron's preload script runs in a sandbox-like
  * context BEFORE any Node loader registers, so `tsx`/ESM imports never
@@ -66,7 +66,9 @@ const child = spawn(electronBin, [path.join(__dirname, 'main.ts')], {
   stdio: 'inherit',
   env: {
     ...process.env,
-    MCP_ELECTRON_DEV_URL: process.env.MCP_ELECTRON_DEV_URL ?? 'http://localhost:5173',
+    MCP_ELECTRON_DEV_URL:
+      process.env.MCP_ELECTRON_DEV_URL ??
+      `http://localhost:${process.env.MCP_DASHBOARD_PORT ?? 7317}`,
     // IPC-first: Hono HTTP listener stays OFF unless the operator
     // explicitly opts in (MCP_DEV_HTTP=1) to debug with curl. The
     // dashboard talks to the backend via window.electronAPI.api.* —

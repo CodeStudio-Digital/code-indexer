@@ -469,12 +469,19 @@ export class MasterLifecycle implements IMasterNotifier {
    * Forward a human message to the master. If the master is alive,
    * pushUserMessage; otherwise resurrect the session with the message.
    *
-   * When the master is alive but currently blocked inside an interactive
-   * tool (`wait_for_subordinates` / `ask_user` / `submit_plan`), the
-   * pushed message would otherwise sit in the runner's pendingUserMessages
-   * buffer until something else wakes the wait. With `interject: true`
-   * we break the wait first (the blocked tool receives `{ interrupted: true }`
-   * and reports an error so the master can react), then push the message.
+   * When the master is blocked in a `waitForUserInput`-based tool
+   * (`ask_user` / `submit_plan`), the pushed message would otherwise sit
+   * in the runner's pendingUserMessages buffer until something else wakes
+   * the wait. With `interject: true` we break that wait first (the blocked
+   * tool receives `{ interrupted: true }` and reports an error so the master
+   * can react), then push the message.
+   *
+   * `wait_for_subordinates` is NOT a `waitForUserInput` wait — it's an
+   * event loop on `MasterAttention`, so `isWaitingForInput()` is false and
+   * `interruptWait()` can't break it. Instead, after pushing the message we
+   * fire a `user_message` attention signal (below) which the wait loop
+   * listens for and returns from, so the master reads the message without
+   * waiting for a subordinate to finish.
    *
    * Returns a structured result so the HTTP layer can distinguish "queued"
    * from "interaction pending — caller must opt-in to override".
@@ -513,6 +520,17 @@ export class MasterLifecycle implements IMasterNotifier {
       } else {
         runner.pushUserMessage(this.enrichWithBoard(message));
       }
+      // Wake `wait_for_subordinates` if the master is parked there. The
+      // message is already in pendingUserMessages (pushed above); this signal
+      // makes the wait loop return so the master runs a turn and reads it now
+      // instead of after a subordinate finishes. No-op when no wait loop is
+      // subscribed (master mid-turn / blocked in ask_user) — signal() iterates
+      // an empty listener set.
+      this.deps.attention.signal({
+        kind: 'user_message',
+        agentRunId: this._agentRunId ?? 0,
+        role: 'human',
+      });
       return { ok: true };
     }
     // A start/resume is still provisioning the sandbox — the runner isn't

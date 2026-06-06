@@ -21,6 +21,7 @@ import {
 } from '@mcp/company/types.js';
 import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
+import { readOperationalRules } from '@mcp/company/services/master/config-loader.js';
 
 interface MasterOrchestratorHooks {
   provisionSandboxIfNeeded?: (signal?: AbortSignal) => Promise<SandboxBinding | null>;
@@ -146,6 +147,12 @@ export async function buildMasterPromptInputs(
     // "ALLOWED SUBORDINATE MODELS" section + tool rejection guidance.
     allowedModels: allowedModels.length > 0 ? [...allowedModels] : undefined,
     sddMode: flags.sddMode,
+    // Session-level operational rules — single source of truth, injected
+    // verbatim. The same text reaches every subordinate (see spawn/resume),
+    // so the master enforces rather than re-pastes them into each task.
+    operationalRules: readOperationalRules(
+      ctx.companyStore.getCompanySession(ctx.companySessionId)?.config_json,
+    ),
   });
 
   return { companyContext, promptBlock, sandboxBinding, configuredStack };

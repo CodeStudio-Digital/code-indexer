@@ -32,8 +32,8 @@ The Electron window opens at the project list. Pick a project to enter the Works
 
 | Command | What it runs |
 | --- | --- |
-| `pnpm dev` | Vite dashboard (`:5173`) + Hono backend (`:3333`) in the browser, no Electron |
-| `pnpm dev:server` | Backend only (`:3333`) — handy when developing the API surface |
+| `pnpm dev` | Vite dashboard (`:7317`) + Hono backend (`:7333`) in the browser, no Electron |
+| `pnpm dev:server` | Backend only (`:7333`) — handy when developing the API surface |
 | `pnpm dev:dashboard` | Dashboard only — pairs with `electron:dev` or `dev:server` |
 | `pnpm start:api` | Production backend (`node dist/apps/http-api/server.js`) |
 | `pnpm start` | CLI (`node dist/apps/cli/index.js`) |

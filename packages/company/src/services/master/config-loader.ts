@@ -66,3 +66,33 @@ export function parseMasterConfigFromDb(
 
   return { allowedModels, roleConfigs };
 }
+
+/**
+ * Read the optional session-level operational rules from `config_json`.
+ *
+ * Operator-authored, free-text markdown injected VERBATIM into the master
+ * and every subordinate system prompt — the single source of truth for
+ * cross-cutting policy (contract validation, no local enum mapping, QA vs
+ * dev separation, self_review, …). Defensive: any parse failure or a
+ * non-string / blank value yields `undefined`. Capped at a generous limit
+ * so a pathological payload can't balloon the prompt; normal rule docs
+ * (a few KB) pass through untouched.
+ */
+export function readOperationalRules(
+  configJson: string | null | undefined,
+): string | undefined {
+  if (!configJson) return undefined;
+  try {
+    const cfg = JSON.parse(configJson) as { operational_rules?: unknown };
+    const raw = cfg.operational_rules;
+    if (typeof raw !== 'string') return undefined;
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+    const CAP = 16_000;
+    return trimmed.length > CAP
+      ? `${trimmed.slice(0, CAP)}\n\n…(truncated — operational rules exceeded ${CAP} chars)`
+      : trimmed;
+  } catch {
+    return undefined;
+  }
+}

@@ -12,6 +12,7 @@ import { ModelDiscovery } from '@mcp/indexer/indexer/providers/model-discovery.j
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import { SessionStore } from '@mcp/code-agent/index.js';
+import { setInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
 import { CompanyStore } from '@mcp/store/company-store.js';
 import { CompanySandboxStore } from '@mcp/store/company-sandbox-store.js';
 import { CompanySandboxServicesStore } from '@mcp/store/company-sandbox-services-store.js';
@@ -575,6 +576,18 @@ export function createDeps(): ServerDeps {
     const result = await embeddingService.embedQuery(text);
     return Float32Array.from(result.vector);
   };
+
+  // Session Drive — investigation ledger semantic recall. Install the
+  // process-global embedder ONCE here (in-process path only; worker threads
+  // re-import code-agent fresh and leave it null → keyword recall fallback,
+  // same posture as Mem C). Reuses the admin-configured EmbeddingService.
+  setInvestigationEmbedder(async (text: string) => {
+    try {
+      return await toolSelectionEmbed(text);
+    } catch {
+      return null;
+    }
+  });
 
   // Context-relevance shares the same embedding adapter; message vectors
   // live in their own store keyed by message-id. The pipeline reads

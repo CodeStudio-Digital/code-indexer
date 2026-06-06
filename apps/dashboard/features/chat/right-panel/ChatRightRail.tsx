@@ -15,6 +15,7 @@ import {
   Compass,
   Gauge,
   GitCompare,
+  HardDrive,
   Info,
   ScrollText,
   Sparkles,
@@ -54,6 +55,7 @@ export function ChatRightRail({
 
   const entries: RailEntry[] = [
     { id: 'meta', icon: Compass, labelKey: 'rightRail.meta', kind: 'panel' },
+    { id: 'drive', icon: HardDrive, labelKey: 'rightRail.drive', kind: 'panel' },
     { id: 'skills', icon: Sparkles, labelKey: 'rightRail.skills', kind: 'panel' },
     { id: 'tools', icon: Wrench, labelKey: 'rightRail.tools', kind: 'panel' },
     { id: 'metrics', icon: Gauge, labelKey: 'rightRail.metrics', kind: 'panel' },

@@ -1,0 +1,88 @@
+import type { SettingDef } from './types.js';
+
+/** MCP transport + worker lifecycle. */
+export const MCP_SETTINGS: readonly SettingDef[] = [
+  {
+    key: 'TRAINING_MCP_BLOCK_SERVER_ID',
+    label: 'Training: block-seed MCP server',
+    description:
+      'Which configured MCP server supplies golden block examples (e.g. shadcn) when generating react-shadcn-vite training datasets. Empty = auto-detect whichever connected server exposes get_block.',
+    type: 'string',
+    category: 'mcp',
+    default: '',
+    advanced: true,
+  },
+  {
+    key: 'MCP_DEV_HTTP',
+    label: 'Expose Hono dev HTTP listener',
+    description:
+      'Binds the in-process API to 127.0.0.1:7333 so you can hit endpoints from curl / a second tool. Off by default; the IDE uses mcp:// in-process dispatch instead.',
+    type: 'bool',
+    category: 'mcp',
+    default: '0',
+    restartNeeded: true,
+  },
+  {
+    key: 'MCP_CODER_WORKER',
+    label: 'Run coder in a worker thread',
+    description:
+      'Isolates each chat session in its own worker_thread. Improves crash recovery + parallelism; off for fewer moving parts in dev.',
+    type: 'bool',
+    category: 'mcp',
+    default: '0',
+    restartNeeded: true,
+  },
+  {
+    key: 'MCP_CODER_WORKER_DEBUG',
+    label: 'Verbose worker logs',
+    description: 'Dumps RPC + bus event breadcrumbs on worker crashes. Only useful with worker mode on.',
+    type: 'bool',
+    category: 'mcp',
+    default: '0',
+    advanced: true,
+  },
+  {
+    key: 'MCP_CODER_WORKER_STRICT_CRASH',
+    label: 'Strict worker crash policy',
+    description:
+      'Kills the worker on EVERY uncaught error (vs the default "keep alive on transient network errors"). Use when chasing a recurring bug.',
+    type: 'bool',
+    category: 'mcp',
+    default: '0',
+    advanced: true,
+  },
+  {
+    key: 'CODER_WORKER_TTL_MS',
+    label: 'Worker idle TTL (ms)',
+    description: 'How long an idle coder worker stays alive before eviction. Default 5 minutes.',
+    type: 'int',
+    category: 'mcp',
+    default: '300000',
+    min: 30_000,
+    advanced: true,
+  },
+  {
+    key: 'MCP_HTTP_REQUEST_TIMEOUT_MS',
+    label: 'HTTP request timeout (ms)',
+    description:
+      "Wall-clock cap on HTTP requests, including the SSE streams that drive long `spawn_agents` runs. " +
+      "Node's default (300000ms = 5 min) was killing subagent explorations on big codebases. " +
+      'Default 3600000 (60 min). Lower to kill runaway runs faster; raise for 10k+ file projects. Restart required.',
+    type: 'int',
+    category: 'mcp',
+    default: '3600000',
+    min: 60_000,
+    advanced: true,
+    restartNeeded: true,
+  },
+  {
+    key: 'CODER_WORKER_POST_RUN_LINGER_MS',
+    label: 'Worker post-run linger (ms)',
+    description: 'Window the worker waits for a follow-up message before evicting. Default 30s.',
+    type: 'int',
+    category: 'mcp',
+    default: '30000',
+    min: 0,
+    advanced: true,
+  },
+];

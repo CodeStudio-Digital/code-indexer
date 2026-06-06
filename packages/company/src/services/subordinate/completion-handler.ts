@@ -205,6 +205,22 @@ export function handleSubordinateFailure(
 }
 
 /**
+ * True when the run's current status is one the USER set deliberately
+ * (`paused` or `aborted`). When the runner's `.done` settles after a
+ * user pause/abort, the completion handler must NOT flip the run to
+ * `error`, auto-retry it, or notify the master — the stop was intentional.
+ * Reading the persisted status works because `pauseSubordinate` /
+ * `abortSubordinate` write it synchronously before `.done` resolves.
+ * Also hardens the pre-existing abort path against the same clobber.
+ */
+export function isUserStoppedRun(deps: SubordinateCompletionDeps, agentRunId: number): boolean {
+  const status = deps.ctx.companyStore.getAgentRun(agentRunId)?.status;
+  // Missing row = the user deleted the agent mid-run → nothing to report
+  // as a failure. `paused`/`aborted` = intentional stop.
+  return status == null || status === 'paused' || status === 'aborted';
+}
+
+/**
  * Attach the `.then/.catch/.finally` chain that owns a subordinate's
  * lifecycle observability. Called once after the runner is created
  * (fresh spawn) or recreated (resume).
@@ -288,6 +304,13 @@ export function attachSubordinateCompletionHandler(
           try { deps.onSubordinateIdle(agentRunId, role); }
           catch (e) { console.warn('[company] inbox drain hook threw:', e); }
         }
+      } else if (isUserStoppedRun(deps, agentRunId)) {
+        // User paused/aborted this run (or deleted it) — preserve that
+        // outcome. Skip the failure path entirely (no error flip, no
+        // auto-retry, no master notify, no completion-bus 'failed').
+        // `.finally` still drains runningIds + fires the idle hook.
+        deps.runningIds.delete(agentRunId);
+        deps.attention.signal({ kind: 'finished', agentRunId, role });
       } else {
         const detail = error ? ` — ${error}` : '';
         handleSubordinateFailure(agentRunId, role, `${reason}${detail}`, error ?? null, deps);
@@ -309,6 +332,13 @@ export function attachSubordinateCompletionHandler(
       }
     })
     .catch((err: unknown) => {
+      if (isUserStoppedRun(deps, agentRunId)) {
+        // See the `.then` branch — a user-initiated stop must not be
+        // reported as a failure.
+        deps.runningIds.delete(agentRunId);
+        deps.attention.signal({ kind: 'finished', agentRunId, role });
+        return;
+      }
       const detail = err instanceof Error ? err.message : String(err);
       handleSubordinateFailure(agentRunId, role, `FAILED: ${detail}`, detail, deps);
       // C5 — broadcast the synchronous-throw failure path too.

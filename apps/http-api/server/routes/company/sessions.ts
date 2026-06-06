@@ -15,6 +15,7 @@ import {
 import { removeServiceAndProject } from './service-helpers.js';
 import {
   validateAllowedModels,
+  applyOperationalRulesPatch,
   type CreateSessionBody,
 } from './session-create-validation.js';
 
@@ -312,6 +313,11 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         ...(body.master_broadcast_subscribe === true
           ? { master_broadcast_subscribe: true }
           : {}),
+        // Session-level operational rules — injected verbatim into the master
+        // and every subordinate prompt at start/spawn/resume. Absent when blank.
+        ...(body.operational_rules?.trim()
+          ? { operational_rules: body.operational_rules.trim() }
+          : {}),
         // Builder config is persisted inside the free-form config_json so
         // no migration is required. SandboxService reads it back on start.
         ...(body.builder
@@ -503,6 +509,8 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         notes?: string;
         is_default?: boolean;
       }>;
+      /** Session-level operational rules (markdown). Empty string clears them. */
+      operational_rules?: string;
     }
     const body = await parseJsonBody<ConfigPatchBody>(c);
     if (!body) return c.json({ error: 'Invalid body' }, 400);
@@ -571,6 +579,12 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       if (body.skills) cfg.skills = body.skills;
       if (body.allowed_models) cfg.allowed_models = body.allowed_models;
       companyStore.updateCompanySessionConfig(id, JSON.stringify(cfg));
+    }
+
+    // Operational rules round-trip to the DB whether or not the session is
+    // running — spawn/resume read them fresh from config_json (see helper).
+    if (body.operational_rules !== undefined) {
+      applyOperationalRulesPatch(companyStore, id, body.operational_rules);
     }
     return c.json({ ok: true });
   });

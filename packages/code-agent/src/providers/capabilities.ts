@@ -400,6 +400,45 @@ export function inferContextWindow(model: string): InferredContextWindow | null 
   return null;
 }
 
+/**
+ * Best-effort image-input (vision) capability for a model:
+ *   - `true`      → sees images natively → send raw image blocks.
+ *   - `false`     → text-only → images must be described (vision fallback).
+ *   - `undefined` → unknown → the runner does NOT auto-describe (no surprise
+ *                   downgrade); the user can still force it via the flag.
+ *
+ * Priority: explicit provider `input_modalities` (reliable when the provider
+ * API reports it), then model-family heuristics. `supports_attachments` is
+ * intentionally NOT consulted — it covers document/PDF uploads and is `true`
+ * for text-only models like GLM, which made the vision fallback silently skip
+ * and a blind model hallucinate about a screenshot it never actually saw.
+ */
+export function modelSupportsVision(opts: {
+  providerKind?: string | null;
+  modelId: string;
+  inputModalities?: string[] | null;
+}): boolean | undefined {
+  if (opts.inputModalities && opts.inputModalities.length > 0) {
+    return opts.inputModalities.includes('image');
+  }
+  const kind = (opts.providerKind ?? '').toLowerCase();
+  const m = (opts.modelId ?? '').toLowerCase();
+
+  // Known TEXT-ONLY families (no image input).
+  if (kind === 'zai' || m.startsWith('glm')) return false;
+  if (kind === 'deepseek' || m.startsWith('deepseek')) return false;
+
+  // Known VISION families (multimodal across their current line-ups).
+  if (kind === 'anthropic' || kind === 'bedrock' || m.includes('claude')) return true;
+  if (kind === 'gemini' || m.includes('gemini')) return true;
+  if (kind === 'openai' || kind === 'azure' || kind === 'chatgpt') {
+    if (/gpt-5|gpt-4o|gpt-4\.1|gpt-4-turbo|chatgpt-4o|o1|o3|o4/.test(m)) return true;
+    if (/gpt-4-0|gpt-4-32k|gpt-3\.5|text-|davinci/.test(m)) return false;
+  }
+  // Kimi (kimi-vl sees, k2 doesn't), Mistral, etc. → unknown.
+  return undefined;
+}
+
 // ── Phase E — fallback usage tracker ─────────────────────────────────────────
 //
 // In-memory record of every model that resolved via heuristic OR hardcoded

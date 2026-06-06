@@ -90,6 +90,15 @@ export class CompactingNode implements BehaviorNode {
       return events.providerError({ retryable: true, status: 500 });
     }
 
+    // Fix B — checkpoint the loop-aware compaction signals once we've reached a
+    // successful Compacting outcome (whether or not there was a head to
+    // collapse). Without this, the `cumulative` / `stuck-progress` branches —
+    // which don't shrink just because we compacted — would re-fire next turn
+    // and route straight back here, an infinite Compacting loop on the
+    // `collapsedFrom === 0` ("nothing to compact") path in particular.
+    ctx.cumulativeAtLastCompaction = ctx.cumulativeInputTokens;
+    ctx.consecutiveNoTextTurns = 0;
+
     if (result.collapsedFrom === 0) {
       // Nothing to do — history already fits. Emit a `none` strategy event
       // so the dashboard sees we considered compaction and chose to skip.

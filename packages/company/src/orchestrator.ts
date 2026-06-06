@@ -278,6 +278,15 @@ export class CompanyOrchestrator {
     return this.subordinates.reactivate(agentRunId, message, attachments, thinking);
   }
   abortSubordinate(agentRunId: number): boolean { return this.subordinates.abort(agentRunId); }
+  pauseSubordinate(agentRunId: number): boolean {
+    const sub = this.subordinates.get(agentRunId);
+    if (!sub) return false;
+    const ok = this.subordinates.pause(agentRunId);
+    // The lifecycle helper only wrote the DB row; emit the live
+    // `agent_status` (+ board) so the dashboard badge flips to "paused".
+    if (ok) this.setAgentStatus(agentRunId, sub.role, 'paused', 'Paused by user');
+    return ok;
+  }
   getSubordinate(agentRunId: number): SubordinateHandle | undefined { return this.subordinates.get(agentRunId); }
   getSubordinateStatus(agentRunId: number): AgentRunStatus | null { return this.subordinates.statusOf(agentRunId); }
   listSubordinates() { return this.subordinates.list(); }

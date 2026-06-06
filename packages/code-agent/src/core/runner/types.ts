@@ -44,7 +44,8 @@ export type StopReason =
   | 'recovery_capped'   // a recovery-path circuit breaker (PR-2 R1) tripped
   | 'doom_loop'         // doom-loop guard refused identical tool calls
   | 'compact_failure'   // consecutive compaction failures hit the cap
-  | 'compact_exhausted'; // pre-emit compaction kept firing without freeing the window
+  | 'compact_exhausted' // pre-emit compaction kept firing without freeing the window
+  | 'tool_budget';      // subagent hit its (optional) tool-CALL budget — benign, partial result (not a crash)
 
 export interface RunResult {
   totalUsage: ChatUsage;
@@ -188,6 +189,43 @@ export interface RunnerOptions {
     taskText: string,
     turn: number,
   ) => Promise<ReadonlyArray<{ id: string; title: string; content: string }>>;
+  /**
+   * True when this session has active (un-kept/un-reverted) file snapshots
+   * worth a self-review. Consulted each turn by the dynamic-injection node to
+   * decide whether to surface the `self_review` reminder — gated by the
+   * CODER_SELF_REVIEW toggle. Unset = no reminder (and tests stay quiet).
+   */
+  hasReviewableChanges?: () => boolean;
+  /**
+   * Fix A — richer self_review nudge signals (supersedes `hasReviewableChanges`
+   * for the nudge decision). Lets the Executing node nudge ONLY when there are
+   * UNREVIEWED changes, instead of every turn with any pending snapshot (which
+   * is forever, since `self_review` never closes snapshots — the session-887
+   * doom-loop). Host reads the snapshot + review stores; unset on
+   * subagents/tests → the node falls back to `hasReviewableChanges`.
+   */
+  collectSelfReviewSignals?: () => {
+    /** `${activeBaselineCount}:${maxLastEditedAtMs}`; '' when no active snapshots. */
+    pendingFingerprint: string;
+    /** ms-epoch of the newest active snapshot edit, or null when none. */
+    lastEditAt: number | null;
+    /** ms-epoch of the most recent completed auto self_review, or null. */
+    lastReviewAt: number | null;
+    /** total completed auto self_reviews this session (drives the hard-stop). */
+    totalAutoReviews: number;
+  } | null;
+  /**
+   * Session Drive injection (migrations 125/126) — host-provided sync read of
+   * the session's compaction-surviving working memory: the active plan, pinned
+   * notes, and a count of available investigations. The Executing node folds
+   * these into the dynamic injector each turn. Unset (company sessions, tests)
+   * = no Session Drive injection.
+   */
+  getSessionDriveInjection?: () => {
+    activePlan: { text: string; status: string } | null;
+    sessionMemory: ReadonlyArray<{ id: string; title: string; body: string }>;
+    investigationCount: number;
+  } | null;
   /**
    * Phase 2 hardening: explicit escape hatch for admin-level operations.
    * Today the runner constructs the policy context with `strict: false`.

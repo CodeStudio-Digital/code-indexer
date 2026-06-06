@@ -96,6 +96,25 @@ function withDefaultLimits(limits?: SubagentLimits): SubagentLimits {
   };
 }
 
+/**
+ * Map a watchdog stop `phase` to a `StopReason`. The tool-call budget
+ * ('limit') is a benign, expected cutoff — report it as `'tool_budget'`, NOT
+ * `'error'`, so the parent doesn't treat a truncated-but-progressing subagent
+ * as a crash (and the session store doesn't mark the parent session errored).
+ * An explicit/parent abort maps to `'aborted'`. Genuine anomalies (stall /
+ * timeout / provider_timeout / quality) stay `'error'`.
+ */
+function phaseToReason(phase: string | undefined): SubagentRunResult['reason'] {
+  switch (phase) {
+    case 'limit':
+      return 'tool_budget';
+    case 'aborted':
+      return 'aborted';
+    default:
+      return 'error';
+  }
+}
+
 export interface SubagentCollected {
   memos: ReadonlyArray<import('@mcp/code-agent/tools/subagent-collector.js').SubagentMemo>;
   snapshots: ReadonlyArray<import('@mcp/code-agent/tools/subagent-collector.js').SubagentSnapshotRef>;
@@ -172,6 +191,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   let subToolCalls = 0;
   let currentTurn = 0;
   let watchdogFailed = false;
+  let watchdogPhase: string | undefined;
   let lastStreamProgressAt = 0;
   const streamProgressThrottleMs =
     Number(process.env.CODER_SUBAGENT_STREAM_PROGRESS_THROTTLE_MS ?? '5000') || 5_000;
@@ -427,6 +447,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   function handleWatchdogFailure(message: string, phase = 'limit'): void {
     if (watchdogFailed) return;
     watchdogFailed = true;
+    watchdogPhase = phase;
     const now = Date.now();
     const snapshot = monitor.snapshot();
     try { subRunner.abort(); } catch { /* ignore */ }
@@ -463,6 +484,9 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     result = await Promise.race([runPromise, watchdog.promise]);
   } catch (e) {
     const collected = collector.snapshot();
+    // Budget cutoffs ('limit' → tool_budget) and aborts are benign stops, not
+    // crashes — only genuine anomalies stay 'error'. See phaseToReason.
+    const reason = phaseToReason(watchdogPhase);
     if (watchdogFailed) {
       const salvaged = await buildSubagentSalvageSummary({
         provider: parent.provider,
@@ -476,7 +500,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         parentSignal: parent.ctx.signal,
       });
       return {
-        reason: 'error',
+        reason,
         finalText: salvaged.text,
         usage: salvaged.usage,
         sandboxViolations,
@@ -484,7 +508,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
       };
     }
     return {
-      reason: 'error',
+      reason,
       finalText: e instanceof Error ? e.message : String(e),
       usage: {
         input_tokens: 0,
@@ -988,6 +1012,9 @@ function classifySubagentTerminal(
 } {
   if (reason === 'completed') return { event: 'completed', status: 'completed' };
   if (reason === 'aborted') return { event: 'aborted', status: 'aborted' };
+  // Benign budget cutoff — show as a soft terminal in the parallel timeline,
+  // not an error.
+  if (reason === 'tool_budget') return { event: 'timed_out', status: 'timed_out' };
   const lower = text.toLowerCase();
   if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('stalled')) {
     return { event: 'timed_out', status: 'timed_out' };

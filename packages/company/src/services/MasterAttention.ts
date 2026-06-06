@@ -29,8 +29,15 @@
  * called `send_to_agent(wait=true)`. The signal carries the sender's
  * own `agentRunId` (the run waiting on the answer) — listeners filter
  * by that id to ignore other agents' inbox traffic.
+ *
+ * V3 adds `user_message`: the human sent a message while the master was
+ * blocked in `wait_for_subordinates`. The message is already queued in the
+ * runner's pendingUserMessages buffer; this signal wakes the wait loop so
+ * the master runs a turn, reads/answers it, then resumes waiting. Carries
+ * the master's own `agentRunId` and `role: 'human'`.
  */
-export type AttentionKind = 'question' | 'plan' | 'tasks' | 'finished' | 'inbox_answered';
+export type AttentionKind =
+  | 'question' | 'plan' | 'tasks' | 'finished' | 'inbox_answered' | 'user_message';
 
 export interface AttentionEvent {
   kind: AttentionKind;

@@ -7,7 +7,15 @@
  * behind navigate. They now live in navigate alongside run_command/write_file.
  */
 import { describe, expect, it } from 'vitest';
-import { getToolTier, profileToTiers, filterByTiers } from '@mcp/code-agent/tools/tiers.js';
+import {
+  getToolTier,
+  profileToTiers,
+  filterByTiers,
+  getAllKnownToolsMeta,
+  BOOTSTRAP_TOOLS,
+} from '@mcp/code-agent/tools/tiers.js';
+import { todoTools } from '@mcp/code-agent/tools/todo.js';
+import { goalTools } from '@mcp/code-agent/tools/goal.js';
 
 describe('tool tiers — persistent-shell session trio', () => {
   it('places exec_command / write_stdin / list_sessions in navigate, not bootstrap', () => {
@@ -37,5 +45,26 @@ describe('tool tiers — persistent-shell session trio', () => {
     const tools = [{ name: 'write_stdin' }, { name: 'exec_command' }, { name: 'list_sessions' }, { name: 'write_file' }];
     const visible = filterByTiers(tools, navigate).map((t) => t.name);
     expect(visible).toEqual(['write_stdin', 'exec_command', 'list_sessions', 'write_file']);
+  });
+});
+
+describe('tier contract — always-on state tools are explicitly tiered', () => {
+  // todoTools + goalTools register UNCONDITIONALLY for every session
+  // (index.ts:292,295). A member missing from every explicit tier set would
+  // ship on turn 1 ONLY via getToolTier's bootstrap fallback — the silent
+  // gotcha that hid update_todo / create_goal / get_goal / update_goal for
+  // months. This locks them in so a future add to either module can't quietly
+  // ride the fallback.
+  const explicit = new Set(getAllKnownToolsMeta().map((t) => t.name));
+  const alwaysOnStateTools = [...todoTools, ...goalTools].map((t) => t.name);
+
+  it.each(alwaysOnStateTools)('%s is in an explicit tier set (no silent fallback)', (name) => {
+    expect(explicit.has(name)).toBe(true);
+  });
+
+  it('the P1-promoted orphans live explicitly in bootstrap', () => {
+    for (const name of ['update_todo', 'create_goal', 'get_goal', 'update_goal']) {
+      expect(BOOTSTRAP_TOOLS.has(name)).toBe(true);
+    }
   });
 });

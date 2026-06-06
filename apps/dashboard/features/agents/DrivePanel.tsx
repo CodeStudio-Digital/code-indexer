@@ -14,7 +14,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Code2, Download, Eye, FileText, FolderOpen, RefreshCw, Trash2, Upload, X } from 'lucide-react';
+import { Code2, Download, Eye, FileText, FolderOpen, RefreshCw, Search, Upload, X } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
@@ -29,6 +29,8 @@ import {
   useCompanyStore,
 } from '../../state/company/index.js';
 import type { DriveFileMeta } from '../../state/company/driveSlice.js';
+import { buildDriveTree, collectFilePaths, type DriveTreeNode } from './drive/driveTree.js';
+import { DriveFileTree } from './drive/DriveFileTree.js';
 
 type ViewMode = 'raw' | 'preview';
 
@@ -72,12 +74,6 @@ interface DrivePanelProps {
   companySessionId: number;
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
-}
-
 export function DrivePanel({ companySessionId }: DrivePanelProps) {
   const { t } = useTranslation('agents');
   const url = `/company/sessions/${companySessionId}/drive`;
@@ -90,6 +86,7 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
   const connected = useCompanyStore((s) => selectStream(s, companySessionId).connected);
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
   const [viewer, setViewer] = useState<DriveReadResponse | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerError, setViewerError] = useState<string | null>(null);
@@ -306,6 +303,31 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
     [url, refresh, selectedPath],
   );
 
+  // Delete a folder = delete every file under it. Mirrors the folder-UPLOAD
+  // pattern (handleFolderPick): the backend has no prefix-delete route, so we
+  // fan out one DELETE per file via the existing endpoint and report failures.
+  const handleDeleteFolder = useCallback(
+    async (node: Extract<DriveTreeNode, { type: 'dir' }>) => {
+      const paths = collectFilePaths(node.children);
+      if (paths.length === 0) return;
+      if (!confirm(`Delete folder "${node.path}" and all ${paths.length} file(s) inside?`)) return;
+      const results = await Promise.allSettled(
+        paths.map((p) => apiDelete(`${url}?path=${encodeURIComponent(p)}`)),
+      );
+      // If the open file lived in this folder, close the viewer.
+      if (selectedPath && paths.includes(selectedPath)) {
+        setSelectedPath(null);
+        setViewer(null);
+      }
+      void refresh();
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      if (failed > 0) {
+        alert(`Folder delete: ${paths.length - failed}/${paths.length} removed, ${failed} failed.`);
+      }
+    },
+    [url, refresh, selectedPath],
+  );
+
   // Reset to preview mode each time the user opens a different file —
   // markdown rendering is the more useful default, the raw toggle is
   // there for inspecting front-matter / verifying agent output.
@@ -316,10 +338,10 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
   const files = useMemo(() => Array.from(slot.files.values()), [slot.files]);
   const scope = slot.scope ?? '';
 
-  const sortedFiles = useMemo(
-    () => [...files].sort((a, b) => a.path.localeCompare(b.path)),
-    [files],
-  );
+  // Folder-grouped, search-filtered tree. `searching` forces every folder
+  // open so matches are never hidden behind a collapsed parent.
+  const searching = query.trim().length > 0;
+  const treeNodes = useMemo(() => buildDriveTree(files, query), [files, query]);
 
   return (
     <div className="flex h-full flex-col">
@@ -474,55 +496,55 @@ export function DrivePanel({ companySessionId }: DrivePanelProps) {
         {/* List */}
         <div
           style={{ width: listSizer.width }}
-          className="overflow-auto border-r flex-shrink-0"
+          className="flex flex-col overflow-hidden border-r flex-shrink-0"
         >
-          {slot.loading && !slot.initialized ? (
-            <div className="p-3 text-xs text-muted-foreground">{t('common.loading', 'Loading…')}</div>
-          ) : slot.error ? (
-            <div className="p-3 text-xs text-destructive">{slot.error}</div>
-          ) : sortedFiles.length === 0 ? (
-            <div className="p-3 text-xs text-muted-foreground">
-              {t('drive.empty', 'The drive is empty. Use Attach to upload a document, or let the agents write to it.')}
-            </div>
-          ) : (
-            <ul className="divide-y">
-              {sortedFiles.map((f) => (
-                <li
-                  key={f.id}
-                  className={`group flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent cursor-pointer ${
-                    selectedPath === f.path ? 'bg-accent' : ''
-                  }`}
-                  onClick={() => void openFile(f.path)}
+          {/* Search — non-scrolling header above the tree. */}
+          <div className="border-b p-1.5">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t('drive.searchPlaceholder', 'Search files…')}
+                className="h-7 pl-7 pr-7 text-xs"
+              />
+              {query ? (
+                <button
+                  type="button"
+                  onClick={() => setQuery('')}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  title={t('common.clear', 'Clear')}
                 >
-                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <div className="flex-1 min-w-0">
-                    <div className="font-mono truncate">{f.path}</div>
-                    <div className="text-[10px] text-muted-foreground flex items-center gap-2">
-                      <span>{formatBytes(f.sizeBytes)}</span>
-                      {f.ownerRole ? (
-                        <span>
-                          by <span className="font-mono">{f.ownerRole}</span>
-                        </span>
-                      ) : null}
-                      <span title={f.updatedAt}>{f.updatedAt.replace('T', ' ').replace(/\..*/, '')}</span>
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleDelete(f.path);
-                    }}
-                    className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100"
-                    title={t('common.delete', 'Delete')}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-auto">
+            {slot.loading && !slot.initialized ? (
+              <div className="p-3 text-xs text-muted-foreground">{t('common.loading', 'Loading…')}</div>
+            ) : slot.error ? (
+              <div className="p-3 text-xs text-destructive">{slot.error}</div>
+            ) : files.length === 0 ? (
+              <div className="p-3 text-xs text-muted-foreground">
+                {t('drive.empty', 'The drive is empty. Use Attach to upload a document, or let the agents write to it.')}
+              </div>
+            ) : treeNodes.length === 0 ? (
+              <div className="p-3 text-xs text-muted-foreground">
+                {t('drive.noMatches', 'No files match your search.')}
+              </div>
+            ) : (
+              <DriveFileTree
+                nodes={treeNodes}
+                forceOpen={searching}
+                selectedPath={selectedPath}
+                onOpen={(p) => void openFile(p)}
+                onDelete={(p) => void handleDelete(p)}
+                onDeleteFolder={(n) => void handleDeleteFolder(n)}
+              />
+            )}
+          </div>
         </div>
 
         <div

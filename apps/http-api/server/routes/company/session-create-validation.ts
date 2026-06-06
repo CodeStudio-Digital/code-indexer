@@ -73,6 +73,15 @@ export interface CreateSessionBody {
    * `config_json` and read at runtime by `InboxQueue.send`.
    */
   master_broadcast_subscribe?: boolean;
+  /**
+   * Session-level operational rules (operator-authored, free-text markdown).
+   * Persisted under `config_json.operational_rules` and injected VERBATIM into
+   * the master and every subordinate system prompt at start/spawn/resume — the
+   * single source of truth for cross-cutting policy (contract validation, no
+   * local enum mapping, QA-vs-dev separation, self_review). Optional; absence
+   * preserves the legacy session shape.
+   */
+  operational_rules?: string;
 }
 
 /**
@@ -117,4 +126,36 @@ export function validateAllowedModels(
     }
   }
   return null;
+}
+
+/** Structural store slice — keeps this module free of heavy store imports.
+ *  Mirrors CompanyStore: getCompanySession returns `… | null`. */
+interface SessionConfigStore {
+  getCompanySession(id: number): { config_json: string | null } | null;
+  updateCompanySessionConfig(id: number, configJson: string): void;
+}
+
+/**
+ * Persist (or clear) the session-level operational rules into `config_json`.
+ *
+ * Read fresh from the DB on every master start + subordinate spawn/resume, so
+ * they must be persisted regardless of whether the session is currently
+ * running — the orchestrator's in-memory `applyConfigPatch` does NOT carry
+ * rules. A blank string clears the key.
+ */
+export function applyOperationalRulesPatch(
+  store: SessionConfigStore,
+  id: number,
+  rules: string,
+): void {
+  let cfg: Record<string, unknown> = {};
+  try {
+    cfg = JSON.parse(store.getCompanySession(id)?.config_json || '{}');
+  } catch {
+    cfg = {};
+  }
+  const trimmed = rules.trim();
+  if (trimmed) cfg.operational_rules = trimmed;
+  else delete cfg.operational_rules;
+  store.updateCompanySessionConfig(id, JSON.stringify(cfg));
 }

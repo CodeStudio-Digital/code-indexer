@@ -11,6 +11,7 @@ import { mountCoderSkillsRoutes } from './skills.js';
 import { mountCoderProjectTreeRoutes } from './project-tree.routes.js';
 import { mountCoderPipelineRoutes } from './pipelines.js';
 import { mountCoderSnapshotRoutes } from './snapshot.js';
+import { mountCoderDriveRoutes } from './drive.js';
 import { mountCompanyRoutes } from '../company/index.js';
 
 export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
@@ -25,5 +26,6 @@ export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
   mountCoderProjectTreeRoutes(app, deps);
   mountCoderPipelineRoutes(app, deps, runtime);
   mountCoderSnapshotRoutes(app, deps);
+  mountCoderDriveRoutes(app, deps);
   mountCompanyRoutes(app, deps);
 }

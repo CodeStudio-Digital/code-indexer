@@ -23,6 +23,7 @@ import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import { SkillStore } from '@mcp/store/skill-store.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { buildSubordinateCompanyBlock } from '@mcp/company/system-prompts.js';
+import { readOperationalRules } from '@mcp/company/services/master/config-loader.js';
 import {
   resolveRoleSkills,
   type AgentRunStatus,
@@ -316,6 +317,11 @@ export async function spawnSubordinate(
         }
       : undefined,
     overridePrompt: spec.roleOverride,
+    // Session-level operational rules, injected verbatim into every spawn so
+    // policy survives reactivation/compaction (system prompt, not turn history).
+    operationalRules: readOperationalRules(
+      ctx.companyStore.getCompanySession(ctx.companySessionId)?.config_json,
+    ),
   });
 
   // Stored in the outer closure so `attachSubordinateCompletionHandler`

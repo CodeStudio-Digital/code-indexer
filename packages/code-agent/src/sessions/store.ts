@@ -31,6 +31,7 @@ import * as goals from './store/goals.js';
 import * as messages from './store/messages.js';
 import * as plans from './store/plans.js';
 import * as inputs from './store/inputs.js';
+import * as sessionDrive from './store/session-drive.js';
 import * as tasks from './store/tasks.js';
 import * as taskRuns from './store/task-runs.js';
 import * as toolStats from './store/tool-stats.js';
@@ -137,6 +138,18 @@ export class SessionStore {
   // ─── Session inputs / hidden-prompt log (migration 061) ────────
   recordSessionInput(input: inputs.RecordSessionInput): SessionInputRow | null { return inputs.record(this.db, input); }
   listSessionInputs(sessionId: number): SessionInputRow[] { return inputs.list(this.db, sessionId); }
+
+  // ─── Session Drive: memory + investigations (migrations 125, 126) ──
+  rememberMemory(sessionId: number, input: sessionDrive.RememberInput): sessionDrive.SessionMemoryRow { return sessionDrive.remember(this.db, sessionId, input); }
+  listSessionMemory(sessionId: number, opts: { kind?: string } = {}): sessionDrive.SessionMemoryRow[] { return sessionDrive.listMemory(this.db, sessionId, opts); }
+  setSessionMemoryPinned(id: number, pinned: boolean): void { sessionDrive.setMemoryPinned(this.db, id, pinned); }
+  deleteSessionMemory(id: number): boolean { return sessionDrive.deleteMemory(this.db, id); }
+  recordInvestigation(input: sessionDrive.RecordInvestigationInput): sessionDrive.InvestigationRow { return sessionDrive.recordInvestigation(this.db, input); }
+  setInvestigationEmbedding(id: number, embedding: Float32Array): void { sessionDrive.setInvestigationEmbedding(this.db, id, embedding); }
+  recallInvestigations(sessionId: number, query: string, limit?: number): sessionDrive.InvestigationRow[] { return sessionDrive.recallInvestigations(this.db, sessionId, query, limit); }
+  recallInvestigationsByVector(sessionId: number, queryVec: Float32Array, limit?: number): sessionDrive.InvestigationRow[] { return sessionDrive.recallInvestigationsByVector(this.db, sessionId, queryVec, limit); }
+  getDriveAggregate(sessionId: number): sessionDrive.DriveAggregate { return sessionDrive.getDriveAggregate(this.db, sessionId); }
+  getDriveInjectionPayload(sessionId: number): sessionDrive.DriveInjectionPayload { return sessionDrive.getDriveInjectionPayload(this.db, sessionId); }
 
   // ─── Tasks (migration 008) ─────────────────────────────────────
   recordTasks(input: tasks.RecordTasksInput): CoderTasksRow { return tasks.record(this.db, input); }

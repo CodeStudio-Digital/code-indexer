@@ -137,6 +137,10 @@ import { projectRunnerShell120 } from './120_project_runner_shell.js';
 import { trainingDatasets121 } from './121_training_datasets.js';
 import { coderBuilderConfig122 } from './122_coder_builder_config.js';
 import { projectBuilderJson123 } from './123_project_builder_json.js';
+import { coderToolCallRefusalKind124 } from './124_coder_tool_call_refusal_kind.js';
+import { coderSessionMemory125 } from './125_coder_session_memory.js';
+import { coderInvestigations126 } from './126_coder_investigations.js';
+import { investigationEmbedding127 } from './127_investigation_embedding.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -290,6 +294,10 @@ export const MIGRATIONS: Migration[] = [
   trainingDatasets121,
   coderBuilderConfig122,
   projectBuilderJson123,
+  coderToolCallRefusalKind124,
+  coderSessionMemory125,
+  coderInvestigations126,
+  investigationEmbedding127,
 ];
 
 /**

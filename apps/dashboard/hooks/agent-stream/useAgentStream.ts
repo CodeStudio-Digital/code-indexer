@@ -8,6 +8,7 @@ import type {
   StreamTaskExecutionMode,
 } from './types.js';
 import { EMPTY_STATE } from './types.js';
+import { pruneSessions } from './prune-sessions.js';
 
 /**
  * Streams a coder session message via SSE (POST /api/coder/sessions/:id/messages).
@@ -24,12 +25,20 @@ export function useAgentStream(sessionId: number | null) {
   // never interrupts an in-flight run; coming back shows it where it was.
   const [stateMap, setStateMap] = useState<Record<number, SessionState>>({});
   const abortMap = useRef<Map<number, AbortController>>(new Map());
+  // Last-touched timestamp per sid, for LRU eviction in `pruneSessions`.
+  const touchedRef = useRef<Map<number, number>>(new Map());
+  // Mirror the active sessionId into a ref so `updateSession` (stable identity,
+  // empty deps) can read the current value without going stale.
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
 
   const updateSession = useCallback((sid: number, patch: SessionPatch) => {
+    touchedRef.current.set(sid, Date.now());
     setStateMap((prev) => {
       const cur = prev[sid] ?? EMPTY_STATE;
       const next = typeof patch === 'function' ? patch(cur) : patch;
-      return { ...prev, [sid]: { ...cur, ...next } };
+      const merged = { ...prev, [sid]: { ...cur, ...next } };
+      return pruneSessions(merged, sessionIdRef.current, touchedRef.current);
     });
   }, []);
 

@@ -180,8 +180,9 @@ export const waitAgents: CoderTool = {
         let done = false;
         const off = orchestrator.onSubordinateAttention((ev) => {
           if (done) return;
-          // Subordinate↔subordinate inbox — never relevant here.
-          if (ev.kind === 'inbox_answered') return;
+          // Subordinate↔subordinate inbox + human→master messages are not
+          // the subordinate lifecycle events this tool waits on.
+          if (ev.kind === 'inbox_answered' || ev.kind === 'user_message') return;
           // Only react when the event is about a TARGET agent.
           if (!targetIds.has(ev.agentRunId)) return;
           done = true;

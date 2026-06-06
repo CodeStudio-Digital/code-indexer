@@ -171,7 +171,7 @@ export async function openStream(
   // In Electron the relative `/api/...` URL would route through the Vite
   // dev proxy, which has been observed to swallow SSE flushes even with
   // x-accel-buffering disabled. Prefixing with the absolute Hono URL
-  // (localhost:3333 when MCP_DEV_HTTP=1) makes the chat reliable. In
+  // (localhost:7333 when MCP_DEV_HTTP=1) makes the chat reliable. In
   // browser dev the prefix is empty so the proxy still handles things.
   const absoluteUrl = opts.url.startsWith('http')
     ? opts.url

@@ -2,7 +2,7 @@
  * Rewrite fetch URLs in Electron so the dashboard talks to the backend
  * via the custom `mcp://` protocol instead of a TCP loopback.
  *
- * Why mcp:// instead of http://127.0.0.1:3333:
+ * Why mcp:// instead of http://127.0.0.1:7333:
  *   - Zero socket / zero port — Electron's `protocol.handle('mcp', …)`
  *     intercepts the request in the main process and dispatches it
  *     directly to `honoApp.fetch(Request)` in-process.

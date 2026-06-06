@@ -44,7 +44,7 @@ import { type CoderTunables, envTunables } from '@mcp/code-agent/core/tunables.j
 import { AGENTS } from '@mcp/code-agent/agents/index.js';
 import { isSummarizerEnabled, summarizeSpan, summarizeSpanV2, renderSummary, renderSummaryV2, isStructuredSummaryEnabled, overlayLiveState } from '@mcp/code-agent/core/summarizer.js';
 import { computeSnapshot, type TokenSnapshot } from '@mcp/code-agent/core/token-accounting.js';
-import { filterByTiers, profileToTiers, type ToolTier, type CoderProfile } from '@mcp/code-agent/tools/tiers.js';
+import { filterByTiers, profileToTiers, PREVIEW_TOOLS, type ToolTier, type CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 import { terseDescription } from '@mcp/code-agent/tools/descriptions.js';
 import { applySmartReducer, reducePreThinkInHistory } from '@mcp/code-agent/core/smart-reducers.js';
 import { getModelContextWindow, getModelMaxTools, getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilities.js';
@@ -225,19 +225,12 @@ import {
 } from './runner/provider-retry.js';
 export { backoffDelayMs };
 
-/**
- * Cycle-aware dominance guard (Fix G). Catches the pattern session 609
- * exhibited: 50+ consecutive turns dominated by `mcp__read_file` with
- * ZERO assistant text emitted between them. Without text the agent has
- * no reasoning anchor — every "round" rediscovers the same content.
- * When the dominance check trips we abort with a clear error rather
- * than refuse a single call, because the agent has already shown it
- * can't break out by itself.
- *
- * Default: 15 turns / 80% dominance / 0 text turns.
- */
-const DOMINANCE_WINDOW = Number(process.env.CODER_DOMINANCE_WINDOW ?? 15);
-const DOMINANCE_RATIO = Number(process.env.CODER_DOMINANCE_RATIO ?? 0.8);
+// Cycle-aware dominance guard (Fix G — session 609's 50+ silent turns of
+// `mcp__read_file`) is now implemented in `runner/guards/dominance.ts` and
+// wired by the Executing node via `evaluatePerTurnLoops`. Its window/ratio
+// tunables (`CODER_DOMINANCE_WINDOW`/`_RATIO`) live in `runner/constants.ts`
+// (dominanceWindow/dominanceRatio). The dead consts that used to sit here
+// were never read — the guard had no implementation until P0.
 // Post-legacy-removal: the auto-continue cap lives entirely inside the
 // BT's `MaxTurnsGuard` (`runner/guards/max-turns.ts:maxAutoContinues`).
 // The duplicated `MAX_AUTO_CONTINUES` constant that used to drive the
@@ -632,6 +625,19 @@ export class CoderRunner extends EventEmitter {
    * a unified diff against the prior content.
    */
   private recentWrites: Map<string, number> = new Map();
+
+  /**
+   * Session-drive "guide files" signal — the files this session edited, most
+   * recently first, capped. Feeds `collectDynamicInjectionSignals`; the
+   * dynamic injector dedups so each file is surfaced to the model once.
+   */
+  private recentEditedFilesForInjection(): string[] {
+    if (this.recentWrites.size === 0) return [];
+    return [...this.recentWrites.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([path]) => path)
+      .slice(0, 8);
+  }
 
   /**
    * Set by the pre-read guard when it decides to ALLOW a re-read after a
@@ -1962,6 +1968,15 @@ export class CoderRunner extends EventEmitter {
           this.opts.agentLoopV2 ? this.buildActiveContextBlockForTurn() : null,
         buildQualityFeedbackSuffix: () => this.buildQualityFeedbackSuffix(),
         getRelevantProjectMemory: this.opts.getRelevantProjectMemory,
+        getSessionDriveInjection: this.opts.getSessionDriveInjection,
+        // Session-drive "guide files": surface the files this session has
+        // edited so the dynamic injector can remind the model (the injector
+        // dedups, so each file is announced once). Was a dead hook until now.
+        collectDynamicInjectionSignals: () => {
+          const recentlyEditedFiles = this.recentEditedFilesForInjection();
+          if (recentlyEditedFiles.length === 0) return null;
+          return { newlyRegisteredSkillIds: [], recentlyEditedFiles };
+        },
         resolveTemperature: () => {
           const r = resolveTemperature({
             agent: this.opts.agentId ?? null,
@@ -2379,6 +2394,13 @@ export class CoderRunner extends EventEmitter {
     turn: number,
   ): string | null {
     if (!isRepeatable || isError) return null;
+    // Preview/DevTools tools are exempt: their RESULT content is intentionally
+    // fixed ("Captured the preview…") while the real payload (the screenshot
+    // image, evolving console/network) is out-of-band or genuinely changes
+    // across navigations — so byte-identical content is NOT a stuck poll. These
+    // are deliberate, agent-driven debugging calls (not background polling); the
+    // run's maxTurns is the backstop against a genuine runaway.
+    if (PREVIEW_TOOLS.has(toolName)) return null;
     if (POLLING_STUCK_CAP < 2) return null;
     if (content.length < POLLING_STUCK_MIN_CHARS) return null;
     const rHash = createHash('sha1').update(content).digest('hex');

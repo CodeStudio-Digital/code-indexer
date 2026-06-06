@@ -12,7 +12,7 @@
  * The endpoint URL is resolved from `MCP_PUBLIC_URL` (or its fallback
  * `MCP_DASHBOARD_URL`) so that a container — which does not share the
  * host's loopback — can reach the http-api. When neither is set we
- * emit `http://host.docker.internal:3333` (Docker Desktop convention)
+ * emit `http://host.docker.internal:7333` (Docker Desktop convention)
  * and return a clear message explaining the assumption so the agent
  * can override via env if it doesn't apply.
  *
@@ -63,8 +63,8 @@ const VALID_TRIGGERS: ReadonlySet<QaRunTrigger> = new Set(['agent', 'human', 'wa
  * `host.docker.internal` via DNS aliasing nowadays.
  */
 const FALLBACK_BY_RUNTIME: Record<string, string> = {
-  docker: 'http://host.docker.internal:3333',
-  podman: 'http://host.containers.internal:3333',
+  docker: 'http://host.docker.internal:7333',
+  podman: 'http://host.containers.internal:7333',
 };
 const DEFAULT_FALLBACK = FALLBACK_BY_RUNTIME.docker;
 

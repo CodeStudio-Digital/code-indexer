@@ -12,7 +12,7 @@ export function buildSddMasterBlock(): string {
 
 This session is in **Spec-Driven Development** mode. For any non-trivial request:
 
-1. Do NOT free-spawn subordinates. Call \`start_pipeline(name='SDD', input=<the user request>)\` instead.
+1. Do NOT free-spawn subordinates. First call \`list_pipelines\` to find the SDD pipeline's id, then \`start_pipeline(pipeline_id=<id>, initial_input=<a synthesised brief of the request — not the raw user message>)\`.
 2. The SDD pipeline routes the work through four stages:
    - **Spec** — a \`spec-writer\` subordinate authors a feature/epic specification (5 sections: Context, Requirements, Design, Acceptance Criteria, Implementation Plan) and pauses for human approval.
    - **Human approval gate** — the operator reviews the spec via the dashboard. You relay rejections back to the spec-writer with the requested changes; you only advance after explicit approval.

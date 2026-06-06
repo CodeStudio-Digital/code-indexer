@@ -64,20 +64,42 @@ export interface AppendToolCallInput {
   truncated?: boolean;
   phase?: string | null;
   turn_telemetry_id?: number | null;
+  /**
+   * Loop-guard refusal tag (mig 124). NULL on a real tool call; 'dedup' /
+   * 'failure-streak' when the runner synthesized an `is_error=1` result to
+   * BLOCK a cycling agent (no tool actually ran). Lets dashboards separate
+   * real tool failures from guard interventions. Auto-derived from
+   * `result_text` when omitted.
+   */
+  refusal_kind?: string | null;
+}
+
+/**
+ * Tag a synthesized loop-guard refusal so it isn't miscounted as a tool
+ * error. The tuple-hash dedup and failure-streak guards REPLACE the result
+ * with a refusal whose text LEADS with a stable marker. Real tool failures
+ * and guard REMINDERS (prepended to a real result) stay NULL.
+ */
+export function classifyToolRefusal(resultText: string, isError: boolean): string | null {
+  if (!isError || !resultText) return null;
+  if (resultText.startsWith('[loop-refused')) return 'dedup';
+  if (resultText.startsWith('[failure-streak REFUSED')) return 'failure-streak';
+  return null;
 }
 
 export function appendToolCall(db: DB, input: AppendToolCallInput): void {
   db.prepare(`
     INSERT INTO coder_tool_calls
       (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
-       output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.message_id, input.tool_use_id, input.tool_name, JSON.stringify(input.args),
     input.result_text, input.is_error ? 1 : 0, input.duration_ms,
     input.output_chars ?? (input.result_text?.length ?? 0),
     input.output_chars_shaped ?? null,
     input.truncated ? 1 : 0, input.phase ?? null, input.turn_telemetry_id ?? null,
+    input.refusal_kind ?? classifyToolRefusal(input.result_text, input.is_error),
   );
 }
 
@@ -107,8 +129,8 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
   const insertTool = db.prepare(`
     INSERT INTO coder_tool_calls
       (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
-       output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const bumpStmt = db.prepare(`
     UPDATE coder_sessions
@@ -140,6 +162,7 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
         tc.output_chars ?? (tc.result_text?.length ?? 0),
         tc.output_chars_shaped ?? null,
         tc.truncated ? 1 : 0, tc.phase ?? null, tc.turn_telemetry_id ?? null,
+        tc.refusal_kind ?? classifyToolRefusal(tc.result_text, tc.is_error),
       );
     }
     if (input.usage) {

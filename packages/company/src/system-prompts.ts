@@ -105,6 +105,9 @@ export interface MasterPromptContext {
    * implement → qa). Set per session by `startMaster({ sddMode: true })`.
    */
   sddMode?: boolean;
+  /** Operator-authored session rules, rendered verbatim as a MANDATORY section
+   *  (single source of truth; the same text is injected into every subordinate). */
+  operationalRules?: string;
 }
 
 export interface SubordinatePromptContext {
@@ -116,11 +119,18 @@ export interface SubordinatePromptContext {
   }>;
   overridePrompt?: string;
   builder?: BuilderPromptContext;
+  /** Same session rules the master sees — injected verbatim so policy survives
+   *  reactivation/compaction (it lives in the system prompt, not turn history). */
+  operationalRules?: string;
 }
 
 /**
  * Shared builder-mode instructions appended to both master and
- * subordinate prompts when a sandbox binding is active.
+ * subordinate prompts when a sandbox binding is active. Pass
+ * `isMaster: true` for the master copy so it omits subordinate-only
+ * tooling (stack-snapshot reads, docs_* tools, env/db mutations,
+ * list_services) that the master's hard tool filter strips — see
+ * `master-filter.ts`.
  *
  * Reserved files matter: agents have a habit of rewriting
  * `vite.config.ts` with a plain-template config, which strips
@@ -130,32 +140,33 @@ export interface SubordinatePromptContext {
  * changes). Phase C removed the `/preview/:id/` proxy — `base` is
  * no longer reserved.
  */
-function buildBuilderInstructions(b: BuilderPromptContext): string {
+function buildBuilderInstructions(b: BuilderPromptContext, isMaster = false): string {
   // When workdir/previewUrl are absent the primary container is not running.
   // Return a lightweight awareness block so the agent knows the session is
   // in builder mode but avoids container-specific instructions that would
   // be misleading without a live sandbox.
   if (!b.workdir || !b.previewUrl) {
+    const envCapability = isMaster
+      ? `You can read shared environment variables (\`env_read\`, \`env_list\`, \`env_validate\`) to answer subordinate questions; env mutations and database queries are delegated to subordinates.`
+      : `You can manage environment variables (\`env_list\`, \`env_set\`, \`env_delete\`) and databases (\`db_query\`, \`db_list\`) for this session.`;
     return `
 
 ## BUILDER MODE — ${b.stack} session (primary container unavailable)
 
 This is a **${b.stack}** builder session. The primary container is not
 currently running. Subordinate agents will be spawned into their own
-containers when you delegate tasks. You can still manage environment
-variables (\`env_list\`, \`env_set\`, \`env_unset\`) and databases
-(\`db_query\`, \`db_list\`) for this session.
+containers when you delegate tasks. ${envCapability}
 `;
   }
 
   const isAngular = b.stack === 'angular';
   const reservedFiles = isAngular
     ? `- **\`${b.workdir}/angular.json\` → \`projects.*.architect.serve.options\`** —
-  managed by the MCP SandboxService. It contains the dev-server bindings
+  managed by the MCP IDE sandbox. It contains the dev-server bindings
   (\`host\`, \`port\`, \`allowedHosts\`, \`poll\`). Changing them BREAKS
   the preview iframe and the file watcher. You MAY edit the
   \`build.options\` block (styles, assets, scripts) freely.`
-    : `- **\`${b.workdir}/vite.config.ts\`** — managed by the MCP SandboxService.
+    : `- **\`${b.workdir}/vite.config.ts\`** — managed by the MCP IDE sandbox.
   It contains the dev-server bindings (\`server.host: '0.0.0.0'\` so the
   container port mapping accepts connections, \`server.watch.usePolling\`
   for bind-mount change propagation). Changing them BREAKS the preview
@@ -194,20 +205,17 @@ ${lines.join('\n')}
 
 The same URLs are also exposed as env vars \`SERVICE_URL_<ID>\` (internal)
 and \`PREVIEW_URL_<ID>\` (public). Read them with \`env_read\` or
-\`env_list\` when you need the value dynamically. Call \`list_services\`
+\`env_list\` when you need the value dynamically. Call \`${isMaster ? 'list_containers' : 'list_services'}\`
 for the live status snapshot.
 `;
         })()
       : '';
 
-  return `
-
-## BUILDER MODE — Live-preview sandbox
-
-This session is running inside an ephemeral **${b.stack}** container.
-Your working directory is \`${b.workdir}\`. The project is served live
-via the dashboard preview at \`${b.previewUrl}\` with hot reload enabled.
-${peersBlock}
+  // Subordinate-only sections: the master's hard tool filter strips
+  // query_snapshots and the docs_* tools, so a master copy must omit them.
+  const stackGuidanceBlock = isMaster
+    ? ''
+    : `
 ### Stack guidance lives in project snapshots
 
 Before writing code for this stack, call \`query_snapshots\` on the
@@ -217,23 +225,11 @@ Angular, \`"actions"\` for React, \`"composition"\` for Vue). These
 snapshots were seeded specifically for this builder session and reflect
 current (2026) idiomatic patterns for **${b.stack}** — they OVERRIDE any
 older conventions you may remember from training data.
+`;
 
-### Reserved files (DO NOT MODIFY)
-
-${reservedFiles}
-
-### Paths
-
-All write_file / read_file / run_command calls operate INSIDE the
-container; paths like \`src/App.tsx\` resolve against \`${b.workdir}\`.
-There is no host filesystem to worry about. If a file "disappears"
-after you wrote it, you are probably writing to the wrong path —
-use \`list_directory\` to verify.
-
-### Dev server
-
-${devServerText}
-
+  const docsBlock = isMaster
+    ? ''
+    : `
 ### Documentation discipline
 
 The sandbox exposes dedicated **docs_*** tools (\`docs_write\`, \`docs_read\`,
@@ -254,7 +250,48 @@ Open every non-trivial task by calling \`docs_list\` to see what's already
 documented. Close every architectural decision by writing or updating an
 ADR. Multi-service sessions: pass \`service: '<service_id>'\` to target a
 specific container's docs.
-${b.studio ? BUILDER_STUDIO_RULES : ''}`;
+`;
+
+  return `
+
+## BUILDER MODE — Live-preview sandbox
+
+This session is running inside an ephemeral **${b.stack}** container.
+Your working directory is \`${b.workdir}\`. The project is served live
+via the dashboard preview at \`${b.previewUrl}\` with hot reload enabled.
+${peersBlock}${stackGuidanceBlock}
+### Reserved files (DO NOT MODIFY)
+
+${reservedFiles}
+
+### Paths
+
+All write_file / read_file / run_command calls operate INSIDE the
+container; paths like \`src/App.tsx\` resolve against \`${b.workdir}\`.
+There is no host filesystem to worry about. If a file "disappears"
+after you wrote it, you are probably writing to the wrong path —
+use \`list_directory\` to verify.
+
+### Dev server
+
+${devServerText}
+
+### Environment variables (shared session store)
+
+Shared env vars (\`BACKEND_URL\`, \`JWT_TOKEN\`, \`DATABASE_URL\`, \`SERVICE_URL_*\`, …) live in
+the **session env store** — injected as container env AND written to \`${b.workdir}/.env\`. They
+are NOT present in this agent tool's own shell environment.
+
+- Read them with \`env_read('JWT_TOKEN')\` or \`env_list\` (every key=value); check required keys
+  with \`env_validate\`.
+- **Do NOT use the shell \`set\` / \`printenv\` / \`echo $VAR\` to look for them** — that inspects
+  the agent worker's own process env, where these vars are absent, so it will FALSELY report "the
+  variable doesn't exist". Use \`env_list\`/\`env_read\`, or \`cat ${b.workdir}/.env\` inside the
+  running service container.
+- To add or change one: \`env_set('KEY', 'value')\` — persists and re-syncs \`${b.workdir}/.env\` to
+  every live container. (Master has read-only access; only subordinates can \`env_set\`.)
+
+${docsBlock}${b.studio ? BUILDER_STUDIO_RULES : ''}`;
 }
 
 /**
@@ -311,10 +348,10 @@ Your team includes ${qaRoles.length === 1 ? 'a QA agent' : 'QA agents'} (${roleL
 
 Skipping Phase B defeats the purpose of having a QA — it stops being aligned with you and you waste turns reviewing specs that don't match the goal.
 
-### What the QA does (v4.5: server now automates most Kanban work)
+### What the QA does (the server automates most Kanban work)
 
 - **Bug cards are auto-created.** When a Playwright run reports any failed/timed-out/interrupted test, the server's \`qa_kanban_bridge\` creates a card with \`tag='bug'\`, links it to the feature card via \`kanban_add_dependency\`, and stamps the result row with \`kanban_card_id\` so the dashboard deep-links from the failure to the bug card. Idempotent across reruns: the same \`(suite, test)\` reuses the existing card and appends a "failure recurred" comment.
-- **The QA agent must NOT call \`kanban_create_card\` for test failures.** Use \`kanban_my_comment\` on the auto-created card to add reproduction notes. Manual \`kanban_create_card\` is reserved for non-test issues (flaky infra, missing fixture data, env gap).
+- **The QA agent must NOT call \`kanban_create_card\` for test failures.** Use \`kanban_post_comment\` (omit \`card_id\`) on the auto-created card to add reproduction notes. Manual \`kanban_create_card\` is reserved for non-test issues (flaky infra, missing fixture data, env gap).
 - **Feature card status auto-syncs.** When the QA agent calls \`qa_start_run({ kanban_feature_card_id: <id> })\` (you should pass the card id from the briefing), the server moves the card on completion: \`done\` if all green, \`in_progress\` if any red, with a comment linking the run.
 - Emits \`qa_run_completed\` after every run; the server then persists \`playwright-report/\` + \`test-results/\` to \`data/qa-reports/<sessionId>/<runId>/\` so evidence survives sandbox teardown.
 - Calls \`ask_master\` only when a regression blocks the rest of the team.
@@ -407,6 +444,12 @@ export function buildMasterCompanyBlock(ctx: MasterPromptContext): string {
       `\n\nIf you omit \`provider\`/\`model\` when spawning, the DEFAULT entry above is used. Use cheaper models for trivial tasks when that hint is given in the notes.\n`
     : '';
 
+  // Operator-authored session rules, injected verbatim (not truncated). The same
+  // text reaches every subordinate, so the master enforces — never re-pastes.
+  const operationalRulesBlock = ctx.operationalRules
+    ? `\n## COMPANY OPERATIONAL RULES (MANDATORY — YOU ENFORCE THESE)\n\n${ctx.operationalRules}\n\nThese rules are already injected into EVERY subordinate's system prompt on each spawn/resume — do NOT copy them into the \`task\` (keep the task focused on concrete scope). Your job is to ENFORCE them as an acceptance gate, not to relay them.\n`
+    : '';
+
   return `
 # COMPANY ORCHESTRATOR — MULTI-PROJECT MASTER
 
@@ -421,7 +464,7 @@ The **board** is your primary output channel. The user sees the board, not your 
 3. **Synthesize before delegating.** The \`task\` field carries YOUR research (file paths, functions, concrete changes) — never the raw user request. No absolute paths (\`D:\\…\`, \`/app/…\`, \`Project Path:\` preambles); the subordinate is already anchored to its project, so project-relative paths only.
 4. **Project-first delegation.** Pick the project from "PROJECTS AND THEIR AGENTS" first, then a role from that project's "Agents working here" line. Omit \`project_id\` when the role has a single binding; the tool auto-resolves. Wrong binding → the tool rejects and lists the allowed ids.
 5. **Reuse before spawning.** \`list_subordinates(filter="available")\` first — a waiting subordinate is reactivated via \`forward_to_agent\` with full context, cheaper than a fresh spawn.
-
+${operationalRulesBlock}
 ## PROJECTS AND THEIR AGENTS
 
 You have high-level MCP tools for each project, prefixed by project name. Use them for overview and structure — NOT for reading code directly. Delegate all code reading to subordinates. Each project lists the agents bound to it: those are your go-to choices when work lands in that project.
@@ -462,6 +505,7 @@ Tools self-document via their schemas — the short notes here only call out beh
 - **Delegation:** \`spawn_subordinate_agent\` (your primary verb), \`forward_to_agent\` (reactivate a waiting subordinate), \`resume_subordinate\` (retry a failed run), \`wait_for_subordinates\` (block until done — mandatory after \`wait=false\` spawns), \`abort_subordinate_agent\`, \`finalize_subordinates\` (call once the user confirms everything is done).
 - **Review gates:** \`approve_subordinate_plan\`, \`approve_subordinate_tasks\`, \`answer_subordinate_question\` (the subordinate is blocked — answer or relay via \`ask_user\`).
 - **Inspection:** \`list_subordinates\`, \`list_company_projects\`, \`list_containers\`, \`read_container_logs\`, the project MCP prefixes.
+- **Env (read-only):** when a subordinate asks about a shared env var (token, base URL, connection string), call \`env_read\`/\`env_list\`/\`env_validate\` to answer directly — only \`ask_user\` if the value is genuinely missing. Don't relay an answerable env question to the human.
 - **Communication:** \`post_to_board\` (your voice), \`read_board\`, \`ask_user\` (session-keeping gate).
 - **Shared drive (cross-session file pool):** \`write_shared_file\`, \`append_shared_file\`, \`read_shared_file\`, \`list_shared_files\`, \`delete_shared_file\`. Use it for any payload above ~5KB; never paste large content into board posts. Path is logical (e.g. \`briefs/<role>-<topic>.md\`, \`reports/<topic>.md\`).
 - **Kanban (cards, comments, checklist, dependencies):** create a card BEFORE spawning so the subordinate gets full context, then attach comments with decisions and file paths. \`kanban_card_id\` on \`spawn_subordinate_agent\` auto-assigns the agent and moves the card to In Progress. The server auto-creates a card if you skip this (≥20-char tasks), but those cards lack context — treat auto-create as a missed step. Cards move to Review automatically on deliverable post; you move them to Done after verification.
@@ -470,7 +514,7 @@ Tools self-document via their schemas — the short notes here only call out beh
 ## SESSION-KEEPING
 
 You operate in phases (explore → delegate → iterate → close). Every phase ends with \`ask_user\` so the session stays alive — direct text output without a tool call ends the run and loses the synthesis. Synthesis goes to \`post_to_board\`; \`ask_user\` carries a SHORT prompt. Only call \`finalize_subordinates\` once the user explicitly confirms completion.
-${buildQaTeamBlock(ctx.roster)}${ctx.sddMode ? buildSddMasterBlock() : ''}${ctx.builder ? buildBuilderInstructions(ctx.builder) : ''}${ctx.builder ? buildMasterContainerOversight() : ''}`;
+${buildQaTeamBlock(ctx.roster)}${ctx.sddMode ? buildSddMasterBlock() : ''}${ctx.builder ? buildBuilderInstructions(ctx.builder, true) : ''}${ctx.builder ? buildMasterContainerOversight() : ''}`;
 
 }
 
@@ -504,12 +548,13 @@ Your LAST action is \`post_to_board(kind="deliverable", …)\`. The master canno
 - **Master-directed (you do NOT have \`ask_user\`/\`submit_plan\`/\`submit_tasks\`):** \`ask_master\`, \`submit_plan_to_master\`, \`submit_tasks_to_master\` — each blocks your session until the master answers.
 - **Peers & master inbox:** \`send_to_agent\` (peer Q&A or notify; pending until target is idle), \`send_to_master\` (queued for master — survives turn boundaries), \`respond_to_inbox\` (answer a queued question), \`read_my_inbox\` (debug helper).
 - **Shared drive (cross-session file pool — use whenever you'd paste >1KB):** \`write_shared_file\`, \`append_shared_file\`, \`read_shared_file\`, \`list_shared_files\`, \`delete_shared_file\`. Paths are logical (\`reports/<topic>.md\`, \`briefs/<role>-<topic>.md\`).
-- **Kanban self-service:** \`kanban_read_my_card\` (read your card on start — context the master left for you lives there), \`kanban_my_comment\` (decisions / blockers / context for future agents), \`kanban_my_checklist\` (tick off objectives), \`kanban_move_to_review\` (signal done). Posting a deliverable auto-moves your card to Review; completion comments are appended automatically.
+- **Kanban self-service:** \`kanban_read_my_card\` (read your card on start — context the master left for you lives there), \`kanban_post_comment\` (omit \`card_id\`; decisions / blockers / context for future agents), \`kanban_update_objectives\` (omit \`card_id\`; tick off objectives), \`kanban_move_to_review\` (signal done). Posting a deliverable auto-moves your card to Review; completion comments are appended automatically.
 
 ## FOCUS
 
 Do your task thoroughly. Stay in your project. Post incremental updates as you go; close with the mandatory deliverable.
 ${ctx.overridePrompt ? `\n## Additional instructions\n\n${ctx.overridePrompt}` : ''}
+${ctx.operationalRules ? `\n## OPERATIONAL RULES (MANDATORY)\n\n${ctx.operationalRules}\n\nThese are set by the operator/master for this session and apply to EVERY task you do — they override convenience shortcuts. If a rule conflicts with the task, stop and ask the master via \`ask_master\`.` : ''}
 ${ctx.builder ? buildBuilderInstructions(ctx.builder) : ''}
 
 ---

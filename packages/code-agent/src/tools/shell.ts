@@ -3,6 +3,7 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { RUN_COMMAND_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { defaultLocalShellPort, type IShellPort } from '@mcp/code-agent/ports/shell-port.js';
 import { pathFor } from '@mcp/code-agent/tools/paths.js';
+import { shellLabel } from '@mcp/code-agent/core/shell-info.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 // Ceiling for a one-shot command. One-shot shell work (builds, installs,
@@ -140,7 +141,13 @@ const runCommandTool: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      command: { type: 'string', description: 'Shell command to execute' },
+      command: {
+        type: 'string',
+        description:
+          `Shell command — runs via ${shellLabel()}. See the system prompt's ` +
+          `OS line for shell-specific dos/don'ts (e.g. on Windows it's cmd.exe: ` +
+          `no \`| head\`/\`grep\`, use \`findstr\`/\`type\`).`,
+      },
       cwd: { type: 'string', description: 'Optional subdirectory relative to project root' },
       timeout_ms: { type: 'number', description: 'Timeout in ms (default 120000, max 600000 / 10 min).' },
       stdin: {

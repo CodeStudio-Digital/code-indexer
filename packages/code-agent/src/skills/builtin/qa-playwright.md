@@ -130,8 +130,8 @@ When the session has multiple services (e.g. a frontend + an `api` + a `worker`)
 
 | Service | Env var | Example value |
 | --- | --- | --- |
-| Primary | `PLAYWRIGHT_BASE_URL` (= `_MAIN`) | `http://host.containers.internal:3333/preview/68/` |
-| `api` | `PLAYWRIGHT_BASE_URL_API` | `http://host.containers.internal:3333/preview/68/_svc/api/` |
+| Primary | `PLAYWRIGHT_BASE_URL` (= `_MAIN`) | `http://host.containers.internal:7333/preview/68/` |
+| `api` | `PLAYWRIGHT_BASE_URL_API` | `http://host.containers.internal:7333/preview/68/_svc/api/` |
 | `worker` | `PLAYWRIGHT_BASE_URL_WORKER` | … |
 
 To target a non-primary service, set the `baseURL` per-test:
@@ -371,7 +371,7 @@ npx playwright test tests/e2e/
 
 **Cause**: `localhost` inside a sandbox container points to the container itself, NOT the host. Port 5173 is the Vite dashboard on the operator's host — invisible from the container. The reporter cannot POST events; the dashboard never sees the run.
 
-`qa_start_run` returns the correct endpoint already (`host.containers.internal:3333` for Podman, `host.docker.internal:3333` for Docker). **Copy that env var unchanged.** Don't substitute `localhost` for it.
+`qa_start_run` returns the correct endpoint already (`host.containers.internal:7333` for Podman, `host.docker.internal:7333` for Docker). **Copy that env var unchanged.** Don't substitute `localhost` for it.
 
 ### ❌ `await page.goto('http://localhost:5173/login')` (or `127.0.0.1`)
 

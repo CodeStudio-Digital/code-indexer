@@ -13,7 +13,7 @@
  * Trade-off: Hono is technically still in the call stack (it parses
  * the URL, runs middleware, etc.), but there is NO socket, NO TCP,
  * NO port — `app.fetch` is just a function call. From the operator's
- * point of view, `Get-NetTCPConnection -LocalPort 3333` returns empty.
+ * point of view, `Get-NetTCPConnection -LocalPort 7333` returns empty.
  *
  * As handlers get extracted to `@mcp/api-handlers` (the "real" IPC
  * surface), the dispatch table here shrinks. End state: this file

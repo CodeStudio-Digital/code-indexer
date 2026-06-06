@@ -1,5 +1,5 @@
 # Plan mode is ACTIVE
-You MUST call `submit_plan` (or `submit_tasks`) and wait for user approval **before using any mutating tool** (write_file, edit_file, create_file, manage_path, git_add, git_commit, git_branch, or run_command outside the read-only allowlist). The runner enforces this at the tool level — mutating calls are rejected until a plan is approved.
+You MUST call `submit_plan` (or `submit_tasks`) and wait for user approval **before using any mutating tool** (write_file, edit_file, multi_edit, create_file, apply_patch, manage_path, git_add, git_commit, git_branch, or run_command outside the read-only allowlist). The runner enforces this at the tool level — mutating calls are rejected until a plan is approved.
 
 Pure conversational replies (greetings, thanks, short answers) do NOT require a plan. If the user didn't ask you to do anything that touches the workspace, just answer with text and stop. You only need `submit_plan` when you're about to do work.
 
@@ -12,7 +12,7 @@ Pure conversational replies (greetings, thanks, short answers) do NOT require a 
   - NO shell composition: pipes (|), redirects (>, <), background (&), sequencing (;), command substitution ($(), backticks). Run multi-step exploration as separate run_command calls instead.
 
 ## What is BLOCKED until plan approval
-- Mutating native tools: `write_file`, `edit_file`, `create_file`, `manage_path`, `git_add`, `git_commit`, `git_branch`
+- Mutating native tools: `write_file`, `edit_file`, `multi_edit`, `create_file`, `apply_patch`, `manage_path`, `git_add`, `git_commit`, `git_branch`
 - `run_command` with anything outside the allowlist above (e.g. `pnpm test`, `npm install`, `make`, `mv`, `rm`, `cp`, `touch`, `mkdir`)
 
 ## How to satisfy plan mode — choose ONE
@@ -27,9 +27,9 @@ Call this when the work is BETTER decomposed into 2+ independent tasks that bene
 - "Migrate the auth system to JWT" → tasks for token issuance, middleware, refresh, tests.
 - "Find redundancies and propose fixes" → 1 analysis task + N implementation tasks.
 
-Each task carries: optional client alias id (only for depends_on inside this submission), title, description, **files** (the project-relative paths the task may read AND write), **references** (curated symbol/snippet/file/doc context you pre-extract), depends_on (aliases that must finish first), suggested_mode ('inline' or 'subagent'), and estimated_complexity. After approval, the backend replaces aliases with generated `tsk_...` ids.
+Each task carries: optional client alias id (only for depends_on inside this submission), title, description, **files** (the project-relative paths the task may read AND write), **references** (curated symbol/snippet/file/doc context you pre-extract), depends_on (aliases that must finish first), suggested_mode ('inline' or 'subagent'), estimated_complexity, an optional `kind` ('investigate' | 'implement' | 'verify') that selects the executing subagent's toolset, and an optional `parallel_group` for tasks that may run concurrently. After approval, the backend replaces aliases with generated `tsk_...` ids.
 
-After approval, use the generated `tsk_...` task ids from the approved result (or call `list_tasks` if unsure), then call `execute_task` once per task in dependency order. Inline mode opens a task scope on the parent runner — mutating tools become unlocked but ONLY for paths inside the task's files. Finish each inline task with `task_complete(task_id, summary, files_modified, errors?)` to release the scope and move to the next task. Use `cancel_tasks`, `delete_tasks`, or `archive_task_list` to abandon/reset rounds; never pass legacy aliases like `task_1` to lifecycle tools. (Subagent mode is Phase 2.)
+After approval, call `execute_tasks` **once** — it walks the dependency graph, batches independent tasks into parallel waves (by `parallel_group`), and runs each task with the subagent toolset its `kind` implies. For a task in inline mode, `execute_tasks` opens a task scope on the parent runner — mutating tools unlock but ONLY for paths inside that task's `files`. Finish each inline task with `task_complete(task_id, summary, files_modified, errors?)` to release the scope, then call `execute_tasks` again to advance the next wave. Use `cancel_tasks`, `delete_tasks`, or `archive_task_list` to abandon/reset rounds; never pass legacy aliases like `task_1` to lifecycle tools.
 
 ### Decision rule
 - 1 cohesive change OR informational answer → `submit_plan`

@@ -169,3 +169,49 @@ describe('resetDoomLoopState', () => {
     expect(state.fuzzy.length).toBe(0);
   });
 });
+
+describe('checkDoomLoop — fuzzyEligible scope', () => {
+  const onlyGoals = (n: string): boolean => n === 'create_goal';
+
+  it('does NOT fuzzy-fire for non-eligible tools — reading 8 different files', () => {
+    const state = createDoomLoopState();
+    let v: ReturnType<typeof checkDoomLoop> = { fired: false };
+    for (let i = 0; i < 8; i++) {
+      v = checkDoomLoop({
+        blocks: [{ name: 'read_file', input: { path: `f${i}.ts` } }],
+        state,
+        fuzzyEligible: onlyGoals,
+      });
+    }
+    // Different paths → strict never matches; read_file not eligible → fuzzy
+    // never accumulates. Legitimate exploration is never flagged.
+    expect(v.fired).toBe(false);
+  });
+
+  it('does NOT fuzzy-fire for non-eligible edits — editing 8 different files', () => {
+    const state = createDoomLoopState();
+    let v: ReturnType<typeof checkDoomLoop> = { fired: false };
+    for (let i = 0; i < 8; i++) {
+      v = checkDoomLoop({
+        blocks: [{ name: 'edit_file', input: { path: `f${i}.ts`, old: 'a', new: 'b' } }],
+        state,
+        fuzzyEligible: onlyGoals,
+      });
+    }
+    expect(v.fired).toBe(false);
+  });
+
+  it('STILL fuzzy-fires for an eligible churn tool — create_goal with rotating args', () => {
+    const state = createDoomLoopState();
+    let v: ReturnType<typeof checkDoomLoop> = { fired: false };
+    for (let i = 0; i < 6; i++) {
+      v = checkDoomLoop({
+        blocks: [{ name: 'create_goal', input: { text: `goal ${i}` } }],
+        state,
+        fuzzyEligible: onlyGoals,
+      });
+    }
+    expect(v.fired).toBe(true);
+    if (v.fired) expect(v.guard).toBe('doom-loop-fuzzy');
+  });
+});

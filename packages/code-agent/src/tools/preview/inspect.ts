@@ -117,7 +117,11 @@ export const previewScreenshotTool: CoderTool = {
       if (!r.base64) return err('screenshot returned no image.');
       const describeHint = typeof args.lookFor === 'string' && args.lookFor.trim() ? args.lookFor.trim() : undefined;
       const block: ImageBlock = { type: 'image', mediaType: 'image/png', base64: r.base64, describeHint };
-      return { content: 'Captured the preview. The screenshot is visible to you next turn.', extraUserBlocks: [block] };
+      const kb = Math.max(1, Math.round((r.base64.length * 3) / 4 / 1024));
+      return {
+        content: `Captured the preview (PNG, ~${kb} KB). The screenshot is visible to you next turn.`,
+        extraUserBlocks: [block],
+      };
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e));
     }

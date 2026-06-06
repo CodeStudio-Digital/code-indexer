@@ -28,7 +28,31 @@ import {
   clearCapabilityFallbacksForTest,
   getEffectiveContextWindow,
   resolveContextWindowWithSource,
+  modelSupportsVision,
 } from '../capabilities.js';
+
+describe('modelSupportsVision', () => {
+  it('uses input_modalities when present (reliable)', () => {
+    expect(modelSupportsVision({ modelId: 'x', inputModalities: ['text', 'image'] })).toBe(true);
+    expect(modelSupportsVision({ modelId: 'x', inputModalities: ['text'] })).toBe(false);
+  });
+  it('treats GLM / Z.AI as text-only (the reported bug)', () => {
+    expect(modelSupportsVision({ providerKind: 'zai', modelId: 'glm-4.6' })).toBe(false);
+    expect(modelSupportsVision({ providerKind: 'openai', modelId: 'glm-5.1' })).toBe(false);
+  });
+  it('treats deepseek as text-only', () => {
+    expect(modelSupportsVision({ providerKind: 'deepseek', modelId: 'deepseek-chat' })).toBe(false);
+  });
+  it('treats claude / gpt-4o / gemini as vision-capable', () => {
+    expect(modelSupportsVision({ providerKind: 'anthropic', modelId: 'claude-sonnet-4' })).toBe(true);
+    expect(modelSupportsVision({ providerKind: 'openai', modelId: 'gpt-4o' })).toBe(true);
+    expect(modelSupportsVision({ providerKind: 'gemini', modelId: 'gemini-2.0-flash' })).toBe(true);
+  });
+  it('returns undefined for unknown families (no surprise downgrade)', () => {
+    expect(modelSupportsVision({ providerKind: 'mistral', modelId: 'mistral-large' })).toBeUndefined();
+    expect(modelSupportsVision({ modelId: 'some-random-model' })).toBeUndefined();
+  });
+});
 
 describe('inferContextWindow — Anthropic family', () => {
   it('claude-opus variants → 200k', () => {

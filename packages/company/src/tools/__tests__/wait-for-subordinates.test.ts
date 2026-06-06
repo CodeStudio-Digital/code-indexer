@@ -53,6 +53,26 @@ describe('wait_for_subordinates — return-shape contract', () => {
     expect(res.content).toContain('backend');
   });
 
+  it('wakes and returns guidance when the human sends a message mid-wait', async () => {
+    const orch = fakeOrchestrator({
+      hasRunningSubordinates: () => true,
+      listSubordinates: (): SubInfo[] => [{ agentRunId: 1, role: 'backend', status: 'running' }],
+      // Fire a user_message attention event asynchronously (after the wait
+      // loop has wired `off`/`timer`) — mirrors MasterLifecycle.sendUserMessage.
+      onSubordinateAttention: (listener: (ev: { kind: string; agentRunId: number; role: string }) => void) => {
+        setTimeout(() => listener({ kind: 'user_message', agentRunId: 0, role: 'human' }), 0);
+        return () => undefined;
+      },
+    });
+    // Omit timeout_minutes → 30-min internal deadline never beats setTimeout(0).
+    const res = await waitTool(orch).handler({}, {} as never);
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('human sent you a message');
+    expect(res.content).toContain('call wait_for_subordinates again');
+    // Must early-return, NOT fall through to the "all done" branch.
+    expect(res.content).not.toContain('all done');
+  });
+
   it('early-returns cleanly when nothing is running', async () => {
     const res = await waitTool(fakeOrchestrator({ hasRunningSubordinates: () => false })).handler(
       {},

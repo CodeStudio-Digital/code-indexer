@@ -3,7 +3,8 @@
 A bird's-eye view of how the IDE fits together. Read [the original
 indexer README](INDEXER.md) for the deep dive on the coder agent,
 indexing pipeline, and tool tier system — the architecture here is the
-delivery layer on top of all that.
+delivery layer on top of all that. For how the agent system prompts are
+assembled and edited, see [PROMPTS.md](PROMPTS.md).
 
 ## Layered view
 
@@ -151,7 +152,7 @@ Electron's bundled Node uses a different ABI than the system Node.
 ## Why not just keep HTTP?
 
 The original dashboard used `fetch('/api/...')` against the Hono backend
-on `:3333` (via Vite proxy in dev). Inside Electron that's an
+on `:7333` (via Vite proxy in dev). Inside Electron that's an
 unnecessary loopback hop — serialization, TCP, proxy buffering. Worse:
 the Vite proxy was eating SSE flushes intermittently, which surfaced as
 "chat stuck on iniciando" for the user.
@@ -162,7 +163,7 @@ The IPC path:
 - Zero spawn cost — the backend lives in the same process as the
   window.
 - Zero exposed network surface — production builds don't open
-  127.0.0.1:3333.
+  127.0.0.1:7333.
 
 Hono still exists because: (a) `pnpm dev` (browser only) needs it,
 (b) the standalone API server (`pnpm start:api`) is the integration
@@ -184,7 +185,7 @@ The plan lives at
 ## Development reminders
 
 - Don't run `pnpm dev` and `pnpm electron:dev` simultaneously — they
-  fight for `:5173`.
+  fight for `:7317`.
 - After running `pnpm dev` you need `pnpm node:rebuild` before
   `pnpm electron:dev` (and vice versa) — better-sqlite3's native ABI
   differs.

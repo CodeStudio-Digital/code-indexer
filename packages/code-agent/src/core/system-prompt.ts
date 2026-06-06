@@ -16,6 +16,7 @@
  * OpenRouter intentionally reuses the OpenAI-compatible preamble.
  */
 import { loadPrompt, interpolate } from '@mcp/code-agent/prompts/loader.js';
+import { describeShell } from '@mcp/code-agent/core/shell-info.js';
 import { runSystemPromptHook } from '@mcp/code-agent/core/hooks.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { WorkspaceContext } from './workspace.js';
@@ -130,6 +131,15 @@ export interface PromptContext {
    * above the dynamic boundary so it stays cache-stable.
    */
   agentId?: AgentId;
+  /**
+   * True for single (non-company) sessions where the Session Drive tools
+   * (`save_note` / `list_notes` / `read_plan` / `recall_investigations`) are
+   * registered. Gates the "Session working memory" section so company
+   * subordinates — which lack those tools — never see it. Set from the same
+   * `!companyContext` condition that registers the tools. Session-fixed →
+   * cache-stable, stays above the dynamic boundary.
+   */
+  sessionDrive?: boolean;
 }
 
 /**
@@ -230,7 +240,10 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   const base = interpolate(loadPrompt('base'), {
     projectName: displayName,
     projectRoot: rootPath,
-    os: ctx.os,
+    // Rich, platform-derived shell descriptor (not a bare "win32"): tells the
+    // model the real shell (cmd.exe vs bash) + what NOT to reach for. Cuts the
+    // ~69% run_command failure rate from Unix idioms on Windows.
+    os: describeShell(ctx.os),
     tierHint: tierHint(ctx.profile),
     mcpSection: mcpSection(ctx.mcpAvailable, ctx.isIndexed),
   });
@@ -266,6 +279,22 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 - \`list_tasks\` / \`execute_tasks\` / \`task_complete\`: companions to submit_tasks. Task ids are backend-generated \`tsk_...\` ids; call list_tasks if unsure, then \`execute_tasks\` ONCE to dispatch the whole approved list (wave-based; runs investigate/implement/verify kinds with the right toolset). \`task_complete\` only closes an inline scope opened by \`execute_tasks\` — never call it on a subagent-mode task.
 - \`cancel_tasks\` / \`delete_tasks\` / \`archive_task_list\`: use these to abandon, remove, or clear task rounds. Never reuse legacy ids like \`task_1\` as executable ids.
 `;
+
+  // Session Drive — single-session durable working memory. Gated on
+  // ctx.sessionDrive (true only for non-company sessions, where the
+  // save_note / list_notes / read_plan / recall_investigations tools are
+  // registered). Session-fixed → cache-stable, stays in the static prefix.
+  const sessionDriveSection = ctx.sessionDrive
+    ? `
+
+# Session working memory
+This session has a durable working memory (the Session Drive panel) that survives context compaction:
+- \`save_note({title, body, kind?})\` — record a decision, a non-obvious fact, a risk, or a TODO you'd regret losing when older turns get summarized. \`title\` is the key (re-saving it updates the note). Save as you go; don't wait until the end.
+- \`list_notes\` — review the notes you've saved.
+- \`read_plan\` — re-read the plan you submitted; it is otherwise invisible once it scrolls out of context.
+- \`recall_investigations({query})\` — BEFORE spawning an explore subagent, check past (auto-saved) sub-agent findings and reuse them instead of paying to re-investigate.
+These notes are SESSION-local. For durable, cross-session project knowledge, use \`mcp__save_memory\` instead.`
+    : '';
 
   // Static "agent loop" + "do not re-read" + "active context pointer". The
   // dynamic payload (live goal / todos / active task scope) is injected as
@@ -332,7 +361,7 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   // sessions because of trailing-newline rules.
   const boundary = `\n\n${SYSTEM_PROMPT_DYNAMIC_BOUNDARY}`;
 
-  return `${preamble}${base}${planSection}${agentSection}${interactionSection}${agentLoopBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+  return `${preamble}${base}${planSection}${agentSection}${interactionSection}${sessionDriveSection}${agentLoopBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
 }
 
 /**
@@ -392,7 +421,10 @@ function tierHint(profile?: 'bootstrap' | 'navigate' | 'full'): string {
 
   if (profile === 'bootstrap') {
     return `# Tool tiers (IMPORTANT)
-You started in the **bootstrap** tier. Only the essential read/search/workflow tools are visible right now (get_project_pulse, query_snapshots, get_context_for, search, grep_code, get_file_skeleton, read_file, list_directory, ask_user, submit_plan, submit_tasks, list_tasks, cancel_tasks, delete_tasks, archive_task_list, expand_toolset).
+You started in the **bootstrap** tier. The essential read/search, workflow, and delegation tools are visible right now:
+- Read & search: get_project_pulse, search_memory, query_snapshots, get_context_for, search, grep_code, get_file_skeleton, read_file, list_directory, glob, find_tools, rag_search_docs
+- Planning & workflow: ask_user, create_goal/get_goal/update_goal, todo_write, submit_plan, submit_tasks, list_tasks/cancel_tasks/delete_tasks/archive_task_list, execute_tasks, self_review
+- Delegation & tiers: spawn_agent, expand_toolset
 
 Write/edit/git/shell tools and deep navigation tools (find_references, trace_usage, prepare_edit, get_symbol_body, etc.) are HIDDEN. To unlock them, call \`expand_toolset({tier: "navigate", reason: "..."})\`. They become visible on the next turn.
 
@@ -403,7 +435,7 @@ Rule of thumb: stay in bootstrap for informational questions. Unlock navigate th
   }
   // navigate
   return `# Tool tiers
-You started in the **navigate** tier. Bootstrap + write/edit/shell/git-read/deep-navigation tools are visible. Admin tools (git_commit, add_snapshot, index_project, costs/models, snapshot mutations) are HIDDEN — call \`expand_toolset({tier: "admin"})\` ONLY when the user explicitly asks for them.
+You started in the **navigate** tier. Bootstrap + write/edit/shell/git-read/deep-navigation tools are visible (including \`save_memory\` to persist durable project memory). Admin tools (git_commit, add_snapshot, index_project, costs/models, snapshot mutations) are HIDDEN — call \`expand_toolset({tier: "admin"})\` ONLY when the user explicitly asks for them.
 `;
 }
 
@@ -468,7 +500,7 @@ If you want full caller graphs / search scoring / vector neighbors, ask the user
 `;
   }
   return `# Tool strategy — token economy
-This project ships ~41 MCP tools (prefixed \`mcp__\`) for semantic codebase navigation. The bootstrap tier shows the cheap, common ones; deeper tools (find_references, prepare_edit, semantic_neighbors, etc.) live in the \`navigate\` tier and are loaded on demand.
+This project ships dozens of MCP tools (prefixed \`mcp__\`) for semantic codebase navigation. The bootstrap tier shows the cheap, common ones; deeper tools (find_references, prepare_edit, semantic_neighbors, etc.) live in the \`navigate\` tier and are loaded on demand.
 
 The 5 default cheap entry points (always visible):
 1. \`mcp__get_project_pulse\` — ultra-compact overview (~100 tokens). Start here.

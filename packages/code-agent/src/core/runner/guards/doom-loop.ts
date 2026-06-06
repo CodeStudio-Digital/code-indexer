@@ -32,6 +32,17 @@ export interface CheckDoomLoopArgs {
   state: DoomLoopState;
   /** Max signatures kept in the rolling window (default 10). */
   maxWindow?: number;
+  /**
+   * Optional gate for the FUZZY (name-only) check. The fuzzy guard fires on
+   * "same tool name N-of-M turns regardless of args" — a LOOP for session
+   * state churn but NORMAL for productive work (reading/editing/searching
+   * DIFFERENT files 6× is exploration, not a loop — and gpt-5.5 emits 1 tool/
+   * turn, so 6 reads = 6 turns). When provided, only blocks whose name passes
+   * contribute to the fuzzy signature; non-eligible tool-turns push a blank
+   * (so they advance the window but never match). STRICT (full-args) is
+   * unaffected — it's precise and safe for high-frequency tools.
+   */
+  fuzzyEligible?: (name: string) => boolean;
 }
 
 export type DoomLoopVerdict =
@@ -47,7 +58,13 @@ export type DoomLoopVerdict =
 export function checkDoomLoop(args: CheckDoomLoopArgs): DoomLoopVerdict {
   const maxWindow = args.maxWindow ?? 10;
   const strictSig = toolCallsSignature(args.blocks);
-  const fuzzySig = toolNamesSignature(args.blocks);
+  // Fuzzy only watches eligible tools (default: all). A turn made up purely of
+  // non-eligible tools (reads/edits/search) yields an empty fuzzy signature —
+  // it advances the window as a blank but can't accumulate a fuzzy match.
+  const fuzzyBlocks = args.fuzzyEligible
+    ? args.blocks.filter((b) => args.fuzzyEligible!(b.name))
+    : args.blocks;
+  const fuzzySig = toolNamesSignature(fuzzyBlocks);
 
   // No tool calls this turn — strict resets (a pure-text turn breaks a
   // strict identical-signature chain), but fuzzy is PRESERVED.

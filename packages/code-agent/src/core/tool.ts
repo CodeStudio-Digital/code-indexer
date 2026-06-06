@@ -216,6 +216,20 @@ export interface ToolContext {
     createdAt: string;
     updatedAt: string;
   }) => void;
+  /**
+   * Session Drive sinks — the session's durable working memory (migrations
+   * 125/126). Wired by `runCoder` for non-company sessions so the
+   * `read_plan` / `remember` / `list_memory` / `recall_investigations`
+   * tools persist + read through the SessionStore. Undefined inside company
+   * sessions, ephemeral subagents, and tests (the tools then return a clear
+   * "not available here" message instead of throwing).
+   */
+  sessionDrive?: {
+    readActivePlan(): { text: string; status: string } | null;
+    remember(input: { title: string; body: string; kind?: string; pinned?: boolean }): { title: string };
+    listMemory(opts?: { kind?: string }): Array<{ kind: string; title: string; body: string; pinned: number; updated_at: string }>;
+    recallInvestigations(query: string, limit?: number): Promise<Array<{ topic: string; summary: string; source_label: string | null; agent_type: string | null; created_at: string }>>;
+  };
   /** Company orchestrator context — present when this runner is part of a company session. */
   companyContext?: import('@mcp/company/types.js').CompanyContext;
   /**

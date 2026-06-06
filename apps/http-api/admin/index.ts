@@ -6,7 +6,7 @@
  * together in declaration order.
  *
  * Routes do NOT enforce authentication today — the dashboard runs locally
- * on http://localhost:3333 per project convention. If that ever changes,
+ * on http://localhost:7333 per project convention. If that ever changes,
  * add a middleware here (`app.use('*', ...)`).
  */
 import { Hono } from 'hono';

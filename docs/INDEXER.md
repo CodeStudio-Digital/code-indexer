@@ -147,7 +147,7 @@ ZAI_API_KEY=sua-chave
 MCP_INDEX_PROVIDER=zai
 MCP_INDEX_MODEL=glm-5.1
 MCP_INDEX_CONCURRENCY=5
-MCP_INDEX_PORT=3333
+MCP_INDEX_PORT=7333
 
 # Budget (opcional, em USD)
 MCP_INDEX_BUDGET=1.00
@@ -178,7 +178,7 @@ Gerado automaticamente com `mcp-code-indexer init`:
   "webhooks": [],
   "costTracking": true,
   "budget": 1.00,
-  "dashboard": { "port": 3333, "host": "0.0.0.0" }
+  "dashboard": { "port": 7333, "host": "0.0.0.0" }
 }
 ```
 
@@ -528,7 +528,7 @@ npm run start:api
 mcp-code-indexer serve
 ```
 
-Roda em `http://localhost:3333` por padrao.
+Roda em `http://localhost:7333` por padrao.
 
 ### Endpoints
 
@@ -580,7 +580,7 @@ npm run build:all
 mcp-code-indexer serve
 ```
 
-Acesse `http://localhost:3333`. Tabs disponiveis por projeto:
+Acesse `http://localhost:7333`. Tabs disponiveis por projeto:
 - **Search** — busca hibrida com filtros de modo e tipo
 - **Files** — lista de arquivos com language, lines, layer, complexity e flags (entry-point/test/generated)
 - **Dependencies** — explorar dependencias (imports), dependentes e dependencias circulares
@@ -604,7 +604,7 @@ Acesse `http://localhost:3333`. Tabs disponiveis por projeto:
 | `MCP_INDEX_PROVIDER` | Provider padrao | `zai` |
 | `MCP_INDEX_MODEL` | Modelo padrao | - |
 | `MCP_INDEX_CONCURRENCY` | Concorrencia de indexacao | `5` |
-| `MCP_INDEX_PORT` | Porta do dashboard/API | `3333` |
+| `MCP_INDEX_PORT` | Porta do dashboard/API | `7333` |
 | `MCP_INDEX_BUDGET` | Limite de custo em USD | - |
 | `MCP_INDEX_EMBEDDINGS` | Habilitar embeddings (`true`/`false`) | `false` |
 | `MCP_INDEX_WORKER_URL` | URL do Cloudflare Worker | - |

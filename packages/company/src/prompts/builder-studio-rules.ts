@@ -18,7 +18,8 @@ speed, and incremental change.
 - Compose UI from shadcn primitives. Add missing ones in ONE shot — list every
   component in a single command: \`npx shadcn@latest add button input dialog --yes\`
   (the \`@/*\` alias + \`components.json\` are configured). Run it via
-  \`run_command\` (or batch it in \`code_exec\`; long installs no longer time out).
+  \`run_command\` (or from inside a \`code_exec\` snippet, which batches tool
+  calls in one turn; long installs no longer time out).
   Never hand-roll a button/input/dialog when shadcn has one.
 - Use the \`cn()\` helper from \`@/lib/utils\` for conditional classes and the
   design tokens (\`bg-background\`, \`text-foreground\`, \`text-muted-foreground\`,
@@ -45,10 +46,10 @@ speed, and incremental change.
   every file write, so the user sees each change immediately. Don't batch a
   dozen unrelated changes into one giant rewrite.
 
-### Reserved files — do NOT modify
-- \`vite.config.ts\` (MCP-managed; regenerated on restart).
-- \`.mcp/\` and \`src/mcp-inspector.ts\` (the element-selection instrumentation).
-  Touching these breaks click-to-edit.
+### Reserved files
+- Do not modify the reserved files listed in the sandbox section above (the
+  MCP-managed dev-server config, \`.mcp/\`, and \`src/mcp-inspector.ts\`) —
+  editing them breaks the live preview and click-to-edit.
 
 ### Reference material
 - Use \`web_fetch\` / \`web_search\` to pull library docs (shadcn, Tailwind,

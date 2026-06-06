@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Check, Crown, Folder, GitBranch, Plus, Server, Users } from 'lucide-react';
+import { Bot, Check, Crown, Folder, GitBranch, Plus, ScrollText, Server, Trash2, Users } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
 import { cn } from '../../../lib/utils.js';
 import { apiPost } from '../../../hooks/useApi.js';
@@ -9,6 +9,7 @@ import ServicesSidebar from '../ServicesSidebar.js';
 import { ProjectBadge } from './ProjectBadge.js';
 import { ProjectRolesBinding } from './ProjectRolesBinding.js';
 import { RoleModelEditor } from './RoleModelEditor.js';
+import { OperationalRulesEditor } from './OperationalRulesEditor.js';
 import { SidebarSection } from './SidebarSection.js';
 import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
 import type { AgentStreamState } from '../../../state/company/types.js';
@@ -90,6 +91,17 @@ export function AgentsSidebar({
       /* non-fatal — refetch reconciles */
     }
     refetch();
+  }
+
+  async function removeRole(idx: number) {
+    const role = roleAssignments[idx];
+    if (!role || role.role === 'master') return;
+    const hasLiveAgent = subordinates.some((s) => s.role === role.role);
+    const msg = hasLiveAgent
+      ? t('role.removeConfirmActive', { role: role.role })
+      : t('role.removeConfirm', { role: role.role });
+    if (!confirm(msg)) return;
+    await patchRoleAssignments(roleAssignments.filter((_, i) => i !== idx));
   }
 
   async function deleteProject(p: SessionProject) {
@@ -286,6 +298,19 @@ export function AgentsSidebar({
                       {r.tier}
                     </Badge>
                   )}
+                  {r.role !== 'master' && (
+                    <button
+                      type="button"
+                      title={t('role.remove', 'Remover papel')}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void removeRole(i);
+                      }}
+                      className="text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
                 </div>
                 {editingRoleIdx === i && (
                   <RoleModelEditor
@@ -301,6 +326,20 @@ export function AgentsSidebar({
           </div>
         </SidebarSection>
       )}
+
+      {/* ── Regras Operacionais (política da sessão, injetada em todo agente) ── */}
+      <SidebarSection
+        storageKey="operationalRules"
+        icon={ScrollText}
+        title={t('company.operationalRules.label')}
+        defaultOpen={false}
+      >
+        <OperationalRulesEditor
+          sessionId={sessionId}
+          value={(config?.operational_rules as string | undefined) ?? ''}
+          refetch={refetch}
+        />
+      </SidebarSection>
 
       {/* ── Microservices ── */}
       <SidebarSection
@@ -341,6 +380,13 @@ export function AgentsSidebar({
             key={agent.agentRunId}
             agent={agent}
             onClick={() => onOpenAgentRun(agent.agentRunId, agent.role, agent.status)}
+            onPause={() => void stream.pauseAgent(agent.agentRunId)}
+            onResume={() => void stream.resumeAgent(agent.agentRunId)}
+            onDelete={() => {
+              if (confirm(t('agentActions.deleteConfirm', { role: agent.role }))) {
+                void stream.deleteAgent(agent.agentRunId);
+              }
+            }}
           />
         ))}
 

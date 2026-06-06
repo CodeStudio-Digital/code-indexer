@@ -94,6 +94,12 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
     // on SSE; AgentPicker updates without a manual refetch.
     publish(bus, 'session_agent_changed', payload);
   });
+  runner.on('session_drive_changed', (payload) => {
+    // Session Drive write (remember note / auto-captured investigation).
+    // Dashboard's Drive panel listens via a DOM bridge and refetches —
+    // live updates instead of polling.
+    publish(bus, 'session_drive_changed', payload);
+  });
   runner.on('fallback_activated', (payload) => {
     publish(bus, 'fallback_activated', payload);
   });

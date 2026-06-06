@@ -138,6 +138,45 @@ export interface RunContext {
    */
   failureStreaks: import('../guards/failure-streak.js').FailureStreakState;
   /**
+   * P0 — per-turn doom-loop rolling window (strict full-sig + fuzzy
+   * name-only). Catches the model emitting the same tool-call signature N
+   * turns in a row when no single call duplicates a prior one — rotating
+   * args defeat tuple-hash, once-per-turn defeats the dup-call cap (the
+   * `create_goal`×37 / `git_status`×109 patterns seen in telemetry). Fed
+   * every Executing turn; checked as a backstop AFTER the per-call guards.
+   * Reset when it FIRES (not on Planning) so it keeps its cross-cycle reach.
+   */
+  doomLoop: import('../guards/doom-loop.js').DoomLoopState;
+  /**
+   * P0 — dominance rolling window (last N tool-turns + whether each carried
+   * assistant text). Catches one tool grinding a long window with ZERO text
+   * (the silent 200–700-turn runaways) that the doom-loop's near-consecutive
+   * window misses when other tools intersperse. Reset when it FIRES.
+   */
+  dominance: import('../guards/dominance.js').DominanceState;
+  /**
+   * Loop-aware compaction signals (Fix B). Fed every Executing turn and
+   * consumed by `evaluateLoopAwareCompaction` so compaction fires on
+   * behavioral loops / steady burn — not just the per-turn ratio gate, which
+   * never tripped for wide-window models (gpt-5.5 = 272k) nor for providers
+   * that omit `usage` (the ChatGPT backend).
+   *
+   *   - `consecutiveNoTextTurns`     — turns in a row with zero assistant
+   *     text; drives the `stuck-progress` branch. Reset on any text turn and
+   *     on a successful compaction.
+   *   - `cumulativeInputTokens`      — best-effort sum of each turn's prompt
+   *     size (real `usage.input_tokens` when present, else the tokenizer
+   *     estimate). DISTINCT from `totalUsage` (real-usage-only, for cost):
+   *     this one always advances so the `cumulative` branch works without
+   *     provider usage. Drives the `cumulative` branch.
+   *   - `cumulativeAtLastCompaction` — checkpoint subtracted from the above
+   *     so the monotonic cumulative branch can't re-fire every turn after a
+   *     compaction.
+   */
+  consecutiveNoTextTurns: number;
+  cumulativeInputTokens: number;
+  cumulativeAtLastCompaction: number;
+  /**
    * PR-F dynamic-injection state. Tracked across turns so the Kimi-style
    * `computeDynamicInjection` provider doesn't include the same skill /
    * file twice across consecutive turns.
@@ -158,6 +197,23 @@ export interface RunContext {
     recentCompactionAt: number | null;
     /** Memory ids already injected (Mem C) — avoids re-injecting each turn. */
     lastInjectedMemoryIds: Set<string>;
+    /** Session Drive note ids already injected — avoids re-injecting each turn. */
+    lastInjectedSessionMemoryIds: Set<string>;
+    /**
+     * self_review nudge state (Fix A). The nudge in `dynamic-injection.ts`
+     * is recomputed every turn while changes are pending; without this gate
+     * the `self_review` tool (which never closes snapshots) loops forever —
+     * the agent re-reviews, applies findings (= MORE pending changes), and
+     * re-reviews again, ignoring even an explicit user "stop".
+     *   - `lastNudgedFingerprint` — pending-change fingerprint last nudged;
+     *     re-nudge only when the pending set actually changes.
+     *   - `suppressed`            — hard stop for the rest of the run (user
+     *     declined, or K auto-reviews ran with no new edit after them).
+     */
+    selfReview: {
+      lastNudgedFingerprint?: string;
+      suppressed: boolean;
+    };
     /**
      * Project memory retrieved THIS turn (async, before assembly) so the
      * synchronous dynamic injector can include it. Reset each turn.
@@ -311,6 +367,17 @@ export interface BridgeCallbacks {
     taskText: string,
     turn: number,
   ) => Promise<ReadonlyArray<{ id: string; title: string; content: string }>>;
+  /**
+   * Session Drive injection (migrations 125/126) — synchronous read of the
+   * session's working memory: the active plan, pinned/recent notes, and a
+   * count of available investigations. The Executing node folds these into
+   * the dynamic injector so they survive compaction. Unset = disabled.
+   */
+  getSessionDriveInjection?: () => {
+    activePlan: { text: string; status: string } | null;
+    sessionMemory: ReadonlyArray<{ id: string; title: string; body: string }>;
+    investigationCount: number;
+  } | null;
   /**
    * Drain `runner.pendingUserMessages` into the main `messages` array.
    * Called at the START of each Executing turn so messages pushed via

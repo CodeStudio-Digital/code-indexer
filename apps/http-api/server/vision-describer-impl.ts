@@ -28,7 +28,9 @@ const VISION_SYSTEM =
   'description that answers the instruction. Describe ONLY what is visible — never invent ' +
   'content. Be structured and specific: layout and structure, each UI component and its ' +
   'position, text labels, colors, typography, spacing/alignment, and any visible defects ' +
-  '(misalignment, overflow, clipping, low contrast) when relevant. No preamble, no markdown fences.';
+  '(misalignment, overflow, clipping, low contrast) when relevant. If the instruction asks ' +
+  'about something not visible in the image, say so explicitly instead of guessing. ' +
+  'No preamble, no markdown fences.';
 
 /** Tiny FIFO/LRU map: re-describing the same image+prompt in one process is free. */
 class DescribeCache {
@@ -85,6 +87,10 @@ export function createVisionDescriber(deps: VisionDescriberDeps): IVisionDescrib
         );
       }
 
+      const kb = Math.max(1, Math.round((req.base64.length * 3) / 4 / 1024));
+      try {
+        console.error(`[vision] describe ~${kb}KB via ${bind.provider.id}/${bind.modelId} — "${req.prompt.slice(0, 60)}"`);
+      } catch { /* noop */ }
       const provider = await createCoderProvider(bind.provider.id, bind.modelId);
       const messages: AgentMessage[] = [
         {

@@ -49,6 +49,10 @@ export interface GlobalTelemetrySummary {
     total_output_chars: number;
     avg_duration_ms: number;
     truncated_count: number;
+    /** Real tool failures (is_error=1) EXCLUDING loop-guard refusals (mig 124). */
+    errors: number;
+    /** Loop-guard refusals (dedup / failure-streak) — NOT tool failures (mig 124). */
+    refused: number;
   }>;
   /** Migration 072 — phase breakdown (Camada 2). */
   phase_breakdown: Array<{
@@ -221,7 +225,9 @@ export function getGlobalTelemetrySummary(
           COUNT(*)                                  AS calls,
           COALESCE(SUM(tc.output_chars), 0)         AS total_output_chars,
           COALESCE(AVG(tc.duration_ms), 0)          AS avg_duration_ms,
-          COALESCE(SUM(tc.truncated), 0)            AS truncated_count
+          COALESCE(SUM(tc.truncated), 0)            AS truncated_count,
+          COALESCE(SUM(CASE WHEN tc.is_error=1 AND tc.refusal_kind IS NULL THEN 1 ELSE 0 END), 0) AS errors,
+          COALESCE(SUM(CASE WHEN tc.refusal_kind IS NOT NULL THEN 1 ELSE 0 END), 0) AS refused
        FROM coder_tool_calls tc
        JOIN coder_messages m ON m.id = tc.message_id
        ${toolWhere}

@@ -9,6 +9,7 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import { buildPipelineMasterTools } from '@mcp/company/tools/pipeline-tools.js';
+import { buildReviewSubordinateTool, type MasterReviewDeps } from '@mcp/company/tools/review-subordinate.js';
 import { resolveAgentRunId } from '@mcp/company/tools/path-resolution.js';
 import { observeOutcome } from '@mcp/services/shadow-traffic/index.js';
 
@@ -23,7 +24,10 @@ function fnv1aHash(text: string): string {
   return (h >>> 0).toString(16);
 }
 
-export function buildMasterTools(orchestrator: CompanyOrchestrator): CoderTool[] {
+export function buildMasterTools(
+  orchestrator: CompanyOrchestrator,
+  reviewDeps?: MasterReviewDeps,
+): CoderTool[] {
   return [
     spawnSubordinateAgent(orchestrator),
     waitForSubordinates(orchestrator),
@@ -39,6 +43,9 @@ export function buildMasterTools(orchestrator: CompanyOrchestrator): CoderTool[]
     listContainers(orchestrator),
     readContainerLogs(orchestrator),
     respondToInbox(orchestrator),
+    // review_subordinate_work — only wired when the host supplies db access
+    // (runCoder does; the lightweight tool unit tests don't, and don't need it).
+    ...(reviewDeps ? [buildReviewSubordinateTool(orchestrator, reviewDeps)] : []),
     ...buildPipelineMasterTools(orchestrator),
   ];
 }
@@ -311,7 +318,7 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
         }
 
         const event = await new Promise<
-          | { kind: 'question' | 'plan' | 'tasks' | 'finished'; agentRunId: number; role: string }
+          | { kind: 'question' | 'plan' | 'tasks' | 'finished' | 'user_message'; agentRunId: number; role: string }
           | { kind: 'timeout' }
         >((resolve) => {
           let done = false;
@@ -333,6 +340,14 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
           }, remaining);
         });
 
+        if (event.kind === 'user_message') {
+          return ok(
+            'The human sent you a message while you were waiting — it is already ' +
+            'in your message queue. Read it next and respond now. Subordinates are ' +
+            'still running: call wait_for_subordinates again after you reply to keep ' +
+            'waiting for them.',
+          );
+        }
         if (event.kind === 'question' || event.kind === 'plan' || event.kind === 'tasks') {
           return ok(
             `Subordinate @${event.role} (run=${event.agentRunId}) needs your attention: posted a ${event.kind}. ` +

@@ -88,7 +88,7 @@ export const previewNavigateTool: CoderTool = {
 export const previewViewportTool: CoderTool = {
   name: 'preview_viewport',
   description:
-    'Set the preview viewport (DevTools device mode) for accurate layout / responsive debugging — screenshots and CSS inspection then reflect this EXACT size, independent of the OS window. Use a `preset` (mobile/tablet/desktop/laptop/hd/fullhd) or custom width/height. `mobile:true` enables touch + a mobile user-agent so responsive sites switch to their mobile layout.',
+    'Resize the preview window to a target viewport for responsive debugging — screenshots and layout then reflect this size. Use a `preset` (mobile/tablet/desktop/laptop/hd/fullhd) or custom width/height; WIDTH-based breakpoints react (mobile nav, stacking, overflow). Note: resizes the real window (clamped to your screen); it does not emulate touch or a mobile user-agent yet, so sites that switch purely on UA/touch may not.',
   source: 'native',
   parameters: {
     type: 'object',
@@ -100,8 +100,8 @@ export const previewViewportTool: CoderTool = {
       },
       width: { type: 'number', description: 'Custom viewport width (px); overrides preset.' },
       height: { type: 'number', description: 'Custom viewport height (px); overrides preset.' },
-      deviceScaleFactor: { type: 'number', description: 'Pixel density (1 = normal, 2-3 = retina/mobile). Default 1.' },
-      mobile: { type: 'boolean', description: 'Emulate a mobile device (touch + mobile UA + mobile viewport meta).' },
+      deviceScaleFactor: { type: 'number', description: 'Informational pixel density (1 = normal). Reserved.' },
+      mobile: { type: 'boolean', description: 'Hint that this is a mobile size (width still drives the layout).' },
     },
     additionalProperties: false,
   },

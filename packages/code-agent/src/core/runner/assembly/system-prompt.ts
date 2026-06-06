@@ -26,7 +26,15 @@
 // `update_task` promoted to BOOTSTRAP_TOOLS. Old fingerprints must
 // invalidate so PR-D's skip-stale gate re-runs anything that depended
 // on the old tool surface.
-export const SYSTEM_PROMPT_VERSION = '20260528.1';
+// P1 bump — goal tools (create_goal/get_goal/update_goal) + update_todo
+// promoted from silent bootstrap fallback to explicit BOOTSTRAP_TOOLS.
+// 2026-06-05.2 bump — prompt accuracy/consistency pass: product name (MCP IDE),
+// memory via save_memory (navigate), execute_tasks flow, current kanban tool
+// names, master-vs-subordinate builder scoping, refreshed bootstrap tier-hint
+// list. Static prefix changed → invalidate stale fingerprints.
+// 2026-06-05.3 bump — added the gated "Session working memory" section
+// (save_note/list_notes/read_plan/recall_investigations) for non-company sessions.
+export const SYSTEM_PROMPT_VERSION = '20260605.3';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

@@ -9,11 +9,11 @@
 import type { BrowserWindow } from 'electron';
 
 export interface Viewport { width: number; height: number; deviceScaleFactor: number; mobile: boolean }
-/** Default emulated viewport (HD) — deterministic so debug/screenshots are
- *  representative instead of whatever the OS window happens to be. */
+/** Default preview viewport (HD). Applied as the native window CONTENT size —
+ *  see PreviewWindowService — which is crash-safe (no CDP Emulation override,
+ *  which destabilised Chromium on some Windows/Electron builds). Width-based
+ *  responsive breakpoints work; true touch/UA device emulation is deferred. */
 export const DEFAULT_VIEWPORT: Viewport = { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false };
-const MOBILE_UA =
-  'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
 
 export interface ConsoleEntry { level: string; text: string; ts: number }
 export interface NetEntry { requestId: string; url: string; method: string; status?: number; statusText?: string; failed?: boolean; errorText?: string; body?: string; ts: number }
@@ -28,58 +28,25 @@ export class PreviewWindow {
   private network: NetEntry[] = [];
   private netById = new Map<string, NetEntry>();
   private waiters: Waiter[] = [];
-  /** Current emulated viewport (DevTools device-metrics override). */
+  /** Current viewport (native window content size — informational). */
   viewport: Viewport = { ...DEFAULT_VIEWPORT };
+
+  /** Bound CDP message handler — kept so `close()` can detach it. */
+  private readonly onMessage: (e: unknown, method: string, params: unknown) => void;
 
   constructor(public win: BrowserWindow, public url: string) {
     this.id = win.id;
     const dbg = win.webContents.debugger;
     try { dbg.attach('1.3'); } catch { /* already attached */ }
-    dbg.on('message', (_e, method, params) => this.onCdp(method, params as Record<string, unknown>));
+    this.onMessage = (_e, method, params) => this.onCdp(method, params as Record<string, unknown>);
+    dbg.on('message', this.onMessage);
     for (const d of ['Runtime', 'Network', 'Log', 'Page', 'Performance', 'DOM', 'CSS']) {
       void dbg.sendCommand(`${d}.enable`).catch(() => undefined);
     }
-    void this.setViewport(DEFAULT_VIEWPORT);
   }
 
   async send(method: string, params?: Record<string, unknown>): Promise<unknown> {
     return this.win.webContents.debugger.sendCommand(method, params ?? {});
-  }
-
-  /**
-   * Set the emulated viewport via CDP device-metrics override — the page
-   * renders at EXACTLY this size regardless of the OS window, so layout
-   * inspection and screenshots are deterministic. `mobile` also enables touch
-   * + a mobile UA so responsive/UA-sniffing sites switch to their mobile view.
-   */
-  async setViewport(v: Partial<Viewport>): Promise<Viewport> {
-    const next: Viewport = {
-      width: Math.max(200, Math.round(v.width ?? this.viewport.width)),
-      height: Math.max(200, Math.round(v.height ?? this.viewport.height)),
-      deviceScaleFactor: v.deviceScaleFactor ?? this.viewport.deviceScaleFactor ?? 1,
-      mobile: v.mobile ?? this.viewport.mobile ?? false,
-    };
-    try {
-      await this.send('Emulation.setDeviceMetricsOverride', {
-        width: next.width,
-        height: next.height,
-        deviceScaleFactor: next.deviceScaleFactor || 1,
-        mobile: next.mobile,
-        screenWidth: next.width,
-        screenHeight: next.height,
-      });
-      await this.send('Emulation.setTouchEmulationEnabled', {
-        enabled: next.mobile,
-        maxTouchPoints: next.mobile ? 5 : 0,
-      }).catch(() => undefined);
-      await this.send('Emulation.setUserAgentOverride', {
-        userAgent: next.mobile ? MOBILE_UA : this.win.webContents.getUserAgent(),
-      }).catch(() => undefined);
-    } catch {
-      /* degrade — emulation unsupported */
-    }
-    this.viewport = next;
-    return next;
   }
 
   /** Reset console/network ring buffers — called on navigate / window reuse so
@@ -114,6 +81,7 @@ export class PreviewWindow {
   }
 
   close(): void {
+    try { this.win.webContents.debugger.removeListener('message', this.onMessage); } catch { /* gone */ }
     try { this.win.webContents.debugger.detach(); } catch { /* gone */ }
     try { this.win.close(); } catch { /* gone */ }
   }
@@ -121,6 +89,16 @@ export class PreviewWindow {
   private push<T>(buf: T[], item: T): void {
     buf.push(item);
     if (buf.length > CAP) buf.shift();
+  }
+  /** Like `push`, but keeps `netById` in sync: when an entry rolls off the
+   *  network ring buffer, its `netById` lookup entry is evicted too. Without
+   *  this the map grows unbounded on a long-lived page making many requests. */
+  private pushNet(item: NetEntry): void {
+    this.network.push(item);
+    if (this.network.length > CAP) {
+      const removed = this.network.shift();
+      if (removed) this.netById.delete(removed.requestId);
+    }
   }
   private fire(kind: 'console' | 'network', e: unknown): void {
     for (const w of this.waiters.slice()) {
@@ -148,7 +126,7 @@ export class PreviewWindow {
       const req = p.request as { url?: string; method?: string } | undefined;
       const e: NetEntry = { requestId: String(p.requestId), url: req?.url ?? '', method: req?.method ?? 'GET', ts: Date.now() };
       this.netById.set(e.requestId, e);
-      this.push(this.network, e);
+      this.pushNet(e);
     } else if (method === 'Network.responseReceived') {
       const res = p.response as { status?: number; statusText?: string } | undefined;
       const e = this.netById.get(String(p.requestId));
@@ -166,6 +144,16 @@ export class PreviewWindow {
         e.errorText = String(p.errorText ?? (p.blockedReason ? `blocked: ${p.blockedReason}` : 'request failed'));
         this.fire('network', e);
       }
+    } else if (method === 'Page.javascriptDialogOpening') {
+      // Native alert()/confirm()/prompt()/beforeunload BLOCK the renderer (and
+      // every CDP command) until answered — so an unanswered dialog froze the
+      // whole agent preview. Auto-accept so flows proceed, and record it in the
+      // console buffer so the agent SEES that a dialog appeared and what it said.
+      const d = p as { type?: string; message?: string };
+      const e: ConsoleEntry = { level: 'dialog', text: `[${d.type ?? 'dialog'}] ${d.message ?? ''}`.trim(), ts: Date.now() };
+      this.push(this.console, e);
+      this.fire('console', e);
+      void this.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => undefined);
     }
   }
 }

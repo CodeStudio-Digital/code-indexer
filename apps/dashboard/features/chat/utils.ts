@@ -123,11 +123,6 @@ export function groupMessages(
 
     if (msg.role === 'tool') continue;
 
-    // Hide the synthetic tool-image plumbing bubble — its image is rendered
-    // inline under the tool call instead (see MessageList resultsById). Skip
-    // WITHOUT flushing so the agent's tool-only group keeps accumulating.
-    if (isToolImagePlumbing(msg)) continue;
-
     if (msg.role === 'user') {
       flushPending();
       groups.push({ kind: 'user', message: msg, messageId: row?.id, usage: row });

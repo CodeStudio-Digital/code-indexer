@@ -19,6 +19,7 @@ import { validateTasksInput } from '@mcp/code-agent/tools/tasks.js';
 import type { CoderTask, TaskExecutionMode, TasksState } from '@mcp/code-agent/sessions/types.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { submitSpecificationToMaster } from './subordinate/submit-specification.js';
+import { awaitMasterDecision } from './subordinate/await-master.js';
 
 // ─── ask_master ───────────────────────────────────────────────────
 
@@ -81,10 +82,17 @@ export const askMaster: CoderTool = {
       allowFreeform,
     });
 
-    const answer = await runner.waitForUserInput();
-    let parsed: { aborted?: boolean; answer?: string };
+    const answer = await awaitMasterDecision(runner);
+    let parsed: { aborted?: boolean; interrupted?: boolean; answer?: string };
     try { parsed = JSON.parse(answer); } catch { parsed = { answer }; }
     if (parsed.aborted) return err('Question aborted by Master.');
+    if (parsed.interrupted) {
+      return err(
+        'The Master did not respond in time and may be unavailable. Proceed using your best ' +
+        'judgment, document any assumptions you make, and finish with a clear summary of what ' +
+        'still needs the Master.',
+      );
+    }
     // Reformat as "Master answered:" for clarity in the subordinate's context
     return ok(`Master answered: ${parsed.answer ?? answer}`);
   },
@@ -127,10 +135,18 @@ export const submitPlanToMaster: CoderTool = {
     // Emit the same event as submit_plan — orchestrator intercepts it
     runner.emit('plan_posted', { type: 'plan', id, plan });
 
-    const raw = await runner.waitForUserInput();
-    let parsed: { approved?: boolean; feedback?: string; aborted?: boolean };
+    const raw = await awaitMasterDecision(runner);
+    let parsed: { approved?: boolean; feedback?: string; aborted?: boolean; interrupted?: boolean };
     try { parsed = JSON.parse(raw); } catch { parsed = { approved: false, feedback: raw }; }
 
+    if (parsed.interrupted) {
+      ctx.resolvePlan?.(id, 'aborted', 'master_unavailable');
+      return err(
+        'The Master did not review your plan in time and may be unavailable. If the work is ' +
+        'safe and reversible, proceed with best-effort assumptions and summarize; otherwise ' +
+        'finish with a clear note on what needs Master approval.',
+      );
+    }
     if (parsed.aborted) {
       ctx.resolvePlan?.(id, 'aborted', parsed.feedback);
       return err('Plan review aborted by Master.');
@@ -260,11 +276,12 @@ export const submitTasksToMaster: CoderTool = {
       version: 1,
     });
 
-    const raw = await runner.waitForUserInput();
+    const raw = await awaitMasterDecision(runner);
     let parsed: {
       approved?: boolean;
       feedback?: string;
       aborted?: boolean;
+      interrupted?: boolean;
       tasks?: CoderTask[];
       execution_mode?: TaskExecutionMode;
     };
@@ -274,6 +291,14 @@ export const submitTasksToMaster: CoderTool = {
       parsed = { approved: false, feedback: raw };
     }
 
+    if (parsed.interrupted) {
+      ctx.resolveTasks?.({ approved: false });
+      return err(
+        'The Master did not review your task list in time and may be unavailable. Proceed on ' +
+        'the safe, independent tasks with best-effort assumptions and summarize what still ' +
+        'needs Master approval.',
+      );
+    }
     if (parsed.aborted) {
       ctx.resolveTasks?.({ approved: false });
       return err('Task list review aborted by Master.');
@@ -290,7 +315,7 @@ export const submitTasksToMaster: CoderTool = {
       const fb = parsed.feedback ? ` Master feedback: ${parsed.feedback}` : '';
       return ok(
         `Tasks approved by Master. Execution mode: ${mode}. ${finalTasks.length} task(s) ready.${fb}\n` +
-        'Call list_tasks if unsure, then execute_task with the generated tsk_... ids in dependency order.',
+        'Call list_tasks if unsure, then execute_tasks once to run the approved list.',
       );
     }
     ctx.resolveTasks?.({ approved: false });

@@ -77,6 +77,37 @@ export const TURN_BUDGET_CHARS = readEnvInt('CODER_TURN_BUDGET_CHARS', 30_000);
 export const DOOM_LOOP_FUZZY_THRESHOLD = readEnvInt('CODER_DOOM_LOOP_FUZZY_THRESHOLD', 6);
 
 /**
+ * Tools the FUZZY doom-loop (name-only) is allowed to watch.
+ *
+ * Fuzzy fires on "same tool name N-of-M turns regardless of args/result" —
+ * which is a LOOP for session-state churn (create_goal with rotating text,
+ * status spam, re-submitting plans) but NORMAL for productive work: reading,
+ * editing, or searching DIFFERENT files 6× in a row is exploration /
+ * refactoring, not a loop. gpt-5.5 emits 1 tool/turn, so 6 reads = 6 turns —
+ * fuzzy would false-fire constantly without this scope.
+ *
+ * So fuzzy is restricted to this small allowlist; everything else (reads,
+ * edits, search, exec, file ops) is exempt from fuzzy. The PRECISE guards
+ * still cover those: strict doom-loop (identical args), tuple-hash / pre-read
+ * (identical call / same slice), failure-streak (consecutive errors), and the
+ * dominance guard (one tool, 15+ turns, ZERO assistant text). A new tool
+ * defaults to NOT being fuzzy-watched — the safe direction (no false
+ * positives; a genuine new churn-loop still hits strict/dominance).
+ */
+export const FUZZY_LOOP_TOOLS: ReadonlySet<string> = new Set<string>([
+  'create_goal',
+  'update_goal',
+  'get_goal',
+  'set_agent_status',
+  'submit_plan',
+  'submit_plan_to_master',
+  'submit_tasks',
+  'submit_tasks_to_master',
+  'expand_toolset',
+  'find_tools',
+]);
+
+/**
  * PR 5 — fuzzy doom-loop tolerance window.
  *
  * The legacy fuzzy check fired only when ALL last `THRESHOLD` signatures
@@ -99,6 +130,27 @@ export function doomLoopFuzzyTolerance(threshold: number): number {
   if (!Number.isFinite(n) || n < 0) return defaultTol;
   // Need at least 2 matches to claim a loop.
   return Math.min(Math.floor(n), Math.max(0, threshold - 2));
+}
+
+/**
+ * Dominance guard (`guards/dominance.ts`). Catches one tool eating a long
+ * window of turns with ZERO assistant text — the silent-grind runaway
+ * (session 609: 50+ turns of `mcp__read_file`, no narration). Lazy readers so
+ * tests can override via `vi.stubEnv`. Kill switch: `CODER_DOMINANCE=0`.
+ *
+ *   - window: turns inspected (default 15).
+ *   - ratio:  fraction of the window a single tool must own (default 0.8).
+ */
+export function dominanceWindow(): number {
+  return envInt('CODER_DOMINANCE_WINDOW', 15);
+}
+export function dominanceRatio(): number {
+  const v = process.env.CODER_DOMINANCE_RATIO;
+  if (v != null && v !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0 && n <= 1) return n;
+  }
+  return 0.8;
 }
 
 /**
@@ -246,4 +298,14 @@ export function canRunSummarizer(args: {
   if (args.runCount >= args.maxRuns) return false;
   if (args.runCount === 0) return true;
   return args.currentTurn - args.lastTurn >= args.cooldownTurns;
+}
+
+/**
+ * Fix A — stop PUSHING the `self_review` nudge after this many auto-reviews
+ * this session. The `self_review` TOOL stays available; we just stop the
+ * per-turn reminder that amplifies the review→fix→review doom-loop
+ * (session 887). `<= 0` disables the cap. Lazy reader for `vi.stubEnv`.
+ */
+export function selfReviewMaxNudges(): number {
+  return envInt('CODER_SELF_REVIEW_MAX', 3);
 }

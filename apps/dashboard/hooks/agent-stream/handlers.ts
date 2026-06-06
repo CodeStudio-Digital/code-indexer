@@ -561,6 +561,23 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       }
     },
 
+    session_drive_changed: (data) => {
+      // Agent wrote to the Session Drive (a `remember` note or an
+      // auto-captured investigation). Bridge to a DOM event so the Drive
+      // panel refetches live instead of polling.
+      if (typeof window === 'undefined') return;
+      const d = data as { kind?: string };
+      try {
+        window.dispatchEvent(
+          new CustomEvent('coder:drive_changed', {
+            detail: { sessionId: sid, kind: d.kind },
+          }),
+        );
+      } catch {
+        /* defensive */
+      }
+    },
+
     tool_loop_intervention: (data) => {
       // Server-emitted when any of the four loop-detection guards fired.
       // Prepend so the most recent intervention shows first; cap at 5 to

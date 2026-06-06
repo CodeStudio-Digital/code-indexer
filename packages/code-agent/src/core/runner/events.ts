@@ -546,4 +546,10 @@ export interface RunnerEvents {
   session_agent_changed: (payload: {
     agent: import('@mcp/code-agent/agents/index.js').AgentId;
   }) => void;
+  /**
+   * Session Drive write — the agent saved a `remember` note or a sub-agent
+   * investigation was auto-captured. The SSE layer forwards it so the
+   * dashboard's Drive panel refetches live instead of polling.
+   */
+  session_drive_changed: (payload: { kind: 'memory' | 'investigation' }) => void;
 }

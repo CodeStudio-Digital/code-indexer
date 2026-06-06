@@ -115,7 +115,7 @@ export const submitSpec: CoderTool = {
             text:
               `<system-reminder>Mode transition: Spec → Build. The spec at ${written.relPath} was approved. ` +
               `Derive tasks from its "## Implementation Plan" section, call submit_tasks with files+complexity per step, ` +
-              `then execute each task inside an execute_task scope. The spec-mode gate is now released; mutating tools are unlocked.</system-reminder>`,
+              `then call execute_tasks once to run them. The spec-mode gate is now released; mutating tools are unlocked.</system-reminder>`,
           },
         ];
       }

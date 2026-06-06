@@ -11,6 +11,7 @@ export type AgentRunStatus =
   | 'completed'
   | 'error'
   | 'aborted'
+  | 'paused'
   | 'interrupted';
 
 export interface CompanyAgentRun {

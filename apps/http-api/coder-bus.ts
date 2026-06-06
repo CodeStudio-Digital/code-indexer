@@ -190,7 +190,7 @@ export function subscribe(
  * client disconnected). Resolves in both cases so the caller's finally block
  * always runs and can clean up subscriptions / schedule orchestrator eviction.
  */
-export function waitEnded(bus: CoderRunBus, signal?: AbortSignal, _pollMs = 200): Promise<void> {
+export function waitEnded(bus: CoderRunBus, signal?: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
     if (bus.ended || signal?.aborted) return resolve();
     let settled = false;

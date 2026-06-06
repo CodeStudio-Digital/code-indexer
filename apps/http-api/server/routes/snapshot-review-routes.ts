@@ -10,6 +10,7 @@ import {
 } from '@mcp/store/session-file-review-store.js';
 import { SessionSnapshotService, type FileDiff } from '@mcp/services/services/session-snapshots.js';
 import { SnapshotReviewPipeline } from '@mcp/services/services/snapshot-review-pipeline.js';
+import { filterReviewableDiffs } from '@mcp/services/services/snapshot-review-ignore.js';
 
 type Scope = 'coder' | 'company';
 
@@ -241,7 +242,10 @@ export function mountSnapshotReviewRoutes(
     const sessionId = parseIdParam(c);
     if (!Number.isFinite(sessionId)) return c.json({ error: 'bad id' }, 400);
     const run = reviewStore.createRun({ session_kind: scope, session_id: sessionId, source: 'auto' });
-    const diffs = await loadDiffs(snapshotService, activeBaselineIds(snapshotStore, scope, sessionId, opts));
+    // Skip internal/never-reviewed paths (.mcp-indexer/**, .git, node_modules, dist).
+    const diffs = filterReviewableDiffs(
+      await loadDiffs(snapshotService, activeBaselineIds(snapshotStore, scope, sessionId, opts)),
+    );
     const pendingHunks = diffs.reduce(
       (sum, diff) => sum + (diff.diffDisabled ? 0 : diff.hunks.filter((h) => h.decision === 'pending').length),
       0,

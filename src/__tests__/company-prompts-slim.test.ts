@@ -18,6 +18,7 @@ import {
   buildMasterCompanyBlock,
   buildSubordinateCompanyBlock,
 } from '@mcp/company/system-prompts.js';
+import { readOperationalRules } from '@mcp/company/services/master/config-loader.js';
 
 const MASTER_CAP_CHARS = 8000;
 const SUBORDINATE_CAP_CHARS = 4500;
@@ -52,5 +53,73 @@ describe('company prompt size caps (Phase F)', () => {
     expect(block).toMatch(/post_to_board\(kind="deliverable"/);
     expect(block).toMatch(/ask_master/);
     expect(block).toMatch(/send_to_master/);
+  });
+});
+
+describe('operational rules injection', () => {
+  // A distinctive marker that would never appear in the base prompt, so a
+  // match proves the operator's text reached the assembled block verbatim.
+  const SENTINEL = 'NUNCA normalizar enum do backend — SENTINELA-OPS-7F3';
+
+  it('injects the operational rules verbatim into the master prompt', () => {
+    const block = buildMasterCompanyBlock({
+      roster: [{ role: 'backend', provider: 'anthropic', model: 'claude-haiku-4-5', tier: 'navigate' }],
+      projects: [{ id: 1, name: 'demo', rootPath: '/tmp/demo' }],
+      operationalRules: SENTINEL,
+    });
+    expect(block).toContain(SENTINEL);
+    // The master is told to ENFORCE, not relay — the behavioral unlock that
+    // stops the lossy re-transmission of rules into every delegated task.
+    expect(block).toMatch(/OPERATIONAL RULES \(MANDATORY/);
+    expect(block).toMatch(/do NOT copy them into the/i);
+  });
+
+  it('injects the SAME rules verbatim into every subordinate prompt', () => {
+    const block = buildSubordinateCompanyBlock({
+      role: 'backend',
+      projects: [{ id: 1, name: 'demo', rootPath: '/tmp/demo' }],
+      operationalRules: SENTINEL,
+    });
+    expect(block).toContain(SENTINEL);
+    expect(block).toMatch(/OPERATIONAL RULES \(MANDATORY\)/);
+  });
+
+  it('renders no rules section when operationalRules is absent (legacy shape)', () => {
+    const master = buildMasterCompanyBlock({
+      roster: [{ role: 'backend', provider: 'anthropic', model: 'claude-haiku-4-5', tier: 'navigate' }],
+      projects: [{ id: 1, name: 'demo', rootPath: '/tmp/demo' }],
+    });
+    const sub = buildSubordinateCompanyBlock({
+      role: 'backend',
+      projects: [{ id: 1, name: 'demo', rootPath: '/tmp/demo' }],
+    });
+    expect(master).not.toMatch(/OPERATIONAL RULES/);
+    expect(sub).not.toMatch(/OPERATIONAL RULES/);
+  });
+});
+
+describe('readOperationalRules (config_json parse)', () => {
+  it('returns the trimmed rules when present', () => {
+    const cfg = JSON.stringify({ operational_rules: '  validate contracts  ', master_model: 'x' });
+    expect(readOperationalRules(cfg)).toBe('validate contracts');
+  });
+
+  it('returns undefined for missing / blank / non-string / null / malformed', () => {
+    expect(readOperationalRules(null)).toBeUndefined();
+    expect(readOperationalRules(undefined)).toBeUndefined();
+    expect(readOperationalRules('{}')).toBeUndefined();
+    expect(readOperationalRules(JSON.stringify({ operational_rules: '   ' }))).toBeUndefined();
+    expect(readOperationalRules(JSON.stringify({ operational_rules: 42 }))).toBeUndefined();
+    expect(readOperationalRules('not json{')).toBeUndefined();
+  });
+
+  it('passes normal-size docs untouched but caps pathological payloads', () => {
+    const normal = 'a'.repeat(8000); // ~the user's 8.8KB canonical doc
+    expect(readOperationalRules(JSON.stringify({ operational_rules: normal }))).toBe(normal);
+
+    const huge = 'b'.repeat(20000);
+    const out = readOperationalRules(JSON.stringify({ operational_rules: huge }))!;
+    expect(out.length).toBeLessThan(huge.length);
+    expect(out).toMatch(/truncated/);
   });
 });

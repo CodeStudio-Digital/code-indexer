@@ -12,6 +12,8 @@ import { createChatProviderAsync } from '../providers/factory.js';
 import { pickChatFn } from '../quality/chat-dispatcher.js';
 import type { ChatCallOptions, ChatCallResult, ChatMessage } from '../quality/llm-chat.js';
 import type { FileDiff } from './session-snapshots.js';
+import { buildMessages } from './snapshot-review-prompt.js';
+import { filterReviewableDiffs } from './snapshot-review-ignore.js';
 
 export type SnapshotReviewSeverity = 'critical' | 'high' | 'medium' | 'low';
 
@@ -110,27 +112,6 @@ function renderDiffs(diffs: FileDiff[]): { text: string; pendingHunks: number } 
     for (const hunk of hunks) chunks.push(renderHunk(diff, hunk));
   }
   return { text: truncate(chunks.join('\n\n'), MAX_DIFF_CHARS), pendingHunks };
-}
-
-function buildMessages(diffText: string): ChatMessage[] {
-  return [
-    {
-      role: 'system',
-      content:
-        'You are a senior code-review bot. Review only the provided unified diffs. ' +
-        'Return strict JSON, no markdown. Prefer high-signal findings: correctness, security, data loss, race conditions, missing tests for risky logic.',
-    },
-    {
-      role: 'user',
-      content:
-        'Review these active session snapshot changes. Respond with exactly this JSON shape:\n' +
-        '{"findings":[{"severity":"critical|high|medium|low","filePath":"path","baselineId":123,' +
-        '"hunkFingerprint":"hex","oldLine":null,"newLine":42,"body":"actionable comment",' +
-        '"suggestedFix":"optional concise fix","diffExcerpt":"optional short relevant diff"}]}\n\n' +
-        'Rules: omit nitpicks, do not invent code outside the diff, include baselineId/hunkFingerprint when available, and use null for unknown lines.\n\n' +
-        diffText,
-    },
-  ];
 }
 
 function extractJson(raw: string): unknown {
@@ -316,7 +297,7 @@ export class SnapshotReviewPipeline {
         });
       }
 
-      const rendered = renderDiffs(input.diffs);
+      const rendered = renderDiffs(filterReviewableDiffs(input.diffs));
       pendingHunks = rendered.pendingHunks;
       const cfg = binding.config;
       const result = await callConfiguredChat(binding, buildMessages(rendered.text), {

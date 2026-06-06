@@ -37,8 +37,7 @@ export class PreviewWindowService implements IPreviewDevtools {
 
     switch (method) {
       case 'viewport': {
-        const v = await pw.setViewport(resolveViewport(args, pw.viewport));
-        this.fitWindow(pw, v);
+        const v = this.applyViewport(pw, resolveViewport(args, pw.viewport));
         return { ok: true, viewport: v };
       }
       case 'navigate':
@@ -139,8 +138,7 @@ export class PreviewWindowService implements IPreviewDevtools {
       existing.clearBuffers();
       await existing.win.loadURL(url);
       existing.url = url;
-      const v = await existing.setViewport(initial);
-      this.fitWindow(existing, v);
+      const v = this.applyViewport(existing, initial);
       return { windowId: existing.id, url, viewport: v };
     }
     const { width, height } = this.clampToScreen(initial.width, initial.height);
@@ -156,8 +154,8 @@ export class PreviewWindowService implements IPreviewDevtools {
     const pw = new PreviewWindow(win, url);
     this.byKey.set(key, pw);
     await win.loadURL(url);
-    const v = await pw.setViewport(initial);
-    return { windowId: pw.id, url, viewport: v };
+    pw.viewport = initial;
+    return { windowId: pw.id, url, viewport: initial };
   }
 
   /** Clamp a desired content size to the primary display work area. */
@@ -166,12 +164,20 @@ export class PreviewWindowService implements IPreviewDevtools {
     return { width: Math.min(Math.max(320, w), wa.width), height: Math.min(Math.max(320, h), wa.height) };
   }
 
-  /** Resize the OS window content to match the viewport when it fits the
-   *  screen; larger viewports stay clamped (device-metrics keeps them exact). */
-  private fitWindow(pw: PreviewWindow, v: Viewport): void {
-    if (pw.win.isDestroyed()) return;
-    const { width, height } = this.clampToScreen(v.width, v.height);
-    try { pw.win.setContentSize(width, height); } catch { /* best-effort */ }
+  /**
+   * Apply a viewport by resizing the OS window's CONTENT area (native, crash-
+   * safe) — width-based responsive breakpoints react. Clamped to the screen
+   * work area. NOTE: no CDP device-metrics override (that destabilised
+   * Chromium on some Windows/Electron builds), so true touch/mobile-UA
+   * emulation is deferred; width is what drives most responsive layouts.
+   */
+  private applyViewport(pw: PreviewWindow, v: Viewport): Viewport {
+    if (!pw.win.isDestroyed()) {
+      const { width, height } = this.clampToScreen(v.width, v.height);
+      try { pw.win.setContentSize(width, height); } catch { /* best-effort */ }
+    }
+    pw.viewport = v;
+    return v;
   }
 
   closeKey(key: string): void {

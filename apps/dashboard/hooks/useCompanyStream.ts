@@ -17,6 +17,7 @@ import type { SSEEvent } from '@mcp/shared/sse/SSEFramer.js';
 import type { MasterPrompt } from '@mcp/company-contracts';
 
 import type { AgentAttachment } from './agent-stream/types.js';
+import { useAgentControls } from './useAgentControls.js';
 import { useCompanyStore, selectStream } from '../state/company/index.js';
 import type { DriveFileMeta } from '../state/company/driveSlice.js';
 import type {
@@ -55,6 +56,7 @@ export function useCompanyStream(companySessionId: number | null) {
   const streamApplyAgentEvent = useCompanyStore((s) => s.streamApplyAgentEvent);
   const streamApplyAgentStatus = useCompanyStore((s) => s.streamApplyAgentStatus);
   const streamApplySubordinateWaiting = useCompanyStore((s) => s.streamApplySubordinateWaiting);
+  const streamRemoveSubordinate = useCompanyStore((s) => s.streamRemoveSubordinate);
   const streamApplyBoardEntry = useCompanyStore((s) => s.streamApplyBoardEntry);
   const streamApplyMasterPrompt = useCompanyStore((s) => s.streamApplyMasterPrompt);
   const streamApplySessionIdle = useCompanyStore((s) => s.streamApplySessionIdle);
@@ -663,6 +665,14 @@ export function useCompanyStream(companySessionId: number | null) {
     }
   }, [companySessionId]);
 
+  // Per-agent (subordinate) control — pause / resume / delete. Lives in a
+  // dedicated hook to keep this file from growing further.
+  const { pauseAgent, resumeAgent, deleteAgent } = useAgentControls(
+    companySessionId,
+    streamSetError,
+    streamRemoveSubordinate,
+  );
+
   return {
     connected: stream.connected,
     started: stream.started,
@@ -696,6 +706,9 @@ export function useCompanyStream(companySessionId: number | null) {
     respondToMasterQuestion,
     hydrateMasterPrompts,
     wakeMaster,
+    pauseAgent,
+    resumeAgent,
+    deleteAgent,
   };
 }
 

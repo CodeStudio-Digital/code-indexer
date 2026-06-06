@@ -22,14 +22,14 @@ pnpm node:rebuild       # before running pnpm dev (Node ABI)
 
 ## What `pnpm electron:dev` does
 
-1. Starts Vite dev server on `:5173` (serves the React dashboard).
+1. Starts Vite dev server on `:7317` (serves the React dashboard).
 2. Spawns Electron via `apps/electron/dev.ts`, which:
-   - Sets `MCP_ELECTRON_DEV_URL=http://localhost:5173` so the renderer
+   - Sets `MCP_ELECTRON_DEV_URL=http://localhost:7317` so the renderer
      loads the live Vite output.
    - Sets `MCP_DEV_HTTP=1` so the Hono server also listens on
-     `127.0.0.1:3333` in parallel with the IPC bridge. The dashboard's
+     `127.0.0.1:7333` in parallel with the IPC bridge. The dashboard's
      legacy `useApi('/...')` callsites fetch via the Vite proxy →
-     `:3333`; new code uses `apiCall('namespace.method', input)` which
+     `:7333`; new code uses `apiCall('namespace.method', input)` which
      prefers IPC. Both work side by side during the migration.
    - Forwards `--import tsx/esm` so the Electron main process can
      `require` the TS files in `apps/electron/` and `apps/http-api/`
@@ -102,15 +102,15 @@ works on my machine" — tracked as a follow-up.
 ```
 ┌────────────────────────────────────────────┐
 │ pnpm electron:dev                           │
-│   ├─ vite (5173)        ── dashboard SPA    │
+│   ├─ vite (7317)        ── dashboard SPA    │
 │   └─ tsx apps/electron/dev.ts               │
 │        └─ spawns Electron                   │
 │             ├─ main process (Node)          │
 │             │   ├─ createApp() backend      │
-│             │   ├─ Hono on 127.0.0.1:3333   │ ← MCP_DEV_HTTP=1
+│             │   ├─ Hono on 127.0.0.1:7333   │ ← MCP_DEV_HTTP=1
 │             │   ├─ ipcMain handlers         │ ← IPC bridge
 │             │   └─ BrowserWindow            │
-│             │        └─ loadURL :5173       │
+│             │        └─ loadURL :7317       │
 │             └─ renderer (Chromium)          │
 │                  └─ window.electronAPI.api  │
 └────────────────────────────────────────────┘

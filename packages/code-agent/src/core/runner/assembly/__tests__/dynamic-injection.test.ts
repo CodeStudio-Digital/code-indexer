@@ -173,6 +173,79 @@ describe('computeDynamicInjection', () => {
       lastInjectedMemoryIds: new Set(['m1']),
     }))).toBeNull();
   });
+
+  it('surfaces the self_review nudge when hasReviewableChanges is set (alone)', () => {
+    const out = computeDynamicInjection(baseCtx({ hasReviewableChanges: true }));
+    expect(out).not.toBeNull();
+    expect(out!.reminder).toContain('self_review');
+    expect(out!.reminder).toContain('pending file changes');
+  });
+
+  it('does NOT surface the self_review nudge when hasReviewableChanges is false', () => {
+    expect(computeDynamicInjection(baseCtx({ hasReviewableChanges: false }))).toBeNull();
+  });
+
+  it('self_review nudge is not deduped — fires alongside other signals', () => {
+    const out = computeDynamicInjection(baseCtx({
+      newlyRegisteredSkillIds: ['s1'],
+      hasReviewableChanges: true,
+    }));
+    expect(out!.reminder).toContain('s1');
+    expect(out!.reminder).toContain('self_review');
+  });
+});
+
+describe('computeDynamicInjection — session drive channels', () => {
+  it('surfaces the active plan on turn 1 (resume)', () => {
+    const out = computeDynamicInjection(baseCtx({ turn: 1, activePlan: { text: 'my plan', status: 'approved' } }));
+    expect(out).not.toBeNull();
+    expect(out!.reminder).toContain('active plan');
+    expect(out!.reminder).toContain('my plan');
+  });
+
+  it('surfaces the active plan right after a compaction', () => {
+    const out = computeDynamicInjection(baseCtx({ recentCompactionAt: 9, activePlan: { text: 'plan body', status: 'pending' } }));
+    expect(out!.reminder).toContain('active plan');
+    expect(out!.reminder).toContain('plan body');
+  });
+
+  it('does NOT surface the plan on a steady mid-session turn', () => {
+    expect(computeDynamicInjection(baseCtx({ activePlan: { text: 'p', status: 'approved' } }))).toBeNull();
+  });
+
+  it('injects a new session-memory note once and reports its id', () => {
+    const out = computeDynamicInjection(baseCtx({ sessionMemory: [{ id: 'n1', title: 'AuthNote', body: 'jwt here' }] }));
+    expect(out!.reminder).toContain('session notes');
+    expect(out!.reminder).toContain('AuthNote');
+    expect(out!.includedSessionMemoryIds).toEqual(['n1']);
+  });
+
+  it('dedups session-memory notes already injected', () => {
+    expect(computeDynamicInjection(baseCtx({
+      sessionMemory: [{ id: 'n1', title: 'AuthNote', body: 'jwt here' }],
+      lastInjectedSessionMemoryIds: new Set(['n1']),
+    }))).toBeNull();
+  });
+
+  it('re-injects already-seen notes after a compaction', () => {
+    const out = computeDynamicInjection(baseCtx({
+      recentCompactionAt: 9,
+      sessionMemory: [{ id: 'n1', title: 'AuthNote', body: 'jwt here' }],
+      lastInjectedSessionMemoryIds: new Set(['n1']),
+    }));
+    expect(out!.reminder).toContain('AuthNote');
+    expect(out!.includedSessionMemoryIds).toEqual(['n1']);
+  });
+
+  it('nudges recall_investigations on turn 1 when investigations exist', () => {
+    const out = computeDynamicInjection(baseCtx({ turn: 1, investigationCount: 3 }));
+    expect(out!.reminder).toContain('recall_investigations');
+    expect(out!.reminder).toContain('3');
+  });
+
+  it('does NOT nudge investigations on a steady mid-session turn', () => {
+    expect(computeDynamicInjection(baseCtx({ investigationCount: 3 }))).toBeNull();
+  });
 });
 
 describe('formatDynamicInjection', () => {

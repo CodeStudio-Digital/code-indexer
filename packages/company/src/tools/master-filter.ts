@@ -49,6 +49,12 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   // MCP resource discovery — read-only static content, doesn't expose code.
   'mcp_list_resources',
   'mcp_read_resource',
+  // Session env — read-only for the master. It orchestrates, so it may
+  // ANSWER a subordinate's env question (read/list/validate) but must not
+  // mutate the shared store (no env_set / env_delete).
+  'env_list',
+  'env_read',
+  'env_validate',
 ]);
 
 /**
