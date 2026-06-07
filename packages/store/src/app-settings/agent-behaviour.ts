@@ -104,6 +104,27 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     advanced: true,
   },
   {
+    key: 'MCP_DURABLE_COMPACTION',
+    label: 'Durable compaction',
+    description:
+      'Persist automatic compaction (summary + recent tail) to the session so the next run starts compacted, reducing token cost across runs. Old messages stay reopenable via "view earlier history".',
+    type: 'bool',
+    category: 'agent',
+    default: '1',
+  },
+  {
+    key: 'CODER_COMPACT_PROTECT_RATIO',
+    label: 'Compaction keep ratio',
+    description:
+      'Fraction of the context window kept verbatim as the recent tail when compacting (the rest is summarized). Lower = cheaper but less recent detail. Default 0.15.',
+    type: 'float',
+    category: 'agent',
+    default: '0.15',
+    min: 0.05,
+    max: 0.6,
+    advanced: true,
+  },
+  {
     key: 'CODER_PROMPTS_WATCH',
     label: 'Hot-reload system prompts',
     description:

@@ -1,7 +1,10 @@
 /**
  * Tool tiers — progressive disclosure of the full tool catalog.
  *
- * On a fresh session we don't need to ship all 57 tools to the LLM on turn 1.
+ * On a fresh session we don't need to ship the full catalog (200+ tools across
+ * native + internal MCP + company/builder) to the LLM on turn 1. The tool
+ * definitions alone run ~14.7k tokens median (up to 40k) — ~3.8x the system
+ * prompt — so a fat turn-1 surface is both costly and hurts tool selection.
  * Most queries ("explain X", "find Y") only need a dozen read/search tools.
  * Writing, git, and admin tools are dead weight in the prompt until the
  * conversation actually calls for them.
@@ -25,6 +28,13 @@
  * unlocks on-demand via `expand_toolset`. ToolTier is widened to `string` so
  * the runner, filter, and promotion logic work generically with any tier name.
  */
+import { COMPANY_TOOLS, BUILDER_TOOLS } from '@mcp/code-agent/tools/tiers-company.js';
+
+// Company/builder tool catalogs live in a sibling module (pure data) to keep
+// this file focused on tiering logic; re-exported so tiers.ts stays the single
+// public entry point for tier data.
+export { COMPANY_TOOLS, BUILDER_TOOLS };
+
 export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master' | 'preview';
 export type ToolTier = string;
 
@@ -79,7 +89,10 @@ export const PREVIEW_TOOLS: ReadonlySet<string> = new Set<string>([
 export type CoderProfile = 'bootstrap' | 'navigate' | 'full';
 
 /**
- * Tier 0 — bootstrap. Always visible. ~13 tools.
+ * Tier 0 — bootstrap. Always visible. ~45 tools: the minimal read/interaction
+ * core + orchestration discovery (expand_toolset/find_tools/spawn_agent) +
+ * the company comms that masters/subordinates need on turn 1. Cold tools
+ * (≤12 calls in 12k turns) were demoted to navigate — see "Phase B" markers.
  *
  * Exported for test access — the membership of company-specific tools
  * (kanban subordinate, design-system) is treated as a contract that
@@ -92,10 +105,10 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'ask_user',
   'submit_plan',
   'submit_tasks',
-  'list_tasks',
-  'cancel_tasks',
-  'delete_tasks',
-  'archive_task_list',
+  // list/cancel/delete/archive_tasks demoted to navigate (Phase B) — ~1 call
+  // each across 12k turns. Subordinates run profile 'navigate'+ and masters
+  // 'full', so they still see them; only solo bootstrap sessions defer them
+  // until expand_toolset('navigate').
   // Subordinate variants (company mode — same events, master-directed names)
   'ask_master',
   'submit_plan_to_master',
@@ -116,10 +129,9 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // Subordinate-only column transition (in_progress → review with
   // constraint). Distinct from master's generic `kanban_move_card`.
   'kanban_move_to_review',
-  // Deprecated aliases — kept in bootstrap so mid-session agents that
-  // learned the old names don't break. Remove after one release.
-  'kanban_my_comment',
-  'kanban_my_checklist',
+  // Deprecated aliases (kanban_my_comment / kanban_my_checklist) demoted to
+  // navigate (Phase B) — still ~12 calls each, so kept reachable (not deleted)
+  // but off the always-on surface. Remove after one release.
   // Design System Creator tools (company mode — DS sessions). All four
   // were previously visible only via the `'bootstrap'` fallback in
   // `getToolTier`; registering them here makes the contract grep-able
@@ -140,21 +152,16 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // execute_tasks — wave-based orchestrator (PR 3). Same rationale as
   // spawn_agent: orchestration that any session must be able to call.
   'execute_tasks',
-  // Frente D — `update_task` joins the bootstrap set so it is
-  // discoverable via `find_tools` and usable without a tier unlock.
-  // The agent calls it to skip/retry/rename/rescope a task; status
-  // mutations beyond that stay with the orchestrator.
-  'update_task',
+  // update_task demoted to navigate (Phase B) — 0 calls in 12k turns.
   'request_review',
   // self_review — pipeline-based review of the session's own snapshots; always on.
   'self_review',
   // Session Drive — single-session working notes (migrations 125/126).
-  // Registered only outside company context (index.ts); listed here so they
-  // are visible from bootstrap without needing a tier unlock.
+  // Registered only outside company context (index.ts). save_note is the
+  // write entry (kept always-on); read_plan + list_notes demoted to navigate
+  // (Phase B) — 0 calls in 12k turns.
   // (Session-scoped notes — distinct from project-wide mcp__save_memory.)
-  'read_plan',
   'save_note',
-  'list_notes',
   'recall_investigations',
   'get_tool_output',
   'glob',
@@ -163,11 +170,12 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // full-list write. Was a silent bootstrap fallback (unlisted in any tier)
   // until P1; the contract test in __tests__/tiers.test.ts now enforces it.
   'update_todo',
-  // Goal tools — session objective state (set / read / complete). Always
-  // registered (goalTools, index.ts:295); were silent bootstrap fallbacks
-  // until P1 listed them explicitly.
+  // Goal tools — session objective state. create_goal + update_goal stay in
+  // bootstrap: the goal-gate hides/exposes create_goal by name on status, and
+  // without update_goal reachable a bootstrap-only session could never clear
+  // an in-progress goal (deadlock). get_goal demoted to navigate (Phase B) —
+  // only 12 calls in 12k turns.
   'create_goal',
-  'get_goal',
   'update_goal',
   'invoke_skill',
   // RAG over the user-managed documentation corpus (Documentação sidebar).
@@ -178,22 +186,28 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // skill descriptions and bodies on demand without paying for them up front.
   'get_skills_list',
   'get_skill_content',
-  // MCP — token-efficient discovery / search
+  'list_skill_namespaces',
+  // MCP — token-efficient discovery / search. Hot path only; the cold ones
+  // (mcp__query_snapshots / search_memory / get_context_for / list_projects /
+  // get_project_stats — all ≤9 calls in 12k turns) are demoted to navigate.
   'mcp__get_project_pulse',
-  'mcp__query_snapshots',
-  'mcp__search_memory',
-  'mcp__get_context_for',
   'mcp__search',
   'mcp__grep_code',
   'mcp__get_file_skeleton',
   'mcp__read_file',
   'mcp__list_directory',
-  'mcp__list_projects',
-  'mcp__get_project_stats',
+  // Unconditional native tools that previously rode the getToolTier bootstrap
+  // fallback (untiered). Listed explicitly so the fallback is no longer load-
+  // bearing — code_exec is the #1 tool (16.7% of all calls), so it MUST stay
+  // always-on. view_image / submit_spec are cheap and stay on the bootstrap
+  // surface they already had via the fallback.
+  'code_exec',
+  'view_image',
+  'submit_spec',
 ]);
 
 /** Tier 1 — navigate + edit. Promoted via expand_toolset('navigate'). */
-const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
+export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   // Native — write/edit + local exploration
   'write_file',
   'edit_file',
@@ -263,6 +277,29 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'mcp__search_global',
   'mcp__list_snapshots',
   'mcp__save_memory',
+  // ─── Demoted from bootstrap (Phase B) ────────────────────────────
+  // Cold always-on tools (≤12 calls across 12k turns). Subordinates run
+  // profile 'navigate'+ and masters 'full', so company sessions still see
+  // them; only solo bootstrap (read-only) sessions defer them to expand.
+  'list_tasks',
+  'cancel_tasks',
+  'delete_tasks',
+  'archive_task_list',
+  'update_task',
+  'read_plan',
+  'list_notes',
+  'get_goal',
+  'kanban_my_comment',
+  'kanban_my_checklist',
+  'mcp__query_snapshots',
+  'mcp__search_memory',
+  'mcp__get_context_for',
+  'mcp__list_projects',
+  'mcp__get_project_stats',
+  // MCP resource discovery (registered for non-master sessions). Read-only,
+  // cold (≤1 call in 12k turns) — was an untiered bootstrap fallback.
+  'mcp_list_resources',
+  'mcp_read_resource',
 ]);
 
 /**
@@ -282,7 +319,7 @@ const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
  * are only `registry.registerAll`'d in the `if (isMaster) {...}` branch
  * of runCoder), so adding the tier label is a no-op for non-masters.
  */
-const MASTER_TOOLS: ReadonlySet<string> = new Set([
+export const MASTER_TOOLS: ReadonlySet<string> = new Set([
   // Subordinate orchestration
   'spawn_subordinate_agent',
   'wait_for_subordinates',
@@ -298,6 +335,9 @@ const MASTER_TOOLS: ReadonlySet<string> = new Set([
   'list_containers',
   'read_container_logs',
   'respond_to_inbox',
+  // review_subordinate_work — master runs the review pipeline over a sub's
+  // snapshots (buildMasterTools). Was an untiered bootstrap fallback.
+  'review_subordinate_work',
   // Master-only kanban management. The unified `kanban_post_comment`
   // and `kanban_update_objectives` stay in bootstrap because they're
   // shared with subordinates.
@@ -315,7 +355,7 @@ const MASTER_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /** Tier 2 — admin. Never auto-promoted. */
-const ADMIN_TOOLS: ReadonlySet<string> = new Set([
+export const ADMIN_TOOLS: ReadonlySet<string> = new Set([
   // Native — git mutations
   'git_add',
   'git_commit',
@@ -336,25 +376,67 @@ const ADMIN_TOOLS: ReadonlySet<string> = new Set([
   'mcp__get_snapshot_history',
 ]);
 
+/** Options for {@link getToolTier}. */
+export interface GetToolTierOpts {
+  /**
+   * Strict mode: throw if `name` matches no explicit tier set instead of
+   * silently returning `bootstrap`. Used by the tier-contract test to surface
+   * untiered tools (the historical "silent fallback" gotcha) loudly.
+   */
+  strict?: boolean;
+}
+
 /**
  * Return the tier a tool belongs to.
  *
- * Static lookup first (internal tools in BOOTSTRAP / NAVIGATE / ADMIN sets),
- * then optional runtime overrides (for external MCP server tools whose tier
- * is configured per-server in the DB). Unknown tools default to `bootstrap`
- * so newly added internal tools are never hidden.
+ * Runtime overrides win first (external MCP tools, tier configured per-server
+ * in the DB). Then an EXPLICIT lookup across every static set. Company/builder
+ * tools resolve to `bootstrap` because they are always-on within their
+ * (conditionally-registered) sessions.
+ *
+ * Unlisted tools default to `bootstrap` so a newly added internal tool is
+ * never accidentally hidden — BUT this fallback is no longer load-bearing:
+ * `tier-contract.test.ts` runs in `strict` mode and fails if any registered
+ * tool reaches it, and `CODER_STRICT_TIERS=1` demotes unlisted tools to
+ * `navigate` (off the turn-1 surface) in production as a belt-and-suspenders.
  */
 export function getToolTier(
   name: string,
   overrides?: ReadonlyMap<string, ToolTier>,
+  opts?: GetToolTierOpts,
 ): ToolTier {
   // Runtime overrides take precedence — external MCP tools live here.
   if (overrides?.has(name)) return overrides.get(name)!;
+  if (BOOTSTRAP_TOOLS.has(name)) return 'bootstrap';
   if (NAVIGATE_TOOLS.has(name)) return 'navigate';
   if (ADMIN_TOOLS.has(name)) return 'admin';
   if (MASTER_TOOLS.has(name)) return 'master';
   if (PREVIEW_TOOLS.has(name)) return 'preview';
+  // Always-on within their own session class; map to bootstrap (see set docs).
+  if (COMPANY_TOOLS.has(name) || BUILDER_TOOLS.has(name)) return 'bootstrap';
+  // Unlisted — no explicit tier.
+  if (opts?.strict) {
+    throw new Error(
+      `getToolTier: tool "${name}" is not in any tier set. Add it to a tier in ` +
+        `tiers.ts (or COMPANY_TOOLS / BUILDER_TOOLS) so it stops riding the ` +
+        `silent bootstrap fallback.`,
+    );
+  }
+  if (process.env.CODER_STRICT_TIERS === '1') return 'navigate';
   return 'bootstrap';
+}
+
+/** Every tool name with an explicit tier placement (union of all sets). */
+export function allTieredToolNames(): Set<string> {
+  return new Set<string>([
+    ...BOOTSTRAP_TOOLS,
+    ...NAVIGATE_TOOLS,
+    ...ADMIN_TOOLS,
+    ...MASTER_TOOLS,
+    ...PREVIEW_TOOLS,
+    ...COMPANY_TOOLS,
+    ...BUILDER_TOOLS,
+  ]);
 }
 
 /** Expand a profile name into the set of active tiers. */
@@ -587,6 +669,12 @@ export function getAllKnownToolsMeta(): ToolMeta[] {
   push('bootstrap', BOOTSTRAP_TOOLS);
   push('navigate', NAVIGATE_TOOLS);
   push('admin', ADMIN_TOOLS);
+  push('master', MASTER_TOOLS);
+  push('preview', PREVIEW_TOOLS);
+  // Company/builder tools resolve to bootstrap in getToolTier (always-on within
+  // their session class); label them as such so the catalog matches.
+  push('bootstrap', COMPANY_TOOLS);
+  push('bootstrap', BUILDER_TOOLS);
   return result;
 }
 
@@ -595,4 +683,8 @@ export const TIER_COUNTS = {
   bootstrap: BOOTSTRAP_TOOLS.size,
   navigate: NAVIGATE_TOOLS.size,
   admin: ADMIN_TOOLS.size,
+  master: MASTER_TOOLS.size,
+  preview: PREVIEW_TOOLS.size,
+  company: COMPANY_TOOLS.size,
+  builder: BUILDER_TOOLS.size,
 } as const;

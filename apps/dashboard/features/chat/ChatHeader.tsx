@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Bot, Info, PanelLeft } from 'lucide-react';
+import { AlertTriangle, Bot, Info, Loader2, PanelLeft, Scissors } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -24,6 +24,10 @@ interface ChatHeaderProps {
   contextStatus: ContextStatus | null;
   indexStatus: IndexStatus | null;
   onOpenDetails: () => void;
+  /** Trigger the manual "summarize & clear" action. Hides the button if undefined. */
+  onSummarizeClear?: () => void;
+  /** True while the summary is being generated — shows a spinner + disables the button. */
+  summarizing?: boolean;
   onOpenSidebar?: () => void;
   onOpenToolConfig?: () => void;
   onOpenSkillConfig?: () => void;
@@ -44,7 +48,7 @@ interface ChatHeaderProps {
   onToggleWorkerLog?: () => void;
 }
 
-export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog }: ChatHeaderProps) {
+export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onSummarizeClear, summarizing, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog }: ChatHeaderProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Persisted (from DB) + runtime delta (current run, if streaming).
   const totalIn = session.total_input_tokens;
@@ -148,6 +152,27 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
             <StatsTooltip session={session} lastUsage={lastUsage} stats={stats} contextWindow={contextWindow} lastTurnInput={lastTurnInput} ctxPct={ctxPct} />
           </TooltipContent>
         </Tooltip>
+        {/* Manual "summarize & clear" — sits next to the context gauge so the
+            user can act on context pressure they just saw. Disabled mid-run
+            (the backend also refuses with 409). */}
+        {onSummarizeClear && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('chat:header.summarizeClear')}
+                onClick={onSummarizeClear}
+                disabled={streaming || summarizing}
+                className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {summarizing
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <Scissors className="h-4 w-4" />}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{t('chat:header.summarizeClearTooltip')}</TooltipContent>
+          </Tooltip>
+        )}
         {/* Session-details is still on the header as a fallback affordance —
             the activity rail also has a Details panel, but power users still
             expect a clickable "i" in the title bar. The other tool toggles

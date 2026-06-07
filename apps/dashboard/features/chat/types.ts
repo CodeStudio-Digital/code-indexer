@@ -50,6 +50,9 @@ export interface CoderSession {
    * Surfaced as a switch in the Composer.
    */
   unrestricted_tool_output?: boolean | null;
+  /** Durable compaction summary (mig 128). Rendered as a card above the chat
+   *  when set; the older messages it covers are hidden behind the boundary. */
+  compaction_summary?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -123,8 +126,10 @@ export interface SessionData {
   session: CoderSession;
   messages: PersistedMessage[];
   message_rows: MessageRow[];
-  /** Total number of messages in the session (may be > messages.length when paginated). */
+  /** Total number of *visible* messages (excludes rows hidden behind a summary boundary). */
   total_messages?: number;
+  /** Count of messages hidden behind a manual "summarize & clear" boundary. 0 = none. */
+  archived_count?: number;
 }
 
 /** Response shape from GET /api/coder/sessions/:id/messages?before_id=N */

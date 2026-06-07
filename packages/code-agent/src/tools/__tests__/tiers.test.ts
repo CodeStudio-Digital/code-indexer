@@ -63,8 +63,12 @@ describe('tier contract — always-on state tools are explicitly tiered', () => 
   });
 
   it('the P1-promoted orphans live explicitly in bootstrap', () => {
-    for (const name of ['update_todo', 'create_goal', 'get_goal', 'update_goal']) {
+    // get_goal demoted to navigate in Phase B (12 calls / 12k turns); create_goal
+    // + update_goal stay in bootstrap so a goal can be set AND cleared without a
+    // tier unlock (the goal-gate hides create_goal by name on in-progress).
+    for (const name of ['update_todo', 'create_goal', 'update_goal']) {
       expect(BOOTSTRAP_TOOLS.has(name)).toBe(true);
     }
+    expect(getToolTier('get_goal')).toBe('navigate');
   });
 });

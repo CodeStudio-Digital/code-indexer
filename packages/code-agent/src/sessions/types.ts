@@ -74,6 +74,19 @@ export interface CoderSession {
    * batched code_exec scripts) where truncation hurts the agent's quality.
    */
   unrestricted_tool_output: boolean | null;
+  /**
+   * Durable compaction boundary (migration 128). When non-null, every message
+   * loader (runner seed + dashboard GET) only returns rows with
+   * `id > summary_boundary_id`; older rows stay in the table but drop out of
+   * the default view. NULL = no boundary (show the full transcript).
+   */
+  summary_boundary_id: number | null;
+  /**
+   * Rendered summary text covering everything ≤ `summary_boundary_id`. The
+   * runner prepends it to its loaded history; the dashboard renders it as a
+   * "conversation summary" card. NULL when there is no boundary.
+   */
+  compaction_summary: string | null;
   created_at: string;
   updated_at: string;
 }

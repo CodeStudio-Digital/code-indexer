@@ -90,6 +90,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
   const [sessionTemperature, setSessionTemperature] = useState<number | null>(null);
   const [unrestrictedOutput, setUnrestrictedOutput] = useState<boolean>(false);
+  const [summarizing, setSummarizing] = useState<boolean>(false);
   const composerRef = useRef<ComposerHandle>(null);
   const sessionsPanelRef = useRef<ImperativePanelHandle>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -453,10 +454,11 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
    * Called by MessageList when the user clicks "Load earlier".
    * Returns the number of message rows fetched (0 = nothing more to load).
    */
-  const loadEarlierMessages = useCallback(async (beforeId: number, limit = 40): Promise<number> => {
+  const loadEarlierMessages = useCallback(async (beforeId: number, limit = 40, includeArchived = false): Promise<number> => {
     if (!selectedId) return 0;
     try {
-      const res = await fetch(`/api/coder/sessions/${selectedId}/messages?before_id=${beforeId}&limit=${limit}`);
+      const archivedQs = includeArchived ? '&include_archived=1' : '';
+      const res = await fetch(`/api/coder/sessions/${selectedId}/messages?before_id=${beforeId}&limit=${limit}${archivedQs}`);
       if (!res.ok) return 0;
       const page = (await res.json()) as MessagePage;
       if (!page.message_rows.length) return 0;
@@ -559,6 +561,37 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     await apiDelete(`/coder/sessions/${id}`);
     if (selectedId === id) setSelectedId(null);
     refetchSessions();
+  };
+
+  /**
+   * Manual "summarize & clear": the backend summarizes the visible transcript
+   * with the session's own model, inserts a summary message and moves the
+   * boundary so older messages drop out of view (still recoverable). On success
+   * we just refetch — the GET respects the new boundary, so the chat collapses
+   * to the summary card on its own.
+   */
+  const handleSummarizeClear = async () => {
+    if (selectedId == null || summarizing) return;
+    const ok = await confirm({
+      title: t('chat:header.summarizeClear'),
+      description: t('chat:header.summarizeClearConfirm'),
+      confirmLabel: t('chat:header.summarizeClearConfirmLabel'),
+    });
+    if (!ok) return;
+    setSummarizing(true);
+    try {
+      await apiPost(`/coder/sessions/${selectedId}/summarize-and-clear`, {});
+      await Promise.resolve(refetchSession());
+      await Promise.resolve(refetchSessions());
+    } catch (e) {
+      await confirm({
+        title: t('chat:header.summarizeClearFailed'),
+        description: e instanceof Error ? e.message : String(e),
+        confirmLabel: t('common:actions.close'),
+      });
+    } finally {
+      setSummarizing(false);
+    }
   };
 
   const handleBatchDelete = async (ids: number[]) => {
@@ -979,6 +1012,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
                   // and the tokens widget. The activity rail (rendered next
                   // to the right panel) owns those buttons.
                   onOpenDetails={() => setActiveRightPanelId('details')}
+                  onSummarizeClear={handleSummarizeClear}
+                  summarizing={summarizing}
                   onOpenSidebar={() => setMobileSidebarOpen(true)}
                   pendingSnapshots={snapshotPending}
                 />

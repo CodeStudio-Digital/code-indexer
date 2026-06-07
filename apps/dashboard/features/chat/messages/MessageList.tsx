@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, ChevronUp } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { AlertCircle, ChevronDown, ChevronUp, History, ScrollText } from 'lucide-react';
 import type { AssistantTurn } from '../../../hooks/useAgentStream.js';
 import { Alert, AlertDescription } from '../../../components/ui/alert.js';
+import { cn } from '../../../lib/utils.js';
 import { INITIAL_PAGE_SIZE, LOAD_MORE_SIZE } from '../constants.js';
 import type { PersistedTasksState, PromptHandlers, SessionData } from '../types.js';
 import { groupMessages } from '../utils.js';
@@ -20,8 +22,37 @@ interface MessageListProps {
   fallbackProviderId: string;
   tasksState: PersistedTasksState | null;
   handlers: PromptHandlers;
-  /** Fetch earlier messages from the backend. Returns count of rows loaded (0 = nothing more). */
-  onLoadEarlier?: (beforeId: number, limit?: number) => Promise<number>;
+  /** Fetch earlier messages from the backend. Returns count of rows loaded (0 = nothing more).
+   *  `includeArchived` crosses a "summarize & clear" boundary to reveal hidden history. */
+  onLoadEarlier?: (beforeId: number, limit?: number, includeArchived?: boolean) => Promise<number>;
+}
+
+/**
+ * Distinct, collapsible card for the synthetic message written by a manual
+ * "summarize & clear". Styled apart from a normal user bubble so the fresh
+ * transcript reads as "here's the summary of what came before", not "the user
+ * pasted a wall of text".
+ */
+function SummaryCard({ text, label }: { text: string; label: string }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/30 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 transition-colors"
+      >
+        <ScrollText className="h-3.5 w-3.5 shrink-0" />
+        <span>{label}</span>
+        <ChevronDown className={cn('h-3.5 w-3.5 ml-auto transition-transform', open ? '' : '-rotate-90')} />
+      </button>
+      {open && (
+        <div className="px-3 pb-3 pt-1 text-xs whitespace-pre-wrap break-words text-foreground/80 leading-relaxed">
+          {text}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -43,12 +74,13 @@ const PersistedMessages = React.memo(function PersistedMessages({
   tasksState: PersistedTasksState | null;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   streaming: boolean;
-  onLoadEarlier?: (beforeId: number, limit?: number) => Promise<number>;
+  onLoadEarlier?: (beforeId: number, limit?: number, includeArchived?: boolean) => Promise<number>;
 }) {
   // Build tool-result map once per sessionData change. Tool-produced images
   // (preview_screenshot / view_image) are rendered as their own image bubble
   // (the synthetic user message), not paired inline here — that path proved
   // fragile; the attachment renderer is the reliable one.
+  const { t } = useTranslation('chat');
   const resultsById = useMemo(() => {
     const m = new Map<string, { content: string; isError: boolean }>();
     for (const msg of sessionData.messages) {
@@ -97,9 +129,20 @@ const PersistedMessages = React.memo(function PersistedMessages({
     ? groups.slice(-renderCap)
     : groups;
 
-  // Backend-driven "has earlier": total_messages > loaded message_rows
+  // Summary-boundary aware pagination. `total_messages` counts only VISIBLE
+  // rows (above a "summarize & clear" boundary); `archived_count` is what's
+  // hidden below it. The user reveals the archive explicitly, after which
+  // normal pagination continues across the boundary (includeArchived=true).
   const totalMessages = sessionData.total_messages ?? sessionData.message_rows.length;
-  const hasEarlier = totalMessages > sessionData.message_rows.length;
+  const archivedCount = sessionData.archived_count ?? 0;
+  const fullTotal = totalMessages + archivedCount;
+  const loadedCount = sessionData.message_rows.length;
+  const [revealArchived, setRevealArchived] = useState(false);
+  const revealArchivedRef = useRef(false);
+  const visibleHasEarlier = totalMessages > loadedCount;
+  const hasEarlier = visibleHasEarlier || (revealArchived && loadedCount < fullTotal);
+  const canRevealArchived = !visibleHasEarlier && archivedCount > 0 && !revealArchived;
+  const displayTotal = revealArchived ? fullTotal : totalMessages;
 
   // Scroll preservation when loading earlier messages
   const prevScrollHeightRef = useRef<number>(0);
@@ -113,10 +156,12 @@ const PersistedMessages = React.memo(function PersistedMessages({
   const exhaustedRef = useRef(false);
   const [exhausted, setExhausted] = useState(false);
 
-  // Reset exhausted flag when switching sessions.
+  // Reset exhausted + archived-reveal flags when switching sessions.
   useEffect(() => {
     exhaustedRef.current = false;
     setExhausted(false);
+    revealArchivedRef.current = false;
+    setRevealArchived(false);
   }, [sessionData.session.id]);
 
   const handleLoadEarlier = useCallback(async () => {
@@ -129,7 +174,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
     loadingEarlierRef.current = true;
     setLoadingMore(true);
     try {
-      const count = await onLoadEarlier(earliestId, LOAD_MORE_SIZE);
+      const count = await onLoadEarlier(earliestId, LOAD_MORE_SIZE, revealArchivedRef.current);
       if (count === 0) {
         // Backend returned nothing — stop polling forever for this session.
         exhaustedRef.current = true;
@@ -140,6 +185,14 @@ const PersistedMessages = React.memo(function PersistedMessages({
       setLoadingMore(false);
     }
   }, [onLoadEarlier, sessionData.message_rows, scrollContainerRef]);
+
+  // Cross the "summarize & clear" boundary on explicit user request, then let
+  // the normal infinite-scroll continue pulling archived pages.
+  const handleRevealArchived = useCallback(() => {
+    revealArchivedRef.current = true;
+    setRevealArchived(true);
+    void handleLoadEarlier();
+  }, [handleLoadEarlier]);
 
   // After new messages are prepended, restore scroll position
   useLayoutEffect(() => {
@@ -193,14 +246,32 @@ const PersistedMessages = React.memo(function PersistedMessages({
             {loadingMore ? 'Loading...' : 'Load earlier'}
           </button>
           <span className="text-[10px] text-muted-foreground/60">
-            {sessionData.message_rows.length} of {totalMessages} loaded
+            {loadedCount} of {displayTotal} loaded
           </span>
         </div>
       )}
-      {exhausted && sessionData.message_rows.length < totalMessages && (
+      {canRevealArchived && (
+        <div className="flex items-center justify-center w-full py-2">
+          <button
+            type="button"
+            onClick={handleRevealArchived}
+            disabled={loadingMore}
+            className="flex items-center justify-center gap-1.5 py-1.5 px-3 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors disabled:opacity-50"
+          >
+            <History className="h-3.5 w-3.5" />
+            {loadingMore
+              ? 'Loading...'
+              : t('messages.showEarlierHistory', { count: archivedCount })}
+          </button>
+        </div>
+      )}
+      {exhausted && loadedCount < fullTotal && (
         <div className="text-center py-1.5 text-[10px] text-muted-foreground/50">
           All available messages loaded
         </div>
+      )}
+      {sessionData.session.compaction_summary && (
+        <SummaryCard text={sessionData.session.compaction_summary} label={t('messages.summaryCard')} />
       )}
       {displayGroups.map((g, gi) => {
         const groupKey = g.kind === 'user'

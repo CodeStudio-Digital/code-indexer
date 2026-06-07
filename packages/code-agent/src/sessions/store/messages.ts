@@ -195,16 +195,48 @@ function rowsToAgentMessages(rows: CoderMessageRow[]): AgentMessage[] {
   }));
 }
 
+/**
+ * Manual "summarize & clear" boundary (migration 128). Messages with
+ * `id <= boundary` are hidden from the default view (runner seed + dashboard).
+ * Returns 0 when the session has no boundary set — so `id > 0` is a no-op
+ * filter and every loader behaves exactly as before for normal sessions.
+ */
+export function getBoundary(db: DB, sessionId: number): number {
+  const row = db
+    .prepare('SELECT summary_boundary_id AS b FROM coder_sessions WHERE id = ?')
+    .get(sessionId) as { b: number | null } | undefined;
+  return row?.b ?? 0;
+}
+
+/**
+ * Count of archived (pre-boundary) messages. Drives the dashboard's
+ * "show earlier history" affordance — 0 means there is nothing hidden.
+ */
+export function getArchivedCount(db: DB, sessionId: number): number {
+  const boundary = getBoundary(db, sessionId);
+  if (boundary <= 0) return 0;
+  const row = db
+    .prepare('SELECT COUNT(*) AS cnt FROM coder_messages WHERE session_id = ? AND id <= ?')
+    .get(sessionId, boundary) as { cnt: number } | undefined;
+  return row?.cnt ?? 0;
+}
+
 export function loadWithMessages(db: DB, id: number): SessionWithMessages | null {
   const session = sessionsCore.get(db, id);
   if (!session) return null;
-  const rows = db.prepare('SELECT * FROM coder_messages WHERE session_id = ? ORDER BY id').all(id) as CoderMessageRow[];
+  const boundary = session.summary_boundary_id ?? 0;
+  const rows = db
+    .prepare('SELECT * FROM coder_messages WHERE session_id = ? AND id > ? ORDER BY id')
+    .all(id, boundary) as CoderMessageRow[];
   return { session, messages: rowsToAgentMessages(rows), message_rows: rows };
 }
 
-/** Total number of messages in a session (cheap COUNT query). */
+/** Number of *visible* messages in a session (respects the summary boundary). */
 export function getCount(db: DB, sessionId: number): number {
-  const row = db.prepare('SELECT COUNT(*) AS cnt FROM coder_messages WHERE session_id = ?').get(sessionId) as { cnt: number } | undefined;
+  const boundary = getBoundary(db, sessionId);
+  const row = db
+    .prepare('SELECT COUNT(*) AS cnt FROM coder_messages WHERE session_id = ? AND id > ?')
+    .get(sessionId, boundary) as { cnt: number } | undefined;
   return row?.cnt ?? 0;
 }
 
@@ -220,18 +252,21 @@ export function getCount(db: DB, sessionId: number): number {
 export function loadTail(db: DB, id: number, tail: number): SessionWithMessages | null {
   const session = sessionsCore.get(db, id);
   if (!session) return null;
+  const boundary = session.summary_boundary_id ?? 0;
 
   const cutoff = db
     .prepare(`
       SELECT id FROM coder_messages
-       WHERE session_id = ? AND role != 'tool'
+       WHERE session_id = ? AND id > ? AND role != 'tool'
        ORDER BY id DESC
        LIMIT 1 OFFSET ?
     `)
-    .get(id, Math.max(0, tail - 1)) as { id: number } | undefined;
+    .get(id, boundary, Math.max(0, tail - 1)) as { id: number } | undefined;
 
   let rows: CoderMessageRow[];
   if (cutoff) {
+    // cutoff.id is already > boundary, so the `id >= cutoff.id` window stays
+    // inside the visible region.
     rows = db
       .prepare(`
         SELECT * FROM coder_messages
@@ -241,13 +276,13 @@ export function loadTail(db: DB, id: number, tail: number): SessionWithMessages 
       `)
       .all(id, cutoff.id, tail * 5) as CoderMessageRow[];
   } else {
-    // Fewer non-tool messages than requested — load last tail*5 from end.
+    // Fewer non-tool messages than requested — load last tail*5 above boundary.
     rows = db.prepare(`
       SELECT * FROM coder_messages
-       WHERE session_id = ?
+       WHERE session_id = ? AND id > ?
        ORDER BY id DESC
        LIMIT ?
-    `).all(id, tail * 5) as CoderMessageRow[];
+    `).all(id, boundary, tail * 5) as CoderMessageRow[];
     rows.reverse();
   }
 
@@ -257,18 +292,23 @@ export function loadTail(db: DB, id: number, tail: number): SessionWithMessages 
 /**
  * Load `limit` renderable messages (user + assistant) before a given message
  * id, plus their interleaved tool messages. Returns in chronological order.
+ *
+ * By default the summary boundary is respected (pagination stops at the
+ * boundary). Pass `includeArchived` to CROSS it — that's how the dashboard's
+ * "show earlier history" button reveals the pre-summary transcript.
  */
 export function loadBefore(
-  db: DB, sessionId: number, beforeId: number, limit: number,
+  db: DB, sessionId: number, beforeId: number, limit: number, includeArchived = false,
 ): { messages: AgentMessage[]; message_rows: CoderMessageRow[] } {
+  const boundary = includeArchived ? 0 : getBoundary(db, sessionId);
   const cutoff = db
     .prepare(`
       SELECT id FROM coder_messages
-       WHERE session_id = ? AND id < ? AND role != 'tool'
+       WHERE session_id = ? AND id < ? AND id > ? AND role != 'tool'
        ORDER BY id DESC
        LIMIT 1 OFFSET ?
     `)
-    .get(sessionId, beforeId, Math.max(0, limit - 1)) as { id: number } | undefined;
+    .get(sessionId, beforeId, boundary, Math.max(0, limit - 1)) as { id: number } | undefined;
 
   let rows: CoderMessageRow[];
   if (cutoff) {
@@ -280,11 +320,53 @@ export function loadBefore(
   } else {
     rows = db.prepare(`
       SELECT * FROM coder_messages
-       WHERE session_id = ? AND id < ?
+       WHERE session_id = ? AND id < ? AND id > ?
        ORDER BY id
-    `).all(sessionId, beforeId) as CoderMessageRow[];
+    `).all(sessionId, beforeId, boundary) as CoderMessageRow[];
   }
   return { messages: rowsToAgentMessages(rows), message_rows: rows };
+}
+
+/** Highest message id in a session (the boundary for a full "clear"). */
+export function maxMessageId(db: DB, sessionId: number): number {
+  return (db
+    .prepare('SELECT COALESCE(MAX(id), 0) AS m FROM coder_messages WHERE session_id = ?')
+    .get(sessionId) as { m: number }).m;
+}
+
+/**
+ * Set (or advance) the durable compaction boundary: hide every message with
+ * `id <= boundaryId` and store `summaryText` as the prepended head summary
+ * (the runner prepends it; the dashboard renders it as a card). Used by BOTH
+ * the manual "summarize & clear" (boundaryId = current MAX(id), no tail) and
+ * the automatic durable compaction (boundaryId = a mid-transcript cutoff, so a
+ * recent tail stays visible).
+ *
+ * Also clears the ChatGPT/Codex `previous_response_id` pointer: the prefix it
+ * referenced no longer matches the new baseline, so the next turn must
+ * re-establish server-side state from the compacted history. Non-destructive —
+ * old rows remain, reachable via `includeArchived` loads.
+ */
+export function setCompactionBoundary(
+  db: DB, sessionId: number, summaryText: string, boundaryId: number,
+): { boundary_id: number; pruned_count: number } {
+  const tx = db.transaction(() => {
+    const prevBoundary = getBoundary(db, sessionId);
+    const prunedCount = (db
+      .prepare('SELECT COUNT(*) AS c FROM coder_messages WHERE session_id = ? AND id > ? AND id <= ?')
+      .get(sessionId, prevBoundary, boundaryId) as { c: number }).c;
+    db.prepare(`
+      UPDATE coder_sessions
+         SET summary_boundary_id = ?,
+             compaction_summary = ?,
+             last_response_id = NULL,
+             last_response_message_count = NULL,
+             updated_at = datetime('now')
+       WHERE id = ?
+    `).run(boundaryId, summaryText, sessionId);
+    return { boundary_id: boundaryId, pruned_count: prunedCount };
+  });
+  return tx();
 }
 
 /** Load a single message by id (targeted query, no full-session load). */

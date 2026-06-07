@@ -8,6 +8,8 @@ import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { summarizeSpanV2, renderSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
+import { runDurableCompaction } from '@mcp/code-agent/core/runner/compaction/durable-compaction.js';
+import { durableCompactionEnabled } from '@mcp/code-agent/core/runner/compaction/threshold.js';
 import { getGlobalToolSelectionFilter } from '@mcp/code-agent/tool-selection/global-filter.js';
 import { buildSystemPrompt } from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
@@ -840,7 +842,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // merged into this one.
   const existingEarly = store.loadSessionWithMessages(session.id);
   const initialMessagesEarly: AgentMessage[] = existingEarly?.messages ?? [];
-  const hasHistory0 = initialMessagesEarly.length > 0;
+  // A durable compaction can leave a session with a summary but zero visible
+  // rows (full "summarize & clear") — that's still a resumed session, not fresh.
+  const hasHistory0 = initialMessagesEarly.length > 0 || !!existingEarly?.session.compaction_summary;
 
   // On session resume, recover tasks stuck in 'running' — the previous runner
   // died before the task could finish. Mark them as 'interrupted' so the model
@@ -1094,8 +1098,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     },
   });
 
-  // Reuse the history we loaded early for profile resolution.
-  const initialMessages: AgentMessage[] = initialMessagesEarly;
+  // Reuse the history we loaded early for profile resolution. When a durable
+  // compaction boundary is set, PREPEND its summary so the model starts from
+  // "summary + recent tail" (the loaders already return only id > boundary).
+  const compactionSummary0 = existingEarly?.session.compaction_summary;
+  const initialMessages: AgentMessage[] = compactionSummary0
+    ? [{ role: 'user', content: [{ type: 'text', text: compactionSummary0 }] }, ...initialMessagesEarly]
+    : initialMessagesEarly;
 
   const activeTiers = profileToTiers(preResolvedProfile);
   // Auto-activate the `master` tier for company-master sessions. Master
@@ -1734,6 +1743,21 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // `run()` returns `{ reason: 'error' }` without the Error — this bridges that gap.
   let lastRunnerError: Error | undefined;
   runner.on('done', (_reason: string, error?: Error) => { lastRunnerError = error; });
+
+  // Durable compaction (off the hot path): when the in-memory compaction fires,
+  // persist a boundary + summary so the NEXT run starts compacted — cross-run
+  // cost reduction. Runs over DB rows in the background; never blocks the run.
+  // The in-flight guard avoids overlapping summary calls during a long run.
+  let durableInFlight = false;
+  runner.on('history_compacted', (p) => {
+    if (p.strategy !== 'summarizer') return;
+    if (!durableCompactionEnabled() || runner.isSubagent || session.id == null) return;
+    if (durableInFlight) return;
+    durableInFlight = true;
+    void runDurableCompaction({ store, sessionId: session.id, provider })
+      .catch((e) => console.warn(`[coder] durable compaction failed for session ${session.id}:`, e))
+      .finally(() => { durableInFlight = false; });
+  });
 
   // Phase-route skip summary handler removed along with PhaseRouter.
 

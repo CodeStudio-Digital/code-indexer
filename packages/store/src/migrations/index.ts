@@ -141,6 +141,7 @@ import { coderToolCallRefusalKind124 } from './124_coder_tool_call_refusal_kind.
 import { coderSessionMemory125 } from './125_coder_session_memory.js';
 import { coderInvestigations126 } from './126_coder_investigations.js';
 import { investigationEmbedding127 } from './127_investigation_embedding.js';
+import { sessionSummaryBoundary128 } from './128_session_summary_boundary.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -298,6 +299,7 @@ export const MIGRATIONS: Migration[] = [
   coderSessionMemory125,
   coderInvestigations126,
   investigationEmbedding127,
+  sessionSummaryBoundary128,
 ];
 
 /**

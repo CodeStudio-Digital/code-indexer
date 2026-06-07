@@ -426,10 +426,13 @@ export function mountCoderSessionsRoutes(
     if (!data) return notFound(c);
 
     const total_messages = sessionStore.getMessageCount(id);
+    // Count of pre-boundary rows hidden by a manual "summarize & clear" — the
+    // dashboard shows a "view earlier history" affordance when this is > 0.
+    const archived_count = sessionStore.getArchivedMessageCount(id);
 
-    if (full) return c.json({ ...data, total_messages });
+    if (full) return c.json({ ...data, total_messages, archived_count });
 
-    return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages });
+    return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages, archived_count });
   });
 
   /**
@@ -443,10 +446,14 @@ export function mountCoderSessionsRoutes(
 
     const beforeId = parseIntQuery(c, 'before_id', 0);
     const limit = Math.max(1, Math.min(100, parseIntQuery(c, 'limit', 40)));
+    // Cross a manual "summarize & clear" boundary to reveal the archived
+    // (pre-summary) transcript — driven by the dashboard's "view earlier
+    // history" button.
+    const includeArchived = c.req.query('include_archived') === '1';
 
     if (!beforeId) return c.json({ error: 'before_id required' }, 400);
 
-    const data = sessionStore.loadMessagesBefore(sessionId, beforeId, limit);
+    const data = sessionStore.loadMessagesBefore(sessionId, beforeId, limit, includeArchived);
     return c.json({ messages: trimMessageBlocks(data.messages), message_rows: data.message_rows });
   });
 

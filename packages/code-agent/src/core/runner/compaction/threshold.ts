@@ -78,10 +78,37 @@ export interface ProtectTokensInputs {
   protectRatio?: number;
 }
 
-export const DEFAULT_PROTECT_RATIO = 0.4;
+/**
+ * Default lowered from 0.40 → 0.15 (keep the recent ~15% verbatim). 40% proved
+ * larger than needed and inflated every prompt; a smaller tail + the summary is
+ * enough to retain the immediate working state (incl. recent tool calls).
+ * Override per-install via `CODER_COMPACT_PROTECT_RATIO` (Settings → exposed).
+ */
+export const DEFAULT_PROTECT_RATIO = 0.15;
+
+/** Env-resolved protect ratio, clamped so a typo can't zero/expand the tail. */
+export function resolveProtectRatio(): number {
+  const raw = process.env.CODER_COMPACT_PROTECT_RATIO;
+  if (!raw) return DEFAULT_PROTECT_RATIO;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_PROTECT_RATIO;
+  return Math.min(0.6, Math.max(0.05, n));
+}
 
 export function computeProtectTokens(inp: ProtectTokensInputs): number {
   const limits = deriveTokenLimits(inp.model);
-  const ratio = inp.protectRatio ?? DEFAULT_PROTECT_RATIO;
+  const ratio = inp.protectRatio ?? resolveProtectRatio();
   return Math.max(1, Math.floor(limits.effective * ratio));
+}
+
+/**
+ * Durable auto-compaction toggle (`MCP_DURABLE_COMPACTION`, default ON). When
+ * on, each in-memory compaction is also persisted as a boundary + summary so
+ * the reduced context (and its cost) carries to the next run.
+ */
+export function durableCompactionEnabled(): boolean {
+  const raw = process.env.MCP_DURABLE_COMPACTION;
+  if (raw == null || raw === '') return true;
+  const v = raw.toLowerCase();
+  return v !== '0' && v !== 'false' && v !== 'off';
 }

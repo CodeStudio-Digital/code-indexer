@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import * as core from './sessions-core.js';
 import * as state from './sessions-state.js';
 import * as messages from './messages.js';
+import * as sessionDrive from './session-drive.js';
 
 const require = createRequire(import.meta.url);
 
@@ -153,8 +154,9 @@ export function forkBeforeMessage(
 
 /**
  * Duplicate a session: create a new session with the same provider/model/
- * group and ALL messages copied. Useful for branching experiments without
- * losing the original conversation.
+ * group, ALL messages copied, AND the Session Drive memory notes copied so the
+ * clone keeps the same working memory. Useful for branching experiments
+ * without losing the original conversation or its notes.
  */
 export function duplicate(db: DB, sourceId: number): CoderSession {
   const src = messages.loadWithMessages(db, sourceId);
@@ -168,6 +170,8 @@ export function duplicate(db: DB, sourceId: number): CoderSession {
       model: src.session.model,
     });
     if (src.session.group_id != null) state.setGroup(db, created.id, src.session.group_id);
+    // Inherit the Drive notes (project-scoped investigations are already shared).
+    sessionDrive.copyMemory(db, sourceId, created.id);
     const copyStmt = db.prepare(`
       INSERT INTO coder_messages
         (session_id, role, content_json, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)

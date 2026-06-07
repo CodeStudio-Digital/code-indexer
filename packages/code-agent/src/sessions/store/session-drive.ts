@@ -99,6 +99,23 @@ export function deleteMemory(db: DB, id: number): boolean {
   return db.prepare('DELETE FROM coder_session_memory WHERE id = ?').run(id).changes > 0;
 }
 
+/**
+ * Copy every working-memory note from one session to another — used when a
+ * session is duplicated so the clone inherits the Drive notes (pins, kinds and
+ * original timestamps preserved). The `(session_id, title)` uniqueness holds
+ * because the target id is fresh. Investigations are NOT copied: they're
+ * project-scoped (see `scopeClause`), so a same-project clone already recalls
+ * them — copying would only create duplicate hits. Returns rows copied.
+ */
+export function copyMemory(db: DB, fromSessionId: number, toSessionId: number): number {
+  const r = db.prepare(`
+    INSERT INTO coder_session_memory (session_id, kind, title, body, pinned, created_at, updated_at)
+    SELECT ?, kind, title, body, pinned, created_at, updated_at
+      FROM coder_session_memory WHERE session_id = ?
+  `).run(toSessionId, fromSessionId);
+  return r.changes ?? 0;
+}
+
 /** Pinned-first, then most-recent — the slice the injector surfaces. */
 export function memoryForInjection(db: DB, sessionId: number, limit = 3): SessionMemoryRow[] {
   return db.prepare(

@@ -37,7 +37,19 @@ import {
 } from '../../../packages/orchestrator-host/src/index.js';
 import { CompanyStore } from '../../../packages/store/src/company-store.js';
 import { CodeIndexDB } from '../../../packages/store/src/db.js';
+import { DesignSystemStore } from '../../../packages/store/src/design-system-store.js';
+import { SkillStore } from '../../../packages/store/src/skill-store.js';
+import { CompanySessionEnvStore } from '../../../packages/store/src/company-session-env-store.js';
+import { QaTestRunStore } from '../../../packages/services/src/qa/store/qa-test-run-store.js';
 import { CompanyOrchestrator } from '../../../packages/company/src/orchestrator.js';
+import {
+  setDesignSystemStore,
+  setDesignSystemSkillStore,
+} from '../../../packages/company/src/tools/design-system/index.js';
+import {
+  setQaTestRunStore,
+  setQaEndpointEnvStore,
+} from '../../../packages/company/src/tools/qa/index.js';
 import {
   startAgentSupervisorIfEnabled,
   setGlobalAgentSupervisor,
@@ -163,6 +175,23 @@ setGlobalDocsResearcher(docsResearcherShim);
 // from a worker thread.
 const companyStore = new CompanyStore(dbPath);
 const db = new CodeIndexDB(dbPath);
+
+// ─── Company-tool store bindings (DS + QA) ──────────────────────
+// worker_threads don't share module state, so the setDesignSystemStore()
+// / setQaTestRunStore() calls in server.ts (main thread) leave these
+// module-level bindings NULL here. Master + subordinates all run in THIS
+// worker, so without this the ds_*/qa_* tools fail with "... not wired"
+// (ds_get_session_info is the very first call of a Design System round).
+// Re-wire against the worker's own DB handle — identical construction to
+// apps/http-api/server/deps.ts, WAL handle shared (ownsConnection=false,
+// so the existing stop-handler close on companyStore still covers it).
+// Harmless when the feature is off: tool registration stays gated by
+// designSystemEnabled in packages/code-agent/src/index.ts.
+const rawDb = db.raw();
+setDesignSystemStore(new DesignSystemStore(rawDb));
+setDesignSystemSkillStore(new SkillStore(rawDb));
+setQaTestRunStore(new QaTestRunStore(rawDb));
+setQaEndpointEnvStore(new CompanySessionEnvStore(rawDb));
 
 // NOTE: this constructor synchronously wires every domain service.
 // If any of them blocks on env vars, registered store factories, or

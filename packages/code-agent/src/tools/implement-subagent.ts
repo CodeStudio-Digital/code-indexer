@@ -618,7 +618,9 @@ export const READ_ONLY_FILTER: (tool: CoderTool) => boolean = (tool) => {
  */
 export const READ_WRITE_FILTER: (tool: CoderTool) => boolean = (tool) => {
   if (IMPLEMENT_ALLOWLIST.has(tool.name)) return true;
-  if (EXPLORE_ALLOWLIST.has(tool.name)) return true; // implement inherits read tools
+  // NOTE: implement does NOT blanket-inherit EXPLORE_ALLOWLIST (~41 read tools).
+  // That made the implement registry ~50 tools when ~21 suffice. The reads an
+  // implementer actually needs are listed directly in IMPLEMENT_ALLOWLIST.
   if (tool.source === 'mcp_external') return true;
   return false;
 };
@@ -664,14 +666,25 @@ export const IMPLEMENT_ALLOWLIST = new Set<string>([
   'mcp__get_dependencies',
   // Native filesystem reads (faster than MCP for paths the subagent owns)
   'read_file',
+  'list_directory',
+  'glob',
   // Mutating filesystem tools — the whole point of an implement subagent
   'write_file',
   'edit_file',
+  'multi_edit',
   'create_file',
   'manage_path',
   // Shell — gated by the parent runner's plan-mode allowlist for read-only,
   // but inside an approved task scope the subagent gets the full set.
   'run_command',
+  // Verify-its-own-work loop: diagnostics + the diff it just produced. These
+  // were previously inherited via EXPLORE_ALLOWLIST (which dragged in ~30
+  // explore-only reads); now listed explicitly so the implement registry
+  // stays lean (~21 tools, was ~50) — see READ_WRITE_FILTER below.
+  'get_diagnostics',
+  'lsp_diagnostics',
+  'git_status',
+  'git_diff',
 ]);
 
 /**

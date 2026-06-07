@@ -121,8 +121,15 @@ export class SessionStore {
   loadSessionWithMessages(id: number): SessionWithMessages | null { return messages.loadWithMessages(this.db, id); }
   getMessageCount(sessionId: number): number { return messages.getCount(this.db, sessionId); }
   loadSessionMessagesTail(id: number, tail: number): SessionWithMessages | null { return messages.loadTail(this.db, id, tail); }
-  loadMessagesBefore(sessionId: number, beforeId: number, limit: number): { messages: AgentMessage[]; message_rows: CoderMessageRow[] } {
-    return messages.loadBefore(this.db, sessionId, beforeId, limit);
+  loadMessagesBefore(sessionId: number, beforeId: number, limit: number, includeArchived = false): { messages: AgentMessage[]; message_rows: CoderMessageRow[] } {
+    return messages.loadBefore(this.db, sessionId, beforeId, limit, includeArchived);
+  }
+  // ─── Durable compaction boundary (migration 128) ───────────────
+  getSummaryBoundary(sessionId: number): number { return messages.getBoundary(this.db, sessionId); }
+  getArchivedMessageCount(sessionId: number): number { return messages.getArchivedCount(this.db, sessionId); }
+  maxMessageId(sessionId: number): number { return messages.maxMessageId(this.db, sessionId); }
+  setCompactionBoundary(sessionId: number, summaryText: string, boundaryId: number): { boundary_id: number; pruned_count: number } {
+    return messages.setCompactionBoundary(this.db, sessionId, summaryText, boundaryId);
   }
   getMessageById(sessionId: number, messageId: number): { role: string; content: unknown; row: CoderMessageRow } | null {
     return messages.getById(this.db, sessionId, messageId);
@@ -144,6 +151,7 @@ export class SessionStore {
   listSessionMemory(sessionId: number, opts: { kind?: string } = {}): sessionDrive.SessionMemoryRow[] { return sessionDrive.listMemory(this.db, sessionId, opts); }
   setSessionMemoryPinned(id: number, pinned: boolean): void { sessionDrive.setMemoryPinned(this.db, id, pinned); }
   deleteSessionMemory(id: number): boolean { return sessionDrive.deleteMemory(this.db, id); }
+  copySessionMemory(fromSessionId: number, toSessionId: number): number { return sessionDrive.copyMemory(this.db, fromSessionId, toSessionId); }
   recordInvestigation(input: sessionDrive.RecordInvestigationInput): sessionDrive.InvestigationRow { return sessionDrive.recordInvestigation(this.db, input); }
   setInvestigationEmbedding(id: number, embedding: Float32Array): void { sessionDrive.setInvestigationEmbedding(this.db, id, embedding); }
   recallInvestigations(sessionId: number, query: string, limit?: number): sessionDrive.InvestigationRow[] { return sessionDrive.recallInvestigations(this.db, sessionId, query, limit); }
