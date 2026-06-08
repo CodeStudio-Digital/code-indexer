@@ -11,8 +11,8 @@
 import type { Hono } from 'hono';
 import { mkdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { virtualProjectDir } from '@mcp/shared/utils/data-paths.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
@@ -104,7 +104,7 @@ export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): v
         rootPath = externalProject.root_path;
       } else {
         const uuid = randomUUID();
-        rootPath = join(process.cwd(), 'data', 'virtual-projects', uuid);
+        rootPath = virtualProjectDir(uuid);
         mkdirSync(rootPath, { recursive: true });
         const created = db.createProject(
           `_builder_${uuid}`,

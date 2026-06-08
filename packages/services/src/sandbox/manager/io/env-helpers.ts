@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve as resolvePath } from 'node:path';
+import { join } from 'node:path';
+import { virtualProjectDir } from '@mcp/shared/utils/data-paths.js';
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 
 /**
@@ -57,17 +58,15 @@ export function renderDotEnv(envs: Record<string, string>): string {
 
 /**
  * Resolve the host directory bind-mounted onto the sandbox workdir.
- * Default: `<cwd>/data/virtual-projects/<sessionId>`. Operators can
- * relocate via `MCP_SANDBOX_WORKDIR_HOST_DIR`. Returns `null` when
- * persistence via bind-mount is explicitly disabled
+ * Default: `<mcpDataDir>/virtual-projects/<sessionId>`
+ * (i.e. `~/.mcp-code-indexer/virtual-projects/<sessionId>`). Operators
+ * can relocate the base via `MCP_SANDBOX_WORKDIR_HOST_DIR`. Returns
+ * `null` when persistence via bind-mount is explicitly disabled
  * (`MCP_SANDBOX_BIND_MOUNT=0`).
  */
 export function resolveHostWorkdirMount(sessionId: string): string | null {
   if (process.env.MCP_SANDBOX_BIND_MOUNT === '0') return null;
-  const base =
-    process.env.MCP_SANDBOX_WORKDIR_HOST_DIR ??
-    resolvePath(process.cwd(), 'data', 'virtual-projects');
-  return join(base, String(sessionId));
+  return virtualProjectDir(sessionId);
 }
 
 /**

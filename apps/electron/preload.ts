@@ -158,6 +158,7 @@ const STREAMING_METHOD_PATHS: ReadonlySet<string> = new Set([
   'docs:sources:retryEmbeddingsStream',
   'docs:research:stream',
   'company:stream',
+  'system:podmanMachineSetupStream',
 ]);
 
 /**

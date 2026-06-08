@@ -92,7 +92,7 @@ const protectedDashboardFiles = [
 ];
 
 const protectedAllowlist = new Map<string, Set<string>>([
-  ['apps/dashboard/AppShell.tsx', new Set(['MCP&nbsp;IDE', 'v'])],
+  ['apps/dashboard/AppShell.tsx', new Set(['CodeStudio', 'v'])],
   ['apps/dashboard/features/admin/ChromeServicePanel.tsx', new Set(['· CDP'])],
   ['apps/dashboard/features/admin/PipelineBindingsPanel.tsx', new Set(['global', 'template', 'session'])],
   ['apps/dashboard/features/admin/PluginsPanel.tsx', new Set(['v', 'MCP_MARKET_URL'])],

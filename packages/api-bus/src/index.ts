@@ -32,6 +32,7 @@ import type { ProjectGitApi } from './projectGit.js';
 import type { AuthApi } from './auth.js';
 import type { BillingApi } from './billing.js';
 import type { PluginsApi } from './plugins.js';
+import type { SystemApi } from './system.js';
 import type {
   CostsApi,
   DiffApi,
@@ -67,6 +68,7 @@ export * from './projectGit.js';
 export * from './auth.js';
 export * from './billing.js';
 export * from './plugins.js';
+export * from './system.js';
 export * from './training.js';
 export * from './misc.js';
 
@@ -106,6 +108,9 @@ export interface Api {
 
   // Plugins / marketplace
   plugins: PluginsApi;
+
+  // Desktop shell: first-run preflight + guided Podman setup
+  system: SystemApi;
 
   // Operational
   admin: AdminApi;

@@ -27,6 +27,7 @@ import { setGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js
 import { PreviewWindowService } from './src/preview-window/service.js';
 import { startOptionalDevHttp } from './src/dev-http.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
+import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
 import type { Hono } from 'hono';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -115,6 +116,11 @@ async function bootstrap() {
   });
 
   await app.whenReady();
+
+  // Production lockdown: strip the application menu + install the renderer
+  // CSP. No-op in dev (gated on app.isPackaged inside). Runs before the
+  // first window loads so the CSP header applies to the document.
+  installGlobalHardening();
 
   // Pass the Hono app so handlers-mount can register a fallback for
   // every IPC channel not yet covered by a pure handler in
@@ -219,7 +225,7 @@ async function createAppWindow(routeSuffix?: string): Promise<BrowserWindow> {
     height: 900,
     minWidth: 1024,
     minHeight: 720,
-    title: 'MCP IDE',
+    title: 'CodeStudio',
     autoHideMenuBar: true,
     webPreferences: {
       preload: PRELOAD_PATH,
@@ -230,6 +236,7 @@ async function createAppWindow(routeSuffix?: string): Promise<BrowserWindow> {
   });
 
   attachWindowHandlers(win);
+  applyProductionHardening(win);
 
   if (DEV_URL) {
     const target = routeSuffix ? `${DEV_URL.replace(/\/$/, '')}${routeSuffix}` : DEV_URL;

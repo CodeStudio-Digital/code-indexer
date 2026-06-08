@@ -628,6 +628,7 @@ export class ExecutingNode implements BehaviorNode {
       enforcePreRead: ctx.bridge?.enforcePreRead,
       enforceTaskMode: ctx.bridge?.enforceTaskMode,
       reduceToolResult: ctx.bridge?.reduceToolResult,
+      finalizeToolResult: ctx.bridge?.finalizeToolResult,
       postProcessToolResult: ctx.bridge?.postProcessToolResult,
       detectPollingStuck: ctx.bridge?.detectPollingStuck,
       onToolCallStart: (id, name, input) => {

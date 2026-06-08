@@ -1,22 +1,37 @@
-import { describe, it, expect } from 'vitest';
-import { join, resolve, sep } from 'node:path';
+import { describe, it, expect, afterEach } from 'vitest';
+import { join, resolve } from 'node:path';
 import { resolveStorageBindPath } from '@mcp/services/verdaccio/storage-paths.js';
+import { mcpDataDir } from '@mcp/shared/utils/config.js';
 
 describe('resolveStorageBindPath', () => {
-  it('defaults to <cwd>/data/packages alongside virtual-projects + design-system-uploads', () => {
-    const r = resolveStorageBindPath({ cwd: 'D:\\MCP', override: null });
-    expect(r).toBe(resolve(join('D:\\MCP', 'data', 'packages')));
+  const orig = process.env.MCP_DATA_DIR;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.MCP_DATA_DIR;
+    else process.env.MCP_DATA_DIR = orig;
+  });
+
+  it('defaults to <mcpDataDir>/packages (no longer the project-root data/)', () => {
+    delete process.env.MCP_DATA_DIR;
+    const r = resolveStorageBindPath({ override: null });
+    expect(r).toBe(join(mcpDataDir(), 'packages'));
+  });
+
+  it('follows MCP_DATA_DIR', () => {
+    process.env.MCP_DATA_DIR = process.platform === 'win32' ? 'D:\\custom-data' : '/custom-data';
+    expect(resolveStorageBindPath({ override: null })).toBe(
+      resolve(process.env.MCP_DATA_DIR, 'packages'),
+    );
   });
 
   it('uses MCP_VERDACCIO_STORAGE_DIR override when supplied', () => {
     const override = '/mnt/registry-backups/packages';
-    const r = resolveStorageBindPath({ cwd: '/anywhere', override });
-    expect(r).toBe(resolve(override));
+    expect(resolveStorageBindPath({ override })).toBe(resolve(override));
   });
 
   it('treats empty / whitespace override as unset', () => {
-    expect(resolveStorageBindPath({ cwd: '/x', override: '' })).toBe(resolve('/x', 'data', 'packages'));
-    expect(resolveStorageBindPath({ cwd: '/x', override: '   ' })).toBe(resolve('/x', 'data', 'packages'));
+    delete process.env.MCP_DATA_DIR;
+    expect(resolveStorageBindPath({ override: '' })).toBe(join(mcpDataDir(), 'packages'));
+    expect(resolveStorageBindPath({ override: '   ' })).toBe(join(mcpDataDir(), 'packages'));
   });
 
   it('rejects relative override (it would silently land in cwd)', () => {
@@ -24,22 +39,17 @@ describe('resolveStorageBindPath', () => {
     // different disk / drive — accepting a relative path here would
     // be confusing because it'd be relative to the SERVER's cwd, not
     // the operator's shell cwd. Force absolute to prevent the trap.
-    expect(() => resolveStorageBindPath({ cwd: '/x', override: 'relative/dir' })).toThrow(/absolute/i);
+    expect(() => resolveStorageBindPath({ override: 'relative/dir' })).toThrow(/absolute/i);
   });
 
   it('canonicalises the override (no trailing slash, OS-correct separators)', () => {
     const override = process.platform === 'win32'
       ? 'D:\\packages\\\\sub\\'
       : '/var/lib/packages/sub/';
-    const r = resolveStorageBindPath({ cwd: '/x', override });
+    const r = resolveStorageBindPath({ override });
     // resolve() collapses doubled separators and strips trailing.
     expect(r).not.toMatch(/[\\/]$/);
     // Last segment is preserved.
-    expect(r).toMatch(new RegExp(`sub$`));
-  });
-
-  it('defaults use the host OS separator', () => {
-    const r = resolveStorageBindPath({ cwd: '/x', override: null });
-    expect(r).toContain(`data${sep}packages`);
+    expect(r).toMatch(/sub$/);
   });
 });

@@ -30,6 +30,7 @@
     "check:loc": "tsx scripts/check-loc-cap.ts",
     "check:cycles": "tsx scripts/check-circular-imports.ts",
     "check:arch": "npm run check:loc && npm run check:cycles",
+    "migrate:data-dir": "tsx scripts/migrate-data-dir.ts",
     "typecheck": "tsc --noEmit",
     "postinstall": "pnpm rebuild better-sqlite3",
     "eval": "tsx src/benchmarks/search-quality.ts --project mcp-code-indexer",

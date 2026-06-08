@@ -521,7 +521,7 @@
   "capabilityFallbacks.columns.lastSeen": "Visto por último",
 
   "mcpHttp.title": "Endpoint HTTP do MCP",
-  "mcpHttp.description.before": "Expõe as tools nativas do MCP IDE (incluindo",
+  "mcpHttp.description.before": "Expõe as tools MCP nativas do CodeStudio (incluindo",
   "mcpHttp.description.after": ") via HTTP pra outros agentes (Claude Code, Cursor, etc). Aceita só conexões de localhost; o tier do token define quais tools cada cliente enxerga.",
   "mcpHttp.endpoint": "Endpoint",
   "mcpHttp.copyEndpoint": "Copiar URL do endpoint",

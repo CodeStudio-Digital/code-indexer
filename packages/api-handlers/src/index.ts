@@ -24,6 +24,7 @@ import { createRunsHandlers } from './runs/index.js';
 import { createSearchHandlers } from './search/index.js';
 import { createProjectGitHandlers } from './projectGit/index.js';
 import { createPluginsHandlers } from './plugins/index.js';
+import { createSystemHandlers } from './system/index.js';
 import type { HandlerDeps } from './types.js';
 
 export type { HandlerDeps } from './types.js';
@@ -41,6 +42,7 @@ export { createRunsHandlers } from './runs/index.js';
 export { createSearchHandlers } from './search/index.js';
 export { createProjectGitHandlers } from './projectGit/index.js';
 export { createPluginsHandlers } from './plugins/index.js';
+export { createSystemHandlers } from './system/index.js';
 export { createTrainingHandlers, MCP_BLOCK_SERVER_KEY } from './training/index.js';
 export { generateAiPipeline, type GeneratePipelineResult } from './projectPipeline/generate.js';
 
@@ -67,5 +69,6 @@ export function createHandlers(deps: HandlerDeps): Partial<Api> {
     search: createSearchHandlers(deps),
     projectGit: createProjectGitHandlers(deps),
     plugins: createPluginsHandlers(deps),
+    system: createSystemHandlers(deps),
   };
 }

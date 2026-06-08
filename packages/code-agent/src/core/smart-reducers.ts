@@ -18,7 +18,13 @@
  * otherwise be truncated. They MUST be deterministic — same input must
  * always produce the same output, so server-side prompt caches stay stable
  * across turns.
+ *
+ * Tools with no name-specific reducer fall through to `jsonCrush`, a
+ * CONTENT-TYPE reducer for generic JSON-array / NDJSON outputs (MCP servers,
+ * code_exec). See ./reducers/json-crush.ts.
  */
+
+import { jsonCrush } from './reducers/json-crush.js';
 
 export interface ReducerInput {
   content: string;
@@ -610,18 +616,28 @@ export function reducePreThinkInHistory<T extends { role: string; content: Reado
 }
 
 /**
- * Apply the reducer registered for `toolName` (if any). Returns the
- * possibly-reduced content. Always idempotent: applying twice yields the
- * same result as applying once because every reducer short-circuits when
- * `content.length <= cap`.
+ * Apply the reducer registered for `toolName`. When there's no name-specific
+ * reducer, fall back to `jsonCrush` (content-type detection for generic
+ * JSON-array / NDJSON outputs). Returns the possibly-reduced content.
+ *
+ * Always idempotent: applying twice yields the same result as applying once
+ * because every reducer short-circuits when `content.length <= cap`.
+ *
+ * `opts.query` (the latest user-turn text) is consumed only by the content-type
+ * fallback to rank rows by relevance. It is captured once at tool-finalize and
+ * the shaped result is persisted, so query-dependence never thrashes the cache.
  */
 export function applySmartReducer(
   toolName: string,
   content: string,
   cap: number,
+  opts?: { query?: string },
 ): string {
   const fn = SMART_REDUCERS[toolName];
-  if (!fn) return content;
-  const out = fn({ content, cap });
-  return out.applied ? out.content : content;
+  if (fn) {
+    const out = fn({ content, cap });
+    return out.applied ? out.content : content;
+  }
+  const crushed = jsonCrush({ content, cap, query: opts?.query });
+  return crushed.applied ? crushed.content : content;
 }

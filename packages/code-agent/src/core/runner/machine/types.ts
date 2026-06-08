@@ -292,6 +292,17 @@ export interface BridgeCallbacks {
    */
   reduceToolResult?: (toolName: string, content: string) => string;
   /**
+   * Live final shaping hook. Spills the raw original to the side-file store
+   * and applies the generic fail-safe cap with an output_id marker. Returns
+   * the content to push plus the `truncated` flag (so resume won't re-cut).
+   */
+  finalizeToolResult?: (args: {
+    toolName: string;
+    rawContent: string;
+    shapedContent: string;
+    isError: boolean;
+  }) => { content: string; truncated?: boolean; originalSize?: number };
+  /**
    * Post-result hook for runner-owned state that needs raw and shaped
    * content (mutation-aware reread diffs, write tracking, etc.).
    */

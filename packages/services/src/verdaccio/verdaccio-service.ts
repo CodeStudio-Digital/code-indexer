@@ -146,7 +146,6 @@ export class VerdaccioService {
       // longer exists and the next `npm publish` fails E401 (session
       // 73 incident on second restart).
       const storageBind = resolveStorageBindPath({
-        cwd: process.cwd(),
         override: process.env.MCP_VERDACCIO_STORAGE_DIR ?? null,
       });
       try {

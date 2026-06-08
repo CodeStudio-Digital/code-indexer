@@ -1,10 +1,12 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { join, resolve } from 'node:path';
 import {
   parseDotEnv,
   renderDotEnv,
   resolveHostWorkdirMount,
   resolveSessionEnvs,
 } from '@mcp/services/sandbox/manager/io/env-helpers.js';
+import { mcpDataDir } from '@mcp/shared/utils/config.js';
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 
 // ─── parseDotEnv ────────────────────────────────────────────────
@@ -132,12 +134,14 @@ describe('resolveHostWorkdirMount', () => {
     else process.env.MCP_SANDBOX_WORKDIR_HOST_DIR = originalHostDir;
   });
 
-  it('returns a path under data/virtual-projects by default', () => {
+  it('returns a path under <mcpDataDir>/virtual-projects by default', () => {
     delete process.env.MCP_SANDBOX_BIND_MOUNT;
     delete process.env.MCP_SANDBOX_WORKDIR_HOST_DIR;
     const out = resolveHostWorkdirMount('42');
     expect(out).not.toBeNull();
-    expect(out!.replace(/\\/g, '/')).toMatch(/data\/virtual-projects\/42$/);
+    // No longer under the project-root `data/` — lives in the user data dir.
+    expect(out!.startsWith(mcpDataDir())).toBe(true);
+    expect(out!.replace(/\\/g, '/')).toMatch(/virtual-projects\/42$/);
   });
 
   it('returns null when MCP_SANDBOX_BIND_MOUNT=0', () => {
@@ -147,10 +151,11 @@ describe('resolveHostWorkdirMount', () => {
 
   it('honours MCP_SANDBOX_WORKDIR_HOST_DIR override', () => {
     delete process.env.MCP_SANDBOX_BIND_MOUNT;
-    process.env.MCP_SANDBOX_WORKDIR_HOST_DIR = '/custom/sandbox-roots';
+    // Override is resolved to an absolute path (bind-mounts must be absolute).
+    const override = process.platform === 'win32' ? 'D:\\custom\\sandbox-roots' : '/custom/sandbox-roots';
+    process.env.MCP_SANDBOX_WORKDIR_HOST_DIR = override;
     const out = resolveHostWorkdirMount('42');
-    expect(out).not.toBeNull();
-    expect(out!.replace(/\\/g, '/')).toBe('/custom/sandbox-roots/42');
+    expect(out).toBe(join(resolve(override), '42'));
   });
 });
 

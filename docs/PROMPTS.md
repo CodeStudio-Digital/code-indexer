@@ -1,4 +1,4 @@
-# Prompts in MCP IDE — a maintainer's guide
+# Prompts in CodeStudio — a maintainer's guide
 
 How the agent system prompts are built, where each one lives, and how to edit
 them without breaking the model's behavior or the parsers that read its output.
@@ -229,7 +229,7 @@ Canonical vocabulary the prompts share:
 - **English only** in prompt bodies. The provider preambles already tell the
   model to answer in the user's language.
 - **No markdown fences around JSON output** in contract prompts.
-- **Product naming** — the product is **MCP IDE**; "MCP Code Indexer" refers only
+- **Product naming** — the product is **CodeStudio**; "MCP Code Indexer" refers only
   to the indexing/search subsystem.
 - **Dev workflow** — set `CODER_PROMPTS_WATCH=1` to hot-reload `.txt` prompts on
   a new session while iterating.

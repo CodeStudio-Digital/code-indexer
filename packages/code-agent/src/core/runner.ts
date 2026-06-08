@@ -253,8 +253,10 @@ import {
   filterGoalToolsByState,
   approxChars,
   shouldSpillToolOutput,
+  capToolContent,
+  finalizeToolOutput,
 } from './runner/pure-helpers.js';
-export { filterGoalToolsByState, approxChars, shouldSpillToolOutput };
+export { filterGoalToolsByState, approxChars, shouldSpillToolOutput, capToolContent };
 
 /**
  * Build a tool_result block, applying push-time truncation if the content
@@ -269,26 +271,17 @@ export function buildToolResultBlock(
   cap: number = PUSH_TIME_CAP,
   outputId?: string,
 ): ToolResultBlock {
-  if (content.length <= cap) {
+  const capped = capToolContent(content, cap, outputId);
+  if (!capped.truncated) {
     return { type: 'tool_result', tool_use_id: toolUseId, content, is_error: isError };
   }
-  const head = content.slice(0, cap);
-  // Deterministic marker. Two identical outputs → identical marker (same
-  // original_size, same outputId because the store hashes content). Once a
-  // block is created, its content never changes across turns — preserves
-  // prefix-cache stability.
-  const idSuffix = outputId
-    ? `; output_id=${outputId}, call get_tool_output("${outputId}") to retrieve the full content (supports offset/limit for pagination)`
-    : '';
   return {
     type: 'tool_result',
     tool_use_id: toolUseId,
-    content:
-      head +
-      `\n\n[truncated: original_size=${content.length} chars; ${content.length - cap} chars elided — call the tool again with narrower params if needed, OR use 'spawn_agent' (with an explore agent) to delegate this exploration without bloating your main context window${idSuffix}]`,
+    content: capped.content,
     is_error: isError,
     truncated: true,
-    originalSize: content.length,
+    originalSize: capped.originalSize,
   };
 }
 
@@ -2042,7 +2035,10 @@ export class CoderRunner extends EventEmitter {
           });
         },
         reduceToolResult: (toolName, content) =>
-          applySmartReducer(toolName, content, this.effectivePushTimeCap),
+          applySmartReducer(toolName, content, this.effectivePushTimeCap, {
+            query: this.getLastUserText(),
+          }),
+        finalizeToolResult: (a) => this.finalizeToolResultForBridge(a),
         detectPollingStuck: (toolName, content, isError, isRepeatable, turn) =>
           this.detectPollingStuckForBridge(toolName, content, isError, isRepeatable, turn),
         runPreThink: async ({ messages, toolNames, turn }) => {
@@ -2309,6 +2305,29 @@ export class CoderRunner extends EventEmitter {
     return null;
   }
 
+  /**
+   * Live final shaping for a tool result: spill the RAW pre-reduction original
+   * to the side-file store (so reductions + truncations are recoverable via
+   * `get_tool_output`) and apply the generic fail-safe cap with an output_id
+   * marker. Mirrors the resume-time `normalizeMessageForCache` cap so live and
+   * resumed histories stay byte-identical. No-op spill when there's no store
+   * (subagents / tests) — the fail-safe cap still applies.
+   */
+  private finalizeToolResultForBridge(args: {
+    toolName: string;
+    rawContent: string;
+    shapedContent: string;
+    isError: boolean;
+  }): { content: string; truncated?: boolean; originalSize?: number } {
+    return finalizeToolOutput({
+      rawContent: args.rawContent,
+      shapedContent: args.shapedContent,
+      isError: args.isError,
+      cap: this.effectivePushTimeCap,
+      store: this.opts.toolContext.toolOutputStore,
+    });
+  }
+
   private postProcessToolResultForBridge(args: {
     toolUseId: string;
     name: string;
@@ -2434,6 +2453,26 @@ export class CoderRunner extends EventEmitter {
       /* defensive */
     }
     return null;
+  }
+
+  /**
+   * Latest user-turn prose, used to rank generic tool-output rows by relevance
+   * (see applySmartReducer → json-crush). Skips injected context blocks
+   * (system-reminder / active-context) which start with '<', and caps length so
+   * the relevance tokenizer stays cheap. Empty string when there's no user turn.
+   */
+  private getLastUserText(): string {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      if (m.role !== 'user') continue;
+      const text = typeof m.content === 'string'
+        ? m.content
+        : m.content
+            .map((b) => (b.type === 'text' && !b.text.trimStart().startsWith('<') ? b.text : ''))
+            .join(' ');
+      return text.slice(0, 4000);
+    }
+    return '';
   }
 
   /**

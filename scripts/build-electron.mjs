@@ -89,20 +89,25 @@ async function buildPreload() {
     format: 'cjs',
     target: 'node20',
     external: ['electron'],
-    sourcemap: 'linked',
+    sourcemap: false,
+    minify: true,
     logLevel: 'info',
   });
   console.log(`✓ preload bundled (CJS) → ${outfile}`);
 }
 
-console.log('Building MCP IDE Electron app…');
+console.log('Building CodeStudio Electron app…');
 console.log(`  root: ${root}`);
 console.log(`  flags: tsc=${!skipTsc} dashboard=${!skipDashboard} package=${!noPackage} target=${target ?? '<default>'}`);
 
 // 1. TypeScript + path-alias rewrite
 if (!skipTsc) {
-  run('pnpm', ['tsc']);
-  run('pnpm', ['exec', 'tsc-alias']);
+  // Production config: sourceMap/declaration/declarationMap OFF so no
+  // .js.map / .d.ts(.map) ever ships in the ASAR. (Dev `pnpm build` keeps
+  // maps via tsconfig.json.) tsc-alias rewrites the same dist with the prod
+  // config's paths.
+  run('pnpm', ['exec', 'tsc', '-p', 'tsconfig.prod.json']);
+  run('pnpm', ['exec', 'tsc-alias', '-p', 'tsconfig.prod.json']);
   run('node', ['scripts/copy-prompts.mjs']);
 }
 

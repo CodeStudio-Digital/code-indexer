@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { virtualProjectDir } from '@mcp/shared/utils/data-paths.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import type { BuilderStack } from '@mcp/services/sandbox/types.js';
@@ -258,7 +258,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     let effectiveProjectIds = body.project_ids ?? [];
     if (isBuilder && effectiveProjectIds.length === 0) {
       const uuid = randomUUID();
-      const rootPath = join(process.cwd(), 'data', 'virtual-projects', uuid);
+      const rootPath = virtualProjectDir(uuid);
       try {
         mkdirSync(rootPath, { recursive: true });
       } catch (e) {

@@ -39,7 +39,12 @@ function loadDefaultMaxTokens(): Record<string, number> {
   }
 }
 
-const MCP_OUTPUT_HARD_CAP = Number(process.env.CODER_MCP_OUTPUT_HARD_CAP ?? 16_000);
+// Raised 16k → 200k: this is now only a PATHOLOGICAL guard against multi-MB
+// payloads. Normal large arrays flow intact to the runner, which spills the
+// original (recoverable via get_tool_output), relevance-ranks via json-crush,
+// and applies the fail-safe push-time cap (see finalizeToolResultForBridge).
+// Blind head-cutting here used to pre-empt json-crush's full-array ranking.
+const MCP_OUTPUT_HARD_CAP = Number(process.env.CODER_MCP_OUTPUT_HARD_CAP ?? 200_000);
 const READ_FILE_HARD_MAX = Number(process.env.CODER_READ_FILE_HARD_MAX ?? 800);
 /**
  * "Unrestricted tool output" overrides — picked when the active session has

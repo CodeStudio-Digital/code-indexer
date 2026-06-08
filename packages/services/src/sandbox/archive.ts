@@ -9,7 +9,7 @@
  * sandbox module stays a leaf of the dependency graph.
  *
  * Layout:
- *   <MCP_SANDBOX_ARCHIVE_DIR || cwd()/data/sandboxes>/
+ *   <MCP_SANDBOX_ARCHIVE_DIR || ~/.mcp-code-indexer/sandboxes>/
  *     └── <sessionId>.tar   ← tar stream produced by
  *                              `ISandboxDriver.exportWorkdir` and
  *                              consumed by `importWorkdir`.
@@ -19,13 +19,11 @@
  */
 
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve as resolvePath } from 'node:path';
+import { dirname, join } from 'node:path';
+import { sandboxArchiveDir } from '@mcp/shared/utils/data-paths.js';
 
 export function archivePath(sessionId: string | number): string {
-  const base =
-    process.env.MCP_SANDBOX_ARCHIVE_DIR ??
-    resolvePath(process.cwd(), 'data', 'sandboxes');
-  return join(base, `${sessionId}.tar`);
+  return join(sandboxArchiveDir(), `${sessionId}.tar`);
 }
 
 /**

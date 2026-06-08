@@ -57,6 +57,9 @@ export interface DispatchedToolResult {
    * right after the tool message — provider-agnostic vision.
    */
   extraUserBlocks?: ContentBlock[];
+  /** Set by the live finalize hook when the fail-safe cap truncated content. */
+  truncated?: boolean;
+  originalSize?: number;
 }
 
 export interface DispatchArgs {
@@ -100,6 +103,18 @@ export interface DispatchArgs {
   enforceTaskMode?: (toolName: string, toolMutates: boolean) => string | null;
   /** Smart-reducer applied to the raw result content before push. */
   reduceToolResult?: (toolName: string, content: string) => string;
+  /**
+   * Live final shaping: spill the raw original to the side-file store + apply
+   * the generic fail-safe cap with an output_id marker. Returns the content to
+   * push plus the `truncated` flag (so resume's `normalizeMessageForCache`
+   * won't re-cut). Skipped when absent (tests / paths without a store).
+   */
+  finalizeToolResult?: (args: {
+    toolName: string;
+    rawContent: string;
+    shapedContent: string;
+    isError: boolean;
+  }) => { content: string; truncated?: boolean; originalSize?: number };
   /**
    * Post-result hook for runner-owned state that needs the real tool_use id
    * and raw content (mutation-aware reread diffs, write tracking, etc.).
@@ -491,15 +506,31 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       }
     }
 
-    args.onToolCallFinalized?.(tu.id, finalContent.length);
+    let finalShaped = finalContent;
+    let finalTruncated: boolean | undefined;
+    let finalOriginalSize: number | undefined;
+    if (args.finalizeToolResult) {
+      const fin = args.finalizeToolResult({
+        toolName: tu.name,
+        rawContent: invocationContent,
+        shapedContent: finalContent,
+        isError: finalIsError,
+      });
+      finalShaped = fin.content;
+      finalTruncated = fin.truncated;
+      finalOriginalSize = fin.originalSize;
+    }
+
+    args.onToolCallFinalized?.(tu.id, finalShaped.length);
     results.push({
       toolUseId: tu.id,
       name: tu.name,
-      content: finalContent,
+      content: finalShaped,
       isError: finalIsError,
       durationMs: Date.now() - t0,
       wasRefusedByDedup: false,
       extraUserBlocks: invocationExtraBlocks,
+      ...(finalTruncated ? { truncated: true, originalSize: finalOriginalSize } : {}),
     });
   }
 
@@ -534,6 +565,7 @@ export function toToolResultBlock(r: DispatchedToolResult): ContentBlock {
     tool_use_id: r.toolUseId,
     content: r.content,
     is_error: r.isError,
+    ...(r.truncated ? { truncated: true, originalSize: r.originalSize } : {}),
   };
 }
 

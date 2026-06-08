@@ -10,7 +10,8 @@
  * This helper runs once per `qa_run_completed`: it walks
  * `playwright-report/` and `test-results/` inside the sandbox, copies
  * every file to a host directory under
- * `${MCP_DATA_DIR ?? 'data'}/qa-reports/<sessionId>/<runId>/`, and stamps
+ * `<mcpDataDir>/qa-reports/<sessionId>/<runId>/`
+ * (i.e. `~/.mcp-code-indexer/qa-reports/…`), and stamps
  * the absolute path on `qa_test_runs.report_persisted_path`. The
  * artifacts route then prefers that path over the (possibly gone)
  * sandbox.
@@ -26,6 +27,8 @@
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { mcpDataDir } from '@mcp/shared/utils/config.js';
+import { qaReportsDir } from '@mcp/shared/utils/data-paths.js';
 import type { SandboxManager } from '../sandbox/sandbox-manager.js';
 import type { IQaTestRunStore } from './store/interfaces.js';
 
@@ -37,7 +40,7 @@ export interface PersistRunArtifactsOpts {
   sessionId: number;
   runId: number;
   serviceId: string;
-  /** Override base dir. Defaults to `${MCP_DATA_DIR ?? 'data'}/qa-reports`. */
+  /** Override base dir. Defaults to `<mcpDataDir>/qa-reports`. */
   baseDir?: string;
   /** Override total cap. Defaults to MCP_QA_PERSIST_MAX_BYTES_PER_RUN env or 1 GiB. */
   maxBytes?: number;
@@ -68,7 +71,7 @@ export function resolveRunReportDir(
   runId: number | string,
   baseDir?: string,
 ): string {
-  const root = (baseDir ?? process.env.MCP_DATA_DIR ?? 'data').replace(/[\\/]+$/, '');
+  const root = (baseDir ?? mcpDataDir()).replace(/[\\/]+$/, '');
   return path.resolve(path.join(root, 'qa-reports', String(sessionId), String(runId)));
 }
 
@@ -98,7 +101,7 @@ export async function persistRunArtifacts(
   >,
   opts: PersistRunArtifactsOpts,
 ): Promise<PersistRunArtifactsResult> {
-  const baseDir = opts.baseDir ?? path.join(process.env.MCP_DATA_DIR ?? 'data', 'qa-reports');
+  const baseDir = opts.baseDir ?? qaReportsDir();
   const absolutePath = resolveRunReportDir(opts.sessionId, opts.runId, baseDir);
   const maxBytes = opts.maxBytes ?? resolveDefaultMaxBytes();
   const perFileMax = opts.perFileMaxBytes ?? DEFAULT_PER_FILE_MAX_BYTES;

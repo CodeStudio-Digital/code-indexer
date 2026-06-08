@@ -1,4 +1,4 @@
-# MCP IDE
+# CodeStudio
 
 An AI-native IDE for builders. Bring your own keys, work in a fast desktop app, let agents reason over your codebase.
 

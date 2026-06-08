@@ -26,6 +26,7 @@ import { useApi } from './hooks/useApi.js';
 import { AppShell } from './AppShell.js';
 import { buildAgentsDefaultUrl } from './features/agents/routing.js';
 import { OnboardingWizard, isOnboarded, resetOnboarding } from './features/onboarding/OnboardingWizard.js';
+import { PreflightWizard, isPreflightDone, isElectronRenderer, resetPreflight } from './features/preflight/index.js';
 import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 
 // ─── Route components ────────────────────────────────────────
@@ -49,6 +50,9 @@ import { installWebviewBridge } from './features/workspace/webview-bridge.js';
  */
 function AppRoot() {
   const [showOnboarding, setShowOnboarding] = useState(() => !isOnboarded());
+  // Preflight gates ahead of onboarding, desktop-only (no HTTP fallback for
+  // system.* in browser dev). Live host checks run inside the wizard.
+  const [showPreflight, setShowPreflight] = useState(() => isElectronRenderer() && !isPreflightDone());
   const navigate = useNavigate();
 
   // Dev helpers — surfaced via DevTools console so QA can re-run the
@@ -66,6 +70,10 @@ function AppRoot() {
       resetOnboarding: () => {
         resetOnboarding();
         setShowOnboarding(true);
+      },
+      resetPreflight: () => {
+        resetPreflight();
+        setShowPreflight(true);
       },
     };
   }, []);
@@ -97,8 +105,10 @@ function AppRoot() {
   return (
     <>
       <AppShell />
-      {showOnboarding && (
-        <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+      {showPreflight ? (
+        <PreflightWizard onDone={() => setShowPreflight(false)} />
+      ) : (
+        showOnboarding && <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
       )}
     </>
   );

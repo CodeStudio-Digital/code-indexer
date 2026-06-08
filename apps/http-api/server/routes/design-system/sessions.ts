@@ -8,7 +8,7 @@
  *   DELETE /api/design-system/sessions/:id
  *
  * Creating a session uploads the theme zip, persists it to
- * `data/design-system-uploads/`, then creates a parent CompanySession
+ * `<mcpDataDir>/design-system-uploads/`, then creates a parent CompanySession
  * (builder-mode with the chosen stack) plus the design_system_session
  * row that links the two. The same flow as company sessions, just
  * wrapped to also accept multipart upload and seed the DS row.
@@ -16,6 +16,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  designSystemMcpDir,
+  designSystemUploadsDir,
+  virtualProjectDir,
+} from '@mcp/shared/utils/data-paths.js';
 import type { Hono } from 'hono';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
@@ -82,7 +87,7 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
     try {
       const buf = Buffer.from(await file.arrayBuffer());
       zipHash = createHash('sha256').update(buf).digest('hex');
-      const uploadsDir = join(process.cwd(), 'data', 'design-system-uploads');
+      const uploadsDir = designSystemUploadsDir();
       mkdirSync(uploadsDir, { recursive: true });
       zipPath = join(uploadsDir, `${zipHash.slice(0, 12)}-${randomUUID()}.zip`);
       writeFileSync(zipPath, buf);
@@ -93,7 +98,7 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
     // Create the virtual project for the builder sandbox (mirrors the
     // company/sessions builder path).
     const projUuid = randomUUID();
-    const projectRoot = join(process.cwd(), 'data', 'virtual-projects', projUuid);
+    const projectRoot = virtualProjectDir(projUuid);
     try { mkdirSync(projectRoot, { recursive: true }); } catch { /* tolerated */ }
     const virtualProject = db.createProject(
       `_design-system_${projUuid}`,
@@ -268,7 +273,7 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
         try {
           const buf = Buffer.from(await file.arrayBuffer());
           newHash = createHash('sha256').update(buf).digest('hex');
-          const uploadsDir = join(process.cwd(), 'data', 'design-system-uploads');
+          const uploadsDir = designSystemUploadsDir();
           mkdirSync(uploadsDir, { recursive: true });
           zipPathToUse = join(uploadsDir, `${newHash.slice(0, 12)}-${randomUUID()}.zip`);
           writeFileSync(zipPathToUse, buf);
@@ -381,7 +386,7 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
 
     // Stable installation directory keyed by session id (one slot per DS
     // session — reinstalling a newer version overwrites the previous one).
-    const installDir = join(process.cwd(), 'data', 'design-system-mcp', String(id));
+    const installDir = join(designSystemMcpDir(), String(id));
 
     // Wipe and recreate on reinstall so stale files don't accumulate.
     try { rmSync(installDir, { recursive: true, force: true }); } catch { /* tolerate */ }

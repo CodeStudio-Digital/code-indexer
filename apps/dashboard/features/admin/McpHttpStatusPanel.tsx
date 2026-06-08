@@ -23,7 +23,7 @@ function buildClaudeCodeSnippet(endpoint: string, hasAuth: boolean): string {
   return JSON.stringify(
     {
       mcpServers: {
-        'mcp-ide': {
+        'codestudio': {
           transport: 'http',
           url: endpoint,
           ...(hasAuth

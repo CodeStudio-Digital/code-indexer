@@ -1,6 +1,6 @@
 {
-  "appId": "io.mcpide.app",
-  "productName": "MCP IDE",
+  "appId": "studio.codestudio.app",
+  "productName": "CodeStudio",
   "directories": {
     "output": "dist/electron-builder",
     "buildResources": "apps/electron/build"
@@ -9,7 +9,8 @@
     "dist/apps/electron/**/*",
     "dist/dashboard/**/*",
     "dist/packages/**/*",
-    "package.json"
+    "package.json",
+    "!**/*.map"
   ],
   "asar": true,
   "asarUnpack": [

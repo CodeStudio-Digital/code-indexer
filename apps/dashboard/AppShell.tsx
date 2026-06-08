@@ -176,7 +176,7 @@ export function AppShell() {
           <span className="h-5 w-5 rounded-md bg-primary text-primary-foreground grid place-items-center">
             <Boxes className="h-3 w-3" />
           </span>
-          <span>MCP&nbsp;IDE</span>
+          <span>CodeStudio</span>
           <span className="text-[9px] text-muted-foreground uppercase tracking-wider font-normal">
             v{__APP_VERSION__}
           </span>

@@ -23,24 +23,23 @@
  * Pure: no I/O. Caller is responsible for `mkdir -p` before passing
  * the result to the driver.
  */
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
+import { verdaccioStorageDir } from '@mcp/shared/utils/data-paths.js';
 
 export interface StorageBindOptions {
   /** Operator override (env var `MCP_VERDACCIO_STORAGE_DIR`). Absolute path. */
   override?: string | null | undefined;
-  /** Process working directory; the default base for the data dir. */
-  cwd: string;
 }
 
 /**
- * Default location: `<cwd>/data/packages`.
+ * Default location: `~/.mcp-code-indexer/packages` (via `mcpDataDir`).
  *
- * Sits next to `data/virtual-projects/` and `data/design-system-uploads/`
- * so all session-side state lives under one tree the operator already
- * backs up. The name `packages` reflects what the directory actually
- * holds from the operator's perspective: every `.tgz` ever published
- * by a Design System session, plus the htpasswd that authenticates
- * future publishes against them.
+ * Sits next to `virtual-projects/` and `design-system-uploads/` so all
+ * session-side state lives under one tree the operator already backs up.
+ * The name `packages` reflects what the directory actually holds from the
+ * operator's perspective: every `.tgz` ever published by a Design System
+ * session, plus the htpasswd that authenticates future publishes against
+ * them.
  */
 export function resolveStorageBindPath(opts: StorageBindOptions): string {
   const override = opts.override?.trim();
@@ -52,5 +51,5 @@ export function resolveStorageBindPath(opts: StorageBindOptions): string {
     }
     return resolve(override);
   }
-  return resolve(join(opts.cwd, 'data', 'packages'));
+  return verdaccioStorageDir();
 }

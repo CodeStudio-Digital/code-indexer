@@ -2,7 +2,7 @@
   "note": "Current dashboard raw visible literals. The i18n guard allows these legacy signatures only so new raw text fails tests.",
   "visibleJsx": {
     "apps/dashboard/App.tsx|jsxText|Loading project…": 2,
-    "apps/dashboard/AppShell.tsx|jsxText|MCP&nbsp;IDE": 1,
+    "apps/dashboard/AppShell.tsx|jsxText|CodeStudio": 1,
     "apps/dashboard/AppShell.tsx|jsxText|v": 1,
     "apps/dashboard/features/admin/Admin.tsx|attr:aria-label|Settings sections": 1,
     "apps/dashboard/features/admin/ApiTokensPanel.tsx|jsxText|. Pass the token as": 1,
