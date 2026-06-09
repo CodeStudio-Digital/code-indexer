@@ -40,6 +40,14 @@ export const COMPANY_TOOLS: ReadonlySet<string> = new Set([
   'qa_get_browser_endpoint',
   'qa_publish_result',
   'qa_start_run',
+  // Session-shared env vars (DB-backed). Registered for EVERY company session
+  // in index.ts (not only builder ones) — master read-only via master-filter,
+  // subordinates read+write. Backed by `company_session_envs`, no container.
+  'env_list',
+  'env_read',
+  'env_set',
+  'env_delete',
+  'env_validate',
 ]);
 
 /**
@@ -58,12 +66,9 @@ export const BUILDER_TOOLS: ReadonlySet<string> = new Set([
   'docs_list',
   'docs_read',
   'docs_write',
-  // Session-shared env vars (DB-backed).
-  'env_delete',
-  'env_list',
-  'env_read',
-  'env_set',
-  'env_validate',
+  // NOTE: env_* tools moved to COMPANY_TOOLS — they're registered for every
+  // company session (external-backend sessions need them too), not only when
+  // a sandbox/builderStack is present.
   // Sandbox + pipeline/service control.
   'read_sandbox_logs',
   'get_pipeline_status',

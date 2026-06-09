@@ -26,6 +26,7 @@ import type { CompanyContext } from '@mcp/company/types.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { parseAgentPath } from '@mcp/company/tools/path-resolution.js';
+import { runAgentWaitLoop } from '@mcp/company/tools/agent-wait-loop.js';
 
 const TERMINAL_STATUSES = new Set(['completed', 'finished', 'failed', 'aborted', 'timed_out', 'error']);
 
@@ -161,63 +162,42 @@ export const waitAgents: CoderTool = {
       return ok(`All targeted agents are already in terminal status:\n${summary}`);
     }
 
-    const timeoutMs = ((args.timeout_minutes as number | undefined) ?? 30) * 60 * 1000;
-    const deadline = Date.now() + timeoutMs;
+    const timeoutMinutes = (args.timeout_minutes as number | undefined) ?? 30;
+    const deadlineMs = Date.now() + timeoutMinutes * 60 * 1000;
 
-    while (!checkAllDone()) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        const stillRunning = targets.filter((t) => !isTargetTerminal(t.agentRunId));
-        return err(
-          `wait_agents: timed out after ${args.timeout_minutes ?? 30}min. Still running: ${stillRunning.map((t) => t.path).join(', ')}.`,
-        );
-      }
-
-      const event = await new Promise<
-        | { kind: 'question' | 'plan' | 'tasks' | 'finished'; agentRunId: number; role: string }
-        | { kind: 'timeout' }
-      >((resolve) => {
-        let done = false;
-        const off = orchestrator.onSubordinateAttention((ev) => {
-          if (done) return;
-          // Subordinate↔subordinate inbox + human→master messages are not
-          // the subordinate lifecycle events this tool waits on.
-          if (ev.kind === 'inbox_answered' || ev.kind === 'user_message') return;
-          // Only react when the event is about a TARGET agent.
-          if (!targetIds.has(ev.agentRunId)) return;
-          done = true;
-          clearTimeout(timer);
-          off();
-          resolve({ kind: ev.kind, agentRunId: ev.agentRunId, role: ev.role });
-        });
-        const timer = setTimeout(() => {
-          if (done) return;
-          done = true;
-          off();
-          resolve({ kind: 'timeout' });
-        }, remaining);
-      });
-
-      // Master only: bail out early when a target asks for input — only the
-      // master can resolve plan/question/tasks. Subordinates keep waiting.
-      if (
-        isMaster &&
-        (event.kind === 'question' || event.kind === 'plan' || event.kind === 'tasks')
-      ) {
+    // Shared event-driven wait mechanism (see @mcp/company agent-wait-loop).
+    // `targetIds` = this fixed set; the loop's safety poll guarantees we
+    // re-check even if a target's `finished` signal is lost. Subordinate
+    // callers (isMaster false) only ever resolve on `all_done`/`deadline`.
+    const outcome = await runAgentWaitLoop(orchestrator, { targetIds, isMaster, deadlineMs });
+    switch (outcome.kind) {
+      case 'attention': {
+        const e = outcome.event;
         const verb =
-          event.kind === 'question' ? 'answer_subordinate_question'
-          : event.kind === 'plan' ? 'approve_subordinate_plan'
+          e.kind === 'question' ? 'answer_subordinate_question'
+          : e.kind === 'plan' ? 'approve_subordinate_plan'
           : 'approve_subordinate_tasks';
         return ok(
-          `wait_agents: subordinate @${event.role} (agent_run_id=${event.agentRunId}) needs attention — posted a ${event.kind}. ` +
+          `wait_agents: subordinate @${e.role} (agent_run_id=${e.agentRunId}) needs attention — posted a ${e.kind}. ` +
           `Resolve with ${verb}, then call wait_agents again to keep waiting for the rest.`,
         );
       }
-      // 'finished' / 'timeout' / subordinate-tier 'plan'|'question'|'tasks' → re-check.
+      case 'pending_messages':
+      case 'message':
+        return ok(
+          'A new message landed in your queue while you were waiting — read it next, ' +
+          'then call wait_agents again to keep waiting for the rest.',
+        );
+      case 'deadline': {
+        const stillRunning = targets.filter((t) => !isTargetTerminal(t.agentRunId));
+        return err(
+          `wait_agents: timed out after ${timeoutMinutes}min. Still running: ${stillRunning.map((t) => t.path).join(', ')}.`,
+        );
+      }
+      case 'all_done':
+      default:
+        return ok(`All targeted agents finished:\n${renderSummary(orchestrator, targets)}`);
     }
-
-    const summary = renderSummary(orchestrator, targets);
-    return ok(`All targeted agents finished:\n${summary}`);
   },
 };
 

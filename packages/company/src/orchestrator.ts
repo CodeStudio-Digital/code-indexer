@@ -294,6 +294,14 @@ export class CompanyOrchestrator {
   /** Subscribe to master-attention events (subordinate question/plan/tasks/terminal). */
   onSubordinateAttention(listener: AttentionListener): () => void { return this.attention.on(listener); }
   isSubordinateRunning(agentRunId: number): boolean { return this.subordinates.isRunning(agentRunId); }
+  /**
+   * True when the master runner has buffered user messages not yet consumed.
+   * `wait_for_subordinates` level-triggers off this: if a subordinate
+   * notification landed while the master was mid-turn (the edge signal was
+   * lost because no listener was subscribed), the master returns from the
+   * wait to drain its queue instead of sleeping until the next signal.
+   */
+  masterHasPendingMessages(): boolean { return this.master.handle?.runner.hasPendingUserMessages() ?? false; }
 
   // ─── Human-in-the-loop resolvers ───────────────────────────────
   resolveSubordinatePlan(agentRunId: number, approved: boolean, feedback?: string): boolean { return this.humanInLoop.resolvePlan(agentRunId, approved, feedback); }

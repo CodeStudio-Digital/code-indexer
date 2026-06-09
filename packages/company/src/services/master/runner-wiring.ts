@@ -85,10 +85,11 @@ export function wireMasterRunnerListeners(
   // gets consumed in the next turn. Cleaned up in the completion
   // handler's `.finally` callback.
   const off = deps.attention.on((ev) => {
-    // `inbox_answered` is handled by the InboxQueue; `user_message` by the
-    // `wait_for_subordinates` loop (and sendUserMessage's interject path).
-    // Neither is a subordinate event this master listener should act on.
-    if (ev.kind === 'inbox_answered' || ev.kind === 'user_message') return;
+    // `inbox_answered` is handled by the InboxQueue; `user_message` and
+    // `notify` are consumed by the `wait_for_subordinates` loop returning and
+    // draining pendingUserMessages on the next turn — not by interrupting a
+    // waitForUserInput here. None is a subordinate event this listener acts on.
+    if (ev.kind === 'inbox_answered' || ev.kind === 'user_message' || ev.kind === 'notify') return;
     if (deps.state.isEnded || deps.state.isRunnerExited) return;
     if (runner.isWaitingForInput()) {
       runner.interruptWait({

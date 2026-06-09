@@ -126,6 +126,22 @@ export const COMPANY_SETTINGS: readonly SettingDef[] = [
     advanced: true,
   },
   {
+    key: 'MCP_COMPANY_MASTER_NUDGE_MS',
+    label: 'Master re-nudge threshold (ms)',
+    description:
+      'When a subordinate has been blocked waiting on the master (plan/question/tasks, ' +
+      'or a master-bound inbox message) longer than this, the RuntimeReconciler re-wakes ' +
+      'the master WITHOUT calling the LLM — re-emitting the attention signal or re-running ' +
+      'inbox delivery. Bridges the gap to the 30-min MCP_SUBORDINATE_MASTER_WAIT_MS hard ' +
+      'fallback so a single lost wake-up no longer strands a subordinate. 0 disables. ' +
+      'Default 30000 (30s).',
+    type: 'int',
+    category: 'company',
+    default: '30000',
+    min: 0,
+    advanced: true,
+  },
+  {
     key: 'MCP_SUPERVISOR_PERSISTENCE',
     label: 'Supervisor persistence (ghost cleanup on boot)',
     description:

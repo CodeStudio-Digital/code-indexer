@@ -142,6 +142,7 @@ import { coderSessionMemory125 } from './125_coder_session_memory.js';
 import { coderInvestigations126 } from './126_coder_investigations.js';
 import { investigationEmbedding127 } from './127_investigation_embedding.js';
 import { sessionSummaryBoundary128 } from './128_session_summary_boundary.js';
+import { sessionCompactionSummary129 } from './129_session_compaction_summary.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -300,6 +301,7 @@ export const MIGRATIONS: Migration[] = [
   coderInvestigations126,
   investigationEmbedding127,
   sessionSummaryBoundary128,
+  sessionCompactionSummary129,
 ];
 
 /**

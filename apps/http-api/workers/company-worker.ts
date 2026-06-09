@@ -50,6 +50,7 @@ import {
   setQaTestRunStore,
   setQaEndpointEnvStore,
 } from '../../../packages/company/src/tools/qa/index.js';
+import { setEnvToolStore } from '../../../packages/company/src/tools/env-tools.js';
 import {
   startAgentSupervisorIfEnabled,
   setGlobalAgentSupervisor,
@@ -191,7 +192,15 @@ const rawDb = db.raw();
 setDesignSystemStore(new DesignSystemStore(rawDb));
 setDesignSystemSkillStore(new SkillStore(rawDb));
 setQaTestRunStore(new QaTestRunStore(rawDb));
-setQaEndpointEnvStore(new CompanySessionEnvStore(rawDb));
+// One CompanySessionEnvStore shared by BOTH the QA browser-endpoint tools and
+// the env_* tools (env_list/env_read/env_set/…). Each has its own module-level
+// binding that server.ts wires on the main thread; worker_threads don't share
+// those globals, so master+subordinates running in THIS worker would otherwise
+// hit "env tools unavailable (store not wired)". Re-wire both against the
+// worker's own DB handle.
+const sessionEnvStore = new CompanySessionEnvStore(rawDb);
+setQaEndpointEnvStore(sessionEnvStore);
+setEnvToolStore(sessionEnvStore);
 
 // NOTE: this constructor synchronously wires every domain service.
 // If any of them blocks on env vars, registered store factories, or

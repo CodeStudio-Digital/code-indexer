@@ -11,6 +11,7 @@ import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import { buildPipelineMasterTools } from '@mcp/company/tools/pipeline-tools.js';
 import { buildReviewSubordinateTool, type MasterReviewDeps } from '@mcp/company/tools/review-subordinate.js';
 import { resolveAgentRunId } from '@mcp/company/tools/path-resolution.js';
+import { runAgentWaitLoop } from '@mcp/company/tools/agent-wait-loop.js';
 import { observeOutcome } from '@mcp/services/shadow-traffic/index.js';
 
 /** FNV-1a hash — matches the producer in recommendations.ts so observed
@@ -294,18 +295,43 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
         return ok('No subordinates currently running — all done.');
       }
 
-      // Event-driven wait: we sleep until a subordinate signals it needs the
-      // master's attention (question / plan / tasks) or transitions to a
-      // terminal status (finished). Attention-triggering events make us
-      // return immediately so the master can run a turn and consume the
-      // `pushUserMessage` notification that HumanInTheLoop already queued.
-      while (orchestrator.hasRunningSubordinates()) {
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) {
-          // Soft continuation, NOT an error: the subordinates are still running
-          // healthily — only OUR internal wait window elapsed. Returning `err`
-          // reads to the model as "broken"; `ok` keeps the loop retomável so
-          // the master simply calls wait_for_subordinates again.
+      // Shared event-driven wait mechanism (see agent-wait-loop.ts). `targetIds:
+      // null` = wait for the whole running fleet. The loop's safety poll fixes
+      // the deadlock where the LAST subordinate's `finished` signal was lost.
+      const outcome = await runAgentWaitLoop(orchestrator, {
+        targetIds: null,
+        isMaster: true,
+        deadlineMs: deadline,
+      });
+      switch (outcome.kind) {
+        case 'pending_messages':
+          return ok(
+            'You have queued message(s) to read — handle them now, then call ' +
+            'wait_for_subordinates again to keep waiting for the rest.',
+          );
+        case 'message':
+          return ok(
+            outcome.via === 'user_message'
+              ? 'The human sent you a message while you were waiting — it is already ' +
+                'in your message queue. Read it next and respond now. Subordinates are ' +
+                'still running: call wait_for_subordinates again after you reply to keep ' +
+                'waiting for them.'
+              : 'A new message arrived in your queue while you were waiting — read it ' +
+                'next and act on it now. Subordinates are still running: call ' +
+                'wait_for_subordinates again after you respond to keep waiting for them.',
+          );
+        case 'attention': {
+          const e = outcome.event;
+          return ok(
+            `Subordinate @${e.role} (run=${e.agentRunId}) needs your attention: posted a ${e.kind}. ` +
+            `The notification with full details was already pushed to your message queue — read it next and respond with ` +
+            `${e.kind === 'question' ? 'answer_subordinate_question' : e.kind === 'plan' ? 'approve_subordinate_plan' : 'approve_subordinate_tasks'}. ` +
+            `Call wait_for_subordinates again after you respond to keep waiting for the others.`,
+          );
+        }
+        case 'deadline': {
+          // Soft continuation, NOT an error: subordinates are still running
+          // healthily — only OUR internal wait window elapsed.
           const stillRunning = orchestrator
             .listSubordinates()
             .filter((s) => s.status === 'running')
@@ -316,53 +342,13 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
             `Call wait_for_subordinates again to keep waiting, or list_subordinates / abort_subordinate_agent to intervene.`,
           );
         }
-
-        const event = await new Promise<
-          | { kind: 'question' | 'plan' | 'tasks' | 'finished' | 'user_message'; agentRunId: number; role: string }
-          | { kind: 'timeout' }
-        >((resolve) => {
-          let done = false;
-          const off = orchestrator.onSubordinateAttention((ev) => {
-            if (done) return;
-            // Inbox answers are subordinate↔subordinate signals; the
-            // master doesn't need to wake for those.
-            if (ev.kind === 'inbox_answered') return;
-            done = true;
-            clearTimeout(timer);
-            off();
-            resolve({ kind: ev.kind, agentRunId: ev.agentRunId, role: ev.role });
-          });
-          const timer = setTimeout(() => {
-            if (done) return;
-            done = true;
-            off();
-            resolve({ kind: 'timeout' });
-          }, remaining);
-        });
-
-        if (event.kind === 'user_message') {
+        case 'all_done':
+        default:
           return ok(
-            'The human sent you a message while you were waiting — it is already ' +
-            'in your message queue. Read it next and respond now. Subordinates are ' +
-            'still running: call wait_for_subordinates again after you reply to keep ' +
-            'waiting for them.',
+            `${summarizeSubordinates(orchestrator)}\n` +
+            `Check the board for their deliverables, then synthesize results.`,
           );
-        }
-        if (event.kind === 'question' || event.kind === 'plan' || event.kind === 'tasks') {
-          return ok(
-            `Subordinate @${event.role} (run=${event.agentRunId}) needs your attention: posted a ${event.kind}. ` +
-            `The notification with full details was already pushed to your message queue — read it next and respond with ` +
-            `${event.kind === 'question' ? 'answer_subordinate_question' : event.kind === 'plan' ? 'approve_subordinate_plan' : 'approve_subordinate_tasks'}. ` +
-            `Call wait_for_subordinates again after you respond to keep waiting for the others.`,
-          );
-        }
-        // 'finished' or 'timeout' → re-check the loop condition.
       }
-
-      return ok(
-        `${summarizeSubordinates(orchestrator)}\n` +
-        `Check the board for their deliverables, then synthesize results.`,
-      );
     },
   };
 }

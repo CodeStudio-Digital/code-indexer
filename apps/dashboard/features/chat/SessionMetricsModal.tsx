@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { useState } from 'react';
-import { Activity, AlertTriangle, BarChart3, ChevronDown, ChevronRight, Database, DollarSign, FileText, History, Loader2, Scissors, Wrench } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, ChevronDown, ChevronRight, Database, DollarSign, FileText, History, Loader2, PiggyBank, Scissors, Wrench } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { useApi } from '../../hooks/useApi.js';
 
@@ -100,6 +100,18 @@ interface SessionTelemetrySummary {
   truncation_rate: number | null;
   /** Migration 072 — populated by Camada 2 (PhaseRouter). */
   phase_breakdown: PhaseBreakdown[];
+  /** Fase 3 — "Economia Real" per-technique savings (optional for older API responses). */
+  savings?: {
+    cacheSavedUsd: number;
+    cacheReadTokens: number;
+    cacheHitRatio: number;
+    shapingSavedChars: number;
+    shapingSavedTokensEst: number;
+    shapingSavedUsdEst: number;
+    tierSavedTokensEstPerTurn: number;
+    tierSavedTokensEstTotal: number;
+    hasUnpricedTurns: boolean;
+  };
 }
 
 interface SessionMetricsModalProps {
@@ -206,6 +218,26 @@ export function SessionMetricsView({
                   }
                 />
               </Section>
+
+              {/* Economia Real — per-technique savings. Cache is exact; shaping
+                  counts forward only (older rows had NULL shaped); tiers is an estimate. */}
+              {data.savings && (
+                <Section title={t('chat:metrics.savings.title')} icon={<PiggyBank className="h-3.5 w-3.5" />}>
+                  <Stat
+                    label={t('chat:metrics.savings.cache')}
+                    value={`${formatUsd(data.savings.cacheSavedUsd)}${data.savings.hasUnpricedTurns ? '+' : ''}`}
+                    intent="good"
+                  />
+                  <Stat
+                    label={t('chat:metrics.savings.shaping')}
+                    value={data.savings.shapingSavedTokensEst > 0 ? `${formatK(data.savings.shapingSavedTokensEst)} tok` : '—'}
+                  />
+                  <Stat
+                    label={t('chat:metrics.savings.tiers')}
+                    value={`~${formatK(data.savings.tierSavedTokensEstPerTurn)} tok/turn`}
+                  />
+                </Section>
+              )}
 
               {/* Turns + context signals */}
               <Section title={t('chat:metrics.turns.title')} icon={<Database className="h-3.5 w-3.5" />}>

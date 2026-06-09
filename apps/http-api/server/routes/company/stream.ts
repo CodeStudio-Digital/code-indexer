@@ -16,6 +16,7 @@ import {
   runtimeEventsToJsonl,
   summarizeRuntimeEvents,
 } from '../../../sse/runtime-event-log.js';
+import { resolveAndRunMaster } from './master-resolve.js';
 
 /**
  * Backoff before retrying a resume that hit `port_closed`. The default
@@ -183,9 +184,16 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         console.warn(`[company s=${id}] pipeline recovery failed:`, err);
       });
 
-      // Await startMaster — if it fails, return JSON error (not a broken SSE stream)
+      // Await master spin-up — if it fails, return JSON error (not a broken SSE
+      // stream). Resume-or-start: if this session ALREADY has a master run,
+      // RESUME it (reuse coder-session + context) instead of spawning a
+      // duplicate master. The 409 guard above already handled "currently
+      // running"; here the session is stopped (error/idle/paused/completed).
       try {
-        await orchestrator.startMaster({
+        const masterExists = companyStore
+          .listAgentRuns(id)
+          .some((r) => r.role === 'master');
+        await resolveAndRunMaster(orchestrator, masterExists, {
           userMessage,
           provider: config.master_provider ?? 'anthropic',
           model: config.master_model ?? 'claude-sonnet-4-6',
@@ -300,27 +308,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         void orchestrator.pipelineRecoverRunning().catch((err) => {
           console.warn(`[company s=${id}] pipeline recovery failed:`, err);
         });
-        if (masterRun) {
-          await orchestrator.resumeExistingMaster({
-            userMessage,
-            maxTurns: 100,
-            roleConfigs,
-            attachments,
-            thinking: body.thinking,
-          });
-        } else {
-          // Cold-start path for a brand-new sub-session in a resumable
-          // root. Same `startMaster` flow `/start` uses.
-          await orchestrator.startMaster({
-            userMessage,
-            provider: config.master_provider ?? 'anthropic',
-            model: config.master_model ?? 'claude-sonnet-4-6',
-            maxTurns: 100,
-            roleConfigs,
-            attachments,
-            thinking: body.thinking,
-          });
-        }
+        // Resume-or-start (shared with /start). `masterRun` present → resume
+        // and reuse its coder-session; absent (brand-new sub-session) → cold
+        // start. Never spawns a duplicate master for a session that has one.
+        await resolveAndRunMaster(orchestrator, !!masterRun, {
+          userMessage,
+          provider: config.master_provider ?? 'anthropic',
+          model: config.master_model ?? 'claude-sonnet-4-6',
+          maxTurns: 100,
+          roleConfigs,
+          attachments,
+          thinking: body.thinking,
+        });
         return { orchestrator, bus: spawned.bus };
       };
 

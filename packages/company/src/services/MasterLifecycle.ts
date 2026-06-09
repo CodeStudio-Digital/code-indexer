@@ -338,6 +338,20 @@ export class MasterLifecycle implements IMasterNotifier {
         runner.interruptWait({ kind: 'subordinate_event' });
       }
       runner.pushUserMessage(enriched);
+      // Wake a master parked in `wait_for_subordinates`. That tool is an
+      // event loop on MasterAttention, NOT a `waitForUserInput`, so the
+      // `interruptWait` above can't break it and `pushUserMessage` alone
+      // leaves the message stranded until the next signal happens to land
+      // while the wait loop is subscribed. Emit AFTER the push (the message
+      // must already be queued when the wait wakes). Mirrors what
+      // `sendUserMessage` does for `user_message`, but covers EVERY notify
+      // path — plan/question/tasks (which also emit their own kind) AND the
+      // inbox / auto-continue paths that previously emitted nothing.
+      this.deps.attention.signal({
+        kind: 'notify',
+        agentRunId: this._agentRunId ?? 0,
+        role: 'system',
+      });
       return;
     }
     this.notifyIdleResurrected();

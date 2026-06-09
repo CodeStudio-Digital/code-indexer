@@ -15,7 +15,7 @@ export interface RunnerEvents {
   text_delta: (text: string) => void;
   thinking_delta: (text: string) => void;
   tool_call_start: (id: string, name: string, input: Record<string, unknown>) => void;
-  tool_call_result: (id: string, name: string, result: { content: string; isError?: boolean; subUsage?: ChatUsage }, durationMs: number) => void;
+  tool_call_result: (id: string, name: string, result: { content: string; isError?: boolean; subUsage?: ChatUsage; rawChars?: number }, durationMs: number) => void;
   /**
    * Periodic heartbeat fired while a tool is in flight, and explicit
    * progress reports from cooperating tools (via `ctx.reportProgress`).

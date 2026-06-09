@@ -1,17 +1,19 @@
 /**
- * EnvRowEditor — single env var row with inline edit + masking.
+ * EnvRowEditor — single env var row: name, value (masked or plain), source /
+ * secret badges, and edit + delete actions.
  *
- * Extracted from EnvTab so the Databases tab can reuse it to display
- * the env vars associated with each registered database. The edit
- * action goes straight to `PUT /api/company/sessions/:id/envs/:key`,
- * so the Databases tab does not need a dedicated mutation path —
- * connection-string edits flow through the same endpoint as any other
- * env var.
+ * Editing happens in EnvEditDialog (opened by the pencil icon), not inline.
+ * Reused by EnvTab and DatabasesTab; the edit action targets
+ * `PUT /api/company/sessions/:id/envs/:key`, so the Databases tab needs no
+ * dedicated mutation path — connection-string edits flow through the same
+ * endpoint as any other env var.
  */
 
-import { useEffect, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Pencil, Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { EnvEditDialog } from './EnvEditDialog.js';
 
 export type EnvSource = 'user' | 'imported' | 'auto' | 'agent';
 
@@ -56,46 +58,15 @@ export function EnvRowEditor({
   managed = false,
   hideDelete = false,
 }: EnvRowEditorProps) {
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(row.value);
-  const [isSecret, setIsSecret] = useState(row.is_secret);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setValue(row.value);
-    setIsSecret(row.is_secret);
-  }, [row.value, row.is_secret]);
-
-  async function save() {
-    setSaving(true);
-    try {
-      await fetch(`/api/company/sessions/${sessionId}/envs/${encodeURIComponent(row.key)}`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ value, is_secret: isSecret }),
-      });
-      setEditing(false);
-      await onSaved();
-    } finally {
-      setSaving(false);
-    }
-  }
+  const { t } = useTranslation('agents');
+  const [editOpen, setEditOpen] = useState(false);
 
   return (
     <div className="flex items-center gap-2 p-2 text-xs">
       <span className="font-mono font-medium min-w-[160px] truncate">{row.key}</span>
-      {editing ? (
-        <input
-          className="flex-1 text-xs bg-background border rounded px-1.5 py-1 font-mono"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          autoFocus
-        />
-      ) : (
-        <span className="flex-1 font-mono text-muted-foreground truncate">
-          {row.masked ? '••••••••' : row.value || '(empty)'}
-        </span>
-      )}
+      <span className="flex-1 font-mono text-muted-foreground truncate">
+        {row.masked ? '••••••••' : row.value || '(empty)'}
+      </span>
       {managed ? (
         <span
           className="text-[9px] uppercase text-muted-foreground tracking-wide"
@@ -103,23 +74,6 @@ export function EnvRowEditor({
         >
           auto
         </span>
-      ) : editing ? (
-        <>
-          <label className="flex items-center gap-1 text-[10px]">
-            <input
-              type="checkbox"
-              checked={isSecret}
-              onChange={(e) => setIsSecret(e.target.checked)}
-            />
-            secret
-          </label>
-          <Button size="sm" onClick={save} disabled={saving}>
-            {saving ? 'Saving…' : 'Save'}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
-            Cancel
-          </Button>
-        </>
       ) : (
         <>
           {row.source && row.source !== 'user' && (
@@ -133,14 +87,26 @@ export function EnvRowEditor({
           {row.is_secret && (
             <span className="text-[9px] uppercase text-muted-foreground tracking-wide">secret</span>
           )}
-          <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
-            Edit
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setEditOpen(true)}
+            title={t('env.edit')}
+          >
+            <Pencil className="h-3 w-3" />
           </Button>
           {!hideDelete && onDelete && (
             <Button size="sm" variant="ghost" onClick={onDelete} title="Delete">
               <Trash2 className="h-3 w-3" />
             </Button>
           )}
+          <EnvEditDialog
+            row={row}
+            sessionId={sessionId}
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            onSaved={onSaved}
+          />
         </>
       )}
     </div>

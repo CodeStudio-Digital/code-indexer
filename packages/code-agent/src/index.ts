@@ -266,9 +266,21 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     registry.registerAll(tasksTools);
     registry.registerAll(interactionTools);
   }
+  // Env tools manage session-shared env vars stored in the DB
+  // (`company_session_envs`). They work with NO container alive, so they are
+  // registered for EVERY company session — master + subordinates — not just
+  // builder/sandbox ones. A session can define shared envs (BACKEND_URL,
+  // JWT_TOKEN, …) while targeting an EXTERNAL backend with no builderStack;
+  // gating these behind sandbox/builderStack hid them from `find_tools`, so
+  // the master had to relay env values to subordinates by hand. The master
+  // filter (`filterInPlace(isMasterAllowed)` below) trims the master to the
+  // read-only trio (env_list/env_read/env_validate); subordinates keep all 5.
+  if (opts.companyContext) {
+    registry.registerAll(envTools);
+  }
   // Builder-mode tools: offered to both master and subordinates in builder
   // sessions. The gate is on session configuration (`builderStack`) rather
-  // than a live sandbox binding so the master can access env/database tools
+  // than a live sandbox binding so the master can access database tools
   // even when the primary container is temporarily unavailable.
   // Tools that actually need a live container (sandboxTools, docsTools) are
   // still registered — they will return clear errors if called without one.
@@ -278,9 +290,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Registered for all builder sessions; fail gracefully when the
     // container is down so the agent gets a useful error message.
     registry.registerAll(docsTools);
-    // Env tools manage session-shared env vars stored in the DB —
-    // they work independently of any container being alive.
-    registry.registerAll(envTools);
     // Database tools query Postgres/MySQL instances registered in the
     // Databases tab — DB-backed, do not require the sandbox container.
     registry.registerAll(databaseTools);
@@ -1572,10 +1581,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       duration_ms: number;
       output_chars: number;
       /**
-       * Set by the `tool_call_finalized` listener (below). Records the
-       * shaped size the LLM saw post-reducer/post-cap — pair with
-       * output_chars (raw size) to compute savings. NULL for synthetic
-       * refusals that never reach buildToolResultBlock.
+       * Size the LLM actually saw (post reduce+cap). Set in the
+       * `tool_call_result` handler from result.content.length; pair with
+       * output_chars (raw) to compute savings.
        */
       output_chars_shaped: number | null;
       truncated: boolean;
@@ -1667,11 +1675,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       result_text: content,
       is_error: Boolean(result.isError),
       duration_ms: durationMs,
-      output_chars: content.length,
-      // Stamped later by the `tool_call_finalized` listener. NULL stays
-      // NULL for synthetic refusals (pre-read cap, dup-call cap) which
-      // emit only `tool_call_result` and skip the shaping path.
-      output_chars_shaped: null,
+      // output_chars = RAW tool output (pre-reduce, from result.rawChars);
+      // output_chars_shaped = what the LLM saw (post reduce+cap = content).
+      // Savings = output_chars - output_chars_shaped. Synthetic refusals carry
+      // no rawChars → raw==shaped (savings 0). Both sourced from this single
+      // event (the old tool_call_finalized stamp raced and never landed).
+      output_chars: result.rawChars ?? content.length,
+      output_chars_shaped: content.length,
       truncated: isTruncatedOutput(content),
       // PhaseRouter removed — column kept for backward compat with old rows
       // that have it set. Always null going forward.
@@ -1692,23 +1702,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     pendingToolCalls.delete(id);
   });
 
-  // Item B (savings telemetry): runner emits `tool_call_finalized` AFTER
-  // smart-reducer + buildToolResultBlock shaping is complete. We use it
-  // to stamp the matching pending tool_calls entry with the shaped size
-  // before the turn flushes. Walk in REVERSE because the runner may have
-  // emitted `tool_call_result` more than once for the same id (e.g., the
-  // dup-cap refusal path at runner.ts ~4379 fires a second event after
-  // the original); only the latest entry reflects the final LLM-visible
-  // state.
-  runner.on('tool_call_finalized', (id, info) => {
-    if (!pendingTurn) return;
-    for (let i = pendingTurn.toolCalls.length - 1; i >= 0; i--) {
-      if (pendingTurn.toolCalls[i].tool_use_id === id) {
-        pendingTurn.toolCalls[i].output_chars_shaped = info.shapedChars;
-        break;
-      }
-    }
-  });
+  // output_chars_shaped is set directly in the `tool_call_result` handler
+  // above (from result.content.length). The old `tool_call_finalized` DB stamp
+  // raced the result event — finalized fired during dispatch, before the
+  // tool_call_result row existed — so it never landed (100% NULL). The
+  // `tool_call_finalized` event still fires for the live dashboard badge.
 
   // The runner pushes a single 'tool' role message after running all tool calls
   // for the turn. We need to persist that too. Hook done to flush the latest one.

@@ -1,14 +1,21 @@
 /**
- * env_* tools — shared session env vars for builder agents.
+ * env_* tools — shared session env vars for company agents.
  *
- * The sandbox pre-injects the current env set as container env vars
- * AND materializes `/app/.env` for live pickup. These tools let the
- * agent introspect and evolve that set from inside the sandbox loop:
- * typical usage is "I just scaffolded a service that needs DATABASE_URL;
- * env_set('DATABASE_URL', '…') so the frontend + backend share it."
+ * The sandbox (when present) pre-injects the current env set as container
+ * env vars AND materializes `/app/.env` for live pickup. These tools let the
+ * agent introspect and evolve that set: typical usage is "I just scaffolded a
+ * service that needs DATABASE_URL; env_set('DATABASE_URL', '…') so the
+ * frontend + backend share it." They equally serve sessions that target an
+ * EXTERNAL backend (no sandbox) — e.g. an agent reading a user-provided
+ * BACKEND_URL / JWT_TOKEN before running an HTTP test battery.
  *
- * Only registered when `companyContext.sandbox` is present (same gate
- * as docs tools) — without a sandbox these tools have nothing to do.
+ * Registered for EVERY company session (gated by `opts.companyContext` in
+ * index.ts), since the env set lives in the DB (`company_session_envs`) and
+ * the read tools work with no container alive. The backing store is wired via
+ * `setEnvToolStore` in BOTH server.ts (main thread) AND company-worker.ts —
+ * worker_threads don't share module globals, and master+subordinates run in
+ * the worker. The master sees only the read-only trio (see master-filter.ts);
+ * subordinates get the full set.
  */
 
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';

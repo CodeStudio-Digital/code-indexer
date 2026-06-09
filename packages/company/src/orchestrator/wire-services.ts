@@ -166,7 +166,9 @@ export function wireServices(args: {
 
   // RuntimeReconciler — periodic DB↔runtime consistency sweep + master-inbox
   // heartbeat. Constructed AFTER masterInbox because it depends on it.
-  const reconciler = new RuntimeReconciler({ ctx, master, subordinates, masterInbox, publisher });
+  const reconciler = new RuntimeReconciler({
+    ctx, master, subordinates, masterInbox, publisher, humanInLoop, attention,
+  });
   reconciler.start();
 
   return {

@@ -710,6 +710,7 @@ export class ExecutingNode implements BehaviorNode {
         {
           content: r.content,
           isError: r.isError,
+          rawChars: r.rawChars,
           ...(img ? { image: { mediaType: img.mediaType, base64: img.base64 } } : {}),
         },
         r.durationMs,

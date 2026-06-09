@@ -1744,6 +1744,16 @@ export class CoderRunner extends EventEmitter {
     this.pendingUserMessages.push({ text, selectedSkillIds: extras?.selectedSkillIds });
   }
 
+  /**
+   * True when there are buffered user messages not yet flushed into a turn.
+   * Lets callers (e.g. the company `wait_for_subordinates` loop) level-trigger
+   * off the queue instead of relying solely on an edge signal that may have
+   * been emitted while no listener was subscribed.
+   */
+  hasPendingUserMessages(): boolean {
+    return this.pendingUserMessages.length > 0;
+  }
+
 
   /** Append a user message with arbitrary content blocks (text + image + document). */
   pushUserContent(blocks: ContentBlock[], extras?: { selectedSkillIds?: string[] }): void {

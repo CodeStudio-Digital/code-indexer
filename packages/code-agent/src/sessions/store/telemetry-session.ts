@@ -1,4 +1,6 @@
 import type { Database as DB } from 'better-sqlite3';
+import { computeSavings, type SavingsBreakdown, type TurnForSavings } from './telemetry-savings.js';
+import { resolvePricingWithSource } from '@mcp/code-agent/providers/pricing-cache.js';
 
 export interface SessionTelemetrySummary {
   turn_count: number;
@@ -38,6 +40,8 @@ export interface SessionTelemetrySummary {
     total_output_chars: number;
     total_duration_ms: number;
   }>;
+  /** Fase 3 — "Economia Real" per-technique savings (cache exact, shaping fwd, tiers estimate). */
+  savings: SavingsBreakdown;
 }
 
 /**
@@ -158,11 +162,39 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
   const cacheRead = totals.total_cache_read_tokens;
   const cache_hit_ratio = inputTotal > 0 ? cacheRead / inputTotal : null;
 
+  // "Economia Real" — per-turn rows for cache $ + tier estimate, and the
+  // raw-vs-shaped tool-output SUM for shaping savings.
+  const turnRows = db
+    .prepare(
+      `SELECT provider, model,
+              COALESCE(input_tokens, 0)            AS input_tokens,
+              COALESCE(cache_read_input_tokens, 0) AS cache_read_input_tokens,
+              tools_def_chars
+       FROM coder_turn_telemetry WHERE session_id = ?`,
+    )
+    .all(sessionId) as TurnForSavings[];
+  const shapingRow = db
+    .prepare(
+      `SELECT COALESCE(SUM(tc.output_chars), 0) AS raw,
+              COALESCE(SUM(COALESCE(tc.output_chars_shaped, tc.output_chars)), 0) AS shaped
+       FROM coder_tool_calls tc
+       JOIN coder_messages m ON m.id = tc.message_id
+       WHERE m.session_id = ?`,
+    )
+    .get(sessionId) as { raw: number; shaped: number };
+  const savings = computeSavings({
+    turns: turnRows,
+    rawToolChars: shapingRow.raw,
+    shapedToolChars: shapingRow.shaped,
+    resolvePricing: (p, m) => resolvePricingWithSource(p, m).pricing,
+  });
+
   return {
     ...totals,
     cache_hit_ratio,
     tools_breakdown,
     phase_breakdown: phaseRows,
     truncation_rate,
+    savings,
   };
 }

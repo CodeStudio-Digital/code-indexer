@@ -35,9 +35,18 @@
  * runner's pendingUserMessages buffer; this signal wakes the wait loop so
  * the master runs a turn, reads/answers it, then resumes waiting. Carries
  * the master's own `agentRunId` and `role: 'human'`.
+ *
+ * V4 adds `notify`: a generic "a message was just pushed to the master's
+ * queue, wake up, RETURN and run a turn". Emitted by `MasterLifecycle.notify`
+ * for EVERY subordinate notification (plan/question/tasks/inbox/auto-continue)
+ * so a master parked in `wait_for_subordinates` actually wakes — `notify`
+ * itself only queues via `pushUserMessage` and can't break that event loop.
+ * Distinct from `finished` (which makes the wait re-check the loop WITHOUT
+ * returning) and `user_message` (human-specific, ignored by the permanent
+ * listener). Carries the master's own `agentRunId` and `role: 'system'`.
  */
 export type AttentionKind =
-  | 'question' | 'plan' | 'tasks' | 'finished' | 'inbox_answered' | 'user_message';
+  | 'question' | 'plan' | 'tasks' | 'finished' | 'inbox_answered' | 'user_message' | 'notify';
 
 export interface AttentionEvent {
   kind: AttentionKind;

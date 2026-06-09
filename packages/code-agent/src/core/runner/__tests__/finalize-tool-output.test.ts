@@ -129,6 +129,9 @@ describe('dispatchTools — finalize hook', () => {
     expect(seen).toEqual({ rawContent: 'RAWBODY', shapedContent: 'RAWBODY-reduced' });
     expect(res.results[0].content).toBe('FINAL');
     expect(res.results[0].truncated).toBe(true);
+    // Measurement fix: the result carries the RAW (pre-reduce) size so index.ts
+    // records output_chars=raw and output_chars_shaped=visible (savings ≠ 0).
+    expect(res.results[0].rawChars).toBe('RAWBODY'.length);
     const block = toToolResultBlock(res.results[0]) as { truncated?: boolean; originalSize?: number };
     expect(block.truncated).toBe(true);
     expect(block.originalSize).toBe(7);

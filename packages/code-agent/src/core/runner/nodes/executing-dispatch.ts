@@ -57,6 +57,8 @@ export interface DispatchedToolResult {
    * right after the tool message — provider-agnostic vision.
    */
   extraUserBlocks?: ContentBlock[];
+  /** Raw tool output size (chars) BEFORE any reduce/cap — for savings telemetry. */
+  rawChars?: number;
   /** Set by the live finalize hook when the fail-safe cap truncated content. */
   truncated?: boolean;
   originalSize?: number;
@@ -526,6 +528,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       toolUseId: tu.id,
       name: tu.name,
       content: finalShaped,
+      rawChars: invocationContent.length,
       isError: finalIsError,
       durationMs: Date.now() - t0,
       wasRefusedByDedup: false,

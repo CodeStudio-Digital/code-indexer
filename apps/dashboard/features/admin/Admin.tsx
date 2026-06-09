@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Activity,
@@ -73,10 +73,14 @@ type SectionId =
   | 'pipeline-bindings'
   | 'auth';
 
+type GroupId = 'models' | 'knowledge' | 'extensions' | 'services' | 'system';
+
 interface SectionDef {
   id: SectionId;
   label: string;
   icon: LucideIcon;
+  /** Which rail group this section is filed under (see `groups`). */
+  group: GroupId;
   /** Optional descriptor — surfaces as muted-fg sub-text under each rail
    *  row so the user knows what the section covers without clicking. */
   hint?: string;
@@ -141,47 +145,105 @@ export default function Admin() {
     }
   };
 
-  // Sections are grouped visually by separator inside the rail. Order
-  // follows usage frequency: providers/storage first (everyday tuning),
-  // then search/tools/integrations, then advanced/system at the bottom.
+  // The rail is organised into fixed, always-visible groups. `groups`
+  // drives header order (top → bottom: everyday model/AI tuning down to
+  // system/infra); each section declares its `group` and the render
+  // filters by it, so within-group order follows the `sections` array.
+  const groups: { id: GroupId; label: string }[] = [
+    { id: 'models',     label: t('admin:tabs.group.models') },
+    { id: 'knowledge',  label: t('admin:tabs.group.knowledge') },
+    { id: 'extensions', label: t('admin:tabs.group.extensions') },
+    { id: 'services',   label: t('admin:tabs.group.services') },
+    { id: 'system',     label: t('admin:tabs.group.system') },
+  ];
+
   const sections: SectionDef[] = [
-    { id: 'providers',         label: t('admin:tabs.providers'),  icon: Plug,
+    // Modelos & IA
+    { id: 'providers',         label: t('admin:tabs.providers'),  icon: Plug,          group: 'models',
       hint: 'Conexões com modelos (OpenAI, Anthropic, …)' },
-    { id: 'capabilities',      label: 'Capabilities',             icon: AlertTriangle,
-      hint: 'Modelos rodando em fallback de context window' },
-    { id: 'app-settings',      label: 'Configurações',            icon: Settings2,
-      hint: 'Env vars persistidas: limites, flags, tuning' },
-    { id: 'storage',           label: t('admin:tabs.embeddings'), icon: Database,
-      hint: 'Embeddings, vector store, índices' },
-    { id: 'hygiene',           label: 'Higiene',                  icon: Wand2,
-      hint: 'Limpeza de dados órfãos, reconciliação' },
-    { id: 'search',            label: t('admin:tabs.search'),     icon: Search,
-      hint: 'HyDE, reranking, configuração de busca' },
-    { id: 'tools',             label: t('admin:tabs.tools'),      icon: Wrench,
-      hint: 'Ferramentas internas do coder' },
-    { id: 'mcp-servers',       label: t('admin:tabs.mcpServers'), icon: Network,
-      hint: 'Servidores MCP externos conectados' },
-    { id: 'mcp-http',          label: 'MCP HTTP',                 icon: Globe,
-      hint: 'Expor nossas tools (incl. RAG) pra outros agentes' },
-    { id: 'skills',            label: t('admin:tabs.skills'),     icon: BookOpen,
-      hint: 'Skills (custom + builtin)' },
-    { id: 'plugins',           label: 'Plugins',                  icon: Blocks,
-      hint: 'Instalar/gerenciar plugins + navegar o Market' },
-    { id: 'ai-geral',          label: 'IA Geral',                 icon: Activity,
-      hint: 'Quality watchdog, intervention policies' },
-    { id: 'deepthink',         label: 'deepThink',                icon: Sparkles,
-      hint: 'Modelo auxiliar de pré-pensamento' },
-    { id: 'chrome-service',    label: 'Chrome Service',           icon: AppWindow,
-      hint: 'Browser headless pra docs / web tools' },
-    { id: 'verdaccio',         label: 'Verdaccio',                icon: Package,
-      hint: 'Registry npm embarcado pra Design System' },
-    { id: 'pipeline-bindings', label: 'Pipelines',                icon: GitFork,
+    { id: 'pipeline-bindings', label: 'Pipelines',                icon: GitFork,       group: 'models',
       hint: 'Bindings de provider/model por pipeline' },
-    { id: 'auth',              label: t('admin:tabs.auth'),       icon: KeyRound,
+    { id: 'capabilities',      label: 'Capabilities',             icon: AlertTriangle, group: 'models',
+      hint: 'Modelos rodando em fallback de context window' },
+    { id: 'deepthink',         label: 'deepThink',                icon: Sparkles,      group: 'models',
+      hint: 'Modelo auxiliar de pré-pensamento' },
+    { id: 'ai-geral',          label: 'IA Geral',                 icon: Activity,      group: 'models',
+      hint: 'Quality watchdog, intervention policies' },
+    // Busca & Conhecimento
+    { id: 'storage',           label: t('admin:tabs.embeddings'), icon: Database,      group: 'knowledge',
+      hint: 'Embeddings, vector store, índices' },
+    { id: 'search',            label: t('admin:tabs.search'),     icon: Search,        group: 'knowledge',
+      hint: 'HyDE, reranking, configuração de busca' },
+    { id: 'hygiene',           label: 'Higiene',                  icon: Wand2,         group: 'knowledge',
+      hint: 'Limpeza de dados órfãos, reconciliação' },
+    // Ferramentas & Extensões
+    { id: 'tools',             label: t('admin:tabs.tools'),      icon: Wrench,        group: 'extensions',
+      hint: 'Ferramentas internas do coder' },
+    { id: 'skills',            label: t('admin:tabs.skills'),     icon: BookOpen,      group: 'extensions',
+      hint: 'Skills (custom + builtin)' },
+    { id: 'plugins',           label: 'Plugins',                  icon: Blocks,        group: 'extensions',
+      hint: 'Instalar/gerenciar plugins + navegar o Market' },
+    { id: 'mcp-servers',       label: t('admin:tabs.mcpServers'), icon: Network,       group: 'extensions',
+      hint: 'Servidores MCP externos conectados' },
+    { id: 'mcp-http',          label: 'MCP HTTP',                 icon: Globe,         group: 'extensions',
+      hint: 'Expor nossas tools (incl. RAG) pra outros agentes' },
+    // Serviços
+    { id: 'chrome-service',    label: 'Chrome Service',           icon: AppWindow,     group: 'services',
+      hint: 'Browser headless pra docs / web tools' },
+    { id: 'verdaccio',         label: 'Verdaccio',                icon: Package,       group: 'services',
+      hint: 'Registry npm embarcado pra Design System' },
+    // Sistema
+    { id: 'app-settings',      label: 'Configurações',            icon: Settings2,     group: 'system',
+      hint: 'Env vars persistidas: limites, flags, tuning' },
+    { id: 'auth',              label: t('admin:tabs.auth'),       icon: KeyRound,      group: 'system',
       hint: 'OAuth 2.1, API tokens, audit log' },
   ];
 
   const active = sections.find((s) => s.id === section) ?? sections[0];
+
+  // One rail row. Extracted so the grouped render can reuse it per group
+  // without duplicating the button JSX.
+  const renderRow = (def: SectionDef) => {
+    const Icon = def.icon;
+    const isActive = section === def.id;
+    return (
+      <button
+        key={def.id}
+        type="button"
+        onClick={() => setSection(def.id)}
+        aria-current={isActive ? 'page' : undefined}
+        title={def.hint}
+        className={cn(
+          'relative text-left rounded-sm px-2 py-1.5 transition-colors flex items-center gap-2',
+          isActive
+            ? 'bg-accent text-accent-foreground'
+            : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+        )}
+      >
+        {/* Active accent bar — flush against the rail edge. */}
+        {isActive && (
+          <span
+            aria-hidden
+            className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-primary"
+          />
+        )}
+        <Icon
+          className={cn(
+            'h-3.5 w-3.5 shrink-0',
+            isActive ? 'text-primary' : 'text-muted-foreground/70',
+          )}
+        />
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate text-[12.5px] font-medium',
+            isActive ? 'text-foreground' : '',
+          )}
+        >
+          {def.label}
+        </span>
+      </button>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -204,47 +266,19 @@ export default function Admin() {
             aria-label="Settings sections"
             className="sticky top-0 flex flex-col gap-0.5 border rounded-md bg-card/40 p-1"
           >
-            {sections.map((def) => {
-              const Icon = def.icon;
-              const isActive = section === def.id;
-              return (
-                <button
-                  key={def.id}
-                  type="button"
-                  onClick={() => setSection(def.id)}
-                  aria-current={isActive ? 'page' : undefined}
-                  title={def.hint}
+            {groups.map((g, gi) => (
+              <Fragment key={g.id}>
+                <div
                   className={cn(
-                    'relative text-left rounded-sm px-2 py-1.5 transition-colors flex items-center gap-2',
-                    isActive
-                      ? 'bg-accent text-accent-foreground'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+                    'px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60',
+                    gi === 0 ? 'pt-1' : 'pt-2.5',
                   )}
                 >
-                  {/* Active accent bar — flush against the rail edge. */}
-                  {isActive && (
-                    <span
-                      aria-hidden
-                      className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-primary"
-                    />
-                  )}
-                  <Icon
-                    className={cn(
-                      'h-3.5 w-3.5 shrink-0',
-                      isActive ? 'text-primary' : 'text-muted-foreground/70',
-                    )}
-                  />
-                  <span
-                    className={cn(
-                      'min-w-0 flex-1 truncate text-[12.5px] font-medium',
-                      isActive ? 'text-foreground' : '',
-                    )}
-                  >
-                    {def.label}
-                  </span>
-                </button>
-              );
-            })}
+                  {g.label}
+                </div>
+                {sections.filter((s) => s.group === g.id).map(renderRow)}
+              </Fragment>
+            ))}
           </nav>
         </aside>
 

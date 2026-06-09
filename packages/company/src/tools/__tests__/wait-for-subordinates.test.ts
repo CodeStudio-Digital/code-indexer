@@ -73,6 +73,38 @@ describe('wait_for_subordinates — return-shape contract', () => {
     expect(res.content).not.toContain('all done');
   });
 
+  it('wakes and returns guidance when a subordinate notification arrives mid-wait', async () => {
+    const orch = fakeOrchestrator({
+      hasRunningSubordinates: () => true,
+      listSubordinates: (): SubInfo[] => [{ agentRunId: 1, role: 'backend', status: 'running' }],
+      // Fire a generic `notify` attention event (emitted by MasterLifecycle.notify
+      // for every subordinate notification) after the wait loop subscribes.
+      onSubordinateAttention: (listener: (ev: { kind: string; agentRunId: number; role: string }) => void) => {
+        setTimeout(() => listener({ kind: 'notify', agentRunId: 0, role: 'system' }), 0);
+        return () => undefined;
+      },
+    });
+    const res = await waitTool(orch).handler({}, {} as never);
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('new message arrived in your queue');
+    expect(res.content).toContain('call wait_for_subordinates again');
+    // Must early-return, NOT fall through to the "all done" branch.
+    expect(res.content).not.toContain('all done');
+  });
+
+  it('level-triggers: returns immediately when the master already has queued messages', async () => {
+    const orch = fakeOrchestrator({
+      hasRunningSubordinates: () => true,
+      masterHasPendingMessages: () => true,
+      // If the loop ever subscribed/slept this would hang — it must not be reached.
+      onSubordinateAttention: () => () => undefined,
+    });
+    const res = await waitTool(orch).handler({}, {} as never);
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('queued message(s)');
+    expect(res.content).not.toContain('all done');
+  });
+
   it('early-returns cleanly when nothing is running', async () => {
     const res = await waitTool(fakeOrchestrator({ hasRunningSubordinates: () => false })).handler(
       {},
