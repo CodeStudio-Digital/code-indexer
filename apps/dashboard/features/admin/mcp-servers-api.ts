@@ -82,6 +82,8 @@ export interface McpOAuthStatus {
   connected: boolean;
   /** Access-token expiry (epoch ms), or null if none/unknown. */
   expires_at: number | null;
+  /** When the tokens were last written (epoch ms), or null if none. */
+  token_updated_at: number | null;
   registration: {
     issuer: string;
     client_id: string;

@@ -56,6 +56,10 @@ export function createMcpServersOauthRouter(
       status,
       connected: tokens !== null,
       expires_at: tokens?.accessExpiresAt ?? null,
+      // Epoch ms the tokens were last written. The dashboard baselines this
+      // at "Authorize" time so it only reports success for a token minted by
+      // THIS attempt — never a stale token left over from a prior flow.
+      token_updated_at: tokens?.updatedAt ?? null,
       registration: reg
         ? {
             issuer: reg.issuer,

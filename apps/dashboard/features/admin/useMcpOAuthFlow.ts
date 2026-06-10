@@ -45,6 +45,10 @@ export function useMcpOAuthFlow({ onConnected, onError, texts }: Options): McpOA
 
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const serverIdRef = useRef<string | null>(null);
+  // Wall-clock (ms) when the current attempt started. A token is only "ours"
+  // if it was written after this — guards against a stale token from a prior
+  // flow instantly flipping the dialog to "connected".
+  const baselineRef = useRef<number>(0);
 
   const stopPolling = useCallback(() => {
     if (pollTimer.current !== null) {
@@ -84,7 +88,14 @@ export function useMcpOAuthFlow({ onConnected, onError, texts }: Options): McpOA
     pollTimer.current = setInterval(() => {
       if (Date.now() > deadline) { cancel(); cbs.current.onError(cbs.current.texts.timeout); return; }
       void fetchOAuthStatus(serverId)
-        .then((s) => { if (s.connected) { cancel(); cbs.current.onConnected(); } })
+        .then((s) => {
+          // Only a token written AFTER this attempt started counts — a stale
+          // token from an earlier flow must not report success.
+          if (s.token_updated_at !== null && s.token_updated_at > baselineRef.current) {
+            cancel();
+            cbs.current.onConnected();
+          }
+        })
         .catch(() => { /* transient fetch error — keep polling */ });
     }, POLL_INTERVAL_MS);
   }, [cancel, stopPolling]);
@@ -112,6 +123,7 @@ export function useMcpOAuthFlow({ onConnected, onError, texts }: Options): McpOA
         cbs.current.onError(e instanceof Error ? e.message : String(e));
         return;
       }
+      baselineRef.current = Date.now();
       openExternal(url);
       startPolling(serverId);
       return;
