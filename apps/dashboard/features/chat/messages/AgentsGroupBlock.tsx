@@ -152,22 +152,29 @@ function AgentRow({ agent, onOpen }: AgentRowProps) {
         ? 'text-warning bg-warning/10'
         : 'text-success bg-success/10';
 
-  const hasSummary = agent.summary || agent.error;
+  // Any agent that reached a terminal state is openable — even when it produced
+  // no summary (e.g. a weak model ended its turn with empty text). Running/pending
+  // rows stay non-clickable; they show their progress via AgentActivityLine.
+  const isFinished =
+    agent.status === 'completed' ||
+    agent.status === 'error' ||
+    agent.status === 'timed_out' ||
+    agent.status === 'aborted';
   const providerLabel = formatProviderLabel(agent.provider, agent.model);
   const runningMeta = formatRunningMeta(agent);
 
   return (
     <div className="border-b last:border-b-0">
       <button
-        onClick={hasSummary ? onOpen : undefined}
-        title={hasSummary ? 'Open agent detail' : undefined}
+        onClick={isFinished ? onOpen : undefined}
+        title={isFinished ? 'Open agent detail' : undefined}
         className={cn(
           'w-full px-3 py-2 flex items-center gap-2 text-left transition-colors',
-          hasSummary && 'hover:bg-muted/60 cursor-pointer',
-          !hasSummary && 'cursor-default',
+          isFinished && 'hover:bg-muted/60 cursor-pointer',
+          !isFinished && 'cursor-default',
         )}
       >
-        {hasSummary ? (
+        {isFinished ? (
           <Maximize2 className="h-3 w-3 text-muted-foreground shrink-0" />
         ) : (
           <span className="w-3 shrink-0" />

@@ -74,6 +74,26 @@ describe('agent_progress handlers', () => {
     expect(flush).toHaveBeenCalledTimes(1);
   });
 
+  it('carries each agent task from group_start into the agent row', () => {
+    const { handlers, blocks } = setup();
+    handlers.agents_group_start(
+      {
+        groupId: 'grp_1',
+        provider: 'zai',
+        model: 'glm-5',
+        agents: [
+          { index: 0, label: 'Explore HTTP', task: 'Map the HTTP layer' },
+          { index: 1, label: 'Explore DB', task: 'Map the DB layer' },
+        ],
+      },
+      'agents_group_start',
+    );
+
+    const g = group(blocks);
+    expect(g.agents[0].task).toBe('Map the HTTP layer');
+    expect(g.agents[1].task).toBe('Map the DB layer');
+  });
+
   it('replaces the group object when the group finishes', () => {
     const { handlers, blocks } = setup();
     handlers.agents_group_start(

@@ -138,7 +138,11 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
     }));
   }, [agents]);
 
-  const SelectedIcon = ICONS[value];
+  // Defensive: never render <undefined/> if `value` is somehow unmapped
+  // (a stale persisted agent id predating the validation guards, or a dep
+  // hiccup during a dev re-optimization). Fall back to the explore icon so a
+  // single missing glyph can't white-screen the whole composer.
+  const SelectedIcon = ICONS[value] ?? Compass;
   const SuggestionIcon = suggestion ? ICONS[suggestion] : null;
 
   return (

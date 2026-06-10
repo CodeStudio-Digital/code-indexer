@@ -23,6 +23,7 @@ import {
   type GitPlanStep,
 } from '@mcp/api-bus';
 import type { HandlerDeps } from '../types.js';
+import { callGeneralAiJson } from '../aiJson.js';
 
 interface GitResult {
   code: number;
@@ -589,6 +590,55 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         }
       }
       return { results, aborted };
+    },
+
+    async aiCommitMessage({ projectId }) {
+      const root = requireRoot(projectId);
+      const d = await runGit(root, ['diff', '--cached', '--no-color']);
+      const diff = d.stdout.trim();
+      if (!diff) {
+        throw new ApiError('nothing_staged', 400, 'No staged changes — stage files first.');
+      }
+      // Cap the diff so a huge changeset doesn't blow the model's context.
+      const MAX_DIFF = 12_000;
+      const clipped =
+        diff.length > MAX_DIFF
+          ? `${diff.slice(0, MAX_DIFF)}\n\n[... truncated, ${diff.length - MAX_DIFF} more chars]`
+          : diff;
+      const system =
+        'You write git commit messages. Output ONLY the message text — no ' +
+        'preamble, no markdown fences, no surrounding quotes.';
+      const user =
+        'Write a Conventional-Commits-style commit message for the staged diff below.\n' +
+        'Rules:\n' +
+        '- First line: type(scope): short summary, <=72 chars, imperative mood.\n' +
+        '- Optional body: blank line, then wrap at ~100 chars, explain WHY not WHAT.\n' +
+        '- No trailing punctuation on the subject line.\n\n' +
+        '--- STAGED DIFF ---\n' +
+        clipped;
+      const res = await callGeneralAiJson(deps, { system, user, maxTokens: 400 });
+      if ('refusal' in res) {
+        // callGeneralAiJson folds both "no provider configured" and "the
+        // call threw" into a refusal string. Map the former to 412 (the UI
+        // points the user at Admin → AI Geral); a runtime failure is 502.
+        const notConfigured = /no usable ai provider|no enabled models|config missing/i.test(
+          res.refusal,
+        );
+        throw new ApiError(
+          notConfigured ? 'general_ai_unavailable' : 'general_ai_failed',
+          notConfigured ? 412 : 502,
+          res.refusal,
+        );
+      }
+      // Models occasionally wrap output in fences/quotes despite the
+      // instruction — strip them defensively before handing to the UI.
+      const message = res.raw
+        .trim()
+        .replace(/^```(?:\w+)?\s*/i, '')
+        .replace(/```\s*$/i, '')
+        .replace(/^["']|["']$/g, '')
+        .trim();
+      return { message };
     },
   };
 }

@@ -20,7 +20,7 @@ import {
   recedeToPreserveLastNTurns,
 } from '@mcp/code-agent/core/compaction/cutoff.js';
 import { summarizeSpanV2, renderSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
-import { computeProtectTokens } from './threshold.js';
+import { computeProtectTokens, resolveRecedeTailRatio } from './threshold.js';
 import { preserveLastNTurns } from '../recovery-config.js';
 
 /** Below this many visible rows there's nothing worth compacting durably. */
@@ -58,8 +58,9 @@ export async function runDurableCompaction(args: {
   if (rows.length < MIN_ROWS) return { ok: false, reason: 'too-short' };
 
   const protectTokens = computeProtectTokens({ model: provider.model });
+  const maxTailTokens = computeProtectTokens({ model: provider.model, protectRatio: resolveRecedeTailRatio() });
   let cutoff = computeCutoffIndexByTokens(msgs, protectTokens);
-  cutoff = recedeToPreserveLastNTurns(msgs, cutoff, preserveLastNTurns());
+  cutoff = recedeToPreserveLastNTurns(msgs, cutoff, preserveLastNTurns(), maxTailTokens);
   cutoff = snapCutoffPreservingPairs(msgs, cutoff);
   if (cutoff <= 0 || cutoff >= msgs.length) return { ok: false, reason: 'nothing-to-compact' };
 
@@ -72,6 +73,6 @@ export async function runDurableCompaction(args: {
   if (!summary) return { ok: false, reason: 'summary-failed' };
 
   const boundaryId = rows[cutoff - 1].id;
-  const res = store.setCompactionBoundary(sessionId, renderSummaryV2(summary), boundaryId);
+  const res = store.setCompactionBoundary(sessionId, renderSummaryV2(summary), boundaryId, 'auto');
   return { ok: true, boundaryId: res.boundary_id, prunedCount: res.pruned_count };
 }

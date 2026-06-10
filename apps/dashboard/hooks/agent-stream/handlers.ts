@@ -463,7 +463,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         groupId: string;
         provider?: string;
         model?: string;
-        agents: Array<{ index: number; label: string; provider?: string; model?: string }>;
+        agents: Array<{ index: number; label: string; provider?: string; model?: string; task?: string }>;
       };
       const group: AgentsGroup = {
         groupId: d.groupId,
@@ -477,6 +477,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
           toolCallCount: 0,
           provider: a.provider ?? d.provider,
           model: a.model ?? d.model,
+          task: a.task,
         })),
       };
       blocks.push({ type: 'agents', group });
@@ -496,7 +497,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       const d = data as { count: number; max: number };
       blocks.push({
         type: 'text',
-        text: `\n---\n**Context compacted. Auto-continuing... (${d.count}/${d.max})**\n---\n`,
+        text: `\n---\n**Auto-continuando — orçamento de turnos estendido (${d.count}/${d.max})**\n---\n`,
       });
       flush();
     },

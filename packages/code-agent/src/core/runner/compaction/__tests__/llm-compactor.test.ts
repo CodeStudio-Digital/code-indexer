@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import { compactWithLLM } from '../llm-compactor.js';
+import { estimateMessageTokens } from '@mcp/code-agent/core/token-accounting.js';
 
 function user(text: string): AgentMessage {
   return { role: 'user', content: [{ type: 'text', text }] };
@@ -146,5 +147,39 @@ describe('compactWithLLM', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.error?.message).toBe('LLM down');
+  });
+
+  it('compacts within a single long user turn when maxTailTokens is set (no-op without it)', async () => {
+    // One user message + many assistant turns → only ONE user turn in history.
+    // That's what makes recede preserve everything and the compactor no-op.
+    const messages: AgentMessage[] = [user('do the big task')];
+    for (let i = 0; i < 30; i++) messages.push(assistant(`step ${i} ${'x'.repeat(20)}`));
+    // Derive budgets from the real token estimate so the token cutoff lands in
+    // the MIDDLE (a head + a tail), isolating recede as the no-op cause.
+    const per = estimateMessageTokens(messages[10]);
+    const protectTokens = per * 3;   // base tail ≈ 3 messages
+    const maxTailTokens = per * 12;  // clamp tail ≈ 12 messages (head remains)
+
+    // Without a tail budget: recede keeps everything (<2 user msgs) → no-op.
+    const noBudget = await compactWithLLM({
+      messages,
+      protectTokens,
+      summaryProvider: NEVER_CALLED_PROVIDER,
+      summarize: async () => STUB_SUMMARY,
+    });
+    expect(noBudget.collapsedFrom).toBe(0);
+
+    // With a tail budget: the head is summarized WITHIN the single turn.
+    const withBudget = await compactWithLLM({
+      messages,
+      protectTokens,
+      maxTailTokens,
+      summaryProvider: NEVER_CALLED_PROVIDER,
+      summarize: async () => STUB_SUMMARY,
+    });
+    expect(withBudget.collapsedFrom).toBeGreaterThan(0);
+    expect(withBudget.collapsedTo).toBe(1);
+    expect(withBudget.messages[0].role).toBe('user'); // synthetic summary
+    expect(withBudget.messages.length).toBeLessThan(messages.length);
   });
 });

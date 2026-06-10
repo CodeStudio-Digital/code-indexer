@@ -90,6 +90,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     loopRefusals: new Map(),
     autoContinues: 0,
     preEmitCompactions: 0,
+    consecutiveNoopCompactions: 0,
     runId: 'test-run',
     aborted: false,
     transition: null,

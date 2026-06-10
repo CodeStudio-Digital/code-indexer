@@ -37,6 +37,16 @@ export interface RunHostCommandResult {
 const TAIL_BYTES = 2_000;
 
 /**
+ * Grace window after the child's `'exit'` to let stdout/stderr finish
+ * draining before we settle on the exit fallback. On Windows a child can
+ * exit while an inherited stdio pipe stays open, so `'close'` never fires —
+ * relying on `'close'` alone (the old behaviour) hung the promise forever,
+ * even past the timeout, freezing the New Project wizard on its spinner. We
+ * settle on `'exit'` too, but wait briefly so the log tail isn't truncated.
+ */
+export const EXIT_DRAIN_MS = 250;
+
+/**
  * Build the child env, stripping dev-runner injection. The MCP backend
  * runs under a `tsx` loader in dev (`NODE_OPTIONS=--import tsx` / `--loader
  * tsx/esm`), which propagates to spawned children. A scaffold CLI like
@@ -53,18 +63,37 @@ function childEnv(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return env;
 }
 
-export function runHostCommand(input: RunHostCommandInput): Promise<RunHostCommandResult> {
+export function runHostCommand(
+  input: RunHostCommandInput,
+  // Seam for tests: inject a fake child so the exit/close fallback is
+  // exercisable without spawning a real process. Defaults to node's `spawn`.
+  spawnFn: typeof spawn = spawn,
+): Promise<RunHostCommandResult> {
   return new Promise((resolve) => {
     let settled = false;
     let stderrTail = '';
     let reason: RunHostCommandResult['reason'];
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
 
     const finish = (r: RunHostCommandResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(graceTimer);
       input.signal?.removeEventListener('abort', onAbort);
       resolve(r);
+    };
+
+    // Build the terminal result from the exit code, preserving an abort/
+    // timeout note. Called by BOTH the `'close'` handler (preferred — full
+    // stdio drain) and the `'exit'` fallback; the `settled` guard makes the
+    // second caller a no-op.
+    const settle = (code: number | null) => {
+      if (reason === 'aborted' || reason === 'timeout') {
+        const note = reason === 'timeout' ? `Timed out after ${input.timeoutMs}ms` : 'Cancelled';
+        return finish({ ok: false, exitCode: code ?? -1, stderrTail: `${note}\n${stderrTail}`.slice(-TAIL_BYTES), reason });
+      }
+      finish({ ok: code === 0, exitCode: code ?? -1, stderrTail });
     };
 
     // Abort before spawn: bail immediately.
@@ -72,7 +101,7 @@ export function runHostCommand(input: RunHostCommandInput): Promise<RunHostComma
       return finish({ ok: false, exitCode: -1, stderrTail: '', reason: 'aborted' });
     }
 
-    const child = spawn(input.program, input.args, {
+    const child = spawnFn(input.program, input.args, {
       cwd: input.cwd,
       env: childEnv(input.env),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -113,12 +142,17 @@ export function runHostCommand(input: RunHostCommandInput): Promise<RunHostComma
       });
     });
 
-    child.on('close', (code) => {
-      if (reason === 'aborted' || reason === 'timeout') {
-        const note = reason === 'timeout' ? `Timed out after ${input.timeoutMs}ms` : 'Cancelled';
-        return finish({ ok: false, exitCode: code ?? -1, stderrTail: `${note}\n${stderrTail}`.slice(-TAIL_BYTES), reason });
-      }
-      finish({ ok: code === 0, exitCode: code ?? -1, stderrTail });
+    // Preferred terminal signal: fires once the process exited AND all stdio
+    // pipes closed (full log drain).
+    child.on('close', (code) => settle(code));
+
+    // Fallback: the process terminated but an inherited stdio pipe may stay
+    // open (Windows), so `'close'` can never fire. Settle after a brief drain
+    // window; a later (or never-arriving) `'close'` is a no-op via `settled`.
+    // This also makes the timeout/abort `kill()` path reliably resolve.
+    child.on('exit', (code) => {
+      graceTimer = setTimeout(() => settle(code), EXIT_DRAIN_MS);
+      graceTimer.unref?.();
     });
   });
 }

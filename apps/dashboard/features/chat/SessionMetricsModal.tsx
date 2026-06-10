@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { useState } from 'react';
-import { Activity, AlertTriangle, BarChart3, ChevronDown, ChevronRight, Database, DollarSign, FileText, History, Loader2, PiggyBank, Scissors, Wrench } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, ChevronDown, ChevronRight, Database, DollarSign, FileText, History, Loader2, MessageSquare, PiggyBank, Scissors, Wrench } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { useApi } from '../../hooks/useApi.js';
 
@@ -83,6 +83,13 @@ interface SessionTelemetrySummary {
   total_tool_calls: number;
   compaction_turns: number;
   summarizer_turns: number;
+  /** Migration 130 — lifetime durable-compaction counts (auto + manual). */
+  compaction_count_auto: number;
+  compaction_count_manual: number;
+  /** Migration 130 — lifetime message counts (independent of the summary boundary). */
+  messages_all: number;
+  messages_conversation: number;
+  messages_user: number;
   paginate_total: number;
   largest_tool_result_chars: number | null;
   last_history_chars: number | null;
@@ -169,6 +176,21 @@ export function SessionMetricsView({
           )}
           {data && !loading && data.turn_count > 0 && (
             <>
+              {/* Session size — message counts (lifetime, independent of the
+                  summary boundary) + how many times the window was summarized
+                  (durable auto + manual). Migration 130. */}
+              <Section title={t('chat:metrics.session.title')} icon={<MessageSquare className="h-3.5 w-3.5" />}>
+                <Stat label={t('chat:metrics.session.msgsConversation')} value={String(data.messages_conversation)} />
+                <Stat label={t('chat:metrics.session.msgsAll')} value={String(data.messages_all)} />
+                <Stat label={t('chat:metrics.session.msgsUser')} value={String(data.messages_user)} />
+                <Stat
+                  label={t('chat:metrics.session.summarizations')}
+                  value={String(data.compaction_count_auto + data.compaction_count_manual)}
+                />
+                <Stat label={t('chat:metrics.session.summAuto')} value={String(data.compaction_count_auto)} />
+                <Stat label={t('chat:metrics.session.summManual')} value={String(data.compaction_count_manual)} />
+              </Section>
+
               {/* Token totals */}
               <Section title={t('chat:metrics.tokens.title')} icon={<BarChart3 className="h-3.5 w-3.5" />}>
                 <Stat label={t('chat:metrics.tokens.input')} value={formatK(data.total_input_tokens)} />

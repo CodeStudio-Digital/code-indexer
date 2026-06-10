@@ -115,3 +115,40 @@ describe('code_exec timeout (codex-faithful)', () => {
     expect(exposed).toContain('read_file');
   });
 });
+
+describe('code_exec ReferenceError hints', () => {
+  it('steers a sandbox-excluded control tool to a top-level call', async () => {
+    const registry = new ToolRegistry();
+    // `task_complete` is registered (callable at top-level) but `isSafeTool`
+    // excludes it from the sandbox. Calling it inside code_exec throws a bare
+    // ReferenceError — the hint must tell the model to call it directly. This
+    // is the exact loop that burned ~18 turns in session 966.
+    registry.register(noopTool('task_complete'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `await task_complete({}); return 'done';` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('task_complete is not defined');
+    expect(res.content).toContain('NOT exposed inside code_exec');
+    expect(res.content).toContain('top-level tool call');
+  });
+
+  it('does NOT emit the control-tool hint for an unknown identifier', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('read_file'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `await totally_made_up_xyz({}); return 'done';` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('totally_made_up_xyz is not defined');
+    expect(res.content).not.toContain('NOT exposed inside code_exec');
+  });
+});

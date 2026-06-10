@@ -90,7 +90,7 @@ const CODE_EXEC_DESC =
   '\n' +
   'Policy: every tool call inside the script goes through the same plan-mode / task-scope policy as a direct call. ' +
   'Mutating tools (write_file, edit_file, multi_edit, create_file, manage_path, apply_patch, git_add/commit/branch) work only when the plan is approved (or the active task scope unlocks the touched paths). ' +
-  'Interactive prompts (submit_plan, submit_tasks, ask_user) and orchestration tools (spawn_*, expand_toolset) are NOT exposed — call them directly outside code_exec.\n' +
+  'Interactive prompts (submit_plan, submit_tasks, ask_user), orchestration tools (spawn_*, expand_toolset), and task-lifecycle tools (task_complete, execute_task) are NOT exposed — call them directly outside code_exec.\n' +
   '\n' +
   'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). ' + MAX_TOOL_CALLS + ' tool calls per script, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB output cap.\n' +
   '\n' +
@@ -195,6 +195,10 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       // Build the tools proxy: one async function per safe registered tool.
       const safe = registry.list().filter(isSafeTool);
       const exposedNames = safe.map((t) => t.name).sort();
+      // Full registry (incl. sandbox-excluded control/lifecycle tools) so the
+      // ReferenceError hint below can tell "exists but not exposed here" apart
+      // from "typo / absent Node global".
+      const allToolNames = new Set(registry.list().map((t) => t.name));
       const logBuffer: string[] = [];
       let toolCalls = 0;
       let outputBytes = 0;
@@ -420,6 +424,14 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
               hint =
                 `\n\nHint: \`${name}\` is a registered tool. Call it as ` +
                 `\`await ${name}(args)\` or \`await tools.${name}(args)\`.`;
+            } else if (allToolNames.has(name)) {
+              // Registered at top-level but excluded from the sandbox (a
+              // control/lifecycle tool). Weak models loop here retrying it
+              // inside code_exec — steer them to a direct top-level call.
+              hint =
+                `\n\nHint: \`${name}\` is a registered tool but is NOT exposed inside code_exec ` +
+                `— it's a control/lifecycle tool (task_complete, execute_task, expand_toolset, spawn_*, ask_user, submit_*) ` +
+                `that needs the runner's own turn cycle. End this code_exec and call \`${name}\` directly as a top-level tool call.`;
             } else if (ABSENT_NODE_GLOBALS.has(name)) {
               // code_exec runs in a node:vm sandbox with NO Node builtins —
               // not a bug, by design. Steer the model to the registered tools

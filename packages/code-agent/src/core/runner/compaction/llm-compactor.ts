@@ -3,7 +3,7 @@
  *   head (compactable) = messages[0..cutoff)
  *   tail (verbatim)    = messages[cutoff..]
  * where `cutoff` is computed by walking from the tail until the running
- * token estimate exceeds `protectTokens` (~40% of effective window).
+ * token estimate exceeds `protectTokens` (~15% of effective window).
  *
  * Steps:
  *   1. `computeCutoffIndexByTokens` — token-based cutoff scan.
@@ -40,8 +40,15 @@ import { renderSummaryAsMessage } from './summary-renderer.js';
 
 export interface CompactArgs {
   messages: AgentMessage[];
-  /** Tokens to keep verbatim at the tail (~40% of effective window). */
+  /** Tokens to keep verbatim at the tail (~15% of effective window). */
   protectTokens: number;
+  /**
+   * Optional ceiling on the preserved tail when receding to keep the last N
+   * user turns. Stops a single long user turn (history has < N user messages)
+   * from preserving everything and forcing a no-op. See
+   * `recedeToPreserveLastNTurns`. Unset → unbounded recede (legacy behaviour).
+   */
+  maxTailTokens?: number;
   /** Cheap provider used for the summary call. */
   summaryProvider: ChatProvider;
   /**
@@ -82,7 +89,7 @@ export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> 
   }
 
   let cutoff = computeCutoffIndexByTokens(args.messages, args.protectTokens);
-  cutoff = recedeToPreserveLastNTurns(args.messages, cutoff, preserveLastNTurns());
+  cutoff = recedeToPreserveLastNTurns(args.messages, cutoff, preserveLastNTurns(), args.maxTailTokens);
   cutoff = snapCutoffPreservingPairs(args.messages, cutoff);
 
   // No-op when nothing is compactable.

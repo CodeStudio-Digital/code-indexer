@@ -266,6 +266,38 @@ describe('SessionStore — telemetry aggregations (modal + dashboard)', () => {
     expect(s.total_input_tokens).toBe(0);
     expect(s.cache_hit_ratio).toBe(null);
     expect(s.tools_breakdown).toEqual([]);
+    // Migration 130 fields default to 0 on a fresh session.
+    expect(s.messages_all).toBe(0);
+    expect(s.messages_conversation).toBe(0);
+    expect(s.messages_user).toBe(0);
+    expect(s.compaction_count_auto).toBe(0);
+    expect(s.compaction_count_manual).toBe(0);
+  });
+
+  it('counts lifetime messages by role and keeps them independent of the summary boundary (mig 130)', () => {
+    const s = store.createSession({
+      project_id: projectId, title: 'msgs', provider: 'a', model: 'm',
+    }).id;
+    store.appendMessage(s, { role: 'user', content: [{ type: 'text', text: 'q1' }] });
+    store.appendMessage(s, { role: 'assistant', content: [{ type: 'text', text: 'a1' }] });
+    store.appendMessage(s, { role: 'tool', content: [{ type: 'text', text: 'result' }] });
+    store.appendMessage(s, { role: 'user', content: [{ type: 'text', text: 'q2' }] });
+
+    const before = store.getSessionTelemetrySummary(s);
+    expect(before.messages_all).toBe(4);          // user + assistant + tool + user
+    expect(before.messages_conversation).toBe(3); // excludes the tool row
+    expect(before.messages_user).toBe(2);
+
+    // The whole point: summarizing the window must NOT shrink the lifetime
+    // counts (rows are hidden, never deleted), but it DOES bump the manual
+    // summarization counter.
+    store.setCompactionBoundary(s, 'SUMMARY', store.maxMessageId(s), 'manual');
+    const after = store.getSessionTelemetrySummary(s);
+    expect(after.messages_all).toBe(4);
+    expect(after.messages_conversation).toBe(3);
+    expect(after.messages_user).toBe(2);
+    expect(after.compaction_count_manual).toBe(1);
+    expect(after.compaction_count_auto).toBe(0);
   });
 
   it('getGlobalTelemetrySummary aggregates across sessions and breaks down by provider/model', () => {

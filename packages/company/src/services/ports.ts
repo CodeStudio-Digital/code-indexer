@@ -54,6 +54,18 @@ export interface IKanbanNotifier {
 /** Centralised `company_agent_runs.status` writes + dashboard events. */
 export interface IAgentStatusUpdater {
   setStatus(agentRunId: number, status: AgentRunStatus, message?: string): void;
+  /**
+   * Write the status AND publish an `agent_status` event (no board post).
+   * `opts.coderSessionId` rides along so the dashboard can open the agent's
+   * transcript the moment it spawns. Use this (not `setStatus`) wherever the
+   * UI needs to learn about the status change live.
+   */
+  publishStatus(
+    agentRunId: number,
+    role: string,
+    status: AgentRunStatus,
+    opts?: { message?: string; coderSessionId?: number },
+  ): void;
 }
 
 /** Master-side notifications — called from subordinate code paths. */

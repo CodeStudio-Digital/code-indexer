@@ -31,6 +31,7 @@ export type { HandlerDeps } from './types.js';
 export { createContext, createInternalContext } from './context.js';
 export { createProjectsHandlers } from './projects/index.js';
 export { runScaffoldStream } from './projects/scaffold.js';
+export { reinstrumentBuilder, type ReinstrumentResult } from './projects/reinstrument.js';
 export { createFilesHandlers } from './files/index.js';
 export { createTerminalHandlers } from './terminal/index.js';
 export { createRunnerHandlers } from './runner/index.js';

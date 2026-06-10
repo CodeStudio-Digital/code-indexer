@@ -11,6 +11,7 @@ export { runHostScaffold } from './scaffold-runner.js';
 export type { ScaffoldCallbacks, ScaffoldRunInput, ScaffoldOutcome } from './scaffold-runner.js';
 export {
   injectBuilderStampHost,
+  repairBuilderStampHost,
   renderHostViteConfig,
   findFreeBuilderPort,
   BUILDER_DEV_DEPS,

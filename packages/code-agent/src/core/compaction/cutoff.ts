@@ -107,6 +107,15 @@ export function snapCutoffPreservingPairs(messages: AgentMessage[], cutoff: numb
  * N user messages plus everything after them as raw text lets the model
  * retain the exact wording of recent intent.
  *
+ * `maxTailTokens` (optional) caps how far we recede: preserving N user turns is
+ * best-effort, but the preserved tail must never blow the budget. Without it, a
+ * single long user turn (history has < N user messages) recedes all the way to
+ * 0 and the caller no-ops — the compactor can never reduce the turn, so the
+ * size gate loops. With it, we stop receding before the tail exceeds the
+ * ceiling and return the furthest-back SAFE boundary (still > 0, so a
+ * compactable head remains) instead of giving up. This is what lets compaction
+ * summarize WITHIN a long single turn.
+ *
  * Caller is expected to feed the result through `snapCutoffPreservingPairs`
  * so atomic tool_use/tool_result pairs aren't split — this function only
  * recedes; it never advances.
@@ -115,27 +124,42 @@ export function recedeToPreserveLastNTurns(
   messages: AgentMessage[],
   cutoff: number,
   n: number,
+  maxTailTokens?: number,
 ): number {
   if (n <= 0 || cutoff <= 0 || cutoff >= messages.length) return cutoff;
 
-  // Count user messages already in the tail (indices >= cutoff).
+  // Seed the running tail size + user count from messages already in the tail
+  // (indices >= cutoff). Token accounting only runs when a budget is set.
+  let tailTokens = 0;
   let userInTail = 0;
   for (let i = cutoff; i < messages.length; i++) {
+    if (maxTailTokens != null) tailTokens += estimateMessageTokens(messages[i]);
     if (messages[i].role === 'user') userInTail++;
   }
   if (userInTail >= n) return cutoff;
 
-  // Walk backward from cutoff-1 looking for user messages. Stop when we have
-  // enough; recede to the index of the Nth-from-tail user message.
+  // Walk backward from cutoff-1, receding the boundary. Stop as soon as we have
+  // N user messages, or — when a budget is set — as soon as one more message
+  // would push the preserved tail over `maxTailTokens`.
   let needed = n - userInTail;
+  let safe = cutoff;
   for (let i = cutoff - 1; i >= 0; i--) {
+    if (maxTailTokens != null) {
+      const t = estimateMessageTokens(messages[i]);
+      if (tailTokens + t > maxTailTokens) return safe; // budget hit — keep head compactable
+      tailTokens += t;
+    }
+    safe = i;
     if (messages[i].role === 'user') {
       needed--;
       if (needed === 0) return i;
     }
   }
-  // Fewer than N user messages exist in history — keep everything raw.
-  return 0;
+  // Fewer than N user messages exist in history. With a budget the loop above
+  // already returned a SAFE positive boundary before reaching here unless the
+  // whole history fits the budget (then nothing needs compacting). Without a
+  // budget, fall back to legacy behaviour: keep everything raw → caller no-ops.
+  return maxTailTokens != null ? safe : 0;
 }
 
 /**

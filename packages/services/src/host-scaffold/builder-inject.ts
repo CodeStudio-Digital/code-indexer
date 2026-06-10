@@ -22,8 +22,10 @@ import {
   INDEX_CSS,
 } from '../sandbox/builder/scaffold/shadcn-files.js';
 
-/** npm deps a builder project needs (installed by the scaffold flow). */
-export const BUILDER_DEV_DEPS = ['tailwindcss@3', 'postcss', 'autoprefixer', 'tailwindcss-animate'];
+/** npm deps a builder project needs (installed by the scaffold flow).
+ *  `@babel/core` powers the dev-only element-selection stamp Vite plugin
+ *  (`.mcp/vite-mcp-stamp.mjs`) — plugin-react no longer brings Babel. */
+export const BUILDER_DEV_DEPS = ['@babel/core', 'tailwindcss@3', 'postcss', 'autoprefixer', 'tailwindcss-animate'];
 export const BUILDER_DEPS = ['class-variance-authority', 'clsx', 'tailwind-merge', 'lucide-react'];
 
 /** Render the host `vite.config.ts` — react+babel-stamp + `@` alias + a
@@ -64,22 +66,45 @@ function writeFileEnsured(path: string, contents: string): void {
 }
 
 /**
+ * Write the stamp files (Babel plugin, dev-only stamp Vite plugin, inspector
+ * runtime), (re)generate `vite.config.ts`, and ensure the dev-only inspector
+ * import on the entry. Shared by first-scaffold inject and the repair path.
+ * Idempotent — safe to re-run; does NOT touch user-editable Tailwind/CSS files.
+ */
+function writeStampInstrumentation(targetDir: string, stack: string, port: number): void {
+  const plugin = getSourceStampPlugin(stack as never);
+  if (!plugin) throw new Error(`No Builder source-stamp for stack '${stack}'`);
+  const c = plugin.contribution();
+
+  // Stamp files (babel plugin, vite stamp plugin, inspector runtime).
+  for (const f of c.files) {
+    writeFileEnsured(join(targetDir, f.path), f.contents);
+  }
+
+  // vite.config.ts with the stamp + pinned port.
+  writeFileEnsured(join(targetDir, 'vite.config.ts'), renderHostViteConfig(c.vite, port));
+
+  // Dev-only inspector import appended to the entry (once).
+  const entryPath = join(targetDir, c.entry.file);
+  try {
+    const current = readFileSync(entryPath, 'utf8');
+    if (!current.includes('mcp-inspector')) {
+      writeFileSync(entryPath, `${current.replace(/\s*$/, '')}\n\n${c.entry.importLine}\n`, 'utf8');
+    }
+  } catch {
+    /* entry missing (unexpected for a Vite template) — skip */
+  }
+}
+
+/**
  * Write the Tailwind/shadcn foundation + the source-stamp files into a
  * freshly-scaffolded host project, overwrite `vite.config.ts` with the
  * stamped config, and append the dev-only inspector import to the entry.
  * Idempotent on the entry append.
  */
 export function injectBuilderStampHost(targetDir: string, stack: string, port: number): void {
-  const plugin = getSourceStampPlugin(stack as never);
-  if (!plugin) throw new Error(`No Builder source-stamp for stack '${stack}'`);
-  const c = plugin.contribution();
-
-  // 1. Stamp files (babel plugin, inspector runtime).
-  for (const f of c.files) {
-    writeFileEnsured(join(targetDir, f.path), f.contents);
-  }
-
-  // 2. Tailwind + shadcn config files.
+  // Tailwind + shadcn config files. First scaffold only — `repairBuilderStampHost`
+  // deliberately skips these so it never clobbers files the user has edited.
   const shadcn: Array<[string, string]> = [
     ['tailwind.config.cjs', TAILWIND_CONFIG_CJS],
     ['postcss.config.cjs', POSTCSS_CONFIG_CJS],
@@ -91,19 +116,19 @@ export function injectBuilderStampHost(targetDir: string, stack: string, port: n
     writeFileEnsured(join(targetDir, rel), contents);
   }
 
-  // 3. vite.config.ts with the stamp + pinned port.
-  writeFileEnsured(join(targetDir, 'vite.config.ts'), renderHostViteConfig(c.vite, port));
+  writeStampInstrumentation(targetDir, stack, port);
+}
 
-  // 4. Dev-only inspector import appended to the entry (once).
-  const entryPath = join(targetDir, c.entry.file);
-  try {
-    const current = readFileSync(entryPath, 'utf8');
-    if (!current.includes('mcp-inspector')) {
-      writeFileSync(entryPath, `${current.replace(/\s*$/, '')}\n\n${c.entry.importLine}\n`, 'utf8');
-    }
-  } catch {
-    /* entry missing (unexpected for a Vite template) — skip */
-  }
+/**
+ * Re-instrument an EXISTING Builder project: rewrite the stamp files +
+ * `vite.config.ts` and ensure the entry import, WITHOUT touching the user's
+ * Tailwind/shadcn/CSS files. Repairs projects scaffolded before the stamp moved
+ * out of `react({ babel })` (which silently no-op'd under plugin-react v6 / oxc).
+ * Callers must also ensure `@babel/core` is installed and restart the dev server
+ * so Vite reloads the regenerated config.
+ */
+export function repairBuilderStampHost(targetDir: string, stack: string, port: number): void {
+  writeStampInstrumentation(targetDir, stack, port);
 }
 
 /** Find a free TCP port for the builder dev server (pinned into vite.config). */

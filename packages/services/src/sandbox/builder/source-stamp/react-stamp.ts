@@ -1,21 +1,24 @@
 /**
- * React source-stamp plugin. Wires a Babel plugin into
- * `@vitejs/plugin-react` (already a devDependency of the `react-ts` Vite
- * template) so every JSX element is stamped with `data-mcp-loc`, and ships
- * the inspector runtime that the preview loads in dev.
+ * React source-stamp plugin. Stamps every JSX element with `data-mcp-loc`
+ * (via a Babel plugin run inside a standalone, dev-only Vite plugin) and
+ * ships the inspector runtime that the preview loads in dev.
  *
- * The canonical `vite.config.ts` (from `renderViteConfig`) intentionally
- * omits the React plugin — esbuild handles the JSX transform on its own.
- * Builder mode re-introduces `@vitejs/plugin-react` purely to host the
- * stamping Babel plugin (Fast Refresh comes along for free).
+ * The stamp runs as its OWN `enforce:'pre'` Vite plugin
+ * (`.mcp/vite-mcp-stamp.mjs`), NOT through `react({ babel: { plugins } })`:
+ * `@vitejs/plugin-react` v6 transforms JSX with oxc and ignores its `babel`
+ * option, so that hook silently did nothing. `@vitejs/plugin-react` is still
+ * included (Fast Refresh) but no longer carries the stamp. See
+ * `vite-stamp-source.ts` for the full rationale.
  */
 import type { SandboxStack } from '../../types.js';
 import type { SourceStampPlugin, StampContribution } from './types.js';
 import { BABEL_STAMP_SOURCE } from './babel-plugin-source.js';
+import { VITE_STAMP_SOURCE } from './vite-stamp-source.js';
 import { CONSOLE_BRIDGE_SOURCE } from '../inspector/console-bridge-source.js';
 import { INSPECTOR_RUNTIME_SOURCE } from '../inspector/runtime-source.js';
 
 const BABEL_PLUGIN_PATH = '.mcp/babel-mcp-stamp.cjs';
+const VITE_STAMP_PATH = '.mcp/vite-mcp-stamp.mjs';
 const INSPECTOR_PATH = 'src/mcp-inspector.ts';
 const ENTRY_FILE = 'src/main.tsx';
 
@@ -44,15 +47,17 @@ export class ReactSourceStamp implements SourceStampPlugin {
         imports: [
           `import react from '@vitejs/plugin-react';`,
           `import { fileURLToPath as __mcpFileURL } from 'node:url';`,
-          `import mcpStamp from './${BABEL_PLUGIN_PATH}';`,
+          `import mcpStampVite from './${VITE_STAMP_PATH}';`,
         ],
-        // The stamping plugin rides inside the React plugin's Babel chain.
-        pluginExprs: [`react({ babel: { plugins: [mcpStamp] } })`],
+        // The stamp plugin runs FIRST (both are enforce:'pre') so data-mcp-loc
+        // is added before plugin-react / oxc transforms the JSX away.
+        pluginExprs: [`mcpStampVite()`, `react()`],
         // shadcn's `@/*` alias, persisted so it survives config regeneration.
         resolveAlias: { '@': `__mcpFileURL(new URL('./src', import.meta.url))` },
       },
       files: [
         { path: BABEL_PLUGIN_PATH, contents: BABEL_STAMP_SOURCE },
+        { path: VITE_STAMP_PATH, contents: VITE_STAMP_SOURCE },
         { path: INSPECTOR_PATH, contents: inspectorModule() },
       ],
       entry: {

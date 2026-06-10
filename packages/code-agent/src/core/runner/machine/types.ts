@@ -99,6 +99,19 @@ export interface RunContext {
    * passes and the provider call proceeds.
    */
   preEmitCompactions: number;
+  /**
+   * Consecutive POST-TURN compaction passes that freed nothing (compactor
+   * no-op'd: `collapsedFrom === 0`). The post-turn size gate (`executing.ts`)
+   * is a pure function of prompt tokens with no state of its own, so a context
+   * that can't shrink (e.g. a tool_result larger than the recede ceiling) would
+   * otherwise re-trigger Compacting every turn — a no-op loop (confirmed in
+   * telemetry: one run churned 94 consecutive no-ops). After
+   * `CODER_POSTTURN_COMPACT_NOOP_MAX` (default 2) the size gate is suppressed —
+   * NOT aborted (unlike pre-emit); the model keeps progressing. Incremented in
+   * CompactingNode on a no-op, reset on a real compaction or when the gate goes
+   * quiet (prompt fell back below the trigger).
+   */
+  consecutiveNoopCompactions: number;
   /** Stable run id (uuid) for telemetry correlation. */
   runId: string;
   aborted: boolean;

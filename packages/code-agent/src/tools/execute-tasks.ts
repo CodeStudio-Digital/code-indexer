@@ -488,7 +488,7 @@ async function runGroupParallel(
   const groupId = `tasks-wave-${Date.now().toString(36)}`;
   ctx.runner?.emit('agents_group_start', {
     groupId,
-    agents: tasks.map((t, i) => ({ index: i, label: `${t.kind ?? 'implement'}:${t.id}` })),
+    agents: tasks.map((t, i) => ({ index: i, label: `${t.kind ?? 'implement'}:${t.id}`, task: specs[i].task })),
   });
 
   let parallelRun: Awaited<ReturnType<typeof runParallelAgents>>;
@@ -833,7 +833,7 @@ function renderInlineScopeInstruction(task: CoderTask, remaining: number): strin
     `${task.description}\n\n` +
     `Files in scope (mutating tools allowed only inside these):\n${fileList}\n\n` +
     `Proceed with the implementation using write_file/edit_file/run_command/etc. ` +
-    `When done (or failed), call task_complete(task_id="${task.id}", summary, files_modified, errors?).` +
+    `When done (or failed), call task_complete(task_id="${task.id}", summary, files_modified, errors?) directly — not inside code_exec.` +
     nextLine
   );
 }

@@ -32,6 +32,7 @@ import { ResolveMcpBearer } from './use-cases/resolve-mcp-bearer.js';
 import { RevokeMcpAuthorization } from './use-cases/revoke-mcp-authorization.js';
 
 import type { McpOAuthRegistrationAdminRepo } from './ports/oauth-registration-repository.js';
+import type { McpOAuthTokensReaderRepo } from './ports/oauth-tokens-repository.js';
 
 export interface McpClientAuthBundle {
   discover: DiscoverAuthorizationServer;
@@ -43,6 +44,13 @@ export interface McpClientAuthBundle {
   resolveBearer: ResolveMcpBearer;
   revoke: RevokeMcpAuthorization;
   registrationAdminRepo: McpOAuthRegistrationAdminRepo;
+  /**
+   * Read-only token lookup, surfaced so the status route can report
+   * whether a server has completed consent (the dashboard polls this
+   * because the OAuth callback lands in an external browser and can't
+   * postMessage back into the desktop window).
+   */
+  tokensReaderRepo: McpOAuthTokensReaderRepo;
 }
 
 export function composeMcpClientAuth(dbPath: string): McpClientAuthBundle {
@@ -83,5 +91,6 @@ export function composeMcpClientAuth(dbPath: string): McpClientAuthBundle {
     resolveBearer,
     revoke,
     registrationAdminRepo: regRepo,
+    tokensReaderRepo: tokensRepo,
   };
 }

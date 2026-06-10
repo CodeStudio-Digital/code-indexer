@@ -59,6 +59,12 @@ export interface AgentStatusPayload {
   role: string;
   status: AgentRunStatus;
   message: string;
+  /**
+   * Coder session backing this agent run. Emitted at subordinate spawn so
+   * the dashboard can open the agent's transcript modal immediately, before
+   * the REST snapshot is refreshed. Optional — other emitters omit it.
+   */
+  coderSessionId?: number;
 }
 
 // ─── Master prompts (ask_user / submit_plan) ──────────────────

@@ -1,6 +1,6 @@
 import type { Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { createProjectsHandlers, createContext } from '@mcp/api-handlers';
+import { createProjectsHandlers, createContext, reinstrumentBuilder } from '@mcp/api-handlers';
 import { ApiError } from '@mcp/api-bus';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
@@ -74,6 +74,20 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
   app.delete('/api/projects/:id', async (c) => {
     try {
       return c.json(await h.delete({ id: parseIdParam(c) }, createContext()));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return notFound(c);
+      return mapApiError(c, err);
+    }
+  });
+
+  // Re-instrument an existing Builder project for element selection (rewrites
+  // the stamp + vite.config, installs @babel/core). The UI then restarts the
+  // dev server. Runs the host npm install with the request's abort signal so a
+  // client disconnect cancels it.
+  app.post('/api/projects/:id/builder/reinstrument', async (c) => {
+    try {
+      const id = parseIdParam(c);
+      return c.json(await reinstrumentBuilder(deps, { id }, c.req.raw.signal));
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) return notFound(c);
       return mapApiError(c, err);

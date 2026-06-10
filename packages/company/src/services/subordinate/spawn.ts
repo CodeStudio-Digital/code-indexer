@@ -368,7 +368,12 @@ export async function spawnSubordinate(
     },
   } as RunCoderOptions & { companyPromptBlock: string });
 
-  deps.status.setStatus(agentRun.id, 'running');
+  // publishStatus (not setStatus) so the dashboard learns about the new
+  // subordinate live — and carries `coderSessionId` so its agent row is
+  // clickable (opens the transcript) from the moment it appears.
+  deps.status.publishStatus(agentRun.id, spec.role, 'running', {
+    coderSessionId: subSession.id,
+  });
   deps.runningIds.add(agentRun.id);
   deps.notifyIdleChanged();
 

@@ -14,6 +14,19 @@ export interface SessionTelemetrySummary {
   total_tool_calls: number;
   compaction_turns: number;
   summarizer_turns: number;
+  /** Migration 130 — lifetime durable-compaction counters (survive compaction). */
+  compaction_count_auto: number;
+  compaction_count_manual: number;
+  /**
+   * Migration 130 — lifetime message counts from `coder_messages`, INDEPENDENT
+   * of the summary boundary (rows are hidden on compaction, never deleted), so
+   * these never shrink. `messages_all` = every row (incl. tool results);
+   * `messages_conversation` = user + assistant (role != 'tool'); `messages_user`
+   * = user prompts only.
+   */
+  messages_all: number;
+  messages_conversation: number;
+  messages_user: number;
   paginate_total: number;
   largest_tool_result_chars: number | null;
   last_history_chars: number | null;
@@ -74,7 +87,45 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
        FROM coder_turn_telemetry
        WHERE session_id = ?`,
     )
-    .get(sessionId) as Omit<SessionTelemetrySummary, 'tools_breakdown' | 'phase_breakdown' | 'cache_hit_ratio' | 'truncation_rate'>;
+    .get(sessionId) as Omit<
+      SessionTelemetrySummary,
+      | 'tools_breakdown'
+      | 'phase_breakdown'
+      | 'cache_hit_ratio'
+      | 'truncation_rate'
+      | 'compaction_count_auto'
+      | 'compaction_count_manual'
+      | 'messages_all'
+      | 'messages_conversation'
+      | 'messages_user'
+    >;
+
+  // Migration 130: lifetime message counts straight from `coder_messages`. NOT
+  // boundary-filtered on purpose — the panel's whole point is a count that does
+  // NOT shrink when the window is summarized. `role != 'tool'` matches the
+  // "renderable" (user+assistant) semantics used by loadTail/loadBefore.
+  const msgCounts = db
+    .prepare(
+      `SELECT
+         COUNT(*)                                                   AS messages_all,
+         COALESCE(SUM(CASE WHEN role != 'tool' THEN 1 ELSE 0 END), 0) AS messages_conversation,
+         COALESCE(SUM(CASE WHEN role  = 'user' THEN 1 ELSE 0 END), 0) AS messages_user
+       FROM coder_messages
+       WHERE session_id = ?`,
+    )
+    .get(sessionId) as { messages_all: number; messages_conversation: number; messages_user: number };
+
+  // Migration 130: durable-compaction counters live on the session row (bumped
+  // by setCompactionBoundary for both auto + manual). COALESCE guards a brand
+  // new session whose row predates the column on an un-migrated dev DB.
+  const compactionCounts = db
+    .prepare(
+      `SELECT COALESCE(compaction_count_auto, 0)   AS compaction_count_auto,
+              COALESCE(compaction_count_manual, 0) AS compaction_count_manual
+       FROM coder_sessions
+       WHERE id = ?`,
+    )
+    .get(sessionId) as { compaction_count_auto: number; compaction_count_manual: number } | undefined;
 
   // Migration 072: tools breakdown JOINs coder_tool_calls for richer metrics
   // (output_chars, duration, truncation). Falls back to the legacy
@@ -191,6 +242,11 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
 
   return {
     ...totals,
+    messages_all: msgCounts.messages_all,
+    messages_conversation: msgCounts.messages_conversation,
+    messages_user: msgCounts.messages_user,
+    compaction_count_auto: compactionCounts?.compaction_count_auto ?? 0,
+    compaction_count_manual: compactionCounts?.compaction_count_manual ?? 0,
     cache_hit_ratio,
     tools_breakdown,
     phase_breakdown: phaseRows,

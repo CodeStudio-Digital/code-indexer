@@ -31,19 +31,22 @@ export function decideTerminal(ctx: RunContext): BehaviorEvent {
 
   if (verdict.kind === 'auto-continue') {
     ctx.autoContinues = verdict.nextCount;
-    ctx.emit('auto_continue', verdict.nextCount, maxAutoContinues());
-    // Append a recap reminder so the model knows it has extra headroom.
+    const cap = maxAutoContinues();
+    ctx.emit('auto_continue', verdict.nextCount, cap);
+    // Each auto-continue grants a fresh batch of ~maxTurns turns. On
+    // intermediate batches, nudge the model to keep working (the old
+    // "wrap up" nag fired every turn and stalled progress). Only on the
+    // FINAL batch do we ask it to land the plane.
+    const isFinal = verdict.nextCount >= cap;
+    const text = isFinal
+      ? `<system-reminder>auto-continue ${verdict.nextCount}/${cap} (último lote) — ` +
+        `mais ~${maxTurns} turnos e acabou. Finalize o trabalho em andamento e encerre; ` +
+        `não inicie novas investigações.</system-reminder>`
+      : `<system-reminder>auto-continue ${verdict.nextCount}/${cap} — concedidos ~${maxTurns} ` +
+        `turnos extras. Continue fazendo progresso concreto na tarefa.</system-reminder>`;
     ctx.messages.push({
       role: 'user',
-      content: [
-        {
-          type: 'text',
-          text:
-            `<system-reminder>auto-continue ${verdict.nextCount}/${maxAutoContinues()} — ` +
-            `you crossed maxTurns=${maxTurns}. Wrap up the in-flight work; ` +
-            `do not start new investigations.</system-reminder>`,
-        },
-      ],
+      content: [{ type: 'text', text }],
     });
     return events.turnSucceeded({ hasToolCalls: false });
   }

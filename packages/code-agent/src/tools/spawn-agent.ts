@@ -342,6 +342,7 @@ async function runParallelEphemeral(
       label: a.label,
       provider: providerInfo.provider,
       model: providerInfo.model,
+      task: a.task,
     })),
   });
 

@@ -287,4 +287,15 @@ export interface ProjectGitApi {
     input: { projectId: number; steps: GitPlanStep[] },
     ctx: ApiContext,
   ): Promise<{ results: GitRunResult[]; aborted: boolean }>;
+
+  /**
+   * Generate a Conventional-Commits message from the staged diff using
+   * the project's general AI provider. Powers the Git panel's inline
+   * commit box "generate" button. Throws 412 when no general AI is
+   * configured so the UI can point the user at Admin → AI Geral.
+   */
+  aiCommitMessage(
+    input: { projectId: number },
+    ctx: ApiContext,
+  ): Promise<{ message: string }>;
 }

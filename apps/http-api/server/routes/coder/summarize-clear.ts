@@ -103,7 +103,7 @@ export function mountCoderSummarizeClearRoute(
       // Full clear: hide the whole visible transcript, store the summary as the
       // prepended head. boundary = current MAX(id) → no verbatim tail remains.
       const boundaryId = sessionStore.maxMessageId(id);
-      const result = sessionStore.setCompactionBoundary(id, renderSummaryV2(summary), boundaryId);
+      const result = sessionStore.setCompactionBoundary(id, renderSummaryV2(summary), boundaryId, 'manual');
 
       // Drop any lingering (ended) bus so the next /messages POST builds a
       // fresh, boundary-aware runner that loads only the summary onward.

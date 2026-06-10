@@ -125,4 +125,35 @@ describe('CompactingNode', () => {
     expect(aborted).toBeDefined();
     expect((aborted!.args[0] as { kind: string }).kind).toBe('compact-failure');
   });
+
+  it('increments consecutiveNoopCompactions on a no-op (collapsedFrom=0)', async () => {
+    const { ctx } = makeTestContext();
+    ctx.messages = [user('short'), assistant('also short')];
+    expect(ctx.consecutiveNoopCompactions).toBe(0);
+
+    await new CompactingNode({ summarizeOverride: async () => STUB_SUMMARY }).execute(ctx, null);
+    expect(ctx.consecutiveNoopCompactions).toBe(1);
+
+    await new CompactingNode({ summarizeOverride: async () => STUB_SUMMARY }).execute(ctx, null);
+    expect(ctx.consecutiveNoopCompactions).toBe(2);
+  });
+
+  it('resets consecutiveNoopCompactions on a real compaction', async () => {
+    const { ctx } = makeTestContext();
+    ctx.consecutiveNoopCompactions = 5; // simulate a prior no-op streak
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      messages.push(user(`u${i}`));
+      messages.push(assistant(`a${i}`));
+    }
+    ctx.messages = messages;
+
+    const event = await new CompactingNode({
+      protectTokensOverride: 10,
+      summarizeOverride: async () => STUB_SUMMARY,
+    }).execute(ctx, null);
+
+    expect(event.kind).toBe('CompactionDone');
+    expect(ctx.consecutiveNoopCompactions).toBe(0);
+  });
 });

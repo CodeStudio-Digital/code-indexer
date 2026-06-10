@@ -65,7 +65,7 @@ describe('durable compaction boundary', () => {
     const boundary = store.maxMessageId(sessionId);
     expect(boundary).toBe(ids[ids.length - 1]);
 
-    const res = store.setCompactionBoundary(sessionId, 'SUMMARY TEXT', boundary);
+    const res = store.setCompactionBoundary(sessionId, 'SUMMARY TEXT', boundary, 'manual');
     expect(res.boundary_id).toBe(boundary);
     expect(res.pruned_count).toBe(5);
 
@@ -79,7 +79,7 @@ describe('durable compaction boundary', () => {
   it('tail-preserving (auto): mid boundary keeps the recent tail visible', () => {
     const ids = seed(5); // ids[0..4]
     const boundary = ids[2]; // hide first 3, keep last 2 (the recent tail)
-    store.setCompactionBoundary(sessionId, 'HEAD SUMMARY', boundary);
+    store.setCompactionBoundary(sessionId, 'HEAD SUMMARY', boundary, 'auto');
 
     const visible = store.loadSessionWithMessages(sessionId);
     expect(visible?.messages).toHaveLength(2);
@@ -93,7 +93,7 @@ describe('durable compaction boundary', () => {
   it('loadMessagesBefore stops at the boundary unless includeArchived crosses it', () => {
     const ids = seed(5);
     const boundary = ids[2];
-    store.setCompactionBoundary(sessionId, 'S', boundary);
+    store.setCompactionBoundary(sessionId, 'S', boundary, 'auto');
     const firstVisibleId = ids[3];
 
     const guarded = store.loadMessagesBefore(sessionId, firstVisibleId, 50);
@@ -109,16 +109,16 @@ describe('durable compaction boundary', () => {
     store.setLastResponseState(sessionId, 'resp_123', 4);
     expect(store.getSession(sessionId)?.last_response_id).toBe('resp_123');
 
-    store.setCompactionBoundary(sessionId, 'S', store.maxMessageId(sessionId));
+    store.setCompactionBoundary(sessionId, 'S', store.maxMessageId(sessionId), 'manual');
     expect(store.getSession(sessionId)?.last_response_id).toBeNull();
   });
 
   it('advancing the boundary is cumulative and non-destructive', () => {
     seed(3);
-    store.setCompactionBoundary(sessionId, 'S1', store.maxMessageId(sessionId));
+    store.setCompactionBoundary(sessionId, 'S1', store.maxMessageId(sessionId), 'auto');
     seed(2); // two more turns after the first boundary
     const second = store.maxMessageId(sessionId);
-    const res = store.setCompactionBoundary(sessionId, 'S2', second);
+    const res = store.setCompactionBoundary(sessionId, 'S2', second, 'manual');
 
     expect(res.pruned_count).toBe(2); // only the rows since the prior boundary
     expect(store.getMessageCount(sessionId)).toBe(0);
@@ -129,5 +129,25 @@ describe('durable compaction boundary', () => {
       'SELECT COUNT(*) AS c FROM coder_messages WHERE session_id = ?',
     ).get(sessionId) as { c: number }).c;
     expect(total).toBe(5);
+  });
+
+  it('bumps the per-kind durable-compaction counters (migration 130)', () => {
+    const counts = () => db.raw().prepare(
+      'SELECT compaction_count_auto AS a, compaction_count_manual AS m FROM coder_sessions WHERE id = ?',
+    ).get(sessionId) as { a: number; m: number };
+
+    expect(counts()).toEqual({ a: 0, m: 0 });
+
+    seed(4);
+    store.setCompactionBoundary(sessionId, 'A1', store.maxMessageId(sessionId), 'auto');
+    expect(counts()).toEqual({ a: 1, m: 0 });
+
+    seed(2);
+    store.setCompactionBoundary(sessionId, 'M1', store.maxMessageId(sessionId), 'manual');
+    expect(counts()).toEqual({ a: 1, m: 1 });
+
+    seed(2);
+    store.setCompactionBoundary(sessionId, 'A2', store.maxMessageId(sessionId), 'auto');
+    expect(counts()).toEqual({ a: 2, m: 1 });
   });
 });

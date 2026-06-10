@@ -36,6 +36,14 @@ declare global {
     /** Reveal a local folder/file in the OS file manager. */
     openPath?: (path: string) => void;
     /**
+     * Start the ephemeral 127.0.0.1 OAuth loopback (RFC 8252) used to
+     * capture the redirect when MCP OAuth opens in the external browser.
+     * Resolves `{ ok, port }`, or `{ ok:false, error }` if the port is busy.
+     */
+    oauthLoopbackStart?: () => Promise<{ ok: boolean; port?: number; error?: string }>;
+    /** Tear down the OAuth loopback listener (idempotent). */
+    oauthLoopbackStop?: () => void;
+    /**
      * Spawn a new Electron window pointing at `route` (e.g. `/projects/42`
      * or `/company/sessions/7/main/work/chat`). The new window inherits
      * the same preload + protocol setup, so it talks to the same

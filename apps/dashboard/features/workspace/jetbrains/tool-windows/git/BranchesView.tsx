@@ -17,7 +17,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
-  Cloud,
   GitBranch,
   GitMerge,
   Loader2,
@@ -26,11 +25,13 @@ import {
   Search,
   Trash2,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { apiCall } from '../../../../../lib/api-client.js';
 import { Button } from '../../../../../components/ui/button.js';
 import { Input } from '../../../../../components/ui/input.js';
 import { confirm, prompt, toast } from '../../../../../components/ui/prompt-dialog.js';
 import { cn } from '../../../../../lib/utils.js';
+import { CollapsibleSection } from './CollapsibleSection.js';
 
 interface GitBranch {
   name: string;
@@ -58,11 +59,12 @@ interface BranchesViewProps {
 }
 
 export function BranchesView({ projectId, onMutated }: BranchesViewProps) {
+  const { t } = useTranslation('workspace');
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
-  const [showRemote, setShowRemote] = useState(true);
+  const [openSections, setOpenSections] = useState({ local: true, remote: true });
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -86,12 +88,10 @@ export function BranchesView({ projectId, onMutated }: BranchesViewProps) {
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    return branches.filter((b) => {
-      if (!showRemote && b.isRemote) return false;
-      if (!q) return true;
-      return b.name.toLowerCase().includes(q);
-    });
-  }, [branches, filter, showRemote]);
+    return branches.filter((b) => !q || b.name.toLowerCase().includes(q));
+  }, [branches, filter]);
+  const local = useMemo(() => filtered.filter((b) => !b.isRemote), [filtered]);
+  const remote = useMemo(() => filtered.filter((b) => b.isRemote), [filtered]);
 
   const checkout = async (b: GitBranch) => {
     if (b.isCurrent) return;
@@ -225,6 +225,82 @@ export function BranchesView({ projectId, onMutated }: BranchesViewProps) {
     }
   };
 
+  const renderRow = (b: GitBranch) => (
+    <div
+      key={`${b.isRemote ? 'r' : 'l'}-${b.name}`}
+      className={cn(
+        'group flex items-center gap-1.5 px-2 py-1 border-b last:border-b-0 text-[11.5px] cursor-pointer transition-colors',
+        b.isCurrent ? 'bg-primary/5' : 'hover:bg-muted/40',
+      )}
+      onClick={() => void checkout(b)}
+      title={b.isCurrent ? 'Current branch' : `Switch to ${b.name}`}
+    >
+      <GitBranch
+        className={cn(
+          'h-3 w-3 shrink-0',
+          b.isCurrent ? 'text-primary' : b.isRemote ? 'text-sky-400' : 'text-muted-foreground/80',
+        )}
+      />
+      <span
+        className={cn(
+          'truncate font-medium',
+          b.isCurrent && 'text-foreground',
+          b.isRemote && !b.isCurrent && 'text-muted-foreground',
+        )}
+      >
+        {b.name}
+      </span>
+      {b.upstream && !b.isRemote && (
+        <span className="text-[10px] text-muted-foreground/70 truncate">→ {b.upstream}</span>
+      )}
+      <span className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground shrink-0">
+        {b.ahead > 0 && <span className="text-emerald-400">↑{b.ahead}</span>}
+        {b.behind > 0 && <span className="text-sky-400">↓{b.behind}</span>}
+      </span>
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        {!b.isCurrent && !b.isRemote && (
+          <button
+            type="button"
+            className="h-5 w-5 grid place-items-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted"
+            title={`Merge ${b.name} into current branch`}
+            onClick={(e) => {
+              e.stopPropagation();
+              void mergeInto(b);
+            }}
+          >
+            <GitMerge className="h-3 w-3" />
+          </button>
+        )}
+        {b.isRemote && (
+          <button
+            type="button"
+            className="h-5 w-5 grid place-items-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted"
+            title="Check out as local branch"
+            onClick={(e) => {
+              e.stopPropagation();
+              void checkout(b);
+            }}
+          >
+            <ArrowRight className="h-3 w-3" />
+          </button>
+        )}
+        {!b.isRemote && !b.isCurrent && (
+          <button
+            type="button"
+            className="h-5 w-5 grid place-items-center rounded-sm text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+            title={`Delete ${b.name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              void deleteBranch(b);
+            }}
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div className="h-full flex flex-col min-h-0">
       <div className="shrink-0 px-2 py-1.5 border-b flex items-center gap-1.5">
@@ -237,15 +313,6 @@ export function BranchesView({ projectId, onMutated }: BranchesViewProps) {
             className="h-6 text-[11px] pl-6"
           />
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className={cn('h-6 w-6', !showRemote && 'opacity-50')}
-          title={showRemote ? 'Hide remote branches' : 'Show remote branches'}
-          onClick={() => setShowRemote((v) => !v)}
-        >
-          <Cloud className="h-3 w-3" />
-        </Button>
         <Button
           variant="ghost"
           size="icon"
@@ -274,81 +341,24 @@ export function BranchesView({ projectId, onMutated }: BranchesViewProps) {
             {filter ? `No branches match "${filter}".` : 'No branches found.'}
           </div>
         )}
-        {filtered.map((b) => (
-          <div
-            key={`${b.isRemote ? 'r' : 'l'}-${b.name}`}
-            className={cn(
-              'group flex items-center gap-1.5 px-2 py-1 border-b last:border-b-0 text-[11.5px] cursor-pointer transition-colors',
-              b.isCurrent ? 'bg-primary/5' : 'hover:bg-muted/40',
-            )}
-            onClick={() => void checkout(b)}
-            title={b.isCurrent ? 'Current branch' : `Switch to ${b.name}`}
+        {local.length > 0 && (
+          <CollapsibleSection
+            title={t('git.local', { count: local.length })}
+            open={openSections.local}
+            onToggle={() => setOpenSections((s) => ({ ...s, local: !s.local }))}
           >
-            <GitBranch
-              className={cn(
-                'h-3 w-3 shrink-0',
-                b.isCurrent ? 'text-primary' : b.isRemote ? 'text-sky-400' : 'text-muted-foreground/80',
-              )}
-            />
-            <span
-              className={cn(
-                'truncate font-medium',
-                b.isCurrent && 'text-foreground',
-                b.isRemote && !b.isCurrent && 'text-muted-foreground',
-              )}
-            >
-              {b.name}
-            </span>
-            {b.upstream && !b.isRemote && (
-              <span className="text-[10px] text-muted-foreground/70 truncate">→ {b.upstream}</span>
-            )}
-            <span className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground shrink-0">
-              {b.ahead > 0 && <span className="text-emerald-400">↑{b.ahead}</span>}
-              {b.behind > 0 && <span className="text-sky-400">↓{b.behind}</span>}
-            </span>
-            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-              {!b.isCurrent && !b.isRemote && (
-                <button
-                  type="button"
-                  className="h-5 w-5 grid place-items-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted"
-                  title={`Merge ${b.name} into current branch`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void mergeInto(b);
-                  }}
-                >
-                  <GitMerge className="h-3 w-3" />
-                </button>
-              )}
-              {b.isRemote && (
-                <button
-                  type="button"
-                  className="h-5 w-5 grid place-items-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted"
-                  title="Check out as local branch"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void checkout(b);
-                  }}
-                >
-                  <ArrowRight className="h-3 w-3" />
-                </button>
-              )}
-              {!b.isRemote && !b.isCurrent && (
-                <button
-                  type="button"
-                  className="h-5 w-5 grid place-items-center rounded-sm text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                  title={`Delete ${b.name}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void deleteBranch(b);
-                  }}
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              )}
-            </div>
-          </div>
-        ))}
+            {local.map(renderRow)}
+          </CollapsibleSection>
+        )}
+        {remote.length > 0 && (
+          <CollapsibleSection
+            title={t('git.remote', { count: remote.length })}
+            open={openSections.remote}
+            onToggle={() => setOpenSections((s) => ({ ...s, remote: !s.remote }))}
+          >
+            {remote.map(renderRow)}
+          </CollapsibleSection>
+        )}
       </div>
     </div>
   );

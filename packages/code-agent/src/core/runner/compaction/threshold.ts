@@ -102,6 +102,27 @@ export function computeProtectTokens(inp: ProtectTokensInputs): number {
 }
 
 /**
+ * Ceiling ratio for how far `recedeToPreserveLastNTurns` may grow the protected
+ * tail when honoring the "preserve last N user turns" rule. Without a ceiling, a
+ * single long user turn (one request → many tool calls, so the whole history has
+ * < N user messages) makes recede preserve EVERYTHING — the compactor then
+ * no-ops while the 0.70 size gate keeps firing every turn (a no-op compaction
+ * loop, confirmed in telemetry: one run churned 94 consecutive no-ops). Capping
+ * the tail at 50% of the effective window — comfortably below the 0.70 trigger,
+ * leaving room for the synthetic summary — guarantees the post-compaction prompt
+ * lands below the trigger. Override via `CODER_COMPACT_RECEDE_TAIL_RATIO`,
+ * clamped to stay above the protect floor and below the trigger.
+ */
+export const DEFAULT_RECEDE_TAIL_RATIO = 0.5;
+
+export function resolveRecedeTailRatio(): number {
+  const raw = process.env.CODER_COMPACT_RECEDE_TAIL_RATIO;
+  const n = raw ? Number(raw) : NaN;
+  const ratio = Number.isFinite(n) ? n : DEFAULT_RECEDE_TAIL_RATIO;
+  return Math.min(DEFAULT_TRIGGER_RATIO - 0.05, Math.max(resolveProtectRatio(), ratio));
+}
+
+/**
  * Durable auto-compaction toggle (`MCP_DURABLE_COMPACTION`, default ON). When
  * on, each in-memory compaction is also persisted as a boundary + summary so
  * the reduced context (and its cost) carries to the next run.

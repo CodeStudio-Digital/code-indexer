@@ -178,6 +178,7 @@ export const TASK_COMPLETE_DESC =
   "USE: with `errors` when you hit a blocker and want to surface it to the user instead of silently moving on.\n" +
   "DON'T: call this on a subagent-mode task — the subagent owns its own lifecycle. This tool ONLY closes scopes the parent runner opened.\n" +
   "DON'T: list files in `files_modified` that you didn't actually touch — the sandbox audits this.\n" +
+  "DON'T: call this from inside code_exec — it isn't exposed in the sandbox; emit it as a direct top-level tool call.\n" +
   'After this call, run `execute_tasks` again to advance to the next inline task in the run.';
 
 /**

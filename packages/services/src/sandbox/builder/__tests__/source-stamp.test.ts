@@ -26,15 +26,22 @@ describe('getSourceStampPlugin', () => {
     expect(getSourceStampPlugin('angular')).toBeNull();
   });
 
-  it('React contribution splices the babel stamp + ships the inspector + dev-only entry import', () => {
+  it('React contribution wires the standalone stamp plugin + ships the inspector + dev-only entry import', () => {
     const c = getSourceStampPlugin('react-ts')!.contribution();
-    // vite config splice
+    // vite config splice: plugin-react (Fast Refresh) + the standalone stamp plugin.
     expect(c.vite.imports.join('\n')).toContain('@vitejs/plugin-react');
-    expect(c.vite.imports.join('\n')).toContain('.mcp/babel-mcp-stamp.cjs');
-    expect(c.vite.pluginExprs.join('')).toContain('react({ babel: { plugins: [mcpStamp] } })');
-    // files: babel plugin + inspector
+    expect(c.vite.imports.join('\n')).toContain('.mcp/vite-mcp-stamp.mjs');
+    const exprs = c.vite.pluginExprs;
+    expect(exprs).toContain('mcpStampVite()');
+    expect(exprs).toContain('react()');
+    // Stamp must run BEFORE plugin-react/oxc transforms the JSX away.
+    expect(exprs.indexOf('mcpStampVite()')).toBeLessThan(exprs.indexOf('react()'));
+    // It must NOT ride plugin-react's `babel` option — v6 transforms with oxc
+    // and ignores it, which is the bug this fix addresses.
+    expect(exprs.join('')).not.toContain('babel:');
+    // files: babel stamp + standalone vite plugin + inspector
     const paths = c.files.map((f) => f.path).sort();
-    expect(paths).toEqual(['.mcp/babel-mcp-stamp.cjs', 'src/mcp-inspector.ts']);
+    expect(paths).toEqual(['.mcp/babel-mcp-stamp.cjs', '.mcp/vite-mcp-stamp.mjs', 'src/mcp-inspector.ts']);
     const inspector = c.files.find((f) => f.path === 'src/mcp-inspector.ts')!.contents;
     expect(inspector).toContain('initMcpConsoleBridge');
     expect(inspector).toContain('initMcpInspector');
@@ -42,6 +49,11 @@ describe('getSourceStampPlugin', () => {
     const babel = c.files.find((f) => f.path === '.mcp/babel-mcp-stamp.cjs')!.contents;
     expect(babel).toContain('data-mcp-loc');
     expect(babel).toContain('JSXOpeningElement');
+    // standalone stamp plugin: dev-only (apply:'serve'), pre, runs the babel stamp.
+    const viteStamp = c.files.find((f) => f.path === '.mcp/vite-mcp-stamp.mjs')!.contents;
+    expect(viteStamp).toContain("enforce: 'pre'");
+    expect(viteStamp).toContain("apply: 'serve'");
+    expect(viteStamp).toContain('./babel-mcp-stamp.cjs');
     // entry: dev-only inspector import, double-quoted for shell-safe append
     expect(c.entry.file).toBe('src/main.tsx');
     expect(c.entry.importLine).toContain('import.meta.env.DEV');

@@ -1,9 +1,10 @@
 import type { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { runScaffoldStream } from '@mcp/api-handlers';
-import type { ScaffoldProjectInput, ScaffoldStreamEvent } from '@mcp/api-bus';
+import type { ScaffoldProjectInput } from '@mcp/api-bus';
 import type { ServerDeps } from '../deps.js';
 import { parseJsonBody } from './_helpers.js';
+import { pumpScaffoldSSE } from './scaffold-sse-pump.js';
 
 /**
  * SSE route for the New Project wizard. Scaffolds a project on the host
@@ -23,20 +24,10 @@ export function mountProjectScaffoldRoute(app: Hono, deps: ServerDeps): void {
     const body = (await parseJsonBody<ScaffoldProjectInput>(c)) as ScaffoldProjectInput;
     const signal = c.req.raw.signal;
 
-    return streamSSE(c, async (stream) => {
-      let seq = 0;
-      const emit = (ev: ScaffoldStreamEvent) =>
-        stream.writeSSE({ id: String(seq++), event: ev.event, data: JSON.stringify(ev.data) });
-      try {
-        await runScaffoldStream(deps, body, (ev) => void emit(ev), signal);
-      } catch (err) {
-        await emit({
-          event: 'error',
-          data: { message: err instanceof Error ? err.message : String(err) },
-        });
-      } finally {
-        await stream.close();
-      }
-    });
+    // The pump serializes writes and flushes the trailing `done` BEFORE
+    // closing — see scaffold-sse-pump.ts for why fire-and-forget hung the wizard.
+    return streamSSE(c, (stream) =>
+      pumpScaffoldSSE(stream, (emit) => runScaffoldStream(deps, body, emit, signal)),
+    );
   });
 }

@@ -18,7 +18,9 @@ import {
   INDEX_CSS,
 } from './shadcn-files.js';
 
-const DEV_DEPS = ['tailwindcss@3', 'postcss', 'autoprefixer', 'tailwindcss-animate'];
+// `@babel/core` powers the dev-only element-selection stamp Vite plugin
+// (`.mcp/vite-mcp-stamp.mjs`); plugin-react v6 (oxc) no longer brings Babel.
+const DEV_DEPS = ['@babel/core', 'tailwindcss@3', 'postcss', 'autoprefixer', 'tailwindcss-animate'];
 const DEPS = ['class-variance-authority', 'clsx', 'tailwind-merge', 'lucide-react'];
 
 export async function installTailwindShadcn(ctx: ScaffoldContext): Promise<void> {

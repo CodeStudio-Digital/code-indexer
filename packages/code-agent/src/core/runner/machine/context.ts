@@ -61,6 +61,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     loopRefusals: new Map(),
     autoContinues: 0,
     preEmitCompactions: 0,
+    consecutiveNoopCompactions: 0,
     runId: randomUUID(),
     aborted: false,
     transition: null,

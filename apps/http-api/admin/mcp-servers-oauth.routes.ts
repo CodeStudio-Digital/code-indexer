@@ -24,7 +24,12 @@ export function createMcpServersOauthRouter(
   const app = new Hono();
 
   function redirectUriFor(serverId: string): string {
-    return `${publicBaseUrl()}/api/admin/mcp-servers/${serverId}/oauth/callback`;
+    // In the socket-free Electron shell the dashboard's own origin has no
+    // HTTP listener, so the desktop main process points OAuth redirects at
+    // an ephemeral 127.0.0.1 loopback (RFC 8252) via MCP_OAUTH_REDIRECT_BASE.
+    // The web deployment leaves it unset and uses its real public origin.
+    const base = process.env.MCP_OAUTH_REDIRECT_BASE ?? publicBaseUrl();
+    return `${base}/api/admin/mcp-servers/${serverId}/oauth/callback`;
   }
 
   function errorStatus(kind: McpAuthClientError['kind']): 400 | 404 | 502 {
@@ -35,16 +40,22 @@ export function createMcpServersOauthRouter(
 
   /**
    * GET  /mcp-servers/:id/oauth/status
-   * Reports whether the server has a registration and valid-looking tokens.
+   * Reports whether the server has a registration and (via `connected`)
+   * whether consent has completed — the dashboard polls `connected`
+   * because the OAuth callback lands in an external browser and can't
+   * postMessage back into the desktop window.
    */
   app.get('/mcp-servers/:id/oauth/status', (c) => {
     const serverId = c.req.param('id');
     const reg = bundle.registrationAdminRepo.listAll().find((r) => r.serverId === serverId);
     // Reader would be cleaner but adminRepo.listAll is already available here.
     const status = reg ? 'registered' : 'not_registered';
+    const tokens = bundle.tokensReaderRepo.findByServerId(serverId);
     return c.json({
       server_id: serverId,
       status,
+      connected: tokens !== null,
+      expires_at: tokens?.accessExpiresAt ?? null,
       registration: reg
         ? {
             issuer: reg.issuer,

@@ -48,6 +48,10 @@ export function useScaffoldStream() {
   const [project, setProject] = useState<CreatedProject | null>(null);
   const [error, setError] = useState<{ message: string; stderrTail?: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Whether a terminal `done`/`error` frame was observed this run. Lets us
+  // detect a stream that closed (clean EOF) WITHOUT delivering `done` — which
+  // would otherwise strand the wizard on 'running' forever.
+  const terminalRef = useRef(false);
 
   const reset = useCallback(() => {
     setStatus('idle');
@@ -66,11 +70,19 @@ export function useScaffoldStream() {
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
+    terminalRef.current = false;
     setStatus('running');
     setPhase(null);
     setLog('');
     setProject(null);
     setError(null);
+
+    // Settle the UI to a definite terminal state. Never downgrades a 'done',
+    // and keeps the first error message.
+    const finalize = (e: { message: string; stderrTail?: string }) => {
+      setError((prev) => prev ?? e);
+      setStatus((s) => (s === 'done' ? s : 'error'));
+    };
 
     const client = new ReconnectingSSEClient({
       url: `${apiBaseUrl()}/api/projects/scaffold/stream`,
@@ -92,9 +104,11 @@ export function useScaffoldStream() {
         else if (ev.event === 'start') setPhase({ phase: 'start', label: 'Starting' });
         else if (ev.event === 'log') setLog((prev) => (prev + String(data.chunk ?? '')).slice(-LOG_CAP));
         else if (ev.event === 'done') {
+          terminalRef.current = true;
           setProject(data.project as unknown as CreatedProject);
           setStatus('done');
         } else if (ev.event === 'error') {
+          terminalRef.current = true;
           setError(data as unknown as { message: string; stderrTail?: string });
           setStatus('error');
         }
@@ -103,11 +117,20 @@ export function useScaffoldStream() {
 
     try {
       await client.run();
+      if (ac.signal.aborted) return; // user cancelled — keep UI quiet
+      // The stream ended without a terminal frame. In Electron the `mcp://`
+      // transport can drop the trailing `done` on a clean EOF — don't leave
+      // the wizard spinning forever for a scaffold that likely finished
+      // server-side.
+      if (!terminalRef.current)
+        finalize({
+          message:
+            'Scaffold stream ended before completion — the project may have been created; check your projects list and refresh.',
+        });
     } catch (err) {
       if (ac.signal.aborted) return; // user cancelled — keep UI quiet
       // Only surface a transport error if we didn't already get a terminal frame.
-      setError((prev) => prev ?? { message: err instanceof Error ? err.message : String(err) });
-      setStatus((s) => (s === 'done' ? s : 'error'));
+      finalize({ message: err instanceof Error ? err.message : String(err) });
     }
   }, []);
 

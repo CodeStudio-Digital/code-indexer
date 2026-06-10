@@ -78,6 +78,10 @@ export async function fetchServerTools(id: string): Promise<McpServerToolInfo[]>
 export interface McpOAuthStatus {
   server_id: string;
   status: 'registered' | 'not_registered';
+  /** True once consent completed and tokens are stored. Polled by the dialog. */
+  connected: boolean;
+  /** Access-token expiry (epoch ms), or null if none/unknown. */
+  expires_at: number | null;
   registration: {
     issuer: string;
     client_id: string;

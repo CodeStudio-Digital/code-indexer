@@ -310,6 +310,26 @@ interface FilterMatches {
   visibleFiles: Set<string>;
 }
 
+/**
+ * Vertical indent guides — one thin rule per nesting level, centered in
+ * each 12px indent column so the line passes through the parent folder's
+ * chevron. Gives the tree the JetBrains/VS Code "connected depth" look,
+ * and the matching chevron-width gutter on file rows (rendered by the
+ * caller) keeps file icons aligned with sibling folder icons.
+ */
+function IndentGuides({ depth }: { depth: number }) {
+  if (depth <= 0) return null;
+  return (
+    <span className="flex shrink-0" aria-hidden="true">
+      {Array.from({ length: depth }, (_, i) => (
+        <span key={i} className="flex w-3 shrink-0 justify-center">
+          <span className="w-px bg-border/70" />
+        </span>
+      ))}
+    </span>
+  );
+}
+
 interface NodeViewProps {
   node: FileTreeNode;
   depth: number;
@@ -390,23 +410,19 @@ function NodeView({
             onClick={() => onOpen(node.path)}
             {...triggerProps}
             className={cn(
-              'group w-full text-left flex items-center gap-1.5 px-1.5 py-[3px] rounded-sm text-[11.5px] leading-tight',
-              'transition-colors',
+              'group w-full text-left flex items-stretch pl-1 pr-1.5 rounded-sm text-[11.5px] leading-tight transition-colors',
               active
                 ? 'bg-primary/10 text-foreground'
                 : 'text-muted-foreground hover:bg-muted hover:text-foreground',
             )}
-            style={{ paddingLeft: `${depth * 12 + 6}px` }}
             title={status ? `${node.path}\n(${status})` : node.path}
           >
-            <TypeIcon
-              className={cn(
-                'h-3.5 w-3.5 shrink-0',
-                colorClass,
-                !active && 'opacity-90',
-              )}
-            />
-            <span className={cn('truncate', color.text, color.extra)}>{node.name}</span>
+            <IndentGuides depth={depth} />
+            <span className="flex items-center gap-1.5 min-w-0 flex-1 py-[3px]">
+              <span className="w-3 shrink-0" aria-hidden="true" />
+              <TypeIcon className={cn('h-3.5 w-3.5 shrink-0', colorClass, !active && 'opacity-90')} />
+              <span className={cn('truncate', color.text, color.extra)}>{node.name}</span>
+            </span>
           </button>
         )}
         {Menu}
@@ -428,7 +444,6 @@ function NodeView({
               Icon={isExpanded ? FolderOpen : Folder}
               onSubmit={(name) => onCommitRename(node.path, name)}
               onCancel={onCancelRename}
-              extraLeading={<span className="w-3" />}
             />
           ) : (
             (() => {
@@ -442,21 +457,23 @@ function NodeView({
                     setExpanded((v) => !v);
                   }}
                   {...triggerProps}
-                  className="w-full text-left flex items-center gap-1 px-1.5 py-[3px] rounded-sm text-[11.5px] leading-tight text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-                  style={{ paddingLeft: `${depth * 12 + 2}px` }}
+                  className="group w-full text-left flex items-stretch pl-1 pr-1.5 rounded-sm text-[11.5px] leading-tight text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                   title={dirStatus ? `${node.path}\n(contains ${dirStatus} files)` : node.path}
                 >
-                  {isExpanded ? (
-                    <ChevronDown className="h-3 w-3 shrink-0" />
-                  ) : (
-                    <ChevronRight className="h-3 w-3 shrink-0" />
-                  )}
-                  {isExpanded ? (
-                    <FolderOpen className="h-3 w-3 shrink-0 text-amber-500/80" />
-                  ) : (
-                    <Folder className="h-3 w-3 shrink-0 text-amber-500/80" />
-                  )}
-                  <span className={cn('truncate', dirColor.text)}>{node.name}</span>
+                  <IndentGuides depth={depth} />
+                  <span className="flex items-center gap-1.5 min-w-0 flex-1 py-[3px]">
+                    {isExpanded ? (
+                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/70" />
+                    ) : (
+                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/70" />
+                    )}
+                    {isExpanded ? (
+                      <FolderOpen className="h-3.5 w-3.5 shrink-0 text-amber-500/80" />
+                    ) : (
+                      <Folder className="h-3.5 w-3.5 shrink-0 text-amber-500/80" />
+                    )}
+                    <span className={cn('truncate', dirColor.text)}>{node.name}</span>
+                  </span>
                 </button>
               );
             })()
@@ -493,7 +510,6 @@ interface InlineRenameInputProps {
   Icon: React.ComponentType<{ className?: string }>;
   onSubmit: (newName: string) => void;
   onCancel: () => void;
-  extraLeading?: React.ReactNode;
 }
 
 function InlineRenameInput({
@@ -503,7 +519,6 @@ function InlineRenameInput({
   Icon,
   onSubmit,
   onCancel,
-  extraLeading,
 }: InlineRenameInputProps) {
   const [value, setValue] = useState(initialName);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -523,29 +538,29 @@ function InlineRenameInput({
   }, [initialName]);
 
   return (
-    <div
-      className="w-full flex items-center gap-1.5 px-1.5 py-[2px] text-[11.5px] leading-tight bg-card/80"
-      style={{ paddingLeft: `${depth * 12 + 6}px` }}
-    >
-      {extraLeading}
-      <Icon className={cn('h-3 w-3 shrink-0', iconColor)} />
-      <input
-        ref={inputRef}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onBlur={() => onSubmit(value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            onSubmit(value);
-          } else if (e.key === 'Escape') {
-            e.preventDefault();
-            onCancel();
-          }
-          e.stopPropagation();
-        }}
-        className="flex-1 min-w-0 bg-background border border-primary/60 rounded-sm px-1 py-[1px] text-[11.5px] outline-none focus:border-primary"
-      />
+    <div className="w-full flex items-stretch pl-1 pr-1.5 text-[11.5px] leading-tight bg-card/80">
+      <IndentGuides depth={depth} />
+      <span className="flex items-center gap-1.5 min-w-0 flex-1 py-[2px]">
+        <span className="w-3 shrink-0" aria-hidden="true" />
+        <Icon className={cn('h-3.5 w-3.5 shrink-0', iconColor)} />
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => onSubmit(value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              onSubmit(value);
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              onCancel();
+            }
+            e.stopPropagation();
+          }}
+          className="flex-1 min-w-0 bg-background border border-primary/60 rounded-sm px-1 py-[1px] text-[11.5px] outline-none focus:border-primary"
+        />
+      </span>
     </div>
   );
 }

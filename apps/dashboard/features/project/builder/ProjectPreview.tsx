@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, ExternalLink, MousePointerClick, PanelRightClose, Play, RotateCw } from 'lucide-react';
+import { Bot, ExternalLink, MousePointerClick, PanelRightClose, Play, RotateCw, Wrench } from 'lucide-react';
 import {
   isPreviewMessage,
   type PreviewToParentMessage,
@@ -15,6 +15,7 @@ import {
   type DeviceFrame,
 } from '../../builder/studio/DeviceFrameSwitcher.js';
 import { useProjectDevServer } from './useProjectDevServer.js';
+import { apiPost } from '../../../hooks/useApi.js';
 
 /**
  * Open the preview URL in a new window and return the window handle (so the
@@ -64,6 +65,8 @@ export function ProjectPreview({
   const [reloadKey, setReloadKey] = useState(0);
   const { problems, add, clear, dismiss, errorCount } = usePreviewProblems();
   const { autoFixEnabled, setAutoFixEnabled } = useAutoFix(projectId, problems);
+  const [repairing, setRepairing] = useState(false);
+  const [repairError, setRepairError] = useState<string | null>(null);
 
   const origin = useMemo(() => {
     try {
@@ -81,6 +84,24 @@ export function ProjectPreview({
     },
     [origin],
   );
+
+  // Re-instrument this Builder project for element selection (rewrites the
+  // source-stamp + vite.config, installs @babel/core) then restarts the dev
+  // server so Vite reloads. Fixes projects scaffolded before the stamp moved
+  // out of plugin-react's (now ignored) `babel` option.
+  const repairSelection = useCallback(async () => {
+    setRepairing(true);
+    setRepairError(null);
+    try {
+      await apiPost(`/projects/${projectId}/builder/reinstrument`, {});
+      await restart();
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setRepairError(e instanceof Error ? e.message : 'Repair failed');
+    } finally {
+      setRepairing(false);
+    }
+  }, [projectId, restart]);
 
   // Auto-start the dev server when the pane opens for a builder project
   // (pinned port → we know it'll serve). For general projects we wait for
@@ -169,13 +190,27 @@ export function ProjectPreview({
         <span className="flex-1 font-mono text-xs truncate text-muted-foreground">{url ?? 'no dev server'}</span>
         <DeviceFrameSwitcher value={device} onChange={setDevice} />
         {selectionEnabled && (
-          <button
-            onClick={() => setSelectMode((v) => !v)}
-            className={`p-1.5 rounded-md ${selectMode ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40' : 'hover:bg-muted'}`}
-            title={selectMode ? 'Selecting — click an element (Esc to cancel)' : 'Select an element to edit'}
-          >
-            <MousePointerClick className="h-3.5 w-3.5" />
-          </button>
+          <>
+            <button
+              onClick={() => setSelectMode((v) => !v)}
+              className={`p-1.5 rounded-md ${selectMode ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40' : 'hover:bg-muted'}`}
+              title={selectMode ? 'Selecting — click an element (Esc to cancel)' : 'Select an element to edit'}
+            >
+              <MousePointerClick className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={repairSelection}
+              disabled={repairing}
+              className="p-1.5 rounded-md hover:bg-muted disabled:opacity-40"
+              title={
+                repairError
+                  ? `Repair failed: ${repairError}`
+                  : 'Repair element selection — re-instrument + restart the dev server. Use if hovering/clicking the preview selects nothing.'
+              }
+            >
+              <Wrench className={`h-3.5 w-3.5 ${repairing ? 'animate-pulse' : ''} ${repairError ? 'text-destructive' : ''}`} />
+            </button>
+          </>
         )}
         <ProblemsBadge
           sessionId={projectId}

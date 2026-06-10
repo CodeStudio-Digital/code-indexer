@@ -20,8 +20,6 @@ import { useTranslation } from 'react-i18next';
 import {
   Archive,
   Check,
-  ChevronDown,
-  ChevronRight,
   GitBranch,
   GitCommit as GitCommitIcon,
   History,
@@ -43,7 +41,8 @@ import { BranchesView } from './git/BranchesView.js';
 import { HistoryView } from './git/HistoryView.js';
 import { GitPromptView } from './git/GitPromptView.js';
 import { StashView } from './git/StashView.js';
-import { CommitDialog } from './git/CommitDialog.js';
+import { CommitBox } from './git/CommitBox.js';
+import { CollapsibleSection } from './git/CollapsibleSection.js';
 
 type GitTab = 'changes' | 'branches' | 'history' | 'stash' | 'ai';
 
@@ -86,7 +85,6 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [commitOpen, setCommitOpen] = useState(false);
   const [openSections, setOpenSections] = useState({ staged: true, unstaged: true, untracked: false });
   const [tab, setTab] = useState<GitTab>('changes');
   const openDiff = useWorkspaceStore((s) => s.openDiff);
@@ -212,28 +210,15 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
         title="Git"
         onClose={onClose}
         actions={
-          <>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-5 w-5 text-muted-foreground hover:text-foreground"
-              onClick={() => void reload()}
-              aria-label={t('git.refresh')}
-            >
-              {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-5 w-5 text-muted-foreground hover:text-foreground"
-              onClick={() => setCommitOpen(true)}
-              disabled={groups.staged.length === 0}
-              aria-label={t('git.commit')}
-              title={t('git.commitStaged')}
-            >
-              <GitCommitIcon className="h-3 w-3" />
-            </Button>
-          </>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-5 w-5 text-muted-foreground hover:text-foreground"
+            onClick={() => void reload()}
+            aria-label={t('git.refresh')}
+          >
+            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          </Button>
         }
       >
         <div className="h-full flex flex-col min-h-0">
@@ -266,6 +251,7 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
 
           {tab === 'changes' && (
             <ChangesPane
+              projectId={projectId}
               status={status}
               error={error}
               groups={groups}
@@ -275,6 +261,7 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
               onStage={onStage}
               onUnstage={onUnstage}
               onDiscard={onDiscard}
+              onCommitted={() => void reload()}
             />
           )}
           {tab === 'branches' && (
@@ -291,17 +278,6 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
           )}
         </div>
       </ToolWindowFrame>
-      {commitOpen && (
-        <CommitDialog
-          projectId={projectId}
-          stagedCount={groups.staged.length}
-          onClose={() => setCommitOpen(false)}
-          onCommitted={() => {
-            setCommitOpen(false);
-            void reload();
-          }}
-        />
-      )}
     </>
   );
 }
@@ -358,6 +334,7 @@ function GitTabNav({ active, onChange }: GitTabNavProps) {
 }
 
 interface ChangesPaneProps {
+  projectId: number;
   status: GitStatus | null;
   error: string | null;
   groups: {
@@ -373,6 +350,7 @@ interface ChangesPaneProps {
   onStage: (paths: string[]) => void | Promise<void>;
   onUnstage: (paths: string[]) => void | Promise<void>;
   onDiscard: (paths: string[]) => void | Promise<void>;
+  onCommitted: () => void;
 }
 
 /**
@@ -382,6 +360,7 @@ interface ChangesPaneProps {
  * a friendly "clean tree" message instead.
  */
 function ChangesPane({
+  projectId,
   status,
   error,
   groups,
@@ -391,6 +370,7 @@ function ChangesPane({
   onStage,
   onUnstage,
   onDiscard,
+  onCommitted,
 }: ChangesPaneProps) {
   const { t } = useTranslation('workspace');
   const total =
@@ -403,23 +383,21 @@ function ChangesPane({
       </div>
     );
   }
-  if (status && total === 0) {
-    return (
-      <div className="flex-1 grid place-items-center px-6 text-center text-muted-foreground gap-2">
-        <Check className="h-5 w-5 opacity-50" />
-        <p className="text-[11.5px]">{t('git.cleanTree')}</p>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto">
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0 overflow-y-auto">
+      {status && total === 0 && (
+        <div className="grid place-items-center px-6 py-10 text-center text-muted-foreground gap-2">
+          <Check className="h-5 w-5 opacity-50" />
+          <p className="text-[11.5px]">{t('git.cleanTree')}</p>
+        </div>
+      )}
       {groups.staged.length > 0 && (
-        <Section
+        <CollapsibleSection
           title={t('git.staged', { count: groups.staged.length })}
           open={openSections.staged}
           onToggle={() => setOpenSections((s) => ({ ...s, staged: !s.staged }))}
-          bulkAction={
+          actions={
             <button
               type="button"
               onClick={() => void onUnstage(groups.staged.map((f) => f.path))}
@@ -444,15 +422,15 @@ function ChangesPane({
               }
             />
           ))}
-        </Section>
+        </CollapsibleSection>
       )}
 
       {groups.unstaged.length > 0 && (
-        <Section
+        <CollapsibleSection
           title={t('git.changes', { count: groups.unstaged.length })}
           open={openSections.unstaged}
           onToggle={() => setOpenSections((s) => ({ ...s, unstaged: !s.unstaged }))}
-          bulkAction={
+          actions={
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -495,17 +473,17 @@ function ChangesPane({
               }
             />
           ))}
-        </Section>
+        </CollapsibleSection>
       )}
 
       {groups.untracked.length > 0 && (
-        <Section
+        <CollapsibleSection
           title={t('git.untracked', { count: groups.untracked.length })}
           open={openSections.untracked}
           onToggle={() =>
             setOpenSections((s) => ({ ...s, untracked: !s.untracked }))
           }
-          bulkAction={
+          actions={
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -547,35 +525,15 @@ function ChangesPane({
               }
             />
           ))}
-        </Section>
+        </CollapsibleSection>
       )}
-    </div>
-  );
-}
-
-interface SectionProps {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  bulkAction?: React.ReactNode;
-  children: React.ReactNode;
-}
-
-function Section({ title, open, onToggle, bulkAction, children }: SectionProps) {
-  return (
-    <div>
-      <div className="sticky top-0 z-[1] flex items-center gap-1 px-2.5 py-1 bg-card/80 backdrop-blur supports-[backdrop-filter]:bg-card/60 border-b">
-        <button
-          type="button"
-          onClick={onToggle}
-          className="flex items-center gap-1 text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground"
-        >
-          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          <span className="font-semibold">{title}</span>
-        </button>
-        {bulkAction && <div className="ml-auto">{bulkAction}</div>}
       </div>
-      {open && children}
+      <CommitBox
+        projectId={projectId}
+        stagedCount={groups.staged.length}
+        upstream={status?.upstream ?? null}
+        onCommitted={onCommitted}
+      />
     </div>
   );
 }

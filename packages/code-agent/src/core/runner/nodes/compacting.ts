@@ -6,9 +6,10 @@
  * routes to Recovering via `ProviderError`.
  *
  * Strategy (per the BT plan §3):
- *   - cutoff via `computeCutoffIndexByTokens` with protect = 40% of effective
+ *   - cutoff via `computeCutoffIndexByTokens` with protect = 15% of effective
  *     context window, then snap to preserve tool pairs and recede to keep
- *     the last N user turns verbatim (Kimi-style).
+ *     the last N user turns verbatim (Kimi-style), capped at `maxTailTokens`
+ *     so a single long user turn can't defeat compaction.
  *   - summarize the head via the aux model (same provider for now;
  *     follow-up commit can swap to a dedicated cheap model).
  *   - replace head with a single synthetic `user` message rendered from
@@ -22,7 +23,7 @@ import { events } from '../machine/events.js';
 import { bumpRecovery } from '../machine/context.js';
 import { recoveryCap } from '../recovery-config.js';
 import { compactWithLLM } from '../compaction/llm-compactor.js';
-import { computeProtectTokens } from '../compaction/threshold.js';
+import { computeProtectTokens, resolveRecedeTailRatio } from '../compaction/threshold.js';
 
 export interface CompactingNodeOptions {
   /**
@@ -46,11 +47,19 @@ export class CompactingNode implements BehaviorNode {
     const summaryProvider = ctx.opts.provider;
     const protectTokens = this.nodeOpts.protectTokensOverride
       ?? computeProtectTokens({ model: summaryProvider.model });
+    // Ceiling on the preserved tail so a single long user turn (history with
+    // < N user messages) can't make recede preserve everything and no-op.
+    // Derived from the model window — independent of the protect-tokens override.
+    const maxTailTokens = computeProtectTokens({
+      model: summaryProvider.model,
+      protectRatio: resolveRecedeTailRatio(),
+    });
     const charsBefore = approxChars(ctx.messages);
 
     const result = await compactWithLLM({
       messages: ctx.messages,
       protectTokens,
+      maxTailTokens,
       summaryProvider,
       summarize: this.nodeOpts.summarizeOverride,
       // A3 — pass the abort signal so a hung aux provider (during summary
@@ -100,8 +109,12 @@ export class CompactingNode implements BehaviorNode {
     ctx.consecutiveNoTextTurns = 0;
 
     if (result.collapsedFrom === 0) {
-      // Nothing to do — history already fits. Emit a `none` strategy event
-      // so the dashboard sees we considered compaction and chose to skip.
+      // Nothing collapsed — either history already fits, or the tail is
+      // irreducible (recede found no compactable head). Count consecutive
+      // no-ops so the post-turn size gate can stop re-triggering us forever.
+      ctx.consecutiveNoopCompactions += 1;
+      // Emit a `none` strategy event so the dashboard sees we considered
+      // compaction and chose to skip.
       ctx.emit('history_compacted', {
         strategy: 'none',
         pruned_messages: 0,
@@ -114,6 +127,8 @@ export class CompactingNode implements BehaviorNode {
     }
 
     ctx.messages = result.messages;
+    // A real compaction freed space — clear the no-op streak.
+    ctx.consecutiveNoopCompactions = 0;
     // Reset the compact-failure counter on a clean run — the circuit
     // breaker should fire only on CONSECUTIVE failures.
     ctx.recovery.set('compact-failure', 0);

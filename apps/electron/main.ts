@@ -26,6 +26,7 @@ import { mountIpcHandlers } from './src/handlers-mount.js';
 import { setGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { PreviewWindowService } from './src/preview-window/service.js';
 import { startOptionalDevHttp } from './src/dev-http.js';
+import { OAUTH_LOOPBACK_PORT, startOAuthLoopback, stopOAuthLoopback } from './src/oauth-loopback.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
 import type { Hono } from 'hono';
@@ -97,6 +98,14 @@ async function bootstrap() {
     process.env.MCP_MODEL_CACHE_DIR = path.join(app.getPath('userData'), 'models');
   }
 
+  // Point outbound-MCP OAuth redirects at the ephemeral 127.0.0.1 loopback
+  // the desktop app spins up during consent (see oauth-loopback.ts). The
+  // dashboard's own origin is socket-free (mcp:// in-process), so a provider
+  // can't redirect a browser back to it. Read by `redirectUriFor` in
+  // mcp-servers-oauth.routes.ts; must be set before createApp() so DCR
+  // registers the loopback redirect_uri. Web deployments leave it unset.
+  process.env.MCP_OAUTH_REDIRECT_BASE = `http://127.0.0.1:${OAUTH_LOOPBACK_PORT}`;
+
   // Boot the backend in-process. The Hono app is built but not served
   // unless MCP_DEV_HTTP=1 — that flag exists so an operator can curl
   // the same backend from outside the Electron window for debugging.
@@ -130,6 +139,7 @@ async function bootstrap() {
   mountTerminalIpc(deps);
   registerNativeIpc();
   registerWindowIpc();
+  registerOAuthLoopbackIpc(honoApp);
   registerMcpProtocol(honoApp);
 
   // Agent preview/devtools: wire the main-process service so the `preview_*`
@@ -138,6 +148,7 @@ async function bootstrap() {
   const previewService = new PreviewWindowService();
   setGlobalPreviewDevtools(previewService);
   app.on('before-quit', () => previewService.closeAll());
+  app.on('before-quit', () => stopOAuthLoopback());
 
   await createAppWindow();
 
@@ -282,6 +293,16 @@ function registerWindowIpc() {
       return { ok: false, error: message };
     }
   });
+}
+
+/**
+ * IPC for the ephemeral OAuth loopback (see oauth-loopback.ts). The
+ * dashboard calls start() right before opening the provider login in the
+ * external browser, then stop() once consent completes or is cancelled.
+ */
+function registerOAuthLoopbackIpc(honoApp: Hono) {
+  ipcMain.handle('oauth:loopback:start', () => startOAuthLoopback(honoApp));
+  ipcMain.on('oauth:loopback:stop', () => stopOAuthLoopback());
 }
 
 /**

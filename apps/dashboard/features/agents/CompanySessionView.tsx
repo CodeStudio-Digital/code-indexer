@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CompanyTerminalPanel } from './terminal/CompanyTerminalPanel.js';
 import { useSandboxStatus } from '../builder/useSandboxStatus.js';
 import { useResizableHeight } from '../../hooks/useResizableHeight.js';
@@ -30,6 +30,7 @@ import { AgentsSidebar } from './session-view/AgentsSidebar.js';
 import { SessionHeader } from './session-view/SessionHeader.js';
 import { NewRoleDialog } from './session-view/NewRoleDialog.js';
 import { parseConfig } from './session-view/types.js';
+import { mergeBoardMessages, mergeSubordinates } from './session-view/merge-live-persisted.js';
 import { SidebarRail, type SidePanel } from './preview-sidebar/SidebarRail.js';
 import { SidebarPanels } from './preview-sidebar/SidebarPanels.js';
 import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
@@ -274,7 +275,14 @@ export function CompanySessionView({
     };
   }, [sessionId, sessionStatus]);
 
-  const subordinates = Array.from(stream.subordinateStates.values());
+  // Merge persisted agent runs with the live subordinate stream so agents
+  // from a recovered session / prior turn stay listed (and clickable) even
+  // when nothing is currently streaming for them. Live state wins; the
+  // persisted `coderSessionId` is preserved when the live seed lacks it.
+  const subordinates = useMemo(
+    () => mergeSubordinates(sessionData?.agentRuns ?? [], stream.subordinateStates),
+    [sessionData?.agentRuns, stream.subordinateStates],
+  );
   const config = sessionData ? parseConfig(sessionData.session.config_json) : null;
   const masterProvider = (config?.master_provider as string | undefined) ?? null;
   const masterModel = (config?.master_model as string | undefined) ?? null;
@@ -341,8 +349,17 @@ export function CompanySessionView({
   }, [studioContext, masterStatus]);
 
   function openAgentRun(agentRunId: number, role: string, status: string) {
-    const persistedRun = sessionData?.agentRuns.find((r) => r.id === agentRunId);
-    const coderSessionId = persistedRun?.coder_session_id;
+    // Resolve the coder session id from the merged live agent first (a
+    // freshly-spawned subordinate carries it via the spawn `agent_status`
+    // before the REST snapshot is refreshed), then the persisted run, then
+    // the master. Without this, a live agent's row click was a no-op.
+    const merged = subordinates.find((s) => s.agentRunId === agentRunId);
+    const coderSessionId =
+      merged?.coderSessionId ??
+      sessionData?.agentRuns.find((r) => r.id === agentRunId)?.coder_session_id ??
+      (stream.masterState?.agentRunId === agentRunId
+        ? stream.masterState.coderSessionId
+        : undefined);
     if (coderSessionId) {
       setModalSession({ coderSessionId, role, status });
     }
@@ -352,13 +369,25 @@ export function CompanySessionView({
     setModalSession({ coderSessionId, role, status });
   }
 
-  // Merge board from stream and persisted (initial REST fetch).
-  const boardMessages = stream.boardMessages.length > 0
-    ? stream.boardMessages
-    : (sessionData?.recentBoard ?? []).map((b) => ({
-        ...b,
-        mentions: JSON.parse(b.mentions_json || '[]'),
-      }));
+  // Merge board from persisted (initial REST fetch) + live stream, deduped
+  // by id. Rendering either source exclusively dropped history the instant
+  // the first live `board_entry` arrived; the union keeps the full feed.
+  const boardMessages = useMemo(
+    () =>
+      mergeBoardMessages(
+        (sessionData?.recentBoard ?? []).map((b) => ({
+          id: b.id,
+          author_role: b.author_role,
+          agent_run_id: b.agent_run_id,
+          kind: b.kind,
+          content: b.content,
+          mentions: JSON.parse(b.mentions_json || '[]'),
+          created_at: b.created_at,
+        })),
+        stream.boardMessages,
+      ),
+    [sessionData?.recentBoard, stream.boardMessages],
+  );
 
   return (
     <div className="flex flex-col h-full">

@@ -15,6 +15,14 @@ export interface AgentStatusPayload {
   role: string;
   status: AgentRunStatus;
   message: string;
+  /**
+   * Coder session backing this agent run. The spawn `agent_status` carries
+   * it so the dashboard can open the agent's transcript modal the moment it
+   * spawns — before the REST snapshot is refreshed. Other emitters (e.g.
+   * the runtime reconciler) omit it; the merge with persisted runs fills
+   * the gap in that case.
+   */
+  coderSessionId?: number;
 }
 
 export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): StreamState {
@@ -31,7 +39,12 @@ export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): Stre
     if (prev.masterState) {
       return {
         ...prev,
-        masterState: { ...prev.masterState, status: d.status, statusMessage: d.message },
+        masterState: {
+          ...prev.masterState,
+          status: d.status,
+          statusMessage: d.message,
+          coderSessionId: prev.masterState.coderSessionId ?? d.coderSessionId,
+        },
       };
     }
     return {
@@ -39,6 +52,7 @@ export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): Stre
       masterState: {
         role: 'master',
         agentRunId: d.agentRunId,
+        coderSessionId: d.coderSessionId,
         textChunks: [],
         toolCalls: [],
         status: d.status,
@@ -47,10 +61,32 @@ export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): Stre
     };
   }
 
-  if (!prev.subordinateStates.has(d.agentRunId)) return prev;
+  // Create-if-absent: the spawn `agent_status` is the FIRST signal for a
+  // subordinate — it fires before the runner emits any `agent_event`. The
+  // old code dropped it (`return prev`), so the agent only materialised
+  // when it started streaming text, and without a `coderSessionId` (which
+  // made its row a dead click). Now we seed the row here carrying the id;
+  // a later `agent_event` reuses this state via `current ?? seed`.
   const subs = new Map(prev.subordinateStates);
-  const existing = subs.get(d.agentRunId)!;
-  subs.set(d.agentRunId, { ...existing, status: d.status, statusMessage: d.message });
+  const existing = subs.get(d.agentRunId);
+  if (existing) {
+    subs.set(d.agentRunId, {
+      ...existing,
+      status: d.status,
+      statusMessage: d.message,
+      coderSessionId: existing.coderSessionId ?? d.coderSessionId,
+    });
+  } else {
+    subs.set(d.agentRunId, {
+      role: d.role,
+      agentRunId: d.agentRunId,
+      coderSessionId: d.coderSessionId,
+      textChunks: [],
+      toolCalls: [],
+      status: d.status,
+      statusMessage: d.message,
+    });
+  }
   return { ...prev, subordinateStates: subs };
 }
 

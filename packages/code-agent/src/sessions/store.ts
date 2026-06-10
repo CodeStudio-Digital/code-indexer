@@ -128,8 +128,8 @@ export class SessionStore {
   getSummaryBoundary(sessionId: number): number { return messages.getBoundary(this.db, sessionId); }
   getArchivedMessageCount(sessionId: number): number { return messages.getArchivedCount(this.db, sessionId); }
   maxMessageId(sessionId: number): number { return messages.maxMessageId(this.db, sessionId); }
-  setCompactionBoundary(sessionId: number, summaryText: string, boundaryId: number): { boundary_id: number; pruned_count: number } {
-    return messages.setCompactionBoundary(this.db, sessionId, summaryText, boundaryId);
+  setCompactionBoundary(sessionId: number, summaryText: string, boundaryId: number, kind: 'auto' | 'manual'): { boundary_id: number; pruned_count: number } {
+    return messages.setCompactionBoundary(this.db, sessionId, summaryText, boundaryId, kind);
   }
   getMessageById(sessionId: number, messageId: number): { role: string; content: unknown; row: CoderMessageRow } | null {
     return messages.getById(this.db, sessionId, messageId);

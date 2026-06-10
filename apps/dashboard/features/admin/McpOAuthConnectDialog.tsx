@@ -8,9 +8,10 @@ import {
 } from '../../components/ui/dialog.js';
 import {
   discoverOAuthMetadata, fetchOAuthStatus, registerOAuthClient,
-  revokeMcpOAuth, startOAuthAuthorize,
+  revokeMcpOAuth,
   type DiscoveredOAuthMetadata, type McpOAuthStatus, type RegisterDcrError,
 } from './mcp-servers-api.js';
+import { useMcpOAuthFlow } from './useMcpOAuthFlow.js';
 
 type Phase = 'idle' | 'registering' | 'ready' | 'awaiting-consent' | 'connected' | 'error';
 
@@ -26,8 +27,10 @@ interface Props {
  *   1. DCR (auto-register our app as a client) OR manual registration
  *      (when the AS rejects DCR — e.g. Figma's `/v1/oauth/mcp/register`
  *      advertises itself but returns 403 to non-pre-registered clients).
- *   2. Open /authorize in a popup
- *   3. Wait for postMessage from the callback page
+ *   2. Authorize: open the provider login in the browser. On desktop this
+ *      goes to the user's real browser and the redirect is captured by an
+ *      ephemeral loopback (see useMcpOAuthFlow); on web it's a popup.
+ *   3. Detect completion (status polling on desktop, postMessage on web).
  *   4. Show connected status (scopes)
  */
 export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnected }: Props) {
@@ -36,7 +39,6 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
   const [resourceUrl, setResourceUrl] = useState(serverUrl);
-  const [popup, setPopup] = useState<Window | null>(null);
 
   // Manual-registration sub-form state. Activated either explicitly by
   // the user, or automatically after a DCR failure (we keep the
@@ -46,6 +48,16 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
   const [manualClientSecret, setManualClientSecret] = useState('');
   const [manualScopes, setManualScopes] = useState('');
   const [discoveredAs, setDiscoveredAs] = useState<DiscoveredOAuthMetadata['as'] | null>(null);
+
+  const oauth = useMcpOAuthFlow({
+    onConnected: () => { setPhase('connected'); setError(null); onConnected?.(); },
+    onError: (msg) => { setPhase('error'); setError(msg); },
+    texts: {
+      loopbackError: t('admin:mcpServer.oauth.loopbackError') as string,
+      popupBlocked: t('admin:mcpServer.oauth.popupBlocked') as string,
+      timeout: t('admin:mcpServer.oauth.timeout') as string,
+    },
+  });
 
   useEffect(() => {
     void refresh();
@@ -61,25 +73,6 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
       setError(e instanceof Error ? e.message : String(e));
     }
   };
-
-  // Listen for the callback page's postMessage.
-  useEffect(() => {
-    const listener = (ev: MessageEvent): void => {
-      const data = ev.data as { ok?: boolean; server_id?: string; error?: string; error_description?: string };
-      if (!data || typeof data !== 'object') return;
-      if (data.server_id && data.server_id !== serverId) return;
-      if (data.ok) {
-        setPhase('connected');
-        setError(null);
-        onConnected?.();
-      } else if (data.error) {
-        setPhase('error');
-        setError(data.error_description ?? data.error);
-      }
-    };
-    window.addEventListener('message', listener);
-    return () => window.removeEventListener('message', listener);
-  }, [serverId, onConnected]);
 
   const doRegister = async (): Promise<void> => {
     setPhase('registering');
@@ -148,21 +141,11 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
   const doAuthorize = async (): Promise<void> => {
     setPhase('awaiting-consent');
     setError(null);
-    try {
-      const { authorization_url } = await startOAuthAuthorize(serverId);
-      const win = window.open(authorization_url, 'mcp-oauth', 'width=520,height=700');
-      setPopup(win);
-      if (!win) {
-        // Popup blocked — offer manual open.
-        setError(t('admin:mcpServer.oauth.popupBlocked') as string);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setPhase('error');
-    }
+    await oauth.authorize(serverId);
   };
 
   const doDisconnect = async (): Promise<void> => {
+    oauth.cancel();
     await revokeMcpOAuth(serverId);
     setStatus(null);
     setPhase('idle');
@@ -173,8 +156,13 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
     setManualScopes('');
   };
 
+  const handleClose = (): void => {
+    oauth.cancel();
+    onClose();
+  };
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && handleClose()}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{t('admin:mcpServer.oauth.title', { id: serverId })}</DialogTitle>
@@ -285,7 +273,7 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
             </p>
           )}
 
-          {popup && phase === 'awaiting-consent' && (
+          {phase === 'awaiting-consent' && (
             <p className="text-xs text-muted-foreground">
               {t('admin:mcpServer.oauth.popupHint')}
             </p>
@@ -295,7 +283,7 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={handleClose}>
             {t('admin:mcpServer.oauth.close')}
           </Button>
         </DialogFooter>

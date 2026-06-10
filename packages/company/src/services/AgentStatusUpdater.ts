@@ -24,6 +24,28 @@ export class AgentStatusUpdater implements IAgentStatusUpdater {
   }
 
   /**
+   * Write the status AND publish an `agent_status` event (no board post).
+   * `opts.coderSessionId` rides along so the dashboard can open the agent's
+   * transcript the moment it spawns. Used at subordinate spawn, where a
+   * separate "Spawned @role" board line is already posted.
+   */
+  publishStatus(
+    agentRunId: number,
+    role: string,
+    status: AgentRunStatus,
+    opts?: { message?: string; coderSessionId?: number },
+  ): void {
+    this.setStatus(agentRunId, status, opts?.message);
+    this.bus.publish('agent_status', {
+      agentRunId,
+      role,
+      status,
+      message: opts?.message ?? '',
+      coderSessionId: opts?.coderSessionId,
+    });
+  }
+
+  /**
    * Extended form that also publishes an `agent_status` event and posts a
    * board message. Used by the public setAgentStatus() API.
    */
@@ -34,8 +56,7 @@ export class AgentStatusUpdater implements IAgentStatusUpdater {
     message: string,
     boardPoster: { post: (a: string, b: number | null, k: 'message', c: string) => void },
   ): void {
-    this.setStatus(agentRunId, status, message);
-    this.bus.publish('agent_status', { agentRunId, role, status, message });
+    this.publishStatus(agentRunId, role, status, { message });
     boardPoster.post(role, agentRunId, 'message',
       `Status: **${status}**${message ? ` — ${message}` : ''}`);
   }

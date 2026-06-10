@@ -159,8 +159,8 @@ export interface ParallelAgent {
   usage?: Usage;
   summary?: string;
   error?: string;
-  /** The prompt/task the agent received. Populated from persisted history
-   *  (the tool input); absent for live groups (not in the stream payload). */
+  /** The prompt/task the agent received — from the live stream payload
+   *  (agents_group_start) and from persisted history (the tool input). */
   task?: string;
   /** Subagent kind (e.g. 'explore' | 'implement'), from history. */
   agentType?: string;

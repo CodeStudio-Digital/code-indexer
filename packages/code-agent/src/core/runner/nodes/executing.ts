@@ -820,6 +820,22 @@ export class ExecutingNode implements BehaviorNode {
     });
     const totalDecision = shouldCompact90({ promptTokens, model: ctx.opts.provider.model });
     if (loopAware.shouldCompact || bodyDecision.shouldCompact || totalDecision.shouldCompact) {
+      // Camada 2 — breaker de no-op. Se as últimas compactações não reduziram
+      // nada (contexto irredutível: ex. um tool_result maior que o teto da
+      // cauda), parar de rotear para Compacting a cada turno. Diferente do
+      // pre-emit (que ABORTA a >90%), aqui apenas SUPRIMIMOS o churn do gate de
+      // 70% — sem abortar; o modelo segue progredindo. O clamp do recede
+      // (Camada 1) + o pre-emit tornam isto raro e auto-curável (uma
+      // compactação real reseta o contador, ou ele zera quando o gate silencia).
+      const noopCap = Number(process.env.CODER_POSTTURN_COMPACT_NOOP_MAX ?? '2') || 2;
+      if (ctx.consecutiveNoopCompactions >= noopCap) {
+        dbg(
+          `compaction suppressed — context irreducible after ` +
+          `${ctx.consecutiveNoopCompactions} no-op passes ` +
+          `[${usageSource}=${promptTokens}] ratio=${Math.max(bodyDecision.ratio, totalDecision.ratio).toFixed(3)}`,
+        );
+        return decideTerminal(ctx);
+      }
       dbg(
         `compaction gate fired [${usageSource}=${promptTokens}]: ` +
         `loop=${loopAware.shouldCompact}(${loopAware.reason}) ` +
@@ -832,6 +848,9 @@ export class ExecutingNode implements BehaviorNode {
       return events.tokenThresholdHit({ ratio: ratio > 0 ? ratio : 1 });
     }
 
+    // Gate quiet — the prompt is back under the trigger, so any future genuine
+    // trigger should start a fresh no-op streak.
+    ctx.consecutiveNoopCompactions = 0;
     return decideTerminal(ctx);
   }
 }

@@ -338,9 +338,14 @@ export function maxMessageId(db: DB, sessionId: number): number {
  * Set (or advance) the durable compaction boundary: hide every message with
  * `id <= boundaryId` and store `summaryText` as the prepended head summary
  * (the runner prepends it; the dashboard renders it as a card). Used by BOTH
- * the manual "summarize & clear" (boundaryId = current MAX(id), no tail) and
- * the automatic durable compaction (boundaryId = a mid-transcript cutoff, so a
- * recent tail stays visible).
+ * the manual "summarize & clear" (`kind='manual'`, boundaryId = current MAX(id),
+ * no tail) and the automatic durable compaction (`kind='auto'`, boundaryId = a
+ * mid-transcript cutoff, so a recent tail stays visible).
+ *
+ * `kind` is required (not defaulted) so a new call site can't silently miscount:
+ * it bumps the matching lifetime counter (`compaction_count_auto|manual`,
+ * migration 130) IN THE SAME transaction as the boundary move, which the metrics
+ * panel surfaces as "Sumarizações (auto/manual)".
  *
  * Also clears the ChatGPT/Codex `previous_response_id` pointer: the prefix it
  * referenced no longer matches the new baseline, so the next turn must
@@ -349,6 +354,7 @@ export function maxMessageId(db: DB, sessionId: number): number {
  */
 export function setCompactionBoundary(
   db: DB, sessionId: number, summaryText: string, boundaryId: number,
+  kind: 'auto' | 'manual',
 ): { boundary_id: number; pruned_count: number } {
   const tx = db.transaction(() => {
     const prevBoundary = getBoundary(db, sessionId);
@@ -361,9 +367,16 @@ export function setCompactionBoundary(
              compaction_summary = ?,
              last_response_id = NULL,
              last_response_message_count = NULL,
+             compaction_count_auto = compaction_count_auto + ?,
+             compaction_count_manual = compaction_count_manual + ?,
              updated_at = datetime('now')
        WHERE id = ?
-    `).run(boundaryId, summaryText, sessionId);
+    `).run(
+      boundaryId, summaryText,
+      kind === 'auto' ? 1 : 0,
+      kind === 'manual' ? 1 : 0,
+      sessionId,
+    );
     return { boundary_id: boundaryId, pruned_count: prunedCount };
   });
   return tx();

@@ -197,7 +197,7 @@ export interface RunnerEvents {
     groupId: string;
     provider?: string;
     model?: string;
-    agents: Array<{ index: number; label: string; provider?: string; model?: string }>;
+    agents: Array<{ index: number; label: string; provider?: string; model?: string; task?: string }>;
   }) => void;
   /** Emitted for per-agent progress within a parallel group. */
   agent_progress: (payload: {

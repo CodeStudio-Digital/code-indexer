@@ -249,6 +249,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url: string) => ipcRenderer.send('shell:openExternal', url),
   openPath: (path: string) => ipcRenderer.send('shell:openPath', path),
   /**
+   * Start/stop the ephemeral OAuth loopback listener (RFC 8252). The MCP
+   * OAuth dialog starts it just before opening the provider login in the
+   * external browser, then stops it once consent completes or is cancelled.
+   */
+  oauthLoopbackStart: () =>
+    ipcRenderer.invoke('oauth:loopback:start') as Promise<{
+      ok: boolean;
+      port?: number;
+      error?: string;
+    }>,
+  oauthLoopbackStop: () => ipcRenderer.send('oauth:loopback:stop'),
+  /**
    * Spawn a new Electron window pointing at `route` (e.g. `/projects/42`).
    * Returns `{ ok, windowId? , error? }`. The new window inherits the
    * same preload + protocol setup, so it talks to the same in-process
