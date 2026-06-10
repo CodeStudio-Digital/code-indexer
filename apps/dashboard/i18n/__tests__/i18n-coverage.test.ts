@@ -86,6 +86,8 @@ const protectedDashboardFiles = [
   'apps/dashboard/features/project/tabs/FilesTab.tsx',
   'apps/dashboard/features/snapshots/SnapshotDiffViewer.tsx',
   'apps/dashboard/features/snapshots/SnapshotsPanel.tsx',
+  'apps/dashboard/features/snapshots/diff/DiffRow.tsx',
+  'apps/dashboard/features/snapshots/diff/ReviewComment.tsx',
   'apps/dashboard/features/workspace/jetbrains/tool-windows/ChatWindow.tsx',
   'apps/dashboard/features/workspace/jetbrains/tool-windows/GitWindow.tsx',
   'apps/dashboard/features/workspace/jetbrains/tool-windows/WebviewWindow.tsx',

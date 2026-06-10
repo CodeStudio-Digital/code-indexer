@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import { ArrowLeft } from 'lucide-react';
@@ -7,12 +7,12 @@ import { cn } from '../../lib/utils.js';
 import { SnapshotFileList } from './SnapshotFileList.js';
 import { SnapshotDiffViewer } from './SnapshotDiffViewer.js';
 import { SnapshotReviewQueue } from './SnapshotReviewQueue.js';
+import { useSelectedDiff } from './diff/useSelectedDiff.js';
 import {
   acceptAll,
   acceptFile,
   acceptHunk,
   createReviewComment,
-  fetchFileDiff,
   fetchSnapshotReviews,
   fetchSnapshotList,
   patchReviewComment,
@@ -24,7 +24,6 @@ import {
 } from './api.js';
 import type {
   SessionScope,
-  SnapshotFileDiff,
   SnapshotFileSummary,
   SnapshotReviewComment,
   SnapshotReviewsResponse,
@@ -48,8 +47,6 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
   const [error, setError] = useState<string | null>(null);
   const [showClosed, setShowClosed] = useState(false);
   const [selectedBaselineId, setSelectedBaselineId] = useState<number | null>(null);
-  const [diff, setDiff] = useState<SnapshotFileDiff | null>(null);
-  const [diffLoading, setDiffLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reviews, setReviews] = useState<SnapshotReviewsResponse>({ runs: [], comments: [] });
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -63,7 +60,6 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
   // null on session change to avoid showing an empty filter for a project
   // that no longer has snapshots.
   const [projectFilter, setProjectFilter] = useState<number | null>(null);
-  const lastRefreshKey = useRef<number | undefined>(refreshKey);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -92,19 +88,17 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     void reloadReviews();
   }, [reload, reloadReviews]);
 
-  // React to live stream pings: refetch list and current diff.
-  useEffect(() => {
-    if (refreshKey === undefined) return;
-    if (lastRefreshKey.current === refreshKey) return;
-    lastRefreshKey.current = refreshKey;
-    void reload();
-    void reloadReviews();
-    if (selectedBaselineId != null) {
-      void fetchFileDiff(scope, sessionId, selectedBaselineId, { context: 3, contextBefore, contextAfter })
-        .then(setDiff)
-        .catch(() => { /* swallow — UI shows stale */ });
-    }
-  }, [refreshKey, reload, reloadReviews, scope, sessionId, selectedBaselineId, contextBefore, contextAfter]);
+  const { diff, diffLoading, reloadDiff } = useSelectedDiff({
+    scope,
+    sessionId,
+    selectedBaselineId,
+    contextBefore,
+    contextAfter,
+    refreshKey,
+    onReload: reload,
+    onReloadReviews: reloadReviews,
+    onError: setError,
+  });
 
   // Auto-select first active file when nothing selected yet.
   useEffect(() => {
@@ -112,26 +106,6 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     const firstActive = files.find((f) => f.status === 'active');
     if (firstActive) setSelectedBaselineId(firstActive.baselineId);
   }, [files, selectedBaselineId]);
-
-  const loadDiff = useCallback(async (baselineId: number) => {
-    setDiffLoading(true);
-    try {
-      const r = await fetchFileDiff(scope, sessionId, baselineId, { context: 3, contextBefore, contextAfter });
-      setDiff(r);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setDiffLoading(false);
-    }
-  }, [scope, sessionId, contextBefore, contextAfter]);
-
-  useEffect(() => {
-    if (selectedBaselineId == null) {
-      setDiff(null);
-      return;
-    }
-    void loadDiff(selectedBaselineId);
-  }, [selectedBaselineId, loadDiff]);
 
   const handleSelect = useCallback((baselineId: number) => {
     setSelectedBaselineId(baselineId);
@@ -145,12 +119,12 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
     setBusy(true);
     try {
       await acceptHunk(scope, sessionId, selectedBaselineId, fingerprint);
-      await loadDiff(selectedBaselineId);
+      await reloadDiff(selectedBaselineId);
       await reload();
     } finally {
       setBusy(false);
     }
-  }, [scope, sessionId, selectedBaselineId, loadDiff, reload, t]);
+  }, [scope, sessionId, selectedBaselineId, reloadDiff, reload, t]);
 
   const handleRevertHunk = useCallback(async (fingerprint: string) => {
     if (selectedBaselineId == null) return;
@@ -160,12 +134,12 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, onSubmitReviewMes
       if (!r.ok && r.reason) {
         setError(t('snapshotPanel.revertHunkFailed', { reason: r.reason }));
       }
-      await loadDiff(selectedBaselineId);
+      await reloadDiff(selectedBaselineId);
       await reload();
     } finally {
       setBusy(false);
     }
-  }, [scope, sessionId, selectedBaselineId, loadDiff, reload, t]);
+  }, [scope, sessionId, selectedBaselineId, reloadDiff, reload, t]);
 
   const handleAcceptFile = useCallback(async () => {
     if (selectedBaselineId == null) return;
