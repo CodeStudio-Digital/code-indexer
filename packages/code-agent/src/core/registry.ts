@@ -1,4 +1,5 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
+import { aliasNormalizationEnabled, normalizeToolArgs } from '@mcp/code-agent/core/tool-arg-aliases.js';
 
 /**
  * In-memory registry that holds the union of native + MCP tools available
@@ -55,8 +56,13 @@ export class ToolRegistry {
     if (fsPort && typeof fsPort.setCurrentTool === 'function') {
       try { fsPort.setCurrentTool(name); } catch { /* never let telemetry break tool dispatch */ }
     }
+    // Silently repair common wrong argument names (e.g. `file_path` → `path`)
+    // against the tool's own schema before dispatch. Invisible to the model;
+    // see tool-arg-aliases.ts. This is the single chokepoint for ALL tool
+    // calls — the runner loop, subagents, and code_exec's nested calls.
+    const finalArgs = aliasNormalizationEnabled() ? normalizeToolArgs(tool.parameters, args) : args;
     try {
-      return await tool.handler(args, ctx);
+      return await tool.handler(finalArgs, ctx);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { content: `Tool '${name}' failed: ${msg}`, isError: true };
