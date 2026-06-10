@@ -2,7 +2,8 @@
  * Viewport presets + resolver for the agent preview window (DevTools device
  * mode). Kept separate from service.ts to stay under the LOC cap.
  */
-import type { Viewport } from './cdp.js';
+import { screen } from 'electron';
+import type { PreviewWindow, Viewport } from './cdp.js';
 
 /** Named viewport presets (DevTools device-mode style). */
 export const VIEWPORT_PRESETS: Record<string, Viewport> = {
@@ -24,4 +25,25 @@ export function resolveViewport(args: Record<string, unknown>, base: Viewport): 
     deviceScaleFactor: args.deviceScaleFactor != null ? Number(args.deviceScaleFactor) : start.deviceScaleFactor,
     mobile: args.mobile != null ? !!args.mobile : start.mobile,
   };
+}
+
+/** Clamp a desired content size to the primary display work area. */
+export function clampToScreen(w: number, h: number): { width: number; height: number } {
+  const wa = screen.getPrimaryDisplay().workAreaSize;
+  return { width: Math.min(Math.max(320, w), wa.width), height: Math.min(Math.max(320, h), wa.height) };
+}
+
+/**
+ * Apply a viewport by resizing the OS window's CONTENT area (native, crash-safe)
+ * — width-based responsive breakpoints react. Clamped to the screen work area.
+ * No CDP device-metrics override (that destabilised Chromium on some
+ * Windows/Electron builds), so true touch/mobile-UA emulation is deferred.
+ */
+export function applyViewport(pw: PreviewWindow, v: Viewport): Viewport {
+  if (!pw.win.isDestroyed()) {
+    const { width, height } = clampToScreen(v.width, v.height);
+    try { pw.win.setContentSize(width, height); } catch { /* best-effort */ }
+  }
+  pw.viewport = v;
+  return v;
 }

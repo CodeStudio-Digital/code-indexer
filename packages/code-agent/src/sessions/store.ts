@@ -29,6 +29,7 @@ import * as state from './store/sessions-state.js';
 import * as ops from './store/sessions-ops.js';
 import * as goals from './store/goals.js';
 import * as messages from './store/messages.js';
+import * as toolResults from './store/tool-results.js';
 import * as plans from './store/plans.js';
 import * as inputs from './store/inputs.js';
 import * as sessionDrive from './store/session-drive.js';
@@ -123,6 +124,10 @@ export class SessionStore {
   loadSessionMessagesTail(id: number, tail: number): SessionWithMessages | null { return messages.loadTail(this.db, id, tail); }
   loadMessagesBefore(sessionId: number, beforeId: number, limit: number, includeArchived = false): { messages: AgentMessage[]; message_rows: CoderMessageRow[] } {
     return messages.loadBefore(this.db, sessionId, beforeId, limit, includeArchived);
+  }
+  /** Audit-table results for the given tool_use ids (dashboard status fallback). */
+  getToolResultsByToolUseIds(sessionId: number, toolUseIds: string[]): toolResults.ToolCallResultRow[] {
+    return toolResults.getToolResultsByToolUseIds(this.db, sessionId, toolUseIds);
   }
   // ─── Durable compaction boundary (migration 128) ───────────────
   getSummaryBoundary(sessionId: number): number { return messages.getBoundary(this.db, sessionId); }

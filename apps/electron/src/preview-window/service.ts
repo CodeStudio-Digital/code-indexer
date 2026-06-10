@@ -4,14 +4,21 @@
  * never gets `electronAPI`), attaches CDP, and dispatches the `preview_*`
  * tool calls. Registered via `setGlobalPreviewDevtools` in main.ts.
  */
-import { BrowserWindow, screen } from 'electron';
+import { BrowserWindow } from 'electron';
 import type { IPreviewDevtools, PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
+import { UNIVERSAL_INSPECTOR_SOURCE } from '@mcp/services/sandbox/builder/inspector/universal-inspector-source.js';
+import { UNIVERSAL_TOOLBAR_SOURCE } from '@mcp/services/sandbox/builder/inspector/universal-toolbar-source.js';
 import { PreviewWindow, DEFAULT_VIEWPORT, type Viewport } from './cdp.js';
 import { dispatchInteraction } from './interact.js';
-import { resolveViewport } from './viewport.js';
+import { resolveViewport, applyViewport, clampToScreen, VIEWPORT_PRESETS } from './viewport.js';
 
 export class PreviewWindowService implements IPreviewDevtools {
   private byKey = new Map<string, PreviewWindow>();
+  /** Per-key selection subscribers (dashboard "Inspect"). Decoupled from the
+   *  window lifecycle so a stream can subscribe before the window opens. */
+  private inspectListeners = new Map<string, Set<(d: unknown) => void>>();
+  /** Windows whose CDP selection events are already forwarded to the map. */
+  private inspectForwarded = new WeakSet<PreviewWindow>();
 
   async invoke(req: PreviewInvoke): Promise<unknown> {
     const { key, method } = req;
@@ -37,7 +44,7 @@ export class PreviewWindowService implements IPreviewDevtools {
 
     switch (method) {
       case 'viewport': {
-        const v = this.applyViewport(pw, resolveViewport(args, pw.viewport));
+        const v = applyViewport(pw, resolveViewport(args, pw.viewport));
         return { ok: true, viewport: v };
       }
       case 'navigate':
@@ -138,10 +145,10 @@ export class PreviewWindowService implements IPreviewDevtools {
       existing.clearBuffers();
       await existing.win.loadURL(url);
       existing.url = url;
-      const v = this.applyViewport(existing, initial);
+      const v = applyViewport(existing, initial);
       return { windowId: existing.id, url, viewport: v };
     }
-    const { width, height } = this.clampToScreen(initial.width, initial.height);
+    const { width, height } = clampToScreen(initial.width, initial.height);
     const win = new BrowserWindow({
       width,
       height,
@@ -149,7 +156,13 @@ export class PreviewWindowService implements IPreviewDevtools {
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
     });
     win.on('closed', () => {
-      if (this.byKey.get(key)?.id === win.id) this.byKey.delete(key);
+      if (this.byKey.get(key)?.id === win.id) {
+        // Tell the dashboard the window is gone (native X or toolbar close) so
+        // it can un-pause the inline iframe. Harmless for agent keys (no listeners).
+        this.fanoutSelect(key, { type: 'mcp:closed' });
+        this.byKey.delete(key);
+        this.inspectListeners.delete(key);
+      }
     });
     const pw = new PreviewWindow(win, url);
     this.byKey.set(key, pw);
@@ -158,34 +171,79 @@ export class PreviewWindowService implements IPreviewDevtools {
     return { windowId: pw.id, url, viewport: initial };
   }
 
-  /** Clamp a desired content size to the primary display work area. */
-  private clampToScreen(w: number, h: number): { width: number; height: number } {
-    const wa = screen.getPrimaryDisplay().workAreaSize;
-    return { width: Math.min(Math.max(320, w), wa.width), height: Math.min(Math.max(320, h), wa.height) };
+  // ── Dashboard-driven "Inspect" (universal element selection) ──────────
+  // Reuses the agent CDP window machinery: open the app, inject the
+  // framework-agnostic inspector, and stream selections back to the dashboard.
+
+  /** Subscribe to selections for a key. Safe to call before `openInspect`. */
+  onInspectSelect(key: string, cb: (d: unknown) => void): () => void {
+    let set = this.inspectListeners.get(key);
+    if (!set) this.inspectListeners.set(key, (set = new Set()));
+    set.add(cb);
+    return () => { this.inspectListeners.get(key)?.delete(cb); };
+  }
+
+  private fanoutSelect(key: string, d: unknown): void {
+    const set = this.inspectListeners.get(key);
+    if (set) for (const cb of Array.from(set)) { try { cb(d); } catch { /* listener threw */ } }
   }
 
   /**
-   * Apply a viewport by resizing the OS window's CONTENT area (native, crash-
-   * safe) — width-based responsive breakpoints react. Clamped to the screen
-   * work area. NOTE: no CDP device-metrics override (that destabilised
-   * Chromium on some Windows/Electron builds), so true touch/mobile-UA
-   * emulation is deferred; width is what drives most responsive layouts.
+   * Open (or reuse) the window at `url` and inject the inspector + control bar.
+   * `arm` starts in selection mode; otherwise it opens in navigate mode (the
+   * bar's Inspect toggle / dashboard can arm later). Used by both the dashboard
+   * "Inspect" (arm) and "Open in new window" (navigate) entry points.
    */
-  private applyViewport(pw: PreviewWindow, v: Viewport): Viewport {
-    if (!pw.win.isDestroyed()) {
-      const { width, height } = this.clampToScreen(v.width, v.height);
-      try { pw.win.setContentSize(width, height); } catch { /* best-effort */ }
+  async openInspect(key: string, url: string, opts: { arm?: boolean } = {}): Promise<{ windowId: number; url: string }> {
+    const res = await this.open(key, url, {});
+    const pw = this.byKey.get(key);
+    if (pw) {
+      if (!this.inspectForwarded.has(pw)) {
+        pw.onSelect((d) => this.fanoutSelect(key, d));
+        pw.onControl((action) => this.handleControl(key, action));
+        this.inspectForwarded.add(pw);
+      }
+      await pw.armInspect(`${UNIVERSAL_INSPECTOR_SOURCE}\n${UNIVERSAL_TOOLBAR_SOURCE}`); // inspector + control bar
+      await pw.send('Runtime.evaluate', {
+        expression: opts.arm ? 'window.__mcpArm && window.__mcpArm()' : 'window.__mcpDisarm && window.__mcpDisarm()',
+      }).catch(() => undefined);
     }
-    pw.viewport = v;
-    return v;
+    return { windowId: res.windowId, url: res.url };
+  }
+
+  async disarmInspect(key: string): Promise<void> {
+    const pw = this.byKey.get(key);
+    if (pw && !pw.win.isDestroyed()) await pw.disarmInspect();
+  }
+
+  /** Bring the inspect window to the front (dashboard "Focus"). */
+  focusInspect(key: string): void {
+    const pw = this.byKey.get(key);
+    if (pw && !pw.win.isDestroyed()) { try { pw.win.focus(); } catch { /* gone */ } }
+  }
+
+  /** Control-bar actions from the injected toolbar (`viewport:<preset>`, `close`). */
+  private handleControl(key: string, action: string): void {
+    if (action === 'close') { this.closeKey(key); return; }
+    if (action.startsWith('viewport:')) {
+      const vp = VIEWPORT_PRESETS[action.slice('viewport:'.length)];
+      const pw = this.byKey.get(key);
+      if (pw && vp) applyViewport(pw, vp);
+    }
   }
 
   closeKey(key: string): void {
+    // Notify the dashboard BEFORE teardown; delete synchronously so a quick
+    // re-open never reuses a closing window. The window 'closed' handler then
+    // no-ops (byKey already cleared), so the sentinel fires exactly once.
+    this.fanoutSelect(key, { type: 'mcp:closed' });
     this.byKey.get(key)?.close();
     this.byKey.delete(key);
+    this.inspectListeners.delete(key);
   }
   closeAll(): void {
     for (const pw of this.byKey.values()) pw.close();
     this.byKey.clear();
+    this.inspectListeners.clear();
   }
 }

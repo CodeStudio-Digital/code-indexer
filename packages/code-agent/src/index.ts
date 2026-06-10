@@ -1566,7 +1566,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Per-turn buffer: accumulate assistant message + all its tool results, then
   // flush to the DB in a single transaction at turn boundary. Prevents orphaned
   // tool rows if the process crashes mid-turn.
-  let lastToolMessageId: number | null = null;
   const pendingToolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
 
   interface PendingTurn {
@@ -1708,32 +1707,17 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // tool_call_result row existed — so it never landed (100% NULL). The
   // `tool_call_finalized` event still fires for the live dashboard badge.
 
-  // The runner pushes a single 'tool' role message after running all tool calls
-  // for the turn. We need to persist that too. Hook done to flush the latest one.
-  // Easiest: peek at runner.messages after the turn — but we don't have a per-turn
-  // event. Instead, persist the tool message right before each new turn_start.
-  // The runner starts with initialMessages loaded from the DB — those are
-  // already persisted. Skip past them so flushToolMessages only persists
-  // tool messages produced *during this run*. Before this fix,
-  // lastPersistedIdx was 0 for non-resume runs, causing every tool message
-  // from history to be re-appended on the first turn_start — exponential
-  // duplication across turns and forks.
-  let lastPersistedIdx = runner.messages.length;
-  const flushToolMessages = () => {
-    for (let i = lastPersistedIdx; i < runner.messages.length; i++) {
-      const m = runner.messages[i];
-      if (m.role === 'tool') {
-        const id = store.appendMessage(session.id, m);
-        lastToolMessageId = id;
-      }
-    }
-    lastPersistedIdx = runner.messages.length;
-  };
-  // Order matters: flush the assistant turn (message + tool rows) BEFORE the
-  // 'tool' role message, so the FK chain stays consistent on resume.
+  // Persist the buffered assistant turn at each turn boundary.
+  // `persistAssistantTurn` writes the assistant message, the tool_calls audit
+  // rows, AND the paired 'tool' role message in a single transaction (see
+  // store/messages.ts), so there is no separate tool-message flush to keep in
+  // sync. The previous approach scanned `runner.messages` from an integer
+  // cursor, which raced compaction: the Compacting node reassigns
+  // `ctx.messages` to a new, shorter array, leaving the cursor past its end so
+  // the scan silently stopped persisting tool messages for the rest of the run
+  // (session 969: ~38 turns of tool results lost while the audit rows survived).
   runner.on('turn_start', () => {
     void flushPendingTurn();
-    flushToolMessages();
   });
 
   // Capture the last error emitted by the runner so we can propagate it
@@ -1798,7 +1782,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     .run()
     .then(async (res) => {
       await flushPendingTurn();
-      flushToolMessages();
       store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
       // Distill durable memory BEFORE `.finally` closes the DB handles. Errored-
       // but-resolved runs are included on purpose — that's where `gotcha`
@@ -1822,12 +1805,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     })
     .catch(async (e) => {
       await flushPendingTurn();
-      flushToolMessages();
       store.updateSessionStatus(session.id, 'error');
       throw e;
     })
     .finally(async () => {
-      void lastToolMessageId; // silence unused
       // Drain any pending async writes for THIS session before closing the
       // local DB handles. The writer is a process-wide singleton with its
       // own connection — it is not closed here, only on process shutdown.

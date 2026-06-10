@@ -466,6 +466,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
         ...prev,
         messages: [...page.messages, ...prev.messages],
         message_rows: [...page.message_rows, ...prev.message_rows],
+        tool_results: [...(page.tool_results ?? []), ...(prev.tool_results ?? [])],
       }));
       return page.message_rows.length;
     } catch {

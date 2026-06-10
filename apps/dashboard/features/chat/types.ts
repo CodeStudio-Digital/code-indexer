@@ -122,6 +122,20 @@ export interface MessageRow {
   cache_creation_tokens?: number;
 }
 
+/**
+ * Audit-table fallback entry for a tool call whose `tool_result` block is
+ * missing from `messages` (pre-fix sessions where a mid-run compaction dropped
+ * the tool message). The message list seeds its tool-result map from these so
+ * the call shows its real terminal status instead of a perpetual spinner.
+ */
+export interface ToolResultFallback {
+  tool_use_id: string;
+  content: string;
+  is_error: boolean;
+  _truncated?: boolean;
+  _originalLength?: number;
+}
+
 export interface SessionData {
   session: CoderSession;
   messages: PersistedMessage[];
@@ -130,12 +144,15 @@ export interface SessionData {
   total_messages?: number;
   /** Count of messages hidden behind a manual "summarize & clear" boundary. 0 = none. */
   archived_count?: number;
+  /** Status fallback for tool calls whose tool_result block is missing. Absent/empty for healthy sessions. */
+  tool_results?: ToolResultFallback[];
 }
 
 /** Response shape from GET /api/coder/sessions/:id/messages?before_id=N */
 export interface MessagePage {
   messages: PersistedMessage[];
   message_rows: MessageRow[];
+  tool_results?: ToolResultFallback[];
 }
 
 export interface EnrichedProviderModel {

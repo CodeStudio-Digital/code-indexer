@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, ExternalLink, MousePointerClick, PanelRightClose, Play, RotateCw, Wrench } from 'lucide-react';
+import { Bot, Crosshair, ExternalLink, MousePointerClick, PanelRightClose, Play, RotateCw, Wrench } from 'lucide-react';
 import {
   isPreviewMessage,
   type PreviewToParentMessage,
@@ -15,6 +15,7 @@ import {
   type DeviceFrame,
 } from '../../builder/studio/DeviceFrameSwitcher.js';
 import { useProjectDevServer } from './useProjectDevServer.js';
+import { useUniversalInspect } from './useUniversalInspect.js';
 import { apiPost } from '../../../hooks/useApi.js';
 
 /**
@@ -103,6 +104,11 @@ export function ProjectPreview({
     }
   }, [projectId, restart]);
 
+  // Universal CDP preview window: Inspect (armed) + "open in new window" (navigate).
+  // Both share one window; the in-window floating bar toggles selection.
+  const { canInspect, windowOpen, open: openInspectWin, close: closeInspectWin, focus: focusInspectWin } =
+    useUniversalInspect(projectId, url);
+
   // Auto-start the dev server when the pane opens for a builder project
   // (pinned port → we know it'll serve). For general projects we wait for
   // the user to run their dev task rather than guessing the command.
@@ -136,6 +142,14 @@ export function ProjectPreview({
   // iframe once the user closes it.
   const popOut = useCallback(() => {
     if (!url) return;
+    // Electron → unified CDP window (navigate mode) WITH the floating control
+    // bar, so the user can toggle Inspect / change device / reload in-window.
+    if (canInspect) {
+      if (windowOpen) focusInspectWin();
+      else void openInspectWin(false);
+      return;
+    }
+    // Browser-dev fallback: plain window.open (no CDP, no bar).
     if (popupRef.current && !popupRef.current.closed) {
       popupRef.current.focus();
       return;
@@ -145,7 +159,7 @@ export function ProjectPreview({
       popupRef.current = w;
       setPoppedOut(true);
     }
-  }, [url]);
+  }, [url, canInspect, windowOpen, openInspectWin, focusInspectWin]);
 
   useEffect(() => {
     if (!poppedOut) return;
@@ -189,6 +203,20 @@ export function ProjectPreview({
         />
         <span className="flex-1 font-mono text-xs truncate text-muted-foreground">{url ?? 'no dev server'}</span>
         <DeviceFrameSwitcher value={device} onChange={setDevice} />
+        {/* Universal inspect is the fallback for stacks without the inline
+            data-mcp-loc selector — hide it when that precise selector is
+            available (builder/Vite) so we don't show two pickers. */}
+        {canInspect && !selectionEnabled && (
+          <button
+            onClick={() => { if (windowOpen) closeInspectWin(); else void openInspectWin(true); }}
+            className={`p-1.5 rounded-md ${windowOpen ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40' : 'hover:bg-muted'}`}
+            title={windowOpen
+              ? 'Close the preview window'
+              : 'Inspect — open the app in a window with a control bar; pick any element (any framework) to cite it'}
+          >
+            <Crosshair className="h-3.5 w-3.5" />
+          </button>
+        )}
         {selectionEnabled && (
           <>
             <button
@@ -231,8 +259,8 @@ export function ProjectPreview({
         <button
           onClick={popOut}
           disabled={!url}
-          className={`p-1.5 rounded-md hover:bg-muted disabled:opacity-40 ${poppedOut ? 'text-indigo-600' : ''}`}
-          title={poppedOut ? 'Preview is in a separate window — click to focus' : 'Open preview in a new window'}
+          className={`p-1.5 rounded-md hover:bg-muted disabled:opacity-40 ${poppedOut || windowOpen ? 'text-indigo-600' : ''}`}
+          title={poppedOut || windowOpen ? 'Preview is in a separate window — click to focus' : 'Open preview in a new window'}
         >
           <ExternalLink className="h-3.5 w-3.5" />
         </button>
@@ -268,6 +296,20 @@ export function ProjectPreview({
             <p>O agente está usando o preview numa janela dedicada (modo preview).</p>
             <p className="text-xs">O iframe aqui foi pausado para liberar processo — volta sozinho quando o agente fechar o preview ou o run terminar.</p>
           </div>
+        ) : windowOpen ? (
+          <div className="m-auto flex flex-col items-center gap-3 text-center text-sm text-muted-foreground p-6">
+            <Crosshair className="h-8 w-8 text-indigo-400" />
+            <p>Preview aberto numa janela dedicada (com barra de controle).</p>
+            <p className="text-xs">Navegue à vontade e use o botão <b>Inspect</b> da barra para selecionar elementos — eles aparecem abaixo para citar. O preview inline fica pausado enquanto a janela está aberta.</p>
+            <div className="flex gap-2">
+              <button onClick={focusInspectWin} className="px-3 py-1.5 rounded-md border hover:bg-muted text-foreground">
+                Focar janela
+              </button>
+              <button onClick={closeInspectWin} className="px-3 py-1.5 rounded-md border hover:bg-muted text-foreground">
+                Fechar
+              </button>
+            </div>
+          </div>
         ) : url ? (
           <iframe
             key={reloadKey}
@@ -297,7 +339,7 @@ export function ProjectPreview({
           </div>
         )}
       </div>
-      {selectionEnabled && (
+      {(selectionEnabled || windowOpen) && (
         <div className="px-2 py-1 border-t empty:hidden">
           <SelectionChip sessionId={projectId} />
         </div>

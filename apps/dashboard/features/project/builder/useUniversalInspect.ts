@@ -1,0 +1,78 @@
+/**
+ * Drives the CDP preview window for a running project: opens the app in
+ * CodeStudio's dedicated window (main process), injects the framework-agnostic
+ * picker + floating control bar, and streams selections into the SHARED
+ * selection store — so the existing `SelectionChip` + `consumeSelectionPrefix`
+ * composer path lights up for ANY stack with no changes to the project.
+ *
+ * One windowed-preview concept with two entry points: `open(true)` = Inspect
+ * (selection mode), `open(false)` = "open in new window" (navigate mode; the
+ * in-window bar toggles selection on). Electron-only (the CDP window lives in
+ * the main process); `canInspect` is false in browser dev or until a dev URL
+ * resolves. Separate from the inline `data-mcp-loc` builder path.
+ */
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { apiCall, apiStream, electronApi } from '../../../lib/api-client.js';
+import { setSelected, type SelectedElement } from '../../builder/studio/studio-context-store.js';
+
+export interface UniversalInspect {
+  /** Electron + a resolved dev URL → the window/inspect affordances are usable. */
+  canInspect: boolean;
+  /** The CDP preview window is currently open (selection or navigate mode). */
+  windowOpen: boolean;
+  /** Open the window. `arm` → start in selection mode; else navigate mode. */
+  open: (arm: boolean) => Promise<void>;
+  close: () => void;
+  focus: () => void;
+}
+
+export function useUniversalInspect(projectId: number, url: string | null): UniversalInspect {
+  const [windowOpen, setWindowOpen] = useState(false);
+  const stopRef = useRef<(() => void) | null>(null);
+  const canInspect = !!url && electronApi() != null;
+
+  const open = useCallback(async (arm: boolean) => {
+    if (!url) return;
+    let cancelled = false;
+    stopRef.current = () => { cancelled = true; };
+    // Subscribe BEFORE opening so no early selection / close is missed.
+    void (async () => {
+      try {
+        for await (const d of apiStream<SelectedElement | { type: 'mcp:closed' }>('previewInspect.events', { projectId })) {
+          if (cancelled) break;
+          if ((d as { type?: string })?.type === 'mcp:closed') { setWindowOpen(false); break; }
+          setSelected(projectId, d as SelectedElement);
+        }
+      } catch { /* stream ended / unavailable */ }
+    })();
+    setWindowOpen(true);
+    try {
+      await apiCall('previewInspect.open', { projectId, url, arm });
+    } catch {
+      stopRef.current?.();
+      stopRef.current = null;
+      setWindowOpen(false);
+    }
+  }, [projectId, url]);
+
+  const close = useCallback(() => {
+    stopRef.current?.();
+    stopRef.current = null;
+    setWindowOpen(false);
+    void apiCall('previewInspect.close', { projectId }).catch(() => undefined);
+  }, [projectId]);
+
+  const focus = useCallback(() => {
+    void apiCall('previewInspect.focus', { projectId }).catch(() => undefined);
+  }, [projectId]);
+
+  // Always close the window when the pane unmounts (tab switch / nav).
+  useEffect(() => {
+    return () => {
+      stopRef.current?.();
+      if (electronApi() != null) void apiCall('previewInspect.close', { projectId }).catch(() => undefined);
+    };
+  }, [projectId]);
+
+  return { canInspect, windowOpen, open, close, focus };
+}

@@ -43,6 +43,18 @@ export type PreviewToParentMessage =
       classes: string[];
       text: string;
       rect: RectLike;
+      // ── Optional enrichments (universal CDP inspect; absent on the inline
+      //    `data-mcp-loc` builder path so its output stays byte-identical) ──
+      /** Framework detected at runtime: 'react' | 'vue' | 'angular' | 'unknown'. */
+      framework?: string;
+      /** Robust CSS selector path (nth-of-type) for elements without a `loc`. */
+      selector?: string;
+      /** Best-effort source file from framework dev metadata (no build stamp). */
+      sourceFile?: string;
+      /** 1-based source line, when the framework exposes it (React `__source`). */
+      sourceLine?: number;
+      /** `data-testid` / `id`, if present — extra anchors for the model. */
+      testId?: string;
     }
   | { type: 'mcp:clear' }
   | { type: 'mcp:console'; level: 'error' | 'warn'; message: string; stack?: string; ts: number }

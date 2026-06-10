@@ -65,6 +65,44 @@ function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(mess
   });
 }
 
+/**
+ * Read-time status repair: for tool_use blocks whose `tool_result` block is
+ * absent from the loaded window, look up the recorded result in the
+ * `coder_tool_calls` audit table. The dashboard seeds these into its
+ * tool-result map so the call renders its real terminal status instead of a
+ * perpetual "loading" spinner. This heals sessions written before the
+ * paired-persistence fix (where a mid-run compaction dropped the tool message
+ * while the audit row survived). Empty for healthy sessions — every block is
+ * already paired — so it adds nothing to the common-case payload.
+ */
+function reconstructMissingToolResults(
+  sessionStore: ServerDeps['sessionStore'],
+  sessionId: number,
+  messages: Array<{ role?: string; content: unknown }>,
+): Array<{ tool_use_id: string; content: string; is_error: boolean; _truncated?: boolean; _originalLength?: number }> {
+  const useIds = new Set<string>();
+  const resIds = new Set<string>();
+  for (const m of messages) {
+    if (!Array.isArray(m.content)) continue;
+    for (const block of m.content as Array<Record<string, unknown>>) {
+      if (!block || typeof block !== 'object') continue;
+      if (block.type === 'tool_use' && typeof block.id === 'string') useIds.add(block.id);
+      else if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') resIds.add(block.tool_use_id);
+    }
+  }
+  const missing = [...useIds].filter((id) => !resIds.has(id));
+  if (missing.length === 0) return [];
+  return sessionStore.getToolResultsByToolUseIds(sessionId, missing).map((r) => {
+    const trimmed = r.result_text.length > TRIM_TOOL_RESULT;
+    return {
+      tool_use_id: r.tool_use_id,
+      content: trimmed ? r.result_text.slice(0, TRIM_TOOL_RESULT) : r.result_text,
+      is_error: r.is_error,
+      ...(trimmed ? { _truncated: true, _originalLength: r.result_text.length } : {}),
+    };
+  });
+}
+
 type GenerateTitleBody = {
   content?: unknown;
   text?: unknown;
@@ -429,10 +467,13 @@ export function mountCoderSessionsRoutes(
     // Count of pre-boundary rows hidden by a manual "summarize & clear" — the
     // dashboard shows a "view earlier history" affordance when this is > 0.
     const archived_count = sessionStore.getArchivedMessageCount(id);
+    // Status fallback for tool calls whose tool_result block was lost (pre-fix
+    // sessions). Empty for healthy sessions — costs nothing in the common case.
+    const tool_results = reconstructMissingToolResults(sessionStore, id, data.messages);
 
-    if (full) return c.json({ ...data, total_messages, archived_count });
+    if (full) return c.json({ ...data, total_messages, archived_count, tool_results });
 
-    return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages, archived_count });
+    return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages, archived_count, tool_results });
   });
 
   /**
@@ -454,7 +495,8 @@ export function mountCoderSessionsRoutes(
     if (!beforeId) return c.json({ error: 'before_id required' }, 400);
 
     const data = sessionStore.loadMessagesBefore(sessionId, beforeId, limit, includeArchived);
-    return c.json({ messages: trimMessageBlocks(data.messages), message_rows: data.message_rows });
+    const tool_results = reconstructMissingToolResults(sessionStore, sessionId, data.messages);
+    return c.json({ messages: trimMessageBlocks(data.messages), message_rows: data.message_rows, tool_results });
   });
 
   app.get('/api/coder/sessions/:id/stats', (c) => {

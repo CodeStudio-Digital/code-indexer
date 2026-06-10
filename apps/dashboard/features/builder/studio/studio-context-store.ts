@@ -45,10 +45,23 @@ export function consumeSelectionPrefix(sid: number): string {
 
 export function formatSelectedElement(sel: SelectedElement): string {
   const classes = sel.classes.join(' ');
+  // The universal (CDP) path supplies a source from framework dev metadata;
+  // the inline builder path supplies `loc` from the data-mcp-loc stamp.
+  const source =
+    sel.sourceFile != null
+      ? `${sel.sourceFile}${sel.sourceLine != null ? `:${sel.sourceLine}` : ''}`
+      : '';
+  // Order chosen so that when the optional (universal-only) attrs are absent,
+  // the emitted string is byte-identical to the original builder output:
+  //   loc → component → tag → classes
   const attrs = [
-    `loc="${sel.loc}"`,
+    sel.loc ? `loc="${sel.loc}"` : '',
+    source ? `source="${source}"` : '',
+    sel.framework ? `framework="${sel.framework}"` : '',
     sel.componentName ? `component="${sel.componentName}"` : '',
     `tag="${sel.tag}"`,
+    sel.selector ? `selector="${sel.selector}"` : '',
+    sel.testId ? `testid="${sel.testId}"` : '',
     classes ? `classes="${classes}"` : '',
   ]
     .filter(Boolean)

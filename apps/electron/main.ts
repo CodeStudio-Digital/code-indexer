@@ -28,6 +28,7 @@ import { PreviewWindowService } from './src/preview-window/service.js';
 import { startOptionalDevHttp } from './src/dev-http.js';
 import { OAUTH_LOOPBACK_PORT, startOAuthLoopback, stopOAuthLoopback } from './src/oauth-loopback.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
+import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
 import type { Hono } from 'hono';
 
@@ -147,6 +148,9 @@ async function bootstrap() {
   // the runner workers via the bridge handler in the worker pools.
   const previewService = new PreviewWindowService();
   setGlobalPreviewDevtools(previewService);
+  // Dashboard "Inspect": reuse the SAME service so universal element-selection
+  // windows are managed alongside the agent's preview windows.
+  mountPreviewInspectIpc(previewService);
   app.on('before-quit', () => previewService.closeAll());
   app.on('before-quit', () => stopOAuthLoopback());
 

@@ -28,6 +28,12 @@ export class PreviewWindow {
   private network: NetEntry[] = [];
   private netById = new Map<string, NetEntry>();
   private waiters: Waiter[] = [];
+  /** Listeners for element selections from the injected universal inspector. */
+  private selectListeners = new Set<(d: unknown) => void>();
+  /** Listeners for control-bar actions (`viewport:<preset>`, `close`). */
+  private controlListeners = new Set<(action: string) => void>();
+  /** True once the inspector script has been registered for new documents. */
+  private inspectArmed = false;
   /** Current viewport (native window content size — informational). */
   viewport: Viewport = { ...DEFAULT_VIEWPORT };
 
@@ -47,6 +53,39 @@ export class PreviewWindow {
 
   async send(method: string, params?: Record<string, unknown>): Promise<unknown> {
     return this.win.webContents.debugger.sendCommand(method, params ?? {});
+  }
+
+  /** Subscribe to element selections (universal inspector → `__mcpSelect`). */
+  onSelect(cb: (d: unknown) => void): () => void {
+    this.selectListeners.add(cb);
+    return () => this.selectListeners.delete(cb);
+  }
+
+  /** Subscribe to control-bar actions (universal toolbar → `__mcpControl`). */
+  onControl(cb: (action: string) => void): () => void {
+    this.controlListeners.add(cb);
+    return () => this.controlListeners.delete(cb);
+  }
+
+  /**
+   * Inject the framework-agnostic inspector into the page (and every future
+   * document, so it survives SPA route changes / HMR reloads) and expose the
+   * `__mcpSelect` binding that carries selections back via `Runtime.bindingCalled`.
+   * Idempotent — the script self-guards (`__mcpInspectorInstalled`) and we only
+   * register the on-new-document hook once per window.
+   */
+  async armInspect(source: string): Promise<void> {
+    await this.send('Runtime.addBinding', { name: '__mcpSelect' }).catch(() => undefined);
+    await this.send('Runtime.addBinding', { name: '__mcpControl' }).catch(() => undefined);
+    if (!this.inspectArmed) {
+      await this.send('Page.addScriptToEvaluateOnNewDocument', { source }).catch(() => undefined);
+      this.inspectArmed = true;
+    }
+    await this.send('Runtime.evaluate', { expression: source }).catch(() => undefined);
+  }
+
+  async disarmInspect(): Promise<void> {
+    await this.send('Runtime.evaluate', { expression: 'window.__mcpDisarm && window.__mcpDisarm()' }).catch(() => undefined);
   }
 
   /** Reset console/network ring buffers — called on navigate / window reuse so
@@ -154,6 +193,21 @@ export class PreviewWindow {
       this.push(this.console, e);
       this.fire('console', e);
       void this.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => undefined);
+    } else if (method === 'Runtime.bindingCalled') {
+      const payload = typeof p.payload === 'string' ? p.payload : '';
+      if (p.name === '__mcpSelect') {
+        // The injected universal inspector calls window.__mcpSelect(json) on click.
+        let parsed: unknown = null;
+        try { parsed = JSON.parse(payload); } catch { /* malformed */ }
+        if (parsed) for (const cb of Array.from(this.selectListeners)) {
+          try { cb(parsed); } catch { /* listener threw — ignore */ }
+        }
+      } else if (p.name === '__mcpControl') {
+        // The floating toolbar calls window.__mcpControl('viewport:<preset>'|'close').
+        for (const cb of Array.from(this.controlListeners)) {
+          try { cb(payload); } catch { /* listener threw — ignore */ }
+        }
+      }
     }
   }
 }

@@ -151,6 +151,9 @@ const STREAMING_METHOD_PATHS: ReadonlySet<string> = new Set([
   'terminal:output',
   'runner:events',
   'runtime:download',
+  // Universal "Inspect" — stream of element selections from the CDP preview
+  // window. Implemented by apps/electron/src/preview-inspect-ipc.ts.
+  'previewInspect:events',
   'docs:sources:createUrlStream',
   'docs:sources:createPdfStream',
   'docs:sources:createFolderStream',

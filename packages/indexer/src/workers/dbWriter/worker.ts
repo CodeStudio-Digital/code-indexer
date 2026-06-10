@@ -68,6 +68,21 @@ const persistAssistantTurnTx = db.transaction((p: PersistAssistantTurnPayload) =
       tc.turn_telemetry_id ?? null,
     );
   }
+  // Paired tool-role message (mirrors store/messages.ts persistAssistantTurn):
+  // the dashboard derives tool status from the presence of a matching
+  // tool_result block, so this must land atomically with the assistant turn.
+  if (p.tool_calls.length > 0) {
+    const toolResultBlocks = p.tool_calls.map((tc) => ({
+      type: 'tool_result' as const,
+      tool_use_id: tc.tool_use_id,
+      content: tc.result_text,
+      is_error: tc.is_error,
+      ...(tc.truncated
+        ? { truncated: true, originalSize: tc.output_chars ?? tc.result_text.length }
+        : {}),
+    }));
+    insertMsg.run(p.session_id, 'tool', JSON.stringify(toolResultBlocks), 0, 0, 0, 0);
+  }
   if (p.usage) {
     bumpStmt.run(
       p.usage.input_tokens,

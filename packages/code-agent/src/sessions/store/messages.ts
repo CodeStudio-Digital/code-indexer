@@ -165,6 +165,28 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
         tc.refusal_kind ?? classifyToolRefusal(tc.result_text, tc.is_error),
       );
     }
+    // Persist the PAIRED tool-role message in the SAME transaction. The
+    // dashboard derives a tool call's status purely from the presence of a
+    // matching `tool_result` block, so a tool message that never lands shows a
+    // perpetual "loading" spinner. The old host-side `flushToolMessages` index
+    // scan silently dropped these whenever a mid-run compaction reassigned the
+    // in-memory message array (it walked `runner.messages` from a stale cursor
+    // that now pointed past the shrunken array) — that's why long auto-runs
+    // that compact often (e.g. session 969) lost almost every tool result.
+    // Rebuilding from the same `tool_calls` buffer that backs the audit rows
+    // makes the assistant→tool pair atomic and immune to array mutation.
+    if (input.tool_calls.length > 0) {
+      const toolResultBlocks = input.tool_calls.map((tc) => ({
+        type: 'tool_result' as const,
+        tool_use_id: tc.tool_use_id,
+        content: tc.result_text,
+        is_error: tc.is_error,
+        ...(tc.truncated
+          ? { truncated: true, originalSize: tc.output_chars ?? tc.result_text.length }
+          : {}),
+      }));
+      insertMsg.run(input.session_id, 'tool', JSON.stringify(toolResultBlocks), 0, 0, 0, 0);
+    }
     if (input.usage) {
       bumpStmt.run(
         input.usage.input_tokens, input.usage.output_tokens,

@@ -83,6 +83,17 @@ const PersistedMessages = React.memo(function PersistedMessages({
   const { t } = useTranslation('chat');
   const resultsById = useMemo(() => {
     const m = new Map<string, { content: string; isError: boolean }>();
+    // Seed from the coder_tool_calls audit fallback FIRST so any real
+    // tool_result block below overrides it. This covers tool calls whose tool
+    // message was never persisted (pre-fix sessions where a mid-run compaction
+    // dropped it) — without it they render as a perpetual loading spinner.
+    for (const tr of sessionData.tool_results ?? []) {
+      const suffix =
+        tr._truncated && tr._originalLength
+          ? `\n\n… [truncated for transport — ${tr._originalLength - (tr.content?.length ?? 0)} more chars in DB]`
+          : '';
+      m.set(tr.tool_use_id, { content: (tr.content ?? '') + suffix, isError: Boolean(tr.is_error) });
+    }
     for (const msg of sessionData.messages) {
       if (msg.role !== 'tool') continue;
       for (const b of msg.content) {
