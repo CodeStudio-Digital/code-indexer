@@ -12,10 +12,12 @@ import { mountDesignSystemSessionRoutes } from './sessions.js';
 import { mountDesignSystemVersionRoutes } from './versions.js';
 import { mountDesignSystemRoundRoutes } from './round.js';
 import { mountDesignSystemStudioRoutes } from './studio.js';
+import { mountDesignSystemConsumerRoutes } from './consumer.js';
 
 export function mountDesignSystemRoutes(app: Hono, deps: ServerDeps): void {
   mountDesignSystemSessionRoutes(app, deps);
   mountDesignSystemVersionRoutes(app, deps);
   mountDesignSystemRoundRoutes(app, deps);
   mountDesignSystemStudioRoutes(app, deps);
+  mountDesignSystemConsumerRoutes(app, deps);
 }

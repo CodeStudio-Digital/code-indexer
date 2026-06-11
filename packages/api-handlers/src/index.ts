@@ -34,6 +34,12 @@ export { runScaffoldStream } from './projects/scaffold.js';
 export { runDsStudioScaffoldStream } from './design-system/studio-scaffold.js';
 export type { DsStudioCreateInput, DsStudioStreamEvent } from './design-system/studio-scaffold.js';
 export { reinstrumentBuilder, type ReinstrumentResult } from './projects/reinstrument.js';
+export {
+  linkDesignSystem,
+  unlinkDesignSystem,
+  linkDsToDir,
+  type DsConsumerLink,
+} from './projects/link-design-system.js';
 export { createFilesHandlers } from './files/index.js';
 export { createTerminalHandlers } from './terminal/index.js';
 export { createRunnerHandlers } from './runner/index.js';

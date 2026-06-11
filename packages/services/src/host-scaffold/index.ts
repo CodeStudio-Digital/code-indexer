@@ -18,6 +18,9 @@ export {
   BUILDER_DEPS,
 } from './builder-inject.js';
 export { runHostCommand } from './run-host-command.js';
+export type { RunHostCommandResult } from './run-host-command.js';
+export { upsertNpmrcScopedRegistry, removeNpmrcScopedRegistry, packageScope } from './npmrc.js';
+export { installDsPackage, uninstallDsPackage } from './ds-consumer-install.js';
 export { INSTALL_TIMEOUT_MS, NON_INTERACTIVE_ENV } from './templates/types.js';
 export { validateScaffoldInput, ScaffoldValidationError } from './validate.js';
 export type { ScaffoldInput } from './validate.js';

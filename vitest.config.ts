@@ -24,6 +24,7 @@ export default defineConfig({
     alias: [
       ...pkgAliases('@mcp/shared', 'shared'),
       ...pkgAliases('@mcp/store', 'store'),
+      ...pkgAliases('@mcp/api-bus', 'api-bus'),
       ...legacyServicesFallback,
       ...pkgAliases('@mcp/services', 'services'),
       ...pkgAliases('@mcp/indexer', 'indexer'),

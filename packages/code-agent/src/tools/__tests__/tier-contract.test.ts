@@ -84,6 +84,8 @@ const FACTORY_ALWAYS_ON = [
   'invoke_skill', 'get_skills_list', 'get_skill_content', 'list_skill_namespaces', 'create_skill',
   'read_plan', 'save_note', 'list_notes', 'recall_investigations',
   'mcp_list_resources', 'mcp_read_resource',
+  // DS consumer set (builder project linked to a published design system).
+  'ds_components', 'ds_component', 'ds_docs',
 ];
 
 const isRuntimeTiered = (name: string) => name.startsWith('mcp__') || name.startsWith('ext_');
@@ -118,6 +120,12 @@ describe('tier contract — every registered tool has an explicit tier', () => {
 describe('tier contract — Phase A/B placements are locked', () => {
   it('keeps the workhorses + anti-deadlock tools always-on (bootstrap)', () => {
     for (const n of ['code_exec', 'view_image', 'submit_spec', 'create_goal', 'update_goal', 'glob', 'mcp__read_file']) {
+      expect(getToolTier(n), n).toBe('bootstrap');
+    }
+  });
+
+  it('keeps the DS consumer queries always-on (bootstrap)', () => {
+    for (const n of ['ds_components', 'ds_component', 'ds_docs']) {
       expect(getToolTier(n), n).toBe('bootstrap');
     }
   });

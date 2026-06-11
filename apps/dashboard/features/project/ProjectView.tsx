@@ -73,6 +73,7 @@ import { apiCall } from '../../lib/api-client.js';
 import { useApi } from '../../hooks/useApi.js';
 import type { Project } from '@mcp/shared/types.js';
 import { ProjectPreview } from './builder/ProjectPreview.js';
+import { LinkDesignSystemDialog } from './builder/LinkDesignSystemDialog.js';
 import { useRunningTasks, tasksForProject, isDevServerTask } from '../../state/running-tasks.js';
 import {
   loadPersistedTabs,
@@ -408,6 +409,7 @@ interface ProjectTopBarProps {
 }
 
 function ProjectTopBar({
+  projectId,
   projectName,
   bottomOpen,
   onToggleBottom,
@@ -420,6 +422,7 @@ function ProjectTopBar({
         {projectName}
       </span>
       <div className="ml-auto flex items-center gap-0.5">
+        <LinkDesignSystemDialog projectId={projectId} />
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

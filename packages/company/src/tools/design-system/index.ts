@@ -32,6 +32,14 @@ export {
 } from '@mcp/company/tools/design-system/store-binding.js';
 export { companyBinding, studioBinding } from '@mcp/company/tools/design-system/binding.js';
 export type { DsToolBinding, DsToolProfile } from '@mcp/company/tools/design-system/binding.js';
+export { buildDesignSystemConsumerTools } from '@mcp/company/tools/design-system/consumer-tools.js';
+export {
+  resolveConsumerVersion,
+  summarizeProps,
+  manifestTokenNames,
+  sortComponents,
+} from '@mcp/company/tools/design-system/consumer-resolve.js';
+export type { DsConsumerBinding } from '@mcp/company/tools/design-system/consumer-resolve.js';
 export { dsGetSessionInfo } from '@mcp/company/tools/design-system/ds-get-session-info.js';
 export { dsRecordComponent, ensureDraftVersion } from '@mcp/company/tools/design-system/ds-record-component.js';
 export { dsListComponents } from '@mcp/company/tools/design-system/ds-list-components.js';

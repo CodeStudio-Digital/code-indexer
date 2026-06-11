@@ -56,12 +56,13 @@ import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
 import { buildSpawnAgentTool } from '@mcp/code-agent/tools/spawn-agent.js';
 import { loadPrompt, interpolate } from '@mcp/code-agent/prompts/loader.js';
-import { parseDsWorkspace } from '@mcp/code-agent/core/builder-config.js';
+import { parseDsConsumer, parseDsWorkspace } from '@mcp/code-agent/core/builder-config.js';
+import { buildDsConsumerBlock } from '@mcp/code-agent/core/ds-consumer-prompt.js';
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
 import { buildKanbanTools } from '@mcp/company/tools/kanban-tools.js';
 import { buildBoardTools } from '@mcp/company/tools/board-tools.js';
 import { buildQaTools } from '@mcp/company/tools/qa/index.js';
-import { buildDesignSystemStudioTools } from '@mcp/company/tools/design-system/index.js';
+import { buildDesignSystemStudioTools, buildDesignSystemConsumerTools } from '@mcp/company/tools/design-system/index.js';
 import { buildSubordinateTools } from '@mcp/company/tools/subordinate-tools.js';
 import { buildSharedDriveTools } from '@mcp/company/tools/shared-drive-tools.js';
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
@@ -327,6 +328,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const dsWorkspace = !opts.companyContext ? parseDsWorkspace(project.builder_json) : null;
   if (dsWorkspace && config.features.designSystemEnabled) {
     registry.registerAll(buildDesignSystemStudioTools(project.id));
+  }
+  // DS CONSUMER — a builder project linked to a PUBLISHED design system
+  // (`builder_json.designSystem`, written by the link flow) gets read-only
+  // query tools (ds_components/ds_component/ds_docs) so the agent uses the
+  // library instead of guessing props. Mutually exclusive with the studio
+  // workspace above (parseDsConsumer returns null when kind==='ds').
+  const dsConsumer = !opts.companyContext && !dsWorkspace ? parseDsConsumer(project.builder_json) : null;
+  if (dsConsumer && config.features.designSystemEnabled) {
+    registry.registerAll(buildDesignSystemConsumerTools(dsConsumer));
   }
   // Cross-agent comm tools (list_agents / wait_agents / send_message /
   // send_input / followup_task) were registered here UNCONDITIONALLY, so they
@@ -1038,6 +1048,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         ? '4. Angular only: run `ng build pkg` first and publish the BUILT output (`ds_publish_version({ pkg_dir: "dist/pkg" })`).'
         : '',
     });
+  } else if (dsConsumer && config.features.designSystemEnabled) {
+    // DS consumer block — derives from the pinned published version
+    // (immutable rows), so the prefix stays byte-stable across turns.
+    systemPrompt += '\n' + buildDsConsumerBlock(dsConsumer);
   }
 
   // Append skill awareness block. Mode resolution priority:

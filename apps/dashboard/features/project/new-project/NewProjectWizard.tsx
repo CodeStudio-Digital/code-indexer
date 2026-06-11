@@ -30,7 +30,7 @@ interface NewProjectWizardProps {
 
 type Step = 'pick' | 'config' | 'progress';
 
-const EMPTY_CONFIG: ConfigState = { name: '', description: '', repoUrl: '', gitInit: true, builder: false };
+const EMPTY_CONFIG: ConfigState = { name: '', description: '', repoUrl: '', gitInit: true, builder: false, dsSessionId: null };
 
 export default function NewProjectWizard({ open, onOpenChange, onCreated }: NewProjectWizardProps) {
   const { t } = useTranslation(['projects', 'common']);
@@ -85,6 +85,7 @@ export default function NewProjectWizard({ open, onOpenChange, onCreated }: NewP
       repoUrl: meta?.requiresRepoUrl ? config.repoUrl.trim() : undefined,
       gitInit: template === 'empty' ? config.gitInit : undefined,
       builder: template === 'react-vite' ? config.builder : undefined,
+      dsSessionId: template === 'react-vite' && config.builder ? config.dsSessionId ?? undefined : undefined,
     });
   }
 

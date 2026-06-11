@@ -19,6 +19,9 @@ export interface ScaffoldInput {
    * project. Only valid for `react-vite` today.
    */
   builder?: boolean;
+  /** Published Design System (DS Studio session id) to link after the
+   *  builder scaffold. Only meaningful when `builder` is true. */
+  dsSessionId?: number;
 }
 
 export class ScaffoldValidationError extends Error {
@@ -58,6 +61,11 @@ export function validateScaffoldInput(body: unknown): ScaffoldInput {
   // Builder is only meaningful for the React+Vite template (the only stack
   // with a source-stamp plugin today).
   const builder = b.builder === true && template === 'react-vite';
+  // DS link rides on builder mode only; anything non-positive-int is dropped.
+  const dsSessionId =
+    builder && typeof b.dsSessionId === 'number' && Number.isInteger(b.dsSessionId) && b.dsSessionId > 0
+      ? b.dsSessionId
+      : undefined;
 
-  return { template, name, description, repoUrl, gitInit, builder };
+  return { template, name, description, repoUrl, gitInit, builder, dsSessionId };
 }

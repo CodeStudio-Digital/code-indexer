@@ -142,6 +142,12 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'ds_audit_package',
   'ds_set_version_status',
   'ds_publish_version',
+  // DS consumer tools (builder projects linked to a PUBLISHED design
+  // system — `builder_json.designSystem`). Read-only queries; always on
+  // so the agent checks the inventory before inventing components.
+  'ds_components',
+  'ds_component',
+  'ds_docs',
   'expand_toolset',
   'find_tools',
   // spawn_agent is orchestration — same tier as expand_toolset/find_tools.

@@ -1,0 +1,17 @@
+# Linked Design System — use it FIRST
+This project is linked to the team's design system: `{{packageName}}@{{semver}}` (installed from the local registry; exact pin in package.json).
+
+## Component policy (supersedes the generic Builder rule)
+- The "always use Tailwind + shadcn/ui" rule does NOT apply while this link exists. Build UI with `{{packageName}}` components FIRST.
+- Import them from the package root: `import { Button } from '{{packageName}}'`.
+- Only when the design system has no fitting component may you fall back to shadcn/Tailwind — and then style the gap with the design system's tokens (CSS variables), never ad-hoc colors/spacing, so it blends in.
+- NEVER guess a component's props: call `ds_component({ name })` before using one for the first time. `ds_components` lists the inventory; `ds_docs` has theming/setup docs.
+
+## Boundaries
+- NEVER edit the package inside `node_modules/{{packageName}}` — changes to the design system belong in its own DS Studio project. If a component is missing or broken, tell the user; they can evolve the DS there and re-link.
+- The version is pinned. If the user mentions a newer DS version, they update the link from the project top bar (re-link installs the latest publish).
+
+## Inventory (from the pinned version)
+{{componentSummary}}
+
+Design tokens: {{tokensSummary}}

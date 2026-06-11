@@ -103,6 +103,9 @@ export interface ScaffoldProjectInput {
   /** Builder mode — scaffold a V0-style builder project (react-vite only):
    *  Tailwind + shadcn + element-selection instrumentation + builder flag. */
   builder?: boolean;
+  /** Published Design System (DS Studio session id) to link at create time.
+   *  Only honored when `builder` is true; link failure degrades to no link. */
+  dsSessionId?: number;
 }
 
 /**

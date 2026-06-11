@@ -23,6 +23,7 @@ import {
   NON_INTERACTIVE_ENV,
 } from '@mcp/services/host-scaffold/index.js';
 import { CreateProjectService, ProjectError } from '@mcp/services/services/projects/index.js';
+import { linkDsToDir } from './link-design-system.js';
 import type { HandlerDeps } from '../types.js';
 
 type Emit = (event: ScaffoldStreamEvent) => void;
@@ -84,7 +85,28 @@ export async function runScaffoldStream(
       }
       emit({ event: 'phase', data: { phase: 'configure', label: 'Instrumenting for element selection…' } });
       injectBuilderStampHost(targetDir, 'react-ts', port);
-      builderJson = JSON.stringify({ stack: 'react-ts', port });
+      let builderCfg: Record<string, unknown> = { stack: 'react-ts', port };
+      // Optional design-system link. Degrades: a failed link (registry down,
+      // DS unpublished, npm error) must not lose an otherwise good scaffold —
+      // the project is created without the link and the user links later
+      // from the project top bar.
+      if (validated.dsSessionId) {
+        emit({ event: 'phase', data: { phase: 'link-ds', label: 'Linking design system…' } });
+        try {
+          const link = await linkDsToDir(deps, {
+            targetDir,
+            dsSessionId: validated.dsSessionId,
+            targetStack: 'react-ts',
+            signal,
+            onLog: (stream, chunk) => emit({ event: 'log', data: { stream, chunk } }),
+          });
+          builderCfg = { ...builderCfg, designSystem: link };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          emit({ event: 'log', data: { stream: 'stderr', chunk: `Design system link failed — project created without it: ${message}\n` } });
+        }
+      }
+      builderJson = JSON.stringify(builderCfg);
     } catch (err) {
       emit({ event: 'error', data: { message: `Builder instrumentation failed: ${err instanceof Error ? err.message : String(err)}` } });
       return;
