@@ -153,6 +153,7 @@
   "runs.noRuns": "No runs yet.",
   "runs.runLabel": "Run #{{id}}",
   "runs.filesCount": "{{indexed}}/{{total}} files",
+  "runs.errorsCount": "{{count}} error(s)",
   "diff.loading": "Loading diff…",
   "diff.notEnoughRuns": "Not enough runs to compare.",
   "diff.noData": "No diff data available.",

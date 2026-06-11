@@ -7,6 +7,7 @@ import {
   formatTasksRejectedResult,
 } from '@mcp/code-agent/tools/tasks.js';
 import { formatAskUserResult } from '@mcp/code-agent/tools/interaction.js';
+import { approvalAskId, buildUserDeniedText } from '@mcp/code-agent/core/permission-gate.js';
 import { createChatProviderAsync } from '@mcp/services/providers/factory.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
@@ -38,13 +39,20 @@ interface SwitchProviderBody {
   model?: string;
 }
 
+interface ToolApprovalBody {
+  tool_use_id: string;
+  approved: boolean;
+  note?: string;
+  always_allow?: boolean;
+}
+
 export function mountCoderInteractionRoutes(
   app: Hono,
   deps: ServerDeps,
   runtime: CoderRuntime,
 ): void {
   const { sessionStore } = deps;
-  const { activeRuns, findPendingInteraction } = runtime;
+  const { activeRuns, findPendingInteraction, findDanglingToolUse } = runtime;
 
   /**
    * Emit a route-level `worker_log` event so the dashboard's
@@ -128,6 +136,69 @@ export function mountCoderInteractionRoutes(
         type: 'tool_result',
         tool_use_id: pending.toolUseId,
         content: formatAskUserResult(answer),
+      }],
+    };
+    sessionStore.appendMessage(id, toolMsg);
+    return c.json(
+      inWorkerMode
+        ? { ok: true, resumed_via_worker: true }
+        : { ok: true, resumed: true },
+    );
+  });
+
+  /**
+   * Resolve a pending PermissionGate approval — a write/execute/admin tool
+   * call paused BEFORE execution (modes 'ask'/'auto'). Live path: resolves
+   * the keyed wait slot `tool_approval:<tool_use_id>`. Dead-runner path:
+   * the tool was NEVER executed, so approving can't run it retroactively —
+   * both verdicts seal the dangling tool_use with an error result (deny →
+   * `[user-denied…]`, approve → re-call instruction) and the model
+   * re-decides on the next run.
+   */
+  app.post('/api/coder/sessions/:id/tool-approval', async (c) => {
+    const id = parseIdParam(c);
+    const body = await c.req.json<ToolApprovalBody>();
+    const toolUseId = typeof body.tool_use_id === 'string' ? body.tool_use_id.trim() : '';
+    if (!toolUseId) return c.json({ error: 'tool_use_id required' }, 400);
+    const approved = !!body.approved;
+    logRouteHit(id, '/tool-approval', {
+      tool_use_id: toolUseId,
+      approved,
+      always_allow: !!body.always_allow,
+    });
+    const payload = JSON.stringify({
+      approved,
+      note: body.note,
+      alwaysAllow: !!body.always_allow,
+    });
+    const askId = approvalAskId(toolUseId);
+    const inWorkerMode = coderWorkerEnabled();
+    if (inWorkerMode) {
+      try {
+        const ok = await getCoderWorkerPool().provideUserInput(id, payload, askId);
+        if (ok) return c.json({ ok: true });
+      } catch (err) {
+        console.warn(
+          `[coder] worker provideUserInput(tool-approval) failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    const entry = activeRuns.get(id);
+    if (entry?.runner) {
+      const ok = entry.runner.provideUserInput(payload, askId);
+      if (ok) return c.json({ ok });
+    }
+    const dangling = findDanglingToolUse(id, toolUseId);
+    if (!dangling) return c.json({ error: 'no pending tool approval' }, 404);
+    const toolMsg: AgentMessage = {
+      role: 'tool',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content: approved
+          ? '[approval-after-restart: aprovação recebida, mas o runner reiniciou e a ferramenta NÃO foi executada. Chame a ferramenta novamente.]'
+          : buildUserDeniedText(dangling.name, body.note),
+        is_error: true,
       }],
     };
     sessionStore.appendMessage(id, toolMsg);

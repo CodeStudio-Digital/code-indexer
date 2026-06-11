@@ -138,8 +138,7 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // and matches the pattern used for the kanban subordinate tools.
   'ds_get_session_info',
   'ds_record_component',
-  'ds_validate_manifest',
-  'ds_validate_stories',
+  'ds_list_components',
   'ds_audit_package',
   'ds_set_version_status',
   'ds_publish_version',

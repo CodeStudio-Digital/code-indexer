@@ -54,6 +54,7 @@ import type { VectorStore } from '@mcp/store/vectors.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { HyDEService } from '@mcp/indexer/search/hyde.js';
+import { planQuery } from '@mcp/indexer/search/planner.js';
 import type { RerankerService } from '@mcp/indexer/search/reranker.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import type { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
@@ -275,6 +276,12 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
   }
 
   private async buildVariants(query: string): Promise<string[]> {
+    // Same shortcut as the legacy path: identifier-shaped queries skip the
+    // HyDE LLM call and template expansion (covers callers that request
+    // hybrid explicitly). Kill switch: MCP_HYBRID_HYDE_SKIP_FTS=0.
+    if (process.env.MCP_HYBRID_HYDE_SKIP_FTS !== '0' && planQuery(query).mode === 'fts') {
+      return [query.trim()];
+    }
     if (this.deps.hyde) {
       const hypothetical = await this.deps.hyde.generate(query);
       if (hypothetical && hypothetical !== query) return [query, hypothetical];

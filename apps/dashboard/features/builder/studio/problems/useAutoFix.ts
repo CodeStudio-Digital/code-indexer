@@ -1,25 +1,23 @@
 /**
- * Auto-fix loop for the Builder studio. When enabled (default ON), it
- * periodically asks the builder agent to resolve the newest unresolved
- * error in the problems feed — self-healing, V0-style.
+ * Auto-fix loop for the Builder studio. When enabled (default ON), it asks
+ * the builder agent to resolve preview errors — self-healing, V0-style —
+ * but ONLY while the agent is idle. Errors captured mid-run never fire
+ * (the agent's own edits keep resurfacing them via HMR); instead, at the
+ * busy→idle edge the container reloads the preview once (`onRevalidate`)
+ * and only errors that re-emit after that reload — still real in the final
+ * state — fire a single auto-fix message.
  *
- * Anti-loop guards (all required, this is the loaded-gun part):
- *   - Per-signature attempt cap: stop auto-firing an error after N tries
- *     (it keeps reappearing → the agent can't fix it → hand back to human).
- *   - Agent-busy gate: never fire while the master is mid-turn / awaiting
- *     input (read from the shared store, written by the chat pane).
- *   - Global cooldown: one auto-fire at a time, with breathing room so the
- *     agent's edit + HMR can settle before the next evaluation.
- *   - Console warnings are never auto-fixed — only real runtime/network
- *     errors.
+ * The decision rules (suspect watermark, freshness, attempt cap, cooldown,
+ * console exclusion) live in autofix-policy.ts as a pure function; this
+ * hook owns the React wiring and the mutable counters. The busy signal is
+ * published by the chat pane (usePublishAgentBusy in AgentChat for the
+ * single-session/DS path, CompanySessionView for the company path).
  */
 import { useEffect, useRef, useState } from 'react';
 import { formatProblem, isAgentBusy, requestStudioSend } from '../studio-context-store.js';
+import { decideAutoFix, TICK_MS } from './autofix-policy.js';
 import type { Problem } from './usePreviewProblems.js';
 
-const MAX_ATTEMPTS = 3;
-const COOLDOWN_MS = 12_000;
-const TICK_MS = 2_000;
 const STORAGE_KEY = 'mcp.studio.autofix';
 
 function readEnabled(): boolean {
@@ -32,10 +30,27 @@ function readEnabled(): boolean {
   }
 }
 
-export function useAutoFix(sessionId: number, problems: Problem[]) {
+export interface AutoFixOptions {
+  /**
+   * Reload the preview so errors that still exist re-emit fresh (run-end
+   * revalidation). Without it, run-end suspects simply never fire.
+   */
+  onRevalidate?: () => void;
+}
+
+export function useAutoFix(sessionId: number, problems: Problem[], opts?: AutoFixOptions) {
   const [enabled, setEnabledState] = useState(readEnabled);
   const attempts = useRef<Map<string, number>>(new Map());
-  const lastFireAt = useRef(0);
+  // Warm-up: pretend we just fired, so a freshly mounted pane (dashboard
+  // reload mid-run → busy publishes a beat late) can't fire instantly.
+  const lastFireAt = useRef(Date.now());
+  const prevBusy = useRef(false);
+  // Watermark: only problems (re-)emitted after this instant may fire. It
+  // advances at every busy→idle edge, marking everything captured during
+  // the run as suspect until the revalidation reload proves it survives.
+  const suspectBefore = useRef(0);
+  const optsRef = useRef(opts);
+  optsRef.current = opts;
 
   function setEnabled(v: boolean) {
     setEnabledState(v);
@@ -49,16 +64,25 @@ export function useAutoFix(sessionId: number, problems: Problem[]) {
   useEffect(() => {
     if (!enabled) return;
     const tick = () => {
-      const candidates = problems.filter((p) => p.kind !== 'console');
-      if (candidates.length === 0) return;
-      if (isAgentBusy(sessionId)) return;
       const now = Date.now();
-      if (now - lastFireAt.current < COOLDOWN_MS) return;
-      // Newest candidate that hasn't exhausted its attempts.
-      const target = [...candidates]
-        .reverse()
-        .find((p) => (attempts.current.get(p.signature) ?? 0) < MAX_ATTEMPTS);
-      if (!target) return;
+      const busyNow = isAgentBusy(sessionId);
+      const decision = decideAutoFix({
+        problems,
+        attempts: attempts.current,
+        busyNow,
+        prevBusy: prevBusy.current,
+        suspectBefore: suspectBefore.current,
+        lastFireAt: lastFireAt.current,
+        now,
+      });
+      prevBusy.current = busyNow;
+      if (decision.kind === 'edge') {
+        suspectBefore.current = now;
+        if (decision.revalidate) optsRef.current?.onRevalidate?.();
+        return;
+      }
+      if (decision.kind !== 'fire') return;
+      const target = decision.target;
       attempts.current.set(target.signature, (attempts.current.get(target.signature) ?? 0) + 1);
       lastFireAt.current = now;
       requestStudioSend(

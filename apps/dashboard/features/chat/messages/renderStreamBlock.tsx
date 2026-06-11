@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { AlertCircle, Brain, ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
 import type { PreThinkStreamBlock, StreamBlock } from '../../../hooks/agent-stream/types.js';
 import { PlanPromptView } from '../prompts/PlanPromptView.js';
 import { SpecPromptView } from '../prompts/SpecPromptView.js';
@@ -8,36 +7,13 @@ import { QuestionPromptView } from '../prompts/QuestionPromptView.js';
 import { TaskListReview } from '../prompts/TaskListReview.js';
 import type { PromptHandlers } from '../types.js';
 import { AgentsGroupBlock } from './AgentsGroupBlock.js';
-import { Markdown } from './Markdown.js';
+import { LiveTextBlock, LiveThinkingBlock } from './live-blocks.js';
 import { TaskExecutionBlock } from './TaskExecutionBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
 import { TodoWriteBlock } from './TodoWriteBlock.js';
 import { SelfReviewBlock } from './SelfReviewBlock.js';
 import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 import { ActivityLineBlock } from '../../../components/stream/ActivityLineBlock.js';
-
-function LiveThinkingBlock({ text }: { text: string }) {
-  const { t } = useTranslation('chat');
-  const [open, setOpen] = useState(true);
-  return (
-    <div className="my-1">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <Brain className="h-3.5 w-3.5 animate-pulse" />
-        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <span className="font-medium">{t('messages.thinking')}</span>
-      </button>
-      {open && (
-        <div className="mt-1 ml-5 rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground italic whitespace-pre-wrap max-h-[40vh] overflow-y-auto">
-          {text}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /**
  * Simulated deepThink block — a pre-thought written by an auxiliary cheap
@@ -105,11 +81,7 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
     return <ActivityLineBlock key={`act-${block.id}`} activity={block} />;
   }
   if (block.type === 'text') {
-    return (
-      <div key={`t-${key}`} className="text-sm text-foreground/90">
-        <Markdown text={block.text} />
-      </div>
-    );
+    return <LiveTextBlock key={`t-${key}`} text={block.text} />;
   }
   if (block.type === 'tool') {
     if (isGoalTool(block.call.name)) {
@@ -123,7 +95,7 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
       !block.call.result.isError
     ) {
       return (
-        <ToolCallBlock key={`tc-${block.call.id}`} call={block.call}>
+        <ToolCallBlock key={`tc-${block.call.id}`} call={block.call} onToolApproval={handlers.onToolApproval}>
           <TodoWriteBlock text={block.call.result.content} />
         </ToolCallBlock>
       );
@@ -135,12 +107,12 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
       !block.call.result.isError
     ) {
       return (
-        <ToolCallBlock key={`tc-${block.call.id}`} call={block.call}>
+        <ToolCallBlock key={`tc-${block.call.id}`} call={block.call} onToolApproval={handlers.onToolApproval}>
           <SelfReviewBlock text={block.call.result.content} />
         </ToolCallBlock>
       );
     }
-    return <ToolCallBlock key={`tc-${block.call.id}`} call={block.call} />;
+    return <ToolCallBlock key={`tc-${block.call.id}`} call={block.call} onToolApproval={handlers.onToolApproval} />;
   }
   if (block.type === 'plan') {
     return <PlanPromptView key={`pl-${block.plan.id}`} plan={block.plan} onResponse={handlers.onPlanResponse} />;

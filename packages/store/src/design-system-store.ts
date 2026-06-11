@@ -24,10 +24,16 @@ export type DsBumpHint = 'patch' | 'minor' | 'major';
 export type DsBumpKind = 'initial' | 'patch' | 'minor' | 'major';
 export type DsVersionStatus = 'draft' | 'building' | 'published' | 'failed' | 'skipped';
 export type DsComponentKind = 'atom' | 'page-template';
+/** 'company' = pipeline legado (read-only); 'studio' = sessão single sobre projeto-workspace. */
+export type DsSessionKind = 'company' | 'studio';
 
 export interface DesignSystemSession {
   id: number;
-  company_session_id: number;
+  /** Legacy company pipeline parent. NULL for studio sessions. */
+  company_session_id: number | null;
+  /** Host workspace project. NULL for legacy company sessions. */
+  project_id: number | null;
+  kind: DsSessionKind;
   name: string;
   package_name: string;
   stack: DsStack;
@@ -75,6 +81,15 @@ export interface CreateDsSessionInput {
   source_zip_path?: string | null;
 }
 
+export interface CreateDsStudioSessionInput {
+  project_id: number;
+  name: string;
+  package_name: string;
+  stack: DsStack;
+  source_zip_hash?: string | null;
+  source_zip_path?: string | null;
+}
+
 export interface CreateDsVersionInput {
   ds_session_id: number;
   semver: string;
@@ -106,7 +121,9 @@ export interface CreateDsComponentInput {
 
 interface SessionRow {
   id: number;
-  company_session_id: number;
+  company_session_id: number | null;
+  project_id: number | null;
+  kind: string;
   name: string;
   package_name: string;
   stack: string;
@@ -149,6 +166,8 @@ function hydrateSession(r: SessionRow): DesignSystemSession {
   return {
     id: r.id,
     company_session_id: r.company_session_id,
+    project_id: r.project_id ?? null,
+    kind: (r.kind as DsSessionKind) ?? 'company',
     name: r.name,
     package_name: r.package_name,
     stack: r.stack as DsStack,
@@ -214,15 +233,34 @@ export class DesignSystemStore {
 
   // ── Sessions ──────────────────────────────────────────────────────
 
+  /** @deprecated Company pipeline is retired — only kept for legacy data/tests. */
   createSession(input: CreateDsSessionInput): DesignSystemSession {
     const info = this.db
       .prepare(
         `INSERT INTO design_system_sessions
-           (company_session_id, name, package_name, stack, source_zip_hash, source_zip_path)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+           (company_session_id, kind, name, package_name, stack, source_zip_hash, source_zip_path)
+         VALUES (?, 'company', ?, ?, ?, ?, ?)`,
       )
       .run(
         input.company_session_id,
+        input.name,
+        input.package_name,
+        input.stack,
+        input.source_zip_hash ?? null,
+        input.source_zip_path ?? null,
+      );
+    return this.getSession(Number(info.lastInsertRowid))!;
+  }
+
+  createStudioSession(input: CreateDsStudioSessionInput): DesignSystemSession {
+    const info = this.db
+      .prepare(
+        `INSERT INTO design_system_sessions
+           (project_id, kind, name, package_name, stack, source_zip_hash, source_zip_path)
+         VALUES (?, 'studio', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.project_id,
         input.name,
         input.package_name,
         input.stack,
@@ -243,6 +281,13 @@ export class DesignSystemStore {
     const row = this.db
       .prepare('SELECT * FROM design_system_sessions WHERE company_session_id = ?')
       .get(companySessionId) as SessionRow | undefined;
+    return row ? hydrateSession(row) : null;
+  }
+
+  getSessionByProjectId(projectId: number): DesignSystemSession | null {
+    const row = this.db
+      .prepare('SELECT * FROM design_system_sessions WHERE project_id = ?')
+      .get(projectId) as SessionRow | undefined;
     return row ? hydrateSession(row) : null;
   }
 

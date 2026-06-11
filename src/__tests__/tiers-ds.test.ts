@@ -5,8 +5,7 @@ describe('tier registration — design-system tools', () => {
   const DS_TOOLS = [
     'ds_get_session_info',
     'ds_record_component',
-    'ds_validate_manifest',
-    'ds_validate_stories',
+    'ds_list_components',
     'ds_audit_package',
     'ds_set_version_status',
     'ds_publish_version',
@@ -28,7 +27,9 @@ describe('tier registration — design-system tools', () => {
   it('does not regress non-DS bootstrap tools (sanity)', () => {
     expect(BOOTSTRAP_TOOLS.has('ask_master')).toBe(true);
     expect(BOOTSTRAP_TOOLS.has('submit_plan_to_master')).toBe(true);
-    expect(BOOTSTRAP_TOOLS.has('kanban_my_comment')).toBe(true);
+    // Phase B demoted the deprecated alias to navigate; the canonical
+    // subordinate comment tool is the bootstrap one.
+    expect(BOOTSTRAP_TOOLS.has('kanban_post_comment')).toBe(true);
   });
 });
 

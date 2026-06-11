@@ -11,7 +11,7 @@
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { DsToolBinding } from '@mcp/company/tools/design-system/binding.js';
 import type {
   DesignSystemStore,
   DesignSystemSession,
@@ -40,11 +40,7 @@ const PARAMETERS: JsonSchema = {
   required: ['name', 'kind'],
 };
 
-export function dsRecordComponent(
-  orchestrator: CompanyOrchestrator,
-  agentRole: string,
-  agentRunId: number | null,
-): CoderTool {
+export function dsRecordComponent(binding: DsToolBinding): CoderTool {
   return {
     name: 'ds_record_component',
     description:
@@ -64,10 +60,10 @@ export function dsRecordComponent(
         const props_schema_json = optString(args.props_schema_json) ?? null;
         const example_code = optString(args.example_code) ?? null;
 
-        const session = store.getSessionByCompanySessionId(orchestrator.effectiveSessionId);
+        const session = binding.resolveDsSession(store);
         if (!session) {
           return err(
-            `No DesignSystemSession bound to company_session_id=${orchestrator.effectiveSessionId}. Was this session created via the Design Systems tab?`,
+            `No DesignSystemSession bound to ${binding.describeBinding()}. Was this session created via the Design Systems tab?`,
           );
         }
 
@@ -86,7 +82,6 @@ export function dsRecordComponent(
           props_schema_json,
           example_code,
         });
-        void agentRole; void agentRunId;
         return ok(
           `Recorded ${kind} '${name}' (id=${component.id}) under draft v${draft.semver} of "${session.package_name}".`,
         );

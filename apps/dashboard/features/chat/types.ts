@@ -50,6 +50,13 @@ export interface CoderSession {
    * Surfaced as a switch in the Composer.
    */
   unrestricted_tool_output?: boolean | null;
+  /**
+   * Per-session tool permission mode (migration 131) driving the
+   * PermissionGate: 'ask' pauses every write/execute/admin tool, 'auto'
+   * pauses execute/admin only, 'unrestricted' never pauses. NULL → 'auto'.
+   * Surfaced as the shield toggle in the Composer.
+   */
+  tool_permission_mode?: 'ask' | 'auto' | 'unrestricted' | null;
   /** Durable compaction summary (mig 128). Rendered as a card above the chat
    *  when set; the older messages it covers are hidden behind the boundary. */
   compaction_summary?: string | null;
@@ -219,6 +226,15 @@ export interface PromptHandlers {
    *  session containing history up to (exclusive) the message, pre-fill the
    *  composer with the message text for editing. */
   onFork?: (messageId: number) => Promise<void> | void;
+  /**
+   * PermissionGate verdict — resolves a tool call paused awaiting approval
+   * (POST /tool-approval). Wired by AgentChat; the ToolCallBlock renders the
+   * approval card only when this handler exists.
+   */
+  onToolApproval?: (
+    toolUseId: string,
+    verdict: { approved: boolean; note?: string; alwaysAllow?: boolean },
+  ) => Promise<void>;
 }
 
 // ─── Visual grouping for chat display ───────────────────────────

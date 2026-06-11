@@ -26,7 +26,7 @@ import { resolve as resolvePath, isAbsolute, join } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import type { CoderTool, JsonSchema, ToolContext } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { DsToolBinding } from '@mcp/company/tools/design-system/binding.js';
 import type { DesignSystemStore } from '@mcp/store/design-system-store.js';
 import { discoverArtifacts } from '@mcp/company/tools/design-system/ds-publish-artifacts.js';
 import { getDesignSystemStore, getSkillStore } from '@mcp/company/tools/design-system/store-binding.js';
@@ -71,11 +71,7 @@ const PARAMETERS: JsonSchema = {
   required: ['pkg_dir'],
 };
 
-export function dsPublishVersion(
-  orchestrator: CompanyOrchestrator,
-  agentRole: string,
-  agentRunId: number | null,
-): CoderTool {
+export function dsPublishVersion(binding: DsToolBinding): CoderTool {
   return {
     name: 'ds_publish_version',
     description:
@@ -89,11 +85,9 @@ export function dsPublishVersion(
         const verdaccio = tryGetVerdaccioService();
         if (!verdaccio) return err('ds_publish_version: VerdaccioService not wired.');
 
-        const session = store.getSessionByCompanySessionId(orchestrator.effectiveSessionId);
+        const session = binding.resolveDsSession(store);
         if (!session) {
-          return err(
-            `No DesignSystemSession bound to company_session_id=${orchestrator.effectiveSessionId}.`,
-          );
+          return err(`No DesignSystemSession bound to ${binding.describeBinding()}.`);
         }
         let draft = store.getLatestVersionAny(session.id);
         // Accept `'failed'` AND `'skipped'` as retry targets:
@@ -146,7 +140,7 @@ export function dsPublishVersion(
         }
         const pkgDir = pkgResolved.path;
 
-        const audit = await auditDesignSystemPackage(pkgDir);
+        const audit = await auditDesignSystemPackage(pkgDir, { profile: binding.profile });
         if (!audit.ok) {
           const auditMessage = formatPackageAudit(audit);
           store.updateVersion(draft.id, {
@@ -285,7 +279,6 @@ export function dsPublishVersion(
         // discover this design system on their next session start.
         upsertDesignSystemSkill(store, persisted.id, session.package_name, nextSemver, publishResult.registryUrl);
 
-        void agentRole; void agentRunId;
         return ok(
           [
             `Published ${session.package_name}@${nextSemver} (bump=${bumpKind}, version_id=${persisted.id}, hash=${shortHash(sourceHash)}).`,

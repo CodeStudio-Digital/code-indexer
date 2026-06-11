@@ -11,10 +11,14 @@ export type DsBumpHint = 'patch' | 'minor' | 'major';
 export type DsBumpKind = 'initial' | 'patch' | 'minor' | 'major';
 export type DsVersionStatus = 'draft' | 'building' | 'published' | 'failed' | 'skipped';
 export type DsComponentKind = 'atom' | 'page-template';
+/** 'studio' = single-session workspace (atual); 'company' = pipeline legado (read-only). */
+export type DsSessionKind = 'company' | 'studio';
 
 export interface DesignSystemSession {
   id: number;
-  company_session_id: number;
+  company_session_id: number | null;
+  project_id: number | null;
+  kind: DsSessionKind;
   name: string;
   package_name: string;
   stack: DsStack;
@@ -25,11 +29,19 @@ export interface DesignSystemSession {
   created_at: string;
 }
 
+export interface DsProjectSummary {
+  id: number;
+  name: string;
+  root_path: string;
+}
+
 export interface DesignSystemSessionListEntry extends DesignSystemSession {
   company_session_status: string;
   is_running: boolean;
   latest_published_semver: string | null;
   latest_published_at: string | null;
+  builder_port: number | null;
+  project: DsProjectSummary | null;
 }
 
 export interface DesignSystemVersion {
@@ -74,76 +86,25 @@ async function unwrap<T>(r: Response): Promise<T> {
   return (await r.json()) as T;
 }
 
-export interface CreateSessionInput {
-  name: string;
-  package_name: string;
-  stack: DsStack;
-  master_provider: string;
-  master_model: string;
-  zip: File;
-}
-
-export async function createDesignSystemSession(input: CreateSessionInput): Promise<{
-  design_system_session: DesignSystemSession;
-  company_session_id: number;
-}> {
-  const form = new FormData();
-  form.set('name', input.name);
-  form.set('package_name', input.package_name);
-  form.set('stack', input.stack);
-  form.set('master_provider', input.master_provider);
-  form.set('master_model', input.master_model);
-  form.set('zip', input.zip);
-  const r = await fetch('/api/design-system/sessions', { method: 'POST', body: form });
-  return unwrap(r);
-}
-
 export async function listDesignSystemSessions(): Promise<DesignSystemSessionListEntry[]> {
   const r = await fetch('/api/design-system/sessions');
   const body = await unwrap<{ sessions: DesignSystemSessionListEntry[] }>(r);
   return body.sessions;
 }
 
-export async function getDesignSystemSession(id: number): Promise<{
+export interface DesignSystemSessionDetail {
   session: DesignSystemSession;
   versions: DesignSystemVersion[];
   latest_published: DesignSystemVersion | null;
   is_running: boolean;
   company_session_status: string;
-}> {
+  builder_port: number | null;
+  project: DsProjectSummary | null;
+}
+
+export async function getDesignSystemSession(id: number): Promise<DesignSystemSessionDetail> {
   const r = await fetch(`/api/design-system/sessions/${id}`);
   return unwrap(r);
-}
-
-export async function startDesignSystemRound(
-  id: number,
-  body: { extra_instructions?: string; max_turns?: number } = {},
-): Promise<void> {
-  // The route returns an SSE stream — we don't read it here; the client
-  // separately opens an EventSource against /stream when it wants live
-  // events. We just need the round to have started, so a HEAD-style
-  // ping is enough: read once and close.
-  const r = await fetch(`/api/design-system/sessions/${id}/start-round`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) {
-    let msg: string;
-    try {
-      const errBody = await r.json();
-      msg = (errBody as { error?: string }).error ?? r.statusText;
-    } catch {
-      msg = r.statusText;
-    }
-    throw new Error(`${r.status}: ${msg}`);
-  }
-  // Drain in the background — the master is already running server-side.
-  void r.body?.cancel();
-}
-
-export async function abortDesignSystemRound(id: number): Promise<{ ok: boolean; was_running: boolean }> {
-  return unwrap(await fetch(`/api/design-system/sessions/${id}/abort`, { method: 'POST' }));
 }
 
 export interface ReExtractResult {

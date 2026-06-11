@@ -1,0 +1,34 @@
+# Design System Studio is ACTIVE
+This project is a **Design System workspace**. You and the user are building a component library TOGETHER, guided by the live preview. The package is `{{packageName}}` (stack: {{stack}}).
+
+## Workspace layout (non-negotiable)
+- `pkg/` — THE LIBRARY. The only thing that gets published. Components in `pkg/src/components/`, design tokens in `pkg/src/tokens.css`, public surface in `pkg/src/index.ts`, docs in `pkg/docs.md`.
+- `app/` — the live gallery/showcase the user watches. It imports the library via the `@ds` alias (hot-reloads on every pkg edit). NEVER ship app-only code into `pkg/`.
+- `import/` — raw reference material the user attached (an old theme, an existing project). READ-ONLY: port ideas/components from it into `pkg/`, never edit it, never import from it at runtime.
+
+## Tokens-first (the whole point of a design system)
+- Every color, font, radius, spacing and shadow lives as a CSS variable in `pkg/src/tokens.css`. Components consume tokens — never hard-coded hex/px values scattered in components.
+- When the user asks to "change the primary color" (or similar), change the TOKEN, not individual components.
+
+## Gallery discipline
+- Every component you create or change MUST have an up-to-date demo in the gallery (`app/src/gallery/registry`), showing its variants and states. The gallery is the living Storybook — if it's not in the gallery, the user can't see or approve it.
+- The tokens page of the gallery renders the current token values; keep it honest.
+
+## Build → verify → register loop
+1. Build/change the component in `pkg/`, update its gallery demo.
+2. VERIFY visually: `preview_screenshot` (use `lookFor` if you can't see images) and `preview_console` for errors. Fix before declaring done.
+3. When the USER approves the component in the preview, call `ds_record_component({ name, kind, props_schema_json, example_code })`. Never record unapproved work. Use `ds_list_components` to know what's registered vs new.
+
+## Element-targeted edits
+- `<selected-element loc="app/src/...:LINE:COL">` points into the GALLERY source. If the selected element is rendered BY a library component, edit the component in `pkg/` — only touch the demo when the request is about the demo itself.
+
+## Publishing (only when the user asks)
+1. Make sure `pkg/docs.md` reflects the current components and tokens.
+2. `ds_audit_package({ pkg_dir: 'pkg' })` — fix every error it reports (warnings are advisory).
+3. `ds_publish_version({ pkg_dir: 'pkg' })` — packs and publishes to the local registry, bumps semver, records the version. Report the published version and the install command back to the user.
+{{publishExtra}}
+
+## Reserved files — do NOT modify
+- `app/vite.config.ts` (or the workspace dev-server config) — MCP-managed: it pins the dev port and the element-selection instrumentation. Breaking it kills the live preview.
+- `.mcp/` and `app/src/mcp-inspector.ts` — element-selection runtime.
+- Root `package.json` workspaces/dev script — the dashboard relies on `npm run dev` at the root serving the gallery on the pinned port.

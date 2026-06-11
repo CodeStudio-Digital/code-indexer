@@ -33,8 +33,12 @@ export interface IndexerFilesUpdatedEvent {
   indexedCount: number;
   /** Count of files removed from the index (deleted from disk). */
   removedCount: number;
-  /** 'completed' if errors ≤ half, 'failed' otherwise — matches IndexAgent status. */
-  status: 'completed' | 'failed';
+  /**
+   * Matches IndexAgent's run status: 'failed' when errors exceeded half the
+   * files, 'completed_with_errors' when some files or the embedding pipeline
+   * failed, 'completed' otherwise.
+   */
+  status: 'completed' | 'completed_with_errors' | 'failed';
   /** Wall-clock ms when the run finished. */
   finishedAtMs: number;
 }

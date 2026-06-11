@@ -33,8 +33,8 @@
     "migrate:data-dir": "tsx scripts/migrate-data-dir.ts",
     "typecheck": "tsc --noEmit",
     "postinstall": "pnpm rebuild better-sqlite3",
-    "eval": "tsx src/benchmarks/search-quality.ts --project mcp-code-indexer",
-    "eval:strict": "tsx src/benchmarks/search-quality.ts --project mcp-code-indexer --min-recall 0.7"
+    "eval": "tsx src/benchmarks/search-quality.ts --project CodeStudio/MCP-CodeBase",
+    "eval:strict": "tsx src/benchmarks/search-quality.ts --project CodeStudio/MCP-CodeBase --modes fts,hybrid --min-recall 0.7 --gate-mode hybrid"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

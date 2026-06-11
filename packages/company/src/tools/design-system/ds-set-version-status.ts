@@ -7,7 +7,7 @@
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { DsToolBinding } from '@mcp/company/tools/design-system/binding.js';
 import { getDesignSystemStore } from '@mcp/company/tools/design-system/store-binding.js';
 
 const PARAMETERS: JsonSchema = {
@@ -26,11 +26,7 @@ const PARAMETERS: JsonSchema = {
   required: ['status'],
 };
 
-export function dsSetVersionStatus(
-  orchestrator: CompanyOrchestrator,
-  agentRole: string,
-  agentRunId: number | null,
-): CoderTool {
+export function dsSetVersionStatus(binding: DsToolBinding): CoderTool {
   return {
     name: 'ds_set_version_status',
     description:
@@ -41,8 +37,8 @@ export function dsSetVersionStatus(
       try {
         const store = getDesignSystemStore();
         if (!store) return err('ds_set_version_status: DesignSystemStore not wired.');
-        const session = store.getSessionByCompanySessionId(orchestrator.effectiveSessionId);
-        if (!session) return err('No DesignSystemSession bound to this company session.');
+        const session = binding.resolveDsSession(store);
+        if (!session) return err(`No DesignSystemSession bound to ${binding.describeBinding()}.`);
         const draft = store.getLatestVersionAny(session.id);
         if (!draft || (draft.status !== 'draft' && draft.status !== 'building')) {
           return err('No active draft version to update.');
@@ -53,7 +49,6 @@ export function dsSetVersionStatus(
         }
         const error = typeof args.error === 'string' ? args.error : null;
         const updated = store.updateVersion(draft.id, { status: 'failed', error });
-        void agentRole; void agentRunId;
         return ok(`Marked draft v${updated.semver} as failed${error ? ` — ${error}` : ''}.`);
       } catch (e) {
         return err(`ds_set_version_status failed: ${(e as Error).message}`);

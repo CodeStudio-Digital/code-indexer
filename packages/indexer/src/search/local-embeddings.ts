@@ -89,4 +89,10 @@ export class LocalEmbeddingService implements EmbeddingService {
   fingerprint(): string {
     return `local:${this.model}`;
   }
+
+  maxConcurrency(): number {
+    // CPU-bound single ONNX pipeline session — concurrent embed() calls
+    // would serialize on the session anyway and only raise peak memory.
+    return 1;
+  }
 }

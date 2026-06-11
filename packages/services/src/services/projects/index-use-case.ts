@@ -245,7 +245,12 @@ export class IndexProjectUseCase {
     const defaults = this.deps.providerStore.getDefaultProviderAndModel();
     const kind = (input.provider ?? defaults.kind) as ProviderName;
     const model = input.model ?? defaults.model;
-    const provider = await createProviderAsync(kind, model);
+    // Pass the caller's provider through untouched. When absent, the factory
+    // resolves the default ProviderStore row itself — WITH its stored
+    // credentials/base_url. Passing `defaults.kind` routed e.g. a zai default
+    // (legacy kind='openai') to the bare openai shape, which then demanded
+    // OPENAI_API_KEY from the env and broke every app-triggered index run.
+    const provider = await createProviderAsync(input.provider as ProviderName | undefined, model);
     return { provider, kind, model };
   }
 

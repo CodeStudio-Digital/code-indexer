@@ -148,6 +148,13 @@ export interface RunCoderOptions {
    * pre-A1 behavior.
    */
   tunables?: import('@mcp/code-agent/core/tunables.js').CoderTunables;
+  /**
+   * Explicit tool-permission-mode override for this run. When omitted, the
+   * effective mode resolves as: company runs → 'unrestricted' (V1 has no
+   * approval UI on the company board), single coder sessions →
+   * `coder_sessions.tool_permission_mode` (NULL → 'auto').
+   */
+  toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
   /** Company orchestrator context — when present, company tools are registered. */
   companyContext?: import('@mcp/company/types.js').CompanyContext;
   /**

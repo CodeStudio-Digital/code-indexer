@@ -6,7 +6,7 @@ import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import type { CostTracker } from '@mcp/services/services/costs.js';
 import type { IndexerConfig } from '@mcp/shared/utils/config.js';
-import type { IndexResult, ProgressCallback, ScannedFile } from '@mcp/shared/types.js';
+import type { IndexResult, ProgressCallback, RunStatus, ScannedFile } from '@mcp/shared/types.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import { FileScanner } from '@mcp/indexer/indexer/scanner.js';
 import { TreeSitterExtractor, type TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js';
@@ -27,6 +27,7 @@ import {
   type EmbeddingRetryResult,
   type IndexedFileEntry,
 } from './indexer/embed-executor.js';
+import { sweepOrphanVectors } from './indexer/post-run-sweep.js';
 import { generateAutoSnapshots } from './indexer/auto-snapshots.js';
 
 // Re-exports preserved for external consumers.
@@ -105,14 +106,21 @@ export class IndexAgent {
     // a different model/backend, clear embedding hashes so everything re-embeds
     // under the new model — otherwise the incremental hash check skips re-embed
     // and the new vector store (e.g. sqlite-vec) stays empty / dim-mismatched.
+    // The new fingerprint is stamped only AFTER the re-embed sweep succeeds
+    // (below): stamping up-front made a crash mid-run lose the "sweep still
+    // needed" signal, leaving the project half-embedded under the new model.
     const embFingerprint = this.embeddingService.fingerprint?.();
+    let fingerprintChanged = false;
     if (embFingerprint) {
       const prevFingerprint = this.db.getProjectEmbeddingFingerprint(project.id);
       if (prevFingerprint && prevFingerprint !== embFingerprint) {
         console.error(`[indexer] Embedding model changed (${prevFingerprint} → ${embFingerprint}) — clearing embedding hashes for a full re-embed`);
         this.db.clearEmbeddingHashes(project.id);
+        fingerprintChanged = true;
+      } else {
+        // First index or unchanged model — stamping now is safe (no stale vectors).
+        this.db.setProjectEmbeddingFingerprint(project.id, embFingerprint);
       }
-      this.db.setProjectEmbeddingFingerprint(project.id, embFingerprint);
     }
 
     const scanner = new FileScanner(project.root_path, this.config.ignorePatterns, this.config.maxFileSize);
@@ -173,14 +181,44 @@ export class IndexAgent {
       }
     }, options?.concurrency ?? this.config.concurrency);
 
-    // Embeddings (if available).
+    // Embeddings (if available). Pipeline failures are tracked separately
+    // from per-file errors: they must surface as completed_with_errors, but
+    // they shouldn't trip the "failed" majority rule that is calibrated to
+    // file counts (1 pipeline error on a 1-file run is not a failed run).
     const vectorsAvailable = this.vectorStore && !(this.embeddingService instanceof NullEmbeddingService)
       ? await this.vectorStore.isAvailable() : false;
+    let pipelineErrorCount = 0;
     if (vectorsAvailable && this.vectorStore) {
       try {
         await processEmbeddings(this.embedDeps(), project, runId, indexedFiles);
       } catch (err) {
+        // The run must not report plain 'completed' when vectors are missing.
+        pipelineErrorCount++;
         console.error('[indexer] Embedding pipeline error:', err);
+      }
+    }
+
+    // Model-change sweep: the pass above only embedded files CHANGED in this
+    // run, but a fingerprint change invalidated every stored vector. The
+    // retry path reads all DB files from disk and embeds exactly the
+    // cleared-hash set (= the whole project). Stamp the new fingerprint only
+    // on success — a crash or failure re-detects the mismatch next run
+    // (re-clearing already-NULL hashes is idempotent).
+    if (fingerprintChanged && vectorsAvailable && embFingerprint) {
+      try {
+        const sweep = await retryEmbeddingsFn(this.embedDeps(), project.root_path, { runId });
+        if (sweep.failedBatches > 0) {
+          // Partial sweep — some hashes never committed. Keep the OLD
+          // fingerprint so the mismatch re-triggers the sweep next run.
+          pipelineErrorCount++;
+          console.error(`[indexer] Model-change sweep incomplete (${sweep.failedBatches} batch(es) failed) — fingerprint NOT updated`);
+        } else {
+          console.error(`[indexer] Model-change sweep: re-embedded ${sweep.embedded} record(s) under ${embFingerprint}`);
+          this.db.setProjectEmbeddingFingerprint(project.id, embFingerprint);
+        }
+      } catch (err) {
+        pipelineErrorCount++;
+        console.error('[indexer] Model-change re-embed sweep failed (will retry next run):', err);
       }
     }
 
@@ -193,29 +231,46 @@ export class IndexAgent {
       console.error(`[indexer] Tree-sitter: ${treeSitterHits}/${toIndex.length} files from AST; ${llmSkipped} LLM calls skipped (structure unchanged)`);
     }
 
+    // Post-run orphan sweep — vector_ids rows whose file no longer exists.
+    // Failure is counted but never blocks the run from finishing.
+    try {
+      const sweep = await sweepOrphanVectors(this.db, this.vectorStore, this.lshSink, project);
+      if (sweep.orphans > 0) {
+        console.error(`[indexer] Orphan sweep: ${sweep.orphans} stale vector id(s) (${sweep.remoteDeleted} deleted remotely, ${sweep.tombstoned} tombstoned)`);
+      }
+    } catch (err) {
+      pipelineErrorCount++;
+      console.error('[indexer] Orphan sweep failed:', err);
+    }
+
     // Update project counters + finish run.
     const stats = this.db.getStats(project.id);
     this.db.updateProject(project.id, { file_count: stats.file_count, symbol_count: stats.symbol_count, last_indexed: new Date().toISOString() });
-    const status = errorCount > toIndex.length / 2 ? 'failed' : 'completed';
+    const totalErrors = errorCount + pipelineErrorCount;
+    const status: RunStatus = errorCount > toIndex.length / 2
+      ? 'failed'
+      : totalErrors > 0
+        ? 'completed_with_errors'
+        : 'completed';
     this.db.finishRun(runId, {
-      status: status as 'completed' | 'failed',
+      status,
       totalFiles: scanResult.toIndex.length + scanResult.unchanged.length,
       indexedFiles: indexedFiles.length,
       skippedFiles: scanResult.unchanged.length,
-      errorCount,
+      errorCount: totalErrors,
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
       embeddingTokens: totalEmbeddingTokens,
       estimatedCostUsd: totalCostUsd,
     });
 
-    await this.dispatchWebhook(status, project, { run_id: runId, indexed_files: indexedFiles.length, error_count: errorCount, cost_usd: totalCostUsd });
+    await this.dispatchWebhook(status, project, { run_id: runId, indexed_files: indexedFiles.length, error_count: totalErrors, cost_usd: totalCostUsd });
 
     await this.emitFilesUpdated({
       projectId: project.id, projectName: project.name, runId,
       indexedCount: indexedFiles.length,
       removedCount: scanResult.toRemove?.length ?? 0,
-      status: status as 'completed' | 'failed',
+      status,
       finishedAtMs: Date.now(),
     });
 
@@ -226,7 +281,7 @@ export class IndexAgent {
       totalFiles: scanResult.toIndex.length + scanResult.unchanged.length,
       indexedFiles: indexedFiles.length,
       skippedFiles: scanResult.unchanged.length,
-      errorCount,
+      errorCount: totalErrors,
       durationMs: Date.now() - startTime,
       costUsd: totalCostUsd,
     };
@@ -289,12 +344,29 @@ export class IndexAgent {
     // harmless on the others. Resolve the project name once for the batch.
     const projectName = this.db.getProject(projectId)?.name;
     const namespace = projectName ? codeNamespace(projectName) : undefined;
+    let tombstoned = 0;
     for (const path of paths) {
       const vectorIds = this.db.deleteVectorIdsByFile(projectId, path);
       if (vectorIds.length > 0 && this.vectorStore) {
-        try { await this.vectorStore.deleteByIds(vectorIds, namespace); } catch { /* ignore */ }
+        try {
+          await this.vectorStore.deleteByIds(vectorIds, namespace);
+          try { await this.lshSink.afterDelete?.(projectId, vectorIds); }
+          catch { /* LSH is best-effort; orphaned buckets only cost recall */ }
+        } catch (err) {
+          // Remote delete failed — tombstone the ids so the hygiene queue
+          // (HygienePanel button / CLI `hygiene vectorize-retry`) retries
+          // later, instead of leaving orphans in the remote store forever.
+          tombstoned += this.db.enqueuePendingVectorDeletes(vectorIds.map((vid) => ({
+            vector_id: vid,
+            project_name: projectName ?? null,
+            error: err instanceof Error ? err.message : String(err),
+          })));
+        }
       }
       this.db.deleteFile(projectId, path);
+    }
+    if (tombstoned > 0) {
+      console.warn(`[indexer] ${tombstoned} vector delete(s) failed remotely — queued for hygiene retry`);
     }
   }
 
@@ -304,7 +376,9 @@ export class IndexAgent {
     data: Record<string, unknown>,
   ): Promise<void> {
     if (!this.webhookDispatcher) return;
-    const event = status === 'completed' ? 'index.done' : 'index.failed';
+    // completed_with_errors still maps to index.done — the payload carries
+    // error_count, and consumers treat "done" as "the index was updated".
+    const event = status === 'failed' ? 'index.failed' : 'index.done';
     try { await this.webhookDispatcher.dispatch(event, project, data); }
     catch { /* ignore webhook errors */ }
   }

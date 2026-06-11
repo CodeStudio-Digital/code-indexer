@@ -305,6 +305,27 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
           const perToolMs = resolveToolTimeoutMs(t);
           let toolTimer: ReturnType<typeof setTimeout> | null = null;
           try {
+            // Permission gate (modes 'ask'/'auto') — INSIDE the try so a
+            // denial throw still hits the finally (inFlight/clock restore),
+            // and BEFORE the per-tool timer so the user's decision time is
+            // free. The clock is already paused (inFlight ≥ 1), so the
+            // script's JS budget isn't burned while waiting. The approval
+            // card anchors to the chat-visible code_exec block.
+            if (ctx.permissionGate) {
+              const decision = await ctx.permissionGate.check({
+                toolUseId: `nx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                toolName: t.name,
+                input: argObj,
+                tool: t,
+                parentToolUseId: ctx.approvalAnchorId ?? ctx.currentToolUseId,
+                nested: true,
+              });
+              if (!decision.allowed) {
+                // Same propagation shape as the policy-block throw above —
+                // the script sees the denial as a JS exception.
+                throw new Error(decision.refusalText);
+              }
+            }
             const invocation = registry.invoke(t.name, argObj, ctx);
             const guarded =
               perToolMs === Infinity

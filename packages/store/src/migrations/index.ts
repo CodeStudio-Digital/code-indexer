@@ -144,6 +144,8 @@ import { investigationEmbedding127 } from './127_investigation_embedding.js';
 import { sessionSummaryBoundary128 } from './128_session_summary_boundary.js';
 import { sessionCompactionSummary129 } from './129_session_compaction_summary.js';
 import { sessionCompactionCounts130 } from './130_session_compaction_counts.js';
+import { sessionToolPermissions131 } from './131_session_tool_permissions.js';
+import { designSystemStudio132 } from './132_design_system_studio.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -304,6 +306,8 @@ export const MIGRATIONS: Migration[] = [
   sessionSummaryBoundary128,
   sessionCompactionSummary129,
   sessionCompactionCounts130,
+  sessionToolPermissions131,
+  designSystemStudio132,
 ];
 
 /**

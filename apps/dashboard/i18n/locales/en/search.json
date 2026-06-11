@@ -19,6 +19,7 @@
   "debug.noEmbedding": "No embedding service configured. Vector search will always return empty. Configure in Admin > Embeddings & Vector Stores.",
   "debug.noVectorStore": "No vector store configured. Embeddings cannot be stored or searched.",
   "debug.noFiles": "No files have been embedded yet. Run indexing with embeddings enabled to populate the vector store.",
+  "debug.fingerprintMismatch": "Embedding model changed ({{stored}} → {{live}}). The next index run will re-embed the whole project.",
   "debug.files": "Files",
   "debug.symbols": "Symbols",
   "debug.symbolBodies": "Symbol Bodies",

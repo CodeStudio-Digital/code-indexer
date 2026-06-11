@@ -84,6 +84,7 @@ export function classifyToolRefusal(resultText: string, isError: boolean): strin
   if (!isError || !resultText) return null;
   if (resultText.startsWith('[loop-refused')) return 'dedup';
   if (resultText.startsWith('[failure-streak REFUSED')) return 'failure-streak';
+  if (resultText.startsWith('[user-denied')) return 'user_denied';
   return null;
 }
 

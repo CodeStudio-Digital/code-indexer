@@ -66,6 +66,29 @@ export interface RunnerEvents {
   spec_posted: (block: SpecBlock) => void;
   /** Emitted when the agent calls ask_user; payload waits for /answer. */
   question_posted: (block: QuestionBlock) => void;
+  /**
+   * Emitted by the PermissionGate when a write/execute/admin tool call pauses
+   * waiting for user approval (modes 'ask'/'auto'). Resolved via
+   * POST /tool-approval → provideUserInput(json, 'tool_approval:<toolUseId>').
+   */
+  tool_approval_request: (payload: {
+    toolUseId: string;
+    /** Chat-visible anchor block when the request came from a nested context (code_exec, subagent). */
+    parentToolUseId?: string;
+    toolName: string;
+    argsSummary: string;
+    riskClass: 'write' | 'execute' | 'admin';
+    turn?: number;
+    nested?: boolean;
+  }) => void;
+  /** Emitted when a pending tool approval is resolved (any source). */
+  tool_approval_resolved: (payload: {
+    toolUseId: string;
+    toolName: string;
+    approved: boolean;
+    source: 'user' | 'interrupt' | 'abort';
+    note?: string;
+  }) => void;
   /** Emitted when provider/model is swapped mid-session. */
   provider_swapped: (provider: string, model: string) => void;
   /** Emitted by submit_tasks; payload is the proposed task list waiting for /tasks-response. */

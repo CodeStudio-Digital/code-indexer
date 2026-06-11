@@ -30,7 +30,22 @@ interface StoryAuditContext {
   manifest: DesignSystemManifestV2 | null;
 }
 
-export async function auditDesignSystemPackage(pkgDir: string): Promise<PackageAuditResult> {
+export interface PackageAuditOptions {
+  /**
+   * 'company' (default) — pipeline legado: exige dist/mcp/storybook-static,
+   * bin do MCP server e manifest.json válido (contrato extractor→builders).
+   * 'studio' — DS Studio: a galeria viva substitui o Storybook e o MCP
+   * server é opcional; exige package.json são (files/exports/peerDeps) e
+   * docs.md. Manifest/mcp viram warnings.
+   */
+  profile?: 'company' | 'studio';
+}
+
+export async function auditDesignSystemPackage(
+  pkgDir: string,
+  opts?: PackageAuditOptions,
+): Promise<PackageAuditResult> {
+  const studio = opts?.profile === 'studio';
   const errors: PackageAuditIssue[] = [];
   const warnings: PackageAuditIssue[] = [];
   const details: PackageAuditResult['details'] = {};
@@ -48,9 +63,11 @@ export async function auditDesignSystemPackage(pkgDir: string): Promise<PackageA
   if (files.length === 0) {
     errors.push({ code: 'package.files_missing', message: 'package.json#files must include published artifacts.', file: packageJsonPath });
   }
-  requireFileEntry(files, 'dist', errors, packageJsonPath);
-  requireFileEntry(files, 'mcp', errors, packageJsonPath);
-  requireFileEntry(files, 'storybook-static', errors, packageJsonPath);
+  if (!studio) {
+    requireFileEntry(files, 'dist', errors, packageJsonPath);
+    requireFileEntry(files, 'mcp', errors, packageJsonPath);
+    requireFileEntry(files, 'storybook-static', errors, packageJsonPath);
+  }
   requireFileEntry(files, 'docs.md', errors, packageJsonPath);
   requireFileEntry(files, 'README.md', warnings, packageJsonPath);
 
@@ -67,12 +84,19 @@ export async function auditDesignSystemPackage(pkgDir: string): Promise<PackageA
   }
 
   const bin = packageJson.bin;
-  if (!bin || typeof bin !== 'object' || Object.keys(bin as Record<string, unknown>).length === 0) {
+  if (!studio && (!bin || typeof bin !== 'object' || Object.keys(bin as Record<string, unknown>).length === 0)) {
     errors.push({ code: 'mcp.bin_missing', message: 'package.json#bin must expose the bundled MCP server.', file: packageJsonPath });
   }
 
   const manifestPath = join(pkgDir, 'manifest.json');
-  const manifestRaw = await readJson(manifestPath, errors, 'manifest.json');
+  // Studio: manifest é opcional (warning) — o registro de componentes nasce
+  // de ds_record_component, não de um contrato de pipeline.
+  let manifestRaw: Record<string, unknown> | null = null;
+  if (studio && !existsSync(manifestPath)) {
+    warnings.push({ code: 'manifest.missing', message: 'pkg/manifest.json not found (optional in studio profile).', file: manifestPath });
+  } else {
+    manifestRaw = await readJson(manifestPath, errors, 'manifest.json');
+  }
   let manifest: DesignSystemManifestV2 | null = null;
   if (manifestRaw) {
     const validation = validateDesignSystemManifestData(manifestRaw, { strict: true });
@@ -108,16 +132,21 @@ export async function auditDesignSystemPackage(pkgDir: string): Promise<PackageA
 
   const mcpManifestPath = join(pkgDir, 'mcp', 'manifest.json');
   if (!existsSync(mcpManifestPath)) {
-    errors.push({ code: 'mcp.manifest_missing', message: 'pkg/mcp/manifest.json is required.', file: mcpManifestPath });
+    const issue = { code: 'mcp.manifest_missing', message: 'pkg/mcp/manifest.json is required.', file: mcpManifestPath };
+    if (studio) warnings.push({ ...issue, message: 'pkg/mcp/manifest.json not found (optional in studio profile).' });
+    else errors.push(issue);
   } else {
     details.mcpManifest = true;
   }
 
-  const storybookIndex = join(pkgDir, 'storybook-static', 'index.html');
-  if (!existsSync(storybookIndex)) {
-    errors.push({ code: 'storybook.static_missing', message: 'pkg/storybook-static/index.html is required.', file: storybookIndex });
-  } else {
-    details.storybookStatic = true;
+  // Studio aposentou o Storybook — a galeria viva do workspace é a vitrine.
+  if (!studio) {
+    const storybookIndex = join(pkgDir, 'storybook-static', 'index.html');
+    if (!existsSync(storybookIndex)) {
+      errors.push({ code: 'storybook.static_missing', message: 'pkg/storybook-static/index.html is required.', file: storybookIndex });
+    } else {
+      details.storybookStatic = true;
+    }
   }
 
   const docsPath = join(pkgDir, 'docs.md');
@@ -133,7 +162,8 @@ export async function auditDesignSystemPackage(pkgDir: string): Promise<PackageA
   // Story-count plausibility — catches the `649618bc...` failure mode where
   // the agent shipped a Bootstrap admin TEMPLATE (zero generated stories,
   // monolithic theme.scss) instead of building components with stories.
-  if (manifest && manifest.components.length > 0) {
+  // Company-only: studio has no Storybook, so zero stories is normal.
+  if (!studio && manifest && manifest.components.length > 0) {
     if (storyAudit.storyCount === 0) {
       errors.push({
         code: 'audit.no_stories',

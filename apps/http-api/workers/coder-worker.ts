@@ -63,6 +63,17 @@ import {
   type DocsResearchBridge,
 } from '../../../packages/docs-agent/src/bridges/docs-bridge.js';
 import type { DocsResearchResult } from '../../../packages/docs-agent/src/types.js';
+import { DesignSystemStore } from '../../../packages/store/src/design-system-store.js';
+import { SkillStore } from '../../../packages/store/src/skill-store.js';
+import { VerdaccioStore } from '../../../packages/store/src/verdaccio-store.js';
+import {
+  setDesignSystemStore,
+  setDesignSystemSkillStore,
+} from '../../../packages/company/src/tools/design-system/index.js';
+import {
+  VerdaccioService,
+  setVerdaccioService,
+} from '../../../packages/services/src/verdaccio/verdaccio-service.js';
 import {
   createBus,
   publish,
@@ -158,6 +169,19 @@ const docsResearcherShim = {
     bridge.request<DocsResearchResult>('docsResearch', input, { timeoutMs: 10 * 60_000 }),
 } as unknown as DocsResearchBridge;
 setGlobalDocsResearcher(docsResearcherShim);
+
+// ─── DS Studio store bindings (DS + Skill + Verdaccio) ───────────────
+// worker_threads don't share module state, so the setDesignSystemStore()
+// / setVerdaccioService() calls in server.ts (main thread) leave these
+// module-level bindings NULL here. DS Studio sessions run their single
+// coder session in THIS worker, so without this the ds_* tools fail with
+// "... not wired" — ds_publish_version being the painful one (npm pack +
+// Verdaccio publish run host-side from this process). Stores are
+// dual-mode (accept a dbPath string) and VerdaccioService reads all its
+// state from the DB, so fresh instances here are equivalent to main's.
+setDesignSystemStore(new DesignSystemStore(dbPath));
+setDesignSystemSkillStore(new SkillStore(dbPath));
+setVerdaccioService(new VerdaccioService({ store: new VerdaccioStore(dbPath) }));
 
 // External-MCP proxy. Constructed once per worker; reuses the main
 // process's `McpExternalPool` for every run inside this worker.
@@ -600,10 +624,13 @@ bridge.handle('pushUserMessage', (payload) => {
  */
 bridge.handle('provideUserInput', (payload) => {
   recordRpc('provideUserInput');
-  const { value } = payload as { value: string };
+  // `askId` targets a keyed wait slot (tool approvals use
+  // `tool_approval:<toolUseId>`); omitted → the default slot
+  // (submit_plan / ask_user / submit_tasks).
+  const { value, askId } = payload as { value: string; askId?: string };
   const runner = activeRun?.runner;
   if (!runner) return { ok: false, reason: 'no_runner' };
-  const accepted = runner.provideUserInput(value);
+  const accepted = runner.provideUserInput(value, askId);
   return { ok: accepted };
 });
 
@@ -613,6 +640,15 @@ bridge.handle('setThinking', (payload) => {
   const runner = activeRun?.runner;
   if (!runner) return { ok: false, reason: 'no_runner' };
   runner.setThinking(thinking);
+  return { ok: true };
+});
+
+bridge.handle('setToolPermissionMode', (payload) => {
+  recordRpc('setToolPermissionMode');
+  const { mode } = payload as { mode: 'ask' | 'auto' | 'unrestricted' };
+  const runner = activeRun?.runner;
+  if (!runner) return { ok: false, reason: 'no_runner' };
+  runner.setToolPermissionMode(mode);
   return { ok: true };
 });
 

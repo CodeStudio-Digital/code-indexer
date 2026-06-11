@@ -30,9 +30,20 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
     const sampleEmbedded = db.sampleEmbeddedFiles(projectId, 5);
     const sampleNotEmbedded = db.sampleNotEmbeddedFiles(projectId, 5);
 
+    // Stored = what the project's vectors were built with; live = what the
+    // configured service produces now. A mismatch means the next index run
+    // will clear hashes and re-embed the whole project.
+    const storedFingerprint = db.getProjectEmbeddingFingerprint(projectId);
+    const liveFingerprint = embeddingService.fingerprint?.() ?? null;
+
     return c.json({
       coverage,
       vectorIds,
+      fingerprint: {
+        stored: storedFingerprint,
+        live: liveFingerprint,
+        mismatch: !!(storedFingerprint && liveFingerprint && storedFingerprint !== liveFingerprint),
+      },
       health: {
         embeddingService: embeddingKind,
         vectorStore: vectorStoreKind,

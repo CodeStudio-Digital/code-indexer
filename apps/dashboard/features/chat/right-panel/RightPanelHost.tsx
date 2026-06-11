@@ -36,7 +36,6 @@ import type { CoderSession, CoderSessionStats, SessionData } from '../types.js';
 import type {
   PipelineRuntimeState,
   TodoItem,
-  WorkerLogEntry,
 } from '../../../hooks/agent-stream/types.js';
 
 export interface RightPanelHostProps {
@@ -56,8 +55,6 @@ export interface RightPanelHostProps {
   skillPicks: string[];
   onToggleSkillPick: (id: string) => void;
   pipelineRuntime: PipelineRuntimeState | null;
-  // Worker log
-  eventLog: readonly WorkerLogEntry[];
   onClose: () => void;
 }
 
@@ -118,7 +115,7 @@ export function RightPanelHost(props: RightPanelHostProps) {
     case 'worker-log':
       return (
         <PanelChrome title={t('chat:rightRail.workerLog', 'Worker log')} icon={ScrollText} onClose={onClose}>
-          <WorkerLogPanel entries={props.eventLog} sessionId={sessionId} onClose={onClose} embedded />
+          <WorkerLogPanel sessionId={sessionId} onClose={onClose} embedded />
         </PanelChrome>
       );
     case 'details':

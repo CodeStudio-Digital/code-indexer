@@ -326,6 +326,38 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // Telemetry: signal start BEFORE invoking so the dashboard can render
     // "tool in flight" the moment the call is dispatched.
     args.onToolCallStart?.(tu.id, tu.name, tu.input);
+
+    // Permission gate (modes 'ask'/'auto') — may pause awaiting user
+    // approval. Sits AFTER onToolCallStart (the dashboard block must exist
+    // as the anchor for the approval card) and BEFORE the duration clock,
+    // heartbeat and timeout wrappers (decision time is free; a long pause
+    // must not be killed by toolTimeoutMs). Runs after checkDupCall so the
+    // user is never asked to approve a call the dedup guard would refuse.
+    // A denial synthesizes an error result without touching the dedup or
+    // failure-streak state — mirrors the toolGate refusal shape above.
+    const permissionGate = args.toolContext.permissionGate;
+    if (permissionGate) {
+      const decision = await permissionGate.check({
+        toolUseId: tu.id,
+        toolName: tu.name,
+        input: tu.input,
+        tool: tool ?? undefined,
+        parentToolUseId: args.toolContext.approvalAnchorId,
+        turn: args.turn,
+      });
+      if (!decision.allowed) {
+        results.push({
+          toolUseId: tu.id,
+          name: tu.name,
+          content: decision.refusalText,
+          isError: true,
+          durationMs: 0,
+          wasRefusedByDedup: false,
+        });
+        continue;
+      }
+    }
+
     const t0 = Date.now();
     let invocationContent: string;
     let invocationIsError = false;
@@ -366,6 +398,9 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     try {
       const callContext: ToolContext = {
         ...args.toolContext,
+        // Anchor for approval requests raised from nested contexts
+        // (code_exec proxies receive this context as `ctx`).
+        currentToolUseId: tu.id,
         signal: invocationAbort?.signal ?? parentSignal,
         reportProgress: (note: string) => {
           const trimmed = typeof note === 'string'

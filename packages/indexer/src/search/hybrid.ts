@@ -47,6 +47,12 @@ export interface SearchDiagnostics {
 
 const RRF_K = 60;
 
+/** Positive-integer env knob with a fallback (NaN/0/negative → fallback). */
+function envInt(name: string, fallback: number): number {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
+}
+
 /**
  * Build 2-3 query variants for pseudo-HyDE expansion. The template phrases
  * nudge the embedding model toward code-space rather than question-space,
@@ -97,8 +103,8 @@ export class HybridSearch {
    */
   private v2Pipeline: CandidatePipeline<HybridSearchPipelineQuery, HybridSearchPipelineCandidate> | null = null;
 
-  /** LRU query cache: key = `${projectId}:${query}:${mode}:${type}` → results */
-  private queryCache = new Map<string, { results: HybridSearchResult[]; ts: number }>();
+  /** LRU query cache: key = `${projectId}:${query}:${mode}:${type}` → results + the diagnostics of the run that produced them */
+  private queryCache = new Map<string, { results: HybridSearchResult[]; diagnostics: SearchDiagnostics; ts: number }>();
   private readonly queryCacheMax = 128;
   private readonly queryCacheTtlMs = 5 * 60 * 1000; // 5 min
 
@@ -196,7 +202,9 @@ export class HybridSearch {
     const requestedMode = options?.mode ?? 'auto';
     const type = options?.type ?? 'all';
     const limit = options?.limit ?? 20;
-    const overFetch = limit * 3;
+    // Per-source candidate depth before fusion. Tunable so RRF coverage can
+    // be measured against latency instead of hardcoding the trade-off.
+    const overFetch = limit * envInt('MCP_SEARCH_OVERFETCH_MULT', 3);
 
     // Resolve `auto` via the planner so callers don't pay hybrid cost
     // for queries that FTS handles in a tenth of the time. The chosen
@@ -216,7 +224,11 @@ export class HybridSearch {
     const cacheKey = `${projectId}:${query}:${mode}:${type}:${limit}`;
     const cached = this.queryCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < this.queryCacheTtlMs) {
-      return { results: cached.results, diagnostics: { vectorAvailable: !!this.vectorStore, embeddingAvailable: !(this.embeddingService instanceof NullEmbeddingService) } };
+      // Return the diagnostics of the run that produced the entry — a
+      // stripped object here made consumers (e.g. the agent-facing
+      // diagnostics trailer) report "all fine" on cache hits even when the
+      // cached run had degraded to FTS-only.
+      return { results: cached.results, diagnostics: cached.diagnostics };
     }
 
     const diag: SearchDiagnostics = {
@@ -231,7 +243,7 @@ export class HybridSearch {
         const oldest = [...this.queryCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
         if (oldest) this.queryCache.delete(oldest[0]);
       }
-      this.queryCache.set(cacheKey, { results: r.results, ts: Date.now() });
+      this.queryCache.set(cacheKey, { results: r.results, diagnostics: r.diagnostics, ts: Date.now() });
       return r;
     };
 
@@ -289,6 +301,9 @@ export class HybridSearch {
     const graph = this.runGraphSearch(projectId, [...fts, ...vec], type);
     if (graph.length > 0) hybridDiag.graphExpansionCount = graph.length;
 
+    // How many fused candidates the reranker scores (cross-encoder cost is
+    // linear in this). Default keeps the historical limit*2.
+    const rerankDepth = envInt('MCP_RERANK_DEPTH', limit * 2);
     const merged = recent.length > 0 || graph.length > 0
       ? this.rrfMergeStreams(
           [
@@ -297,9 +312,9 @@ export class HybridSearch {
             ...(recent.length > 0 ? [{ name: 'recent', results: recent }] : []),
             ...(graph.length > 0 ? [{ name: 'graph', results: graph }] : []),
           ],
-          limit * 2,
+          rerankDepth,
         )
-      : this.rrfMerge(fts, vec, limit * 2); // Over-fetch for re-ranking
+      : this.rrfMerge(fts, vec, rerankDepth); // Over-fetch for re-ranking
 
     // Re-rank if a cross-encoder is configured
     if (merged.length > 0 && !(this.reranker instanceof NullReranker)) {
@@ -409,9 +424,17 @@ export class HybridSearch {
     }
 
     try {
-      // Build query variants for better NL→code recall
+      // Build query variants for better NL→code recall.
+      // Identifier-shaped queries gain nothing from HyDE — the LLM call adds
+      // 200-400ms and the synthetic snippet drifts away from exact-name
+      // matching — so when the planner classifies the query as fts-shaped,
+      // embed only the raw query. Kill switch: MCP_HYBRID_HYDE_SKIP_FTS=0.
+      const skipExpansion = process.env.MCP_HYBRID_HYDE_SKIP_FTS !== '0'
+        && planQuery(query).mode === 'fts';
       let variants: string[];
-      if (this.hydeService) {
+      if (skipExpansion) {
+        variants = [query.trim()];
+      } else if (this.hydeService) {
         const hypothetical = await this.hydeService.generate(query);
         variants =
           hypothetical && hypothetical !== query

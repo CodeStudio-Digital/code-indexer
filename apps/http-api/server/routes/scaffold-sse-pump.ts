@@ -1,5 +1,3 @@
-import type { ScaffoldStreamEvent } from '@mcp/api-bus';
-
 /**
  * Minimal slice of Hono's SSE stream that the scaffold pump uses — narrow
  * enough that a test can supply a fake to assert the flush-before-close
@@ -9,6 +7,15 @@ import type { ScaffoldStreamEvent } from '@mcp/api-bus';
 export interface ScaffoldSseStream {
   writeSSE(message: { data: string; event?: string; id?: string }): Promise<void>;
   close(): Promise<void>;
+}
+
+/**
+ * Structural envelope the pump accepts — `ScaffoldStreamEvent` (projects)
+ * and `DsStudioStreamEvent` (DS Studio, richer `done`) are both assignable.
+ */
+export interface ScaffoldSseEvent {
+  event: string;
+  data: unknown;
 }
 
 /**
@@ -24,11 +31,11 @@ export interface ScaffoldSseStream {
  */
 export async function pumpScaffoldSSE(
   stream: ScaffoldSseStream,
-  run: (emit: (ev: ScaffoldStreamEvent) => void) => Promise<void>,
+  run: (emit: (ev: ScaffoldSseEvent) => void) => Promise<void>,
 ): Promise<void> {
   let seq = 0;
   let writeChain: Promise<void> = Promise.resolve();
-  const emit = (ev: ScaffoldStreamEvent) => {
+  const emit = (ev: ScaffoldSseEvent) => {
     writeChain = writeChain
       .then(() => stream.writeSSE({ id: String(seq++), event: ev.event, data: JSON.stringify(ev.data) }))
       .catch(() => {}); // a write to a disconnected client must not break the chain

@@ -19,8 +19,7 @@ describe('isMasterAllowed — design-system tools', () => {
   it.each([
     'ds_get_session_info',
     'ds_record_component',
-    'ds_validate_manifest',
-    'ds_validate_stories',
+    'ds_list_components',
     'ds_audit_package',
     'ds_set_version_status',
     'ds_publish_version',

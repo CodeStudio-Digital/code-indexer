@@ -328,14 +328,14 @@ export class CoderWorkerPool {
    * the caller should fall back to the resume path (synthesize the
    * tool_result and append to message history).
    */
-  async provideUserInput(sessionId: number, value: string): Promise<boolean> {
+  async provideUserInput(sessionId: number, value: string, askId?: string): Promise<boolean> {
     const entry = this.entries.get(sessionId);
     if (!entry) return false;
     this.cancelPostRunEvict(entry);
     entry.lastTouchedAt = Date.now();
     const result = await entry.host
       .requireBridge()
-      .request<{ ok: boolean }>('provideUserInput', { value });
+      .request<{ ok: boolean }>('provideUserInput', { value, askId });
     return !!result?.ok;
   }
 
@@ -349,6 +349,13 @@ export class CoderWorkerPool {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
     await entry.host.requireBridge().request('setThinking', { thinking });
+  }
+
+  /** Push a mid-run tool-permission-mode change into the live runner. */
+  async setToolPermissionMode(sessionId: number, mode: 'ask' | 'auto' | 'unrestricted'): Promise<void> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return;
+    await entry.host.requireBridge().request('setToolPermissionMode', { mode });
   }
 
   async abort(sessionId: number): Promise<void> {

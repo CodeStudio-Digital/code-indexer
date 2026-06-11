@@ -46,6 +46,11 @@ import {
   setDesignSystemStore,
   setDesignSystemSkillStore,
 } from '../../../packages/company/src/tools/design-system/index.js';
+import { VerdaccioStore } from '../../../packages/store/src/verdaccio-store.js';
+import {
+  VerdaccioService,
+  setVerdaccioService,
+} from '../../../packages/services/src/verdaccio/verdaccio-service.js';
 import {
   setQaTestRunStore,
   setQaEndpointEnvStore,
@@ -191,6 +196,11 @@ const db = new CodeIndexDB(dbPath);
 const rawDb = db.raw();
 setDesignSystemStore(new DesignSystemStore(rawDb));
 setDesignSystemSkillStore(new SkillStore(rawDb));
+// Verdaccio: setVerdaccioService() in server.ts is main-thread only, so
+// ds_publish_version inside this worker found no service and failed with
+// "VerdaccioService not wired" (pre-existing gap — the service reads all
+// state from the DB, so a worker-local instance is equivalent to main's).
+setVerdaccioService(new VerdaccioService({ store: new VerdaccioStore(rawDb) }));
 setQaTestRunStore(new QaTestRunStore(rawDb));
 // One CompanySessionEnvStore shared by BOTH the QA browser-endpoint tools and
 // the env_* tools (env_list/env_read/env_set/…). Each has its own module-level

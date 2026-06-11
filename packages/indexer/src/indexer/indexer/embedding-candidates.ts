@@ -28,6 +28,20 @@ export interface EmbeddingCandidate {
   metadata: Record<string, string>;
   hash: string;
   onCommit: () => void;
+  /**
+   * Candidates sharing a groupKey form one logical unit (the windows of a
+   * multi-chunk symbol body). Batch slicers must keep a group inside a
+   * single batch — its hash commit (carried by the LAST member) assumes
+   * every earlier window landed in the same or an earlier-successful batch.
+   */
+  groupKey?: string;
+  /**
+   * Vector ids made stale by this candidate (a body that shrank from N to
+   * M windows leaves ids M..N-1 behind — invisible to the orphan check
+   * because the file still exists). The executor deletes them after a
+   * successful upsert; failures fall into the tombstone queue.
+   */
+  supersededIds?: string[];
 }
 
 interface SkippedSymbolGroup {
@@ -230,22 +244,38 @@ function appendBodyCandidate(
   );
 
   // One combined hash gates the whole body: any window change re-emits all
-  // windows. Stored in the symbol's single body-hash slot — the per-chunk
-  // onCommit calls all write the same value (idempotent).
+  // windows. It lives in the symbol's single body-hash slot.
   const combinedHash = createHash('md5').update(chunkTexts.join(' ')).digest('hex');
   const storedBodyHash = symHashMap.get(symDbId)?.body ?? null;
   if (storedBodyHash === combinedHash) return;
 
-  chunkTexts.forEach((text, i) => {
+  // Only the LAST window carries the real hash commit (others are no-ops).
+  // Candidates are pushed contiguously and batch slicers keep a groupKey
+  // together, so the commit only runs once its whole group upserted. If a
+  // batch fails, the hash is never written and every window re-emits on the
+  // next run (self-healing). With the old all-windows commit, a failure
+  // after the first batch persisted the hash while windows were missing
+  // from the store, and the incremental check then trusted that gap forever.
+  const groupKey = `body:${symDbId}`;
+  const bodyChunkId = (i: number): string => {
     // Chunk 0 keeps the historical id (no suffix) so it overwrites the old
     // single vector in place — no mass re-orphaning on the first reindex.
     const idSeed = i === 0
       ? `${project.id}:${filePath}:${sym.name}:body`
       : `${project.id}:${filePath}:${sym.name}:body:${i}`;
-    const bodyVecId = 'sb_' + createHash('md5').update(idSeed).digest('hex').slice(0, 23);
+    return 'sb_' + createHash('md5').update(idSeed).digest('hex').slice(0, 23);
+  };
+  // Ids of windows this body USED to have but no longer does (deterministic
+  // up to the configured max). Carried on the last chunk so the executor
+  // cleans them after the new windows landed.
+  const supersededIds: string[] = [];
+  for (let j = chunkTexts.length; j < MAX_BODY_CHUNKS; j++) supersededIds.push(bodyChunkId(j));
+
+  chunkTexts.forEach((text, i) => {
+    const isLast = i === chunkTexts.length - 1;
     candidates.push({
       text,
-      id: bodyVecId,
+      id: bodyChunkId(i),
       filePath,
       metadata: {
         project_name: project.name,
@@ -254,7 +284,11 @@ function appendBodyCandidate(
         chunk_index: String(i),
       },
       hash: combinedHash,
-      onCommit: () => db.setSymbolEmbeddingHash(symDbId, combinedHash, 'body'),
+      groupKey,
+      ...(isLast && supersededIds.length > 0 ? { supersededIds } : {}),
+      onCommit: isLast
+        ? () => db.setSymbolEmbeddingHash(symDbId, combinedHash, 'body')
+        : () => { /* committed by the last window of the group */ },
     });
   });
 }

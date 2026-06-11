@@ -7,6 +7,7 @@ import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { PermissionGate, normalizeToolPermissionMode } from '@mcp/code-agent/core/permission-gate.js';
 import { summarizeSpanV2, renderSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
 import { runDurableCompaction } from '@mcp/code-agent/core/runner/compaction/durable-compaction.js';
 import { durableCompactionEnabled } from '@mcp/code-agent/core/runner/compaction/threshold.js';
@@ -54,11 +55,13 @@ import { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
 import { buildSpawnAgentTool } from '@mcp/code-agent/tools/spawn-agent.js';
+import { loadPrompt, interpolate } from '@mcp/code-agent/prompts/loader.js';
+import { parseDsWorkspace } from '@mcp/code-agent/core/builder-config.js';
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
 import { buildKanbanTools } from '@mcp/company/tools/kanban-tools.js';
 import { buildBoardTools } from '@mcp/company/tools/board-tools.js';
 import { buildQaTools } from '@mcp/company/tools/qa/index.js';
-import { buildDesignSystemTools } from '@mcp/company/tools/design-system/index.js';
+import { buildDesignSystemStudioTools } from '@mcp/company/tools/design-system/index.js';
 import { buildSubordinateTools } from '@mcp/company/tools/subordinate-tools.js';
 import { buildSharedDriveTools } from '@mcp/company/tools/shared-drive-tools.js';
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
@@ -316,6 +319,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (!opts.companyContext) {
     registry.registerAll(buildSessionDriveTools());
   }
+  // DS Studio — single sessions on a Design System workspace project get
+  // the ds_* tools (record/list/audit/publish) bound to the project. The
+  // workspace is identified by `projects.builder_json.kind === 'ds'`
+  // (written by the studio scaffold). Company sessions keep their own
+  // registration below; the feature flag gates the whole surface.
+  const dsWorkspace = !opts.companyContext ? parseDsWorkspace(project.builder_json) : null;
+  if (dsWorkspace && config.features.designSystemEnabled) {
+    registry.registerAll(buildDesignSystemStudioTools(project.id));
+  }
   // Cross-agent comm tools (list_agents / wait_agents / send_message /
   // send_input / followup_task) were registered here UNCONDITIONALLY, so they
   // fell through getToolTier → bootstrap and shipped on turn 1 of every SOLO
@@ -540,13 +552,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // The tool is harmless when not used, so we register unconditionally for
       // subordinates and let the prompt-injector instructions discipline usage.
       registry.registerAll(buildQaTools(orchestrator, agentRole, agentRunId));
-      // Design System Creator tools: same pattern — gated by per-skill
-      // allowed-tools (ds-extractor, ds-components-*, ds-mcp-server, ds-docs).
-      // Skipped entirely when DESIGN_SYSTEM_ENABLED=false so the model
-      // never sees the tool surface.
-      if (config.features.designSystemEnabled) {
-        registry.registerAll(buildDesignSystemTools(orchestrator, agentRole, agentRunId));
-      }
+      // ds_* tools são exclusivas do DS Studio (sessão single) — o pipeline
+      // company de Design System foi aposentado e sessões legacy são
+      // read-only, então subordinados não recebem mais esse surface.
     }
     if (isMaster) {
       // review_subordinate_work needs in-process DB access to run the review
@@ -559,22 +567,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         }),
       );
       registry.registerAll(buildKanbanTools(orchestrator));
-      // Master also gets the DS publish/status tools (it owns the publish step).
-      if (config.features.designSystemEnabled) {
-        registry.registerAll(buildDesignSystemTools(orchestrator, agentRole, agentRunId));
-      }
       // Strip code-level tools from Master — it should only orchestrate, not read code
       registry.filterInPlace(isMasterAllowed);
       console.log(`[coder] Master: filtered to ${registry.list().length} tools (orchestration-only)`);
-    }
-    // Diagnostic log of DS tool count post-registration. Lets the operator
-    // distinguish "tool missing from registry" (this log shows 0) from
-    // "model didn't call tool" (log shows 4) when a round goes wrong.
-    const dsCount = registry.list().filter((t) => t.name.startsWith('ds_')).length;
-    if (dsCount > 0) {
-      console.log(
-        `[coder] DS tools registered for ${isMaster ? 'master' : `subordinate (${agentRole})`}: ${dsCount}`,
-      );
     }
   }
 
@@ -1031,6 +1026,20 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     systemPrompt += '\n' + opts.companyPromptBlock;
   }
 
+  // DS Studio block — appended (not replacing the agent prompt) so the
+  // `builder` agent identity stays intact and the prefix remains
+  // cache-stable: every value comes from builder_json, fixed at scaffold
+  // time, no DB query per turn.
+  if (dsWorkspace) {
+    systemPrompt += '\n' + interpolate(loadPrompt('ds-studio'), {
+      packageName: dsWorkspace.packageName ?? '(see ds_get_session_info)',
+      stack: dsWorkspace.stack,
+      publishExtra: dsWorkspace.stack === 'angular'
+        ? '4. Angular only: run `ng build pkg` first and publish the BUILT output (`ds_publish_version({ pkg_dir: "dist/pkg" })`).'
+        : '',
+    });
+  }
+
   // Append skill awareness block. Mode resolution priority:
   //   1. Explicit env CODER_SKILLS_PROMPT_MODE = lazy | compact | matched | full
   //   2. Company context present (master/subordinate) → 'matched' (existing
@@ -1408,6 +1417,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // per-block PUSH_TIME_CAP to the high safety ceiling so verbose MCP tools
     // (Unity, large file reads, batched code_exec) arrive intact.
     unrestrictedToolOutput: !!session.unrestricted_tool_output,
+    // Tool permission mode (migration 131). Company runs force 'unrestricted'
+    // in V1 — the company board has no approval UI yet, so a paused
+    // subordinate would hang invisibly. Single sessions read the column
+    // (NULL → 'auto'). Explicit opt wins (tests / future company V2).
+    toolPermissionMode: opts.toolPermissionMode
+      ?? (opts.companyContext
+        ? 'unrestricted'
+        : normalizeToolPermissionMode(session.tool_permission_mode)),
     // A1 — per-session tunables (push caps, turn budget). Undefined →
     // runner uses envTunables() = bit-identical to pre-A1 constants.
     tunables: opts.tunables,
@@ -1749,6 +1766,38 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // See `RunCoderOptions.onRunnerReady` for the contract.
   if (opts.onRunnerReady) {
     opts.onRunnerReady(runner);
+  }
+
+  // Permission gate — pauses write/execute/admin tool calls for user
+  // approval depending on the session mode. Lives on the SHARED toolContext
+  // object (the runner holds the same reference), so the main dispatch,
+  // code_exec nested calls and subagent context copies all consult ONE
+  // instance. Mode is read live from the runner, so PATCH
+  // /tool-permission-mode applies mid-run to the next gated call.
+  {
+    let initialGrants: string[] = [];
+    try {
+      const parsed: unknown = JSON.parse(session.tool_permission_grants ?? '[]');
+      if (Array.isArray(parsed)) initialGrants = parsed.filter((g): g is string => typeof g === 'string');
+    } catch { /* corrupted grants column — start empty */ }
+    toolContext.permissionGate = new PermissionGate({
+      getMode: () => runner.getToolPermissionMode(),
+      emit: (event, payload) => { runner.emit(event, payload as never); },
+      waitForUserInput: (askId) => runner.waitForUserInput(askId),
+      initialGrants,
+      onGrant: (toolName) => {
+        try {
+          store.addToolPermissionGrant(session.id, toolName);
+        } catch (e) {
+          console.warn(`[coder] addToolPermissionGrant failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      },
+      // Keep-alive while approvals are pending so the stuck-running
+      // watchdog (10 min) doesn't flip the session to idle mid-pause.
+      onPendingTick: () => {
+        try { store.touchSession(session.id); } catch { /* best-effort */ }
+      },
+    });
   }
 
   // Close the recorder ↔ runner loop now that both exist. The recorder

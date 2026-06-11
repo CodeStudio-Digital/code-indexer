@@ -10,6 +10,13 @@ export interface EmbeddingService {
    * it; the indexer uses it to detect a model change and trigger a re-embed.
    */
   fingerprint?(): string;
+  /**
+   * How many `embed()` calls this backend tolerates in flight at once.
+   * Optional hint consumed by the indexer's batch runner; absent → 1
+   * (sequential). Network-bound backends benefit from > 1; a CPU-bound
+   * single-session backend (local ONNX) must stay at 1.
+   */
+  maxConcurrency?(): number;
 }
 
 export class CloudflareEmbeddingService implements EmbeddingService {
@@ -196,6 +203,14 @@ export class CloudflareEmbeddingService implements EmbeddingService {
     // the vector space — the model identity is what matters for re-index.
     return 'cloudflare:bge-m3';
   }
+
+  maxConcurrency(): number {
+    // Judgment call, not a measured limit — Workers AI rate limits for
+    // bge-m3 aren't published. 4 in-flight requests of ≤35k est. tokens is
+    // modest; `fetchWithRetry` absorbs transient 429/5xx per request, and
+    // MCP_EMBED_CONCURRENCY=1 restores sequential behavior.
+    return 4;
+  }
 }
 
 /**
@@ -342,6 +357,12 @@ export class BedrockTitanEmbeddingService implements EmbeddingService {
 
   fingerprint(): string {
     return `bedrock:${this.modelId}`;
+  }
+
+  maxConcurrency(): number {
+    // Titan is per-text InvokeModel; account-level TPS limits are real but
+    // unverified — stay conservative. Tunable via MCP_EMBED_CONCURRENCY.
+    return 2;
   }
 }
 

@@ -153,6 +153,7 @@
   "runs.noRuns": "Nenhuma execução ainda.",
   "runs.runLabel": "Execução #{{id}}",
   "runs.filesCount": "{{indexed}}/{{total}} arquivos",
+  "runs.errorsCount": "{{count}} erro(s)",
   "diff.loading": "Carregando diff…",
   "diff.notEnoughRuns": "Execuções insuficientes para comparar.",
   "diff.noData": "Nenhum dado de diff disponível.",

@@ -25,6 +25,11 @@ export interface CoderRuntime {
   findPendingInteraction(
     sessionId: number,
   ): { toolUseId: string; name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'submit_spec' | 'submit_specification_to_master' } | null;
+  /** Dangling tool_use lookup by id (any tool name) — POST /tool-approval dead-runner fallback. */
+  findDanglingToolUse(
+    sessionId: number,
+    toolUseId: string,
+  ): { toolUseId: string; name: string } | null;
   coderPipelineRegistry: CoderPipelineRegistry;
 }
 
@@ -131,11 +136,45 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
     return null;
   }
 
+  /**
+   * Locate a specific dangling tool_use (no matching tool_result) by id —
+   * the dead-runner fallback of POST /tool-approval. Unlike
+   * `findPendingInteraction` it matches ANY tool name: a PermissionGate
+   * pause can sit on write_file/run_command/etc. Only finds calls whose
+   * turn was already flushed to the DB (compaction/restart edge); an
+   * unflushed pause simply 404s and the model re-decides on the next run.
+   */
+  function findDanglingToolUse(
+    sessionId: number,
+    toolUseId: string,
+  ): { toolUseId: string; name: string } | null {
+    const data = sessionStore.loadSessionWithMessages(sessionId);
+    if (!data) return null;
+    for (const m of data.messages) {
+      if (m.role === 'tool' || m.role === 'user') {
+        for (const b of m.content) {
+          if (b.type === 'tool_result' && b.tool_use_id === toolUseId) return null;
+        }
+      }
+    }
+    for (let i = data.messages.length - 1; i >= 0; i--) {
+      const m = data.messages[i];
+      if (m.role !== 'assistant') continue;
+      for (const b of m.content) {
+        if (b.type === 'tool_use' && b.id === toolUseId) {
+          return { toolUseId: b.id, name: b.name };
+        }
+      }
+    }
+    return null;
+  }
+
   return {
     activeRuns,
     BUS_LINGER_MS,
     wireRunnerToBus,
     findPendingInteraction,
+    findDanglingToolUse,
     coderPipelineRegistry,
   };
 }

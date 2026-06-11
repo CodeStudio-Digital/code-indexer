@@ -191,17 +191,31 @@ describe('code_exec — sandbox + tool proxy', () => {
     expect(r.content).toContain('exceeded 50 tool calls');
   });
 
-  it('enforces the async timeout', async () => {
+  it('enforces the async JS-time budget (burned between tool calls, paused during them)', async () => {
+    // Codex-faithful semantics: `timeout_ms` bounds the script's OWN JS-active
+    // time. A slow nested tool no longer trips it (the clock PAUSES while a
+    // tool is in flight — canonical coverage in packages/code-agent
+    // src/tools/__tests__/code-exec.test.ts), but synchronous work BETWEEN
+    // tool calls still burns the budget: pauseClock() discounts the elapsed
+    // slice at the next tool call and resumeClock() rejects once it goes ≤ 0.
+    // The burn must come AFTER the first await — the initial sync slice is
+    // covered by the vm `timeout` option (a different mechanism).
     const registry = makeRegistry([
-      safeTool('slow', async () => {
-        await new Promise((res) => setTimeout(res, 5_000));
-        return { content: 'late' };
-      }),
+      safeTool('fast', async () => ({ content: 'ok' })),
     ]);
     const exec = buildCodeExecTool(registry);
-    const r = await exec.handler({ code: 'return await tools.slow({});', timeout_ms: 600 }, ctx);
+    const code = `
+      await tools.fast({});
+      const t0 = Date.now();
+      while (Date.now() - t0 < 900) { /* burn the script's own JS time */ }
+      await tools.fast({});
+      return "should not reach";
+    `;
+    const r = await exec.handler({ code, timeout_ms: 600 }, ctx);
     expect(r.isError).toBe(true);
-    expect(r.content).toContain('timed out');
+    // The "(JS time)" suffix proves the async budget fired — the vm sync
+    // guard reports "parse/sync error" instead.
+    expect(r.content).toContain('timed out after 600 ms (JS time)');
   });
 
   it('forbids access to require/process/Buffer in the sandbox', async () => {

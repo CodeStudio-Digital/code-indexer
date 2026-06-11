@@ -37,7 +37,10 @@ export type SymbolKind =
   | 'namespace'
   | 'other';
 
-export type RunStatus = 'running' | 'completed' | 'failed';
+// 'completed_with_errors': run finished but some files or the embedding
+// pipeline failed — the index is usable yet incomplete (error_count > 0).
+// 'abandoned': stamped by markStaleRuns on runs orphaned by a crash.
+export type RunStatus = 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'abandoned';
 
 export type WebhookEvent =
   | 'index.start'

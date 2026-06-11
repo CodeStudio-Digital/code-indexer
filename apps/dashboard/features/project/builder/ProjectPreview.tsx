@@ -65,7 +65,12 @@ export function ProjectPreview({
   const [device, setDevice] = useState<DeviceFrame>('desktop');
   const [reloadKey, setReloadKey] = useState(0);
   const { problems, add, clear, dismiss, errorCount } = usePreviewProblems();
-  const { autoFixEnabled, setAutoFixEnabled } = useAutoFix(projectId, problems);
+  // Run-end revalidation: reload the iframe so only errors that still exist
+  // re-emit (and fire); fixed ones stay silent. The badge list is kept.
+  const onAutoFixRevalidate = useCallback(() => setReloadKey((k) => k + 1), []);
+  const { autoFixEnabled, setAutoFixEnabled } = useAutoFix(projectId, problems, {
+    onRevalidate: onAutoFixRevalidate,
+  });
   const [repairing, setRepairing] = useState(false);
   const [repairError, setRepairError] = useState<string | null>(null);
 

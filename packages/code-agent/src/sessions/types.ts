@@ -75,6 +75,20 @@ export interface CoderSession {
    */
   unrestricted_tool_output: boolean | null;
   /**
+   * Per-session tool permission mode (migration 131). Drives the
+   * PermissionGate: 'ask' pauses every write/execute/admin tool for user
+   * approval, 'auto' pauses only execute/admin, 'unrestricted' never pauses.
+   * NULL → 'auto' for single coder sessions (company runs override to
+   * 'unrestricted' at the call site in V1).
+   */
+  tool_permission_mode: 'ask' | 'auto' | 'unrestricted' | null;
+  /**
+   * JSON string[] of tool names the user marked "always allow" for this
+   * session (migration 131). Seeds the PermissionGate grant set so repeat
+   * approvals are skipped. NULL → no grants.
+   */
+  tool_permission_grants: string | null;
+  /**
    * Durable compaction boundary (migration 128). When non-null, every message
    * loader (runner seed + dashboard GET) only returns rows with
    * `id > summary_boundary_id`; older rows stay in the table but drop out of

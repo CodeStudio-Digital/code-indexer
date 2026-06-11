@@ -27,6 +27,7 @@ import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { MessageList } from './messages/MessageList.js';
 import { StuckBanner } from './StuckBanner.js';
+import { ApprovalBanner } from './ApprovalBanner.js';
 import { ToolLoopBanner } from './ToolLoopBanner.js';
 // The five ex-modals (Skills/Tools/Metrics/ToolStats/Details) and the
 // WorkerLog/SessionState panels are now routed through `RightPanelHost`
@@ -44,7 +45,7 @@ import type {
   SessionData,
 } from './types.js';
 import { useAgentChatState } from './useAgentChatState.js';
-import { consumeSelectionPrefix, onStudioSend } from '../builder/studio/studio-context-store.js';
+import { consumeSelectionPrefix, onStudioSend, usePublishAgentBusy } from '../builder/studio/studio-context-store.js';
 import type { AgentAttachment } from '../../hooks/useAgentStream.js';
 
 export default function AgentChat({ projectId, projectName, initialSessionId, selectionPrefixSessionId }: AgentChatProps) {
@@ -90,6 +91,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
   const [sessionTemperature, setSessionTemperature] = useState<number | null>(null);
   const [unrestrictedOutput, setUnrestrictedOutput] = useState<boolean>(false);
+  const [toolPermissionMode, setToolPermissionMode] = useState<'ask' | 'auto' | 'unrestricted'>('auto');
   const [summarizing, setSummarizing] = useState<boolean>(false);
   const composerRef = useRef<ComposerHandle>(null);
   const sessionsPanelRef = useRef<ImperativePanelHandle>(null);
@@ -173,7 +175,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     sidebarRefreshTick,
     snapshotTick,
     toolLoopInterventions,
-    eventLog,
+    pendingApprovals,
     lastEventAt,
     sendMessage,
     reattach,
@@ -183,8 +185,12 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     respondToPlan,
     respondToTasks,
     respondToSpec,
+    respondToToolApproval,
     switchProvider,
   } = stream;
+
+  // Builder/DS studio: gate the preview's auto-fix loop while this chat runs.
+  usePublishAgentBusy(selectionPrefixSessionId, streaming);
 
   const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, stats, liveTurnDuplicatedInHistory } =
     useAgentChatState({
@@ -519,6 +525,16 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     setUnrestrictedOutput(!!v);
   }, [sessionData?.session]);
 
+  // Tool permission mode (migration 131). Reads from the session row,
+  // writes via PATCH — which also pushes into the live runner mid-run.
+  useEffect(() => {
+    if (!sessionData?.session) {
+      setToolPermissionMode('auto');
+      return;
+    }
+    setToolPermissionMode(sessionData.session.tool_permission_mode ?? 'auto');
+  }, [sessionData?.session]);
+
   const handleTemperatureChange = async (next: number | null) => {
     setSessionTemperature(next);
     if (!selectedId) return;
@@ -534,6 +550,16 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     if (!selectedId) return;
     try {
       await apiPatch(`/coder/sessions/${selectedId}/unrestricted-output`, { enabled: next });
+    } catch {
+      /* ignore — UI optimistic, server is the source of truth on next refetch */
+    }
+  };
+
+  const handleToolPermissionModeChange = async (next: 'ask' | 'auto' | 'unrestricted') => {
+    setToolPermissionMode(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/tool-permission-mode`, { mode: next });
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
     }
@@ -796,10 +822,11 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
         }
       },
       onFork: handleFork,
+      onToolApproval: (toolUseId, verdict) => respondToToolApproval(toolUseId, verdict),
     }),
     // handleFork depends on selectedId — re-create when session changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [answerQuestion, respondToPlan, respondToTasks, respondToSpec, selectedId, agent],
+    [answerQuestion, respondToPlan, respondToTasks, respondToSpec, respondToToolApproval, selectedId, agent],
   );
 
   return (
@@ -1021,11 +1048,16 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
               )}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
                 <ToolLoopBanner interventions={toolLoopInterventions} />
-                <StuckBanner
-                  streaming={streaming}
-                  lastEventAt={lastEventAt ?? null}
-                  onOpenLog={() => setActiveRightPanelId('worker-log')}
-                />
+                <ApprovalBanner approvals={pendingApprovals} onRespond={respondToToolApproval} />
+                {/* A paused PermissionGate is silence by design — suppress the
+                    stall heuristic while approvals are pending. */}
+                {pendingApprovals.length === 0 && (
+                  <StuckBanner
+                    streaming={streaming}
+                    lastEventAt={lastEventAt ?? null}
+                    onOpenLog={() => setActiveRightPanelId('worker-log')}
+                  />
+                )}
                 <MessageList
                   sessionData={sessionData ?? null}
                   currentTurn={currentTurn}
@@ -1075,6 +1107,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
                 setTemperature={handleTemperatureChange}
                 unrestrictedOutput={unrestrictedOutput}
                 setUnrestrictedOutput={handleUnrestrictedOutputChange}
+                toolPermissionMode={toolPermissionMode}
+                setToolPermissionMode={handleToolPermissionModeChange}
                 getModelsForProvider={getModelsForProvider}
                 selectedPipelineId={selectedPipelineId}
                 setSelectedPipelineId={setSelectedPipelineId}
@@ -1111,7 +1145,6 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
                 skillPicks={skillPicks}
                 onToggleSkillPick={toggleSkillPick}
                 pipelineRuntime={pipelineRuntime}
-                eventLog={eventLog ?? []}
                 onClose={() => setActiveRightPanelId(null)}
               />
             </Panel>

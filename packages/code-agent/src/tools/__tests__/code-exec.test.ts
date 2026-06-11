@@ -152,3 +152,88 @@ describe('code_exec ReferenceError hints', () => {
     expect(res.content).not.toContain('NOT exposed inside code_exec');
   });
 });
+
+describe('code_exec permission gate (nested calls)', () => {
+  /** Fake PermissionGate — the real class is covered by permission-gate.test.ts. */
+  function gateCtx(
+    check: (req: { toolName: string; parentToolUseId?: string; nested?: boolean }) => Promise<{ allowed: true } | { allowed: false; refusalText: string }>,
+  ): ToolContext {
+    return {
+      ...makeCtx(),
+      currentToolUseId: 'ce_block_1',
+      permissionGate: { check, pendingCount: () => 0 } as unknown as ToolContext['permissionGate'],
+    };
+  }
+
+  it('denial reaches the script as a JS exception (finally restores clock/inFlight)', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('run_command'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `await tools.run_command({ command: 'ls' }); return 'unreachable';` },
+      gateCtx(async () => ({ allowed: false, refusalText: '[user-denied: o usuário negou permissão para `run_command`.]' })),
+    );
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('[user-denied');
+  });
+
+  it('a denied call does not kill the script — try/catch keeps running', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('run_command'));
+    registry.register(noopTool('read_file'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      {
+        code: `
+          let denied = false;
+          try { await tools.run_command({}); } catch (e) { denied = String(e).includes('user-denied'); }
+          const r = await tools.read_file({});
+          return JSON.stringify({ denied, r });
+        `,
+      },
+      gateCtx(async (req) =>
+        req.toolName === 'run_command'
+          ? { allowed: false, refusalText: '[user-denied: negado.]' }
+          : { allowed: true }),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('"denied":true');
+    expect(res.content).toContain('read_file-ok');
+  });
+
+  it('anchors nested requests to the code_exec block (parentToolUseId + nested)', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('run_command'));
+    const codeExec = buildCodeExecTool(registry);
+    const seen: Array<{ parent?: string; nested?: boolean }> = [];
+
+    const res = await codeExec.handler(
+      { code: `await tools.run_command({}); return 'done';` },
+      gateCtx(async (req) => {
+        seen.push({ parent: req.parentToolUseId, nested: req.nested });
+        return { allowed: true };
+      }),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(seen).toEqual([{ parent: 'ce_block_1', nested: true }]);
+  });
+
+  it('no gate on the context → nested calls run free (legacy)', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('run_command'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `const r = await tools.run_command({}); return r;` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('run_command-ok');
+  });
+});

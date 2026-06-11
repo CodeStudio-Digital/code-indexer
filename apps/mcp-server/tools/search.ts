@@ -4,6 +4,7 @@ import { defineTool, type McpTool } from '../tool.js';
 import { grepInFiles } from '@mcp/services/services/code-reader.js';
 import type { SearchMode, SearchType } from '@mcp/shared/types.js';
 import { withProject } from './_helpers.js';
+import { renderDegradedTrailer, renderZeroResultDiagnostics } from './search-diagnostics.js';
 
 const DISK_FALLBACK_MAX_FILES = 2000;
 const DISK_FALLBACK_IGNORE = [
@@ -37,25 +38,32 @@ export async function scanDiskForGrep(rootPath: string, glob: string | undefined
 
 const search = defineTool({
   name: 'search',
-  description: 'Search files and symbols in a project',
+  description: 'Search files and symbols in a project (FTS + semantic). mode defaults to auto: the planner routes identifier-shaped queries to fast FTS and natural-language queries to hybrid.',
   inputSchema: {
     type: 'object',
     properties: {
       project_name: { type: 'string' },
       query: { type: 'string' },
-      mode: { type: 'string', enum: ['fts', 'vector', 'hybrid'] },
+      mode: { type: 'string', enum: ['auto', 'fts', 'vector', 'hybrid'] },
       type: { type: 'string', enum: ['files', 'symbols', 'all'] },
       limit: { type: 'number' },
     },
     required: ['project_name', 'query'],
   },
-  handler: withProject(async (args, { hybridSearch }, project) => {
-    const results = await hybridSearch.search(project.id, project.name, args.query as string, {
-      mode: (args.mode as SearchMode) ?? 'hybrid',
+  handler: withProject(async (args, { db, hybridSearch }, project) => {
+    // 'auto' lets the planner route: identifier-shaped → FTS (~10ms),
+    // natural language → hybrid. Forcing 'hybrid' here made every symbol
+    // lookup pay HyDE + multi-variant embedding + rerank for nothing.
+    const requestedMode = (args.mode as SearchMode) ?? 'auto';
+    const { results, diagnostics } = await hybridSearch.searchWithDiag(project.id, project.name, args.query as string, {
+      mode: requestedMode,
       type: (args.type as SearchType) ?? 'all',
       limit: (args.limit as number) ?? 20,
     });
-    return results.map(r => {
+    if (results.length === 0) {
+      return renderZeroResultDiagnostics(requestedMode, diagnostics, () => db.getEmbeddingCoverage(project.id));
+    }
+    const body = results.map(r => {
       const d = r.data as unknown as Record<string, unknown>;
       if (r.type === 'file') {
         const concepts = (() => { try { return JSON.parse(d.concepts as string ?? '[]').join(', '); } catch { return ''; } })();
@@ -73,7 +81,9 @@ const search = defineTool({
         d.comment ? `Description: ${d.comment}` : '',
         d.parent ? `Parent: ${d.parent}` : '',
       ].filter(Boolean).join('\n');
-    }).join('\n\n') || 'No results found.';
+    }).join('\n\n');
+    const trailer = renderDegradedTrailer(diagnostics);
+    return trailer ? `${body}\n\n${trailer}` : body;
   }),
 });
 

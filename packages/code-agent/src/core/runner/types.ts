@@ -84,6 +84,13 @@ export interface RunnerOptions {
    * to the high safety ceiling. Auto-compaction still runs.
    */
   unrestrictedToolOutput?: boolean | null;
+  /**
+   * Per-session tool permission mode driving the PermissionGate
+   * ('ask' | 'auto' | 'unrestricted'). Null/undefined → 'auto'. Read live by
+   * the gate via `getToolPermissionMode()`, so mid-run changes apply to the
+   * next gated call. Mirrors `coder_sessions.tool_permission_mode`.
+   */
+  toolPermissionMode?: 'ask' | 'auto' | 'unrestricted' | null;
   /** Initial set of active tool tiers. Filters tools array each turn. */
   activeTiers?: Set<ToolTier>;
   /**

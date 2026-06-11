@@ -5,6 +5,7 @@
  * the preview writes here, the composer reads here — mirroring the existing
  * `sandbox:file-changed:<id>` window-event pattern used by BuilderView.
  */
+import { useEffect } from 'react';
 import type { PreviewToParentMessage } from '@mcp/services/sandbox/builder/protocol.js';
 
 export type SelectedElement = Extract<PreviewToParentMessage, { type: 'mcp:select' }>;
@@ -94,6 +95,20 @@ export function setAgentBusy(sid: number, busy: boolean): void {
 }
 export function isAgentBusy(sid: number): boolean {
   return busyBySession.get(sid) ?? false;
+}
+
+/**
+ * Publish a chat pane's live busy state under the studio key (single-session
+ * chat passes `streaming` from useAgentStream; the company pane has its own
+ * masterStatus-based publisher). Cleanup resets to idle so a stale `true`
+ * never outlives the pane that produced it.
+ */
+export function usePublishAgentBusy(sid: number | null | undefined, busy: boolean): void {
+  useEffect(() => {
+    if (sid == null) return;
+    setAgentBusy(sid, busy);
+    return () => setAgentBusy(sid, false);
+  }, [sid, busy]);
 }
 
 // ── Send bridge (preview pane → chat pane) ──────────────────────────

@@ -1,25 +1,40 @@
-{"query": "hybrid search RRF merge", "relevant_files": ["src/core/search/hybrid.ts"]}
-{"query": "how does contextual retrieval prepend context before embedding", "relevant_files": ["src/core/indexer/indexer.ts"]}
-{"query": "context bundle token budget and dedup", "relevant_files": ["src/core/search/context-bundle.ts"]}
-{"query": "tree-sitter symbol extractor", "relevant_files": ["src/core/indexer/tree-sitter/extractor.ts"]}
-{"query": "vector store abstraction", "relevant_files": ["src/store/vectors.ts"]}
-{"query": "cloudflare BGE embeddings service", "relevant_files": ["src/core/search/embeddings.ts"]}
-{"query": "cross encoder reranker", "relevant_files": ["src/core/search/reranker.ts"]}
-{"query": "query planner routes identifier to FTS", "relevant_files": ["src/core/search/planner.ts"]}
-{"query": "HyDE hypothetical document expansion", "relevant_files": ["src/core/search/hyde.ts"]}
-{"query": "file tier mapper core support on_demand", "relevant_files": ["src/core/indexer/mapper.ts"]}
-{"query": "incremental indexing skip unchanged embeddings", "relevant_files": ["src/core/indexer/incremental.ts"]}
-{"query": "repo map for agent system prompt", "relevant_files": ["src/core/coder/core/repo-map.ts"]}
-{"query": "system prompt dynamic boundary cache stratification", "relevant_files": ["src/core/coder/core/system-prompt.ts"]}
-{"query": "tool tiers bootstrap navigate full", "relevant_files": ["src/core/coder/tools/tiers.ts"]}
-{"query": "spawn subagent explore allowlist", "relevant_files": ["src/core/coder/tools/subagent.ts", "src/core/coder/tools/implement-subagent.ts"]}
-{"query": "agent modes explore plan build admin", "relevant_files": ["src/core/coder/agents/index.ts"]}
-{"query": "MCP server stdio entry point", "relevant_files": ["src/apps/mcp-server/index.ts"]}
-{"query": "snapshots full text search service", "relevant_files": ["src/core/services/snapshots.ts"]}
-{"query": "history compaction tool result pruning", "relevant_files": ["src/core/coder/core/compaction.ts"]}
-{"query": "migration 071 file index tier", "relevant_files": ["src/store/migrations/071_file_index_tier.ts"]}
-{"query": "migration 070 index hygiene vector dedup", "relevant_files": ["src/store/migrations/070_index_hygiene.ts"]}
-{"query": "provider factory and registry", "relevant_files": ["src/core/providers/factory.ts", "src/core/providers/registry.ts"]}
-{"query": "cost tracker records embedding usage", "relevant_files": ["src/core/indexer/indexer.ts"]}
-{"query": "search context bundling helper for coder bootstrap", "relevant_files": ["src/core/bootstrap/search-bundle.ts"]}
-{"query": "HTTP API dashboard hono server", "relevant_files": ["src/apps/http-api/server.ts"]}
+{"query": "hybrid search RRF merge", "relevant_files": ["packages/indexer/src/search/hybrid.ts"]}
+{"query": "how does contextual retrieval prepend context before embedding", "relevant_files": ["packages/indexer/src/indexer/indexer/embedding-candidates.ts", "packages/indexer/src/indexer/indexer.ts"]}
+{"query": "context bundle token budget and dedup", "relevant_files": ["packages/indexer/src/search/context-bundle.ts"]}
+{"query": "tree-sitter symbol extractor", "relevant_files": ["packages/indexer/src/indexer/tree-sitter/extractor.ts"]}
+{"query": "vector store abstraction", "relevant_files": ["packages/store/src/vectors.ts"]}
+{"query": "cloudflare BGE embeddings service", "relevant_files": ["packages/indexer/src/search/embeddings.ts"]}
+{"query": "cross encoder reranker", "relevant_files": ["packages/indexer/src/search/reranker.ts"]}
+{"query": "query planner routes identifier to FTS", "relevant_files": ["packages/indexer/src/search/planner.ts"]}
+{"query": "HyDE hypothetical document expansion", "relevant_files": ["packages/indexer/src/search/hyde.ts"]}
+{"query": "file tier mapper core support on_demand", "relevant_files": ["packages/indexer/src/indexer/mapper.ts"]}
+{"query": "incremental indexing skip unchanged embeddings", "relevant_files": ["packages/indexer/src/indexer/incremental.ts"]}
+{"query": "repo map for agent system prompt", "relevant_files": ["packages/code-agent/src/core/repo-map.ts"]}
+{"query": "system prompt dynamic boundary cache stratification", "relevant_files": ["packages/code-agent/src/core/system-prompt.ts"]}
+{"query": "tool tiers bootstrap navigate full", "relevant_files": ["packages/code-agent/src/tools/tiers.ts"]}
+{"query": "spawn subagent explore allowlist", "relevant_files": ["packages/code-agent/src/tools/subagent.ts", "packages/code-agent/src/tools/implement-subagent.ts"]}
+{"query": "agent modes explore plan build admin", "relevant_files": ["packages/code-agent/src/agents/index.ts"]}
+{"query": "MCP server stdio entry point", "relevant_files": ["apps/mcp-server/index.ts"]}
+{"query": "snapshots full text search service", "relevant_files": ["packages/services/src/services/snapshots.ts"]}
+{"query": "history compaction tool result pruning", "relevant_files": ["packages/code-agent/src/core/compaction.ts"]}
+{"query": "migration 071 file index tier", "relevant_files": ["packages/store/src/migrations/071_file_index_tier.ts"]}
+{"query": "migration 070 index hygiene vector dedup", "relevant_files": ["packages/store/src/migrations/070_index_hygiene.ts"]}
+{"query": "provider factory and registry", "relevant_files": ["packages/services/src/providers/factory.ts", "packages/services/src/providers/registry.ts"]}
+{"query": "cost tracker records embedding usage", "relevant_files": ["packages/indexer/src/indexer/indexer/embed-executor.ts", "packages/services/src/services/costs.ts"]}
+{"query": "search context bundling helper for coder bootstrap", "relevant_files": ["packages/indexer/src/bootstrap/search-bundle.ts"]}
+{"query": "HTTP API dashboard hono server", "relevant_files": ["apps/http-api/server.ts"]}
+{"query": "processEmbeddings", "relevant_files": ["packages/indexer/src/indexer/indexer/embed-executor.ts"], "relevant_symbols": ["processEmbeddings"]}
+{"query": "buildEmbeddingCandidates", "relevant_files": ["packages/indexer/src/indexer/indexer/embedding-candidates.ts"], "relevant_symbols": ["buildEmbeddingCandidates"]}
+{"query": "planQuery", "relevant_files": ["packages/indexer/src/search/planner.ts"], "relevant_symbols": ["planQuery"]}
+{"query": "withConcurrency", "relevant_files": ["packages/indexer/src/indexer/indexer/enrich-references.ts"], "relevant_symbols": ["withConcurrency"]}
+{"query": "codeNamespace", "relevant_files": ["packages/shared/src/vector-namespace.ts"], "relevant_symbols": ["codeNamespace"]}
+{"query": "how are deleted files removed from the vector store", "relevant_files": ["packages/indexer/src/indexer/indexer.ts", "packages/store/src/db/vectors.ts"]}
+{"query": "what happens when the embedding model fingerprint changes", "relevant_files": ["packages/indexer/src/indexer/indexer.ts"]}
+{"query": "how does the local cross encoder reranker score candidates offline", "relevant_files": ["packages/indexer/src/search/local-reranker.ts"]}
+{"query": "como o planner decide entre busca fts e híbrida", "relevant_files": ["packages/indexer/src/search/planner.ts"]}
+{"query": "como os corpos de funções grandes são divididos em janelas para embedding", "relevant_files": ["packages/indexer/src/indexer/indexer/embedding-candidates.ts", "packages/shared/src/utils/sliding-window.ts"]}
+{"query": "recent files recency boost search", "relevant_files": ["packages/indexer/src/search/recent-files-source.ts"]}
+{"query": "graph expansion callers importers one hop", "relevant_files": ["packages/indexer/src/search/graph-expansion-source.ts"]}
+{"query": "LSH simhash bucket prefilter embeddings", "relevant_files": ["packages/indexer/src/indexer/lsh-indexing-sink.ts"]}
+{"query": "candidate pipeline stages dedup topk rerank hydrator", "relevant_files": ["packages/indexer/src/search/hybrid-pipeline.ts"]}
+{"query": "retry embeddings missing hashes from disk", "relevant_files": ["packages/indexer/src/indexer/indexer/embed-executor.ts"], "relevant_symbols": ["retryEmbeddings"]}

@@ -7,7 +7,7 @@ import {
   formatPackageAudit,
 } from '@mcp/design-system/package-audit.js';
 import { dsAuditPackage } from '@mcp/company/tools/design-system/ds-audit-package.js';
-import { dsValidateManifest } from '@mcp/company/tools/design-system/ds-validate-manifest.js';
+import { companyBinding, studioBinding } from '@mcp/company/tools/design-system/binding.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 describe('design-system package audit and tools', () => {
@@ -287,38 +287,6 @@ export default {
     expect(messages).toContain("argTypes.variant.options includes 'gradient'");
   });
 
-  it('ds_validate_manifest returns actionable schema errors', async () => {
-    writeJson('bad-manifest.json', {
-      manifest_version: '2',
-      dependencies: {
-        css_frameworks: [],
-        icon_fonts: [],
-        js_libs: [],
-        fonts: [],
-      },
-      components: [
-        {
-          name: 'Button',
-          css_classes: ['btn'],
-          source_refs: ['index.html:1'],
-          dependencies: [],
-          confidence: 0.5,
-        },
-      ],
-    });
-
-    const tool = dsValidateManifest({} as never, 'master', null);
-    const result = await tool.handler(
-      { manifest_path: 'bad-manifest.json' },
-      { cwd: dir, projectName: 'test-project' } satisfies ToolContext,
-    );
-
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain('components.0.html');
-    expect(result.content).toContain('components.0.kind');
-    expect(result.content).toContain('components.0.props_schema');
-  });
-
   it('ds_audit_package exposes package audit failures through the native tool', async () => {
     writeJson('pkg/package.json', {
       name: '@acme/broken-ui',
@@ -329,7 +297,7 @@ export default {
     });
     writeJson('pkg/manifest.json', validManifest());
 
-    const tool = dsAuditPackage({} as never, 'master', null);
+    const tool = dsAuditPackage(companyBinding({ effectiveSessionId: 1 } as never));
     const result = await tool.handler(
       { pkg_dir: 'pkg' },
       { cwd: dir, projectName: 'test-project' } satisfies ToolContext,
@@ -339,5 +307,46 @@ export default {
     expect(result.content).toContain('Package audit: failed');
     expect(result.content).toContain('mcp.bin_missing');
     expect(result.content).toContain('storybook.static_missing');
+  });
+
+  it('studio profile: passes without storybook/mcp/bin but still demands docs.md', async () => {
+    // Pacote mínimo do DS Studio: publica src/ direto, sem Storybook,
+    // sem MCP server, sem manifest do pipeline.
+    writeJson('pkg/package.json', {
+      name: '@acme/studio-ds',
+      version: '0.0.0',
+      type: 'module',
+      files: ['src', 'docs.md'],
+      exports: { '.': './src/index.ts', './tokens.css': './src/tokens.css' },
+      peerDependencies: { react: '^19.0.0' },
+    });
+    write('pkg/src/index.ts', 'export {};\n');
+    write('pkg/docs.md', '# Acme DS\n');
+
+    const passing = await auditDesignSystemPackage(join(dir, 'pkg'), { profile: 'studio' });
+    expect(passing.errors).toEqual([]);
+    expect(passing.ok).toBe(true);
+    // Artefatos do pipeline viram warnings informativos, não bloqueio.
+    expect(passing.warnings.some((w) => w.code === 'manifest.missing')).toBe(true);
+    expect(passing.warnings.some((w) => w.code === 'mcp.manifest_missing')).toBe(true);
+
+    // docs.md continua obrigatório no studio.
+    rmSync(join(dir, 'pkg', 'docs.md'));
+    const failing = await auditDesignSystemPackage(join(dir, 'pkg'), { profile: 'studio' });
+    expect(failing.ok).toBe(false);
+    expect(failing.errors.some((e) => e.code === 'docs.aggregate_missing')).toBe(true);
+  });
+
+  it('studio binding resolves the DS session by project id', () => {
+    const session = { id: 9, project_id: 77, kind: 'studio' };
+    const store = {
+      getSessionByProjectId: (pid: number) => (pid === 77 ? session : null),
+      getSessionByCompanySessionId: () => null,
+    } as never;
+    const binding = studioBinding(77);
+    expect(binding.profile).toBe('studio');
+    expect(binding.resolveDsSession(store)).toEqual(session);
+    expect(binding.describeBinding()).toBe('project_id=77');
+    expect(studioBinding(1).resolveDsSession(store)).toBeNull();
   });
 });

@@ -1,206 +1,109 @@
 /**
- * Routes — Design System Creator sessions.
+ * Routes — Design System sessions (DS Studio + legacy read-only).
  *
- *   POST   /api/design-system/sessions            (multipart/form-data)
- *   GET    /api/design-system/sessions
- *   GET    /api/design-system/sessions/:id
+ *   POST   /api/design-system/sessions                → 410 Gone (pipeline company aposentado)
+ *   GET    /api/design-system/sessions                → list (studio + legacy, enriquecidos por kind)
+ *   GET    /api/design-system/sessions/:id            → detail
  *   PATCH  /api/design-system/sessions/:id/next-bump-hint
+ *   POST   /api/design-system/sessions/:id/re-extract → studio: extrai p/ <workspace>/import/
+ *                                                       legacy: re-extrai design_system/ + inventário
  *   DELETE /api/design-system/sessions/:id
+ *   POST   .../versions/:semver/install-mcp           → instala MCP server da versão publicada
  *
- * Creating a session uploads the theme zip, persists it to
- * `<mcpDataDir>/design-system-uploads/`, then creates a parent CompanySession
- * (builder-mode with the chosen stack) plus the design_system_session
- * row that links the two. The same flow as company sessions, just
- * wrapped to also accept multipart upload and seed the DS row.
+ * Criação de DS novo é exclusiva do DS Studio: `POST /api/design-system/studio`
+ * (scaffold de projeto-workspace + sessão single de chat). Sessões legacy
+ * (kind='company') ficam somente leitura — versões/docs/storybook.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  designSystemMcpDir,
-  designSystemUploadsDir,
-  virtualProjectDir,
-} from '@mcp/shared/utils/data-paths.js';
+import { designSystemMcpDir, designSystemUploadsDir } from '@mcp/shared/utils/data-paths.js';
 import type { Hono } from 'hono';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
-import { buildDesignSystemRoles } from '@mcp/design-system/template-config.js';
 import { extractZipToDir } from '@mcp/design-system/extract-zip.js';
 import { writeSourceInventory } from '@mcp/design-system/source-inventory.js';
-import type { DsStack, DsBumpHint } from '@mcp/store/design-system-store.js';
+import type { DesignSystemSession, DsBumpHint } from '@mcp/store/design-system-store.js';
 import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import { runNpm } from '@mcp/design-system/run-npm.js';
 import { hasCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import { tryGetVerdaccioService } from '@mcp/services/verdaccio/verdaccio-service.js';
 
-/**
- * Convention: the uploaded theme is unzipped into this folder of the
- * virtual project so the bind-mounted sandbox sees `/app/design_system/`
- * with the original HTML/CSS/SCSS files. Centralised so the route, the
- * master message, and tests all agree.
- */
+/** Legacy: pasta do tema extraído dentro do virtual project (company pipeline). */
 export const DS_SOURCE_DIRNAME = 'design_system';
+/** Studio: material bruto de referência dentro do projeto-workspace. */
+export const DS_IMPORT_DIRNAME = 'import';
 
-const VALID_STACKS: ReadonlySet<DsStack> = new Set<DsStack>(['react-ts', 'vue-ts', 'angular']);
 const VALID_HINTS: ReadonlySet<DsBumpHint> = new Set<DsBumpHint>(['patch', 'minor', 'major']);
 const ZIP_MAX_BYTES = 50 * 1024 * 1024;
+
+interface BuilderProjectConfig {
+  stack?: string;
+  port?: number;
+  kind?: string;
+  packageName?: string;
+}
+
+function parseBuilderJson(raw: string | null | undefined): BuilderProjectConfig {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as BuilderProjectConfig;
+  } catch {
+    return {};
+  }
+}
 
 export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): void {
   const { designSystemStore, companyStore, db } = deps;
 
-  app.post('/api/design-system/sessions', async (c) => {
-    let form: FormData;
-    try {
-      form = await c.req.formData();
-    } catch (e) {
-      return c.json({ error: `Failed to parse multipart body: ${(e as Error).message}` }, 400);
+  /** Enrichment compartilhado entre list e detail. */
+  function enrich(s: DesignSystemSession) {
+    const latest = designSystemStore.getLatestPublishedVersion(s.id);
+    const base = {
+      ...s,
+      latest_published_semver: latest?.semver ?? null,
+      latest_published_at: latest?.published_at ?? null,
+    };
+    if (s.kind === 'studio' && s.project_id != null) {
+      const project = db.getProject(s.project_id);
+      const builder = parseBuilderJson(project?.builder_json);
+      return {
+        ...base,
+        company_session_status: 'n/a',
+        is_running: false,
+        builder_port: builder.port ?? null,
+        project: project
+          ? { id: project.id, name: project.name, root_path: project.root_path }
+          : null,
+      };
     }
-    const name = stringField(form, 'name');
-    const packageName = stringField(form, 'package_name');
-    const stackRaw = stringField(form, 'stack');
-    const masterProvider = stringField(form, 'master_provider');
-    const masterModel = stringField(form, 'master_model');
-    if (!name || !packageName || !stackRaw || !masterProvider || !masterModel) {
-      return c.json(
-        { error: 'name, package_name, stack, master_provider, master_model are required.' },
-        400,
-      );
-    }
-    if (!VALID_STACKS.has(stackRaw as DsStack)) {
-      return c.json({ error: `Invalid stack '${stackRaw}'. Use react-ts, vue-ts or angular.` }, 400);
-    }
-    const stack = stackRaw as DsStack;
+    const cs = s.company_session_id != null
+      ? companyStore.getCompanySession(s.company_session_id)
+      : null;
+    return {
+      ...base,
+      company_session_status: cs?.status ?? 'unknown',
+      is_running: s.company_session_id != null && hasCompanyOrchestrator(s.company_session_id),
+      builder_port: null,
+      project: null,
+    };
+  }
 
-    const file = form.get('zip');
-    if (!(file instanceof File)) {
-      return c.json({ error: 'Multipart field `zip` is required (file upload).' }, 400);
-    }
-    if (file.size > ZIP_MAX_BYTES) {
-      return c.json({ error: `Zip too large (max ${ZIP_MAX_BYTES} bytes).` }, 400);
-    }
-    if (!file.name.toLowerCase().endsWith('.zip')) {
-      return c.json({ error: 'Only .zip uploads are accepted.' }, 400);
-    }
-
-    let zipPath: string;
-    let zipHash: string;
-    try {
-      const buf = Buffer.from(await file.arrayBuffer());
-      zipHash = createHash('sha256').update(buf).digest('hex');
-      const uploadsDir = designSystemUploadsDir();
-      mkdirSync(uploadsDir, { recursive: true });
-      zipPath = join(uploadsDir, `${zipHash.slice(0, 12)}-${randomUUID()}.zip`);
-      writeFileSync(zipPath, buf);
-    } catch (e) {
-      return c.json({ error: `Failed to persist zip: ${(e as Error).message}` }, 500);
-    }
-
-    // Create the virtual project for the builder sandbox (mirrors the
-    // company/sessions builder path).
-    const projUuid = randomUUID();
-    const projectRoot = virtualProjectDir(projUuid);
-    try { mkdirSync(projectRoot, { recursive: true }); } catch { /* tolerated */ }
-    const virtualProject = db.createProject(
-      `_design-system_${projUuid}`,
-      projectRoot,
-      `Virtual project for Design System session "${name}"`,
-    );
-
-    // Extract the zip into `<projectRoot>/design_system/` so the
-    // sandbox sees it at `/app/design_system/` immediately. Failure
-    // here is fatal — the agent has nothing to extract from otherwise.
-    const designSystemDir = join(projectRoot, DS_SOURCE_DIRNAME);
-    let extractStats;
-    try {
-      extractStats = extractZipToDir(zipPath, designSystemDir, { clean: true });
-    } catch (e) {
-      return c.json({ error: `Failed to extract zip into virtual project: ${(e as Error).message}` }, 500);
-    }
-    if (extractStats.filesWritten === 0) {
-      return c.json({ error: 'Zip extracted to 0 files — empty or all entries unsafe.' }, 400);
-    }
-    let inventoryStats;
-    try {
-      const inventory = await writeSourceInventory(
-        designSystemDir,
-        join(projectRoot, 'source-inventory.json'),
-      );
-      inventoryStats = inventory.totals;
-    } catch (e) {
-      return c.json({ error: `Failed to write source inventory: ${(e as Error).message}` }, 500);
-    }
-
-    // Build role assignments using the shared config helper.
-    const roles = buildDesignSystemRoles({ provider: masterProvider, model: masterModel });
-    const roleAssignments = roles.map((r) => ({
-      role: r.role,
-      provider: r.provider,
-      model: r.model,
-      tier: r.tier,
-      ...(r.systemPromptOverride ? { system_prompt_override: r.systemPromptOverride } : {}),
-      ...(r.skills ? { skills: r.skills } : {}),
-    }));
-
-    const companySession = companyStore.createCompanySession({
-      template_id: null,
-      name: name,
-      config_json: JSON.stringify({
-        master_provider: masterProvider,
-        master_model: masterModel,
-        role_assignments: roleAssignments,
-        // The SANDBOX stack is always 'node-only' for DS sessions: we
-        // want a bare Node + npm container with the virtual project
-        // bind-mounted, NOT a Vite scaffold polluting the workdir
-        // (the uploaded theme already lives at /app/design_system/).
-        // The user's chosen DS OUTPUT stack (react-ts | vue-ts | angular)
-        // travels via `design_system.target_stack` and on the
-        // `design_system_sessions.stack` row — that's what tells the
-        // components-builder which framework to emit.
-        builder: { stack: 'node-only' },
-        design_system: {
-          package_name: packageName,
-          source_zip_path: zipPath,
-          target_stack: stack,
-        },
-      }),
-    });
-    companyStore.addProjectToCompanySession(companySession.id, virtualProject.id);
-
-    const dsSession = designSystemStore.createSession({
-      company_session_id: companySession.id,
-      name,
-      package_name: packageName,
-      stack,
-      source_zip_hash: zipHash,
-      source_zip_path: zipPath,
-    });
-
-    return c.json({
-      design_system_session: dsSession,
-      company_session_id: companySession.id,
-      extracted: {
-        files: extractStats.filesWritten,
-        bytes: extractStats.bytesWritten,
-        skipped: extractStats.skipped,
+  app.post('/api/design-system/sessions', (c) => {
+    return c.json(
+      {
+        error:
+          'The autonomous Design System pipeline was retired. Create a DS Studio ' +
+          'session instead: POST /api/design-system/studio (guided single-session ' +
+          'development over a real workspace project, with live preview).',
       },
-      inventory: inventoryStats,
-    }, 201);
+      410,
+    );
   });
 
   app.get('/api/design-system/sessions', (c) => {
     const sessions = designSystemStore.listSessions();
-    const enriched = sessions.map((s) => {
-      const cs = companyStore.getCompanySession(s.company_session_id);
-      const latest = designSystemStore.getLatestPublishedVersion(s.id);
-      return {
-        ...s,
-        company_session_status: cs?.status ?? 'unknown',
-        is_running: hasCompanyOrchestrator(s.company_session_id),
-        latest_published_semver: latest?.semver ?? null,
-        latest_published_at: latest?.published_at ?? null,
-      };
-    });
-    return c.json({ sessions: enriched });
+    return c.json({ sessions: sessions.map(enrich) });
   });
 
   app.get('/api/design-system/sessions/:id', (c) => {
@@ -209,13 +112,15 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
     if (!session) return notFound(c);
     const versions = designSystemStore.listVersions(id);
     const latestPublished = designSystemStore.getLatestPublishedVersion(id);
-    const cs = companyStore.getCompanySession(session.company_session_id);
+    const enriched = enrich(session);
     return c.json({
       session,
       versions,
       latest_published: latestPublished,
-      is_running: hasCompanyOrchestrator(session.company_session_id),
-      company_session_status: cs?.status ?? 'unknown',
+      is_running: enriched.is_running,
+      company_session_status: enriched.company_session_status,
+      builder_port: enriched.builder_port,
+      project: enriched.project,
     });
   });
 
@@ -237,15 +142,29 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
     const dsSession = designSystemStore.getSession(id);
     if (!dsSession) return notFound(c);
 
-    // Resolve the virtual project's root path — the bind-mount target
-    // for the sandbox. We persisted it via the linked project at create
-    // time; look it up from companyStore → db.getProject.
-    const linked = companyStore.listCompanySessionProjects(dsSession.company_session_id);
-    const virtualProject = linked
-      .map((p) => db.getProject(p.project_id))
-      .find((p): p is NonNullable<typeof p> => !!p && p.name.startsWith('_design-system_'));
-    if (!virtualProject || !virtualProject.root_path) {
-      return c.json({ error: 'Virtual project missing — session is in an inconsistent state.' }, 500);
+    // Resolve the extraction root per kind. Studio: the workspace project
+    // itself (`<root>/import/` — raw reference material, read-only for the
+    // agent). Legacy: the virtual project linked to the company session
+    // (`<root>/design_system/` + the deterministic source inventory).
+    let extractRoot: string;
+    if (dsSession.kind === 'studio') {
+      const project = dsSession.project_id != null ? db.getProject(dsSession.project_id) : null;
+      if (!project?.root_path) {
+        return c.json({ error: 'Workspace project missing — studio session is in an inconsistent state.' }, 500);
+      }
+      extractRoot = project.root_path;
+    } else {
+      if (dsSession.company_session_id == null) {
+        return c.json({ error: 'Legacy session without company_session_id — inconsistent state.' }, 500);
+      }
+      const linked = companyStore.listCompanySessionProjects(dsSession.company_session_id);
+      const virtualProject = linked
+        .map((p) => db.getProject(p.project_id))
+        .find((p): p is NonNullable<typeof p> => !!p && p.name.startsWith('_design-system_'));
+      if (!virtualProject || !virtualProject.root_path) {
+        return c.json({ error: 'Virtual project missing — session is in an inconsistent state.' }, 500);
+      }
+      extractRoot = virtualProject.root_path;
     }
 
     // Two paths: (a) operator uploaded a fresh zip via multipart →
@@ -287,25 +206,32 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       return c.json({ error: 'No zip available — neither persisted nor uploaded.' }, 400);
     }
 
-    const designSystemDir = join(virtualProject.root_path, DS_SOURCE_DIRNAME);
+    const targetDir = join(
+      extractRoot,
+      dsSession.kind === 'studio' ? DS_IMPORT_DIRNAME : DS_SOURCE_DIRNAME,
+    );
     let stats;
     try {
-      stats = extractZipToDir(zipPathToUse, designSystemDir, { clean: true });
+      stats = extractZipToDir(zipPathToUse, targetDir, { clean: true });
     } catch (e) {
       return c.json({ error: `Extraction failed: ${(e as Error).message}` }, 500);
     }
     if (stats.filesWritten === 0) {
       return c.json({ error: 'Zip extracted to 0 files — empty or all entries unsafe.' }, 400);
     }
-    let inventoryStats;
-    try {
-      const inventory = await writeSourceInventory(
-        designSystemDir,
-        join(virtualProject.root_path, 'source-inventory.json'),
-      );
-      inventoryStats = inventory.totals;
-    } catch (e) {
-      return c.json({ error: `Failed to write source inventory: ${(e as Error).message}` }, 500);
+    let inventoryStats = null;
+    if (dsSession.kind !== 'studio') {
+      // Legacy pipeline consumed a deterministic source inventory. Studio
+      // skips it — the agent reads import/ directly, guided by the user.
+      try {
+        const inventory = await writeSourceInventory(
+          targetDir,
+          join(extractRoot, 'source-inventory.json'),
+        );
+        inventoryStats = inventory.totals;
+      } catch (e) {
+        return c.json({ error: `Failed to write source inventory: ${(e as Error).message}` }, 500);
+      }
     }
 
     // Persist the (possibly new) zip path + hash on the DS session.
@@ -346,10 +272,11 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       }
     }
 
-    // CASCADE delete on the company_session also drops the DS rows
-    // (FK with ON DELETE CASCADE on design_system_sessions). Defensive:
-    // also call the DS-level delete so isolated tests stay clean even
-    // when company_session is deleted by a separate path.
+    // Studio: removes only the DS face (session + versions via CASCADE).
+    // The workspace project row and the files on disk stay — it's a real
+    // host project the user may keep working on or delete separately.
+    // Legacy: company_session CASCADE also drops DS rows; the DS-level
+    // delete keeps isolated tests clean when company rows go separately.
     designSystemStore.deleteSession(id);
     return c.json({ ok: true });
   });
@@ -425,9 +352,4 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
 
     return c.json({ ok: true, mcp_server_config_id: mcpServerId, server_js_path: serverJsPath });
   });
-}
-
-function stringField(form: FormData, key: string): string {
-  const v = form.get(key);
-  return typeof v === 'string' ? v.trim() : '';
 }

@@ -1776,6 +1776,20 @@ export class CoderRunner extends EventEmitter {
   }
 
   /**
+   * Effective tool permission mode for the PermissionGate. NULL column /
+   * unset option → 'auto'. Read live (closure in the gate deps) so
+   * `setToolPermissionMode` applies to the very next gated tool call.
+   */
+  getToolPermissionMode(): 'ask' | 'auto' | 'unrestricted' {
+    return this.opts.toolPermissionMode ?? 'auto';
+  }
+
+  /** Switch the tool permission mode mid-run (PATCH endpoint / worker RPC). */
+  setToolPermissionMode(mode: 'ask' | 'auto' | 'unrestricted'): void {
+    this.opts = { ...this.opts, toolPermissionMode: mode };
+  }
+
+  /**
    * Toggle deepThink (simulated deep-thinking via auxiliary model) for
    * subsequent turns. Optionally swap the auxiliary model/provider — the
    * cached `auxProvider` instance is invalidated so the next turn re-resolves

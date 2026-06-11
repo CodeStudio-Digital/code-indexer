@@ -57,6 +57,27 @@ describe('DesignSystemStore (integration)', () => {
     expect(byCompany?.id).toBe(created.id);
   });
 
+  it('creates and resolves studio sessions by project', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (cdb as any).db
+      .prepare(`INSERT INTO projects (id, name, root_path) VALUES (7, 'ds-ws', 'D:/tmp/ds-ws')`)
+      .run();
+    const created = store.createStudioSession({
+      project_id: 7,
+      name: 'Acme DS',
+      package_name: '@acme/ds',
+      stack: 'react-ts',
+    });
+    expect(created.kind).toBe('studio');
+    expect(created.project_id).toBe(7);
+    expect(created.company_session_id).toBeNull();
+
+    const byProject = store.getSessionByProjectId(7);
+    expect(byProject?.id).toBe(created.id);
+    // Legacy lookups continuam funcionando lado a lado.
+    expect(store.getSessionByCompanySessionId(1)).toBeNull();
+  });
+
   it('updates next_bump_hint', () => {
     const s = store.createSession({
       company_session_id: 1,

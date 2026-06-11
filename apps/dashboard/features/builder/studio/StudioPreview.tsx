@@ -34,8 +34,14 @@ export function StudioPreview({
 }: StudioPreviewProps) {
   const [selectMode, setSelectMode] = useState(false);
   const [device, setDevice] = useState<DeviceFrame>('desktop');
+  // Run-end revalidation: reload the iframe so only errors that still exist
+  // re-emit (and fire); fixed ones stay silent. The badge list is kept.
+  const [revalidateTick, setRevalidateTick] = useState(0);
+  const onAutoFixRevalidate = useCallback(() => setRevalidateTick((t) => t + 1), []);
   const { problems, add, clear, dismiss, errorCount } = usePreviewProblems();
-  const { autoFixEnabled, setAutoFixEnabled } = useAutoFix(sessionId, problems);
+  const { autoFixEnabled, setAutoFixEnabled } = useAutoFix(sessionId, problems, {
+    onRevalidate: onAutoFixRevalidate,
+  });
 
   const onPreviewMessage = useCallback(
     (msg: PreviewToParentMessage) => {
@@ -67,6 +73,7 @@ export function StudioPreview({
           onRestartDev={onRestartDev}
           sessionId={sessionId}
           fileChangeTick={fileChangeTick}
+          reloadTick={revalidateTick}
           selectMode={selectMode}
           onToggleSelectMode={() => setSelectMode((v) => !v)}
           onPreviewMessage={onPreviewMessage}

@@ -65,7 +65,10 @@ export function register(program: Command): void {
 
       const providerStore = createAndSeedProviderStore(config.dbPath);
       const defaults = providerStore.getDefaultProviderAndModel();
-      const provider = await createProviderAsync((opts.provider ?? defaults.kind) as ProviderName, opts.model ?? defaults.model);
+      // No explicit provider → pass undefined so the factory resolves the
+      // default ProviderStore row with its stored credentials/base_url
+      // (passing `defaults.kind` would strip them and fall back to env vars).
+      const provider = await createProviderAsync(opts.provider as ProviderName | undefined, opts.model ?? defaults.model);
       const agent = new IndexAgent(db, provider, embeddingService, vectorStore, costTracker, webhookDispatcher, config);
 
       console.log(`Indexing ${projectPath} with ${provider.name}/${provider.model}...`);

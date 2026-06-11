@@ -22,8 +22,9 @@ export type LshEntityType = 'file' | 'symbol';
 export interface LshIndexingSink {
   /**
    * Called after the indexer successfully upserts a batch into the
-   * vector store. Implementations should be fast and never throw —
-   * indexing is the hot path.
+   * vector store. Implementations should be fast. Throwing is allowed —
+   * the embed executor is the single guard layer: it catches, counts and
+   * logs sink failures without failing the indexing run.
    */
   afterUpsert(projectId: number, records: ReadonlyArray<VectorRecord>): void | Promise<void>;
   /**
@@ -76,11 +77,9 @@ export class RealLshIndexingSink implements LshIndexingSink {
       entityId: vectorIdToEntityId(r.id),
       embedding: Float32Array.from(r.values),
     }));
-    try {
-      this.lshIndex.indexMany(inputs);
-    } catch {
-      // LSH is best-effort — never break indexing if the LSH store hiccups.
-    }
+    // No internal swallow: the embed executor catches, counts and logs sink
+    // failures (a second silent layer here hid every LSH hiccup entirely).
+    this.lshIndex.indexMany(inputs);
   }
 
   afterDelete(projectId: number, vectorIds: ReadonlyArray<string>): void {

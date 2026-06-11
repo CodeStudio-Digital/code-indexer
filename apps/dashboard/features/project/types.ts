@@ -27,6 +27,7 @@ export interface Run {
   started_at: string;
   indexed_files: number;
   total_files: number;
+  error_count: number;
   estimated_cost_usd: number;
 }
 

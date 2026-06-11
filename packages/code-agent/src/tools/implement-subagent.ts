@@ -284,6 +284,13 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     // as the main session (with the smaller subagent ceiling enforced by
     // the runner's `effectivePushTimeCap`).
     unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput,
+    // Permission gate inheritance: the gate instance holds the PARENT
+    // runner's waitForUserInput/emit, so subagent approvals render and
+    // resolve at session level (the sub has no bus of its own).
+    permissionGate: parent.ctx.permissionGate,
+    // Anchor approvals to the chat-visible spawning tool_use (spawn_agent /
+    // execute_tasks block) — subagent tool calls have no blocks of their own.
+    approvalAnchorId: parent.ctx.approvalAnchorId ?? parent.ctx.currentToolUseId,
     // Intentionally NO `runner` — interactive tools fail inside the subagent.
     planMode: false,
     // Frente C — collector receives memos / snapshots / board posts from

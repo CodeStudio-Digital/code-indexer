@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Eye, FileText, Maximize2, Paperclip, Sparkles, X } from 'lucide-react';
+import { Brain, Eye, FileText, Maximize2, Paperclip, Shield, ShieldCheck, ShieldOff, Sparkles, X } from 'lucide-react';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { useConfirm } from '../../../components/ui/dialog-provider.js';
@@ -72,6 +72,14 @@ interface ComposerProps {
    */
   unrestrictedOutput?: boolean;
   setUnrestrictedOutput?: (v: boolean) => void;
+  /**
+   * Per-session tool permission mode (migration 131) — PermissionGate.
+   * 'ask' pauses every write/execute/admin tool for approval, 'auto'
+   * pauses execute/admin only, 'unrestricted' never pauses. Persisted via
+   * PATCH (applies mid-run); rendered as a cycling shield toggle.
+   */
+  toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
+  setToolPermissionMode?: (v: 'ask' | 'auto' | 'unrestricted') => void;
   sessionId?: number | null;
   /** Thinking mode toggle — only shown when provider supports it. */
   thinking?: boolean;
@@ -610,6 +618,70 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
                           defaultValue:
                             'Tool output: full. Eleva o cap de truncação por tool-call de ~24 KB para ~1 MB. Útil para Unity / leituras grandes. Auto-compactação continua. Aplica na próxima mensagem.',
                         })}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+
+                  {/* Tool permission mode (PermissionGate) — cycling 3-state shield.
+                      Not disabled while streaming: the PATCH pushes the change
+                      into the live runner (next gated call honours it). */}
+                  {props.setToolPermissionMode && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const mode = props.toolPermissionMode ?? 'auto';
+                            const next = mode === 'ask' ? 'auto' : mode === 'auto' ? 'unrestricted' : 'ask';
+                            props.setToolPermissionMode?.(next);
+                          }}
+                          aria-label={t(`toolbar.permissionMode.${props.toolPermissionMode ?? 'auto'}`)}
+                          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
+                            props.toolPermissionMode === 'ask'
+                              ? 'bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25'
+                              : props.toolPermissionMode === 'unrestricted'
+                                ? 'bg-red-500/15 text-red-500 hover:bg-red-500/25'
+                                : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                          }`}
+                        >
+                          {props.toolPermissionMode === 'ask' ? (
+                            <ShieldCheck className="h-3.5 w-3.5" />
+                          ) : props.toolPermissionMode === 'unrestricted' ? (
+                            <ShieldOff className="h-3.5 w-3.5" />
+                          ) : (
+                            <Shield className="h-3.5 w-3.5" />
+                          )}
+                          {props.toolPermissionMode !== 'auto' && props.toolPermissionMode !== undefined && (
+                            <span
+                              aria-hidden
+                              className={`absolute top-1 right-1 h-1.5 w-1.5 rounded-full ${
+                                props.toolPermissionMode === 'ask' ? 'bg-emerald-500' : 'bg-red-500'
+                              }`}
+                            />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[280px]">
+                        <span className="font-medium">
+                          {t(`toolbar.permissionMode.${props.toolPermissionMode ?? 'auto'}`, {
+                            defaultValue:
+                              props.toolPermissionMode === 'ask'
+                                ? 'Solicitar Permissão'
+                                : props.toolPermissionMode === 'unrestricted'
+                                  ? 'Sem Impedimento'
+                                  : 'Modo Auto',
+                          })}
+                        </span>
+                        {' — '}
+                        {t(`toolbar.permissionModeTip.${props.toolPermissionMode ?? 'auto'}`, {
+                          defaultValue:
+                            props.toolPermissionMode === 'ask'
+                              ? 'toda ferramenta de escrita/execução/admin pausa e pede sua aprovação.'
+                              : props.toolPermissionMode === 'unrestricted'
+                                ? 'nunca pergunta — o agente executa tudo livremente.'
+                                : 'edições de arquivos rodam livres; shell, git e ações administrativas pedem aprovação.',
+                        })}{' '}
+                        {t('toolbar.permissionModeCycle', { defaultValue: 'Clique para alternar.' })}
                       </TooltipContent>
                     </Tooltip>
                   )}

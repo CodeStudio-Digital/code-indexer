@@ -9,6 +9,7 @@ import type {
   ScannedFile,
 } from '@mcp/shared/types.js';
 import type { TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js';
+import { safeJsonArray } from '@mcp/shared/utils/safe-json.js';
 
 import { cosineSimilarity } from './cosine.js';
 import { enrichReferencesWithLines } from './enrich-references.js';
@@ -82,43 +83,51 @@ export async function processFile(
     outputTokens: result.outputTokens,
   });
 
-  const fileId = deps.db.upsertFile(project.id, {
-    path: file.relativePath,
-    language: result.analysis.language,
-    size: file.sizeBytes,
-    lineCount: file.lineCount,
-    contentHash: file.hash,
-    summary: result.analysis.summary,
-    concepts: result.analysis.concepts,
-    dependencies: result.analysis.dependencies,
-    internalDeps: result.analysis.internal_deps,
-    externalDeps: result.analysis.external_deps,
-    notes: result.analysis.notes,
-    complexity: result.analysis.complexity,
-    layer: result.analysis.layer,
-    isEntryPoint: result.analysis.is_entry_point,
-    isTest: result.analysis.is_test,
-    isGenerated: result.analysis.is_generated,
-    indexTier: file.tier,
-    mapperReason: file.mapperReason,
-  });
+  // The whole composite persist (file row, structure hash, symbols, deps,
+  // references, snapshot) commits as ONE transaction. The block is fully
+  // synchronous; the individual upserts' inner transactions become
+  // savepoints. Before this, a crash between upsertFile and upsertSymbols
+  // left a fresh file row pointing at stale symbols.
+  const fileId = deps.db.transaction(() => {
+    const id = deps.db.upsertFile(project.id, {
+      path: file.relativePath,
+      language: result.analysis.language,
+      size: file.sizeBytes,
+      lineCount: file.lineCount,
+      contentHash: file.hash,
+      summary: result.analysis.summary,
+      concepts: result.analysis.concepts,
+      dependencies: result.analysis.dependencies,
+      internalDeps: result.analysis.internal_deps,
+      externalDeps: result.analysis.external_deps,
+      notes: result.analysis.notes,
+      complexity: result.analysis.complexity,
+      layer: result.analysis.layer,
+      isEntryPoint: result.analysis.is_entry_point,
+      isTest: result.analysis.is_test,
+      isGenerated: result.analysis.is_generated,
+      indexTier: file.tier,
+      mapperReason: file.mapperReason,
+    });
 
-  // Persist structure hash + embedding when tree-sitter produced them.
-  const stash = tsResult as { _structHash?: string; _structEmbedding?: Float32Array };
-  if (tsResult.supported && stash._structHash) deps.db.setFileStructureHash(fileId, stash._structHash);
-  if (tsResult.supported && stash._structEmbedding) deps.db.setFileStructureEmbedding(fileId, stash._structEmbedding);
+    // Persist structure hash + embedding when tree-sitter produced them.
+    const stash = tsResult as { _structHash?: string; _structEmbedding?: Float32Array };
+    if (tsResult.supported && stash._structHash) deps.db.setFileStructureHash(id, stash._structHash);
+    if (tsResult.supported && stash._structEmbedding) deps.db.setFileStructureEmbedding(id, stash._structEmbedding);
 
-  deps.db.upsertSymbols(project.id, fileId, file.relativePath, result.analysis.symbols);
-  deps.db.upsertFileDependencies(project.id, fileId, file.relativePath, result.analysis.internal_deps, result.analysis.external_deps);
+    deps.db.upsertSymbols(project.id, id, file.relativePath, result.analysis.symbols);
+    deps.db.upsertFileDependencies(project.id, id, file.relativePath, result.analysis.internal_deps, result.analysis.external_deps);
 
-  if (result.analysis.references && result.analysis.references.length > 0) {
-    const enriched = enrichReferencesWithLines(result.analysis.references, content);
-    deps.db.upsertSymbolReferences(project.id, fileId, file.relativePath, enriched);
-  }
+    if (result.analysis.references && result.analysis.references.length > 0) {
+      const enriched = enrichReferencesWithLines(result.analysis.references, content);
+      deps.db.upsertSymbolReferences(project.id, id, file.relativePath, enriched);
+    }
 
-  deps.db.saveFileSnapshot({
-    runId, projectId: project.id, filePath: file.relativePath, contentHash: file.hash,
-    summary: result.analysis.summary, concepts: result.analysis.concepts, symbols: result.analysis.symbols,
+    deps.db.saveFileSnapshot({
+      runId, projectId: project.id, filePath: file.relativePath, contentHash: file.hash,
+      summary: result.analysis.summary, concepts: result.analysis.concepts, symbols: result.analysis.symbols,
+    });
+    return id;
   });
 
   return {
@@ -170,11 +179,11 @@ async function analyzeWithTreeSitter(
       analysis: {
         language: tsResult.analysis.language ?? existingFile.language,
         summary: existingFile.summary,
-        concepts: JSON.parse(existingFile.concepts || '[]'),
-        dependencies: tsResult.analysis.dependencies ?? JSON.parse(existingFile.dependencies || '[]'),
-        internal_deps: tsResult.analysis.internal_deps ?? JSON.parse(existingFile.internal_deps || '[]'),
-        external_deps: tsResult.analysis.external_deps ?? JSON.parse(existingFile.external_deps || '[]'),
-        notes: JSON.parse(existingFile.notes || '[]'),
+        concepts: safeJsonArray<string>(existingFile.concepts),
+        dependencies: tsResult.analysis.dependencies ?? safeJsonArray<string>(existingFile.dependencies),
+        internal_deps: tsResult.analysis.internal_deps ?? safeJsonArray<string>(existingFile.internal_deps),
+        external_deps: tsResult.analysis.external_deps ?? safeJsonArray<string>(existingFile.external_deps),
+        notes: safeJsonArray<string>(existingFile.notes),
         complexity: existingFile.complexity,
         layer: existingFile.layer,
         is_entry_point: !!existingFile.is_entry_point,

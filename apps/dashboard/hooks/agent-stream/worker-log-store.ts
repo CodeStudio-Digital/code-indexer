@@ -1,0 +1,102 @@
+/**
+ * Dedicated store for the per-session worker event log, deliberately kept
+ * OUT of `SessionState`/`useAgentStream`. The SSE stream emits 50+ events/s;
+ * routing those through the session state re-rendered the whole `AgentChat`
+ * tree on every event — even with the Worker Log panel closed. Here only the
+ * panel (when mounted) subscribes, and commits are coalesced per animation
+ * frame, so ingestion costs ~nothing when nobody is watching.
+ *
+ * Writer side (openStream) calls `pushWorkerLog`; the buffer is drained into
+ * the zustand store at most once per frame. The throttle lives on the writer,
+ * not the subscription, so there is no StrictMode subscribe/unsubscribe timer
+ * hazard.
+ */
+import { create } from 'zustand';
+import type { WorkerLogEntry } from './types.js';
+import { MAX_SESSIONS } from './prune-sessions.js';
+
+/** LIFO cap per session — mirrors the old `SessionState.eventLog` bound. */
+const CAP = 1000;
+const EMPTY: readonly WorkerLogEntry[] = [];
+
+interface WorkerLogStore {
+  /** Per-session committed entries. A new array reference per sid on change
+   *  drives selector re-renders only for that session's subscriber. */
+  slots: Map<number, readonly WorkerLogEntry[]>;
+  _set: (slots: Map<number, readonly WorkerLogEntry[]>) => void;
+}
+
+const useWorkerLogStore = create<WorkerLogStore>((set) => ({
+  slots: new Map(),
+  _set: (slots) => set({ slots }),
+}));
+
+// --- Writer-side coalescing (module-level, not React state) ----------------
+const pending = new Map<number, WorkerLogEntry[]>();
+// Monotonic touch counter for LRU eviction of idle slots.
+let touchSeq = 0;
+const touched = new Map<number, number>();
+let rafHandle: number | null = null;
+let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+function commitPending(): void {
+  rafHandle = null;
+  if (timeoutHandle !== null) {
+    clearTimeout(timeoutHandle);
+    timeoutHandle = null;
+  }
+  if (pending.size === 0) return;
+  const { slots } = useWorkerLogStore.getState();
+  const next = new Map(slots);
+  for (const [sid, incoming] of pending) {
+    const cur = next.get(sid) ?? EMPTY;
+    let merged = cur.length === 0 ? incoming.slice() : cur.concat(incoming);
+    if (merged.length > CAP) merged = merged.slice(merged.length - CAP);
+    next.set(sid, merged);
+  }
+  pending.clear();
+  evictIdle(next);
+  useWorkerLogStore.getState()._set(next);
+}
+
+/** Bound the store independently of React: keep the most-recently-touched
+ *  `MAX_SESSIONS` slots so a long work session opening many chats can't leak. */
+function evictIdle(slots: Map<number, readonly WorkerLogEntry[]>): void {
+  if (slots.size <= MAX_SESSIONS) return;
+  const byAge = [...slots.keys()].sort((a, b) => (touched.get(a) ?? 0) - (touched.get(b) ?? 0));
+  for (const sid of byAge.slice(0, slots.size - MAX_SESSIONS)) {
+    slots.delete(sid);
+    touched.delete(sid);
+  }
+}
+
+function schedule(): void {
+  if (rafHandle !== null) return;
+  rafHandle = requestAnimationFrame(commitPending);
+  // Fallback for background tabs / suspended rAF (mirrors openStream's flush).
+  timeoutHandle = setTimeout(() => {
+    timeoutHandle = null;
+    if (rafHandle !== null) {
+      cancelAnimationFrame(rafHandle);
+      commitPending();
+    }
+  }, 120);
+}
+
+/** Append one event for a session. Coalesced — safe to call 50+/s. */
+export function pushWorkerLog(sid: number, entry: WorkerLogEntry): void {
+  let buf = pending.get(sid);
+  if (!buf) {
+    buf = [];
+    pending.set(sid, buf);
+  }
+  buf.push(entry);
+  touched.set(sid, ++touchSeq);
+  schedule();
+}
+
+/** Subscribe to one session's entries. Only re-renders this subscriber when
+ *  that session's array changes (coalesced ~1/frame). */
+export function useWorkerLog(sid: number | null): readonly WorkerLogEntry[] {
+  return useWorkerLogStore((s) => (sid == null ? EMPTY : s.slots.get(sid) ?? EMPTY));
+}

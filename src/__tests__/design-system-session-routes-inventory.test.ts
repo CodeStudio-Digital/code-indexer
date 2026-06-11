@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import AdmZip from 'adm-zip';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hono } from 'hono';
@@ -87,55 +87,52 @@ describe('design-system session routes source inventory', () => {
     } as never;
   }
 
-  it('writes source-inventory.json when creating a design-system session', async () => {
-    let createdProjectRoot: string | null = null;
-    const deps = createDeps(() => createdProjectRoot);
-    const db = (deps as { db: { createProject: ReturnType<typeof vi.fn> } }).db;
-    db.createProject = vi.fn((name: string, root_path: string, description: string) => {
-      createdProjectRoot = root_path;
-      return { id: 10, name, root_path, description };
-    });
-
+  it('returns 410 Gone for the retired company creation path', async () => {
+    const deps = createDeps(() => null);
     const app = new Hono();
     mountDesignSystemSessionRoutes(app, deps);
 
     const form = new FormData();
     form.set('name', 'Corporate UI');
-    form.set('package_name', '@acme/corporate-ui');
-    form.set('stack', 'react-ts');
-    form.set('master_provider', 'openai');
-    form.set('master_model', 'gpt-test');
-    form.set('zip', new File([zipBlobPart({
-      'index.html': '<div class="card"><div class="card-body">Hello</div></div>',
-      'assets/bootstrap.css': '.card{display:block}',
-    })], 'template.zip', { type: 'application/zip' }));
+    form.set('zip', new File([zipBlobPart({ 'index.html': '<div/>' })], 'template.zip', { type: 'application/zip' }));
 
     const response = await app.request('/api/design-system/sessions', {
       method: 'POST',
       body: form,
     });
-    const body = await response.json() as { inventory: { html_pages: number; component_candidates: number } };
+    const body = await response.json() as { error: string };
+    expect(response.status).toBe(410);
+    expect(body.error).toContain('/api/design-system/studio');
+  });
 
-    expect(response.status).toBe(201);
-    expect(body.inventory.html_pages).toBe(1);
-    expect(body.inventory.component_candidates).toBeGreaterThan(0);
-    expect(createdProjectRoot).toBeTruthy();
+  it('re-extracts a studio session zip into <workspace>/import/ without inventory', async () => {
+    const workspaceRoot = join(dir, 'ds-workspace');
+    const zipPath = join(dir, 'theme.zip');
+    writeFileSync(zipPath, zipBuffer({
+      'theme/buttons.html': '<button class="btn btn-primary">Go</button>',
+      'theme/styles.css': '.btn{display:inline-block}',
+    }));
 
-    const inventoryPath = join(createdProjectRoot!, 'source-inventory.json');
-    expect(existsSync(inventoryPath)).toBe(true);
-    const persisted = JSON.parse(readFileSync(inventoryPath, 'utf8')) as {
-      totals: { html_pages: number };
-      shards: Record<string, string>;
-      component_candidates?: unknown;
-    };
-    expect(persisted.totals.html_pages).toBe(1);
-    expect(persisted.component_candidates).toBeUndefined();
-    expect(persisted.shards.components).toBe('source-inventory/components.json');
-    expect(existsSync(join(createdProjectRoot!, 'source-inventory', 'dependencies.json'))).toBe(true);
-    expect(existsSync(join(createdProjectRoot!, 'source-inventory', 'pages.json'))).toBe(true);
-    expect(existsSync(join(createdProjectRoot!, 'source-inventory', 'styles.json'))).toBe(true);
-    expect(existsSync(join(createdProjectRoot!, 'source-inventory', 'components.json'))).toBe(true);
-    expect(existsSync(join(createdProjectRoot!, 'source-inventory', 'warnings.json'))).toBe(true);
+    const deps = createDeps(() => workspaceRoot, {
+      kind: 'studio',
+      project_id: 10,
+      company_session_id: null,
+      source_zip_path: zipPath,
+    });
+    const app = new Hono();
+    mountDesignSystemSessionRoutes(app, deps);
+
+    const response = await app.request('/api/design-system/sessions/1/re-extract', {
+      method: 'POST',
+    });
+    const body = await response.json() as { ok: boolean; inventory: unknown };
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    // Studio skips the legacy source inventory entirely.
+    expect(body.inventory).toBeNull();
+    expect(existsSync(join(workspaceRoot, 'import', 'theme', 'buttons.html'))).toBe(true);
+    expect(existsSync(join(workspaceRoot, 'source-inventory.json'))).toBe(false);
   });
 
   it('rewrites source-inventory.json when re-extracting an existing session zip', async () => {

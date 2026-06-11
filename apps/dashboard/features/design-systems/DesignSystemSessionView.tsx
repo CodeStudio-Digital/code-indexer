@@ -1,34 +1,23 @@
 /**
- * Detail view for a single Design System session.
- *
- * Tabs:
- *   - Versions    — semver list, status, "Set next bump" buttons.
- *   - Components  — atoms + page templates of the latest published version.
- *   - Docs        — markdown of the latest published version.
- *   - Storybook   — iframe of the same version's static build.
- *
- * Auto-refreshes every 5 s (versions/components change as the agents
- * work). The actual agent run is monitored in the Agents tab via the
- * parent CompanySession id — we surface a quick link to it here.
+ * Detail view for a LEGACY (company-pipeline) Design System session —
+ * read-only since the autonomous pipeline was retired in favour of the
+ * DS Studio. Versions/Components/Docs/Storybook of published versions
+ * remain browsable, and the MCP server of a published version can still
+ * be (re)installed.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Trans, useTranslation } from 'react-i18next';
-import { ArrowLeft, BookOpen, Boxes, Filter, History, Loader2, Play, RefreshCcw, Server, Square, Upload } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { ArrowLeft, BookOpen, Boxes, Filter, History, Loader2, RefreshCcw, Server } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import {
-  abortDesignSystemRound,
   fetchVersionDocs,
   getDesignSystemSession,
   installDesignSystemMcp,
   listVersionComponents,
-  reExtractDesignSystem,
-  setNextBumpHint,
-  startDesignSystemRound,
   storybookSrc,
   type DesignSystemComponent,
   type DesignSystemSession,
   type DesignSystemVersion,
-  type DsBumpHint,
 } from './design-system-api.js';
 
 const REFRESH_INTERVAL_MS = 5_000;
@@ -51,7 +40,6 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
   const [tab, setTab] = useState<TabKey>('versions');
   const [busy, setBusy] = useState(false);
   const [onlyMarked, setOnlyMarked] = useState(false);
-  const [extraInstructions, setExtraInstructions] = useState('');
 
   async function refresh() {
     try {
@@ -64,37 +52,6 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
       setError(null);
     } catch (e) {
       setError((e as Error).message);
-    }
-  }
-
-  async function startRound() {
-    if (!session) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await startDesignSystemRound(session.id, {
-        extra_instructions: extraInstructions.trim() || undefined,
-      });
-      setExtraInstructions('');
-      await refresh();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function abortRound() {
-    if (!session) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await abortDesignSystemRound(session.id);
-      await refresh();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -113,48 +70,12 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
     }
   }
 
-  async function reExtract(file?: File) {
-    if (!session) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await reExtractDesignSystem(session.id, file);
-      const skipped = result.extracted.skipped.length;
-      const note = result.zip_replaced ? t('session.zipReplaced') : '';
-      const skippedNote = skipped > 0 ? t('session.skippedUnsafe', { count: skipped }) : '';
-      // Brief inline confirmation; clears on next refresh.
-      setError(`✓ ${t('session.reExtracted', {
-        files: result.extracted.files,
-        kb: (result.extracted.bytes / 1024).toFixed(1),
-        note,
-        skippedNote,
-      })}`);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   useEffect(() => {
     void refresh();
     const t = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
-
-  async function setHint(hint: DsBumpHint) {
-    if (!session) return;
-    setBusy(true);
-    try {
-      const next = await setNextBumpHint(session.id, hint);
-      setSession(next);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const filteredVersions = useMemo(() => {
     if (!onlyMarked) return versions;
@@ -170,7 +91,7 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
   }
 
   return (
-    <div className="px-3 py-4 sm:px-6 sm:py-6 space-y-4">
+    <div className="h-full overflow-auto px-3 py-4 sm:px-6 sm:py-6 space-y-4">
       <header className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={onBack}>
@@ -182,8 +103,7 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
               <RunningBadge isRunning={isRunning} status={companyStatus} />
             </h1>
             <div className="text-xs text-muted-foreground font-mono">
-              {session.package_name} · {session.stack} · {t('session.nextBump')}{' '}
-              <span className="font-semibold">{session.next_bump_hint}</span>
+              {session.package_name} · {session.stack}
             </div>
           </div>
         </div>
@@ -196,55 +116,8 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
         <div className="border border-red-300 bg-red-50 text-red-800 text-sm p-3 rounded">{error}</div>
       )}
 
-      <div className="border rounded p-3 space-y-2 bg-muted/20">
-        <div className="flex items-center justify-between gap-2">
-          <div className="text-sm font-medium">{t('session.roundControls')}</div>
-          <ReExtractMenu busy={busy || isRunning} onReExtract={(f) => void reExtract(f)} />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          <Trans i18nKey="session.roundDescription" ns="designSystems" components={{ strong: <strong /> }} />
-        </p>
-        <textarea
-          value={extraInstructions}
-          onChange={(e) => setExtraInstructions(e.target.value)}
-          disabled={busy || isRunning}
-          placeholder={t('session.extraInstructionsPlaceholder')}
-          className="w-full text-sm border rounded px-2 py-1 font-mono min-h-[60px]"
-        />
-        <div className="flex items-center gap-2">
-          {isRunning ? (
-            <Button variant="outline" size="sm" onClick={() => void abortRound()} disabled={busy}>
-              <Square className="h-3.5 w-3.5 mr-1" /> {t('session.abortRound')}
-            </Button>
-          ) : (
-            <Button size="sm" onClick={() => void startRound()} disabled={busy}>
-              <Play className="h-3.5 w-3.5 mr-1" />
-              {versions.length === 0 ? t('session.startFirstRound') : t('session.startRound')}
-            </Button>
-          )}
-          {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground mr-1">{t('session.setNextBump')}</span>
-        {(['patch', 'minor', 'major'] as DsBumpHint[]).map((h) => (
-          <Button
-            key={h}
-            variant={session.next_bump_hint === h ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => void setHint(h)}
-            disabled={busy}
-          >
-            {t('session.buildBump', { bump: h })}
-          </Button>
-        ))}
-        <span className="text-xs text-muted-foreground ml-2">
-          {t('session.nextSuccessfulRound', {
-            bump: session.next_bump_hint,
-            fromVersion: latestPublished ? t('session.fromVersion', { version: latestPublished.semver }) : '',
-          })}
-        </span>
+      <div className="border rounded p-3 text-xs text-muted-foreground bg-muted/20">
+        {t('legacy.readOnlyNotice')}
       </div>
 
       {latestPublished?.mcp_manifest_json && (
@@ -305,46 +178,6 @@ export function DesignSystemSessionView({ sessionId, onBack }: Props) {
       {tab === 'storybook' && (
         <StorybookView sessionId={session.id} latestPublished={latestPublished} />
       )}
-    </div>
-  );
-}
-
-function ReExtractMenu({
-  busy, onReExtract,
-}: { busy: boolean; onReExtract: (file?: File) => void }) {
-  const { t } = useTranslation('designSystems');
-  const fileRef = useRef<HTMLInputElement | null>(null);
-  return (
-    <div className="flex items-center gap-1">
-      <input
-        ref={fileRef}
-        type="file"
-        accept=".zip,application/zip"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onReExtract(f);
-          if (fileRef.current) fileRef.current.value = '';
-        }}
-      />
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={busy}
-        onClick={() => onReExtract(undefined)}
-        title={t('reExtract.title')}
-      >
-        <RefreshCcw className="h-3.5 w-3.5 mr-1" /> {t('reExtract.action')}
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={busy}
-        onClick={() => fileRef.current?.click()}
-        title={t('reExtract.replaceTitle')}
-      >
-        <Upload className="h-3.5 w-3.5 mr-1" /> {t('reExtract.replace')}
-      </Button>
     </div>
   );
 }

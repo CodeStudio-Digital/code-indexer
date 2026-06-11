@@ -6,9 +6,14 @@ import { getModelContextWindow } from '@mcp/code-agent/providers/capabilities.js
 import { runGeneralAi, GeneralAiNotConfiguredError } from '@mcp/services/ai-general/generalClient.js';
 import { enumerateExternalTools } from '../../../admin/mcp-servers.routes.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
+import { TOOL_PERMISSION_MODES } from '@mcp/code-agent/core/permission-gate.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseIdParam, parseIntQuery, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  coderWorkerEnabled,
+  getCoderWorkerPool,
+} from '../../../sse/coderWorkerPoolSingleton.js';
 
 /**
  * Trim heavy inline content (tool_result strings and image/document base64)
@@ -397,6 +402,35 @@ export function mountCoderSessionsRoutes(
       return c.json({ error: 'enabled:boolean|null required' }, 400);
     }
     sessionStore.setSessionUnrestrictedToolOutput(id, v ?? null);
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    return c.json(session);
+  });
+
+  /**
+   * Per-session tool permission mode (PermissionGate). Persists the column
+   * AND pushes the change into the live runner (worker RPC or in-process),
+   * so a mid-run switch applies to the next gated tool call. `null` clears
+   * back to the default ('auto').
+   */
+  app.patch('/api/coder/sessions/:id/tool-permission-mode', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ mode?: 'ask' | 'auto' | 'unrestricted' | null }>(c);
+    const mode = body.mode ?? null;
+    if (mode !== null && !TOOL_PERMISSION_MODES.includes(mode)) {
+      return c.json({ error: "mode:'ask'|'auto'|'unrestricted'|null required" }, 400);
+    }
+    sessionStore.setSessionToolPermissionMode(id, mode);
+    const effective = mode ?? 'auto';
+    if (coderWorkerEnabled()) {
+      try {
+        await getCoderWorkerPool().setToolPermissionMode(id, effective);
+      } catch { /* no live worker — column alone covers the next run */ }
+    } else {
+      try {
+        runtime.activeRuns.get(id)?.runner?.setToolPermissionMode(effective);
+      } catch { /* best-effort live push */ }
+    }
     const session = sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);

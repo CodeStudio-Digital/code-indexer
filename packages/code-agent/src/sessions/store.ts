@@ -83,6 +83,9 @@ export class SessionStore {
   setSessionAgent(id: number, agent: string | null): void { state.setAgent(this.db, id, agent); }
   setSessionTemperature(id: number, temperature: number | null): void { state.setTemperature(this.db, id, temperature); }
   setSessionUnrestrictedToolOutput(id: number, enabled: boolean | null): void { state.setUnrestrictedToolOutput(this.db, id, enabled); }
+  setSessionToolPermissionMode(id: number, mode: 'ask' | 'auto' | 'unrestricted' | null): void { state.setToolPermissionMode(this.db, id, mode); }
+  addToolPermissionGrant(id: number, toolName: string): void { state.addToolPermissionGrant(this.db, id, toolName); }
+  touchSession(id: number): void { state.touchSession(this.db, id); }
   setLastResponseState(id: number, responseId: string | null, messageCount: number | null): void { state.setLastResponseState(this.db, id, responseId, messageCount); }
   setSessionArchived(id: number, archived: boolean): void { state.setArchived(this.db, id, archived); }
   setSessionFavorite(id: number, favorite: boolean): void { state.setFavorite(this.db, id, favorite); }

@@ -37,7 +37,7 @@ import { createEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import { createVectorStore, NullVectorStore } from '@mcp/store/vectors.js';
 import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
 import { HyDEService } from '@mcp/indexer/search/hyde.js';
-import { createReranker } from '@mcp/indexer/search/reranker.js';
+import { createReranker, NullReranker } from '@mcp/indexer/search/reranker.js';
 import type { HybridSearchResult, SearchMode } from '@mcp/shared/types.js';
 
 interface EvalQuery {
@@ -221,7 +221,13 @@ async function main(): Promise<void> {
       file: { type: 'string' },
       modes: { type: 'string' },
       'no-hyde': { type: 'boolean' },
+      // Force the passthrough reranker (RRF order) — for A/B against the
+      // production default resolved from the provider store.
+      'no-rerank': { type: 'boolean' },
       'min-recall': { type: 'string' },
+      // Which mode the --min-recall gate applies to. Default: best across
+      // the run modes (legacy behavior, lets fts mask a hybrid regression).
+      'gate-mode': { type: 'string' },
       // Optional: write results JSON to disk for diffing against future runs.
       // Used by the baseline workflow. Default: do not write a file (legacy behavior).
       output: { type: 'string' },
@@ -231,7 +237,7 @@ async function main(): Promise<void> {
 
   if (!values.project) {
     console.error(
-      'Usage: tsx src/benchmarks/search-quality.ts --project <name> [--file queries.jsonl] [--modes fts,vector,hybrid,expanded] [--no-hyde] [--min-recall 0.7]'
+      'Usage: tsx src/benchmarks/search-quality.ts --project <name> [--file queries.jsonl] [--modes fts,vector,hybrid,expanded] [--no-hyde] [--no-rerank] [--min-recall 0.7] [--gate-mode hybrid]'
     );
     process.exit(1);
   }
@@ -259,13 +265,15 @@ async function main(): Promise<void> {
   const vectorStore = createVectorStore(providerStore);
   const searchable = vectorStore instanceof NullVectorStore ? null : vectorStore;
   const hyde = values['no-hyde'] ? null : new HyDEService(providerStore);
-  // Reranker matches production wiring (deps.ts, mcp-server, cli/snapshots).
-  // Returns NullReranker when env vars unset → bench reflects what users see.
-  const reranker = createReranker();
+  // Match production wiring (deps.ts, mcp-server): resolve the admin-managed
+  // default from the provider store — after `seedFromEnvIfEmpty()` that is
+  // LocalReranker, NOT NullReranker. Passing no store here would silently
+  // benchmark a reranker-less stack production never runs.
+  const reranker = values['no-rerank'] ? new NullReranker() : createReranker(providerStore);
   const search = new HybridSearch(db, searchable, embeddingService, hyde, reranker);
 
   const { queries, source } = loadQueries(values.file);
-  console.log(`\n[bench] project=${project.name} queries=${queries.length} source=${source} hyde=${hyde ? 'real' : 'off'}`);
+  console.log(`\n[bench] project=${project.name} queries=${queries.length} source=${source} hyde=${hyde ? 'real' : 'off'} reranker=${reranker.name}`);
   console.log(`[bench] modes: ${modes.join(', ')}\n`);
 
   const results: ModeResult[] = [];
@@ -323,21 +331,30 @@ async function main(): Promise<void> {
 
   db.close();
 
-  // CI gate: if --min-recall set, fail when the BEST recall@10 across the
-  // run modes is under the threshold. "Best" because users typically only
-  // care that at least one configured mode hits the bar — not that every
-  // mode does (e.g. fts alone is expected to lose to hybrid).
+  // CI gate: if --min-recall set, fail when recall@10 is under the threshold.
+  // By default "best across run modes" (legacy — at least one mode hits the
+  // bar). With --gate-mode the gate pins a single mode, so e.g. fts can no
+  // longer mask a hybrid regression.
   if (Number.isFinite(minRecall)) {
-    const bestRecall = results.length > 0
-      ? Math.max(...results.map((r) => r.recall_at_10))
-      : 0;
-    if (bestRecall < minRecall) {
+    const gateMode = values['gate-mode'];
+    const gated = gateMode ? results.filter((r) => r.mode === gateMode) : results;
+    if (gated.length === 0) {
       console.error(
-        `\n[bench] FAIL: best recall@10 ${bestRecall.toFixed(3)} < threshold ${minRecall.toFixed(3)}`
+        gateMode
+          ? `\n[bench] FAIL: --gate-mode ${gateMode} did not run (modes: ${results.map((r) => r.mode).join(', ') || 'none'})`
+          : '\n[bench] FAIL: no mode produced results'
       );
       process.exit(1);
     }
-    console.log(`\n[bench] PASS: best recall@10 ${bestRecall.toFixed(3)} >= threshold ${minRecall.toFixed(3)}`);
+    const label = gateMode ? `${gateMode} recall@10` : 'best recall@10';
+    const bestRecall = Math.max(...gated.map((r) => r.recall_at_10));
+    if (bestRecall < minRecall) {
+      console.error(
+        `\n[bench] FAIL: ${label} ${bestRecall.toFixed(3)} < threshold ${minRecall.toFixed(3)}`
+      );
+      process.exit(1);
+    }
+    console.log(`\n[bench] PASS: ${label} ${bestRecall.toFixed(3)} >= threshold ${minRecall.toFixed(3)}`);
   }
 }
 

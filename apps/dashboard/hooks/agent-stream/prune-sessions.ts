@@ -2,12 +2,12 @@ import type { SessionState } from './types.js';
 
 /**
  * Upper bound on how many per-session state slots `useAgentStream` keeps
- * resident. Each slot retains an `eventLog` of up to 1000 raw SSE payloads
- * plus the live turn, so without a cap the map grows by a few MB per session
- * the user opens over a long work session (the hook is mounted once and
- * `sessionId` just changes). We never evict the active session or one with a
- * background run still streaming — only idle, previously-viewed sessions
- * beyond this cap.
+ * resident. Each slot retains the live turn plus per-turn metrics, so without
+ * a cap the map grows per session the user opens over a long work session
+ * (the hook is mounted once and `sessionId` just changes). We never evict the
+ * active session or one with a background run still streaming — only idle,
+ * previously-viewed sessions beyond this cap. (The worker event log lives in
+ * its own `worker-log-store`, which self-bounds to the same `MAX_SESSIONS`.)
  */
 export const MAX_SESSIONS = 8;
 

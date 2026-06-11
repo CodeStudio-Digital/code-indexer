@@ -237,4 +237,18 @@ export class SqliteVecVectorStore implements VectorStore {
       return false;
     }
   }
+
+  /**
+   * Every vector id in the store (optionally one namespace). Class-only —
+   * NOT part of the VectorStore interface, since remote stores can't list
+   * cheaply. Used by consistency tests/checks: `vector_ids ⊆ listIds()`.
+   */
+  async listIds(namespace?: string): Promise<string[]> {
+    await this.loadExt();
+    if (!this.tableExists()) return [];
+    const rows = namespace !== undefined && !this.isLegacySchema()
+      ? this.db.prepare(`SELECT vid FROM ${TABLE} WHERE namespace = ?`).all(namespace) as Array<{ vid: string }>
+      : this.db.prepare(`SELECT vid FROM ${TABLE}`).all() as Array<{ vid: string }>;
+    return rows.map((r) => r.vid);
+  }
 }

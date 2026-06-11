@@ -883,13 +883,16 @@ export function RunsTab({ projectId }: RunsTabProps) {
               >
                 <div className="flex items-center gap-3">
                   <span
+                    title={r.status}
                     className={cn(
                       'h-2 w-2 rounded-full',
                       r.status === 'completed'
                         ? 'bg-success'
-                        : r.status === 'running'
-                          ? 'bg-warning animate-pulse'
-                          : 'bg-destructive',
+                        : r.status === 'completed_with_errors'
+                          ? 'bg-warning'
+                          : r.status === 'running'
+                            ? 'bg-warning animate-pulse'
+                            : 'bg-destructive',
                     )}
                   />
                   <span className="text-sm font-medium">{t('projects:runs.runLabel', { id: r.id })}</span>
@@ -901,6 +904,11 @@ export function RunsTab({ projectId }: RunsTabProps) {
                   <span>
                     {t('projects:runs.filesCount', { indexed: r.indexed_files, total: r.total_files })}
                   </span>
+                  {r.error_count > 0 && (
+                    <span className="text-warning">
+                      {t('projects:runs.errorsCount', { count: r.error_count })}
+                    </span>
+                  )}
                   <span>${r.estimated_cost_usd.toFixed(4)}</span>
                 </div>
               </div>

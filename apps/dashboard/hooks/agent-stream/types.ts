@@ -6,7 +6,7 @@ export interface ToolCallEvent {
    *  view_image) so the UI can show it inline under the tool call. */
   result?: { content: string; isError?: boolean; image?: { mediaType: string; base64: string } };
   durationMs?: number;
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'awaiting_approval' | 'done' | 'error';
   /** `Date.now()` stamped when `tool_call_start` arrived. Used to render
    *  "running Xs" while the tool is in flight, AND as a fallback for
    *  `elapsedMs` if the worker is on an older build that doesn't emit
@@ -20,6 +20,24 @@ export interface ToolCallEvent {
    *  `ctx.reportProgress` (e.g. "fetched 3/10 docs"). Trimmed to ~200
    *  chars on the runner side. */
   progressNote?: string;
+  /**
+   * Pending PermissionGate approvals anchored to this block. An array —
+   * one code_exec block can stack several nested tool requests. Cleared
+   * as each `tool_approval_resolved` arrives.
+   */
+  approvals?: PendingToolApproval[];
+}
+
+/** A PermissionGate request waiting for the user's verdict. */
+export interface PendingToolApproval {
+  toolUseId: string;
+  /** Chat-visible anchor block id (code_exec / spawn_agent) when nested. */
+  parentToolUseId?: string;
+  toolName: string;
+  argsSummary: string;
+  riskClass: 'write' | 'execute' | 'admin';
+  nested?: boolean;
+  receivedAt: number;
 }
 
 export interface PlanPrompt {
@@ -425,8 +443,6 @@ export interface SessionState {
   lastUsage: Usage | null;
   /** Sum of every message_complete usage since the current run started. */
   runDelta: RunDelta;
-  /** Last SSE event id seen for this session — used as Last-Event-ID on reattach. */
-  lastSeenSeq: number;
   /** True when the current stream was reattached to a background run. */
   reattached: boolean;
   /** Lightweight checklist from the `todo_write` tool. Replaced whole on each SSE event. */
@@ -469,12 +485,12 @@ export interface SessionState {
    */
   toolLoopInterventions: ToolLoopIntervention[];
   /**
-   * Flat event log captured from the SSE stream — every event the
-   * worker emits, in arrival order. Powers the WorkerLogPanel (a
-   * collapsible side-by-side inspector). Capped at 1000 entries; older
-   * entries are dropped LIFO so the most recent context survives.
+   * PermissionGate approvals waiting for the user's verdict, oldest first.
+   * Mirrors the per-block `ToolCallEvent.approvals` so the banner above the
+   * message list can act on requests whose anchor block scrolled away.
+   * Cleared when the run ends or a new send resets the turn.
    */
-  eventLog: WorkerLogEntry[];
+  pendingApprovals: PendingToolApproval[];
   /**
    * `Date.now()` of the last event observed on the stream. Used by the
    * stuck-detection banner — if `streaming` stays true but this stops
@@ -528,7 +544,6 @@ export const EMPTY_STATE: SessionState = {
   error: null,
   lastUsage: null,
   runDelta: ZERO_DELTA,
-  lastSeenSeq: -1,
   reattached: false,
   todos: [],
   contextStatus: null,
@@ -538,7 +553,7 @@ export const EMPTY_STATE: SessionState = {
   sidebarRefreshTick: 0,
   snapshotTick: 0,
   toolLoopInterventions: [],
-  eventLog: [],
+  pendingApprovals: [],
   lastEventAt: null,
 };
 

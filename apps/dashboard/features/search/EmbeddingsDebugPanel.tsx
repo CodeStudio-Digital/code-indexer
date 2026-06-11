@@ -25,6 +25,11 @@ interface EmbeddingStats {
     vectorStore: string;
     vectorStoreAvailable: boolean;
   };
+  fingerprint?: {
+    stored: string | null;
+    live: string | null;
+    mismatch: boolean;
+  };
   sampleEmbedded: Array<{ type: string; path: string; embeddingHash: string }>;
   sampleNotEmbedded: Array<{ type: string; path: string }>;
 }
@@ -150,6 +155,12 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
               <div className="flex items-start gap-2 p-2 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs">
                 <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span>{t('search:debug.noFiles')}</span>
+              </div>
+            )}
+            {stats.fingerprint?.mismatch && (
+              <div className="flex items-start gap-2 p-2 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs">
+                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span>{t('search:debug.fingerprintMismatch', { stored: stats.fingerprint.stored, live: stats.fingerprint.live })}</span>
               </div>
             )}
 

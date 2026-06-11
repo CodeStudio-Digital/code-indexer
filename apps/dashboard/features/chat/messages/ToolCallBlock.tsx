@@ -1,12 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronRight, Loader2, Wrench, X } from 'lucide-react';
+import { Check, ChevronRight, Loader2, ShieldQuestion, Wrench, X } from 'lucide-react';
 import type { ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Badge } from '../../../components/ui/badge.js';
 import { cn } from '../../../lib/utils.js';
+import { ToolApprovalCard, type ToolApprovalVerdict } from './ToolApprovalCard.js';
 
 interface ToolCallBlockProps {
   call: ToolCallEvent;
+  /**
+   * PermissionGate verdict callback. When set AND `call.approvals` is
+   * non-empty, the approval card renders pinned below the header (outside
+   * the collapse) so the user can act without expanding the block.
+   */
+  onToolApproval?: (toolUseId: string, verdict: ToolApprovalVerdict) => Promise<void>;
   /**
    * Optional rich detail rendered in the expanded body INSTEAD of the raw
    * input/result JSON. Used by the chat transcript to show answered
@@ -39,11 +46,13 @@ export const ToolCallBlock = React.memo(ToolCallBlockInner, (prev, next) => {
     // note would never update.
     a.startedAt === b.startedAt &&
     a.elapsedMs === b.elapsedMs &&
-    a.progressNote === b.progressNote
+    a.progressNote === b.progressNote &&
+    // Approval requests attach/detach mid-flight (PermissionGate pauses).
+    a.approvals === b.approvals
   );
 });
 
-function ToolCallBlockInner({ call, children }: ToolCallBlockProps) {
+function ToolCallBlockInner({ call, onToolApproval, children }: ToolCallBlockProps) {
   const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
   const isMcp = call.name.startsWith('mcp__');
@@ -51,8 +60,11 @@ function ToolCallBlockInner({ call, children }: ToolCallBlockProps) {
 
   // Local 1-second tick while the tool is running, so "running Xs" advances
   // smoothly between the 5s server-side heartbeats. Disabled (and cleaned up)
-  // as soon as the tool finishes — an idle session pays nothing.
+  // as soon as the tool finishes — an idle session pays nothing. Intentionally
+  // NOT ticking while awaiting approval: the user's decision time is not the
+  // tool's runtime.
   const isRunning = call.status === 'running';
+  const isAwaitingApproval = call.status === 'awaiting_approval';
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!isRunning || !call.startedAt) return;
@@ -60,11 +72,18 @@ function ToolCallBlockInner({ call, children }: ToolCallBlockProps) {
     return () => clearInterval(id);
   }, [isRunning, call.startedAt]);
 
-  const StatusIcon = call.status === 'running' ? Loader2 : call.status === 'error' ? X : Check;
+  const StatusIcon =
+    call.status === 'running'
+      ? Loader2
+      : call.status === 'awaiting_approval'
+        ? ShieldQuestion
+        : call.status === 'error'
+          ? X
+          : Check;
   const statusColor =
     call.status === 'error'
       ? 'text-destructive bg-destructive/10'
-      : call.status === 'running'
+      : call.status === 'running' || call.status === 'awaiting_approval'
         ? 'text-warning bg-warning/10'
         : 'text-success bg-success/10';
 
@@ -99,7 +118,11 @@ function ToolCallBlockInner({ call, children }: ToolCallBlockProps) {
             mcp
           </Badge>
         )}
-        {call.durationMs !== undefined ? (
+        {isAwaitingApproval ? (
+          <span className="ml-auto text-warning shrink-0">
+            {t('approval.waiting', { defaultValue: 'aguardando aprovação' })}
+          </span>
+        ) : call.durationMs !== undefined ? (
           <span className="ml-auto text-muted-foreground tabular-nums shrink-0">{call.durationMs}ms</span>
         ) : elapsedSec !== null ? (
           <span className="ml-auto text-muted-foreground tabular-nums shrink-0">
@@ -107,6 +130,13 @@ function ToolCallBlockInner({ call, children }: ToolCallBlockProps) {
           </span>
         ) : null}
       </button>
+      {/* PermissionGate card — pinned OUTSIDE the collapse so the user can
+          act without expanding the block. */}
+      {onToolApproval && call.approvals && call.approvals.length > 0 && (
+        <div className="px-3 pb-3 pt-1 border-t bg-background/50">
+          <ToolApprovalCard approvals={call.approvals} onRespond={onToolApproval} />
+        </div>
+      )}
       {open && (
         <div className="px-3 pb-3 pt-1 space-y-2 border-t bg-background/50">
           {isRunning && call.progressNote && (
@@ -143,7 +173,7 @@ function ToolCallBlockInner({ call, children }: ToolCallBlockProps) {
               {call.result.image && (
                 <img
                   src={`data:${call.result.image.mediaType};base64,${call.result.image.base64}`}
-                  alt="Tool screenshot"
+                  alt={t('messages.toolScreenshotAlt', { defaultValue: 'Tool screenshot' })}
                   className="mt-2 max-w-full rounded-md border"
                 />
               )}

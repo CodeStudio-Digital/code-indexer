@@ -18,6 +18,12 @@ describe('classifyToolRefusal', () => {
     ).toBe('failure-streak');
   });
 
+  it('tags PermissionGate user denials', () => {
+    expect(
+      classifyToolRefusal('[user-denied: o usuário negou permissão para `write_file`. Motivo: nome errado.]', true),
+    ).toBe('user_denied');
+  });
+
   it('leaves real tool errors untagged', () => {
     expect(classifyToolRefusal("'head' is not recognized as an internal command", true)).toBeNull();
   });

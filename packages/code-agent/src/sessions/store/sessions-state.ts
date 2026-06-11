@@ -28,6 +28,40 @@ export function setUnrestrictedToolOutput(db: DB, id: number, enabled: boolean |
 }
 
 /**
+ * Persist the per-session tool permission mode ('ask' | 'auto' |
+ * 'unrestricted'). Pass `null` to clear (runtime falls back to 'auto').
+ */
+export function setToolPermissionMode(db: DB, id: number, mode: string | null): void {
+  db.prepare("UPDATE coder_sessions SET tool_permission_mode = ?, updated_at = datetime('now') WHERE id = ?").run(mode, id);
+}
+
+/**
+ * Append a tool name to the session's "always allow" grant list (JSON
+ * string[]). Idempotent — re-granting an already-granted tool is a no-op.
+ */
+export function addToolPermissionGrant(db: DB, id: number, toolName: string): void {
+  const row = db.prepare('SELECT tool_permission_grants FROM coder_sessions WHERE id = ?')
+    .get(id) as { tool_permission_grants: string | null } | undefined;
+  if (!row) return;
+  let grants: string[] = [];
+  try {
+    const parsed = JSON.parse(row.tool_permission_grants ?? '[]');
+    if (Array.isArray(parsed)) grants = parsed.filter((g): g is string => typeof g === 'string');
+  } catch { /* corrupted column — rebuild from scratch */ }
+  if (grants.includes(toolName)) return;
+  grants.push(toolName);
+  db.prepare("UPDATE coder_sessions SET tool_permission_grants = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(grants), id);
+}
+
+/**
+ * Bump `updated_at` only. Used as a keep-alive while a tool approval is
+ * pending so the stuck-running watchdog doesn't flip the session to idle.
+ */
+export function touchSession(db: DB, id: number): void {
+  db.prepare("UPDATE coder_sessions SET updated_at = datetime('now') WHERE id = ?").run(id);
+}
+
+/**
  * Persist the Responses API state needed to enable `previous_response_id` on
  * the next turn for ChatGPT/Codex sessions. `messageCount` is the size of the
  * AgentMessage[] array we just sent — the backend now owns that prefix.

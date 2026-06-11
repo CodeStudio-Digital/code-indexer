@@ -25,6 +25,9 @@ export function useAgentStream(sessionId: number | null) {
   // never interrupts an in-flight run; coming back shows it where it was.
   const [stateMap, setStateMap] = useState<Record<number, SessionState>>({});
   const abortMap = useRef<Map<number, AbortController>>(new Map());
+  // Highest SSE id per sid for reattach Last-Event-ID. A ref (not React
+  // state) because openStream advances it on every event — see OpenStreamDeps.
+  const lastSeenSeqRef = useRef<Map<number, number>>(new Map());
   // Last-touched timestamp per sid, for LRU eviction in `pruneSessions`.
   const touchedRef = useRef<Map<number, number>>(new Map());
   // Mirror the active sessionId into a ref so `updateSession` (stable identity,
@@ -51,7 +54,12 @@ export function useAgentStream(sessionId: number | null) {
 
   const runStream = useCallback(
     (sid: number, opts: Parameters<typeof openStream>[1], onMessageComplete?: () => void) =>
-      openStream(sid, opts, { updateSession, abortMap: abortMap.current }, onMessageComplete),
+      openStream(
+        sid,
+        opts,
+        { updateSession, abortMap: abortMap.current, lastSeenSeqMap: lastSeenSeqRef.current },
+        onMessageComplete,
+      ),
     [updateSession],
   );
 
@@ -152,7 +160,7 @@ export function useAgentStream(sessionId: number | null) {
    */
   const reattach = useCallback(
     async (sid: number, onMessageComplete?: () => void) => {
-      const lastSeq = stateMap[sid]?.lastSeenSeq ?? -1;
+      const lastSeq = lastSeenSeqRef.current.get(sid) ?? -1;
       await runStream(
         sid,
         {
@@ -164,7 +172,7 @@ export function useAgentStream(sessionId: number | null) {
         onMessageComplete,
       );
     },
-    [runStream, stateMap],
+    [runStream],
   );
 
   /** Clear the streaming-in-progress turn. Called by AgentChat after the
@@ -296,6 +304,37 @@ export function useAgentStream(sessionId: number | null) {
     [sessionId, postAndResume],
   );
 
+  /**
+   * Resolve a PermissionGate approval (tool paused before execution).
+   * Optimistically drops the request from `pendingApprovals` — the
+   * authoritative `tool_approval_resolved` event follows over SSE.
+   * `postAndResume` covers the dead-runner fallback (the server sealed
+   * the dangling tool_use in the DB and asked us to resume).
+   */
+  const respondToToolApproval = useCallback(
+    (
+      toolUseId: string,
+      verdict: { approved: boolean; note?: string; alwaysAllow?: boolean },
+    ) => {
+      if (sessionId) {
+        updateSession(sessionId, (s) => ({
+          pendingApprovals: s.pendingApprovals.filter((a) => a.toolUseId !== toolUseId),
+        }));
+      }
+      return postAndResume(
+        `/api/coder/sessions/${sessionId}/tool-approval`,
+        {
+          tool_use_id: toolUseId,
+          approved: verdict.approved,
+          note: verdict.note,
+          always_allow: verdict.alwaysAllow,
+        },
+        {},
+      );
+    },
+    [sessionId, postAndResume, updateSession],
+  );
+
   const switchProvider = useCallback(
     async (provider: string, model?: string) => {
       if (!sessionId) return;
@@ -324,7 +363,7 @@ export function useAgentStream(sessionId: number | null) {
     sidebarRefreshTick: active.sidebarRefreshTick,
     snapshotTick: active.snapshotTick,
     toolLoopInterventions: active.toolLoopInterventions,
-    eventLog: active.eventLog,
+    pendingApprovals: active.pendingApprovals,
     lastEventAt: active.lastEventAt,
     sendMessage,
     sendWithInterject,
@@ -337,6 +376,7 @@ export function useAgentStream(sessionId: number | null) {
     respondToPlan,
     respondToTasks,
     respondToSpec,
+    respondToToolApproval,
     switchProvider,
   };
 }

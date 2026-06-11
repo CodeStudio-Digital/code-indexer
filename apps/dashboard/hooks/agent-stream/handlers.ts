@@ -1,6 +1,7 @@
 import type {
   AgentStatus,
   AgentsGroup,
+  PendingToolApproval,
   PipelineNodeRuntimeStatus,
   PipelineRuntimeState,
   StreamBlock,
@@ -190,10 +191,84 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
             // the "running Xs" renderer into showing it on a finished tool.
             elapsedMs: undefined,
             progressNote: undefined,
+            // The result seals the block — any stale approval card dies here.
+            approvals: undefined,
           };
         }
       }
       if (removeActivity(blocks, `tool:${d.id}`)) rebuildToolIndex(blocks, toolIndex);
+      flush();
+    },
+
+    /**
+     * PermissionGate paused a tool call awaiting the user's verdict. Anchor
+     * the approval card to the chat-visible block: the call's own block, or
+     * — for nested requests (code_exec scripts, subagent runs) — the parent
+     * wrapper block. Always mirrored into `pendingApprovals` so the banner
+     * above the message list can act even when the block scrolled away.
+     */
+    tool_approval_request: (data) => {
+      const d = data as {
+        toolUseId: string;
+        parentToolUseId?: string;
+        toolName: string;
+        argsSummary?: string;
+        riskClass?: 'write' | 'execute' | 'admin';
+        nested?: boolean;
+      };
+      if (!d.toolUseId) return;
+      const approval: PendingToolApproval = {
+        toolUseId: d.toolUseId,
+        parentToolUseId: d.parentToolUseId,
+        toolName: String(d.toolName ?? ''),
+        argsSummary: String(d.argsSummary ?? ''),
+        riskClass: d.riskClass ?? 'write',
+        nested: !!d.nested,
+        receivedAt: Date.now(),
+      };
+      const anchor = d.parentToolUseId ?? d.toolUseId;
+      const idx = toolIndex.get(anchor);
+      if (idx !== undefined) {
+        const block = blocks[idx];
+        if (block && block.type === 'tool' && (block.call.status === 'running' || block.call.status === 'awaiting_approval')) {
+          block.call = {
+            ...block.call,
+            status: 'awaiting_approval',
+            approvals: [...(block.call.approvals ?? []), approval],
+          };
+        }
+      }
+      updateSession(sid, (s) => ({
+        pendingApprovals: [...s.pendingApprovals.filter((a) => a.toolUseId !== d.toolUseId), approval],
+      }));
+      flush();
+    },
+
+    /** A pending approval was resolved (user / interrupt / abort). */
+    tool_approval_resolved: (data) => {
+      const d = data as { toolUseId: string };
+      if (!d.toolUseId) return;
+      // The resolved payload has no anchor hint — scan newest-first for the
+      // block holding this approval (cheap: blocks is one turn's worth).
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const block = blocks[i];
+        if (block.type !== 'tool' || !block.call.approvals?.length) continue;
+        if (!block.call.approvals.some((a) => a.toolUseId === d.toolUseId)) continue;
+        const remaining = block.call.approvals.filter((a) => a.toolUseId !== d.toolUseId);
+        block.call = {
+          ...block.call,
+          approvals: remaining.length > 0 ? remaining : undefined,
+          // Approved → back to running while the tool executes; denied →
+          // the synthesized error result lands right after and seals it.
+          status: remaining.length === 0 && block.call.status === 'awaiting_approval'
+            ? 'running'
+            : block.call.status,
+        };
+        break;
+      }
+      updateSession(sid, (s) => ({
+        pendingApprovals: s.pendingApprovals.filter((a) => a.toolUseId !== d.toolUseId),
+      }));
       flush();
     },
 
@@ -637,6 +712,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       updateSession(sid, {
         doneReason: String(d.reason ?? 'completed'),
         ...(d.error ? { error: d.error } : {}),
+        // No run → no resolvable approvals (abort/interrupt denied them).
+        pendingApprovals: [],
       });
     },
 

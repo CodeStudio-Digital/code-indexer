@@ -19,6 +19,7 @@
   "debug.noEmbedding": "Nenhum serviço de embedding configurado. Busca vetorial sempre retornará vazio. Configure em Admin > Embeddings & Vector Stores.",
   "debug.noVectorStore": "Nenhum vector store configurado. Embeddings não podem ser armazenados ou buscados.",
   "debug.noFiles": "Nenhum arquivo foi embedado ainda. Execute a indexação com embeddings habilitados para popular o vector store.",
+  "debug.fingerprintMismatch": "Modelo de embedding mudou ({{stored}} → {{live}}). A próxima indexação vai re-embedar o projeto inteiro.",
   "debug.files": "Arquivos",
   "debug.symbols": "Símbolos",
   "debug.symbolBodies": "Corpos de Símbolos",

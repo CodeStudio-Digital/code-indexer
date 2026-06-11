@@ -3,14 +3,7 @@ import type { StreamBlock, UpdateSession, WorkerLogEntry } from './types.js';
 import { ZERO_DELTA } from './types.js';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
 import { apiBaseUrl } from '../../lib/api-client.js';
-
-/**
- * Cap for `SessionState.eventLog`. Older entries drop off (LIFO trim) so
- * memory stays bounded across long runs. 1000 entries covers ~5 minutes of
- * a chatty worker without sliding off the most recent context the user
- * cares about when debugging a stall.
- */
-const EVENT_LOG_CAP = 1000;
+import { pushWorkerLog } from './worker-log-store.js';
 
 /**
  * Derive `{level, category, message}` for the worker-log entry from the
@@ -81,6 +74,13 @@ export interface OpenStreamOpts {
 export interface OpenStreamDeps {
   updateSession: UpdateSession;
   abortMap: Map<number, AbortController>;
+  /**
+   * Persisted highest SSE id per sid, used as Last-Event-ID on reattach.
+   * Kept in a ref-backed Map (not React state) because it advances on every
+   * single event — writing it to `SessionState` would re-render the chat
+   * 50+/s for a value nothing renders.
+   */
+  lastSeenSeqMap: Map<number, number>;
 }
 
 /**
@@ -99,7 +99,7 @@ export async function openStream(
   deps: OpenStreamDeps,
   onMessageComplete?: () => void,
 ): Promise<void> {
-  const { updateSession, abortMap } = deps;
+  const { updateSession, abortMap, lastSeenSeqMap } = deps;
 
   updateSession(sid, {
     streaming: true,
@@ -108,6 +108,9 @@ export async function openStream(
     error: null,
     runDelta: ZERO_DELTA,
     reattached: !!opts.reattach,
+    // Stale approvals can't be resolved across runs — the wait slots died
+    // with the previous run (interruptWait/abort already denied them).
+    pendingApprovals: [],
   });
   // If a previous stream for this sid is still alive (rapid session switch /
   // resubmit), abort it before installing the new controller — otherwise the
@@ -123,6 +126,8 @@ export async function openStream(
   let lastSeenSeq = typeof opts.lastEventId === 'number' && opts.lastEventId >= 0
     ? opts.lastEventId
     : -1;
+  // Throttle the `lastEventAt` commit (stall detector only needs ~1s).
+  let lastEventAtCommit = 0;
 
   // Batch flushes to at most one per animation frame. Tokens arrive at
   // 50+/s; without batching every token triggers a full React re-render of
@@ -184,9 +189,12 @@ export async function openStream(
     signal: ctrl.signal,
     getLastEventId: () => lastSeenSeq,
     onEvent: (ev) => {
+      // Persist the highest id for reattach in a ref (no re-render). This
+      // fires on every event; writing it to React state was a hidden 50+/s
+      // churn source even though nothing renders the value.
       if (ev.id !== undefined && ev.id > lastSeenSeq) {
         lastSeenSeq = ev.id;
-        updateSession(sid, (cur) => (ev.id! > cur.lastSeenSeq ? { lastSeenSeq: ev.id! } : {}));
+        lastSeenSeqMap.set(sid, ev.id);
       }
       if (!ev.data) return;
       let data: Record<string, unknown>;
@@ -199,15 +207,17 @@ export async function openStream(
       // existing per-event handlers below only fire for events the UI
       // explicitly renders (text, tool_*, plan, etc.) — many events
       // like history_compacted / provider_call / worker_log have no
-      // chat-side handler but are precious for debugging stalls.
+      // chat-side handler but are precious for debugging stalls. Routed
+      // through a coalesced store so the firehose doesn't re-render the
+      // chat (only the Worker Log panel, when open, subscribes).
       const entry = buildLogEntry(ev.event, data);
-      updateSession(sid, (cur) => ({
-        eventLog:
-          cur.eventLog.length < EVENT_LOG_CAP
-            ? [...cur.eventLog, entry]
-            : [...cur.eventLog.slice(cur.eventLog.length - EVENT_LOG_CAP + 1), entry],
-        lastEventAt: entry.ts,
-      }));
+      pushWorkerLog(sid, entry);
+      // Stall detector (StuckBanner) only needs ~1s granularity — throttle
+      // the lastEventAt commit so it isn't a per-event re-render of AgentChat.
+      if (entry.ts - lastEventAtCommit >= 1000) {
+        lastEventAtCommit = entry.ts;
+        updateSession(sid, { lastEventAt: entry.ts });
+      }
       const handler = handlers[ev.event];
       if (handler) handler(data, ev.event);
     },

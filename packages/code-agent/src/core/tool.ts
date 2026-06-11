@@ -127,6 +127,25 @@ export interface ToolContext {
    * `coder_sessions.unrestricted_tool_output` column.
    */
   unrestrictedToolOutput?: boolean;
+  /**
+   * Per-session tool permission gate (ask/auto/unrestricted). Consulted by
+   * executing-dispatch and code_exec BEFORE invoking gated tools. Holds the
+   * PARENT runner's waitForUserInput/emit, so subagent context copies surface
+   * and resolve approvals at session level. Mirrors
+   * `coder_sessions.tool_permission_mode`. Undefined in tests/legacy paths.
+   */
+  permissionGate?: import('./permission-gate.js').PermissionGate;
+  /**
+   * tool_use id of the currently executing tool call. Set per-call by the
+   * dispatch spread so nested contexts (code_exec) can anchor approval
+   * requests to the chat-visible block.
+   */
+  currentToolUseId?: string;
+  /**
+   * Chat-visible anchor block for approvals raised in non-visible contexts
+   * (subagent runs). Set by runSubagent to the spawning tool_use id.
+   */
+  approvalAnchorId?: string;
   /** Optional abort signal for long-running operations. */
   signal?: AbortSignal;
   /**

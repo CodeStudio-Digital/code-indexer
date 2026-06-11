@@ -16,6 +16,8 @@ export interface PreviewIframeProps {
   onRestartDev: () => Promise<void>;
   sessionId: number;
   fileChangeTick?: number;
+  /** Bump to force an iframe reload (e.g. auto-fix run-end revalidation). */
+  reloadTick?: number;
   extraServices?: Array<{
     id: string;
     label: string;
@@ -57,6 +59,7 @@ export function PreviewIframe({
   onRestartDev,
   sessionId,
   fileChangeTick = 0,
+  reloadTick = 0,
   extraServices = [],
   selectMode,
   onToggleSelectMode,
@@ -100,6 +103,13 @@ export function PreviewIframe({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileChangeTick]);
+
+  useEffect(() => {
+    if (reloadTick > 0 && status === 'ready') {
+      setReloadKey((k) => k + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadTick]);
 
   const step = sandbox?.step;
   const logs = sandbox?.recentLogs ?? [];

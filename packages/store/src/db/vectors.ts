@@ -75,14 +75,18 @@ export function listOrphans(db: DB, projectId: number): Array<{ vector_id: strin
   `).all(projectId) as Array<{ vector_id: string; file_path: string | null; type: string }>;
 }
 
+// SQLite's default bind-parameter limit is 999; stay under it per statement.
+const IN_CHUNK = 900;
+
 export function deleteRows(db: DB, projectId: number, vectorIds: string[]): number {
   if (vectorIds.length === 0) return 0;
-  const stmt = db.prepare('DELETE FROM vector_ids WHERE project_id = ? AND vector_id = ?');
   const tx = db.transaction((ids: string[]) => {
     let n = 0;
-    for (const id of ids) {
-      const r = stmt.run(projectId, id);
-      n += r.changes;
+    for (let i = 0; i < ids.length; i += IN_CHUNK) {
+      const slice = ids.slice(i, i + IN_CHUNK);
+      const placeholders = slice.map(() => '?').join(',');
+      n += db.prepare(`DELETE FROM vector_ids WHERE project_id = ? AND vector_id IN (${placeholders})`)
+        .run(projectId, ...slice).changes;
     }
     return n;
   });
@@ -140,10 +144,14 @@ export function takePendingDeletes(db: DB, limit = 5000): Array<{ id: number; ve
 
 export function deletePendingByIds(db: DB, ids: number[]): number {
   if (ids.length === 0) return 0;
-  const stmt = db.prepare('DELETE FROM pending_vector_deletes WHERE id = ?');
   const tx = db.transaction((items: number[]) => {
     let n = 0;
-    for (const id of items) n += stmt.run(id).changes;
+    for (let i = 0; i < items.length; i += IN_CHUNK) {
+      const slice = items.slice(i, i + IN_CHUNK);
+      const placeholders = slice.map(() => '?').join(',');
+      n += db.prepare(`DELETE FROM pending_vector_deletes WHERE id IN (${placeholders})`)
+        .run(...slice).changes;
+    }
     return n;
   });
   return tx(ids);

@@ -26,3 +26,14 @@ export type { ResolvedTarget } from './paths.js';
 export { slugify } from './slugify.js';
 export { TEMPLATE_IDS, isTemplateId, getHostTemplate } from './templates/registry.js';
 export type { TemplateId, HostTemplate } from './templates/types.js';
+export {
+  scaffoldDsStudioWorkspace,
+  buildReactWorkspaceFiles,
+  buildVueWorkspaceFiles,
+  renderDsStudioViteConfig,
+} from './ds-studio/index.js';
+export type {
+  DsStudioScaffoldInput,
+  DsStudioScaffoldOutcome,
+  DsStudioStack,
+} from './ds-studio/index.js';

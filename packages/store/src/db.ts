@@ -44,6 +44,12 @@ export class CodeIndexDB {
   /** better-sqlite3 handle for stores that need direct prepared-statement access. */
   raw(): DB { return this.db; }
   close(): void { this.db.close(); }
+  /**
+   * Run `fn` (synchronous) inside one SQLite transaction. Inner
+   * `db.transaction` calls (files.upsert, symbols.upsert, …) become
+   * savepoints, so composite persists commit or roll back as a unit.
+   */
+  transaction<T>(fn: () => T): T { return this.db.transaction(fn)(); }
 
   // ─── Projects ───────────────────────────────────────────────────
   createProject(name: string, rootPath: string, description?: string): Project { return projects.create(this.db, name, rootPath, description); }

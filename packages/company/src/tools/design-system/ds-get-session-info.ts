@@ -6,7 +6,7 @@
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { DsToolBinding } from '@mcp/company/tools/design-system/binding.js';
 import { getDesignSystemStore } from '@mcp/company/tools/design-system/store-binding.js';
 
 const PARAMETERS: JsonSchema = {
@@ -14,11 +14,7 @@ const PARAMETERS: JsonSchema = {
   properties: {},
 };
 
-export function dsGetSessionInfo(
-  orchestrator: CompanyOrchestrator,
-  agentRole: string,
-  agentRunId: number | null,
-): CoderTool {
+export function dsGetSessionInfo(binding: DsToolBinding): CoderTool {
   return {
     name: 'ds_get_session_info',
     description:
@@ -29,16 +25,13 @@ export function dsGetSessionInfo(
       try {
         const store = getDesignSystemStore();
         if (!store) return err('ds_get_session_info: DesignSystemStore not wired.');
-        const session = store.getSessionByCompanySessionId(orchestrator.effectiveSessionId);
+        const session = binding.resolveDsSession(store);
         if (!session) {
-          return err(
-            `No DesignSystemSession bound to company_session_id=${orchestrator.effectiveSessionId}.`,
-          );
+          return err(`No DesignSystemSession bound to ${binding.describeBinding()}.`);
         }
         const draft = store.getLatestVersionAny(session.id);
         const published = store.getLatestPublishedVersion(session.id);
         const componentCount = draft ? store.listComponents(draft.id).length : 0;
-        void agentRole; void agentRunId;
         const lines = [
           `name: ${session.name}`,
           `package_name: ${session.package_name}`,
