@@ -52,6 +52,7 @@ export interface ProviderModelRaw {
   visibility: string | null;
   supported_in_api: number | null;
   input_modalities: string | null;
+  max_tools: number | null;
 }
 
 export interface OAuthTokenRaw {
@@ -156,6 +157,7 @@ export function hydrateModel(r: ProviderModelRaw): ProviderModel {
     visibility: r.visibility,
     supported_in_api: r.supported_in_api === null ? null : !!r.supported_in_api,
     input_modalities: parseJson<string[] | null>(r.input_modalities, null),
+    max_tools: r.max_tools ?? null,
   };
 }
 

@@ -9,7 +9,7 @@
  * LLM error, unparseable) it returns [] so the session is never affected.
  */
 import type { SnapshotCategory } from '@mcp/shared/types.js';
-import type { PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
+import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
 import { pickChatFn } from '../quality/chat-dispatcher.js';
 import type { MemoryCandidate, MemoryDistiller, SessionMemoryInput } from './extractor.js';
 
@@ -20,6 +20,9 @@ const CATEGORIES: ReadonlySet<SnapshotCategory> = new Set<SnapshotCategory>([
 export interface LlmMemoryDistillerOptions {
   resolver: PipelineProviderResolver;
   resolveContext?: ResolveContext;
+  /** Zero-config fallback consulted when no binding row resolves. Lazy —
+   *  the operator can change the general default model at runtime. */
+  getFallbackDefault?: () => FallbackDefault | null;
   /** Skip the LLM (tests) — returns []. */
   skipLlm?: boolean;
 }
@@ -30,7 +33,10 @@ export class LlmMemoryDistiller implements MemoryDistiller {
   async distill(input: SessionMemoryInput): Promise<MemoryCandidate[]> {
     if (this.opts.skipLlm) return [];
     const binding = await this.opts.resolver
-      .resolveOrNull('memory_extraction', 'distiller', this.opts.resolveContext ?? {})
+      .resolveOrNull(
+        'memory_extraction', 'distiller', this.opts.resolveContext ?? {},
+        this.opts.getFallbackDefault?.() ?? undefined,
+      )
       .catch(() => null);
     if (!binding) return [];
     try {

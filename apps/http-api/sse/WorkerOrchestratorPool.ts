@@ -44,6 +44,7 @@ import {
   type SupervisorIncidentEnvelope,
 } from './supervisor-incident-bus.js';
 import { installRuntimeEventLog } from './runtime-event-log.js';
+import { registerWorkerMemoryHandlers } from './worker-memory-handlers.js';
 
 interface PoolEntry {
   host: WorkerHost;
@@ -337,6 +338,18 @@ export class WorkerOrchestratorPool {
       }
       return backend.search(payload as Parameters<DocSearchBackend['search']>[0]);
     });
+    // rag_read_doc — same deps box; the verb is optional on older backends
+    // so the worker shim gets the same "not available" the in-process tool
+    // would emit.
+    const offDocReadChunk = bridge.handle('docReadChunk', async (payload) => {
+      const backend = this.opts.docDeps?.docSearch;
+      if (!backend?.readChunk) {
+        throw new Error(
+          'rag_read_doc is not available in this process (backend without readChunk). Use the rag_search_docs snippets instead.',
+        );
+      }
+      return backend.readChunk(payload as Parameters<NonNullable<DocSearchBackend['readChunk']>>[0]);
+    });
     const offDocsResearch = bridge.handle('docsResearch', async (payload) => {
       const researcher = this.opts.docDeps?.docsResearch;
       if (!researcher) {
@@ -363,6 +376,12 @@ export class WorkerOrchestratorPool {
       }
       return v.describe(payload as VisionDescribeRequest);
     });
+    // Project memory (Mem C) — master + every subordinate runner inside this
+    // company-worker reach the canonical MemoryRetriever + RunEndMemory
+    // (server/deps.ts) through these handlers. Worker-side consumers:
+    // `setCompanyMemoryPorts` in company-worker.ts (spawn-time PROJECT MEMORY
+    // block + run-end distillation for subordinates).
+    const offMemory = registerWorkerMemoryHandlers(bridge, () => this.opts.docDeps);
 
     // Keep the pool entry warm while the worker is doing observable work.
     // The TTL sweep evicts on `lastTouchedAt`, which `getOrSpawn`/`get`/RPC
@@ -431,9 +450,11 @@ export class WorkerOrchestratorPool {
       try { offSupervisorBoot(); } catch { /* best-effort */ }
       try { offSupervisorIncident(); } catch { /* best-effort */ }
       try { offDocSearch(); } catch { /* best-effort */ }
+      try { offDocReadChunk(); } catch { /* best-effort */ }
       try { offDocsResearch(); } catch { /* best-effort */ }
       try { offPreviewDevtools(); } catch { /* best-effort */ }
       try { offVisionDescribe(); } catch { /* best-effort */ }
+      try { offMemory(); } catch { /* best-effort */ }
     };
 
     const orchestrator = createOrchestratorProxy(host, sessionId, bus);

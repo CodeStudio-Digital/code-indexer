@@ -55,8 +55,17 @@ export interface MemoryRetrieverOptions {
   topK?: number;
   /** Candidates fetched from hybrid search before re-ranking. Default max(topK*3, 10). */
   fetchK?: number;
-  /** Skip retrieval for queries shorter than this (avoids noise). Default 12. */
+  /** Skip retrieval for queries shorter than this (avoids noise). Default 4 —
+   *  was 12, which silently dropped short-but-real user asks ("fix auth"). */
   minQueryChars?: number;
+  /** Diagnostics sink for silent-skip paths (short query / zero hits). */
+  log?: (event: 'skip_short_query' | 'zero_hits', data: Record<string, unknown>) => void;
+}
+
+/** Full-content row returned by the explicit `recall` path (recall_memory tool). */
+export interface RecalledMemory extends RetrievedMemory {
+  category?: string;
+  source?: string;
 }
 
 // Decay/staleness scoring weights. The additive block (base+imp+rec+use) sums
@@ -80,14 +89,77 @@ export class MemoryRetriever {
 
   async retrieve(projectId: number, projectName: string, queryText: string): Promise<RetrievedMemory[]> {
     const q = queryText.trim();
-    if (q.length < (this.opts.minQueryChars ?? 12)) return [];
+    const minChars = this.opts.minQueryChars ?? 4;
+    if (q.length < minChars) {
+      this.opts.log?.('skip_short_query', { length: q.length, min: minChars });
+      return [];
+    }
 
     const topK = this.opts.topK ?? 3;
     const fetchK = this.opts.fetchK ?? Math.max(topK * 3, 10);
 
     const hits = await this.search.searchSnapshotsHybrid(projectId, projectName, q, fetchK);
-    if (hits.length === 0) return [];
+    if (hits.length === 0) {
+      this.opts.log?.('zero_hits', { query: q.slice(0, 80) });
+      return [];
+    }
 
+    const top = this.scoreHits(hits, projectId).slice(0, topK);
+    this.markAccessed(top.map((t) => t.snap.id));
+
+    return top.map((t) => ({
+      id: String(t.snap.id),
+      title: t.snap.title,
+      content: t.snap.content,
+      importance: clamp01(t.snap.importance ?? 0.5),
+      staleNote: buildStaleNote(t.st?.stale),
+    }));
+  }
+
+  /**
+   * Explicit full-content recall — backs the `recall_memory` tool. No
+   * min-query gate (an explicit call IS intent), wider fetch, and the result
+   * carries category/source so the agent sees provenance. Marks access.
+   */
+  async recall(
+    projectId: number,
+    projectName: string,
+    query: string,
+    limit = 5,
+  ): Promise<RecalledMemory[]> {
+    const q = query.trim();
+    if (!q) return [];
+    const k = Math.max(1, Math.min(12, Math.floor(limit)));
+
+    const hits = await this.search.searchSnapshotsHybrid(projectId, projectName, q, Math.max(k * 3, 15));
+    if (hits.length === 0) {
+      this.opts.log?.('zero_hits', { query: q.slice(0, 80), recall: true });
+      return [];
+    }
+
+    const top = this.scoreHits(hits, projectId).slice(0, k);
+    this.markAccessed(top.map((t) => t.snap.id));
+
+    return top.map((t) => ({
+      id: String(t.snap.id),
+      title: t.snap.title,
+      content: t.snap.content,
+      category: t.snap.category,
+      source: t.snap.source,
+      importance: clamp01(t.snap.importance ?? 0.5),
+      staleNote: buildStaleNote(t.st?.stale),
+    }));
+  }
+
+  /**
+   * Score = relevance × (importance + recency + frequency-of-use) × staleness
+   * discount. Relevance (hybrid rank) still dominates first-order; the rest
+   * breaks near-ties and lets a fresh memory beat a stale-but-relevant one.
+   */
+  private scoreHits(
+    hits: ContextSnapshot[],
+    projectId: number,
+  ): Array<{ snap: ContextSnapshot; st?: { stale: string[]; total: number }; score: number }> {
     // Batched staleness over all candidates (one grouped query). Optional dep:
     // when absent (test fakes) the discount + note are simply skipped.
     let staleMap: Map<number, { stale: string[]; total: number }> | null = null;
@@ -99,9 +171,6 @@ export class MemoryRetriever {
       }
     }
 
-    // Score = relevance × (importance + recency + frequency-of-use) × staleness
-    // discount. Relevance (hybrid rank) still dominates first-order; the rest
-    // breaks near-ties and lets a fresh memory beat a stale-but-relevant one.
     const now = Date.now();
     const scored = hits.map((snap, i) => {
       const imp = clamp01(snap.importance ?? 0.5);
@@ -114,21 +183,15 @@ export class MemoryRetriever {
       return { snap, st, score: relevance * (W_BASE + W_IMP * imp + W_REC * rec + W_USE * use) * staleMult };
     });
     scored.sort((a, b) => b.score - a.score);
+    return scored;
+  }
 
-    const top = scored.slice(0, topK);
+  private markAccessed(ids: number[]): void {
     try {
-      this.access.markSnapshotAccessed(top.map((t) => t.snap.id));
+      this.access.markSnapshotAccessed(ids);
     } catch {
       /* access bump is best-effort — never fail retrieval over it */
     }
-
-    return top.map((t) => ({
-      id: String(t.snap.id),
-      title: t.snap.title,
-      content: t.snap.content,
-      importance: clamp01(t.snap.importance ?? 0.5),
-      staleNote: buildStaleNote(t.st?.stale),
-    }));
   }
 }
 

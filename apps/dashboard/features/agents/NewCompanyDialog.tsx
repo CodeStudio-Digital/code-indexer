@@ -3,15 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import { useApi, apiPost } from '../../hooks/useApi.js';
 import { useProviders } from '../../hooks/useProviders.js';
-import { FallbackPicker } from '../../components/FallbackPicker.js';
-import { AllowedModelsEditor } from './new-company-dialog/AllowedModelsEditor.js';
 import { BuilderModeSection } from './new-company-dialog/BuilderModeSection.js';
-import { OperationalRulesField } from './new-company-dialog/OperationalRulesField.js';
 import {
   resolveLimitsFromForm,
   type BuilderStack,
   type LimitsPreset,
-  type PoolEntry,
   type Project,
   type ProjectManifestResponse,
   type Template,
@@ -22,6 +18,14 @@ interface NewCompanyDialogProps {
   onCreated: (sessionId: number) => void;
 }
 
+/**
+ * Creation wizard, intentionally minimal: name + projects + master model.
+ * Everything else (template, builder/sandbox) lives behind the collapsed
+ * "Advanced" section; post-create config (roles, fallback, operational
+ * rules, services) belongs to the session sidebar. The rarely-used
+ * `allowed_models` pool and `master_broadcast_subscribe` flag are API-only
+ * now — the server still accepts and enforces both.
+ */
 export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) {
   const { t } = useTranslation(['agents', 'common']);
   const { data: templates, loading: templatesLoading } = useApi<Template[]>('/company/templates');
@@ -38,8 +42,6 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   const [selectedProjectIds, setSelectedProjectIds] = useState<number[]>([]);
   const [masterProvider, setMasterProvider] = useState(providerOptions[0]?.id ?? 'anthropic');
   const [masterModel, setMasterModel] = useState('claude-sonnet-4-6');
-  const [masterFallbackProvider, setMasterFallbackProvider] = useState<string | null>(null);
-  const [masterFallbackModel, setMasterFallbackModel] = useState<string | null>(null);
   // Builder mode: when the user picks a stack, the backend provisions a
   // sandbox and enables the live-preview pane. 'off' preserves the
   // traditional company-session flow (no sandbox, no preview).
@@ -58,23 +60,6 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   // Per-session base image + raw run flags. Empty image = server default.
   const [customImage, setCustomImage] = useState('');
   const [customRunArgs, setCustomRunArgs] = useState('');
-  // Curated pool of (provider, model) tuples the master can spawn
-  // subordinates with. Empty list = no restriction (backward compat).
-  // Non-empty list = server-side enforcement; master gets an error if
-  // it picks outside. The editor that owns the per-row state lives in
-  // `new-company-dialog/AllowedModelsEditor.tsx`.
-  const [allowedModels, setAllowedModels] = useState<PoolEntry[]>([]);
-  /**
-   * Phase B "living company": when on, every peer-to-peer inbox message
-   * also generates a fire-and-forget `notify` copy addressed to the
-   * master so the orchestrator stays aware of inter-subordinate traffic.
-   * Default off — opt-in because the master sees more context but
-   * spends a turn processing it.
-   */
-  const [masterBroadcastSubscribe, setMasterBroadcastSubscribe] = useState(false);
-  // Session-level operational rules (free-text markdown) — injected verbatim
-  // into the master and every subordinate prompt. Empty = legacy behavior.
-  const [operationalRules, setOperationalRules] = useState('');
   const [creating, setCreating] = useState(false);
 
   const selectedTemplate = templates?.find((t) => t.id === selectedTemplateId);
@@ -178,20 +163,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
         project_ids: selectedProjectIds,
         master_provider: masterProvider,
         master_model: masterModel,
-        master_fallback_provider: masterFallbackProvider,
-        master_fallback_model: masterFallbackModel,
         role_assignments: selectedTemplate?.roles.filter((r) => r.role !== 'master') ?? [],
-        // Submit the allowed-models pool only when non-empty; an empty
-        // list would read as "strict empty pool" on the server and
-        // would reject every spawn. Empty == "no restriction", matching
-        // the legacy behavior.
-        ...(allowedModels.length > 0 ? { allowed_models: allowedModels } : {}),
-        // Phase B "master observer": include only when on; absence keeps
-        // the legacy session shape intact.
-        ...(masterBroadcastSubscribe ? { master_broadcast_subscribe: true } : {}),
-        // Operational rules — only when non-blank; keeps the legacy payload
-        // shape otherwise.
-        ...(operationalRules.trim() ? { operational_rules: operationalRules.trim() } : {}),
         // Only send `builder` when the user picked a real stack. Leaving
         // the field absent keeps the payload identical to the legacy
         // format, so nothing about non-builder sessions changes server-side.
@@ -247,135 +219,6 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
               className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm"
               placeholder={t('agents:newCompanyDialog.sessionPlaceholder')}
             />
-          </div>
-
-          {needsExternalMainProject && (
-            <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
-              <label className="text-xs font-medium text-muted-foreground">
-                {t('agents:mainProject.label')}
-              </label>
-              <select
-                value={mainProjectId ?? ''}
-                onChange={(e) => setMainProjectId(e.target.value ? Number(e.target.value) : null)}
-                className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm"
-              >
-                {selectedProjectIds.map((id) => {
-                  const project = projects?.find((p) => p.id === id);
-                  return (
-                    <option key={id} value={id}>
-                      {project?.name ?? `project-${id}`} — {project?.root_path ?? ''}
-                    </option>
-                  );
-                })}
-              </select>
-              <div className="mt-2 grid grid-cols-2 gap-1">
-                <button
-                  type="button"
-                  className={
-                    'rounded border px-2 py-1 text-[10px] ' +
-                    (mainProjectRuntime === 'node'
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-background hover:bg-accent')
-                  }
-                  onClick={() => setMainProjectRuntime('node')}
-                >
-                  {t('agents:mainProject.nodeRuntime')}
-                </button>
-                <button
-                  type="button"
-                  className={
-                    'rounded border px-2 py-1 text-[10px] ' +
-                    (mainProjectRuntime === 'dockerfile'
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-background hover:bg-accent')
-                  }
-                  onClick={() => setMainProjectRuntime('dockerfile')}
-                >
-                  {t('agents:mainProject.dockerfileRuntime')}
-                </button>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1 text-[10px]">
-                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">
-                  {t('agents:mainProject.preserved')}
-                </span>
-                {mainProjectManifestLoading && (
-                  <span className="rounded bg-muted px-1.5 py-0.5">
-                    {t('agents:mainProject.checking')}
-                  </span>
-                )}
-                {mainProjectManifest?.manifest && (
-                  <span className="rounded bg-muted px-1.5 py-0.5">
-                    {mainProjectManifest.manifest.kind}
-                    {mainProjectManifest.manifest.packageManager
-                      ? ` (${mainProjectManifest.manifest.packageManager})`
-                      : ''}
-                    {mainProjectManifest.manifest.devScriptName
-                      ? ` · ${mainProjectManifest.manifest.devScriptName}`
-                      : ''}
-                  </span>
-                )}
-                {mainProjectRuntime === 'node' && !mainProjectNodeOk && !mainProjectManifestLoading && (
-                  <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-600">
-                    {t('agents:mainProject.nodeRuntimeRequired')}
-                  </span>
-                )}
-                {mainProjectManifest?.dockerfile?.exposedPorts?.[0] ? (
-                  <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-emerald-600">
-                    {t('agents:mainProject.dockerfileDetected', {
-                      port: mainProjectManifest.dockerfile.exposedPorts[0],
-                    })}
-                  </span>
-                ) : mainProjectRuntime === 'dockerfile' && !mainProjectManifestLoading ? (
-                  <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-600">
-                    {t('agents:mainProject.dockerfileRequired')}
-                  </span>
-                ) : null}
-              </div>
-              <p className="mt-2 text-[10px] text-muted-foreground">
-                {t('agents:mainProject.helper')}
-              </p>
-            </div>
-          )}
-
-          {/* Template */}
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">{t('agents:newCompanyDialog.template')}</label>
-            <select
-              value={selectedTemplateId ?? ''}
-              onChange={(e) => setSelectedTemplateId(e.target.value ? Number(e.target.value) : null)}
-              disabled={templatesLoading}
-              className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm disabled:opacity-50"
-            >
-              <option value="">{templatesLoading ? 'Loading templates…' : t('agents:newCompanyDialog.customTemplate')}</option>
-              {templates?.map((t) => (
-                <option key={t.id} value={t.id}>{t.name} — {t.description}</option>
-              ))}
-            </select>
-            {selectedTemplate ? (
-              <div className="mt-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs space-y-1">
-                <div className="font-medium text-primary">✓ Template locked: {selectedTemplate.name}</div>
-                {selectedTemplate.roles.map((r) => (
-                  <div key={r.role} className="font-mono text-[11px] text-muted-foreground">
-                    <span className="text-foreground">{r.role}</span>
-                    {' → '}
-                    {r.provider}/{r.model}
-                    {r.tier ? ` · tier=${r.tier}` : ''}
-                    {r.skills?.length ? ` · skills=${r.skills.length}` : ''}
-                  </div>
-                ))}
-                <div className="mt-1 text-[10px] italic text-muted-foreground">
-                  Master provider/model and every role's model are enforced by this template.
-                </div>
-              </div>
-            ) : templatesLoading ? (
-              <div className="mt-2 text-xs text-amber-600 italic">
-                Templates still loading — wait before clicking Create to avoid saving as "Custom".
-              </div>
-            ) : (
-              <div className="mt-2 text-xs text-amber-600 italic">
-                No template selected — subordinates will inherit the master's provider/model as a fallback.
-              </div>
-            )}
           </div>
 
           {/* Projects */}
@@ -457,69 +300,155 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
             </div>
           </div>
 
-          {/* Builder mode + container resources. */}
-          <BuilderModeSection
-            builderStack={builderStack}
-            setBuilderStack={setBuilderStack}
-            limitsPreset={limitsPreset}
-            setLimitsPreset={setLimitsPreset}
-            customMemory={customMemory}
-            setCustomMemory={setCustomMemory}
-            customCpus={customCpus}
-            setCustomCpus={setCustomCpus}
-            customPids={customPids}
-            setCustomPids={setCustomPids}
-            availableImages={availableImages}
-            customImage={customImage}
-            setCustomImage={setCustomImage}
-            customRunArgs={customRunArgs}
-            setCustomRunArgs={setCustomRunArgs}
-          />
+          {/* Advanced — template + builder/sandbox. Collapsed by default;
+              post-create knobs (roles, fallback, rules, services) live in
+              the session sidebar, not here. */}
+          <details className="rounded-md border">
+            <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/30">
+              {t('agents:newCompanyDialog.advanced')}
+            </summary>
+            <div className="space-y-4 border-t p-3">
+              {/* Template */}
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">{t('agents:newCompanyDialog.template')}</label>
+                <select
+                  value={selectedTemplateId ?? ''}
+                  onChange={(e) => setSelectedTemplateId(e.target.value ? Number(e.target.value) : null)}
+                  disabled={templatesLoading}
+                  className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm disabled:opacity-50"
+                >
+                  <option value="">{templatesLoading ? 'Loading templates…' : t('agents:newCompanyDialog.customTemplate')}</option>
+                  {templates?.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name} — {t.description}</option>
+                  ))}
+                </select>
+                {selectedTemplate ? (
+                  <div className="mt-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs space-y-1">
+                    <div className="font-medium text-primary">✓ Template locked: {selectedTemplate.name}</div>
+                    {selectedTemplate.roles.map((r) => (
+                      <div key={r.role} className="font-mono text-[11px] text-muted-foreground">
+                        <span className="text-foreground">{r.role}</span>
+                        {' → '}
+                        {r.provider}/{r.model}
+                        {r.tier ? ` · tier=${r.tier}` : ''}
+                        {r.skills?.length ? ` · skills=${r.skills.length}` : ''}
+                      </div>
+                    ))}
+                    <div className="mt-1 text-[10px] italic text-muted-foreground">
+                      Master provider/model and every role's model are enforced by this template.
+                    </div>
+                  </div>
+                ) : null}
+              </div>
 
-          {/* Master fallback provider+model */}
-          <FallbackPicker
-            fallbackProvider={masterFallbackProvider}
-            fallbackModel={masterFallbackModel}
-            providerOptions={providerOptions}
-            getModelsForProvider={getModelsForProvider}
-            onChange={(p, m) => { setMasterFallbackProvider(p); setMasterFallbackModel(m); }}
-          />
+              {/* Builder mode + container resources. */}
+              <BuilderModeSection
+                builderStack={builderStack}
+                setBuilderStack={setBuilderStack}
+                limitsPreset={limitsPreset}
+                setLimitsPreset={setLimitsPreset}
+                customMemory={customMemory}
+                setCustomMemory={setCustomMemory}
+                customCpus={customCpus}
+                setCustomCpus={setCustomCpus}
+                customPids={customPids}
+                setCustomPids={setCustomPids}
+                availableImages={availableImages}
+                customImage={customImage}
+                setCustomImage={setCustomImage}
+                customRunArgs={customRunArgs}
+                setCustomRunArgs={setCustomRunArgs}
+              />
 
-          <AllowedModelsEditor
-            allowedModels={allowedModels}
-            setAllowedModels={setAllowedModels}
-            masterProvider={masterProvider}
-            masterModel={masterModel}
-            providerOptions={providerOptions}
-            getModelsForProvider={getModelsForProvider}
-            getDefaultModel={getDefaultModel}
-          />
-
-          <label
-            className={`flex items-start gap-2.5 rounded-md border p-3 text-xs select-none cursor-pointer transition-colors ${
-              masterBroadcastSubscribe
-                ? 'border-primary/30 bg-primary/[0.03]'
-                : 'border-border hover:bg-muted/30'
-            }`}
-          >
-            <input
-              type="checkbox"
-              checked={masterBroadcastSubscribe}
-              onChange={(e) => setMasterBroadcastSubscribe(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 accent-primary"
-            />
-            <span className="flex-1 leading-snug">
-              <span className="font-medium text-foreground">
-                {t('agents:company.masterObserves.title')}
-              </span>
-              <span className="block text-muted-foreground mt-0.5">
-                {t('agents:company.masterObserves.description')}
-              </span>
-            </span>
-          </label>
-
-          {/* Operational rules — session-wide policy injected into every agent */}
-          <OperationalRulesField value={operationalRules} onChange={setOperationalRules} />
+              {needsExternalMainProject && (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+                  <label className="text-xs font-medium text-muted-foreground">
+                    {t('agents:mainProject.label')}
+                  </label>
+                  <select
+                    value={mainProjectId ?? ''}
+                    onChange={(e) => setMainProjectId(e.target.value ? Number(e.target.value) : null)}
+                    className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm"
+                  >
+                    {selectedProjectIds.map((id) => {
+                      const project = projects?.find((p) => p.id === id);
+                      return (
+                        <option key={id} value={id}>
+                          {project?.name ?? `project-${id}`} — {project?.root_path ?? ''}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <div className="mt-2 grid grid-cols-2 gap-1">
+                    <button
+                      type="button"
+                      className={
+                        'rounded border px-2 py-1 text-[10px] ' +
+                        (mainProjectRuntime === 'node'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-background hover:bg-accent')
+                      }
+                      onClick={() => setMainProjectRuntime('node')}
+                    >
+                      {t('agents:mainProject.nodeRuntime')}
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        'rounded border px-2 py-1 text-[10px] ' +
+                        (mainProjectRuntime === 'dockerfile'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-background hover:bg-accent')
+                      }
+                      onClick={() => setMainProjectRuntime('dockerfile')}
+                    >
+                      {t('agents:mainProject.dockerfileRuntime')}
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1 text-[10px]">
+                    <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">
+                      {t('agents:mainProject.preserved')}
+                    </span>
+                    {mainProjectManifestLoading && (
+                      <span className="rounded bg-muted px-1.5 py-0.5">
+                        {t('agents:mainProject.checking')}
+                      </span>
+                    )}
+                    {mainProjectManifest?.manifest && (
+                      <span className="rounded bg-muted px-1.5 py-0.5">
+                        {mainProjectManifest.manifest.kind}
+                        {mainProjectManifest.manifest.packageManager
+                          ? ` (${mainProjectManifest.manifest.packageManager})`
+                          : ''}
+                        {mainProjectManifest.manifest.devScriptName
+                          ? ` · ${mainProjectManifest.manifest.devScriptName}`
+                          : ''}
+                      </span>
+                    )}
+                    {mainProjectRuntime === 'node' && !mainProjectNodeOk && !mainProjectManifestLoading && (
+                      <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-600">
+                        {t('agents:mainProject.nodeRuntimeRequired')}
+                      </span>
+                    )}
+                    {mainProjectManifest?.dockerfile?.exposedPorts?.[0] ? (
+                      <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-emerald-600">
+                        {t('agents:mainProject.dockerfileDetected', {
+                          port: mainProjectManifest.dockerfile.exposedPorts[0],
+                        })}
+                      </span>
+                    ) : mainProjectRuntime === 'dockerfile' && !mainProjectManifestLoading ? (
+                      <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-600">
+                        {t('agents:mainProject.dockerfileRequired')}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-2 text-[10px] text-muted-foreground">
+                    {t('agents:mainProject.helper')}
+                  </p>
+                </div>
+              )}
+            </div>
+          </details>
         </div>
 
         {/* Footer */}

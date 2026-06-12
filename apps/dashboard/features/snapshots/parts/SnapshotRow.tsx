@@ -42,6 +42,9 @@ export function SnapshotRow({ snapshot: s, selected, onSelect }: SnapshotRowProp
       </div>
       <div className="flex items-center gap-1 text-[10px] text-muted-foreground min-w-0">
         <span className="shrink-0">{formatRelativeTime(s.created_at)}</span>
+        {s.source && s.source !== 'manual' && (
+          <span className="shrink-0 px-1 rounded bg-muted text-[9px]">{s.source}</span>
+        )}
         {tags.length > 0 && (
           <>
             <span className="opacity-40">·</span>

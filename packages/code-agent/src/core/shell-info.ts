@@ -30,10 +30,12 @@ export function describeShell(platform: string = process.platform): string {
       'NOT bash. Use Windows commands: `dir` (not ls), `type` (not cat), ' +
       '`findstr` (not grep), `where` (not which). Unix pipes like `| head` / ' +
       '`| tail` DO NOT EXIST in cmd — the tool already truncates output, so omit ' +
-      'them. `&&` chaining and `cmd1 & cmd2` work. For anything beyond a simple ' +
-      'command (loops, redirects, env logic), call PowerShell explicitly: ' +
-      '`powershell -NoProfile -Command "..."`. Feed multi-line scripts via the ' +
-      '`stdin` param instead of inline quoting.'
+      'them. `&&` chaining and `cmd1 & cmd2` work. Env vars expand as `%VAR%` in ' +
+      'cmd — `$env:VAR` only works inside PowerShell, `$VAR` never. Discard ' +
+      'streams with `2>nul` in cmd (`2>$null` is PowerShell-only). For anything ' +
+      'beyond a simple command (loops, redirects, env logic), call PowerShell ' +
+      'explicitly: `powershell -NoProfile -Command "..."`. Feed multi-line ' +
+      'scripts via the `stdin` param instead of inline quoting.'
     );
   }
   const name = platform === 'darwin' ? 'macOS' : platform === 'linux' ? 'Linux' : platform;

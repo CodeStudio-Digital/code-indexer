@@ -31,6 +31,7 @@ async function main(argv: string[]): Promise<void> {
     case 'build': {
       const r = await buildPlugin(arg ?? '.');
       console.log(`Built ${r.tools} tool(s) -> ${r.bundle}; wrote ${r.appJson}`);
+      for (const f of r.uiFiles) console.log(`Inlined UI -> ${f}`);
       return;
     }
     case 'publish': {

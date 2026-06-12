@@ -16,6 +16,7 @@
 import type { Database as DB } from 'better-sqlite3';
 import * as plans from './plans.js';
 import * as tasks from './tasks.js';
+import * as goals from './goals.js';
 
 export interface SessionMemoryRow {
   id: number;
@@ -122,6 +123,33 @@ export function memoryForInjection(db: DB, sessionId: number, limit = 3): Sessio
     `SELECT * FROM coder_session_memory WHERE session_id = ?
      ORDER BY pinned DESC, updated_at DESC, id DESC LIMIT ?`,
   ).all(sessionId, limit) as SessionMemoryRow[];
+}
+
+/**
+ * Note slice for the Session State Block — pinned-first/most-recent like
+ * {@link memoryForInjection}, but AUTO-captured notes (`kind LIKE 'auto:%'`,
+ * written by the runner's auto-capture hooks) are capped at `autoLimit`
+ * slots so they can never evict notes the agent saved deliberately.
+ */
+export function memoryForState(
+  db: DB, sessionId: number, opts: { limit: number; autoLimit: number },
+): SessionMemoryRow[] {
+  const rows = db.prepare(
+    `SELECT * FROM coder_session_memory WHERE session_id = ?
+     ORDER BY pinned DESC, updated_at DESC, id DESC LIMIT ?`,
+  ).all(sessionId, Math.max(opts.limit * 3, 12)) as SessionMemoryRow[];
+  const out: SessionMemoryRow[] = [];
+  let autos = 0;
+  for (const r of rows) {
+    if (out.length >= opts.limit) break;
+    const isAuto = r.kind.startsWith('auto:');
+    if (isAuto) {
+      if (autos >= opts.autoLimit) continue;
+      autos++;
+    }
+    out.push(r);
+  }
+  return out;
 }
 
 // ─── Investigations ──────────────────────────────────────────────
@@ -368,6 +396,56 @@ export function getDriveInjectionPayload(db: DB, sessionId: number): DriveInject
       title: m.title,
       body: m.body,
     })),
+    investigationCount: countInvestigations(db, sessionId),
+  };
+}
+
+/** Structural mirror of `core/runner/assembly/session-state.ts:SessionStateData`. */
+export interface SessionStateData {
+  goal: { text: string; status: string } | null;
+  activePlan: { text: string; status: string } | null;
+  todos: Array<{ status: string; label: string }>;
+  notes: Array<{ id: string; title: string; body: string; kind: string; pinned: boolean }>;
+  filesChanged: string[];
+  investigationCount: number;
+}
+
+/**
+ * Everything the Session State Block renders, in one read: goal + active plan
+ * + todos (from `coder_sessions.todos_json`) + notes (auto-capped via
+ * {@link memoryForState}) + changed files + investigation count. All derived
+ * from PERSISTED state — the block must never depend on LLM summarization.
+ */
+export function getSessionStateData(db: DB, sessionId: number): SessionStateData {
+  const latestPlan = plans.list(db, sessionId)[0] ?? null;
+  const goal = goals.get(db, sessionId);
+
+  let todos: Array<{ status: string; label: string }> = [];
+  try {
+    const row = db.prepare('SELECT todos_json FROM coder_sessions WHERE id = ?')
+      .get(sessionId) as { todos_json: string | null } | undefined;
+    if (row?.todos_json) {
+      const parsed = JSON.parse(row.todos_json) as Array<{ content?: string; status?: string }>;
+      if (Array.isArray(parsed)) {
+        todos = parsed
+          .filter((t) => t && typeof t.content === 'string')
+          .map((t) => ({ status: t.status ?? 'pending', label: t.content as string }));
+      }
+    }
+  } catch { /* malformed todos_json → no todos section */ }
+
+  return {
+    goal: goal ? { text: goal.text, status: goal.status } : null,
+    activePlan: latestPlan ? { text: latestPlan.plan_text, status: latestPlan.status } : null,
+    todos,
+    notes: memoryForState(db, sessionId, { limit: 6, autoLimit: 2 }).map((m) => ({
+      id: String(m.id),
+      title: m.title,
+      body: m.body,
+      kind: m.kind,
+      pinned: m.pinned === 1,
+    })),
+    filesChanged: getFileMap(db, sessionId).changed,
     investigationCount: countInvestigations(db, sessionId),
   };
 }

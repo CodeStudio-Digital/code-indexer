@@ -14,7 +14,8 @@ interface KvNamespace {
 export const kvTools = [
   contributeTool({
     name: 'cf_kv_list',
-    description: 'List KV namespaces',
+    description:
+      'List Workers KV namespaces (title + id). The other cf_kv_* tools take the id as `namespaceId`.',
     riskLevel: 'read',
     mutates: false,
     parameters: { type: 'object', properties: {} },
@@ -80,7 +81,9 @@ export const kvTools = [
   }),
   contributeTool({
     name: 'cf_kv_keys',
-    description: 'List keys in a KV namespace',
+    description:
+      'List keys in a KV namespace, optionally filtered by prefix. ' +
+      "Args example: { namespaceId: 'abc123', prefix: 'user:', limit: 100 }.",
     riskLevel: 'read',
     mutates: false,
     parameters: {
@@ -102,7 +105,9 @@ export const kvTools = [
   }),
   contributeTool({
     name: 'cf_kv_get',
-    description: 'Read a text value from a KV namespace',
+    description:
+      "Read a key's text value from a KV namespace. Args example: " +
+      "{ namespaceId: 'abc123', key: 'user:42' }. Use cf_kv_metadata for TTL/metadata.",
     riskLevel: 'read',
     mutates: false,
     parameters: {
@@ -136,7 +141,9 @@ export const kvTools = [
   }),
   contributeTool({
     name: 'cf_kv_put',
-    description: 'Write a text value to a KV key',
+    description:
+      'Write a text value to a KV key (overwrites silently — read first if unsure). Args example: ' +
+      "{ namespaceId: 'abc123', key: 'user:42', value: '{...}', expiration_ttl: 3600 }.",
     riskLevel: 'write',
     mutates: true,
     parameters: {

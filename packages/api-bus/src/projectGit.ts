@@ -50,6 +50,32 @@ export interface GitDiffResult {
   patch: string;
 }
 
+/** A single file touched by a commit (from `git show --numstat --name-status`). */
+export interface GitCommitFileChange {
+  path: string;
+  /** Previous path for renames/copies; undefined otherwise. */
+  oldPath?: string;
+  state: 'modified' | 'added' | 'deleted' | 'renamed' | 'copied';
+  /** Lines added/removed; 0 for binary files (git emits `-`). */
+  additions: number;
+  deletions: number;
+}
+
+/** Full detail of one commit — powers the IDE's commit preview panel. */
+export interface GitCommitDetail {
+  sha: string;
+  shortSha: string;
+  author: string;
+  authorEmail: string;
+  date: string;
+  subject: string;
+  /** Commit message body (everything after the subject line). */
+  body: string;
+  /** Parent SHAs (2+ for merge commits, 0 for the root commit). */
+  parents: string[];
+  files: GitCommitFileChange[];
+}
+
 export interface GitBranch {
   /** Short name (e.g. `main`, `origin/feature/x`). */
   name: string;
@@ -84,6 +110,18 @@ export interface GitStashEntry {
   message: string;
   /** ISO-strict date when the stash was created. */
   date: string;
+}
+
+/** Full detail of a stash entry — powers the stash preview surface. */
+export interface GitStashDetail {
+  /** Stash ref (e.g. `stash@{0}`). */
+  ref: string;
+  shortSha: string;
+  /** Branch the stash was created on, when parseable. */
+  branch: string | null;
+  message: string;
+  date: string;
+  files: GitCommitFileChange[];
 }
 
 /**
@@ -135,6 +173,26 @@ export interface ProjectGitApi {
     ctx: ApiContext,
   ): Promise<GitCommit[]>;
 
+  /**
+   * Full detail of a single commit — metadata + message body + the list
+   * of files it touched (with status + numstat). Powers the commit
+   * preview panel in the Git log surface.
+   */
+  commitDetail(
+    input: { projectId: number; sha: string },
+    ctx: ApiContext,
+  ): Promise<GitCommitDetail>;
+
+  /**
+   * Unified diff of one file as introduced by a commit
+   * (`git show <sha> -- <path>`). Used when the user clicks a changed
+   * file in the commit preview — opens as a normal diff tab.
+   */
+  commitFileDiff(
+    input: { projectId: number; sha: string; path: string },
+    ctx: ApiContext,
+  ): Promise<GitDiffResult>;
+
   stage(input: { projectId: number; paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
   unstage(input: { projectId: number; paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
   discard(input: { projectId: number; paths: string[] }, ctx: ApiContext): Promise<{ ok: true }>;
@@ -169,6 +227,12 @@ export interface ProjectGitApi {
 
   branchDelete(
     input: { projectId: number; name: string; force?: boolean },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
+
+  /** Rename a local branch (`git branch -m [--force] <old> <new>`). */
+  branchRename(
+    input: { projectId: number; oldName: string; newName: string; force?: boolean },
     ctx: ApiContext,
   ): Promise<{ ok: true }>;
 
@@ -264,6 +328,19 @@ export interface ProjectGitApi {
 
   /** Unified diff of `ref` against its parent — for the "view" action. */
   stashShow(input: { projectId: number; ref: string }, ctx: ApiContext): Promise<GitDiffResult>;
+
+  /**
+   * Metadata + changed-file list for a stash entry. Powers the stash
+   * preview surface (file list → click to open each file's diff),
+   * mirroring `commitDetail` for commits.
+   */
+  stashDetail(input: { projectId: number; ref: string }, ctx: ApiContext): Promise<GitStashDetail>;
+
+  /** Unified diff of one file within a stash (`git stash show -p <ref> -- <path>`). */
+  stashFileDiff(
+    input: { projectId: number; ref: string; path: string },
+    ctx: ApiContext,
+  ): Promise<GitDiffResult>;
 
   // ── AI-assisted git ────────────────────────────────────────
   /**

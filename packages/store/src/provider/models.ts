@@ -37,13 +37,14 @@ export function replaceFromSource(
   const tx = db.transaction(() => {
     const existingRows = db
       .prepare(
-        'SELECT model_id, mode, enabled, default_reasoning_level FROM provider_models WHERE provider_id = ? AND source = ?'
+        'SELECT model_id, mode, enabled, default_reasoning_level, max_tools FROM provider_models WHERE provider_id = ? AND source = ?'
       )
       .all(providerId, source) as {
         model_id: string;
         mode: string;
         enabled: number;
         default_reasoning_level: string | null;
+        max_tools: number | null;
       }[];
     const existingEnabled = new Map<string, boolean>();
     // Track whether each row existed before (regardless of whether the stored
@@ -51,10 +52,14 @@ export function replaceFromSource(
     // null, but row existed) from "first time we see the model" (= no entry
     // in this map, fall back to seed default).
     const existingReasoning = new Map<string, string | null>();
+    // max_tools is admin-set and live discovery never supplies it — without
+    // this preservation every refresh would wipe the admin's cap.
+    const existingMaxTools = new Map<string, number | null>();
     for (const row of existingRows) {
       const key = `${row.model_id}|${row.mode}`;
       existingEnabled.set(key, !!row.enabled);
       existingReasoning.set(key, row.default_reasoning_level);
+      existingMaxTools.set(key, row.max_tools);
     }
 
     db
@@ -67,8 +72,9 @@ export function replaceFromSource(
           can_reason, supports_attachments, enabled, source, updated_at,
           display_name, description, default_reasoning_level,
           supported_reasoning_levels, apply_patch_tool_type, available_in_plans,
-          minimal_client_version, visibility, supported_in_api, input_modalities)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          minimal_client_version, visibility, supported_in_api, input_modalities,
+          max_tools)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(provider_id, model_id, mode) DO UPDATE SET
          name = excluded.name,
          context_window = excluded.context_window,
@@ -87,7 +93,8 @@ export function replaceFromSource(
          minimal_client_version = excluded.minimal_client_version,
          visibility = excluded.visibility,
          supported_in_api = excluded.supported_in_api,
-         input_modalities = excluded.input_modalities`
+         input_modalities = excluded.input_modalities,
+         max_tools = excluded.max_tools`
     );
     for (const m of models) {
       const mode = m.mode ?? '';
@@ -99,6 +106,9 @@ export function replaceFromSource(
       const finalReasoningLevel = existingReasoning.has(key)
         ? existingReasoning.get(key) ?? null
         : m.default_reasoning_level ?? null;
+      const finalMaxTools = existingMaxTools.has(key)
+        ? existingMaxTools.get(key) ?? null
+        : m.max_tools ?? null;
       insert.run(
         providerId,
         m.model_id,
@@ -122,7 +132,8 @@ export function replaceFromSource(
         m.supported_in_api === null || m.supported_in_api === undefined
           ? null
           : m.supported_in_api ? 1 : 0,
-        m.input_modalities ? JSON.stringify(m.input_modalities) : null
+        m.input_modalities ? JSON.stringify(m.input_modalities) : null,
+        finalMaxTools
       );
     }
   });
@@ -139,6 +150,7 @@ export function update(
     name?: string;
     default_reasoning_level?: string | null;
     context_window?: number | null;
+    max_tools?: number | null;
   },
 ): void {
   const sets: string[] = [];
@@ -152,6 +164,10 @@ export function update(
   if (patch.context_window !== undefined) {
     sets.push('context_window = ?');
     args.push(patch.context_window);
+  }
+  if (patch.max_tools !== undefined) {
+    sets.push('max_tools = ?');
+    args.push(patch.max_tools);
   }
   if (!sets.length) return;
   sets.push("updated_at = datetime('now')");

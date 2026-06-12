@@ -80,7 +80,9 @@ export const r2Tools = [
   }),
   contributeTool({
     name: 'cf_r2_objects',
-    description: 'List objects in an R2 bucket',
+    description:
+      'List objects in an R2 bucket, optionally under a prefix (paginate with the returned ' +
+      "cursor). Args example: { bucket: 'assets', prefix: 'img/', delimiter: '/' }.",
     riskLevel: 'read',
     mutates: false,
     parameters: {
@@ -108,7 +110,9 @@ export const r2Tools = [
   }),
   contributeTool({
     name: 'cf_r2_object_get',
-    description: 'Read an R2 object as text',
+    description:
+      'Read an R2 object as text (binary objects come back garbled — check the key/extension ' +
+      "first). Args example: { bucket: 'assets', key: 'config/app.json' }.",
     riskLevel: 'read',
     mutates: false,
     parameters: { type: 'object', properties: { bucket: { type: 'string' }, key: { type: 'string' } }, required: ['bucket', 'key'] },
@@ -121,7 +125,9 @@ export const r2Tools = [
   }),
   contributeTool({
     name: 'cf_r2_object_put',
-    description: 'Write an R2 text object',
+    description:
+      'Write a text object to R2 (overwrites silently). Args example: ' +
+      "{ bucket: 'assets', key: 'config/app.json', value: '{...}', contentType: 'application/json' }.",
     riskLevel: 'write',
     mutates: true,
     parameters: {

@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
+import { Markdown } from '../../chat/messages/Markdown.js';
 import { fetchVersionDocs, type DesignSystemSessionDetail } from '../design-system-api.js';
 
 export function DocsPanel({ detail }: { detail: DesignSystemSessionDetail }) {
@@ -59,8 +60,8 @@ export function DocsPanel({ detail }: { detail: DesignSystemSessionDetail }) {
     );
   }
   return (
-    <pre className="m-3 max-h-full overflow-auto whitespace-pre-wrap break-words rounded border bg-muted/20 p-2 text-xs">
-      {md}
-    </pre>
+    <div className="p-3">
+      <Markdown text={md} />
+    </div>
   );
 }

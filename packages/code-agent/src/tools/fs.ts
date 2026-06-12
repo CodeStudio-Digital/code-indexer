@@ -7,6 +7,7 @@ import {
   type IFilesystemPort,
 } from '@mcp/code-agent/ports/filesystem-port.js';
 import { emitRecentFileTouched } from '@mcp/code-agent/tools/global-recent-files.js';
+import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 import { managePathTool } from '@mcp/code-agent/tools/manage-path.js';
 
 /**
@@ -36,6 +37,26 @@ function resolveSafe(filePath: string, ctx: ToolContext): string | null {
   return resolveSafePath(filePath, ctx.cwd);
 }
 
+/**
+ * Cross-project misfire guard. In multi-project (company) sessions models
+ * sometimes call the NATIVE fs tools with mcp__read_file-style args
+ * (`project_name` + path) — observed in telemetry. Native tools always
+ * resolve against the CURRENT session root; silently ignoring a different
+ * `project_name` would read/write the WRONG project's file at the same
+ * relative path. Returns an error result to surface instead, or null when
+ * the call is fine.
+ */
+function crossProjectGuard(args: Record<string, unknown>, ctx: ToolContext): ToolResult | null {
+  const requested = typeof args.project_name === 'string' ? args.project_name.trim() : '';
+  if (!requested || requested === ctx.projectName) return null;
+  return err(
+    `This native tool operates on the current session project ('${ctx.projectName}') and ignores ` +
+      `project_name — '${requested}' would silently resolve against the wrong root. ` +
+      `To access another indexed project, use its prefixed MCP tools (e.g. mcp__<project>__read_file) ` +
+      `from your toolset, or expand_toolset/find_tools to locate them.`,
+  );
+}
+
 const writeFile: CoderTool = {
   name: 'write_file',
   description: maybeTerse(WRITE_FILE_DESC),
@@ -59,6 +80,8 @@ const writeFile: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    const guard = crossProjectGuard(args, ctx);
+    if (guard) return guard;
     const path = String(args.path ?? '');
     const content = String(args.content ?? '');
     const abs = resolveSafe(path, ctx);
@@ -87,6 +110,8 @@ const createFile: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    const guard = crossProjectGuard(args, ctx);
+    if (guard) return guard;
     const path = String(args.path ?? '');
     const content = String(args.content ?? '');
     const abs = resolveSafe(path, ctx);
@@ -299,6 +324,8 @@ const editFile: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    const guard = crossProjectGuard(args, ctx);
+    if (guard) return guard;
     const path = String(args.path ?? '');
     const oldStr = String(args.old_string ?? '');
     const newStr = String(args.new_string ?? '');
@@ -441,6 +468,8 @@ const readFile: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    const guard = crossProjectGuard(args, ctx);
+    if (guard) return guard;
     const path = String(args.path ?? '');
     if (!path) return err('path is required and cannot be empty');
     const abs = resolveSafe(path, ctx);
@@ -541,7 +570,7 @@ const readFile: CoderTool = {
         : '';
     const richHeader = `${path} | ${total} lines | ${ext}\n[lines ${startLine}-${endLine}]${tag}\n`;
     const footer = remaining > 0
-      ? `\n... [${remaining} more lines — pass force=true, symbol, around_line, or search_term]`
+      ? `\n... ${truncationMarker(`${remaining} more lines`, 'pass force=true, symbol, around_line, or search_term')}`
       : '';
     return ok(richHeader + headerNote + numbered + footer);
   },
@@ -560,6 +589,8 @@ const listDirectory: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    const guard = crossProjectGuard(args, ctx);
+    if (guard) return guard;
     const path = String(args.path ?? '.');
     const abs = resolveSafe(path, ctx);
     if (!abs) return err(`Path '${path}' is outside project root`);

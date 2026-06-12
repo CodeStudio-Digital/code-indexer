@@ -104,6 +104,43 @@ export interface CoderTool {
   timeoutMs?: number;
 }
 
+/** One nested tool invocation outcome, reported by code_exec's proxy. */
+export interface NestedToolCallRecord {
+  /** tool_use id of the parent code_exec block. */
+  parentToolUseId: string;
+  /** 1-based completion-order sequence within the parent call. */
+  seq: number;
+  name: string;
+  args: Record<string, unknown>;
+  isError: boolean;
+  durationMs: number;
+  resultChars: number;
+  /** First ~2k chars of the result/error — telemetry preview, not transcript. */
+  resultPreview: string;
+  /** Guard refusal tag when the observer blocked the call (dedup/failure-streak). */
+  refusalKind?: string;
+}
+
+/**
+ * Loop-guard + telemetry hooks for tool calls made INSIDE another tool
+ * (code_exec scripts). Implemented over the run's own guard state by
+ * runner/guards/nested-observer.ts; consumed by code-exec.ts around each
+ * nested `registry.invoke`. Both methods are non-throwing by contract.
+ */
+export interface NestedToolObserver {
+  /**
+   * Consult the guards BEFORE a nested call. Non-null = refuse: the caller
+   * surfaces `refusalText` as a (catchable) JS exception inside the script.
+   */
+  beforeNestedCall(
+    name: string,
+    args: Record<string, unknown>,
+    opts?: { repeatable?: boolean },
+  ): { refusalText: string; kind: 'dedup' | 'failure-streak' } | null;
+  /** Feed guard state + telemetry AFTER a nested call settles. Never throws. */
+  afterNestedCall(e: Omit<NestedToolCallRecord, 'parentToolUseId' | 'seq'>): void;
+}
+
 export interface ToolContext {
   /** Project root path. All filesystem operations must stay inside this. */
   cwd: string;
@@ -146,6 +183,19 @@ export interface ToolContext {
    * (subagent runs). Set by runSubagent to the spawning tool_use id.
    */
   approvalAnchorId?: string;
+  /**
+   * tool_use id of the PARENT call when this context is a nested one
+   * (code_exec proxy). Set per-call by the dispatch spread; links nested
+   * telemetry rows back to the visible block.
+   */
+  parentToolUseId?: string;
+  /**
+   * Loop-guard + telemetry observer for nested tool calls (code_exec).
+   * Built per parent call by the Executing node over the run's own guard
+   * state; absent in tests/subagent paths and when
+   * `CODER_NESTED_GUARDS_DISABLE=1`. See runner/guards/nested-observer.ts.
+   */
+  nestedToolObserver?: NestedToolObserver;
   /** Optional abort signal for long-running operations. */
   signal?: AbortSignal;
   /**
@@ -249,6 +299,30 @@ export interface ToolContext {
     listMemory(opts?: { kind?: string }): Array<{ kind: string; title: string; body: string; pinned: number; updated_at: string }>;
     recallInvestigations(query: string, limit?: number): Promise<Array<{ topic: string; summary: string; source_label: string | null; agent_type: string | null; created_at: string }>>;
   };
+  /**
+   * Durable PROJECT memory ports (cross-session, snapshots table). Wired by
+   * `runCoder` from the host's `RunCoderOptions.projectMemory` callback when
+   * the project has memory enabled. `save` rides the same dedup/merge as the
+   * distillers; `recall` is the semantic full-content fetch behind the
+   * `recall_memory` tool. Undefined → tools answer with a clear message
+   * instead of throwing (company sessions, subagents, tests).
+   */
+  projectMemory?: {
+    save(entry: {
+      title: string;
+      content: string;
+      category: string;
+    }): Promise<{ created: number; merged: number; skipped: number } | null>;
+    recall(query: string, limit?: number): Promise<Array<{
+      id: string;
+      title: string;
+      content: string;
+      category?: string;
+      source?: string;
+      importance?: number;
+      staleNote?: string;
+    }>>;
+  };
   /** Company orchestrator context — present when this runner is part of a company session. */
   companyContext?: import('@mcp/company/types.js').CompanyContext;
   /**
@@ -257,6 +331,12 @@ export interface ToolContext {
    * agents key off `companyContext.agentRunId/companySessionId` instead.
    */
   sessionId?: number;
+  /**
+   * The session's project id (coder_sessions.project_id). Lets project-aware
+   * tools (`rag_search_docs` linked-collection scoping, the `<indexed-docs>`
+   * hint) resolve project-scoped state without a DB round-trip per call.
+   */
+  projectId?: number;
   /**
    * Optional execution ports — when provided, filesystem/shell tools
    * route through these instead of talking to `node:fs` / `child_process`

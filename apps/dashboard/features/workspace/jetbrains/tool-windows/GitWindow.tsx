@@ -43,6 +43,7 @@ import { GitPromptView } from './git/GitPromptView.js';
 import { StashView } from './git/StashView.js';
 import { CommitBox } from './git/CommitBox.js';
 import { CollapsibleSection } from './git/CollapsibleSection.js';
+import { fileKind } from './git/file-kind.js';
 
 type GitTab = 'changes' | 'branches' | 'history' | 'stash' | 'ai';
 
@@ -65,19 +66,6 @@ interface GitStatus {
 interface GitWindowProps {
   projectId: number;
   onClose?: () => void;
-}
-
-function fileKind(state: string): { letter: string; color: string } {
-  switch (state) {
-    case 'modified': return { letter: 'M', color: 'text-amber-500' };
-    case 'added':    return { letter: 'A', color: 'text-emerald-500' };
-    case 'deleted':  return { letter: 'D', color: 'text-destructive' };
-    case 'renamed':  return { letter: 'R', color: 'text-cyan-400' };
-    case 'copied':   return { letter: 'C', color: 'text-cyan-400' };
-    case 'untracked':return { letter: '?', color: 'text-muted-foreground' };
-    case 'unmerged': return { letter: '!', color: 'text-destructive' };
-    default:         return { letter: '·', color: 'text-muted-foreground' };
-  }
 }
 
 export function GitWindow({ projectId, onClose }: GitWindowProps) {

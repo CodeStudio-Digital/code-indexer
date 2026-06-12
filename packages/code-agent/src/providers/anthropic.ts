@@ -342,13 +342,18 @@ export class AnthropicChatProvider implements ChatProvider {
       // Final usage from the completed message is more complete on the SDK helper.
       const final = await finalMessage();
       if (final.usage) {
+        const inputT = final.usage.input_tokens ?? 0;
+        const cacheW = final.usage.cache_creation_input_tokens ?? 0;
+        const cacheR = final.usage.cache_read_input_tokens ?? 0;
         yield {
           type: 'usage',
           usage: {
-            input_tokens: final.usage.input_tokens ?? 0,
+            input_tokens: inputT,
             output_tokens: final.usage.output_tokens ?? 0,
-            cache_creation_input_tokens: final.usage.cache_creation_input_tokens ?? 0,
-            cache_read_input_tokens: final.usage.cache_read_input_tokens ?? 0,
+            cache_creation_input_tokens: cacheW,
+            cache_read_input_tokens: cacheR,
+            // Anthropic splits the prompt: input_tokens EXCLUDES cached slices.
+            prompt_tokens_total: inputT + cacheW + cacheR,
           },
         };
       }
@@ -358,7 +363,11 @@ export class AnthropicChatProvider implements ChatProvider {
     if (sawUsage) {
       yield {
         type: 'usage',
-        usage,
+        usage: {
+          ...usage,
+          prompt_tokens_total:
+            usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens,
+        },
       };
     }
   }

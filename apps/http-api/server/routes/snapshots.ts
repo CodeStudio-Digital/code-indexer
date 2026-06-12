@@ -46,11 +46,31 @@ export function mountSnapshotsRoutes(app: Hono, deps: ServerDeps): void {
         category?: SnapshotCategory;
         content?: string;
         tags?: string[];
+        importance?: number;
       }>();
       return c.json(await h.update({ id: parseIdParam(c), ...body }, createContext()));
     } catch (err) {
       return mapApiError(c, err);
     }
+  });
+
+  // Memory health — feeds the project Memory tab's diagnostics card: when
+  // the project last distilled (and with what result), plus memory totals
+  // by category and provenance. Read-only over memory_distill_log (mig 136).
+  app.get('/api/projects/:id/memory/health', (c) => {
+    const projectId = parseIdParam(c);
+    const project = deps.db.getProject(projectId);
+    if (!project) return c.json({ error: 'project not found' }, 404);
+    return c.json({
+      memory_enabled: deps.db.getProjectMemoryEnabled(projectId),
+      last: deps.db.latestMemoryDistill(projectId),
+      recent: deps.db.recentMemoryDistills(projectId, 10),
+      totals: {
+        total: deps.db.countSnapshots(projectId),
+        byCategory: deps.db.countMemoryByCategory(projectId),
+        bySource: deps.db.countMemoryBySource(projectId),
+      },
+    });
   });
 
   app.delete('/api/snapshots/:id', async (c) => {

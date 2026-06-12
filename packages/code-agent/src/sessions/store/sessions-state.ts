@@ -111,6 +111,25 @@ export function setWorktree(db: DB, id: number, worktreePath: string | null): vo
   db.prepare("UPDATE coder_sessions SET worktree_path = ?, updated_at = datetime('now') WHERE id = ?").run(worktreePath, id);
 }
 
+/**
+ * High-water mark of memory distillation (migration 136): the last message id
+ * already covered by a distillation pass. The compaction harvest advances it
+ * (to the boundary); the idle sweeper distills only messages PAST it and
+ * advances it even on error (anti poison-pill). NOTE: never moves backwards —
+ * concurrent passes can only widen coverage.
+ */
+export function setMemoryDistilledBoundary(db: DB, id: number, messageId: number): void {
+  db.prepare(
+    'UPDATE coder_sessions SET memory_distilled_message_id = MAX(memory_distilled_message_id, ?) WHERE id = ?',
+  ).run(messageId, id);
+}
+
+export function getMemoryDistilledBoundary(db: DB, id: number): number {
+  const row = db.prepare('SELECT memory_distilled_message_id AS m FROM coder_sessions WHERE id = ?')
+    .get(id) as { m: number | null } | undefined;
+  return row?.m ?? 0;
+}
+
 /** Get existing cloudcode_session_id or generate + persist a new one. */
 export function getOrCreateCloudCodeSessionId(db: DB, id: number): string {
   const row = db.prepare('SELECT cloudcode_session_id FROM coder_sessions WHERE id = ?').get(id) as { cloudcode_session_id: string | null } | undefined;

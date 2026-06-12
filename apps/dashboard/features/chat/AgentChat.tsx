@@ -20,6 +20,7 @@ import { TooltipProvider } from '../../components/ui/tooltip.js';
 import { ChatHeader } from './ChatHeader.js';
 import { ChatRightRail } from './right-panel/ChatRightRail.js';
 import { RightPanelHost } from './right-panel/RightPanelHost.js';
+import { usePluginPanels } from './right-panel/usePluginPanels.js';
 import type { RightPanelId } from './right-panel/types.js';
 import { Composer, type ComposerHandle } from './composer/Composer.js';
 import { providerSupportsThinking } from './composer/provider-caps.js';
@@ -137,15 +138,9 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
   useEffect(() => {
     localStorage.setItem('chatRightPanelId', activeRightPanelId ?? 'null');
   }, [activeRightPanelId]);
+  // Plugin tool windows for the right rail (side: 'right'), with dead-id guard.
+  const pluginPanelWindows = usePluginPanels(projectId, activeRightPanelId, setActiveRightPanelId);
   const [thinking, setThinking] = useState(false);
-  /**
-   * Per-session deepThink (simulated). Orthogonal to `thinking` — when on,
-   * the runner asks an auxiliary cheap model (Haiku) for a brief pre-thought
-   * before each main-model turn. Propagated via POST /messages
-   * `{deep_think: true}` → runCoder → runner.opts.deepThink. Volatile by
-   * session (mirrors how `thinking` works today — not persisted in DB).
-   */
-  const [deepThink, setDeepThink] = useState(false);
   /**
    * Per-session "Describe images" flag. FORCES the vision fallback (image →
    * text description via the configured vision model) even when the active
@@ -416,8 +411,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
             console.warn('[auto-title] generate-title failed:', err);
           });
       }
-    }, { attachments: atts, agent, maxTurns, thinking, deepThink, describeImages, selectedSkillIds });
-  }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, deepThink, describeImages, selectionPrefixSessionId]);
+    }, { attachments: atts, agent, maxTurns, thinking, describeImages, selectedSkillIds });
+  }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, describeImages, selectionPrefixSessionId]);
 
   // Builder preview "Fix" / auto-fix → send a message into this chat.
   // Scoped to the builder key (the project id) so only this chat reacts.
@@ -432,8 +427,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     const reviewAgent = agent === 'explore' || agent === 'plan' ? 'build' : agent;
     await sendMessage(message, async () => {
       refetchSession();
-    }, { agent: reviewAgent, maxTurns, thinking, deepThink, describeImages });
-  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking, deepThink, describeImages]);
+    }, { agent: reviewAgent, maxTurns, thinking, describeImages });
+  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking, describeImages]);
 
   /**
    * Pipeline-mode send: post to `/pipelines/:pid/start` instead of
@@ -1096,8 +1091,6 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
                 thinking={thinking}
                 setThinking={setThinking}
                 supportsThinking={providerSupportsThinking(provider, providerOptions, model)}
-                deepThink={deepThink}
-                setDeepThink={setDeepThink}
                 describeImages={describeImages}
                 setDescribeImages={setDescribeImages}
                 fallbackProvider={fallbackProvider}
@@ -1145,6 +1138,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
                 skillPicks={skillPicks}
                 onToggleSkillPick={toggleSkillPick}
                 pipelineRuntime={pipelineRuntime}
+                pluginWindows={pluginPanelWindows}
                 onClose={() => setActiveRightPanelId(null)}
               />
             </Panel>
@@ -1161,6 +1155,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
               onSelectPanel={setActiveRightPanelId}
               onOpenSnapshots={() => setSnapshotsOpen(true)}
               pendingSnapshots={snapshotPending}
+              pluginWindows={pluginPanelWindows}
             />
           </div>
         )}

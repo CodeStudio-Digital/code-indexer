@@ -15,6 +15,7 @@ import {
   type DeviceFrame,
 } from '../../builder/studio/DeviceFrameSwitcher.js';
 import { useProjectDevServer } from './useProjectDevServer.js';
+import { PreviewUrlEditor } from './PreviewUrlEditor.js';
 import { useUniversalInspect } from './useUniversalInspect.js';
 import { apiPost } from '../../../hooks/useApi.js';
 
@@ -206,7 +207,10 @@ export function ProjectPreview({
           className={`h-2 w-2 rounded-full ${status === 'running' ? 'bg-green-500' : 'bg-muted-foreground'}`}
           title={status}
         />
-        <span className="flex-1 font-mono text-xs truncate text-muted-foreground">{url ?? 'no dev server'}</span>
+        {/* URL clicável → editor inline. O override manual é sticky por
+            projeto (localStorage) e vence a detecção; o chip âmbar mostra
+            isso e limpa com um clique. */}
+        <PreviewUrlEditor url={url} manualUrl={manualUrl} onSet={setManualUrl} />
         <DeviceFrameSwitcher value={device} onChange={setDevice} />
         {/* Universal inspect is the fallback for stacks without the inline
             data-mcp-loc selector — hide it when that precise selector is

@@ -10,8 +10,10 @@
  *   3. Compute `source_hash` over `pkg_dir` (excluding node_modules etc.).
  *   4. Compare to the latest published version's hash. If equal, mark the
  *      draft as 'skipped' and return — no registry churn.
- *   5. Otherwise, compute next semver from `next_bump_hint`, set status
- *      'building', call `verdaccioService.publishTarball()`.
+ *   5. Otherwise, compute next semver from `next_bump_hint`, stamp it into
+ *      pkg/package.json (`npm version --no-git-tag-version`), RE-PACK so the
+ *      tarball carries the real version, set status 'building', call
+ *      `verdaccioService.publishTarball()`.
  *   6. On success: set status 'published', persist tarball_path, manifest,
  *      mcp_manifest, docs_md, storybook_path; reset hint to 'patch'.
  *   7. On failure: set status 'failed', persist `error`.
@@ -48,7 +50,7 @@ const PARAMETERS: JsonSchema = {
     tarball_path: {
       type: 'string',
       description:
-        'OPTIONAL. Path to a pre-built .tgz. Omit it to let the tool run `npm pack` inside pkg_dir itself — recommended.',
+        'OPTIONAL. Path to a pre-built .tgz, used ONLY for skip-detection; the published tarball is always re-packed from pkg_dir with the final semver. Omit it — recommended.',
     },
     manifest_json: {
       type: 'string',
@@ -66,6 +68,11 @@ const PARAMETERS: JsonSchema = {
       type: 'string',
       description:
         'Optional path to `storybook-static/` (relative to project root). Served as iframe in Docs tab.',
+    },
+    allow_empty: {
+      type: 'boolean',
+      description:
+        'Allow publishing a draft with ZERO recorded components (only for a design system that intentionally ships none). Without it, publish refuses until ds_record_component populated the registry.',
     },
   },
   required: ['pkg_dir'],
@@ -128,6 +135,19 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
             `Latest version (id=${draft.id}, status=${draft.status}) is not a draft. ` +
               `Only draft / building / failed / skipped states can be published. ` +
               `If this row should be retried, set its status back to 'draft' first.`,
+          );
+        }
+
+        // Empty-inventory guard. A published version with 0 recorded
+        // components leaves every consumer surface blind (ds_components,
+        // the builder prompt block, the global skill). Session 979 shipped
+        // 1.0.0 empty and the 21 components landed in the NEXT draft 33s
+        // later. Refuse unless the emptiness is explicitly intentional.
+        if (args.allow_empty !== true && store.listComponents(draft.id).length === 0) {
+          return err(
+            'Refusing to publish: this draft has 0 recorded components, so consumers would see an empty design system. ' +
+              'Run ds_list_components to inspect the registry and ds_record_component({ name, kind, props_schema_json, example_code }) for every approved gallery component, then publish again. ' +
+              'Pass allow_empty=true only if this design system intentionally ships no components.',
           );
         }
 
@@ -220,10 +240,46 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
         const bumpKind = resolveBumpKind({ previous: previousSemver, hint: session.next_bump_hint });
         const nextSemver = bumpSemver(previousSemver, bumpKind);
 
+        // Step: stamp the semver into pkg/package.json and RE-PACK. Verdaccio
+        // reads the version from the tarball's own package.json — without
+        // this, the registry kept `0.0.0` forever while the DB said 1.x (and
+        // the next changed publish died on EPUBLISHCONFLICT). The pack above
+        // is only the skip-detector; the repacked tarball is what ships. The
+        // next run's skip-pack runs with the bumped package.json, so we
+        // persist the FINAL tarball hash to keep skip-detection aligned.
+        const versionRes = await runNpm({
+          args: ['version', nextSemver, '--no-git-tag-version', '--allow-same-version'],
+          cwd: pkgDir,
+          timeoutMs: NPM_PACK_TIMEOUT_MS,
+        });
+        if (!versionRes.ok) {
+          store.updateVersion(draft.id, {
+            status: 'failed',
+            error: shortenError(versionRes.stderr || versionRes.stdout),
+          });
+          return err(
+            `npm version ${nextSemver} failed in ${pkgDir} (exit ${versionRes.exitCode}). ` +
+              `Stderr: ${shortenError(versionRes.stderr) || '(empty)'}`,
+          );
+        }
+        const finalPack = await packPackage(pkgDir);
+        if (!finalPack.ok || !finalPack.tarballPath) {
+          store.updateVersion(draft.id, {
+            status: 'failed',
+            error: shortenError(finalPack.stderr || finalPack.stdout),
+          });
+          return err(
+            `npm pack (versioned re-pack) failed in ${pkgDir} (exit ${finalPack.exitCode}). ` +
+              `Stderr: ${shortenError(finalPack.stderr) || '(empty)'}`,
+          );
+        }
+        tarballPath = finalPack.tarballPath;
+        const finalHash = await hashTarball(tarballPath);
+
         // Step: mark building.
         store.updateVersion(draft.id, {
           status: 'building',
-          source_hash: sourceHash,
+          source_hash: finalHash,
         });
 
         // Step: publish to verdaccio.
@@ -281,7 +337,7 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
 
         return ok(
           [
-            `Published ${session.package_name}@${nextSemver} (bump=${bumpKind}, version_id=${persisted.id}, hash=${shortHash(sourceHash)}).`,
+            `Published ${session.package_name}@${nextSemver} (bump=${bumpKind}, version_id=${persisted.id}, hash=${shortHash(finalHash)}).`,
             `Registry: ${publishResult.registryUrl}`,
             `Tarball: ${tarballPath}`,
             `Published at: ${now}`,

@@ -8,6 +8,7 @@ import type { JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { getOverlayHandler } from '@mcp/code-agent/overlay/overlay-handlers.js';
+import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 
 /**
  * Default `max_tokens` injected by the bridge for verbose MCP tools when the
@@ -193,7 +194,7 @@ export class McpToolBridge {
             const requested = typeof finalArgs.max_lines === 'number' ? finalArgs.max_lines : null;
             if (requested != null && requested > effectiveReadFileHardMax) {
               finalArgs.max_lines = effectiveReadFileHardMax;
-              clampNote = `[clamped from ${requested} to ${effectiveReadFileHardMax} lines — bridge cap]\n`;
+              clampNote = `${truncationMarker(`max_lines clamped from ${requested} to ${effectiveReadFileHardMax}`, 'bridge cap')}\n`;
             }
           }
           let mcpText: string;
@@ -303,7 +304,7 @@ function applyOutputCap(text: string, ctx?: ToolContext): string {
   if (text.length <= cap) return text;
   return (
     text.slice(0, cap) +
-    `\n\n[output truncated at ${cap} chars — refine your query, use max_tokens/limit, or paginate via offset]`
+    `\n\n${truncationMarker(`output capped at ${cap} chars`, 'refine your query, use max_tokens/limit, or paginate via offset')}`
   );
 }
 

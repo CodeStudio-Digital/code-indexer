@@ -2,9 +2,9 @@
  * Race-helpers for the Executing/Compacting nodes — Frente A (PR 1).
  *
  * The BT was previously vulnerable to two classes of hang:
- *   1. `await provider.chat()` / `runPreThink()` / `compactWithLLM()` that
- *      never resolved because the underlying provider stalled past every
- *      internal timeout AND the user's abort signal was ignored.
+ *   1. `await provider.chat()` / `compactWithLLM()` that never resolved
+ *      because the underlying provider stalled past every internal
+ *      timeout AND the user's abort signal was ignored.
  *   2. `registry.invoke(toolName, ...)` for a misbehaving MCP tool with no
  *      `timeoutMs` declared — the Camada 1 heartbeat surfaced "still
  *      running" but couldn't cancel the call.

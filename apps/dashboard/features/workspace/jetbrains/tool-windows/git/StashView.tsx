@@ -49,6 +49,7 @@ export function StashView({ projectId, onMutated }: StashViewProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [busyRef, setBusyRef] = useState<string | null>(null);
   const openDiff = useWorkspaceStore((s) => s.openDiff);
+  const openGitStash = useWorkspaceStore((s) => s.openGitStash);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -92,6 +93,15 @@ export function StashView({ projectId, onMutated }: StashViewProps) {
             r.stderr.trim().split('\n').slice(-2).join('\n') ||
             'Done.',
         });
+        // Pop/Drop remove a stash and renumber every ref above it, so any
+        // open stash-preview tabs now point at the wrong (or gone) entry.
+        // Close them all rather than show stale snapshots.
+        if (method !== 'projectGit.stashApply') {
+          const { openFiles, closeFile } = useWorkspaceStore.getState();
+          for (const f of openFiles) {
+            if (f.kind === 'git-stash') closeFile(f.path);
+          }
+        }
         onMutated();
         await reload();
       } else {
@@ -104,6 +114,16 @@ export function StashView({ projectId, onMutated }: StashViewProps) {
     } finally {
       setBusyRef(null);
     }
+  };
+
+  const openDetail = (entry: GitStashEntry) => {
+    openGitStash({
+      kind: 'git-stash',
+      projectId,
+      path: `gitstash:${entry.index}`,
+      title: `Stash ${entry.shortSha}`,
+      stashRef: entry.index,
+    });
   };
 
   const showDiff = async (entry: GitStashEntry) => {
@@ -169,6 +189,7 @@ export function StashView({ projectId, onMutated }: StashViewProps) {
             key={s.index}
             entry={s}
             busy={busyRef === s.index}
+            onOpen={() => openDetail(s)}
             onPop={() => void runOp('Pop', 'projectGit.stashPop', s.index)}
             onApply={() => void runOp('Apply', 'projectGit.stashApply', s.index)}
             onDrop={() => void runOp('Drop', 'projectGit.stashDrop', s.index, true)}

@@ -16,6 +16,7 @@
 import type { Hono } from 'hono';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import { summarizeSpanV2, renderSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
+import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseIdParam, notFound } from '../_helpers.js';
@@ -104,6 +105,23 @@ export function mountCoderSummarizeClearRoute(
       // prepended head. boundary = current MAX(id) → no verbatim tail remains.
       const boundaryId = sessionStore.maxMessageId(id);
       const result = sessionStore.setCompactionBoundary(id, renderSummaryV2(summary), boundaryId, 'manual');
+
+      // Memory harvest — distill durable project memory from the summary we
+      // JUST paid for (same pipeline as the automatic compaction harvest).
+      // Fire-and-forget: a failed harvest never affects the clear.
+      if (session.project_id != null) {
+        void harvestCompactionMemory({
+          runEndMemory: deps.runEndMemory,
+          store: sessionStore,
+          getMemoryEnabled: () => deps.db.getProjectMemoryEnabled(session.project_id),
+          projectId: session.project_id,
+          projectName: deps.db.getProject(session.project_id)?.name ?? '',
+          sessionId: id,
+          summary,
+          boundaryId,
+          trigger: 'manual_clear',
+        });
+      }
 
       // Drop any lingering (ended) bus so the next /messages POST builds a
       // fresh, boundary-aware runner that loads only the summary onward.

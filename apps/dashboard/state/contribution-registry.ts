@@ -30,6 +30,8 @@ export interface ContribToolWindow {
   pluginNs: string;
   id: string;
   title: string;
+  /** Optional icon name from the small lucide allowlist (see plugin-icon.ts). */
+  icon?: string;
   side: 'left' | 'right' | 'bottom';
   entry: string;
 }

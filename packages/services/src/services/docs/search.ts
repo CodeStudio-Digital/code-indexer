@@ -39,8 +39,15 @@ export interface DocSearchEnhancements {
 export interface DocSearchInput {
   /** Natural-language query. */
   query: string;
-  /** Optional: restrict to a single collection name. */
+  /** Optional: restrict to a single collection name. Wins over `collection_ids`. */
   collection?: string;
+  /**
+   * Optional: restrict to a subset of collection ids (project scoping,
+   * migration 134). Ignored when `collection` is supplied. An empty array
+   * is treated as "no filter" — callers express "project has no links" by
+   * omitting the field, not by passing [].
+   */
+  collection_ids?: number[];
   /** Top-K cap. Default 5; clamped to [1, 20]. */
   limit?: number;
   /**
@@ -106,6 +113,14 @@ export interface DocSearchDiagnostics {
   no_good_match?: boolean;
   /** Best calibrated relevance seen (pre-threshold); null when uncalibrated. */
   top_relevance?: number | null;
+  /**
+   * Search scope, set by the host backend (not by DocHybridSearch itself):
+   * 'project' when the search was filtered to project-linked collections,
+   * 'all' when it ran over the global corpus.
+   */
+  scope?: 'project' | 'all';
+  /** Names of the collections searched when scope === 'project'. */
+  scoped_collections?: string[];
 }
 
 export interface DocHybridSearchEnhancementDeps {
@@ -156,8 +171,8 @@ export class DocHybridSearch {
     const ftsBudget = Math.max(effectiveLimit * 4, 20);
     const vectorBudget = Math.max(effectiveLimit * 4, 20);
 
-    // Resolve collection filter (name → id).
-    let collectionId: number | undefined;
+    // Resolve collection filter (name → id, or a project-scoped id subset).
+    let collectionIds: number[] | undefined;
     if (input.collection) {
       const found = this.collectionLookup(input.collection);
       if (found == null) {
@@ -174,7 +189,9 @@ export class DocHybridSearch {
           },
         };
       }
-      collectionId = found;
+      collectionIds = [found];
+    } else if (input.collection_ids && input.collection_ids.length > 0) {
+      collectionIds = input.collection_ids;
     }
 
     const forcedMode = input.mode;
@@ -204,8 +221,8 @@ export class DocHybridSearch {
     const perVariant = await Promise.all(
       queries.map(async (q) => {
         const [fts, vec] = await Promise.all([
-          useFts ? this.runFts(q, collectionId, ftsBudget) : Promise.resolve([] as RankedHit[]),
-          useVector ? this.runVector(q, collectionId, vectorBudget) : Promise.resolve([] as RankedHit[]),
+          useFts ? this.runFts(q, collectionIds, ftsBudget) : Promise.resolve([] as RankedHit[]),
+          useVector ? this.runVector(q, collectionIds, vectorBudget) : Promise.resolve([] as RankedHit[]),
         ]);
         return { fts, vec };
       }),
@@ -333,14 +350,14 @@ export class DocHybridSearch {
 
   // ─── Source fan-outs ─────────────────────────────────────────────
 
-  private async runFts(query: string, collectionId: number | undefined, budget: number): Promise<RankedHit[]> {
-    const hits = this.docStore.searchChunksFts(query, { collectionId, limit: budget });
+  private async runFts(query: string, collectionIds: number[] | undefined, budget: number): Promise<RankedHit[]> {
+    const hits = this.docStore.searchChunksFts(query, { collectionIds, limit: budget });
     // FTS rank is negative bm25 (lower is better); convert to ascending
     // rank order (1, 2, …) for RRF — `rrfMerge` only looks at position.
     return hits.map((h) => ({ candidateId: String(h.chunk_id), score: -h.rank }));
   }
 
-  private async runVector(query: string, collectionId: number | undefined, budget: number): Promise<RankedHit[]> {
+  private async runVector(query: string, collectionIds: number[] | undefined, budget: number): Promise<RankedHit[]> {
     if (!this.embeddingService || !this.vectorStore) return [];
     let queryVec: number[];
     try {
@@ -351,18 +368,18 @@ export class DocHybridSearch {
     }
 
     // Doc vectors are isolated PER COLLECTION via a namespace (docNamespace).
-    // A specific collection → one namespaced query: no foreign (code) vectors
-    // pollute the top-K, so no over-fetch and no in-memory post-filter needed.
-    // "All collections" → fan-out one namespaced query per collection and merge
-    // by score (collections are few). This replaces the old "fetch 10× and
-    // filter in memory" hack that existed only because code+docs shared a
-    // single unfiltered index.
-    if (collectionId != null) {
-      return this.searchNamespace(queryVec, docNamespace(collectionId), budget);
+    // A filtered search (single collection or a project-linked subset) only
+    // queries those namespaces: no foreign (code) vectors pollute the top-K,
+    // so no over-fetch and no in-memory post-filter needed. "All collections"
+    // → fan-out one namespaced query per collection and merge by score
+    // (collections are few). This replaces the old "fetch 10× and filter in
+    // memory" hack that existed only because code+docs shared one index.
+    const ids = collectionIds ?? this.docStore.listCollections().map((c) => c.id);
+    if (ids.length === 1) {
+      return this.searchNamespace(queryVec, docNamespace(ids[0]), budget);
     }
-    const collections = this.docStore.listCollections();
     const perCollection = await Promise.all(
-      collections.map((c) => this.searchNamespace(queryVec, docNamespace(c.id), budget)),
+      ids.map((id) => this.searchNamespace(queryVec, docNamespace(id), budget)),
     );
     return perCollection
       .flat()

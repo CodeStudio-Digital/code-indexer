@@ -8,8 +8,8 @@ import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { PermissionGate, normalizeToolPermissionMode } from '@mcp/code-agent/core/permission-gate.js';
-import { summarizeSpanV2, renderSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
 import { runDurableCompaction } from '@mcp/code-agent/core/runner/compaction/durable-compaction.js';
+import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
 import { durableCompactionEnabled } from '@mcp/code-agent/core/runner/compaction/threshold.js';
 import { getGlobalToolSelectionFilter } from '@mcp/code-agent/tool-selection/global-filter.js';
 import { buildSystemPrompt } from '@mcp/code-agent/core/system-prompt.js';
@@ -73,7 +73,8 @@ import { buildSubordinateKanbanTools } from '@mcp/company/tools/subordinate-kanb
 import { isMasterAllowed } from '@mcp/company/tools/master-filter.js';
 import { RuntimeHookRegistry } from '@mcp/code-agent/core/hook-registry.js';
 import { registerCompanyHooks } from '@mcp/code-agent/core/company-hooks.js';
-import { inferProfileFromMessage, inferProfileFromHistory, profileToTiers, type CoderProfile } from '@mcp/code-agent/tools/tiers.js';
+import { inferProfileFromMessage, inferProfileFromHistory, profileToTiers, getToolTier, type CoderProfile } from '@mcp/code-agent/tools/tiers.js';
+import { getModelMaxTools } from '@mcp/code-agent/providers/capabilities.js';
 import { AGENTS, isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { ToolOutputStore } from '@mcp/code-agent/overlay/tool-output-store.js';
@@ -85,11 +86,14 @@ import { webTools } from '@mcp/code-agent/tools/web.js';
 import { httpTools } from '@mcp/code-agent/tools/http.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
+import { ragReadDocTools } from '@mcp/code-agent/tools/rag-read-doc.js';
 import { todoTools, generateTodoId } from '@mcp/code-agent/tools/todo.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
 import { goalTools } from '@mcp/code-agent/tools/goal.js';
 import { buildSessionDriveTools } from '@mcp/code-agent/tools/session-drive-tools.js';
+import { buildProjectMemoryTools } from '@mcp/code-agent/tools/project-memory-tools.js';
+import { buildAutoCapture } from '@mcp/code-agent/sessions/auto-capture.js';
 import { getInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
 import { buildCodeExecTool } from '@mcp/code-agent/tools/code-exec.js';
 import { listAgentsTools } from '@mcp/code-agent/tools/list-agents.js';
@@ -308,6 +312,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(httpTools);
   registry.registerAll(globTools);
   registry.registerAll(ragSearchDocsTools);
+  registry.registerAll(ragReadDocTools);
   registry.registerAll(todoTools);
   registry.registerAll(viewImageTools);
   registry.registerAll(previewTools);
@@ -319,6 +324,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // sessions. Bootstrap-tier (see tools/tiers.ts) so any mode can use them.
   if (!opts.companyContext) {
     registry.registerAll(buildSessionDriveTools());
+  }
+  // Project memory read tool (recall_memory) — any session whose host wired
+  // the `projectMemory` ports (single sessions today; company keeps the
+  // mcp__search_memory path). The per-project memory_enabled gate is applied
+  // at the ToolContext wiring, so an absent port degrades to a clear message.
+  if (opts.projectMemory) {
+    registry.registerAll(buildProjectMemoryTools());
   }
   // DS Studio — single sessions on a Design System workspace project get
   // the ds_* tools (record/list/audit/publish) bound to the project. The
@@ -684,6 +696,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }),
   );
 
+  // Auto-captured session notes — LLM-free hooks (plan approved, goal
+  // completed, task closed, error-streak fixed) that keep the Session State
+  // Block useful even when the model never calls save_note on its own.
+  const autoCapture = buildAutoCapture({
+    store,
+    sessionId: session.id,
+    enabled: !opts.companyContext && process.env.CODER_AUTO_NOTES !== '0',
+    isRepeatable: (name) => {
+      try { return registry.get(name)?.repeatable === true; } catch { return false; }
+    },
+  });
+
   const toolContext: ToolContext = {
     cwd: effectiveCwd,
     projectName: workspace.displayName,
@@ -703,6 +727,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     resolvePlan: (toolUseId, status, feedback) => {
       try {
         store.resolvePlan(toolUseId, status, feedback);
+        if (status === 'approved') {
+          autoCapture.onPlanResolved(status, store.listPlans(session.id)[0]?.plan_text ?? null, feedback);
+        }
       } catch (e) {
         console.warn(`[coder] resolvePlan failed: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -755,7 +782,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     },
     updateTaskStatus: (taskId, patch) => {
       try {
-        return store.updateTaskStatus(session.id, taskId, patch);
+        const row = store.updateTaskStatus(session.id, taskId, patch);
+        autoCapture.onTaskStatus(taskId, patch as Parameters<typeof autoCapture.onTaskStatus>[1]);
+        return row;
       } catch (e) {
         console.warn(`[coder] updateTaskStatus failed: ${e instanceof Error ? e.message : String(e)}`);
         return null;
@@ -780,6 +809,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     upsertGoalState: (goal) => {
       try {
         store.upsertSessionGoal(session.id, goal);
+        autoCapture.onGoalUpserted(goal);
       } catch (e) {
         console.warn(`[coder] upsertSessionGoal failed: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -836,9 +866,21 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         }
       },
     },
+    // Durable project memory ports (save_note scope 'project' + recall_memory).
+    // Gated on the per-project toggle; absent ports → tools answer clearly.
+    projectMemory:
+      opts.projectMemory && db.getProjectMemoryEnabled(project.id)
+        ? {
+            save: (entry) => opts.projectMemory!.save(project.id, project.name, entry),
+            recall: (query, limit) => opts.projectMemory!.recall(project.id, project.name, query, limit),
+          }
+        : undefined,
     companyContext: opts.companyContext,
     // Coder session id — keys per-agent resources (preview/devtools window).
     sessionId: session.id,
+    // Project id — lets project-aware tools (rag_search_docs scoping,
+    // <indexed-docs> hint) resolve linked doc collections.
+    projectId: project.id,
     // Surface indexing status to tools so DB-dependent paths can fall back
     // to disk/regex/tree-sitter instead of returning empty results.
     projectIndexed: undefined, // set after isIndexed is computed (see below)
@@ -1029,6 +1071,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     agentLoopV2: agentLoopV2EnvFlag,
     agentId: effectiveAgentId ?? undefined,
     sessionDrive: !opts.companyContext,
+    // Tool-visibility hint for small-catalog models (GLM flash class).
+    // Registry is fully populated by now (native + company + MCP); the
+    // count is a session-start approximation, which is all the hint needs.
+    toolCap: {
+      maxTools: getModelMaxTools(session.model),
+      approxCatalog: registry.list().length,
+    },
   });
 
   // Append company prompt block (master orchestration or subordinate instructions)
@@ -1162,6 +1211,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     console.log(
       `[coder] agent=${effectiveAgentId ?? 'none'} profile=${preResolvedProfile} planMode=${opts.planMode ?? false} active_tiers=${Array.from(activeTiers).sort().join(',')}`,
     );
+  }
+
+  // Pin re-derivation (resume): tools the conversation ALREADY used whose
+  // tier is not active now — master/preview/custom-tier calls that
+  // inferProfileFromHistory cannot cover (it only widens across the 3 core
+  // profiles). Without this a resumed session would hide tools it
+  // demonstrably used. Never persisted — cheap to recompute every resume.
+  const initialPinnedTools = [
+    ...new Set(historyToolNames.filter((n) => !activeTiers.has(getToolTier(n, externalToolTiers)))),
+  ];
+  if (initialPinnedTools.length > 0 && process.env.CODER_LOG_TOOLS_COUNT === '1') {
+    console.log(`[coder] re-pinned from history: ${initialPinnedTools.sort().join(',')}`);
   }
 
   // ─── Runtime hooks ─────────────────────────────────────────────
@@ -1380,18 +1441,32 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       opts.memoryRetriever && db.getProjectMemoryEnabled(project.id)
         ? (taskText: string) => opts.memoryRetriever!.retrieve(project.id, project.name, taskText)
         : undefined,
-    // Session Drive injection (migrations 125/126) — non-company sessions
-    // only. Surfaces the active plan + saved notes + investigation count so
-    // they survive compaction. Best-effort: any read error → no injection.
-    getSessionDriveInjection: opts.companyContext
+    // Session State Block data — non-company sessions only. The runner
+    // renders goal/plan/todos/notes/files/recall into a `<session-state>`
+    // tail block per the window-scaled policy, so continuity never depends
+    // on summarization alone. Best-effort: any read error → no block.
+    getSessionStateData: opts.companyContext
       ? undefined
       : () => {
           try {
-            return store.getDriveInjectionPayload(session.id);
+            return store.getSessionStateData(session.id);
           } catch {
             return null;
           }
         },
+    // Project memory index (MEMORY.md-style) — direct store read (works in
+    // workers too: each worker holds its own WAL handle). Gated on the
+    // per-project toggle; empty index → no injection.
+    getProjectMemoryIndex:
+      !opts.companyContext && db.getProjectMemoryEnabled(project.id)
+        ? () => {
+            try {
+              return db.listMemoryIndex(project.id, 12);
+            } catch {
+              return null;
+            }
+          }
+        : undefined,
     // (assignment below) — keeps recorder in sync with runner.turn
     // even though the runner is constructed after recorder. The recorder
     // reads `runnerRef?.turn` lazily, so this assignment closes the loop.
@@ -1402,11 +1477,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     thinkingBudgetTokens: opts.thinkingBudgetTokens,
     modelSupportsVision: opts.modelSupportsVision,
     describeImages: opts.describeImages,
-    deepThink: opts.deepThink,
-    deepThinkModel: opts.deepThinkModel,
-    deepThinkProvider: opts.deepThinkProvider,
-    preThinkOnToolResults: opts.preThinkOnToolResults,
     activeTiers,
+    initialPinnedTools: initialPinnedTools.length > 0 ? initialPinnedTools : undefined,
     globalDisabledTools,
     sessionDisabledTools: sessionDisabledTools.size > 0 ? sessionDisabledTools : undefined,
     externalToolTiers,
@@ -1617,9 +1689,23 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
        */
       output_chars_shaped: number | null;
       truncated: boolean;
-      phase: string | null;
+      /**
+       * Harness refusal tag (gate/pre-read/task-mode/dedup/user_denied/
+       * failure-streak/timeout/abort) from the dispatch pipeline; null on a
+       * real invocation. messages.ts falls back to classifyToolRefusal for
+       * rows that arrive without it (legacy/subagent paths).
+       */
+      refusal_kind: string | null;
       turn_telemetry_id: number | null;
+      /** Set on nested (code_exec script) rows only — links to the parent block. */
+      parent_tool_use_id?: string | null;
     }>;
+    /**
+     * Nested code_exec invocations buffered from `nested_tool_call` events.
+     * Persisted as audit-only rows (parent_tool_use_id set) — NEVER part of
+     * the paired tool message (no matching tool_use block exists for them).
+     */
+    nestedToolCalls: PendingTurn['toolCalls'];
     subagentUsage: {
       input_tokens: number;
       output_tokens: number;
@@ -1628,14 +1714,21 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     };
   }
   /**
-   * Cheap heuristic for the `truncated` flag in coder_tool_calls. Mirrors the
-   * markers emitted by mcp-bridge.ts (MCP_OUTPUT_HARD_CAP, READ_FILE clamp).
-   * False negatives are fine — the dashboard treats this as a noisy-tool
-   * signal, not a billing input.
+   * Cheap heuristic for the `truncated` flag in coder_tool_calls. Every
+   * model-facing cut now goes through `truncationMarker()` (`[truncated: …]`);
+   * `output_truncated=true` is exec_command/write_stdin's structured header.
+   * The two legacy prefixes keep old transcripts/paths matching. False
+   * negatives are fine — the dashboard treats this as a noisy-tool signal,
+   * not a billing input.
    */
   const isTruncatedOutput = (s: string): boolean => {
     if (!s) return false;
-    return s.includes('[output truncated') || s.includes('[clamped from ');
+    return (
+      s.includes('[truncated:') ||
+      s.includes('output_truncated=true') ||
+      s.includes('[output truncated') ||
+      s.includes('[clamped from ')
+    );
   };
   let pendingTurn: PendingTurn | null = null;
 
@@ -1649,6 +1742,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     const telemetryId = runner.lastTurnTelemetryId;
     if (telemetryId != null) {
       for (const tc of turn.toolCalls) tc.turn_telemetry_id = telemetryId;
+      for (const tc of turn.nestedToolCalls) tc.turn_telemetry_id = telemetryId;
     }
     const hasSubUsage = turn.subagentUsage.input_tokens > 0
       || turn.subagentUsage.output_tokens > 0;
@@ -1657,6 +1751,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       message: turn.message,
       usage: turn.usage,
       tool_calls: turn.toolCalls,
+      nested_tool_calls: turn.nestedToolCalls.length > 0 ? turn.nestedToolCalls : undefined,
       subagent_usage: hasSubUsage ? turn.subagentUsage : undefined,
     };
     try {
@@ -1685,6 +1780,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       message,
       usage: usage ?? null,
       toolCalls: [],
+      nestedToolCalls: [],
       subagentUsage: {
         input_tokens: 0,
         output_tokens: 0,
@@ -1694,14 +1790,50 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     };
   });
 
+  // Nested code_exec invocations — one row per settled script call, linked
+  // to the parent block via parent_tool_use_id (mig 133). Buffered into the
+  // same per-turn flush so the audit lands atomically with the turn.
+  if (process.env.CODER_NESTED_TELEMETRY_DISABLE !== '1') {
+    runner.on('nested_tool_call', (e) => {
+      try {
+        if (!pendingTurn) return;
+        pendingTurn.nestedToolCalls.push({
+          tool_use_id: `${e.parentToolUseId}#${e.seq}`,
+          tool_name: e.name,
+          args: e.args,
+          result_text: e.resultPreview,
+          is_error: e.isError,
+          duration_ms: e.durationMs,
+          output_chars: e.resultChars,
+          output_chars_shaped: null,
+          truncated: false,
+          refusal_kind: e.refusalKind ?? null,
+          turn_telemetry_id: null,
+          parent_tool_use_id: e.parentToolUseId,
+        });
+      } catch { /* telemetry must never break the run */ }
+    });
+  }
+
   runner.on('tool_call_result', (id, name, result, durationMs) => {
+    // Error-streak tracker for auto-captured "Fixed: <tool>" notes. Cheap,
+    // best-effort, and independent of the telemetry buffering below.
+    autoCapture.onToolResult(
+      name,
+      Boolean(result.isError),
+      result.isError ? String(result.content ?? '').slice(0, 200) : '',
+      runnerRef?.turn ?? 0,
+    );
     if (!pendingTurn) return;
     const pending = pendingToolCalls.get(id);
     const content = result.content ?? '';
     pendingTurn.toolCalls.push({
       tool_use_id: id,
       tool_name: name,
-      args: pending?.input ?? {},
+      // Harness-refused calls (gate/pre-read/dedup/…) never fired
+      // tool_call_start, so there is no pending entry — the result event
+      // carries the original input precisely for this row.
+      args: pending?.input ?? result.input ?? {},
       result_text: content,
       is_error: Boolean(result.isError),
       duration_ms: durationMs,
@@ -1713,9 +1845,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       output_chars: result.rawChars ?? content.length,
       output_chars_shaped: content.length,
       truncated: isTruncatedOutput(content),
-      // PhaseRouter removed — column kept for backward compat with old rows
-      // that have it set. Always null going forward.
-      phase: null,
+      refusal_kind: result.refusalKind ?? null,
       // Stamped at flushPendingTurn time, when persistTurnTelemetry has
       // already run for this turn and runner.lastTurnTelemetryId is the
       // id of THIS turn's row. Setting it here would point at the prior turn.
@@ -1761,6 +1891,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // persist a boundary + summary so the NEXT run starts compacted — cross-run
   // cost reduction. Runs over DB rows in the background; never blocks the run.
   // The in-flight guard avoids overlapping summary calls during a long run.
+  // The memory harvest chains on success: distillation reuses the summary
+  // that was ALREADY paid for here (replaces the old per-run-end capture).
   let durableInFlight = false;
   runner.on('history_compacted', (p) => {
     if (p.strategy !== 'summarizer') return;
@@ -1768,6 +1900,20 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     if (durableInFlight) return;
     durableInFlight = true;
     void runDurableCompaction({ store, sessionId: session.id, provider })
+      .then((res) => {
+        if (!res.ok || !res.summary || res.boundaryId == null || !opts.runEndMemory) return;
+        return harvestCompactionMemory({
+          runEndMemory: opts.runEndMemory,
+          store,
+          getMemoryEnabled: () => db.getProjectMemoryEnabled(project.id),
+          projectId: project.id,
+          projectName: project.name,
+          sessionId: session.id,
+          summary: res.summary,
+          boundaryId: res.boundaryId,
+          trigger: 'compaction',
+        });
+      })
       .catch((e) => console.warn(`[coder] durable compaction failed for session ${session.id}:`, e))
       .finally(() => { durableInFlight = false; });
   });
@@ -1819,51 +1965,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // are stamped with the right turn number.
   runnerRef = runner;
 
-  // Durable-memory write-back (off the hot path). Reuses the structured
-  // summarizer to assemble the distiller signal from the finished run, then
-  // hands it to the host `runEndMemory` callback (positive facts + `gotcha`
-  // failure lessons). Best-effort; only meaningful when the host wired a
-  // writer and the project has memory enabled.
-  const captureRunEndMemory = async (succeeded: boolean): Promise<void> => {
-    const summary = await summarizeSpanV2(runner.messages, provider);
-    if (!summary) return;
-    // Recipe steps come only from a successful run's clean (non-error) commands.
-    const toolTrail = succeeded
-      ? store.getCommandTrail(session.id).filter((c) => !c.isError).map((c) => c.command)
-      : [];
-    await opts.runEndMemory!.extractAndPersist(project.id, project.name, {
-      primaryRequest: summary.primary_request || undefined,
-      summary: renderSummaryV2(summary),
-      filesTouched: summary.files_and_code.map((f) => f.path).filter(Boolean),
-      errorsAndFixes: summary.errors_and_fixes,
-      toolTrail,
-      succeeded,
-    });
-  };
+  // Durable-memory write-back now rides the compaction summary (see the
+  // `history_compacted` handler above) and the idle sweeper (http-api) —
+  // both reuse summaries that are already paid for, replacing the old
+  // per-run-end capture that burned an extra summarizeSpanV2 on every run.
 
   const donePromise = runner
     .run()
     .then(async (res) => {
       await flushPendingTurn();
       store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
-      // Distill durable memory BEFORE `.finally` closes the DB handles. Errored-
-      // but-resolved runs are included on purpose — that's where `gotcha`
-      // lessons come from. Time-bounded so a stalled LLM can't pin handles open.
-      if (
-        opts.runEndMemory &&
-        db.getProjectMemoryEnabled(project.id) &&
-        runner.messages.length >= 4 &&
-        (await opts.runEndMemory.isConfigured())
-      ) {
-        const succeeded = res.reason !== 'error' && store.didRunSucceed(session.id);
-        await Promise.race([
-          captureRunEndMemory(succeeded).catch(() => undefined),
-          new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, 30_000);
-            (timer as { unref?: () => void }).unref?.();
-          }),
-        ]);
-      }
       return { reason: res.reason, usage: res.totalUsage, error: lastRunnerError?.message };
     })
     .catch(async (e) => {

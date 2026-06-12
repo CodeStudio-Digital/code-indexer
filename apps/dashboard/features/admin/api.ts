@@ -149,6 +149,26 @@ export async function setModelContextWindow(
   }
 }
 
+export async function setModelMaxTools(
+  providerId: string,
+  modelId: string,
+  mode: string,
+  value: number | null,
+): Promise<void> {
+  const r = await fetch(
+    `/api/admin/providers/${providerId}/models/${encodeURIComponent(modelId)}?mode=${encodeURIComponent(mode)}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_tools: value }),
+    },
+  );
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+}
+
 /**
  * Backfill `provider_models.context_window` for every row that has it null,
  * pulling values from the static registry's prefix-aware lookup. Returns

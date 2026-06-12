@@ -15,7 +15,13 @@ export interface RunnerEvents {
   text_delta: (text: string) => void;
   thinking_delta: (text: string) => void;
   tool_call_start: (id: string, name: string, input: Record<string, unknown>) => void;
-  tool_call_result: (id: string, name: string, result: { content: string; isError?: boolean; subUsage?: ChatUsage; rawChars?: number }, durationMs: number) => void;
+  /**
+   * `input` rides along because harness-refused calls (gate/pre-read/dedup/…)
+   * never fire `tool_call_start` — without it the telemetry row for a refusal
+   * persists `args_json='{}'`. `refusalKind` distinguishes synthesized
+   * refusals from genuine tool failures (both have isError=true).
+   */
+  tool_call_result: (id: string, name: string, result: { content: string; isError?: boolean; subUsage?: ChatUsage; rawChars?: number; input?: Record<string, unknown>; refusalKind?: string }, durationMs: number) => void;
   /**
    * Periodic heartbeat fired while a tool is in flight, and explicit
    * progress reports from cooperating tools (via `ctx.reportProgress`).
@@ -42,6 +48,14 @@ export interface RunnerEvents {
    * there for the persistence path.
    */
   tool_call_finalized: (id: string, info: { shapedChars: number }) => void;
+  /**
+   * One nested tool invocation inside a code_exec script settled (success,
+   * failure, or guard refusal). 103 code_exec rows could hide up to 50
+   * invisible calls each before this event existed — the index.ts listener
+   * persists these to coder_tool_calls with `parent_tool_use_id` set, OUT of
+   * the paired tool message (they have no matching tool_use block).
+   */
+  nested_tool_call: (payload: import('@mcp/code-agent/core/tool.js').NestedToolCallRecord) => void;
   /** Generic lifecycle for long async operations (provider/tool/subagent/task). */
   operation_started: (payload: AsyncOperationSnapshot) => void;
   operation_progress: (payload: AsyncOperationSnapshot) => void;
@@ -257,15 +271,26 @@ export interface RunnerEvents {
   }) => void;
   /** Emitted when the runner auto-continues after hitting maxTurns. */
   auto_continue: (count: number, max: number) => void;
-  /** Emitted per-turn with context size metrics for the dashboard. */
+  /**
+   * Emitted per-turn with honest context accounting — the SAME number the
+   * compaction gates act on. `prompt_tokens` is the TRUE prompt size of the
+   * last provider call (adapter-normalized `prompt_tokens_total`: includes
+   * cached slices on Anthropic-style APIs) or the calibrated tokenizer
+   * estimate when the provider omits usage. Single source of truth for the
+   * dashboard context bar — replaces mixing live `input_tokens` with the
+   * persisted cache-blind `last_turn_input_tokens` (the "70k jumps to 100k
+   * on send" bug).
+   */
   context_status: (payload: {
-    history_chars: number;
     turn: number;
-    max_turns: number;
-    auto_continue_count: number;
-    auto_continue_max: number;
-    last_turn_input_tokens: number;
-    context_window: number | null;
+    /** True prompt size (tokens) of the last provider call. */
+    prompt_tokens: number;
+    /** Where the number came from: provider usage or tokenizer estimate. */
+    source: 'usage' | 'estimate';
+    /** Effective context window of the active model (window − reserved output). */
+    context_window: number;
+    /** prompt_tokens / context_window (0 when window unknown). */
+    ratio: number;
   }) => void;
   /** Emitted when a fallback provider is activated due to persistent errors. */
   fallback_activated: (payload: {
@@ -499,40 +524,6 @@ export interface RunnerEvents {
         priorIsCompacted: boolean;
       }
   ) => void;
-  /**
-   * deepThink — emitted right before the auxiliary (cheap) model is asked
-   * to produce a pre-thought for the upcoming main-model turn. Only fires
-   * when `RunnerOptions.deepThink` is on AND `shouldRunPreThink` passes.
-   */
-  pre_think_started: (payload: {
-    runId: string;
-    turn: number;
-    model: string;
-    provider: string;
-  }) => void;
-  /** Streamed chunk of the auxiliary's pre-thought text. UI renders these
-   *  live, mirroring how `thinking_delta` works for native extended-thinking. */
-  pre_think_delta: (payload: {
-    runId: string;
-    turn: number;
-    text: string;
-  }) => void;
-  /** Auxiliary call finished successfully. `text` is the full concatenated
-   *  pre-thought (already trimmed). `usage` is the auxiliary's token usage —
-   *  the runner also accumulates it into `RunResult.totalUsage.aux_*`. */
-  pre_think_completed: (payload: {
-    runId: string;
-    turn: number;
-    text: string;
-    usage: ChatUsage | undefined;
-  }) => void;
-  /** Auxiliary call failed or timed out. The main-model turn proceeds
-   *  WITHOUT the prefilled `<thinking>` block — degrade silently. */
-  pre_think_failed: (payload: {
-    runId: string;
-    turn: number;
-    error: string;
-  }) => void;
   /**
    * Frente E — BT state dwell telemetry. Fires once per state transition,
    * carrying how long the BT spent in the state it just left and which

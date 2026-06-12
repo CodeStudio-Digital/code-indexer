@@ -1,8 +1,8 @@
 /**
  * DS Studio — a tela do Design System guiado: chat (sessão single com o
- * agente builder) | preview ao vivo da galeria (seleção de elementos,
- * problems feed) | rail de Versões/Componentes/Docs. Tudo keyed pelo
- * projeto-workspace; o botão Publicar manda uma mensagem pré-pronta no
+ * agente builder) | painel de conteúdo (Preview ao vivo OU Versões/
+ * Componentes/Docs) | rail vertical de ícones na borda direita. Tudo keyed
+ * pelo projeto-workspace; o botão Publicar manda uma mensagem pré-pronta no
  * chat (humano no loop — o agente roda audit → fix → publish).
  */
 import { useCallback, useEffect, useState } from 'react';
@@ -17,9 +17,33 @@ import {
   getDesignSystemSession,
   type DesignSystemSessionDetail,
 } from '../design-system-api.js';
-import { DsStudioRail } from './DsStudioRail.js';
+import { DsStudioRail, DsStudioTabContent, type DsStudioTab } from './DsStudioRail.js';
 
 const REFRESH_INTERVAL_MS = 5_000;
+const TAB_STORAGE_KEY = 'mcp.ds-studio.tab';
+const TAB_IDS: DsStudioTab[] = ['preview', 'versions', 'components', 'docs'];
+
+/** Aba ativa persistida ('none' = painel recolhido, só o chat + rail). */
+function usePersistedTab(): [DsStudioTab | null, (t: DsStudioTab | null) => void] {
+  const [value, setValue] = useState<DsStudioTab | null>(() => {
+    try {
+      const raw = window.localStorage.getItem(TAB_STORAGE_KEY);
+      if (raw === 'none') return null;
+      return TAB_IDS.includes(raw as DsStudioTab) ? (raw as DsStudioTab) : 'preview';
+    } catch {
+      return 'preview';
+    }
+  });
+  const set = useCallback((t: DsStudioTab | null) => {
+    setValue(t);
+    try {
+      window.localStorage.setItem(TAB_STORAGE_KEY, t ?? 'none');
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  return [value, set];
+}
 
 export function DsStudioView({
   dsSessionId,
@@ -34,6 +58,7 @@ export function DsStudioView({
   const { t } = useTranslation('designSystems');
   const [detail, setDetail] = useState<DesignSystemSessionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = usePersistedTab();
 
   const refresh = useCallback(async () => {
     try {
@@ -95,28 +120,44 @@ export function DsStudioView({
         </Button>
       </header>
 
-      <PanelGroup direction="horizontal" autoSaveId="mcp-ds-studio-horiz" className="min-h-0 flex-1">
-        <Panel id="ds-chat" order={1} defaultSize={40} minSize={26}>
-          <AgentChat
-            projectId={projectId}
-            projectName={project.name}
-            initialSessionId={initialCoderSessionId}
-            selectionPrefixSessionId={projectId}
-          />
-        </Panel>
-        <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40" />
-        <Panel id="ds-preview" order={2} defaultSize={38} minSize={24}>
-          <ProjectPreview
-            projectId={projectId}
-            pinnedPort={builderPort ?? undefined}
-            selectionEnabled={session.stack === 'react-ts'}
-          />
-        </Panel>
-        <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40" />
-        <Panel id="ds-rail" order={3} defaultSize={22} minSize={14}>
-          <DsStudioRail detail={detail} onChanged={() => void refresh()} />
-        </Panel>
-      </PanelGroup>
+      <div className="flex min-h-0 flex-1">
+        {/* Árvore ESTÁVEL no toggle: o Panel do chat é sempre o primeiro
+            filho do MESMO PanelGroup, então trocar/recolher a aba só
+            adiciona/remove o Panel de conteúdo — o AgentChat nunca desmonta
+            (o que derrubaria a sessão aberta). Mesmo padrão do ProjectView. */}
+        <PanelGroup direction="horizontal" autoSaveId="mcp-ds-studio-horiz" className="min-h-0 flex-1">
+          <Panel id="ds-chat" order={1} defaultSize={activeTab ? 45 : 100} minSize={26}>
+            <AgentChat
+              projectId={projectId}
+              projectName={project.name}
+              initialSessionId={initialCoderSessionId}
+              selectionPrefixSessionId={projectId}
+            />
+          </Panel>
+          {activeTab && (
+            <>
+              <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-primary/40" />
+              <Panel id="ds-content" order={2} defaultSize={55} minSize={24}>
+                {activeTab === 'preview' ? (
+                  <ProjectPreview
+                    key={projectId}
+                    projectId={projectId}
+                    pinnedPort={builderPort ?? undefined}
+                    selectionEnabled={session.stack === 'react-ts'}
+                    onHide={() => setActiveTab(null)}
+                  />
+                ) : (
+                  <DsStudioTabContent tab={activeTab} detail={detail} onChanged={() => void refresh()} />
+                )}
+              </Panel>
+            </>
+          )}
+        </PanelGroup>
+        <DsStudioRail
+          active={activeTab}
+          onSelect={(tab) => setActiveTab(activeTab === tab ? null : tab)}
+        />
+      </div>
     </div>
   );
 }

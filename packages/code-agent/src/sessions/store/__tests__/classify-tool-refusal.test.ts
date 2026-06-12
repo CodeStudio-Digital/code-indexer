@@ -24,6 +24,15 @@ describe('classifyToolRefusal', () => {
     ).toBe('user_denied');
   });
 
+  it('tags harness timeouts and aborts', () => {
+    expect(
+      classifyToolRefusal('[tool-timeout: `web_fetch` exceeded 300000ms. Tune MCP_TOOL_NORMAL_TIMEOUT_MS …]', true),
+    ).toBe('timeout');
+    expect(
+      classifyToolRefusal('[tool-aborted: `run_command` cancelled by user/session.]', true),
+    ).toBe('abort');
+  });
+
   it('leaves real tool errors untagged', () => {
     expect(classifyToolRefusal("'head' is not recognized as an internal command", true)).toBeNull();
   });

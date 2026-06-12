@@ -146,6 +146,64 @@ describe('find_tools — ranking quality', () => {
     // description (mentioned in two clauses). That's acceptable. We only
     // assert the noise tool is cut.
   });
+});
+
+describe('find_tools — discovery affordances (param summary + pin awareness)', () => {
+  function schemaRegistry(): ToolRegistry {
+    const r = new ToolRegistry();
+    r.register(tool('edit_file', 'Edit a file in place — apply a search/replace patch.', {
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          old_string: { type: 'string' },
+          new_string: { type: 'string' },
+          dry_run: { type: 'boolean' },
+        },
+        required: ['path', 'old_string', 'new_string'],
+      },
+    }));
+    return r;
+  }
+
+  async function findWithRunner(
+    registry: ToolRegistry,
+    query: string,
+    runner?: unknown,
+  ): Promise<string> {
+    const found = buildFindToolsTool(registry);
+    const result: ToolResult = await found.handler(
+      { query },
+      { cwd: '/tmp', projectName: 'test', runner } as never,
+    );
+    return typeof result.content === 'string' ? result.content : '';
+  }
+
+  it('candidates carry a compact arg summary (required first, optional with ?)', async () => {
+    const output = await findWithRunner(schemaRegistry(), 'edit file');
+    expect(output).toContain('args: ');
+    expect(output).toContain('path:string');
+    expect(output).toContain('dry_run?:boolean');
+    // Required params render before optional ones.
+    expect(output.indexOf('old_string:string')).toBeLessThan(output.indexOf('dry_run?:boolean'));
+  });
+
+  it('tier-hidden tools advertise the direct-call-pins path', async () => {
+    // edit_file is navigate-tier in the real tier map; runner only has bootstrap.
+    const output = await findWithRunner(schemaRegistry(), 'edit file', {
+      activeTiers: new Set(['bootstrap']),
+    });
+    expect(output).toContain('[hidden — call it directly (it will be pinned into your toolset)');
+    expect(output).toContain("expand_toolset('navigate')");
+  });
+
+  it('a pinned tool is reported visible even when its tier is inactive', async () => {
+    const output = await findWithRunner(schemaRegistry(), 'edit file', {
+      activeTiers: new Set(['bootstrap']),
+      pinnedTools: new Set(['edit_file']),
+    });
+    expect(output).not.toContain('[hidden');
+  });
 
   it('empty query errors out cleanly', async () => {
     const found = buildFindToolsTool(buildRegistry());

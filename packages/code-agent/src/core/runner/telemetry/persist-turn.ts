@@ -62,6 +62,8 @@ export interface PersistTurnTelemetryArgs {
   systemPromptChars?: number;
   /** Tools array (stringified JSON) size in chars shipped this turn. */
   toolsDefChars?: number;
+  /** How many tools were visible to the model this turn (mig 135). */
+  visibleToolsCount?: number;
   /** Sanitized provider request/response metadata (mig 093). */
   responseMeta?: ChatProviderResponseMeta | null;
 }
@@ -139,6 +141,7 @@ export function persistTurnTelemetry(args: PersistTurnTelemetryArgs): number | n
       paginate_count: paginate,
       system_prompt_chars: args.systemPromptChars ?? null,
       tools_def_chars: args.toolsDefChars ?? null,
+      visible_tools_count: args.visibleToolsCount ?? null,
       estimated_cost_usd: cost > 0 ? cost : null,
       response_meta: args.responseMeta ?? null,
     });

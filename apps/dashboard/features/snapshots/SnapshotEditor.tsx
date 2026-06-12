@@ -21,11 +21,17 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Plus } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { useConfirm } from '../../components/ui/dialog-provider.js';
-import { apiDelete, useApi } from '../../hooks/useApi.js';
+import { apiDelete, apiPut, useApi } from '../../hooks/useApi.js';
 import { SnapshotList } from './parts/SnapshotList.js';
 import { SnapshotDetail } from './parts/SnapshotDetail.js';
 import { SnapshotForm } from './parts/SnapshotForm.js';
+import { MemoryHealthCard } from './parts/MemoryHealthCard.js';
 import type { Snapshot } from './snapshot-types.js';
+
+/** Pin = boost retrieval salience; unpin returns to the default mid-weight. */
+const PIN_IMPORTANCE = 0.95;
+const UNPIN_IMPORTANCE = 0.5;
+export const PIN_THRESHOLD = 0.9;
 
 interface SnapshotEditorProps {
   projectId: number;
@@ -88,6 +94,17 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
     refetch();
   };
 
+  // Pin = importance boost so the memory wins retrieval ranking + the
+  // turn-1 index. Metadata-only PUT (no version row, no re-embed).
+  const handleTogglePin = async () => {
+    if (!selected) return;
+    const pinned = (selected.importance ?? 0.5) >= PIN_THRESHOLD;
+    await apiPut(`/snapshots/${selected.id}`, {
+      importance: pinned ? UNPIN_IMPORTANCE : PIN_IMPORTANCE,
+    });
+    refetch();
+  };
+
   if (loading) {
     return (
       <div className="px-4 py-6 text-sm text-muted-foreground">
@@ -97,7 +114,9 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
   }
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="flex flex-col h-full min-h-0">
+      <MemoryHealthCard projectId={projectId} />
+      <div className="flex flex-1 min-h-0">
       <PanelGroup
         direction="horizontal"
         autoSaveId="snapshots-editor-cols"
@@ -132,6 +151,7 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
               snapshot={selected}
               onEdit={handleEdit}
               onDelete={handleDelete}
+              onTogglePin={handleTogglePin}
             />
           ) : (
             <EmptyDetail onNew={handleNew} />
@@ -149,6 +169,7 @@ export default function SnapshotEditor({ projectId }: SnapshotEditorProps) {
         }}
         onSaved={refetch}
       />
+      </div>
     </div>
   );
 }

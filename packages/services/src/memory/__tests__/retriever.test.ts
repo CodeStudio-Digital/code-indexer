@@ -31,10 +31,42 @@ function fakeAccess(): AccessMarker & { ids: number[] } {
 describe('MemoryRetriever', () => {
   it('skips retrieval (no search) for a too-short query', async () => {
     let called = false;
+    let logged: string | null = null;
     const search: SnapshotSearch = { async searchSnapshotsHybrid() { called = true; return []; } };
-    const out = await new MemoryRetriever(search, fakeAccess()).retrieve(1, 'p', 'short');
+    const out = await new MemoryRetriever(search, fakeAccess(), {
+      log: (event) => { logged = event; },
+    }).retrieve(1, 'p', 'fix'); // 3 chars < default min 4 (lowered from 12)
     expect(out).toEqual([]);
     expect(called).toBe(false);
+    expect(logged).toBe('skip_short_query');
+  });
+
+  it('retrieves for short-but-real queries that the old 12-char gate dropped', async () => {
+    let called = false;
+    const search: SnapshotSearch = { async searchSnapshotsHybrid() { called = true; return []; } };
+    await new MemoryRetriever(search, fakeAccess()).retrieve(1, 'p', 'fix auth');
+    expect(called).toBe(true);
+  });
+
+  it('recall returns full content with category/source, honours limit, marks access', async () => {
+    const search: SnapshotSearch = {
+      async searchSnapshotsHybrid() {
+        return [snap(1, 'A', 'full A', 0.9), snap(2, 'B', 'full B', 0.8), snap(3, 'C', 'full C', 0.7)];
+      },
+    };
+    const access = fakeAccess();
+    const out = await new MemoryRetriever(search, access).recall(1, 'p', 'gotcha', 2);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ title: 'A', content: 'full A', category: 'note', source: 'manual' });
+    expect(access.ids).toEqual([1, 2]);
+  });
+
+  it('recall has no min-query gate (explicit call is intent)', async () => {
+    let called = false;
+    const search: SnapshotSearch = { async searchSnapshotsHybrid() { called = true; return []; } };
+    const out = await new MemoryRetriever(search, fakeAccess()).recall(1, 'p', 'ab');
+    expect(called).toBe(true);
+    expect(out).toEqual([]);
   });
 
   it('returns [] when search yields nothing', async () => {

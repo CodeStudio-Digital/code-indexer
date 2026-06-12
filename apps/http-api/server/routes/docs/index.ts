@@ -25,6 +25,7 @@ import { accessSync, statSync, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import { mountDocsProjectLinkRoutes } from './project-links.js';
 import { attachHeartbeat } from '../../../sse/SSEHeartbeat.js';
 import {
   DocError,
@@ -116,6 +117,10 @@ interface CreateFolderSourceBody {
 export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
   const { docStore, indexDocsUseCase, docHybridSearch, docProgressTracker } = deps;
   console.log('[doc-routes] mounted /api/docs/*');
+
+  // Project ↔ collection links (migration 134) — sub-mounted to keep this
+  // file under control.
+  mountDocsProjectLinkRoutes(app, deps);
 
   // ─── Collections ─────────────────────────────────────────────────
 

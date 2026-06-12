@@ -94,6 +94,13 @@ export interface RunnerOptions {
   /** Initial set of active tool tiers. Filters tools array each turn. */
   activeTiers?: Set<ToolTier>;
   /**
+   * Seed for the runner's pinned-tool set — hidden tools the model called
+   * by name in a PRIOR run of this session (re-derived from history on
+   * resume; never persisted). Pinned tools bypass the tier filter and
+   * survive the model's maxTools cap.
+   */
+  initialPinnedTools?: Iterable<string>;
+  /**
    * Profile shorthand — expanded into `activeTiers` if not explicitly set.
    * 'bootstrap' → ~13 essentials; 'navigate' adds edit/git read; 'full' adds admin.
    */
@@ -140,30 +147,6 @@ export interface RunnerOptions {
    * whose extended-thinking surface accepts a budget (Anthropic).
    */
   thinkingBudgetTokens?: number;
-  /**
-   * Simulated deep-thinking — orthogonal to `thinking`. When true, BEFORE
-   * each main-model turn the runner asks a cheaper auxiliary model for
-   * inner reasoning, then prefills an `<thinking data-source="aux">…</thinking>`
-   * block. Independent of `thinking`: both can be on, both can be off.
-   */
-  deepThink?: boolean;
-  /** Model id for the auxiliary pre-think call. Default 'claude-haiku-4-5-20251001'. */
-  deepThinkModel?: string;
-  /** Provider name for the auxiliary call. Default 'anthropic'. */
-  deepThinkProvider?: string;
-  /** When false (default), skip pre-think on tool_result turns. */
-  preThinkOnToolResults?: boolean;
-  /** Hard timeout for the auxiliary call (ms). Default 8000. */
-  preThinkTimeoutMs?: number;
-  /**
-   * Persist injected `<thinking data-source="aux">` blocks so future turns
-   * see accumulated reasoning. Default true.
-   */
-  persistPreThoughts?: boolean;
-  /** How many pre-think blocks to keep in history. Default 3. */
-  preThinkHistoryWindow?: number;
-  /** Minimum approx token count of last user input to fire pre-think. Default 0. */
-  preThinkMinInputTokens?: number;
   /** Fallback chain for automatic provider recovery on persistent errors. */
   fallbackChain?: import('@mcp/code-agent/core/fallback.js').FallbackChain;
   /** Factory function to create a new provider for fallback. */
@@ -222,17 +205,26 @@ export interface RunnerOptions {
     totalAutoReviews: number;
   } | null;
   /**
-   * Session Drive injection (migrations 125/126) — host-provided sync read of
-   * the session's compaction-surviving working memory: the active plan, pinned
-   * notes, and a count of available investigations. The Executing node folds
-   * these into the dynamic injector each turn. Unset (company sessions, tests)
-   * = no Session Drive injection.
+   * Session State Block data — host-provided sync read of the session's
+   * persisted state (goal, active plan, todos, notes, changed files,
+   * investigation count). The Executing node renders + injects it per the
+   * window-scaled policy (`assembly/injection-policy.ts`) so continuity never
+   * depends on summarization alone. Unset (company sessions, tests) = off.
    */
-  getSessionDriveInjection?: () => {
+  getSessionStateData?: () => {
+    goal: { text: string; status: string } | null;
     activePlan: { text: string; status: string } | null;
-    sessionMemory: ReadonlyArray<{ id: string; title: string; body: string }>;
+    todos: ReadonlyArray<{ status: string; label: string }>;
+    notes: ReadonlyArray<{ id: string; title: string; body: string; kind: string; pinned: boolean }>;
+    filesChanged: ReadonlyArray<string>;
     investigationCount: number;
   } | null;
+  /**
+   * Project memory index (MEMORY.md-style top-N titles) — injected at
+   * turn 1 / post-compaction so the session knows what the project already
+   * learned (full bodies via the recall_memory tool). Unset = off.
+   */
+  getProjectMemoryIndex?: () => ReadonlyArray<{ title: string; category: string }> | null;
   /**
    * Phase 2 hardening: explicit escape hatch for admin-level operations.
    * Today the runner constructs the policy context with `strict: false`.

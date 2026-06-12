@@ -10,6 +10,8 @@
  * who it is). `window.__pluginContext` ({ namespace, projectId }) is injected
  * separately by WebviewWindow before this script runs.
  */
+import { PLUGIN_UI_KIT_CSS } from './plugin-ui-kit/index.js';
+
 export const PLUGIN_IFRAME_RUNTIME = `(function () {
   var seq = 0;
   var pending = {};
@@ -132,13 +134,27 @@ export function buildIframeInjection(
   ].join('\n');
 }
 
-/** Splice the injection into a plugin's HTML (before </head>, else prepend). */
+/**
+ * Splice the kit + injection into a plugin's HTML. Placement is deliberate:
+ * the UI kit goes right AFTER `<head>` opens so the author's own <style>
+ * (later in the head) overrides any `.mcp-*` rule by cascade order, while
+ * context/theme/shim keep going right BEFORE `</head>` (after author styles —
+ * theme vars are :root declarations, no class conflicts; the shim must be
+ * defined before body scripts run). HTML without a <head> degrades to
+ * injection → kit → original markup, preserving both orderings.
+ */
 export function injectIntoHtml(
   html: string,
   context: { namespace: string; projectId?: number; locale?: string },
   themeTokens: Record<string, string>,
 ): string {
+  const kit = `<style id="mcp-ui-kit">${PLUGIN_UI_KIT_CSS}</style>`;
   const injection = buildIframeInjection(context, themeTokens);
-  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${injection}\n</head>`);
-  return `${injection}\n${html}`;
+  const headOpen = /<head[^>]*>/i.exec(html);
+  const at = headOpen ? headOpen.index + headOpen[0].length : -1;
+  const withKit = headOpen
+    ? `${html.slice(0, at)}\n${kit}${html.slice(at)}`
+    : `${kit}\n${html}`;
+  if (/<\/head>/i.test(withKit)) return withKit.replace(/<\/head>/i, `${injection}\n</head>`);
+  return `${injection}\n${withKit}`;
 }

@@ -14,6 +14,7 @@ import { statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 import type { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import {
   readFileSlice,
@@ -53,7 +54,9 @@ const handleReadFile: OverlayHandler = {
       const actualEnd = Math.min(total, end);
       const header = `${filePath} ${OVERLAY_TAG} (lines ${start}-${actualEnd} of ${total})`;
       const body = lines.map((l, i) => `${(start + i).toString().padStart(5)}\t${l}`).join('\n');
-      const footer = actualEnd < total ? `\n... [${total - actualEnd} more lines — pass start_line/end_line to read more]` : '';
+      const footer = actualEnd < total
+        ? `\n... ${truncationMarker(`${total - actualEnd} more lines`, 'pass start_line/end_line to read more')}`
+        : '';
       return ok(`${header}\n${body}${footer}`);
     } catch (e) {
       return err(`overlay read_file failed for ${filePath}: ${e instanceof Error ? e.message : String(e)}`);

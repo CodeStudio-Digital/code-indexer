@@ -87,7 +87,7 @@ describe('ExecutingNode', () => {
     // `length <= 1` guard), so reaching TokenThresholdHit here can ONLY come
     // from the post-response ESTIMATE fallback.
     const limits = deriveTokenLimits('claude-haiku-4-5-20251001');
-    const targetTokens = Math.floor(limits.effective * 0.8); // > 0.70 trigger
+    const targetTokens = Math.floor(limits.effective * 0.95); // > 0.90 trigger
     const unit = 'lorem ipsum dolor ';
     const filler = unit.repeat(Math.ceil((targetTokens * 4) / unit.length));
     // A tool_use turn (text-only turns end the run before the compaction gate).
@@ -136,6 +136,60 @@ describe('ExecutingNode', () => {
     // tool_call_result event was emitted.
     const toolEvent = recordedEvents.find((e) => e.event === 'tool_call_result');
     expect(toolEvent).toBeDefined();
+  });
+
+  it('emits context_status with the cache-inclusive prompt total from usage', async () => {
+    const { ctx, recordedEvents } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'tool_call_start', id: 'tu1', name: 'echo' },
+        { type: 'tool_call_end', id: 'tu1', name: 'echo', input: { msg: 'hi' } },
+        {
+          type: 'usage',
+          // Anthropic-style: input excludes cache; adapter normalizes the total.
+          usage: {
+            input_tokens: 100,
+            output_tokens: 5,
+            cache_read_input_tokens: 900,
+            prompt_tokens_total: 1000,
+          } as ChatUsage,
+        },
+        { type: 'done', stop_reason: 'tool_use' },
+      ]),
+      registry: makeRegistry({ echo: (input) => `echo: ${input.msg}` }),
+      toolContext: emptyToolContext(),
+    });
+
+    await new ExecutingNode().execute(ctx, null);
+
+    const cs = recordedEvents.find((e) => e.event === 'context_status');
+    expect(cs).toBeDefined();
+    const payload = (cs!.args as [
+      { prompt_tokens: number; source: string; context_window: number; ratio: number },
+    ])[0];
+    expect(payload.prompt_tokens).toBe(1000); // NOT the cache-blind 100
+    expect(payload.source).toBe('usage');
+    expect(payload.context_window).toBeGreaterThan(0);
+    expect(payload.ratio).toBeCloseTo(1000 / payload.context_window, 5);
+  });
+
+  it('emits context_status from the estimate when the provider omits usage', async () => {
+    const { ctx, recordedEvents } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'tool_call_start', id: 'tu1', name: 'echo' },
+        { type: 'tool_call_end', id: 'tu1', name: 'echo', input: { msg: 'hi' } },
+        { type: 'done', stop_reason: 'tool_use' },
+      ]),
+      registry: makeRegistry({ echo: (input) => `echo: ${input.msg}` }),
+      toolContext: emptyToolContext(),
+    });
+
+    await new ExecutingNode().execute(ctx, null);
+
+    const cs = recordedEvents.find((e) => e.event === 'context_status');
+    expect(cs).toBeDefined();
+    const payload = (cs!.args as [{ prompt_tokens: number; source: string }])[0];
+    expect(payload.source).toBe('estimate');
+    expect(payload.prompt_tokens).toBeGreaterThan(0);
   });
 
   it('routes to ToolLoopDetected after 3 identical calls (tuple-hash refuse)', async () => {

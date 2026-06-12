@@ -32,6 +32,12 @@ const DiffMount = lazy(() =>
 const MarkdownView = lazy(() =>
   import('./editor/MarkdownView.js').then((m) => ({ default: m.MarkdownView })),
 );
+const GitLogView = lazy(() =>
+  import('./jetbrains/tool-windows/git/GitLogView.js').then((m) => ({ default: m.GitLogView })),
+);
+const StashDetailView = lazy(() =>
+  import('./jetbrains/tool-windows/git/StashDetailView.js').then((m) => ({ default: m.StashDetailView })),
+);
 
 function isMarkdownPath(path: string): boolean {
   return /\.(md|markdown|mdx)$/i.test(path);
@@ -55,7 +61,11 @@ export function EditorPane() {
               </div>
             }
           >
-            {activeFile.kind === 'diff' ? (
+            {activeFile.kind === 'git-log' ? (
+              <GitLogView tab={activeFile} />
+            ) : activeFile.kind === 'git-stash' ? (
+              <StashDetailView tab={activeFile} />
+            ) : activeFile.kind === 'diff' ? (
               <DiffMount diff={activeFile} />
             ) : isMarkdownPath(activeFile.path) ? (
               <MarkdownView file={activeFile} />

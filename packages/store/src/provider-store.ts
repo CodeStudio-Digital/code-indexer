@@ -33,7 +33,6 @@ export type {
   ProviderConfig,
   ProviderModel,
   OAuthTokenRow,
-  DeepThinkDefaults,
   EmbeddingKind,
   EmbeddingConfigRow,
   VectorStoreKind,
@@ -51,7 +50,6 @@ import type {
   ProviderModel,
   UpsertProviderInput,
   UpsertModelInput,
-  DeepThinkDefaults,
   OAuthTokenRow,
   EmbeddingConfigRow,
   VectorStoreConfigRow,
@@ -99,13 +97,11 @@ export class ProviderStore {
   upsertManualModelPrice(input: UpsertModelPriceInput): void { modelPrices.upsertManualPrice(this.db, input); }
   seedHardcodedModelPrices(seed: UpsertModelPriceInput[]): number { return modelPrices.seedHardcodedPricesIfMissing(this.db, seed); }
 
-  // ─── App Settings & General Default & deepThink & Fallback ─────
+  // ─── App Settings & General Default & Fallback ─────
   getAppSetting(key: string): string | null { return appSettings.getAppSetting(this.db, key); }
   setAppSetting(key: string, value: string): void { appSettings.setAppSetting(this.db, key, value); }
   getGeneralDefault(): { providerId: string; modelId: string } | null { return appSettings.getGeneralDefault(this.db); }
   setGeneralDefault(providerId: string, modelId: string): void { appSettings.setGeneralDefault(this.db, providerId, modelId); }
-  getDeepThinkDefaults(): DeepThinkDefaults | null { return appSettings.getDeepThinkDefaults(this.db); }
-  setDeepThinkDefaults(defaults: DeepThinkDefaults): void { appSettings.setDeepThinkDefaults(this.db, defaults); }
   getFallbackChain(providerId: string): Array<{ provider: string; model: string }> { return appSettings.getFallbackChain(this.db, providerId); }
   setFallbackProvider(providerId: string, fallbackProviderId: string | null): void { appSettings.setFallbackProvider(this.db, providerId, fallbackProviderId); }
 

@@ -4,12 +4,15 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parsePluginManifest } from '../manifest/schema.js';
+import { buildPluginUi } from './build-ui.js';
 import type { PluginModule } from '../contributions/types.js';
 
 export interface BuildResult {
   bundle: string;
   appJson: string;
   tools: number;
+  /** Self-contained HTML files emitted from `ui/*.template.html` (if any). */
+  uiFiles: string[];
 }
 
 /**
@@ -58,5 +61,6 @@ export async function buildPlugin(dir: string): Promise<BuildResult> {
   };
   const appJson = join(root, '.app.json');
   await writeFile(appJson, `${JSON.stringify(app, null, 2)}\n`);
-  return { bundle, appJson, tools: pm.tools.length };
+  const ui = await buildPluginUi(root);
+  return { bundle, appJson, tools: pm.tools.length, uiFiles: ui.written };
 }

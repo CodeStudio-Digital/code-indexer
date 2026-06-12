@@ -41,6 +41,7 @@ export interface ProviderModalProps {
   onToggleModel: (modelId: string, mode: string, enabled: boolean) => void;
   onSetModelEffort: (modelId: string, mode: string, level: string | null) => void;
   onSetModelContextWindow: (modelId: string, mode: string, value: number | null) => void;
+  onSetModelMaxTools: (modelId: string, mode: string, value: number | null) => void;
   onBackfillContextWindows: () => void;
   onSetFallback: (providerId: string, fallbackProviderId: string | null) => void;
   onSetSubagentTarget: (

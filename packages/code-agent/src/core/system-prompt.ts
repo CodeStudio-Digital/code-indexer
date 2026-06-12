@@ -90,6 +90,16 @@ export interface PromptContext {
    * agent knows which external tool groups are available for on-demand expansion.
    */
   customTiers?: Array<{ tier: string; displayName: string; toolCount: number }>;
+  /**
+   * Model catalog cap vs. full registry size, computed once at session
+   * start. When the cap is smaller than the catalog, a "Tool visibility"
+   * block renders BELOW the dynamic boundary (it varies by model and
+   * registry size, so it must not pollute the shared static prefix)
+   * teaching the model the find_tools → direct-call-pins → expand_toolset
+   * ladder. Numbers are session-start values — fine if slightly stale
+   * after tier promotions.
+   */
+  toolCap?: { maxTools: number; approxCatalog: number };
   /** Session ID for skill template variable interpolation. */
   sessionId?: string;
   /**
@@ -280,20 +290,22 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 - \`cancel_tasks\` / \`delete_tasks\` / \`archive_task_list\`: use these to abandon, remove, or clear task rounds. Never reuse legacy ids like \`task_1\` as executable ids.
 `;
 
-  // Session Drive — single-session durable working memory. Gated on
-  // ctx.sessionDrive (true only for non-company sessions, where the
-  // save_note / list_notes / read_plan / recall_investigations tools are
-  // registered). Session-fixed → cache-stable, stays in the static prefix.
+  // Session & project memory — single-session durable working memory plus
+  // the cross-session project memory. Gated on ctx.sessionDrive (true only
+  // for non-company sessions, where the save_note / list_notes / read_plan /
+  // recall_investigations / recall_memory tools are registered).
+  // Session-fixed → cache-stable, stays in the static prefix.
   const sessionDriveSection = ctx.sessionDrive
     ? `
 
-# Session working memory
-This session has a durable working memory (the Session Drive panel) that survives context compaction:
-- \`save_note({title, body, kind?})\` — record a decision, a non-obvious fact, a risk, or a TODO you'd regret losing when older turns get summarized. \`title\` is the key (re-saving it updates the note). Save as you go; don't wait until the end.
-- \`list_notes\` — review the notes you've saved.
+# Session & project memory
+This session has a durable working memory (the Session Drive panel) plus a cross-session PROJECT MEMORY:
+- \`save_note({title, body, kind?, scope?})\` — scope 'session' (default): a decision, a non-obvious fact, a risk, or a TODO you'd regret losing when older turns get summarized (\`title\` is the key; re-saving updates it). scope 'project': a DURABLE fact about THIS CODEBASE — a non-obvious gotcha you hit, a convention you confirmed, a decision with its why, a recipe that worked. Save project memory AS YOU LEARN IT, not at the end; never save transient task state or file dumps to project scope.
+- \`recall_memory({query})\` — fetch full project memories by meaning BEFORE re-exploring something this project likely already learned (the memory index in context shows titles only).
+- \`list_notes\` — review the session notes you've saved.
 - \`read_plan\` — re-read the plan you submitted; it is otherwise invisible once it scrolls out of context.
 - \`recall_investigations({query})\` — BEFORE spawning an explore subagent, check past (auto-saved) sub-agent findings and reuse them instead of paying to re-investigate.
-These notes are SESSION-local. For durable, cross-session project knowledge, use \`mcp__save_memory\` instead.`
+The runner re-injects your plan, notes and session state automatically after compaction — you don't need to re-call read_plan/list_notes for what that block already shows.`
     : '';
 
   // Static "agent loop" + "do not re-read" + "active context pointer". The
@@ -332,6 +344,7 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   // exactly here.
 
   const customTiersText = customTiersBlock(ctx.customTiers);
+  const toolCapText = toolCapBlock(ctx.toolCap);
 
   // Plugin hook — projects can drop `.mcp-indexer/hooks/system-prompt.js`
   // to append extra instructions without forking the coder. Runs in a vm
@@ -351,7 +364,7 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   // ctx.repoMap is empty/undefined and this collapses to nothing.
   const repoMapBlock = ctx.repoMap && ctx.repoMap.length > 0 ? `\n\n${ctx.repoMap}` : '';
 
-  const dynamicSuffix = `${customTiersText}${extraBlock}${repoMapBlock}`;
+  const dynamicSuffix = `${toolCapText}${customTiersText}${extraBlock}${repoMapBlock}`;
   // ALWAYS emit the boundary, even when the dynamic suffix is empty. The
   // marker itself costs ~50 chars but it gives consumers a byte-stable
   // hinge to split on — splitting tests, cache-instrumentation code, and
@@ -437,6 +450,28 @@ Rule of thumb: stay in bootstrap for informational questions. Unlock navigate th
   return `# Tool tiers
 You started in the **navigate** tier. Bootstrap + write/edit/shell/git-read/deep-navigation tools are visible (including \`save_memory\` to persist durable project memory). Admin tools (git_commit, add_snapshot, index_project, costs/models, snapshot mutations) are HIDDEN — call \`expand_toolset({tier: "admin"})\` ONLY when the user explicitly asks for them.
 `;
+}
+
+/**
+ * Render the "Tool visibility" block for models whose catalog cap is smaller
+ * than the full registry (weak models — GLM flash class — get ~32 tools).
+ * Without this the model has no idea tools were trimmed and never reaches
+ * for find_tools. Lives BELOW the dynamic boundary: the text varies by
+ * (model, registry size), so placing it in the static prefix would break
+ * cross-session prefix sharing for the same (project, provider, profile)
+ * tuple. Within a session it is byte-stable across turns.
+ */
+function toolCapBlock(toolCap?: { maxTools: number; approxCatalog: number }): string {
+  if (!toolCap || toolCap.maxTools >= toolCap.approxCatalog) return '';
+  return (
+    '\n\n# Tool visibility (model-adapted)\n' +
+    `Your visible tool list is trimmed to at most ${toolCap.maxTools} high-priority tools for this model; ` +
+    `the full catalog is larger (~${toolCap.approxCatalog} tools). Hidden tools remain fully usable:\n` +
+    '1. `find_tools("<capability>")` returns exact names + argument summaries.\n' +
+    '2. Calling a discovered tool by name WORKS even while hidden — it executes and is pinned into your visible list from the next turn.\n' +
+    '3. `expand_toolset({tier: "<name>"})` unlocks a whole tier when you need several of its tools.\n' +
+    'Never invent tool names — discover first, then call.\n'
+  );
 }
 
 /**

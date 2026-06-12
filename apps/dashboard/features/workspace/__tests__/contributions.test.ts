@@ -13,7 +13,7 @@ describe('collectContributions', () => {
             { id: 'dark', label: 'A Dark', appearance: 'dark', tokens: { '--primary': '#111' } },
           ],
           commands: [{ id: 'c', label: 'C' }],
-          toolWindows: [{ id: 'w', title: 'W', side: 'right', entry: 'ui/p.html' }],
+          toolWindows: [{ id: 'w', title: 'W', icon: 'cloud', side: 'right', entry: 'ui/p.html' }],
         },
       },
       {
@@ -27,6 +27,8 @@ describe('collectContributions', () => {
     expect(result.themes[0].pluginNs).toBe('a');
     expect(result.commands).toHaveLength(1);
     expect(result.toolWindows[0].side).toBe('right');
+    // Declared icon names ride along (rails map them via pluginWindowIcon).
+    expect(result.toolWindows[0].icon).toBe('cloud');
   });
 });
 

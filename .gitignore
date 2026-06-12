@@ -20,3 +20,4 @@ worker-market/.wrangler/
 worker-market/.deploy.*
 .tmp-deploy/
 .tmp-smoke/
+.smoke/

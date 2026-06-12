@@ -24,6 +24,8 @@ export interface RecordTurnTelemetryInput {
   system_prompt_chars?: number | null;
   /** Tools array (JSON-stringified) size in chars on this turn. Migration 072. */
   tools_def_chars?: number | null;
+  /** How many tools were visible to the model this turn. Migration 135. */
+  visible_tools_count?: number | null;
   /** USD cost computed from pricing table. Migration 072. */
   estimated_cost_usd?: number | null;
   /** Sanitized provider request/response metadata. Migration 093. */
@@ -56,14 +58,14 @@ export function record(db: DB, input: RecordTurnTelemetryInput): number | null {
           cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens,
           history_chars, tool_count, tools_called_json,
           largest_tool_result_chars, compaction_triggered, summarizer_ran, paginate_count,
-          system_prompt_chars, tools_def_chars, estimated_cost_usd,
+          system_prompt_chars, tools_def_chars, visible_tools_count, estimated_cost_usd,
           request_api_model, request_requested_model, request_display_model,
           request_max_tokens, request_stream, request_betas_json,
           request_thinking_type, request_effort,
           response_status, response_ok, response_request_id,
           response_retry_after, response_x_should_retry,
           response_rate_limits_json, response_path
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.session_id, input.run_id, input.turn, input.is_subagent ? 1 : 0,
@@ -77,6 +79,7 @@ export function record(db: DB, input: RecordTurnTelemetryInput): number | null {
         input.paginate_count,
         input.system_prompt_chars ?? null,
         input.tools_def_chars ?? null,
+        input.visible_tools_count ?? null,
         input.estimated_cost_usd ?? null,
         request?.api_model ?? null,
         request?.requested_model ?? null,

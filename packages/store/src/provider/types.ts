@@ -61,6 +61,13 @@ export interface ProviderModel {
   visibility: string | null;
   supported_in_api: boolean | null;
   input_modalities: string[] | null;
+  /**
+   * Admin-set cap on how many tools the coder ships to this model per turn
+   * (migration 135). NULL = use the static MODEL_REGISTRY / prefix
+   * fallbacks. Live discovery never supplies it; preserved across
+   * `replaceFromSource` refreshes like `default_reasoning_level`.
+   */
+  max_tools: number | null;
 }
 
 export interface OAuthTokenRow {
@@ -71,24 +78,6 @@ export interface OAuthTokenRow {
   scope: string | null;
   extra: Record<string, unknown>;
   updated_at: string;
-}
-
-/**
- * Operator-pinned defaults for the simulated deepThink mode. When the chat
- * composer toggles `deepthink+` without overriding fields, the runner reads
- * these to pick the auxiliary model + tuning knobs.
- */
-export interface DeepThinkDefaults {
-  provider: string | null;
-  model: string | null;
-  /** Hard timeout for the auxiliary call (ms). Default 8000 when null. */
-  timeoutMs: number | null;
-  /** How many <thinking data-source="aux"> blocks to keep in history. Default 3. */
-  historyWindow: number | null;
-  /** Skip auxiliary when last user text is shorter than this (~chars/4). Default 0 (no filter). */
-  minInputTokens: number | null;
-  /** Run pre-think on tool_result turns too. Default false. */
-  preThinkOnToolResults: boolean;
 }
 
 export type EmbeddingKind = 'cloudflare' | 'bedrock' | 'local' | 'null';
@@ -185,6 +174,8 @@ export interface UpsertModelInput {
   visibility?: string | null;
   supported_in_api?: boolean | null;
   input_modalities?: string[] | null;
+  /** Seed for newly seen rows only — existing rows keep the admin's value. */
+  max_tools?: number | null;
 }
 
 /**

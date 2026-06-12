@@ -80,6 +80,10 @@ export interface CoderSessionStats {
   total_cache_read_tokens: number;
   total_cache_creation_tokens: number;
   last_turn_input_tokens: number;
+  /** Cache-inclusive prompt size of the last assistant turn (input + cache
+   *  read + cache creation) — the at-rest counterpart of the live
+   *  `context_status.prompt_tokens`. Null for sessions with no turns. */
+  last_turn_prompt_tokens?: number | null;
   /** Model context window size — returned by the stats API. */
   context_window?: number | null;
   message_count: number;

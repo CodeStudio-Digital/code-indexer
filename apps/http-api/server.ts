@@ -57,7 +57,6 @@ import {
   type WatchdogChatRunner,
 } from '@mcp/services/quality/index.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
-import { DEFAULT_MIN_RELEVANCE } from '@mcp/services/services/docs/index.js';
 import { setGlobalSubAgentCache } from '@mcp/services/sub-agent-cache/index.js';
 import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relevance/index.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
@@ -106,6 +105,8 @@ import { mountDocsRoutes } from './server/routes/docs/index.js';
 import { mountDocsAgentRoutes } from './server/routes/docs-agent/index.js';
 import { setChromeServiceForDocs } from './server/deps.js';
 import { setGlobalDocSearch } from '@mcp/code-agent/tools/rag-search-docs.js';
+import { setGlobalDocsHintProvider } from '@mcp/code-agent/core/docs-hint.js';
+import { buildDocSearchBackend, buildDocsHintProvider } from './server/docs/search-backend.js';
 import { setGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
 import { createVisionDescriber } from './server/vision-describer-impl.js';
 import {
@@ -118,6 +119,7 @@ import { McpExternalPool, setGlobalMcpExternalPool } from './sse/McpExternalPool
 // Frente E — periodic watchdog for stuck coder_sessions. Started during
 // server bootstrap below; auto-`unref()` so it never holds process exit.
 import { startCoderWatchdog } from './sse/coder-watchdog.js';
+import { startMemorySweeper, memorySweeperEnabled } from './sse/memory-sweeper.js';
 import { AppSettingsStore } from '@mcp/store/app-settings-store.js';
 import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
@@ -475,6 +477,22 @@ export function createApp() {
     console.warn(`[coder/watchdog] failed to start: ${e instanceof Error ? e.message : String(e)}`);
   }
 
+  // Idle memory sweeper — distills project memory from sessions that went
+  // quiet (the moment most sessions actually "end"). Same lifecycle posture
+  // as the watchdog: unref()-ed timer, best-effort, flag-gated
+  // (MCP_MEMORY_SWEEPER=0 disables).
+  if (memorySweeperEnabled()) {
+    try {
+      startMemorySweeper({
+        sessionStore: deps.sessionStore,
+        db: deps.db,
+        runEndMemory: deps.runEndMemory,
+      });
+    } catch (e) {
+      console.warn(`[memory/sweeper] failed to start: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   // Phase A "living company": surface any sessions that carry pending
   // master inbox messages from before the restart. Orchestrators are
   // lazy (built on first dashboard visit / stream reconnect), so the
@@ -684,31 +702,18 @@ export function createApp() {
   // backend the `rag_search_docs` agent tool reads from at call time, so
   // the moment routes are live, every agent in this process can search.
   mountDocsRoutes(app, deps);
-  // Env-flag-aware adapter — the tool interface (DocSearchBackend in
-  // packages/code-agent) only exposes {query,collection,limit}, so the
-  // enhancements (rewrite + rerank) + relevance threshold live in this
-  // wrapper. They default ON so the first-line `rag_search_docs` every
-  // agent reaches for gets calibrated relevance and an honest "no good
-  // match" without opting in. Set the env var to '0' to disable.
-  //   DOCS_RAG_REWRITE=0  → query rewriter OFF
-  //   DOCS_RAG_RERANK=0   → reranker OFF (also disables calibrated scores)
-  // Both still degrade to no-op when the corresponding binding is
-  // unconfigured in the admin panel — flags only control the OPT-IN.
-  const docsRagRewrite = process.env.DOCS_RAG_REWRITE !== '0';
-  const docsRagRerank = process.env.DOCS_RAG_RERANK !== '0';
-  const docSearchBackend = {
-    search: async (input: Parameters<typeof deps.docHybridSearch.search>[0]) => {
-      return deps.docHybridSearch.search({
-        // Threshold weak hits so the tool can report "nothing relevant"
-        // instead of citing junk. Only bites when rerank produced
-        // calibrated scores; a caller-supplied value still wins.
-        min_relevance: DEFAULT_MIN_RELEVANCE,
-        ...input,
-        enhancements: { rewrite: docsRagRewrite, rerank: docsRagRerank },
-      });
-    },
-  };
+  // Backend behind rag_search_docs / rag_read_doc — project scoping,
+  // enhancement env-flags and the readChunk verb live in the builder
+  // (server/docs/search-backend.ts).
+  const docSearchBackend = buildDocSearchBackend({
+    docHybridSearch: deps.docHybridSearch,
+    docStore: deps.docStore,
+  });
   setGlobalDocSearch(docSearchBackend);
+  // <indexed-docs> per-turn hint — lists project-linked collections so
+  // agents learn the corpus exists. Workers wire their own provider over
+  // the worker-local DB (module globals don't cross worker_threads).
+  setGlobalDocsHintProvider(buildDocsHintProvider(deps.docStore));
 
   // DocsAgent — multi-step retrieval orchestrator. Installed as a
   // process singleton so the (separately registered) docs_deep_research
@@ -737,12 +742,31 @@ export function createApp() {
   const visionDescriber = createVisionDescriber({ resolver: deps.pipelineProviderResolver });
   setGlobalVisionDescriber(visionDescriber);
 
-  setCoderWorkerDocDeps({ docSearch: docSearchBackend, docsResearch: docsResearchBridge, vision: visionDescriber });
+  // Mem C across workers: memoryRetriever + runEndMemory are the SAME
+  // canonical instances stream.ts passes on the in-process path — workers
+  // reach them via the memoryRetrieve/memoryExtract/memoryIsConfigured RPC
+  // handlers (sse/worker-memory-handlers.ts), so per-turn memory injection
+  // and run-end distillation work identically with MCP_CODER_WORKER=1.
+  setCoderWorkerDocDeps({
+    docSearch: docSearchBackend,
+    docsResearch: docsResearchBridge,
+    vision: visionDescriber,
+    memoryRetriever: deps.memoryRetriever,
+    runEndMemory: deps.runEndMemory,
+    projectMemory: deps.projectMemory,
+  });
   // Same wire-up for the COMPANY worker pool — master + subordinates run
   // inside `company-worker.ts`, which installs the matching RPC shims. Without
   // this, `rag_search_docs` from a company subordinate errors with "doc corpus
   // backend is not wired into this process". Reuses the same backends.
-  setCompanyWorkerDocDeps({ docSearch: docSearchBackend, docsResearch: docsResearchBridge, vision: visionDescriber });
+  setCompanyWorkerDocDeps({
+    docSearch: docSearchBackend,
+    docsResearch: docsResearchBridge,
+    vision: visionDescriber,
+    memoryRetriever: deps.memoryRetriever,
+    runEndMemory: deps.runEndMemory,
+    projectMemory: deps.projectMemory,
+  });
   mountDocsAgentRoutes(app, deps, docsResearchBridge);
 
   // External-MCP connection pool. Boots async so the dashboard

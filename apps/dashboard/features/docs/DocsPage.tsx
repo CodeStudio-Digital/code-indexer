@@ -9,10 +9,12 @@
  *   - Research    — converse with the DocsAgent (Phase 10 PR 2): multi-step
  *                   retrieval with citations.
  *
- * Collections are GLOBAL (no project scope) — agents from any project read
- * from the same corpus via the `rag_search_docs` tool. The Suggestions tab,
- * by contrast, scans a SPECIFIC project's manifests, so it exposes its own
- * project picker.
+ * Collections are GLOBAL for ingestion, but retrieval is project-scoped:
+ * linking a collection to a project (CollectionDetail → "Projetos
+ * vinculados", or automatically on suggestion approval) makes agent
+ * sessions on that project search it first via `rag_search_docs`. The
+ * Suggestions tab scans a SPECIFIC project's manifests, so it exposes its
+ * own project picker.
  */
 import { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';

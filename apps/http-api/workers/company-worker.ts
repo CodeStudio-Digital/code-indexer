@@ -37,6 +37,7 @@ import {
 } from '../../../packages/orchestrator-host/src/index.js';
 import { CompanyStore } from '../../../packages/store/src/company-store.js';
 import { CodeIndexDB } from '../../../packages/store/src/db.js';
+import { hydrateWorkerCapabilities } from './worker-capabilities.js';
 import { DesignSystemStore } from '../../../packages/store/src/design-system-store.js';
 import { SkillStore } from '../../../packages/store/src/skill-store.js';
 import { CompanySessionEnvStore } from '../../../packages/store/src/company-session-env-store.js';
@@ -68,6 +69,8 @@ import {
   setGlobalDocSearch,
   type DocSearchBackend,
 } from '../../../packages/code-agent/src/tools/rag-search-docs.js';
+import { setGlobalDocsHintProvider } from '../../../packages/code-agent/src/core/docs-hint.js';
+import { DocStore } from '../../../packages/store/src/doc-store.js';
 import {
   setGlobalPreviewDevtools,
   type IPreviewDevtools,
@@ -83,6 +86,8 @@ import {
   type DocsResearchBridge,
 } from '../../../packages/docs-agent/src/bridges/docs-bridge.js';
 import type { DocsResearchResult } from '../../../packages/docs-agent/src/types.js';
+import { setCompanyMemoryPorts } from '../../../packages/company/src/services/memory/ports.js';
+import { buildWorkerMemoryShims } from './memory-shims.js';
 import { subscribe, publish, markEnded, type CoderRunBus } from '../coder-bus.js';
 
 interface CompanyWorkerData {
@@ -111,6 +116,9 @@ const { companySessionId, dbPath } = workerData as CompanyWorkerData;
 // half-written WAL on next boot.
 const dbConn = openWorkerDb({ dbPath });
 
+// Per-model caps — module-global cache, re-hydrated per worker thread (see worker-capabilities.ts).
+hydrateWorkerCapabilities(dbConn.handle, `company-worker ${companySessionId}`);
+
 // The bridge wires its message listener inside the constructor, so
 // any request that races the orchestrator construction will be
 // queued by the bridge and dispatched once we register handlers.
@@ -135,18 +143,23 @@ const bridge = new MessageBridge({
 // `DocHybridSearch` + `DocsResearchBridge` instances live ONCE in the
 // main process — zero duplication. Mirrors the coder-worker wiring.
 //
-// NOTE: `docs_deep_research` additionally needs a per-runner
+// `docs_deep_research` additionally needs a per-runner
 // `installDocsDeepResearch(runner)` call (it's not a always-registered
-// bootstrap tool like `rag_search_docs`). That lives in the company
-// runner path (spawn.ts / start.ts) and is a separate follow-up — until
-// then this singleton is wired but the tool won't surface for
-// subordinates. `rag_search_docs` works the moment this shim is set.
+// bootstrap tool like `rag_search_docs`) — wired in the company runner
+// paths (MasterLifecycle.wireAllForRunner + subordinate spawn).
 const docSearchShim: DocSearchBackend = {
   search: async (input) =>
     bridge.request<Awaited<ReturnType<DocSearchBackend['search']>>>(
       'docSearch',
       input,
       { timeoutMs: 60_000 },
+    ),
+  // rag_read_doc — plain SQLite reads on the main side, so a short ceiling.
+  readChunk: async (input) =>
+    bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['readChunk']>>>>(
+      'docReadChunk',
+      input,
+      { timeoutMs: 15_000 },
     ),
 };
 setGlobalDocSearch(docSearchShim);
@@ -175,6 +188,16 @@ const docsResearcherShim = {
 } as unknown as DocsResearchBridge;
 setGlobalDocsResearcher(docsResearcherShim);
 
+// ─── Project-memory ports: route to the main process via RPC ─────────
+// Spawn/resume (packages/company/services/subordinate/) read these via
+// `getCompanyMemoryPorts()` to (a) render the PROJECT MEMORY system-prompt
+// block from task-relevant snapshots and (b) hand memoryRetriever/
+// runEndMemory to runCoder — per-turn injection + run-end distillation.
+// The canonical MemoryRetriever/RunEndMemory live once in server/deps.ts;
+// handlers in WorkerOrchestratorPool. MUST be set before the orchestrator
+// is constructed so the very first spawn already sees the ports.
+setCompanyMemoryPorts(buildWorkerMemoryShims(bridge));
+
 // Build the stores. Both wrap better-sqlite3 internally — we let
 // them open their own handles to keep the construction unchanged.
 // `CodeIndexDB` and `CompanyStore` are both safe to instantiate
@@ -196,6 +219,25 @@ const db = new CodeIndexDB(dbPath);
 const rawDb = db.raw();
 setDesignSystemStore(new DesignSystemStore(rawDb));
 setDesignSystemSkillStore(new SkillStore(rawDb));
+// <indexed-docs> hint provider — worker-local DocStore reads (two SELECTs
+// per 30s/project; no RPC). Inlined for the same alias-resolution reason
+// as the coder-worker: server/docs/search-backend.ts pulls `@mcp/*`
+// aliases that don't resolve inside worker_threads.
+const workerDocStore = new DocStore(rawDb);
+setGlobalDocsHintProvider({
+  listForProject: (projectId) => {
+    try {
+      return workerDocStore.listCollectionsForProject(projectId).map((c) => ({
+        name: c.name,
+        description: c.description,
+        chunk_count: c.chunk_count,
+      }));
+    } catch {
+      // Pre-migration DB or transient read error — hint silently absent.
+      return [];
+    }
+  },
+});
 // Verdaccio: setVerdaccioService() in server.ts is main-thread only, so
 // ds_publish_version inside this worker found no service and failed with
 // "VerdaccioService not wired" (pre-existing gap — the service reads all

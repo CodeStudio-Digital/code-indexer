@@ -186,21 +186,35 @@ export function attachmentsToBlocks(
 export interface ChatUsage {
   input_tokens: number;
   output_tokens: number;
+  /**
+   * TRUE total prompt size of this call, normalized by the adapter.
+   * Anthropic-style APIs split the prompt into uncached `input_tokens` +
+   * cache_read/cache_creation (total = sum); OpenAI-style APIs report the
+   * full prompt in `input_tokens` with cache as a breakdown (total = input).
+   * Consumers should read it via `promptTokensTotal(usage)`.
+   */
+  prompt_tokens_total?: number;
   /** Tokens written into prompt cache this call (Anthropic ephemeral cache writes). */
   cache_creation_input_tokens?: number;
   /** Tokens served from prompt cache this call (Anthropic + OpenAI/ZAI/DeepSeek). */
   cache_read_input_tokens?: number;
   /** Tokens spent on thinking/reasoning (Gemini thinkingConfig, Anthropic extended thinking). */
   thinking_tokens?: number;
-  /**
-   * deepThink — tokens spent on the auxiliary (cheap) model that produces
-   * the pre-thought block. Accumulated separately from `input_tokens` /
-   * `output_tokens` so cost dashboards can split main vs auxiliary spend.
-   * Only populated on `RunResult.totalUsage`, never on a single ChatRequest.
-   */
-  aux_input_tokens?: number;
-  aux_output_tokens?: number;
-  aux_cache_read_input_tokens?: number;
+}
+
+/**
+ * True prompt size of a call. Prefers the adapter-normalized
+ * `prompt_tokens_total`; falls back to raw `input_tokens`, which never
+ * OVERcounts (it may undercount for additive-style providers that predate
+ * the field — same behaviour as before the field existed). Returns null
+ * when usage is absent or zeroed so callers can fall back to an estimate.
+ */
+export function promptTokensTotal(usage: ChatUsage | null | undefined): number | null {
+  if (!usage) return null;
+  if (usage.prompt_tokens_total != null && usage.prompt_tokens_total > 0) {
+    return usage.prompt_tokens_total;
+  }
+  return usage.input_tokens > 0 ? usage.input_tokens : null;
 }
 
 export interface ChatProviderResponseMeta {

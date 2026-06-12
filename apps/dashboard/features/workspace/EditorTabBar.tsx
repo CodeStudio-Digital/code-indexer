@@ -10,9 +10,9 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Circle, FileCode2, GitCompare, MoreHorizontal, Search, X } from 'lucide-react';
+import { Archive, Circle, FileCode2, GitBranch, GitCompare, MoreHorizontal, Search, X } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
-import { useWorkspaceStore, type OpenTab } from '../../state/workspace.js';
+import { useWorkspaceStore, isVirtualTab, type OpenTab } from '../../state/workspace.js';
 import { useContextMenu, type ContextMenuItem } from '../../components/ui/context-menu.js';
 import {
   DropdownMenu,
@@ -21,6 +21,14 @@ import {
 } from '../../components/ui/dropdown-menu.js';
 import { Input } from '../../components/ui/input.js';
 import { fileIconFor } from '../../lib/file-icon.js';
+
+/** Icon + color for a tab — virtual surfaces get their own glyph. */
+function tabIcon(file: OpenTab): { Icon: React.ComponentType<{ className?: string }>; colorClass: string } {
+  if (file.kind === 'git-log') return { Icon: GitBranch, colorClass: 'text-primary' };
+  if (file.kind === 'git-stash') return { Icon: Archive, colorClass: 'text-amber-400' };
+  if (file.kind === 'diff') return { Icon: GitCompare, colorClass: 'text-amber-300' };
+  return fileIconFor(file.path);
+}
 
 export function EditorTabBar() {
   const openFiles = useWorkspaceStore((s) => s.openFiles);
@@ -117,14 +125,10 @@ function TabChip({
   onCloseRight,
   onCloseAll,
 }: TabChipProps) {
-  const isDiff = file.kind === 'diff';
-  const display = isDiff ? file.title : (file.path.split('/').pop() ?? file.path);
-  const dirty = !isDiff && file.dirty;
-  // Type-aware icon (color + glyph). Diff tabs are special — keep the
-  // git-compare icon so the row reads as "review surface" not "code file".
-  const { Icon: TypeIcon, colorClass } = isDiff
-    ? { Icon: GitCompare, colorClass: 'text-amber-300' }
-    : fileIconFor(file.path);
+  const isVirtual = isVirtualTab(file);
+  const display = isVirtual ? file.title : (file.path.split('/').pop() ?? file.path);
+  const dirty = !isVirtual && file.dirty;
+  const { Icon: TypeIcon, colorClass } = tabIcon(file);
 
   const items: ContextMenuItem[] = [
     { id: 'close', label: 'Close', onSelect: onClose },
@@ -142,7 +146,7 @@ function TabChip({
       label: 'Copy path',
       separatorBefore: true,
       onSelect: () => {
-        if (file.kind === 'diff') return;
+        if (isVirtual) return;
         void navigator.clipboard.writeText(file.path).catch(() => undefined);
       },
     },
@@ -172,7 +176,7 @@ function TabChip({
           }
         }}
         {...triggerProps}
-        title={isDiff ? file.title : file.path}
+        title={isVirtual ? file.title : file.path}
       >
         {/* Active accent bar — top edge, primary tint, 2px so it reads
             confidently. Bottom edge stays clean so the tab and editor
@@ -227,13 +231,13 @@ interface OverflowDropdownProps {
 function OverflowDropdown({ files, activeFilePath, onPick, onClose }: OverflowDropdownProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const dirty = files.filter((f) => f.kind !== 'diff' && f.dirty).length;
+  const dirty = files.filter((f) => !isVirtualTab(f) && f.dirty).length;
 
   const filtered = useMemo(() => {
     if (!query.trim()) return files;
     const q = query.toLowerCase();
     return files.filter((f) => {
-      const label = f.kind === 'diff' ? f.title : f.path;
+      const label = isVirtualTab(f) ? f.title : f.path;
       return label.toLowerCase().includes(q);
     });
   }, [files, query]);
@@ -281,14 +285,12 @@ function OverflowDropdown({ files, activeFilePath, onPick, onClose }: OverflowDr
             </div>
           )}
           {filtered.map((file) => {
-            const isDiff = file.kind === 'diff';
-            const display = isDiff ? file.title : (file.path.split('/').pop() ?? file.path);
-            const subtitle = isDiff ? '' : (file.path.includes('/') ? posixDirname(file.path) : '');
-            const dirtyOne = !isDiff && file.dirty;
+            const isVirtual = isVirtualTab(file);
+            const display = isVirtual ? file.title : (file.path.split('/').pop() ?? file.path);
+            const subtitle = isVirtual ? '' : (file.path.includes('/') ? posixDirname(file.path) : '');
+            const dirtyOne = !isVirtual && file.dirty;
             const active = file.path === activeFilePath;
-            const { Icon, colorClass } = isDiff
-              ? { Icon: GitCompare, colorClass: 'text-amber-300' }
-              : fileIconFor(file.path);
+            const { Icon, colorClass } = tabIcon(file);
             return (
               <div
                 key={file.path}
@@ -300,7 +302,7 @@ function OverflowDropdown({ files, activeFilePath, onPick, onClose }: OverflowDr
                   onPick(file.path);
                   setOpen(false);
                 }}
-                title={isDiff ? file.title : file.path}
+                title={isVirtual ? file.title : file.path}
               >
                 <Icon className={cn('h-3.5 w-3.5 shrink-0', colorClass)} />
                 <div className="flex-1 min-w-0">

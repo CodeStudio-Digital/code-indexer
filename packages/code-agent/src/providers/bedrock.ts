@@ -219,6 +219,9 @@ export class BedrockChatProvider implements ChatProvider {
               output_tokens: u.outputTokens ?? 0,
               cache_read_input_tokens: u.cacheReadInputTokens ?? 0,
               cache_creation_input_tokens: u.cacheWriteInputTokens ?? 0,
+              // Bedrock (Anthropic-style) splits the prompt: inputTokens excludes cache.
+              prompt_tokens_total:
+                (u.inputTokens ?? 0) + (u.cacheReadInputTokens ?? 0) + (u.cacheWriteInputTokens ?? 0),
             },
           };
         }

@@ -58,6 +58,7 @@
   "provider.noModels": "Nenhum modelo ainda. Clique em atualizar para buscar da API do provider.",
   "provider.backfillContextWindows.label": "Preencher context windows",
   "provider.backfillContextWindows.tooltip": "Resolve valores de context_window ausentes a partir do registro estático (sem rede).",
+  "provider.maxToolsPlaceholder": "ex.: 32",
   "provider.subagentProvider": "Provider dos subagentes",
   "provider.subagentProviderDefault": "Mesmo provider",
   "provider.subagentModel": "Modelo dos subagentes",

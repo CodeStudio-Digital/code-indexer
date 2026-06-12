@@ -37,13 +37,17 @@ const COMPONENTS = [
   },
 ];
 
-function fakeStore(over: Partial<Record<'getSession' | 'getVersionBySemver' | 'listComponents', unknown>> = {}): DesignSystemStore {
+function fakeStore(
+  over: Partial<Record<'getSession' | 'getVersionBySemver' | 'listComponents' | 'getLatestPublishedVersion', unknown>> = {},
+): DesignSystemStore {
   return {
     getSession: (id: number) => (id === 3 ? { id: 3, package_name: '@acme/ui', stack: 'react-ts' } : null),
     getVersionBySemver: (_id: number, semver: string) =>
       semver === '1.2.0'
         ? { id: 7, semver: '1.2.0', status: 'published', manifest_json: MANIFEST, docs_md: DOCS }
         : null,
+    // Default: the pin IS the latest → no "newer available" note.
+    getLatestPublishedVersion: () => ({ id: 7, semver: '1.2.0', status: 'published' }),
     listComponents: () => COMPONENTS,
     ...over,
   } as unknown as DesignSystemStore;
@@ -93,6 +97,19 @@ describe('ds_components', () => {
     expect(r.content).toContain('variant: primary|ghost');
     expect(r.content).toContain('color.primary');
     expect(r.content).toContain('radius');
+    expect(r.content).not.toContain('is published'); // pin == latest → no note
+  });
+
+  it('points at a newer published version when the pin is behind', async () => {
+    setDesignSystemStore(
+      fakeStore({
+        getLatestPublishedVersion: () => ({ id: 9, semver: '1.3.0', status: 'published' }),
+      }),
+    );
+    const r = await tools().components.handler({}, ctx);
+    expect(r.isError).toBeUndefined();
+    expect(r.content).toContain('@acme/ui@1.3.0 is published');
+    expect(r.content).toContain('UPDATE the design-system link');
   });
 });
 

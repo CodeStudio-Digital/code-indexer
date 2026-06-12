@@ -11,8 +11,8 @@ allowed-tools:
   - submit_plan_to_master
   - post_to_board
   - read_board
-  - kanban_my_comment
-  - kanban_my_checklist
+  - kanban_post_comment
+  - kanban_update_objectives
   - kanban_move_to_review
 context-mode: both
 trigger:
@@ -197,7 +197,7 @@ When the spec is updated and validated:
 
 1. `post_to_board` with kind `deliverable`, mentioning the master:
    > *"OpenAPI for `<service_id>` updated — N endpoints documented, examples added/refreshed for M of them. Open the **API Reference** tab in the preview to inspect."*
-2. If you were spawned for a kanban card, `kanban_my_checklist` to mark items done, then `kanban_move_to_review`.
+2. If you were spawned for a kanban card, `kanban_update_objectives` to mark items done, then `kanban_move_to_review`.
 
 ## Hard rules
 

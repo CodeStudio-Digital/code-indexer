@@ -90,7 +90,7 @@ const lspReferences: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      file_path: { type: 'string' },
+      file_path: { type: 'string', description: 'Project-relative path to a .ts/.tsx/.js/.jsx file.' },
       line: { type: 'number', description: '1-based line number.' },
       column: { type: 'number', description: '1-based column number.' },
     },
@@ -141,7 +141,7 @@ const lspHover: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      file_path: { type: 'string' },
+      file_path: { type: 'string', description: 'Project-relative path to a .ts/.tsx/.js/.jsx file.' },
       line: { type: 'number', description: '1-based line number.' },
       column: { type: 'number', description: '1-based column number.' },
     },

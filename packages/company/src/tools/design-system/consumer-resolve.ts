@@ -19,7 +19,13 @@ export interface DsConsumerBinding {
 }
 
 export type ConsumerResolution =
-  | { ok: true; session: DesignSystemSession; version: DesignSystemVersion }
+  | {
+      ok: true;
+      session: DesignSystemSession;
+      version: DesignSystemVersion;
+      /** Latest published semver when it differs from the pin (link is behind). */
+      newerSemver: string | null;
+    }
   | { ok: false; error: string };
 
 /** Resolve the pinned session+version, with a clear stale-link message. */
@@ -40,7 +46,9 @@ export function resolveConsumerVersion(
   if (!version || version.status !== 'published') {
     return stale(`version ${binding.semver} is no longer published`);
   }
-  return { ok: true, session, version };
+  const latest = store.getLatestPublishedVersion(binding.sessionId);
+  const newerSemver = latest && latest.semver !== binding.semver ? latest.semver : null;
+  return { ok: true, session, version, newerSemver };
 }
 
 /** One-line props summary out of a JSON-schema-ish props_schema_json. */

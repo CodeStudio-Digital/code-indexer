@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Eye, Network, Repeat, Send, Settings2, Shield, Sparkles, Square, Thermometer } from 'lucide-react';
+import { Brain, Eye, Network, Repeat, Send, Settings2, Shield, Square, Thermometer } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -64,15 +64,6 @@ interface ComposerToolbarProps {
   setThinking?: (v: boolean) => void;
   supportsThinking?: boolean;
   /**
-   * Simulated deepThink — orthogonal to `thinking`. When on, an auxiliary
-   * cheap model (default Haiku) writes a brief pre-thought before each
-   * main-model turn and the runner prefills it as a `<thinking>` block.
-   * Propagates: useAgentChatState → POST /api/coder/sessions/:id/messages
-   * `{deep_think: true}` → runner.opts.deepThink.
-   */
-  deepThink?: boolean;
-  setDeepThink?: (v: boolean) => void;
-  /**
    * "Describe images" — FORCE the vision fallback (image → text description
    * via the configured vision model) even when the active model can see
    * images. Auto-fallback for blind models happens regardless. Propagates:
@@ -113,15 +104,13 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   thinking,
   setThinking,
   supportsThinking,
-  deepThink,
-  setDeepThink,
   describeImages,
   setDescribeImages,
 }: ComposerToolbarProps) {
   const { t } = useTranslation(['chat', 'common']);
-  // Note: the Paperclip (attach), PipelinePicker, think, deepthink, and
-  // cap/full icons now live in the markdown toolbar row above (passed
-  // as `rightSlot` to MarkdownToolbar). This row is reserved for the
+  // Note: the Paperclip (attach), PipelinePicker, think, and cap/full
+  // icons now live in the markdown toolbar row above (passed as
+  // `rightSlot` to MarkdownToolbar). This row is reserved for the
   // pickers + send button so the bottom of the composer is calmer.
   // `handleFiles` is still threaded through because the mobile popover
   // (and a future drag/drop overlay) may want it.
@@ -213,11 +202,11 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
         />
       </div>
 
-      {/* Think / deepthink / cap toggles moved to the markdown toolbar
-          row above (rendered by MarkdownToolbar's `rightSlot`). We keep
-          the props flowing through so the mobile popover below — which
-          condenses every control into one sheet on narrow viewports —
-          still exposes the toggles. */}
+      {/* Think / cap toggles moved to the markdown toolbar row above
+          (rendered by MarkdownToolbar's `rightSlot`). We keep the props
+          flowing through so the mobile popover below — which condenses
+          every control into one sheet on narrow viewports — still
+          exposes the toggles. */}
 
       {/* Desktop fallback popover */}
       <div className="hidden sm:block">
@@ -363,24 +352,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
                 <span>
                   {t('chat:toolbar.thinking', { defaultValue: 'Extended thinking' })}
                   {thinking ? ' • on' : ''}
-                </span>
-              </button>
-            )}
-            {setDeepThink && (
-              <button
-                type="button"
-                onClick={() => setDeepThink(!deepThink)}
-                className={`w-full inline-flex items-center justify-center gap-2 h-8 px-3 rounded-md text-xs font-mono transition-colors ${
-                  deepThink
-                    ? 'bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/25 dark:text-emerald-300'
-                    : 'border border-input text-muted-foreground hover:bg-muted hover:text-foreground'
-                }`}
-                aria-pressed={deepThink ?? false}
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                <span>
-                  {t('chat:toolbar.deepThink', { defaultValue: 'deepThink (simulated)' })}
-                  {deepThink ? ' • on' : ''}
                 </span>
               </button>
             )}

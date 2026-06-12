@@ -92,10 +92,6 @@ export interface SendMessageInput {
   profile?: ToolProfile;
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;
-  deep_think?: boolean;
-  deep_think_model?: string;
-  deep_think_provider?: string;
-  pre_think_on_tool_results?: boolean;
   interject?: boolean;
   selected_skill_ids?: string[];
   /** Resume from history (last message must be a tool result). */

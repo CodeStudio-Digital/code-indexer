@@ -10,25 +10,24 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { KanbanColumn } from '@mcp/company/types.js';
 import { KANBAN_COLUMNS } from '@mcp/company/types.js';
+import { kanbanCreateCardTool, kanbanMoveCardTool } from '@mcp/company/tools/kanban-batch.js';
 
 export function buildKanbanTools(orchestrator: CompanyOrchestrator): CoderTool[] {
   return [
-    kanbanCreateCard(orchestrator),
-    kanbanMoveCard(orchestrator),
+    // Batch-capable create/move live in kanban-batch.ts (telemetry showed
+    // masters paying one full turn per card while planning a board).
+    kanbanCreateCardTool(orchestrator),
+    kanbanMoveCardTool(orchestrator),
     kanbanUpdateMeta(orchestrator),
     // Unified comment + checklist tools — work for master AND
     // subordinates (sub auto-resolves card_id via assigned card).
     // Replace the prior split (kanban_add_comment + kanban_my_comment
     // and kanban_update_checklist + kanban_my_checklist) that
-    // confused agents about which variant to use.
+    // confused agents about which variant to use. The deprecated
+    // aliases were removed after their grace release — the unknown-tool
+    // error lists valid names, so a stale agent self-corrects.
     kanbanPostComment(orchestrator),
     kanbanUpdateObjectives(orchestrator),
-    // Deprecated aliases — kept registered for one release so agents
-    // mid-session that learned the old names don't break. Mark with
-    // [DEPRECATED] in description; remove next sprint.
-    kanbanAddComment(orchestrator),
-    kanbanUpdateChecklist(orchestrator),
-    kanbanUpdateCard(orchestrator),
     kanbanAddDependency(orchestrator),
     kanbanRemoveDependency(orchestrator),
     kanbanAssignAgent(orchestrator),
@@ -45,90 +44,6 @@ export function buildKanbanTools(orchestrator: CompanyOrchestrator): CoderTool[]
  */
 export function buildUnifiedKanbanTools(orchestrator: CompanyOrchestrator): CoderTool[] {
   return [kanbanPostComment(orchestrator), kanbanUpdateObjectives(orchestrator)];
-}
-
-// ─── kanban_create_card ───────────────────────────────────────
-
-function kanbanCreateCard(orchestrator: CompanyOrchestrator): CoderTool {
-  const parameters: JsonSchema = {
-    type: 'object',
-    properties: {
-      title: { type: 'string', description: 'Card title — concise task name' },
-      description: { type: 'string', description: 'Technical description of the task' },
-      column: { type: 'string', enum: KANBAN_COLUMNS, description: 'Target column (default: backlog)' },
-      tag: { type: 'string', enum: ['bug', 'feature', 'refactor', 'documentation'], description: 'Task category tag' },
-      checklist: { type: 'array', items: { type: 'string' }, description: 'Initial objectives/checklist items' },
-    },
-    required: ['title'],
-  };
-
-  return {
-    name: 'kanban_create_card',
-    description: 'Create a Kanban task card with title, description, objectives checklist, and tag. Use this BEFORE delegating work to subordinates — the card becomes the single source of truth for the task.',
-    parameters,
-    source: 'native',
-    handler: async (args) => {
-      try {
-        const card = orchestrator.kanbanCreateCard({
-          title: args.title as string,
-          description: args.description as string | undefined,
-          column: args.column as KanbanColumn | undefined,
-          tag: args.tag as 'bug' | 'feature' | 'refactor' | 'documentation' | undefined,
-          created_by: 'master',
-          checklist: args.checklist as string[] | undefined,
-        });
-        return ok(JSON.stringify(card, null, 2));
-      } catch (e) {
-        return err(`Failed to create card: ${(e as Error).message}`);
-      }
-    },
-  };
-}
-
-// ─── kanban_move_card ─────────────────────────────────────────
-
-function kanbanMoveCard(orchestrator: CompanyOrchestrator): CoderTool {
-  const parameters: JsonSchema = {
-    type: 'object',
-    properties: {
-      card_id: { type: 'number', description: 'ID of the card to move' },
-      column: { type: 'string', enum: KANBAN_COLUMNS, description: 'Target column' },
-      position: { type: 'number', description: 'Position within the column (0-based, optional — appends at end by default)' },
-    },
-    required: ['card_id', 'column'],
-  };
-
-  return {
-    name: 'kanban_move_card',
-    description: 'Move a Kanban card to a different column. Respects dependency constraints: a card cannot move to in_progress/review/done if it has blockers that are not yet done.',
-    parameters,
-    source: 'native',
-    handler: async (args) => {
-      try {
-        const cardId = args.card_id as number;
-        const column = args.column as KanbanColumn;
-
-        // Validate dependency constraints
-        if (['in_progress', 'review', 'done'].includes(column)) {
-          const full = orchestrator.kanbanGetCard(cardId);
-          if (full && full.blocked_by.length > 0) {
-            return err(
-              `Card #${cardId} is blocked by cards: ${full.blocked_by.join(', ')}. ` +
-              `Resolve blockers first by either:\n` +
-              `  1. Moving blocker(s) to done (use kanban_move_card on each blocker), or\n` +
-              `  2. Removing the dependency (use kanban_remove_dependency card_id=${cardId}, depends_on_card_id=<blocker>), or\n` +
-              `  3. Inspecting each blocker with kanban_get_card to decide next action.`,
-            );
-          }
-        }
-
-        const card = orchestrator.kanbanMoveCard(cardId, column, args.position as number | undefined);
-        return ok(`Card #${card.id} moved to ${column} (position ${card.position})`);
-      } catch (e) {
-        return err(`Failed to move card: ${(e as Error).message}`);
-      }
-    },
-  };
 }
 
 // ─── kanban_update_meta (renamed from kanban_update_card) ─────
@@ -172,20 +87,6 @@ function kanbanUpdateMeta(orchestrator: CompanyOrchestrator): CoderTool {
         return err(`Failed to update card: ${(e as Error).message}`);
       }
     },
-  };
-}
-
-// ─── kanban_update_card (deprecated alias for kanban_update_meta) ──
-
-function kanbanUpdateCard(orchestrator: CompanyOrchestrator): CoderTool {
-  // Same parameters / handler as `kanban_update_meta` — only the
-  // name + description differs. Reduces duplication while preserving
-  // the old surface for one release cycle.
-  const meta = kanbanUpdateMeta(orchestrator);
-  return {
-    ...meta,
-    name: 'kanban_update_card',
-    description: '[DEPRECATED — use kanban_update_meta] ' + meta.description,
   };
 }
 
@@ -357,30 +258,6 @@ function kanbanUpdateObjectives(orchestrator: CompanyOrchestrator): CoderTool {
         return err(`Failed to update objectives: ${(e as Error).message}`);
       }
     },
-  };
-}
-
-// ─── kanban_add_comment (deprecated alias for kanban_post_comment) ──
-
-function kanbanAddComment(orchestrator: CompanyOrchestrator): CoderTool {
-  const unified = kanbanPostComment(orchestrator);
-  return {
-    ...unified,
-    name: 'kanban_add_comment',
-    description:
-      '[DEPRECATED — use kanban_post_comment instead] ' + unified.description,
-  };
-}
-
-// ─── kanban_update_checklist (deprecated alias for kanban_update_objectives) ──
-
-function kanbanUpdateChecklist(orchestrator: CompanyOrchestrator): CoderTool {
-  const unified = kanbanUpdateObjectives(orchestrator);
-  return {
-    ...unified,
-    name: 'kanban_update_checklist',
-    description:
-      '[DEPRECATED — use kanban_update_objectives instead] ' + unified.description,
   };
 }
 

@@ -43,6 +43,22 @@ import { resolveToolTimeoutMs, NORMAL_TIMEOUT_MS } from '../../tool-timeouts.js'
  * tiers via MCP_TOOL_NORMAL_TIMEOUT_MS / MCP_TOOL_SLOW_TIMEOUT_MS.
  */
 
+/**
+ * Why a tool_result was synthesized/replaced by the harness instead of (or on
+ * top of) a real invocation. Persisted to telemetry (`coder_tool_calls.
+ * refusal_kind`) so guard refusals are separable from genuine tool failures —
+ * `is_error=1` alone conflated them and poisoned per-tool error rates.
+ */
+export type RefusalKind =
+  | 'gate'
+  | 'pre-read'
+  | 'task-mode'
+  | 'dedup'
+  | 'user_denied' // permission-gate denial — name matches classifyToolRefusal's legacy tag
+  | 'failure-streak'
+  | 'timeout'
+  | 'abort';
+
 export interface DispatchedToolResult {
   toolUseId: string;
   name: string;
@@ -51,6 +67,8 @@ export interface DispatchedToolResult {
   durationMs: number;
   /** True when synthesized by the dedup refusal path (no real invocation). */
   wasRefusedByDedup: boolean;
+  /** Set on every harness-synthesized refusal/replacement — see RefusalKind. */
+  refusalKind?: RefusalKind;
   /**
    * Extra content blocks (e.g. an image from `view_image`/`preview_screenshot`)
    * the tool wants the model to SEE. Surfaced as a synthetic user message
@@ -187,6 +205,41 @@ export interface DispatchArgs {
     lastError: string;
     turn: number;
   }) => void;
+  /**
+   * Factory for the nested-call guard/telemetry observer. Consulted once per
+   * dispatched tool; the Executing node only returns one for `code_exec`
+   * parents (and when nested guards are enabled). The observer closes over
+   * the run's `dupCalls`/`failureStreaks`, so nested calls count against the
+   * SAME guard state as direct ones.
+   */
+  makeNestedObserver?: (
+    parentToolUseId: string,
+    parentToolName: string,
+  ) => import('@mcp/code-agent/core/tool.js').NestedToolObserver | undefined;
+  /**
+   * Names visible to the model THIS turn (from buildTools). When provided,
+   * a call to a registered-but-hidden name (tier-hidden or cap-cut)
+   * executes anyway and is pinned via `onToolPinned`; the result carries a
+   * deterministic `[toolset]` suffix telling the model the tool is now in
+   * its list. Omit to disable hidden-call handling (tests / subagents).
+   * Kill switch: CODER_TOOL_PIN_DISABLE=1.
+   */
+  visibleToolNames?: ReadonlySet<string>;
+  /**
+   * Already-pinned names (LIVE reference to the run's pin set). Consulted
+   * so a tool pinned earlier in the same batch doesn't get a duplicate
+   * suffix.
+   */
+  pinnedTools?: ReadonlySet<string>;
+  /** Fired when a hidden registered tool executed — pin it for next turn. */
+  onToolPinned?: (name: string) => void;
+  /**
+   * Hard block for admin/session-disabled tools. Before this existed a
+   * disabled tool still EXECUTED when the model emitted its name — the
+   * disabled sets only filtered the PRESENTATION in buildTools. Returns
+   * the refusal text, or null when the tool is allowed.
+   */
+  isToolBlocked?: (name: string) => string | null;
 }
 
 export interface DispatchResult {
@@ -238,6 +291,54 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // `policy.ts`'s BUILTIN_CLASSIFICATION, not on their CoderTool.
     const interactive = tool ? resolveToolMetadata(tool).interactive : false;
 
+    // Hidden-call handling (pin mechanism). A registered tool can be absent
+    // from the model's visible list (tier-hidden or cap-cut) yet still be
+    // called by name — find_tools tells the model to do exactly that.
+    // Policy: disabled tools hard-block; goal-gated create_goal refuses
+    // with redirection; everything else flows through ALL the gates below,
+    // executes, and is pinned at the result tail.
+    const pinDisabled = process.env.CODER_TOOL_PIN_DISABLE === '1';
+    if (!pinDisabled && tool && args.isToolBlocked) {
+      const blockedText = args.isToolBlocked(tu.name);
+      if (blockedText !== null) {
+        results.push({
+          toolUseId: tu.id,
+          name: tu.name,
+          content: blockedText,
+          isError: true,
+          durationMs: 0,
+          wasRefusedByDedup: false,
+          refusalKind: 'gate',
+        });
+        continue;
+      }
+    }
+    const hiddenFromModel =
+      !pinDisabled &&
+      !!tool &&
+      !!args.visibleToolNames &&
+      !args.visibleToolNames.has(tu.name) &&
+      !args.pinnedTools?.has(tu.name);
+    if (hiddenFromModel && tu.name === 'create_goal') {
+      // create_goal is hidden by the goal-gate while a goal is in_progress
+      // (sessions 656/658 looped on it) — pinning would permanently defeat
+      // that gate, so refuse with the correct redirection instead.
+      const goal = args.toolContext.getGoalState?.();
+      if (goal && goal.status === 'in_progress') {
+        results.push({
+          toolUseId: tu.id,
+          name: tu.name,
+          content:
+            '[goal-gate] a goal is already in_progress — call update_goal to progress or complete it instead of creating a new one.',
+          isError: true,
+          durationMs: 0,
+          wasRefusedByDedup: false,
+          refusalKind: 'gate',
+        });
+        continue;
+      }
+    }
+
     // Pre-dispatch gate (plan/spec/policy refusal). Synthesises an error
     // tool_result without touching the dedup counter — the call never
     // happened from the agent's POV.
@@ -250,6 +351,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         isError: true,
         durationMs: 0,
         wasRefusedByDedup: false,
+        refusalKind: 'gate',
       });
       continue;
     }
@@ -268,6 +370,9 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         isError,
         durationMs: 0,
         wasRefusedByDedup: false,
+        // The auto-downgrade variant (isError=false) is a degraded SUCCESS,
+        // not a refusal — leave it untagged so error analytics stay clean.
+        ...(isError ? { refusalKind: 'pre-read' as const } : {}),
       });
       continue;
     }
@@ -287,6 +392,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         isError: true,
         durationMs: 0,
         wasRefusedByDedup: false,
+        refusalKind: 'task-mode',
       });
       continue;
     }
@@ -308,6 +414,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         isError: true,
         durationMs: 0,
         wasRefusedByDedup: true,
+        refusalKind: 'dedup',
       });
       toolLoopDetected = true;
       loopGuard = 'tuple-hash';
@@ -353,6 +460,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           isError: true,
           durationMs: 0,
           wasRefusedByDedup: false,
+          refusalKind: 'user_denied',
         });
         continue;
       }
@@ -362,6 +470,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let invocationContent: string;
     let invocationIsError = false;
     let invocationExtraBlocks: ContentBlock[] | undefined;
+    let refusalKind: RefusalKind | undefined;
 
     // Periodic heartbeat — keeps the dashboard StuckBanner alive during
     // long-running invocations (web_fetch, run_command, spawn_agent
@@ -401,6 +510,8 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         // Anchor for approval requests raised from nested contexts
         // (code_exec proxies receive this context as `ctx`).
         currentToolUseId: tu.id,
+        parentToolUseId: tu.id,
+        nestedToolObserver: args.makeNestedObserver?.(tu.id, tu.name),
         signal: invocationAbort?.signal ?? parentSignal,
         reportProgress: (note: string) => {
           const trimmed = typeof note === 'string'
@@ -432,8 +543,10 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         invocationContent =
           `[tool-timeout: \`${tu.name}\` exceeded ${e.ms}ms. ` +
           `Tune MCP_TOOL_NORMAL_TIMEOUT_MS / MCP_TOOL_SLOW_TIMEOUT_MS, or declare timeoutMs on the tool.]`;
+        refusalKind = 'timeout';
       } else if (isAbortError(e)) {
         invocationContent = `[tool-aborted: \`${tu.name}\` cancelled by user/session.]`;
+        refusalKind = 'abort';
       } else {
         invocationContent = e instanceof Error ? e.message : String(e);
       }
@@ -530,6 +643,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       } else if (verdict.kind === 'refuse') {
         finalContent = buildFailureStreakRefusalText({ ...verdict, toolName: tu.name });
         finalIsError = true;
+        refusalKind = 'failure-streak';
         toolLoopDetected = true;
         loopGuard = 'failure-streak';
         args.onFailureStreakIntervention?.({
@@ -558,6 +672,16 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       finalOriginalSize = fin.originalSize;
     }
 
+    // Pin AFTER finalizeToolResult so the fail-safe cap can't truncate the
+    // suffix away. Pins even on isError — the model's intent to use the
+    // tool is what matters, and pinning stops repeated suffixes (the live
+    // `pinnedTools` reference makes a second call in this batch non-hidden).
+    if (hiddenFromModel) {
+      finalShaped +=
+        `\n\n[toolset] '${tu.name}' was not in your visible tool list; it executed anyway and is now pinned — it will appear in your tools from the next turn.`;
+      args.onToolPinned?.(tu.name);
+    }
+
     args.onToolCallFinalized?.(tu.id, finalShaped.length);
     results.push({
       toolUseId: tu.id,
@@ -567,6 +691,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       isError: finalIsError,
       durationMs: Date.now() - t0,
       wasRefusedByDedup: false,
+      refusalKind,
       extraUserBlocks: invocationExtraBlocks,
       ...(finalTruncated ? { truncated: true, originalSize: finalOriginalSize } : {}),
     });

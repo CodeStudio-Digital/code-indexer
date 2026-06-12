@@ -10,7 +10,7 @@
  * `procedure`. The run-end orchestrator only invokes it when the run SUCCEEDED,
  * so the steps come from commands that actually worked.
  */
-import type { PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
+import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
 import { pickChatFn } from '../quality/chat-dispatcher.js';
 import { parseMemoryCandidates } from './distiller.js';
 import type { MemoryCandidate, MemoryDistiller, SessionMemoryInput } from './extractor.js';
@@ -18,6 +18,8 @@ import type { MemoryCandidate, MemoryDistiller, SessionMemoryInput } from './ext
 export interface ProcedureDistillerOptions {
   resolver: PipelineProviderResolver;
   resolveContext?: ResolveContext;
+  /** Zero-config fallback consulted when no binding row resolves (lazy). */
+  getFallbackDefault?: () => FallbackDefault | null;
   /** Skip the LLM (tests) — returns []. */
   skipLlm?: boolean;
 }
@@ -31,7 +33,10 @@ export class ProcedureDistiller implements MemoryDistiller {
     if (commands.length === 0) return []; // no commands ran → no procedure to capture
 
     const binding = await this.opts.resolver
-      .resolveOrNull('memory_extraction', 'distiller', this.opts.resolveContext ?? {})
+      .resolveOrNull(
+        'memory_extraction', 'distiller', this.opts.resolveContext ?? {},
+        this.opts.getFallbackDefault?.() ?? undefined,
+      )
       .catch(() => null);
     if (!binding) return [];
     try {

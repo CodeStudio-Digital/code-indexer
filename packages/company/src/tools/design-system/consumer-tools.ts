@@ -29,13 +29,13 @@ const SECTION_CAP = 16_000;
 /** Null-guard the store + resolve the pinned version, then run `fn`. */
 function withVersion(
   binding: DsConsumerBinding,
-  fn: (store: DesignSystemStore, version: DesignSystemVersion) => ToolResult,
+  fn: (store: DesignSystemStore, version: DesignSystemVersion, newerSemver: string | null) => ToolResult,
 ): ToolResult {
   const store = getDesignSystemStore();
   if (!store) return err('Design system tools: DesignSystemStore not wired.');
   const resolved = resolveConsumerVersion(store, binding);
   if (!resolved.ok) return err(resolved.error);
-  return fn(store, resolved.version);
+  return fn(store, resolved.version, resolved.newerSemver);
 }
 
 function dsComponents(binding: DsConsumerBinding): CoderTool {
@@ -46,7 +46,7 @@ function dsComponents(binding: DsConsumerBinding): CoderTool {
     parameters: NO_PARAMS,
     source: 'native',
     handler: async () =>
-      withVersion(binding, (store, version) => {
+      withVersion(binding, (store, version, newerSemver) => {
         const components = sortComponents(store.listComponents(version.id));
         const lines = components.map((c) => {
           const props = summarizeProps(c.props_schema_json);
@@ -58,6 +58,12 @@ function dsComponents(binding: DsConsumerBinding): CoderTool {
           lines.length ? lines.join('\n') : '(none registered)',
         ];
         if (tokens.length) out.push(`Design tokens: ${tokens.join(', ')}`);
+        if (newerSemver) {
+          out.push(
+            `Note: the project pins @${binding.semver}, but ${binding.packageName}@${newerSemver} is published. ` +
+              'If components seem missing or outdated, ask the user to UPDATE the design-system link from the project top bar (palette icon).',
+          );
+        }
         out.push('Use ds_component({ name }) for the full props schema + usage example of one component.');
         return ok(out.join('\n\n'));
       }),

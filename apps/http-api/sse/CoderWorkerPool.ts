@@ -40,6 +40,7 @@ import type { IVisionDescriber, VisionDescribeRequest } from '@mcp/code-agent/co
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import type { McpExternalPool } from './McpExternalPool.js';
 import { installRuntimeEventLog } from './runtime-event-log.js';
+import { registerWorkerMemoryHandlers, type WorkerMemoryDeps } from './worker-memory-handlers.js';
 
 /**
  * Optional doc-corpus deps the host wires AFTER `boot/createApp` has built
@@ -58,11 +59,13 @@ import { installRuntimeEventLog } from './runtime-event-log.js';
  * the same "not configured" message the in-process path already used to
  * emit when `setGlobalDocSearch(null)` was active.
  */
-export interface CoderWorkerDocDeps {
+export interface CoderWorkerDocDeps extends WorkerMemoryDeps {
   docSearch?: DocSearchBackend | null;
   docsResearch?: DocsResearchBridge | null;
   /** Main-side vision describer; worker reaches it via `visionDescribe` RPC. */
   vision?: IVisionDescriber | null;
+  // memoryRetriever / runEndMemory (Mem C) inherited from WorkerMemoryDeps —
+  // same mutable-box wiring, handlers in worker-memory-handlers.ts.
 }
 
 export interface CoderWorkerPoolOpts {
@@ -146,12 +149,6 @@ export interface RunFreshOpts {
   describeImages?: boolean;
   /** Auto-activate the `preview` DevTools tier (builder/dev-server sessions). */
   previewAvailable?: boolean;
-  /** Simulated deepThink (auxiliary cheap model writes a pre-thought
-   *  before each main-model turn). Orthogonal to `thinking`. */
-  deepThink?: boolean;
-  deepThinkModel?: string;
-  deepThinkProvider?: string;
-  preThinkOnToolResults?: boolean;
   /** Skill IDs the user pre-selected in the sidebar; forwarded to runCoder. */
   selectedSkillIds?: string[];
   /**
@@ -527,6 +524,18 @@ export class CoderWorkerPool {
       }
       return backend.search(payload as Parameters<DocSearchBackend['search']>[0]);
     });
+    // rag_read_doc — same deps box; the verb is optional on older backends
+    // so the worker shim gets the same "not available" the in-process
+    // tool would emit.
+    const offDocReadChunk = bridge.handle('docReadChunk', async (payload) => {
+      const backend = this.opts.docDeps?.docSearch;
+      if (!backend?.readChunk) {
+        throw new Error(
+          'rag_read_doc is not available in this process (backend without readChunk). Use the rag_search_docs snippets instead.',
+        );
+      }
+      return backend.readChunk(payload as Parameters<NonNullable<DocSearchBackend['readChunk']>>[0]);
+    });
     const offDocsResearch = bridge.handle('docsResearch', async (payload) => {
       const researcher = this.opts.docDeps?.docsResearch;
       if (!researcher) {
@@ -557,6 +566,12 @@ export class CoderWorkerPool {
       }
       return v.describe(payload as VisionDescribeRequest);
     });
+    // Project memory (Mem C) — routes retrieve / extract / isConfigured to
+    // the canonical MemoryRetriever + RunEndMemory built in server/deps.ts.
+    // Without these handlers the worker path silently loses per-turn memory
+    // injection AND run-end distillation (regression vs the in-process path
+    // in routes/coder/stream.ts, which passes deps.memoryRetriever directly).
+    const offMemory = registerWorkerMemoryHandlers(bridge, () => this.opts.docDeps);
 
     // ─── External-MCP pool bridge ─────────────────────────────────────
     // Worker's `RemoteMcpServerManager` requests a snapshot once per run
@@ -642,9 +657,11 @@ export class CoderWorkerPool {
         try { offEvent(); } catch { /* best-effort */ }
         try { offEnd(); } catch { /* best-effort */ }
         try { offDocSearch(); } catch { /* best-effort */ }
+        try { offDocReadChunk(); } catch { /* best-effort */ }
         try { offDocsResearch(); } catch { /* best-effort */ }
         try { offPreviewDevtools(); } catch { /* best-effort */ }
         try { offVisionDescribe(); } catch { /* best-effort */ }
+        try { offMemory(); } catch { /* best-effort */ }
         try { offMcpSnapshot(); } catch { /* best-effort */ }
         try { offMcpCallTool(); } catch { /* best-effort */ }
       },

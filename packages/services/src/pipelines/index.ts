@@ -31,5 +31,7 @@ export {
   findCatalogEntry,
 } from './catalog.js';
 
+export { generalDefaultAsFallback } from './general-fallback.js';
+
 // A1 finalization — glue from Decider → CoderTunables.
 export { tunablesFromDecider } from './coder-tunables-adapter.js';

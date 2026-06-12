@@ -16,6 +16,9 @@ export interface CreateSnapshotData {
 export type UpdateSnapshotData = Partial<Pick<ContextSnapshot, 'title' | 'category' | 'content'>> & {
   tags?: string[];
   updatedBy?: string;
+  /** 0..1 retrieval salience (migration 114) — the Memory tab "pin" boost.
+   *  Does NOT invalidate the embedding (content unchanged). */
+  importance?: number;
 };
 
 export function create(db: DB, projectId: number, data: CreateSnapshotData): ContextSnapshot {
@@ -138,8 +141,25 @@ export function update(db: DB, id: number, updates: UpdateSnapshotData): void {
   if (updates.category !== undefined) { fields.push('category = ?'); values.push(updates.category); }
   if (updates.content !== undefined) { fields.push('content = ?'); values.push(updates.content); }
   if (updates.tags !== undefined) { fields.push('tags = ?'); values.push(JSON.stringify(updates.tags)); }
+  if (updates.importance !== undefined) {
+    fields.push('importance = ?');
+    values.push(Math.max(0, Math.min(1, updates.importance)));
+  }
 
   if (fields.length === 0) return;
+
+  // Importance-only updates (the Memory tab pin) are metadata: no version
+  // row, no FTS churn, no embedding invalidation — just the column.
+  const contentChanged =
+    updates.title !== undefined ||
+    updates.category !== undefined ||
+    updates.content !== undefined ||
+    updates.tags !== undefined;
+  if (!contentChanged) {
+    values.push(id);
+    db.prepare(`UPDATE snapshots SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    return;
+  }
 
   fields.push("updated_at = datetime('now')");
   if (updates.title !== undefined || updates.content !== undefined) {
@@ -189,6 +209,41 @@ export function listMissingEmbedding(db: DB, projectId?: number): ContextSnapsho
   }
   return db.prepare('SELECT * FROM snapshots WHERE project_id = ? AND embedding_hash IS NULL ORDER BY id')
     .all(projectId) as ContextSnapshot[];
+}
+
+export interface MemoryIndexEntry {
+  id: number;
+  title: string;
+  category: string;
+  importance: number;
+}
+
+/**
+ * MEMORY.md-style index — top-N one-liners (title + category) ranked by
+ * importance × 30-day recency decay, injected at session start so every
+ * session knows WHAT the project has learned (full bodies via recall).
+ * Does NOT mark access — reading a title is not using the memory.
+ */
+export function listMemoryIndex(db: DB, projectId: number, limit = 12): MemoryIndexEntry[] {
+  const rows = db.prepare(`
+    SELECT id, title, category, importance, last_accessed_at, created_at
+    FROM snapshots WHERE project_id = ?
+    ORDER BY importance DESC LIMIT 100
+  `).all(projectId) as Array<{
+    id: number; title: string; category: string; importance: number;
+    last_accessed_at: string | null; created_at: string;
+  }>;
+  const now = Date.now();
+  const HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000; // same half-life as the retriever
+  const scored = rows.map((r) => {
+    const ts = Date.parse(`${(r.last_accessed_at ?? r.created_at).replace(' ', 'T')}Z`);
+    const age = Number.isNaN(ts) ? HALF_LIFE_MS : Math.max(0, now - ts);
+    return { r, score: (r.importance ?? 0.5) * Math.pow(0.5, age / HALF_LIFE_MS) };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, Math.max(1, limit)).map(({ r }) => ({
+    id: r.id, title: r.title, category: r.category, importance: r.importance ?? 0.5,
+  }));
 }
 
 export function count(db: DB, projectId: number): number {

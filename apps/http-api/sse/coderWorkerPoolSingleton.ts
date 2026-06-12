@@ -123,11 +123,17 @@ export function setCoderWorkerDocDeps(
     docSearch?: CoderWorkerDocDeps['docSearch'];
     docsResearch?: CoderWorkerDocDeps['docsResearch'];
     vision?: CoderWorkerDocDeps['vision'];
+    memoryRetriever?: CoderWorkerDocDeps['memoryRetriever'];
+    runEndMemory?: CoderWorkerDocDeps['runEndMemory'];
+    projectMemory?: CoderWorkerDocDeps['projectMemory'];
   },
 ): void {
   if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
   if (deps.docsResearch !== undefined) docDeps.docsResearch = deps.docsResearch;
   if (deps.vision !== undefined) docDeps.vision = deps.vision;
+  if (deps.memoryRetriever !== undefined) docDeps.memoryRetriever = deps.memoryRetriever;
+  if (deps.runEndMemory !== undefined) docDeps.runEndMemory = deps.runEndMemory;
+  if (deps.projectMemory !== undefined) docDeps.projectMemory = deps.projectMemory;
 }
 
 /**

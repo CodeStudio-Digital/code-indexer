@@ -2,7 +2,7 @@
  * Cloudflare manager plugin — vertical slice. Declares the capabilities it
  * needs (granted at install): fs to detect/read the wrangler config + package
  * manifest, exec to run `npx wrangler`, storage to hold the API token + chosen
- * account. The management UI (bottom panel webview) drives the tools through
+ * account. The management UI (right-rail webview) drives the tools through
  * window.mcp.invokeTool.
  */
 import { definePlugin, contributeToolWindow } from '@mcp/plugin-sdk/define.js';
@@ -33,21 +33,12 @@ export default definePlugin({
     contributeToolWindow({
       id: 'cf-manage',
       title: 'Cloudflare',
-      side: 'bottom',
+      icon: 'cloud',
+      side: 'right',
       entry: 'ui/panel.html',
-      // Auto-detect: surface this panel in any Cloudflare project — a wrangler
-      // config or OpenNext config at the root, or a CF/OpenNext dep.
-      activation: {
-        whenFiles: [
-          'wrangler.toml',
-          'wrangler.jsonc',
-          'wrangler.json',
-          'open-next.config.ts',
-          'open-next.config.js',
-          'open-next.config.mjs',
-        ],
-        whenPackageDep: ['wrangler', '@cloudflare/workers-types', '@opennextjs/cloudflare'],
-      },
+      // No activation rule (Podman model): D1/KV/R2/DNS/… are ACCOUNT-level
+      // resources, useful from any project. Project-bound actions (deploy/
+      // build/preview) surface contextually inside the panel via cf_detect.
     }),
   ],
 });

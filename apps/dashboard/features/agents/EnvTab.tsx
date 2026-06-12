@@ -169,8 +169,10 @@ function EnvGroupedList({
   return (
     <div className="space-y-3">
       {groups.map(({ source, rows }) => (
-        <div key={source} className="border rounded">
-          <div className="px-3 py-1.5 bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground font-medium border-b flex items-center gap-2">
+        // `auto` is system noise (sandbox/database-managed) — render it
+        // collapsed by default so operator-relevant groups own the panel.
+        <details key={source} className="border rounded" open={source !== 'auto'}>
+          <summary className="cursor-pointer select-none px-3 py-1.5 bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground font-medium border-b flex items-center gap-2">
             <span>{SOURCE_LABELS[source]}</span>
             {SOURCE_HINTS[source] && (
               <span className="normal-case lowercase font-normal text-muted-foreground/80">
@@ -180,7 +182,7 @@ function EnvGroupedList({
             <span className="ml-auto normal-case font-normal text-muted-foreground/70">
               {rows.length}
             </span>
-          </div>
+          </summary>
           <div className="divide-y">
             {rows.map((row) => (
               <EnvRowEditor
@@ -193,7 +195,7 @@ function EnvGroupedList({
               />
             ))}
           </div>
-        </div>
+        </details>
       ))}
     </div>
   );

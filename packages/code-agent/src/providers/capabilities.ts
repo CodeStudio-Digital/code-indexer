@@ -18,7 +18,10 @@
  * Runtime priority (highest → lowest):
  *   1. CODER_MODEL_CAPS env var  (JSON: {"model-id": {"maxTools": N, "contextWindow": N}})
  *   2. DB layer loaded via mergeDBCapabilities() on server startup
+ *      (carries context_window AND max_tools — admin-set per model)
  *   3. MODEL_REGISTRY static file (model-registry.ts)
+ *   4. Prefix fallbacks (context window + max tools) for variants that ship
+ *      faster than the static registry is updated.
  */
 
 import { MODEL_REGISTRY } from '@mcp/code-agent/providers/model-registry.js';
@@ -51,22 +54,27 @@ const MAX_RESERVED_OUTPUT = 20_000;
 
 // ── DB layer ─────────────────────────────────────────────────────────────────
 // Populated once on server startup by mergeDBCapabilities(). Keyed by model_id.
-// Only contextWindow is stored here — maxTools lives only in the registry.
-let dbLayer: Record<string, number> = {};
+// Carries the admin-tunable per-model values: context_window and max_tools.
+// NOTE: module-global — worker_threads get their own copy, so every worker
+// boot (coder-worker / company-worker) must call mergeDBCapabilities itself.
+let dbLayer: Record<string, { contextWindow?: number; maxTools?: number }> = {};
 
 /**
- * Load context-window values from the provider_models DB rows into the
- * in-memory lookup. Call this after the DB is ready and after any model
- * refresh so getModelContextWindow() returns up-to-date values.
+ * Load context-window / max-tools values from the provider_models DB rows
+ * into the in-memory lookup. Call this after the DB is ready and after any
+ * model refresh so getModelContextWindow() / getModelMaxTools() return
+ * up-to-date values.
  */
 export function mergeDBCapabilities(
-  models: ReadonlyArray<{ model_id: string; context_window: number | null }>
+  models: ReadonlyArray<{ model_id: string; context_window: number | null; max_tools?: number | null }>
 ): void {
-  const next: Record<string, number> = {};
+  const next: Record<string, { contextWindow?: number; maxTools?: number }> = {};
   for (const m of models) {
-    if (m.context_window != null) {
-      next[m.model_id] = m.context_window;
-    }
+    if (m.context_window == null && m.max_tools == null) continue;
+    next[m.model_id] = {
+      ...(m.context_window != null ? { contextWindow: m.context_window } : {}),
+      ...(m.max_tools != null ? { maxTools: m.max_tools } : {}),
+    };
   }
   dbLayer = next;
 }
@@ -89,11 +97,38 @@ function loadOverride(): Record<string, ModelCapability> {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/** Look up the max-tools cap for a model. Falls back to 200 when unknown. */
+/**
+ * Max-tools prefix fallbacks for model variants that ship before the static
+ * registry is updated. The original GLM bug was exactly this: new glm-*
+ * variants silently inherited the 200 default and the cap never fired.
+ * Most-specific prefix first (same convention as
+ * CONTEXT_WINDOW_PREFIX_FALLBACKS below).
+ */
+const MAX_TOOLS_PREFIX_FALLBACKS: Array<[string, number]> = [
+  ['glm-5',         96],
+  ['glm-4.7-flash', 32],
+  ['glm-4.6',       48],
+  ['glm-4.5-air',   32],
+  ['glm-4.5-x',     32],
+  ['glm-4.5-flash', 32],
+  ['glm-4.5',       48],
+  ['glm-4',         48],
+];
+
+/**
+ * Look up the max-tools cap for a model.
+ * Priority: env var > DB (admin-set) > static registry > prefix fallback > 200.
+ */
 export function getModelMaxTools(model: string): number {
   const override = loadOverride();
-  const cap = override[model] ?? MODEL_REGISTRY[model];
-  return cap?.maxTools ?? 200;
+  if (override[model]?.maxTools != null) return override[model].maxTools;
+  if (dbLayer[model]?.maxTools != null) return dbLayer[model].maxTools!;
+  const reg = MODEL_REGISTRY[model]?.maxTools;
+  if (reg != null) return reg;
+  for (const [prefix, cap] of MAX_TOOLS_PREFIX_FALLBACKS) {
+    if (model.startsWith(prefix)) return cap;
+  }
+  return 200;
 }
 
 /**
@@ -104,7 +139,7 @@ export function getModelMaxTools(model: string): number {
 export function getModelContextWindow(model: string): number | null {
   const override = loadOverride();
   if (override[model]?.contextWindow != null) return override[model].contextWindow!;
-  if (dbLayer[model] != null) return dbLayer[model];
+  if (dbLayer[model]?.contextWindow != null) return dbLayer[model].contextWindow!;
   return getRegistryContextWindow(model);
 }
 

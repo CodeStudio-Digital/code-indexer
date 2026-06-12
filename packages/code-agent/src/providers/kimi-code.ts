@@ -178,6 +178,8 @@ export class KimiCodeChatProvider implements ChatProvider {
               usage.prompt_tokens_details?.cached_tokens ??
               usage.prompt_cache_hit_tokens ??
               0,
+            // OpenAI-compatible: prompt_tokens already INCLUDES cached tokens.
+            prompt_tokens_total: usage.prompt_tokens ?? 0,
             ...(usage.completion_tokens_details?.reasoning_tokens
               ? { thinking_tokens: usage.completion_tokens_details.reasoning_tokens }
               : {}),

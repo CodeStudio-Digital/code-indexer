@@ -31,6 +31,9 @@ import { SessionMetricsView } from '../SessionMetricsModal.js';
 import { ToolStatsView } from '../ToolStatsModal.js';
 import { SessionDetailsView } from '../SessionDetailsModal.js';
 import { WorkerLogPanel } from '../WorkerLogPanel.js';
+import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
+import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
+import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 import type { RightPanelId } from './types.js';
 import type { CoderSession, CoderSessionStats, SessionData } from '../types.js';
 import type {
@@ -55,12 +58,35 @@ export interface RightPanelHostProps {
   skillPicks: string[];
   onToggleSkillPick: (id: string) => void;
   pipelineRuntime: PipelineRuntimeState | null;
+  /** Plugin tool windows (side: 'right') the rail can activate. */
+  pluginWindows?: ContribToolWindow[];
   onClose: () => void;
 }
 
 export function RightPanelHost(props: RightPanelHostProps) {
   const { t } = useTranslation(['chat']);
   const { activeId, sessionId, onClose } = props;
+
+  // Plugin-contributed panel → its sandboxed webview inside the shared
+  // chrome (chromeless webview: PanelChrome already renders title + close).
+  if (activeId.startsWith('plugin:')) {
+    const win = (props.pluginWindows ?? []).find(
+      (w) => `plugin:${w.pluginNs}:${w.id}` === activeId,
+    );
+    if (!win) return null; // uninstalled/disabled — usePluginPanels resets the id
+    return (
+      <PanelChrome title={win.title} icon={pluginWindowIcon(win.icon)} onClose={onClose}
+        bodyClassName="overflow-hidden">
+        <WebviewWindow
+          namespace={win.pluginNs}
+          title={win.title}
+          entry={win.entry}
+          projectId={props.projectId}
+          chromeless
+        />
+      </PanelChrome>
+    );
+  }
 
   switch (activeId) {
     case 'meta':

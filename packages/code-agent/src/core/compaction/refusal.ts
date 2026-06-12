@@ -24,20 +24,35 @@ export interface RichRefusalArgs {
  * small reads (e.g. 250-char file slices), the refusal was 6× larger than the
  * content it was preventing — the brake cost more tokens than the loop. This
  * version drops the verbose lists and renders as 2–3 lines (~250 chars).
- * Optional fields (`currentMtimeMs`, `contextPreview`, `knownSymbols`) are
- * kept on the signature for backwards-compat but not rendered.
+ * Optional fields (`currentMtimeMs`, `knownSymbols`) are kept on the
+ * signature for backwards-compat but not rendered.
+ *
+ * Honesty rule: "Content is already in your context above" is only claimed
+ * when the caller verified a prior tool_result is still THERE
+ * (`contextPreview` present). When every prior read was compacted/elided,
+ * asserting it would gaslight the model into quoting content it cannot see —
+ * the fallback wording points at `force_reread` instead.
  */
 export function buildRichRefusal(args: RichRefusalArgs): string {
   const { toolName, path, prior, windowTurns } = args;
   // Compact turn list — just the numbers, joined comma-sep.
   const turns = prior.map((p) => p.turn).join(', ');
   const plural = prior.length === 1 ? '' : 's';
-
-  return (
+  const head =
     `Refused: \`${toolName}\` called ${prior.length} time${plural} for \`${path}\` ` +
-    `in last ${windowTurns} turns (turn${plural} ${turns}). ` +
-    `Content is already in your context above — quote it and act on it, ` +
-    `or pass \`force_reread: true\` if the file genuinely changed since the first read.`
+    `in last ${windowTurns} turns (turn${plural} ${turns}). `;
+
+  if (args.contextPreview !== undefined) {
+    return (
+      head +
+      `Content is already in your context above — quote it and act on it, ` +
+      `or pass \`force_reread: true\` if the file genuinely changed since the first read.`
+    );
+  }
+  return (
+    head +
+    `The prior read may have been compacted out of your context — if you genuinely ` +
+    `need the content again, pass \`force_reread: true\`; otherwise act on what you have.`
   );
 }
 

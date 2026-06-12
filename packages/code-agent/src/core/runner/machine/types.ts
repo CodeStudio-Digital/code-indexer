@@ -67,6 +67,13 @@ export interface RunContext {
    */
   activeTiers: Set<ToolTier> | null;
   /**
+   * Tools the model called by name while they were hidden (tier-hidden or
+   * cap-cut). They join the visible list from the next turn (`buildTools`
+   * unions them past the tier filter and protects them from the cap).
+   * Shared BY REFERENCE with the host runner; monotone — only grows.
+   */
+  pinnedTools: Set<string>;
+  /**
    * Per-recovery-kind circuit breaker counters. Each kind has its own cap
    * resolved by `recoveryCap()`; the orchestrator aborts when a kind goes
    * over.
@@ -112,6 +119,13 @@ export interface RunContext {
    * quiet (prompt fell back below the trigger).
    */
   consecutiveNoopCompactions: number;
+  /**
+   * EMA of `real_prompt_tokens / tokenizer_estimate`, learned on turns where
+   * the provider reported usage. Calibrates the pre-emit projection and the
+   * estimate fallback of the post-turn gates (chars/4 drifts with content
+   * mix). `null` until the first usage-bearing turn (treated as 1).
+   */
+  estimateCalibration: number | null;
   /** Stable run id (uuid) for telemetry correlation. */
   runId: string;
   aborted: boolean;
@@ -210,8 +224,10 @@ export interface RunContext {
     recentCompactionAt: number | null;
     /** Memory ids already injected (Mem C) — avoids re-injecting each turn. */
     lastInjectedMemoryIds: Set<string>;
-    /** Session Drive note ids already injected — avoids re-injecting each turn. */
-    lastInjectedSessionMemoryIds: Set<string>;
+    /** Hash of the last injected Session State Block — re-inject on change. */
+    lastInjectedSessionStateHash: string | null;
+    /** Hash of the last injected project memory index — re-inject on change. */
+    lastInjectedProjectIndexHash: string | null;
     /**
      * self_review nudge state (Fix A). The nudge in `dynamic-injection.ts`
      * is recomputed every turn while changes are pending; without this gate
@@ -341,17 +357,6 @@ export interface BridgeCallbacks {
     turn: number,
   ) => string | null;
   /**
-   * Deep-think pre-think — calls an auxiliary cheap model BEFORE the
-   * main provider.chat() to produce a reasoning block that gets
-   * prefilled onto the conversation. Failures must NOT block the
-   * main turn — the callback handles its own error events.
-   */
-  runPreThink?: (args: {
-    messages: AgentMessage[];
-    toolNames: string[];
-    turn: number;
-  }) => Promise<{ text: string; usage?: ChatUsage } | null>;
-  /**
    * Quality watchdog — fire-and-forget classifier triggered AFTER each
    * turn finishes. The callback is expected to schedule the LLM call
    * asynchronously and emit `quality_watchdog_alert` when relevant.
@@ -392,16 +397,26 @@ export interface BridgeCallbacks {
     turn: number,
   ) => Promise<ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>>;
   /**
-   * Session Drive injection (migrations 125/126) — synchronous read of the
-   * session's working memory: the active plan, pinned/recent notes, and a
-   * count of available investigations. The Executing node folds these into
-   * the dynamic injector so they survive compaction. Unset = disabled.
+   * Session State Block data (replaces the old per-field Session Drive
+   * injection) — synchronous read of the session's persisted state: goal,
+   * active plan, todos, notes, changed files, investigation count. The
+   * Executing node renders it (`assembly/session-state.ts`) and injects per
+   * the window-scaled policy (`assembly/injection-policy.ts`). Unset = off.
    */
-  getSessionDriveInjection?: () => {
+  getSessionStateData?: () => {
+    goal: { text: string; status: string } | null;
     activePlan: { text: string; status: string } | null;
-    sessionMemory: ReadonlyArray<{ id: string; title: string; body: string }>;
+    todos: ReadonlyArray<{ status: string; label: string }>;
+    notes: ReadonlyArray<{ id: string; title: string; body: string; kind: string; pinned: boolean }>;
+    filesChanged: ReadonlyArray<string>;
     investigationCount: number;
   } | null;
+  /**
+   * Project memory index (MEMORY.md-style) — top-N titles of the project's
+   * durable memory, injected at turn 1 / post-compaction so every session
+   * knows what the project already learned. Unset = off.
+   */
+  getProjectMemoryIndex?: () => ReadonlyArray<{ title: string; category: string }> | null;
   /**
    * Drain `runner.pendingUserMessages` into the main `messages` array.
    * Called at the START of each Executing turn so messages pushed via
@@ -438,6 +453,7 @@ export interface BridgeCallbacks {
     historyChars: number;
     systemPromptChars: number;
     toolsDefChars: number;
+    visibleToolsCount?: number;
     responseMeta: import('@mcp/code-agent/core/messages.js').ChatProviderResponseMeta | null;
     compactionTriggered: boolean;
     summarizerRan: boolean;

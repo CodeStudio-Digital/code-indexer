@@ -28,6 +28,7 @@ interface ProviderCardProps {
   onToggleModel: (modelId: string, mode: string, enabled: boolean) => void;
   onSetModelEffort: (modelId: string, mode: string, level: string | null) => void;
   onSetModelContextWindow: (modelId: string, mode: string, value: number | null) => void;
+  onSetModelMaxTools: (modelId: string, mode: string, value: number | null) => void;
   onBackfillContextWindows: () => void;
   onSetFallback: (providerId: string, fallbackProviderId: string | null) => void;
   onSetSubagentTarget: (
@@ -56,6 +57,7 @@ export function ProviderCard({
   onToggleModel,
   onSetModelEffort,
   onSetModelContextWindow,
+  onSetModelMaxTools,
   onBackfillContextWindows,
   onSetFallback,
   onSetSubagentTarget,
@@ -218,11 +220,30 @@ export function ProviderCard({
                           })}
                         </select>
                       )}
-                    <ContextWindowField
+                    <NumericOverrideField
                       modelId={m.model_id}
                       mode={m.mode}
                       value={m.context_window}
                       onSet={onSetModelContextWindow}
+                      min={1024}
+                      placeholder="e.g. 200000"
+                      warnWhenNull
+                      unknownLabel="? ctx"
+                      format={(v) => `${formatCtx(v)} ctx`}
+                      titleUnknown="Context window unknown — click to set manually"
+                      titleValue={(v) => `Context window: ${v.toLocaleString()} tokens — click to edit`}
+                    />
+                    <NumericOverrideField
+                      modelId={m.model_id}
+                      mode={m.mode}
+                      value={m.max_tools}
+                      onSet={onSetModelMaxTools}
+                      min={4}
+                      placeholder={t('admin:provider.maxToolsPlaceholder')}
+                      unknownLabel="auto tools"
+                      format={(v) => `${v} tools`}
+                      titleUnknown="Tool catalog cap: automatic (registry default) — click to override"
+                      titleValue={(v) => `Tool catalog cap: ${v} tools per turn — click to edit`}
                     />
                     <Switch
                       checked={m.enabled}
@@ -327,23 +348,39 @@ function readSubagentModelId(value: unknown): string | null {
 }
 
 /**
- * Inline context-window editor for a single model row. Shows a read-only
- * "ctx 200k" pill by default; clicking flips it into a numeric input. Empty
- * input clears the override (sends null → DB null → registry fallback wins).
+ * Inline numeric-override editor for a single model row (context window,
+ * tool cap, ...). Shows a read-only pill by default; clicking flips it into
+ * a numeric input. Empty input clears the override (sends null → DB null →
+ * registry fallback wins).
  *
  * Lazy state so we don't blow re-renders for every model row when nothing
  * is being edited.
  */
-function ContextWindowField({
+function NumericOverrideField({
   modelId,
   mode,
   value,
   onSet,
+  min,
+  placeholder,
+  unknownLabel,
+  format,
+  titleUnknown,
+  titleValue,
+  warnWhenNull = false,
 }: {
   modelId: string;
   mode: string;
   value: number | null;
   onSet: (modelId: string, mode: string, value: number | null) => void;
+  min: number;
+  placeholder: string;
+  unknownLabel: string;
+  format: (v: number) => string;
+  titleUnknown: string;
+  titleValue: (v: number) => string;
+  /** Amber-tint the null pill (e.g. unknown context window = a problem). */
+  warnWhenNull?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string>('');
@@ -353,19 +390,17 @@ function ContextWindowField({
         type="button"
         className={
           'h-7 px-2 rounded border text-[11px] font-mono ' +
-          (value == null ? 'border-amber-500/40 text-amber-700 dark:text-amber-400' : 'text-muted-foreground hover:bg-muted')
+          (value == null && warnWhenNull
+            ? 'border-amber-500/40 text-amber-700 dark:text-amber-400'
+            : 'text-muted-foreground hover:bg-muted')
         }
-        title={
-          value == null
-            ? 'Context window unknown — click to set manually'
-            : `Context window: ${value.toLocaleString()} tokens — click to edit`
-        }
+        title={value == null ? titleUnknown : titleValue(value)}
         onClick={() => {
           setDraft(value != null ? String(value) : '');
           setEditing(true);
         }}
       >
-        {value == null ? '? ctx' : `${formatCtx(value)} ctx`}
+        {value == null ? unknownLabel : format(value)}
       </button>
     );
   }
@@ -377,7 +412,7 @@ function ContextWindowField({
       return;
     }
     const n = Number(trimmed.replace(/[_,]/g, ''));
-    if (!isFinite(n) || n < 1024) return; // server validates too
+    if (!isFinite(n) || n < min) return; // server validates too
     onSet(modelId, mode, n);
   };
   return (
@@ -385,7 +420,7 @@ function ContextWindowField({
       type="text"
       autoFocus
       className="h-7 w-24 rounded border bg-background px-1.5 text-xs font-mono"
-      placeholder="e.g. 200000"
+      placeholder={placeholder}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}

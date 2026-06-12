@@ -5,6 +5,7 @@ import ignore from 'ignore';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { resolveSafe } from '@mcp/code-agent/tools/paths.js';
+import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 
 /**
  * glob — fast filename pattern matching across the project tree.
@@ -135,7 +136,7 @@ export const globTool: CoderTool = {
     const capped = filtered.slice(0, limit);
     const lines = capped.map((m) => m.rel);
     const header = total > limit
-      ? `${capped.length} of ${total} matches (limit=${limit} — narrow the pattern or raise limit)`
+      ? `${capped.length} of ${total} matches ${truncationMarker(`limit=${limit}`, 'narrow the pattern or raise limit')}`
       : `${total} match${total === 1 ? '' : 'es'}`;
     if (total === 0) {
       return ok(

@@ -73,6 +73,12 @@ export const MASTER_ALLOWED_MCP_SUFFIXES: ReadonlySet<string> = new Set([
   'list_directory',
   'search',
   'get_recently_modified_files',
+  // Project memory (Mem C) — read-only retrieval of distilled decisions/
+  // gotchas from prior runs. The master plans delegation with this context
+  // (e.g. quote a known gotcha in the spawn task); writes stay with
+  // subordinates + the run-end distiller.
+  'search_memory',
+  'get_context_for',
 ]);
 
 /**

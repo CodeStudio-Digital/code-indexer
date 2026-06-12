@@ -15,6 +15,7 @@
 
 import { runCoder, type CoderAttachment, type RunCoderOptions, type RunCoderHandle, type MasterStartResult } from '@mcp/code-agent/index.js';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import { SessionStore } from '@mcp/code-agent/sessions/store.js';
@@ -93,19 +94,6 @@ export type RoleConfig = {
    */
   thinking?: boolean;
   thinkingBudgetTokens?: number;
-  /**
-   * Phase F: simulated deepThink. Orthogonal to `thinking` — both can be on.
-   * Subordinates spawned with this role get an auxiliary (cheap) model call
-   * before each main-model turn; its output is prefilled as a pre-thought.
-   * Forwarded into `runCoder({ deepThink, deepThinkModel, deepThinkProvider,
-   * preThinkOnToolResults })`. All four are optional; absence is identical
-   * to legacy behaviour. See packages/code-agent/RunnerOptions for full
-   * field docs.
-   */
-  deepThink?: boolean;
-  deepThinkModel?: string;
-  deepThinkProvider?: string;
-  preThinkOnToolResults?: boolean;
 };
 
 function buildPromptRoster(
@@ -248,7 +236,7 @@ export class MasterLifecycle implements IMasterNotifier {
     this._roleConfigs = configs;
   }
 
-  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number; thinking?: boolean; thinkingBudgetTokens?: number; deepThink?: boolean; deepThinkModel?: string; deepThinkProvider?: string; preThinkOnToolResults?: boolean } | null {
+  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number; thinking?: boolean; thinkingBudgetTokens?: number } | null {
     const cfg = this._roleConfigs.find((r) => r.role === role);
     return cfg ? {
       provider: cfg.provider,
@@ -260,10 +248,6 @@ export class MasterLifecycle implements IMasterNotifier {
       temperature: cfg.temperature,
       thinking: cfg.thinking,
       thinkingBudgetTokens: cfg.thinkingBudgetTokens,
-      deepThink: cfg.deepThink,
-      deepThinkModel: cfg.deepThinkModel,
-      deepThinkProvider: cfg.deepThinkProvider,
-      preThinkOnToolResults: cfg.preThinkOnToolResults,
     } : null;
   }
 
@@ -626,6 +610,11 @@ export class MasterLifecycle implements IMasterNotifier {
       attention: this.deps.attention,
       state: this.buildRunnerStateMutators(),
     });
+    // docs_deep_research — DocsAgent escalation over the indexed doc corpus.
+    // Per-runner install (not a static registry tool); the company-worker's
+    // docsResearch RPC shim was already wired — this was the missing half.
+    // Navigate-tier, so it surfaces via expand_toolset('navigate').
+    installDocsDeepResearch(runner);
   }
 
   private attachCompletionHandler(handle: RunCoderHandle, runId: number): void {

@@ -13,9 +13,9 @@
  *     focused tool — the constraint encoded in the tool name + handler
  *     prevents the sub from moving cards backwards.
  *
- * Deprecated aliases (`kanban_my_comment`, `kanban_my_checklist`) are
- * registered for one release so mid-session agents don't break.
- * They delegate to the unified handlers with `card_id` auto-resolved.
+ * The deprecated aliases (`kanban_my_comment`, `kanban_my_checklist`)
+ * were removed after their grace release — the unknown-tool error lists
+ * the valid names, so a stale agent self-corrects to the unified tools.
  */
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
@@ -33,124 +33,7 @@ export function buildSubordinateKanbanTools(
     ...buildUnifiedKanbanTools(orchestrator),
     // Subordinate-only column transition with built-in constraint.
     kanbanMoveToReview(orchestrator, agentRole, agentRunId),
-    // Deprecated aliases — kept for one release. Remove next sprint.
-    kanbanMyComment(orchestrator, agentRole, agentRunId),
-    kanbanMyChecklist(orchestrator, agentRole, agentRunId),
   ];
-}
-
-// ─── kanban_my_comment ───────────────────────────────────────
-
-function kanbanMyComment(
-  orchestrator: CompanyOrchestrator,
-  agentRole: string,
-  agentRunId: number,
-): CoderTool {
-  const parameters: JsonSchema = {
-    type: 'object',
-    properties: {
-      content: {
-        type: 'string',
-        description:
-          'Comment content — progress notes, decisions, blockers, technical context. ' +
-          'This is preserved across agent restarts and visible to the Master and future agents.',
-      },
-    },
-    required: ['content'],
-  };
-
-  return {
-    name: 'kanban_my_comment',
-    description:
-      '[DEPRECATED — use kanban_post_comment instead, omit card_id] ' +
-      'Add a comment to YOUR assigned Kanban card. Use for progress updates, decisions, ' +
-      'blockers, or technical context that should survive agent restarts. ' +
-      'The Master and future agents will see these comments.',
-    parameters,
-    source: 'native',
-    handler: async (args) => {
-      try {
-        const cardId = orchestrator.findCardForAgent(agentRunId);
-        if (!cardId) {
-          return err('No Kanban card is currently assigned to you.');
-        }
-
-        const comment = orchestrator.kanbanAddComment(
-          cardId,
-          agentRole,
-          agentRunId,
-          args.content as string,
-        );
-        return ok(`Comment #${comment.id} added to your card #${cardId}`);
-      } catch (e) {
-        return err(`Failed to add comment: ${(e as Error).message}`);
-      }
-    },
-  };
-}
-
-// ─── kanban_my_checklist ─────────────────────────────────────
-
-function kanbanMyChecklist(
-  orchestrator: CompanyOrchestrator,
-  _agentRole: string,
-  agentRunId: number,
-): CoderTool {
-  const parameters: JsonSchema = {
-    type: 'object',
-    properties: {
-      items: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            id: { type: 'number', description: 'Existing item ID (omit to create new). Get IDs from kanban_read_my_card.' },
-            text: { type: 'string', description: 'Objective text' },
-            checked: { type: 'boolean', description: 'Whether this objective is completed' },
-          },
-          required: ['text', 'checked'],
-        },
-        description: 'Checklist items to create or update on your card',
-      },
-    },
-    required: ['items'],
-  };
-
-  return {
-    name: 'kanban_my_checklist',
-    description:
-      '[DEPRECATED — use kanban_update_objectives instead, omit card_id] ' +
-      'Check off completed objectives or add new checklist items to YOUR Kanban card. ' +
-      'Use kanban_read_my_card first to see current item IDs.',
-    parameters,
-    source: 'native',
-    handler: async (args) => {
-      try {
-        const cardId = orchestrator.findCardForAgent(agentRunId);
-        if (!cardId) {
-          return err('No Kanban card is currently assigned to you.');
-        }
-
-        const items = args.items as Array<{ id?: number; text: string; checked: boolean }>;
-
-        // Validate that referenced item IDs belong to this card
-        const card = orchestrator.kanbanGetCard(cardId);
-        if (card && items.some(i => i.id != null)) {
-          const cardItemIds = new Set(card.checklist.map(ci => ci.id));
-          const invalidIds = items.filter(i => i.id != null && !cardItemIds.has(i.id)).map(i => i.id);
-          if (invalidIds.length > 0) {
-            return err(`Checklist item(s) ${invalidIds.join(', ')} do not belong to your card #${cardId}.`);
-          }
-        }
-
-        const result = orchestrator.kanbanUpdateChecklist(cardId, items);
-        const checked = result.filter(i => i.checked).length;
-        return ok(`Checklist updated: ${checked}/${result.length} items completed on card #${cardId}`);
-      } catch (e) {
-        return err(`Failed to update checklist: ${(e as Error).message}`);
-      }
-    },
-  };
 }
 
 // ─── kanban_move_to_review ───────────────────────────────────

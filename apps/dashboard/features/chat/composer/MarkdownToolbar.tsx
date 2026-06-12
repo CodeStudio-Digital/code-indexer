@@ -55,9 +55,9 @@ interface MarkdownToolbarProps {
   /**
    * Optional content rendered after a separator on the right side of the
    * toolbar. Used by the composer to tuck the "session-level" controls
-   * (attachment, pipeline, think, deepthink, cap) into the same horizontal
-   * strip as the markdown formatting buttons — keeps the busier toolbar
-   * on the bottom for picker controls (agent, provider, model, send).
+   * (attachment, pipeline, think, cap) into the same horizontal strip as
+   * the markdown formatting buttons — keeps the busier toolbar on the
+   * bottom for picker controls (agent, provider, model, send).
    */
   rightSlot?: React.ReactNode;
 }

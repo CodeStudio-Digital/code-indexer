@@ -16,6 +16,10 @@ import {
   type IndexProjectInput,
 } from '@mcp/services/services/projects/index.js';
 import { makeHybridSearchCacheInvalidator } from '@mcp/indexer/search/cache-invalidator.js';
+import {
+  composeFilesUpdatedListeners,
+  makeAutoDiscoveryIndexListener,
+} from '@mcp/services/services/docs/index.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import type { HandlerDeps } from '../types.js';
 
@@ -64,9 +68,15 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     // throws are swallowed inside IndexAgent; absent search instance is
     // tolerated by makeHybridSearchCacheInvalidator. Safe to wire
     // unconditionally — the listener no-ops when nothing is cached.
-    filesUpdatedListener: deps.hybridSearch
-      ? makeHybridSearchCacheInvalidator(deps.hybridSearch)
-      : undefined,
+    // Composed with the doc auto-discovery scan (fire-and-forget + 6h
+    // per-project debounce inside the listener — it never holds the run).
+    filesUpdatedListener: composeFilesUpdatedListeners(
+      deps.hybridSearch ? makeHybridSearchCacheInvalidator(deps.hybridSearch) : undefined,
+      makeAutoDiscoveryIndexListener({
+        db: db.raw(),
+        getProjectRoot: (projectId) => db.getProject(projectId)?.root_path ?? null,
+      }),
+    ),
   });
 
   // Clear a project's REMOTE vectors. Prefers a wholesale namespace drop

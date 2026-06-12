@@ -15,15 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  ClipboardCopy,
-  GitCommit,
-  Loader2,
-  MoreHorizontal,
-  RefreshCw,
-  Replace,
-  RotateCcw,
-} from 'lucide-react';
+import { Loader2, RefreshCw } from 'lucide-react';
 import { apiCall } from '../../../../../lib/api-client.js';
 import { Button } from '../../../../../components/ui/button.js';
 import {
@@ -34,16 +26,7 @@ import {
   SelectValue,
 } from '../../../../../components/ui/select.js';
 import { confirm, toast } from '../../../../../components/ui/prompt-dialog.js';
-import { useContextMenu, type ContextMenuItem } from '../../../../../components/ui/context-menu.js';
-import { cn } from '../../../../../lib/utils.js';
-
-interface Commit {
-  sha: string;
-  shortSha: string;
-  author: string;
-  date: string;
-  subject: string;
-}
+import { CommitRow, type Commit } from './CommitRow.js';
 
 interface GitRunResult {
   command: string;
@@ -231,116 +214,4 @@ export function HistoryView({ projectId, onMutated }: HistoryViewProps) {
       </div>
     </div>
   );
-}
-
-function CommitRow({
-  commit: c,
-  onCherryPick,
-  onRevert,
-  onReset,
-}: {
-  commit: Commit;
-  onCherryPick: () => void;
-  onRevert: () => void;
-  onReset: (mode: 'soft' | 'mixed' | 'hard') => void;
-}) {
-  const items: ContextMenuItem[] = [
-    {
-      id: 'cherry-pick',
-      label: 'Cherry-pick onto current branch',
-      icon: Replace,
-      onSelect: onCherryPick,
-    },
-    {
-      id: 'revert',
-      label: 'Revert (new commit that undoes this)',
-      icon: RotateCcw,
-      onSelect: onRevert,
-    },
-    {
-      id: 'reset-soft',
-      separatorBefore: true,
-      label: 'Reset HEAD → here (soft)',
-      onSelect: () => onReset('soft'),
-    },
-    {
-      id: 'reset-mixed',
-      label: 'Reset HEAD → here (mixed)',
-      onSelect: () => onReset('mixed'),
-    },
-    {
-      id: 'reset-hard',
-      label: 'Reset HEAD → here (hard, destructive)',
-      destructive: true,
-      onSelect: () => onReset('hard'),
-    },
-    {
-      id: 'copy-sha',
-      separatorBefore: true,
-      label: 'Copy full SHA',
-      icon: ClipboardCopy,
-      onSelect: () => {
-        void navigator.clipboard.writeText(c.sha).catch(() => undefined);
-      },
-    },
-  ];
-  const { triggerProps, Menu } = useContextMenu(items);
-
-  return (
-    <>
-      <div
-        {...triggerProps}
-        className={cn(
-          'group flex items-center gap-1.5 px-2 py-1 border-b last:border-b-0 text-[11.5px] hover:bg-muted/40 transition-colors',
-        )}
-        title={c.subject}
-      >
-        <GitCommit className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        <span className="font-mono text-[10px] text-muted-foreground w-14 shrink-0 truncate">
-          {c.shortSha}
-        </span>
-        <span className="truncate flex-1">{c.subject}</span>
-        <span className="text-[10px] text-muted-foreground/70 max-w-[110px] truncate shrink-0">
-          {c.author}
-        </span>
-        <span className="text-[10px] text-muted-foreground/60 shrink-0">
-          {formatDate(c.date)}
-        </span>
-        <button
-          type="button"
-          className="h-5 w-5 grid place-items-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity"
-          aria-label="More actions"
-          onClick={(e) => {
-            e.preventDefault();
-            // Open the context menu by simulating a right-click event at
-            // the button's coordinates.
-            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-            const evt = new MouseEvent('contextmenu', {
-              bubbles: true,
-              cancelable: true,
-              view: window,
-              clientX: rect.left,
-              clientY: rect.bottom,
-            });
-            (e.currentTarget as HTMLElement).dispatchEvent(evt);
-          }}
-        >
-          <MoreHorizontal className="h-3 w-3" />
-        </button>
-      </div>
-      {Menu}
-    </>
-  );
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
-  const now = Date.now();
-  const diff = now - d.getTime();
-  if (diff < 60_000) return 'now';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d`;
-  return d.toLocaleDateString();
 }

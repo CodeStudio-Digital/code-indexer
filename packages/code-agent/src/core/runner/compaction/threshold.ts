@@ -8,7 +8,11 @@
  * the legacy path uses, so the new and old paths agree on what "effective"
  * means while both still exist.
  */
-import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
+import {
+  DEFAULT_COMPACT_TRIGGER_RATIO,
+  deriveTokenLimits,
+  resolveTriggerRatio,
+} from '@mcp/code-agent/core/compaction/limits.js';
 
 export interface CompactionThresholdInputs {
   /** Last known prompt-token count from the provider response. */
@@ -31,24 +35,20 @@ export interface CompactionThresholdDecision {
 }
 
 /**
- * Frente B (PR 2 da reavaliação) — desceu de 0.9 → 0.75. Com o char
- * compactor legacy morto, o LLM compactor precisa disparar ANTES da
- * pressão real para preservar fidelidade (90% deixava pouco espaço para
- * o LLM auxiliar trabalhar; 75% antecipa o resumo enquanto ainda há
- * 25% de janela disponível para o turno em curso).
- *
- * Fix B — desceu 0.75 → 0.70. A degradação de coerência observada na sessão
- * 887 (gpt-5.5, janela 272k) já estava instalada por volta de ~150k = ~0.60
- * da janela efetiva; 0.70 antecipa o resumo sem ser um número fixo (continua
- * RELATIVO à janela: 0.70×272k≈176k, 0.70×1M=700k — escala com o modelo, ao
- * contrário de um cap absoluto, que seria prematuro em 272k e absurdo em 1M).
- * Env-ajustável por `triggerRatio` no call-site.
+ * História do ratio: 0.90 → 0.75 (Frente B) → 0.70 (Fix B, sessão 887) →
+ * **0.90 de novo** por decisão do operador: 0.70 desperdiçava ~30% da janela
+ * resumindo cedo demais, e a continuidade pós-resumo agora é carregada pelo
+ * estado vivo da sessão + memória durável injetados, não por uma cauda longa.
+ * O valor é o knob único `resolveTriggerRatio()` (env
+ * `CODER_COMPACT_TRIGGER_RATIO`, clamp 0.50–0.95) — também dirige o gate de
+ * body (ratio − 0.05) e o backstop token-budget de `deriveTokenLimits`.
  */
-export const DEFAULT_TRIGGER_RATIO = 0.70;
+export const DEFAULT_TRIGGER_RATIO = DEFAULT_COMPACT_TRIGGER_RATIO;
+export { resolveTriggerRatio };
 
 export function shouldCompact90(inp: CompactionThresholdInputs): CompactionThresholdDecision {
   const limits = deriveTokenLimits(inp.model);
-  const triggerRatio = inp.triggerRatio ?? DEFAULT_TRIGGER_RATIO;
+  const triggerRatio = inp.triggerRatio ?? resolveTriggerRatio();
   if (limits.effective <= 0 || inp.promptTokens <= 0) {
     return {
       shouldCompact: false,
@@ -106,11 +106,11 @@ export function computeProtectTokens(inp: ProtectTokensInputs): number {
  * tail when honoring the "preserve last N user turns" rule. Without a ceiling, a
  * single long user turn (one request → many tool calls, so the whole history has
  * < N user messages) makes recede preserve EVERYTHING — the compactor then
- * no-ops while the 0.70 size gate keeps firing every turn (a no-op compaction
+ * no-ops while the size gate keeps firing every turn (a no-op compaction
  * loop, confirmed in telemetry: one run churned 94 consecutive no-ops). Capping
- * the tail at 50% of the effective window — comfortably below the 0.70 trigger,
- * leaving room for the synthetic summary — guarantees the post-compaction prompt
- * lands below the trigger. Override via `CODER_COMPACT_RECEDE_TAIL_RATIO`,
+ * the tail at 50% of the effective window — comfortably below the trigger
+ * ratio, leaving room for the synthetic summary — guarantees the post-compaction
+ * prompt lands below the trigger. Override via `CODER_COMPACT_RECEDE_TAIL_RATIO`,
  * clamped to stay above the protect floor and below the trigger.
  */
 export const DEFAULT_RECEDE_TAIL_RATIO = 0.5;
@@ -119,7 +119,9 @@ export function resolveRecedeTailRatio(): number {
   const raw = process.env.CODER_COMPACT_RECEDE_TAIL_RATIO;
   const n = raw ? Number(raw) : NaN;
   const ratio = Number.isFinite(n) ? n : DEFAULT_RECEDE_TAIL_RATIO;
-  return Math.min(DEFAULT_TRIGGER_RATIO - 0.05, Math.max(resolveProtectRatio(), ratio));
+  // Clamp against the RESOLVED trigger ratio (not the constant) so an env
+  // override of the trigger keeps the post-compaction prompt below it.
+  return Math.min(resolveTriggerRatio() - 0.05, Math.max(resolveProtectRatio(), ratio));
 }
 
 /**

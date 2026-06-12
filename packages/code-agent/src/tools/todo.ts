@@ -163,10 +163,11 @@ export const todoWrite: CoderTool = {
     '\n' +
     'RULES:\n' +
     '1. Do not call this tool repeatedly without making real progress on at least one task between calls. Progress means a tool result, file change, or verified observation. Re-writing the same list is counterproductive — use update_todo instead.\n' +
-    '2. Update statuses progressively as work happens — flip items to in_progress BEFORE starting, to completed IMMEDIATELY after finishing. Do not batch completions at the end.\n' +
+    '2. Update statuses progressively as work happens — flip items to in_progress BEFORE starting, to completed IMMEDIATELY after finishing. Do not batch completions at the end. Completing the current item and starting the next is ONE update_todo call (`updates: [...]`), not two.\n' +
     '3. Do not jump an item from pending directly to completed: always set it to in_progress first.\n' +
     '4. Exactly ONE item in_progress at a time.\n' +
-    '5. Reconcile the list before stopping the session: every item must end as completed or be removed. Never end a session with pending/in_progress items unless you state in your final message exactly why they are non-applicable.\n' +
+    '5. Bookkeeping rides along: emit todo_write/update_todo in the SAME assistant turn as your next work tool call (parallel tool calls are supported) — never spend a turn on checklist updates alone.\n' +
+    '6. Reconcile the list before stopping the session: every item must end as completed or be removed. Never end a session with pending/in_progress items unless you state in your final message exactly why they are non-applicable.\n' +
     '\n' +
     'WHEN TO USE: multi-step work (3+ distinct steps), tasks with logical phases or dependencies, or when the user gave a list of things to do.\n' +
     "WHEN NOT TO USE: single-step work, simple questions, conversational replies, or when the user gave very specific one-shot instructions — just do the work.\n" +
@@ -222,7 +223,7 @@ export const todoWrite: CoderTool = {
         return err(
           `Refused: todo_write called ${burst.count} times in the last ${Math.round(WRITE_BURST_WINDOW_MS / 1000)}s ` +
             `with the same list and no intervening progress. ` +
-            `Use update_todo({id: "...", status: "completed"}) to flip a single item instead of re-sending the whole list. ` +
+            `Use update_todo — single {id, status} or batch updates: [{id, status}, …] — instead of re-sending the whole list. ` +
             `Current ids: ${ids}.`,
         );
       }
@@ -253,18 +254,66 @@ export const todoWrite: CoderTool = {
 
 // ─── update_todo ───────────────────────────────────────────────────────
 
+interface TodoPatch {
+  id: string;
+  status?: TodoItem['status'];
+  content?: string;
+  activeForm?: string;
+}
+
+const MAX_PATCHES_PER_CALL = 10;
+
+/**
+ * Parse and validate one patch (from the top-level single form or one
+ * `updates[]` entry). `label` names the source in error messages.
+ */
+function parsePatch(raw: Record<string, unknown>, label: string): { ok: true; patch: TodoPatch } | { ok: false; error: string } {
+  const id = typeof raw.id === 'string' ? raw.id.trim().toLowerCase() : '';
+  if (!id) return { ok: false, error: `update_todo: ${label}.id is required` };
+
+  const status = raw.status;
+  const content = typeof raw.content === 'string' ? raw.content.trim() : undefined;
+  const activeForm = typeof raw.activeForm === 'string' ? raw.activeForm.trim() : undefined;
+  const hasStatus = status === 'pending' || status === 'in_progress' || status === 'completed';
+  // Validate status first — reject an explicitly bad value before falling
+  // through to the "no fields provided" check, otherwise the caller gets a
+  // misleading "at least one of …" error when they really passed a bad status.
+  if (status !== undefined && !hasStatus) {
+    return { ok: false, error: `update_todo: ${label}.status must be pending|in_progress|completed, got '${String(status)}'` };
+  }
+  if (!hasStatus && !content && !activeForm) {
+    return { ok: false, error: `update_todo: ${label} needs at least one of {status, content, activeForm}` };
+  }
+  return {
+    ok: true,
+    patch: {
+      id,
+      ...(hasStatus ? { status: status as TodoItem['status'] } : {}),
+      ...(content ? { content } : {}),
+      ...(activeForm ? { activeForm } : {}),
+    },
+  };
+}
+
 export const updateTodo: CoderTool = {
   name: 'update_todo',
   description:
-    'Patch a single todo by id. Use this to flip status (pending → in_progress → completed) or rename content/activeForm without re-sending the whole list. ' +
+    'Patch one or more todos by id in a SINGLE call — flip status (pending → in_progress → completed) or rename content/activeForm without re-sending the whole list. ' +
     'Get ids from the most recent todo_write result or from the <active-context> block.\n' +
     '\n' +
-    'At least one of {status, content, activeForm} is required. Other items in the list are left untouched.',
+    'Single patch: pass {id, status?, content?, activeForm?} at the top level.\n' +
+    'Several patches: pass `updates: [{id, status?, ...}, ...]` (max ' + MAX_PATCHES_PER_CALL + ') — validated and applied ATOMICALLY: one bad id rejects the whole call and nothing changes.\n' +
+    '\n' +
+    'Finishing one item and starting the next is ONE call, not two:\n' +
+    '  updates: [{id: "a1b2c3d4", status: "completed"}, {id: "e5f6a7b8", status: "in_progress"}]\n' +
+    '\n' +
+    'Do not spend a turn on bookkeeping alone — emit update_todo in the SAME assistant turn as your next work tool call (parallel tool calls are supported).\n' +
+    'At least one of {status, content, activeForm} is required per patch. Items not referenced are left untouched.',
   source: 'native',
   parameters: {
     type: 'object',
     properties: {
-      id: { type: 'string', description: 'The id of the todo to patch (from todo_write or <active-context>).' },
+      id: { type: 'string', description: 'Id of the todo to patch (single form). For 2+ changes use `updates` instead.' },
       status: {
         type: 'string',
         enum: ['pending', 'in_progress', 'completed'],
@@ -272,26 +321,63 @@ export const updateTodo: CoderTool = {
       },
       content: { type: 'string', description: 'Replacement imperative-form text (rare; prefer rewriting the whole list via todo_write).' },
       activeForm: { type: 'string', description: 'Replacement present-continuous text.' },
+      updates: {
+        type: 'array',
+        description:
+          'Batch form: several patches applied atomically in one call. Each entry: {id (required), status?, content?, activeForm?}. ' +
+          'Use for the complete-current + start-next transition instead of two calls.',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'Id of the todo to patch.' },
+            status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+            content: { type: 'string' },
+            activeForm: { type: 'string' },
+          },
+          required: ['id'],
+        },
+      },
     },
-    required: ['id'],
+    required: [],
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-    const id = typeof args.id === 'string' ? args.id.trim().toLowerCase() : '';
-    if (!id) return err('update_todo: id is required');
-
-    const status = args.status;
-    const newContent = typeof args.content === 'string' ? args.content.trim() : undefined;
-    const newActiveForm = typeof args.activeForm === 'string' ? args.activeForm.trim() : undefined;
-    const hasStatus = status === 'pending' || status === 'in_progress' || status === 'completed';
-    // Validate status first — reject an explicitly bad value before falling
-    // through to the "no fields provided" check, otherwise the user gets a
-    // misleading "at least one of …" error when they really passed a bad status.
-    if (status !== undefined && !hasStatus) {
-      return err(`update_todo: status must be pending|in_progress|completed, got '${String(status)}'`);
+    // Two mutually exclusive arg shapes: legacy single (top-level id) or batch.
+    const hasBatch = args.updates !== undefined;
+    const hasSingle =
+      args.id !== undefined || args.status !== undefined || args.content !== undefined || args.activeForm !== undefined;
+    if (hasBatch && hasSingle) {
+      return err('update_todo: pass EITHER the single top-level {id, ...} form OR `updates: [...]` — not both.');
     }
-    if (!hasStatus && !newContent && !newActiveForm) {
-      return err('update_todo: at least one of {status, content, activeForm} must be provided');
+
+    let patches: TodoPatch[];
+    if (hasBatch) {
+      if (!Array.isArray(args.updates) || args.updates.length === 0) {
+        return err('update_todo: `updates` must be a non-empty array of {id, status?, content?, activeForm?}');
+      }
+      if (args.updates.length > MAX_PATCHES_PER_CALL) {
+        return err(`update_todo: too many patches (${args.updates.length}, max ${MAX_PATCHES_PER_CALL}).`);
+      }
+      patches = [];
+      const seen = new Set<string>();
+      for (let i = 0; i < args.updates.length; i++) {
+        const raw = args.updates[i];
+        if (typeof raw !== 'object' || raw === null) {
+          return err(`update_todo: updates[${i}] must be an object with {id, status?, content?, activeForm?}`);
+        }
+        const parsed = parsePatch(raw as Record<string, unknown>, `updates[${i}]`);
+        if (!parsed.ok) return err(parsed.error);
+        if (seen.has(parsed.patch.id)) {
+          return err(`update_todo: updates[${i}] repeats id '${parsed.patch.id}' — merge the patches for one item.`);
+        }
+        seen.add(parsed.patch.id);
+        patches.push(parsed.patch);
+      }
+    } else {
+      if (typeof args.id !== 'string' || !args.id.trim()) return err('update_todo: id is required');
+      const parsed = parsePatch(args as Record<string, unknown>, 'call');
+      if (!parsed.ok) return err(parsed.error);
+      patches = [parsed.patch];
     }
 
     const runner = ctx.runner as unknown as
@@ -306,23 +392,32 @@ export const updateTodo: CoderTool = {
       return err('update_todo: no active todo list — call todo_write first to create one.');
     }
 
-    const idx = current.findIndex((t) => t.id === id);
-    if (idx < 0) {
-      const knownIds = current.map((t) => t.id).join(', ');
-      return err(
-        `update_todo: id '${id}' not found. Known ids: ${knownIds}. ` +
-          `Pass an exact id from the most recent todo_write result.`,
-      );
+    // Resolve ALL ids before applying anything — a batch is atomic: one
+    // unknown id rejects the call and the list is left untouched.
+    const indexById = new Map(current.map((t, i) => [t.id, i]));
+    for (const p of patches) {
+      if (!indexById.has(p.id)) {
+        const knownIds = current.map((t) => t.id).join(', ');
+        return err(
+          `update_todo: id '${p.id}' not found — nothing was applied. Known ids: ${knownIds}. ` +
+            `Pass exact ids from the most recent todo_write result.`,
+        );
+      }
     }
 
-    const next: TodoItem[] = current.map((t, i) => (i === idx ? { ...t } : { ...t }));
-    const target = next[idx];
-    if (hasStatus) target.status = status as TodoItem['status'];
-    if (newContent) target.content = newContent;
-    if (newActiveForm) target.activeForm = newActiveForm;
+    const next: TodoItem[] = current.map((t) => ({ ...t }));
+    for (const p of patches) {
+      const target = next[indexById.get(p.id)!];
+      if (p.status) target.status = p.status;
+      if (p.content) target.content = p.content;
+      if (p.activeForm) target.activeForm = p.activeForm;
+    }
 
     runner.setTodos(next);
 
+    // Invariant check runs on the FINAL state — the whole point of the batch
+    // form is that the complete-current + start-next pair never produces a
+    // transient 0-or-2 in_progress snapshot.
     const inProgress = next.filter((t) => t.status === 'in_progress');
     const warnings: string[] = [];
     if (inProgress.length > 1) {

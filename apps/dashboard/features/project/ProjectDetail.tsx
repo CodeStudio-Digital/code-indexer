@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  BookOpen,
   Boxes,
+  Brain,
   DollarSign,
   FileCode2,
   Files,
@@ -46,7 +46,7 @@ const TABS = [
   { id: 'files', labelKey: 'detail.tabs.files', icon: Files },
   { id: 'dependencies', labelKey: 'detail.tabs.deps', icon: Network },
   { id: 'architecture', labelKey: 'detail.tabs.arch', icon: Layers },
-  { id: 'snapshots', labelKey: 'detail.tabs.snapshots', icon: BookOpen },
+  { id: 'snapshots', labelKey: 'detail.tabs.memory', icon: Brain },
   { id: 'diff', labelKey: 'detail.tabs.diff', icon: GitCompare },
   { id: 'costs', labelKey: 'detail.tabs.costs', icon: DollarSign },
   { id: 'runs', labelKey: 'detail.tabs.runs', icon: History },

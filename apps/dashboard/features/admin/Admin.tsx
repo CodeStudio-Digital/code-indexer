@@ -16,7 +16,6 @@ import {
   Plus,
   Search,
   Settings2,
-  Sparkles,
   Wand2,
   Wrench,
   type LucideIcon,
@@ -44,7 +43,6 @@ import { HygienePanel } from './HygienePanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
 import { AuthPanel } from './AuthPanel.js';
 import { GeneralAiPanel } from './GeneralAiPanel.js';
-import { DeepThinkPanel } from './DeepThinkPanel.js';
 import { ChromeServicePanel } from './ChromeServicePanel.js';
 import { VerdaccioPanel } from './VerdaccioPanel.js';
 import { PipelineBindingsPanel } from './PipelineBindingsPanel.js';
@@ -67,7 +65,6 @@ type SectionId =
   | 'skills'
   | 'plugins'
   | 'ai-geral'
-  | 'deepthink'
   | 'chrome-service'
   | 'verdaccio'
   | 'pipeline-bindings'
@@ -105,6 +102,7 @@ export default function Admin() {
     toggleModel,
     setModelEffort,
     setModelContextWindow,
+    setModelMaxTools,
     backfillContextWindows,
     setSubagentTarget,
     setKimiCodeThinkingMode,
@@ -165,8 +163,6 @@ export default function Admin() {
       hint: 'Bindings de provider/model por pipeline' },
     { id: 'capabilities',      label: 'Capabilities',             icon: AlertTriangle, group: 'models',
       hint: 'Modelos rodando em fallback de context window' },
-    { id: 'deepthink',         label: 'deepThink',                icon: Sparkles,      group: 'models',
-      hint: 'Modelo auxiliar de pré-pensamento' },
     { id: 'ai-geral',          label: 'IA Geral',                 icon: Activity,      group: 'models',
       hint: 'Quality watchdog, intervention policies' },
     // Busca & Conhecimento
@@ -412,6 +408,7 @@ export default function Admin() {
                 onSetModelContextWindow={(modelId, mode, value) =>
                   expanded && setModelContextWindow(expanded, modelId, mode, value)
                 }
+                onSetModelMaxTools={(modelId, mode, value) => expanded && setModelMaxTools(expanded, modelId, mode, value)}
                 onBackfillContextWindows={backfillContextWindows}
                 onSetFallback={setFallback}
                 onSetSubagentTarget={setSubagentTarget}
@@ -431,7 +428,6 @@ export default function Admin() {
           {section === 'skills'            && <SkillsPanel />}
           {section === 'plugins'           && <PluginsPanel />}
           {section === 'ai-geral'          && <GeneralAiPanel />}
-          {section === 'deepthink'         && <DeepThinkPanel />}
           {section === 'chrome-service'    && <ChromeServicePanel />}
           {section === 'verdaccio'         && <VerdaccioPanel />}
           {section === 'pipeline-bindings' && <PipelineBindingsPanel />}

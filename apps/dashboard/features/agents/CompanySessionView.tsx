@@ -28,7 +28,7 @@ import { DEFAULT_TAB_FOR_ZONE, type Zone } from './zones/types.js';
 import { buildAgentsUrl, parseAgentsParams } from './routing.js';
 import { AgentsSidebar } from './session-view/AgentsSidebar.js';
 import { SessionHeader } from './session-view/SessionHeader.js';
-import { NewRoleDialog } from './session-view/NewRoleDialog.js';
+import { RoleDialog } from './session-view/RoleDialog.js';
 import { parseConfig } from './session-view/types.js';
 import { mergeBoardMessages, mergeSubordinates } from './session-view/merge-live-persisted.js';
 import { SidebarRail, type SidePanel } from './preview-sidebar/SidebarRail.js';
@@ -216,7 +216,7 @@ export function CompanySessionView({
     status: string;
   } | null>(null);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
-  const [newRoleDraft, setNewRoleDraft] = useState<RoleConfig | null>(null);
+  const [roleDialog, setRoleDialog] = useState<{ draft: RoleConfig; editIdx?: number } | null>(null);
 
   // Reference data for the sidebar and modals.
   const { data: allProjects } = useApi<AvailableProject[]>('/projects');
@@ -576,9 +576,7 @@ export function CompanySessionView({
                     refetch={refetch}
                     onOpenAgentRun={openAgentRun}
                     onOpenPersistedRun={openPersistedRun}
-                    onOpenNewRoleDialog={({ provider, model }) =>
-                      setNewRoleDraft({ role: '', provider, model, tier: 'navigate' })
-                    }
+                    onOpenRoleDialog={(args) => setRoleDialog(args)}
                   />
                 }
                 pluginWindows={contribWindows}
@@ -651,19 +649,21 @@ export function CompanySessionView({
         />
       )}
 
-      {newRoleDraft && config && (
-        <NewRoleDialog
+      {roleDialog && config && (
+        <RoleDialog
           sessionId={sessionId}
           config={config}
-          initialDraft={newRoleDraft}
+          initialDraft={roleDialog.draft}
+          editIdx={roleDialog.editIdx}
+          stream={stream}
           skills={skillsList?.skills ?? []}
           providerOptions={providerOptions}
           getModelsForProvider={getModelsForProvider}
           getDefaultModel={getDefaultModel}
-          onClose={() => setNewRoleDraft(null)}
+          onClose={() => setRoleDialog(null)}
           onApplied={() => {
             refetch();
-            setNewRoleDraft(null);
+            setRoleDialog(null);
           }}
         />
       )}

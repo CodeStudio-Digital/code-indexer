@@ -2,7 +2,12 @@ import type { Database as DB } from 'better-sqlite3';
 
 export interface ToolCallStats {
   totalCalls: number;
-  byName: Array<{ name: string; count: number; errorCount: number; lastAt: string | null }>;
+  /**
+   * `errorCount` = genuine tool failures only; harness refusals (dedup,
+   * failure-streak, timeout, …) are split into `refusedCount` so a guard
+   * doing its job doesn't read as a flaky tool.
+   */
+  byName: Array<{ name: string; count: number; errorCount: number; refusedCount: number; lastAt: string | null }>;
   recent: Array<{
     id: number;
     name: string;
@@ -39,7 +44,8 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
       `SELECT
           tc.tool_name                  AS name,
           COUNT(*)                      AS count,
-          COALESCE(SUM(tc.is_error), 0) AS errorCount,
+          COALESCE(SUM(CASE WHEN tc.is_error = 1 AND tc.refusal_kind IS NULL THEN 1 ELSE 0 END), 0) AS errorCount,
+          COALESCE(SUM(CASE WHEN tc.refusal_kind IS NOT NULL THEN 1 ELSE 0 END), 0)                 AS refusedCount,
           MAX(tc.created_at)            AS lastAt
        FROM coder_tool_calls tc
        JOIN coder_messages m ON m.id = tc.message_id
@@ -47,7 +53,7 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
        GROUP BY tc.tool_name
        ORDER BY count DESC, name ASC`,
     )
-    .all(sessionId) as Array<{ name: string; count: number; errorCount: number; lastAt: string | null }>;
+    .all(sessionId) as Array<{ name: string; count: number; errorCount: number; refusedCount: number; lastAt: string | null }>;
   const totalCalls = byNameRows.reduce((acc, r) => acc + r.count, 0);
   const cappedLimit = Math.max(1, Math.min(200, Math.floor(recentLimit)));
   const recentRows = db
@@ -104,7 +110,7 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
 
   return {
     totalCalls,
-    byName: byNameRows.map((r) => ({ name: r.name, count: r.count, errorCount: r.errorCount, lastAt: r.lastAt })),
+    byName: byNameRows.map((r) => ({ name: r.name, count: r.count, errorCount: r.errorCount, refusedCount: r.refusedCount, lastAt: r.lastAt })),
     recent: recentRows.map((r) => ({
       id: r.id, name: r.name,
       argsPreview: (r.args_json ?? '').slice(0, 200),

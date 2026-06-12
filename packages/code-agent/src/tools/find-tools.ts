@@ -1,4 +1,4 @@
-import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { getToolTier, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
@@ -17,10 +17,14 @@ import { getToolTier, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
  * description. The model can then call `expand_toolset(<tier>)` confidently
  * (or skip it entirely if the candidate is already visible).
  *
- * Discovery does NOT promote any tier — it's read-only. The agent still has
- * to call `expand_toolset` to actually unlock; this preserves cache stability
- * (no surprise tool-array growth between turns) and gives the user an audit
- * trail of which tiers were unlocked and why.
+ * Discovery does NOT promote any tier — it's read-only. From here the agent
+ * has two paths: call the discovered tool DIRECTLY (dispatch executes hidden
+ * registered tools and pins them into the visible list — see the pin
+ * mechanism in executing-dispatch.ts), or `expand_toolset(<tier>)` to unlock
+ * the whole tier. Both grow the tool array monotonically between turns, so
+ * prefix-cache stability is preserved either way. Known imprecision: a
+ * tier-visible tool that was cap-cut for a small-catalog model still shows
+ * as visible here — harmless, a direct call works and pins it.
  *
  * Implementation notes:
  *  - Cheap lexical match: substring + per-token overlap. No vector store
@@ -40,11 +44,12 @@ export function buildFindToolsTool(
     mutates: false,
     parallelSafe: true,
     description:
-      'Find tools by description (lazy discovery for tools NOT in the current tier).\n\n' +
+      'Find tools by description (lazy discovery for tools NOT in your visible list).\n\n' +
       'Use when you suspect a tool exists for a task but cannot see it in your current tools array. ' +
-      'Returns up to 5 candidates with their `name`, `tier` (which tier hides them), `source`, and a ' +
-      'short description. If the best candidate is in a higher tier, call `expand_toolset(<tier>)` ' +
-      'next to unlock it; otherwise call the tool directly.\n\n' +
+      'Returns up to 5 candidates with their `name`, `tier`, `source`, argument summary, and a ' +
+      'short description. You can call a discovered tool DIRECTLY even while hidden — it executes ' +
+      'and is pinned into your visible list from the next turn. `expand_toolset(<tier>)` unlocks a ' +
+      'whole tier at once when you need several of its tools.\n\n' +
       'WHEN TO USE: before guessing tool names, before calling expand_toolset speculatively, when ' +
       'a generic search/edit/git/web/lsp/mcp capability is needed but no matching tool is visible.\n\n' +
       "DON'T: use this when you already see the tool you need in your tools array — call it directly. " +
@@ -72,11 +77,14 @@ export function buildFindToolsTool(
       if (!query) return err('find_tools: `query` is required and must be non-empty.');
       const limit = Math.max(1, Math.min(10, Number(args.limit ?? 5) || 5));
 
-      // Pull active tiers from the runner via ctx if available. Subagents
-      // and tests may not have a runner — in that case treat all tiers as
-      // visible (no "hidden" tag) so the result is still useful.
-      const runner = ctx.runner as { activeTiers?: ReadonlySet<ToolTier> | null } | undefined;
+      // Pull active tiers + pins from the runner via ctx if available.
+      // Subagents and tests may not have a runner — in that case treat all
+      // tiers as visible (no "hidden" tag) so the result is still useful.
+      const runner = ctx.runner as
+        | { activeTiers?: ReadonlySet<ToolTier> | null; pinnedTools?: ReadonlySet<string> }
+        | undefined;
       const active = runner?.activeTiers ?? null;
+      const pinned = runner?.pinnedTools;
       const tools = registry.list();
 
       // Tokenize query into lowercase keywords; keep words >=2 chars.
@@ -113,6 +121,7 @@ export function buildFindToolsTool(
         tier: ToolTier;
         source: string;
         description: string;
+        params: string;
         score: number;
         visible: boolean;
       };
@@ -135,12 +144,13 @@ export function buildFindToolsTool(
         // real candidates.
         if (nameScore === 0 && descScore < 2) continue;
         const tier = getToolTier(t.name, tierOverrides);
-        const visible = active ? active.has(tier) : true;
+        const visible = active ? active.has(tier) || !!pinned?.has(t.name) : true;
         scored.push({
           name: t.name,
           tier,
           source: t.source,
           description: t.description ?? '',
+          params: paramSummary(t.parameters),
           score,
           visible,
         });
@@ -169,21 +179,55 @@ export function buildFindToolsTool(
       // economy goal of Camada 3.
       const lines: string[] = [`Top ${top.length} tool match${top.length === 1 ? '' : 'es'} for "${query}":`];
       for (const r of top) {
-        const visTag = r.visible ? '' : ` [hidden — call expand_toolset('${r.tier}')]`;
+        const visTag = r.visible
+          ? ''
+          : ` [hidden — call it directly (it will be pinned into your toolset) or expand_toolset('${r.tier}')]`;
         // Trim description to one sentence-ish for compactness.
         const shortDesc = r.description.split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) ?? '';
-        lines.push(`- ${r.name} (tier=${r.tier}, source=${r.source})${visTag}: ${shortDesc}`);
+        const argsTag = r.params ? ` (args: ${r.params})` : '';
+        lines.push(`- ${r.name} (tier=${r.tier}, source=${r.source})${argsTag}${visTag}: ${shortDesc}`);
       }
-      // Suggest the most likely unlock when top candidate is hidden.
+      // Steer the follow-up when the top candidate is hidden.
       const firstHidden = top.find((r) => !r.visible);
       if (firstHidden) {
         lines.push('');
         lines.push(
-          `Hint: \`expand_toolset({ tier: "${firstHidden.tier}" })\` will reveal ${firstHidden.name} ` +
-            `and its tier-mates next turn.`,
+          `Hint: call ${firstHidden.name} directly with the args above — it executes and joins your ` +
+            `toolset next turn. Use \`expand_toolset({ tier: "${firstHidden.tier}" })\` instead if you ` +
+            `need several ${firstHidden.tier}-tier tools.`,
         );
       }
       return ok(lines.join('\n'));
     },
   };
+}
+
+/**
+ * One-line `name:type` argument summary from a JSON schema — required params
+ * first, optional ones suffixed `?`. Capped ~90 chars so a wide schema can't
+ * bloat the discovery result. Exists so a model can call a HIDDEN tool with
+ * correct args on the first try (it never saw the tool's full schema).
+ */
+function paramSummary(schema: JsonSchema | undefined): string {
+  const s = schema as
+    | { properties?: Record<string, { type?: string | string[] }>; required?: string[] }
+    | undefined;
+  const props = s?.properties;
+  if (!props) return '';
+  const required = new Set(s?.required ?? []);
+  const keys = Object.keys(props).sort(
+    (a, b) => Number(required.has(b)) - Number(required.has(a)) || a.localeCompare(b),
+  );
+  const parts: string[] = [];
+  for (const k of keys) {
+    const t = props[k]?.type;
+    const typeLabel = Array.isArray(t) ? t.join('|') : t ?? 'any';
+    const next = `${k}${required.has(k) ? '' : '?'}:${typeLabel}`;
+    if ([...parts, next].join(', ').length > 90) {
+      parts.push('…');
+      break;
+    }
+    parts.push(next);
+  }
+  return parts.join(', ');
 }

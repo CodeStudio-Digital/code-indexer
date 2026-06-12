@@ -58,6 +58,7 @@
   "provider.noModels": "No models yet. Click refresh to fetch from the provider API.",
   "provider.backfillContextWindows.label": "Backfill context windows",
   "provider.backfillContextWindows.tooltip": "Resolve missing context_window values from the static registry (no network).",
+  "provider.maxToolsPlaceholder": "e.g. 32",
   "provider.subagentProvider": "Subagent provider",
   "provider.subagentProviderDefault": "Same provider",
   "provider.subagentModel": "Subagent model",

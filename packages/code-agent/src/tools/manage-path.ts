@@ -163,7 +163,13 @@ export const managePathTool: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      operation: { type: 'string', enum: ['mkdir', 'move', 'delete'] },
+      operation: {
+        type: 'string',
+        enum: ['mkdir', 'move', 'delete'],
+        description:
+          "Which args each operation requires — 'mkdir': path; 'move': from_path + to_path; " +
+          "'delete': path (+ recursive and confirm for non-empty dirs, delete_mode defaults to trash).",
+      },
       path: { type: 'string', description: 'Project-relative path for mkdir/delete' },
       from_path: { type: 'string', description: 'Project-relative source path for move' },
       to_path: { type: 'string', description: 'Project-relative destination path for move' },

@@ -25,7 +25,15 @@ export interface SnapshotsApi {
     ctx: ApiContext,
   ): Promise<Snapshot & { embed_error: string | null }>;
   update(
-    input: { id: number; title?: string; category?: SnapshotCategory; content?: string; tags?: string[] },
+    input: {
+      id: number;
+      title?: string;
+      category?: SnapshotCategory;
+      content?: string;
+      tags?: string[];
+      /** 0..1 retrieval salience — the Memory tab "pin" boost. */
+      importance?: number;
+    },
     ctx: ApiContext,
   ): Promise<{ ok: true; embed_error: string | null }>;
   delete(input: { id: number }, ctx: ApiContext): Promise<{ ok: true }>;

@@ -70,12 +70,24 @@ export default definePlugin({
 
 Import from `@mcp/plugin-sdk/define` (zero-dep) — not the package root — so the bundle stays lean.
 
+### Multi-file webview UI (`*.template.html`)
+
+Webviews render as **null-origin** iframes, so the final HTML must be self-contained — external
+`<script src>` / `<link href>` never load. To keep authoring modular anyway, the CLI `build`
+inlines templates: any `ui/**/*.template.html` has its **relative** script/stylesheet refs bundled
+(esbuild, `iife`/browser, TS supported) and spliced in, emitting the artifact without the suffix
+(`ui/panel.template.html` → `ui/panel.html` — gitignore the artifact, point the tool window's
+`entry` at it). Absolute/`https:` refs are left untouched. The template stays a valid HTML page you
+can open in a browser while iterating. `</script>` sequences inside bundles are escaped. Plugins
+without templates build exactly as before. Changes only reach the app after **reinstall** (the
+contributions snapshot lives in `installed_plugins`).
+
 ### Contribution points
 
 | `contributeX` | Surface | Notes |
 | --- | --- | --- |
 | `contributeTool` | Agent tool `plugin__<ns>__<name>` | `handler(args, ctx)` runs in an isolated worker. `ctx` = `{ projectName, cwd, fetch, log, host.invoke }` — no `fs`/`child_process`. |
-| `contributeToolWindow` | Sandboxed iframe + rail icon | `entry` = an HTML file in the bundle; `side` = `left`/`right`/`bottom`. |
+| `contributeToolWindow` | Sandboxed iframe + rail icon | `entry` = an HTML file in the bundle; `side` = `left`/`right`/`bottom`. `right` also surfaces in the chat session's right rail and the Company sidebar. Optional `icon` from a small lucide allowlist (`cloud`, `database`, `box`, `container`, `globe`, `server`, `terminal`, `zap`, `hard-drive`, `key-round`, `package`; fallback: puzzle). Omit `activation` to surface everywhere (account-level plugins, e.g. Cloudflare/Podman). |
 | `contributeCommand` | Command Palette (`Ctrl+Shift+P`) | — |
 | `contributeTheme` | "Apply theme: X" in the palette | Overrides shadcn CSS vars; toggles `.dark`. |
 | `.mcp.json` / `skills/` | Agent MCP servers / skills | Registered on install (Claude Code convention). |
@@ -102,6 +114,32 @@ the plugin dir). The iframe reaches the host only through `webview-bridge`, whic
 
 **RPC** — the `plugins` api-bus namespace: `list · get · install · uninstall · setEnabled ·
 readAsset · searchMarket · marketInfo`, mounted as `api:plugins:*`.
+
+## UI Kit (webviews)
+
+The host injects a themed stylesheet (`<style id="mcp-ui-kit">`, see
+`apps/dashboard/features/workspace/plugin-ui-kit/`) into **every** plugin webview, right after
+`<head>` opens — so your own `<style>` (later in the head) overrides any kit rule by plain cascade
+order. Every selector is namespaced `.mcp-*`; plugins that style raw elements are untouched. The
+kit is themed by the same host CSS variables that are already injected (`--background`,
+`--primary`, `--border`, `--success`, `--warning`, `--destructive-foreground`, `--popover`, …),
+so it always matches the active theme — no rebuild needed.
+
+| Classes | What you get |
+|---|---|
+| `.mcp-app` | Root container (flex column, host fonts/colors, thin scrollbars, focus rings) |
+| `.mcp-btn` (+ `.primary .danger .ghost .sm .icon`) | Buttons |
+| `.mcp-input` / `.mcp-select` / `.mcp-textarea` (+ `.mono`), `.mcp-field` / `.mcp-label` / `.mcp-hint`, `.mcp-checkbox` | Form controls |
+| `.mcp-card` / `.mcp-card-title` / `.mcp-card-sub`, `.mcp-section` / `.mcp-section-title` | Cards and sections |
+| `.mcp-list` / `.mcp-row` (+ `.active .static`) / `.mcp-row-main` / `.mcp-row-title` / `.mcp-row-meta` / `.mcp-row-chev` | Drill-in list rows |
+| `.mcp-tabs` / `.mcp-tab` (+ `.active`) | Tabs |
+| `.mcp-table` (wrap a `<table>` in it) | Sticky-header data table with horizontal overflow |
+| `.mcp-badge` (+ `.ok .warn .err .info`), `.mcp-dot` (+ `.ok .warn .err`) | Status chips and dots |
+| `.mcp-empty` / `.mcp-empty-icon`, `.mcp-loading` / `.mcp-spinner` | Empty and loading states |
+| `.mcp-breadcrumb` / `.mcp-crumb` (+ `.current`) / `.mcp-crumb-sep` | Breadcrumb |
+| `.mcp-toolbar`, `.mcp-grid-2`, `.mcp-stack`, `.mcp-hstack`, `.mcp-scroll`, `.mcp-grow` | Layout helpers |
+| `.mcp-log` | Monospace stream-output block (deploy logs, tails) |
+| `.mcp-mono`, `.mcp-muted`, `.mcp-xs`, `.mcp-truncate`, `.mcp-divider`, `.mcp-kbd`, `.mcp-link` | Text utilities |
 
 ## Security model
 

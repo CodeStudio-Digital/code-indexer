@@ -202,23 +202,6 @@ export interface AgentsGroup {
 
 // ─── Stream blocks ────────────────────────────────────────────
 
-/**
- * Live block for the simulated deepThink — a "scratchpad" written by the
- * auxiliary cheap model BEFORE the main-model turn. Distinct from native
- * `thinking` (different model, different cost, different visual badge).
- * Lifecycle: created on `pre_think_started`, grows on each
- * `pre_think_delta`, sealed on `pre_think_completed` (status='done') or
- * `pre_think_failed` (status='failed' + error).
- */
-export interface PreThinkStreamBlock {
-  type: 'pre_think';
-  text: string;
-  model: string;
-  provider: string;
-  status: 'streaming' | 'done' | 'failed';
-  error?: string;
-}
-
 export type StreamActivityStatus = 'running' | 'completed' | 'failed' | 'timed_out' | 'aborted';
 export type StreamActivityKind = 'provider' | 'tool' | 'spawn_agent' | 'subagent' | 'task' | 'operation';
 
@@ -241,7 +224,6 @@ export interface StreamActivityBlock {
 export type StreamBlock =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
-  | PreThinkStreamBlock
   | StreamActivityBlock
   | { type: 'tool'; call: ToolCallEvent }
   | { type: 'plan'; plan: PlanPrompt }
@@ -283,17 +265,23 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
-/** Live context metrics emitted per-turn so the dashboard can show progress. */
+/**
+ * Live context metrics emitted per-turn — the SAME number the runner's
+ * compaction gates act on. `prompt_tokens` is the TRUE prompt size of the
+ * last provider call (cache-inclusive on Anthropic-style APIs) or the
+ * calibrated tokenizer estimate when the provider omits usage. Single
+ * source of truth for the header context bar.
+ */
 export interface ContextStatus {
-  history_chars: number;
   turn: number;
-  max_turns: number;
-  auto_continue_count: number;
-  auto_continue_max: number;
-  /** Actual input tokens for the most recent turn — represents real context window usage. */
-  last_turn_input_tokens: number;
-  /** Model context window size in tokens, or null when unknown. */
-  context_window: number | null;
+  /** True prompt size (tokens) of the last provider call. */
+  prompt_tokens: number;
+  /** Where the number came from: provider usage or tokenizer estimate. */
+  source: 'usage' | 'estimate';
+  /** Effective context window of the active model (window − reserved output). */
+  context_window: number;
+  /** prompt_tokens / context_window (0 when window unknown). */
+  ratio: number;
 }
 
 export interface IndexStatus {

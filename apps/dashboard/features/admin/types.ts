@@ -40,6 +40,8 @@ export interface AdminModel {
   supported_reasoning_levels: string[] | null;
   /** Persisted context window in tokens. Null when discovery couldn't resolve it. */
   context_window: number | null;
+  /** Admin-set tool catalog cap per turn. Null = registry/prefix default. */
+  max_tools: number | null;
 }
 
 export interface TestResult {

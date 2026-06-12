@@ -5,6 +5,7 @@ import { CostTracker } from '@mcp/services/services/costs.js';
 import { SnapshotService } from '@mcp/services/services/snapshots.js';
 import { MemoryRetriever } from '@mcp/services/memory/retriever.js';
 import { createRunEndMemory, type RunEndMemory } from '@mcp/services/memory/run-end.js';
+import { MemoryExtractor } from '@mcp/services/memory/extractor.js';
 import { DiffService } from '@mcp/services/services/differ.js';
 import { ExportService } from '@mcp/services/services/exporter.js';
 import { WebhookDispatcher } from '@mcp/services/services/webhooks.js';
@@ -28,7 +29,7 @@ import { DesignSystemStore } from '@mcp/store/design-system-store.js';
 import { VerdaccioStore } from '@mcp/store/verdaccio-store.js';
 import { PipelineTelemetryStore } from '@mcp/store/pipeline-telemetry-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
-import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
+import { PipelineProviderResolver, generalDefaultAsFallback } from '@mcp/services/pipelines/index.js';
 import { NoopTelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import type { TelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import {
@@ -147,6 +148,24 @@ export interface SearchDeps {
   memoryRetriever: MemoryRetriever;
   /** Mem C write-back — end-of-run durable-memory distillation (facts + gotchas). */
   runEndMemory: RunEndMemory;
+  /** Direct agent ports: save_note scope 'project' (dedup'd write) + recall_memory
+   *  (full-content semantic fetch). Mirrors `RunCoderOptions.projectMemory`. */
+  projectMemory: {
+    save(
+      projectId: number,
+      projectName: string,
+      entry: { title: string; content: string; category: string },
+    ): Promise<{ created: number; merged: number; skipped: number } | null>;
+    recall(
+      projectId: number,
+      projectName: string,
+      query: string,
+      limit?: number,
+    ): Promise<Array<{
+      id: string; title: string; content: string;
+      category?: string; source?: string; importance?: number; staleNote?: string;
+    }>>;
+  };
   /**
    * I2 — process-wide hot cache of recently-touched files. Always
    * constructed (so tools can `touch()` regardless of feature flag), but
@@ -548,7 +567,12 @@ export function createDeps(): ServerDeps {
   // Mem C — project-memory retriever over the snapshot store (reuses the
   // admin-configured embedding/vector backend via hybridSearch). Passed into
   // runCoder so the runner proactively injects relevant memory per turn.
-  const memoryRetriever = new MemoryRetriever(hybridSearch, db);
+  // topK 5 (was the default 3) + diagnostics on the silent-skip paths so an
+  // empty injection is explainable from the logs.
+  const memoryRetriever = new MemoryRetriever(hybridSearch, db, {
+    topK: 5,
+    log: (event, data) => console.debug(`[memory] retriever ${event}`, data),
+  });
   const sessionStore = new SessionStore(config.dbPath);
   const companyStore = new CompanyStore(config.dbPath);
   // Share the same underlying better-sqlite3 handle that CodeIndexDB
@@ -571,12 +595,50 @@ export function createDeps(): ServerDeps {
   const pipelineProviderResolver = new PipelineProviderResolver(pipelineBindingsStore, providerStore);
   // Mem C write-back — distills durable memory (facts + `gotcha` lessons) at
   // run-end. Reuses the snapshot writer + hybrid dedup + the resolver's
-  // `memory_extraction` binding. Passed into runCoder as `runEndMemory`.
+  // `memory_extraction` binding; when no binding is set it falls back to the
+  // general default AI model (zero-config). Passed into runCoder as `runEndMemory`.
   const runEndMemory = createRunEndMemory({
     writer: snapshotService,
     search: hybridSearch,
     resolver: pipelineProviderResolver,
+    getFallbackDefault: () => generalDefaultAsFallback(providerStore),
+    // Memory-health diagnostics (migration 136) — every pass lands a row so
+    // the project Memory tab can show when/what was learned (or why not).
+    distillLog: (projectId, entry) => {
+      try { db.insertMemoryDistillLog(projectId, entry); } catch { /* best-effort */ }
+    },
   });
+
+  // Direct agent ports for project memory (save_note scope 'project' +
+  // recall_memory). The write path reuses the distillers' MemoryExtractor
+  // with a LITERAL candidate — same dedup/merge/importance floors, embedding
+  // via SnapshotService, zero new dedup code.
+  const VALID_MEMORY_CATEGORIES = new Set([
+    'architecture', 'decision', 'convention', 'pattern', 'todo', 'note', 'gotcha', 'procedure',
+  ]);
+  const projectMemory: SearchDeps['projectMemory'] = {
+    save: async (projectId, projectName, entry) => {
+      const category = VALID_MEMORY_CATEGORIES.has(entry.category) ? entry.category : 'note';
+      const candidate = {
+        title: entry.title,
+        content: entry.content,
+        category: category as import('@mcp/shared/types.js').SnapshotCategory,
+        importance: 0.6, // per-category floors still apply inside the extractor
+      };
+      const literal = new MemoryExtractor(
+        { distill: async () => [candidate] },
+        snapshotService,
+        hybridSearch,
+      );
+      const res = await literal.extractAndPersist(projectId, projectName, 'agent', {});
+      try {
+        db.insertMemoryDistillLog(projectId, { trigger: 'agent', status: 'ok', ...res });
+      } catch { /* diagnostics are best-effort */ }
+      return res;
+    },
+    recall: (projectId, projectName, query, limit) =>
+      memoryRetriever.recall(projectId, projectName, query, limit),
+  };
 
   // Tool-selection plumbing. The embed adapter wraps the existing indexer
   // EmbeddingService into a single-text `EmbeddingFn`. ToolEmbeddingStore is
@@ -900,6 +962,7 @@ export function createDeps(): ServerDeps {
     hybridSearch,
     memoryRetriever,
     runEndMemory,
+    projectMemory,
     recentFilesSource,
     sessionStore,
     companyStore,

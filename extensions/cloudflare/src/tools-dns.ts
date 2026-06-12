@@ -45,7 +45,9 @@ export const dnsTools = [
   }),
   contributeTool({
     name: 'cf_dns_list',
-    description: 'List DNS records in a zone',
+    description:
+      'List DNS records in a zone, with optional filters. Get the zoneId from cf_zones_list. ' +
+      "Args example: { zoneId: 'abc...', type: 'CNAME', search: 'api' }.",
     riskLevel: 'read',
     mutates: false,
     parameters: {
@@ -78,7 +80,10 @@ export const dnsTools = [
   }),
   contributeTool({
     name: 'cf_dns_create',
-    description: 'Create a DNS record in a zone',
+    description:
+      'Create a DNS record in a zone. Args example: ' +
+      "{ zoneId: 'abc...', type: 'A', name: 'api.example.com', content: '203.0.113.7', proxied: true, ttl: 1 } " +
+      '(ttl 1 = auto). Check for an existing record with cf_dns_list first to avoid duplicates.',
     riskLevel: 'write',
     mutates: true,
     parameters: {

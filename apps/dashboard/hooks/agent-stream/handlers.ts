@@ -79,76 +79,6 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       flush();
     },
 
-    // ── deepThink (simulated) — auxiliary cheap model pre-thought ──────
-    // Lifecycle: started → (delta*) → completed | failed. The runner emits
-    // these BEFORE the main provider.chat() call of each main-model turn.
-    // We render a distinct emerald block (vs the purple native thinking)
-    // with the aux model name as a badge.
-    pre_think_started: (data) => {
-      const d = data as { model?: string; provider?: string };
-      blocks.push({
-        type: 'pre_think',
-        text: '',
-        model: String(d.model ?? 'auxiliary'),
-        provider: String(d.provider ?? '?'),
-        status: 'streaming',
-      });
-      flush();
-    },
-
-    pre_think_delta: (data) => {
-      const t = String((data as { text?: string }).text ?? '');
-      if (!t) return;
-      const last = blocks[blocks.length - 1];
-      if (last && last.type === 'pre_think') {
-        last.text += t;
-      } else {
-        // Defensive: delta arrived before started (or after another block
-        // already closed) — synthesize a stub so the chunk isn't lost.
-        blocks.push({
-          type: 'pre_think',
-          text: t,
-          model: 'auxiliary',
-          provider: '?',
-          status: 'streaming',
-        });
-      }
-      flush();
-    },
-
-    pre_think_completed: (data) => {
-      const d = data as { text?: string };
-      const last = blocks[blocks.length - 1];
-      if (last && last.type === 'pre_think') {
-        // Trust the final aggregated text — covers any chunk we missed.
-        if (typeof d.text === 'string' && d.text.length > 0) last.text = d.text;
-        last.status = 'done';
-        flush();
-      }
-    },
-
-    pre_think_failed: (data) => {
-      const d = data as { error?: string };
-      const last = blocks[blocks.length - 1];
-      if (last && last.type === 'pre_think') {
-        last.status = 'failed';
-        last.error = String(d.error ?? 'unknown error');
-        flush();
-      } else {
-        // Failed before any delta — push an empty failed block so the user
-        // sees WHY deepThink degraded (rather than nothing at all).
-        blocks.push({
-          type: 'pre_think',
-          text: '',
-          model: 'auxiliary',
-          provider: '?',
-          status: 'failed',
-          error: String(d.error ?? 'unknown error'),
-        });
-        flush();
-      }
-    },
-
     tool_call_start: (data) => {
       const d = data as { id: string; name: string; input?: Record<string, unknown> };
       if (clearProviderActivities(blocks) || removeActivity(blocks, `tool:${d.id}`)) {
@@ -579,13 +509,11 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
 
     context_status: (data) => {
       const d = data as {
-        history_chars: number;
         turn: number;
-        max_turns: number;
-        auto_continue_count: number;
-        auto_continue_max: number;
-        last_turn_input_tokens: number;
-        context_window: number | null;
+        prompt_tokens: number;
+        source: 'usage' | 'estimate';
+        context_window: number;
+        ratio: number;
       };
       updateSession(sid, { contextStatus: d });
     },

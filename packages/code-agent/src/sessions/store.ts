@@ -103,9 +103,14 @@ export class SessionStore {
   }
   setSessionBaseCommit(sessionId: number, sha: string | null): void { state.setBaseCommit(this.db, sessionId, sha); }
   markSessionReviewedNow(sessionId: number): void { state.markReviewedNow(this.db, sessionId); }
+  setMemoryDistilledBoundary(id: number, messageId: number): void { state.setMemoryDistilledBoundary(this.db, id, messageId); }
+  getMemoryDistilledBoundary(id: number): number { return state.getMemoryDistilledBoundary(this.db, id); }
 
   // ─── Sessions ops (stats, fork, duplicate) ─────────────────────
   getSessionStats(id: number): CoderSessionStats | null { return ops.getStats(this.db, id); }
+  listMemoryDistillPending(idleSeconds: number, limit: number): ops.MemoryDistillPendingRow[] {
+    return ops.listMemoryDistillPending(this.db, idleSeconds, limit);
+  }
   forkSessionBeforeMessage(sourceSessionId: number, beforeMessageId: number): { session: CoderSession; seed_text: string } {
     return ops.forkBeforeMessage(this.db, sourceSessionId, beforeMessageId);
   }
@@ -127,6 +132,9 @@ export class SessionStore {
   loadSessionMessagesTail(id: number, tail: number): SessionWithMessages | null { return messages.loadTail(this.db, id, tail); }
   loadMessagesBefore(sessionId: number, beforeId: number, limit: number, includeArchived = false): { messages: AgentMessage[]; message_rows: CoderMessageRow[] } {
     return messages.loadBefore(this.db, sessionId, beforeId, limit, includeArchived);
+  }
+  listMessagesAfter(sessionId: number, afterId: number): { messages: AgentMessage[]; maxId: number } {
+    return messages.listAfter(this.db, sessionId, afterId);
   }
   /** Audit-table results for the given tool_use ids (dashboard status fallback). */
   getToolResultsByToolUseIds(sessionId: number, toolUseIds: string[]): toolResults.ToolCallResultRow[] {
@@ -166,6 +174,7 @@ export class SessionStore {
   recallInvestigationsByVector(sessionId: number, queryVec: Float32Array, limit?: number): sessionDrive.InvestigationRow[] { return sessionDrive.recallInvestigationsByVector(this.db, sessionId, queryVec, limit); }
   getDriveAggregate(sessionId: number): sessionDrive.DriveAggregate { return sessionDrive.getDriveAggregate(this.db, sessionId); }
   getDriveInjectionPayload(sessionId: number): sessionDrive.DriveInjectionPayload { return sessionDrive.getDriveInjectionPayload(this.db, sessionId); }
+  getSessionStateData(sessionId: number): sessionDrive.SessionStateData { return sessionDrive.getSessionStateData(this.db, sessionId); }
   getCommandTrail(sessionId: number, limit?: number): Array<{ command: string; isError: boolean }> { return sessionDrive.getCommandTrail(this.db, sessionId, limit); }
   didRunSucceed(sessionId: number): boolean { return sessionDrive.didRunSucceed(this.db, sessionId); }
 

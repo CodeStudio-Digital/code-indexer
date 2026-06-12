@@ -192,6 +192,8 @@ export class OpenAIChatProvider implements ChatProvider {
             input_tokens: u.prompt_tokens ?? 0,
             output_tokens: u.completion_tokens ?? 0,
             cache_read_input_tokens: cachedRead,
+            // OpenAI-style: prompt_tokens already INCLUDES cached tokens.
+            prompt_tokens_total: u.prompt_tokens ?? 0,
             ...(reasoningTokens ? { thinking_tokens: reasoningTokens } : {}),
           },
         };

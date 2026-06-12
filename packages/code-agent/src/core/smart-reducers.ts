@@ -576,46 +576,6 @@ export const SMART_REDUCERS: Record<string, (input: ReducerInput) => ReducerOutp
 };
 
 /**
- * deepThink history pruner.
- *
- * When `RunnerOptions.persistPreThoughts` is on, the runner writes every
- * auxiliary pre-thought into `this.messages` as an isMeta assistant message
- * whose only content is a `<thinking data-source="aux" ...>` text block.
- * Over a long session this would grow unbounded, so this reducer keeps only
- * the `windowK` most recent pre-thoughts and drops the older ones.
- *
- * The reducer is run from `assembleMessagesForChat` BEFORE compactHistoryForLLM,
- * so the compactor never sees the stale pre-thoughts. Pure function — does
- * not mutate the input array.
- */
-const PRE_THINK_MARKER = '<thinking data-source="aux"';
-
-export function reducePreThinkInHistory<T extends { role: string; content: ReadonlyArray<{ type: string; text?: string }> }>(
-  messages: ReadonlyArray<T>,
-  windowK: number,
-): T[] {
-  if (windowK < 0) return messages.slice();
-  const preThinkIdxs: number[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i];
-    if (m.role !== 'assistant') continue;
-    if (m.content.length !== 1) continue;
-    const block = m.content[0];
-    if (block.type !== 'text') continue;
-    if (typeof block.text !== 'string') continue;
-    if (block.text.startsWith(PRE_THINK_MARKER)) preThinkIdxs.push(i);
-  }
-  if (preThinkIdxs.length <= windowK) return messages.slice();
-  const dropCount = preThinkIdxs.length - windowK;
-  const drop = new Set(preThinkIdxs.slice(0, dropCount));
-  const out: T[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    if (!drop.has(i)) out.push(messages[i]);
-  }
-  return out;
-}
-
-/**
  * Apply the reducer registered for `toolName`. When there's no name-specific
  * reducer, fall back to `jsonCrush` (content-type detection for generic
  * JSON-array / NDJSON outputs). Returns the possibly-reduced content.

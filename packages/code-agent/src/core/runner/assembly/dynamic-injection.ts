@@ -70,22 +70,24 @@ export interface DynamicInjectionContext {
    */
   hasReviewableChanges?: boolean;
   /**
-   * Session Drive (migrations 125/126) — the session's own working memory.
-   * Surfaced so it SURVIVES COMPACTION:
-   *   - `activePlan`         — the plan the agent submitted; re-injected on
-   *     turn 1 (resume) and right after a compaction so the agent doesn't
-   *     drift from it. Excerpted, not dumped.
-   *   - `sessionMemory`      — pinned/recent `remember` notes. New notes are
-   *     injected once (deduped via `lastInjectedSessionMemoryIds`); after a
-   *     compaction the whole slice is re-injected to repopulate the model.
-   *   - `investigationCount` — drives a one-line "call recall_investigations
-   *     before re-exploring" nudge (turn 1 / post-compaction only).
+   * Session State Block (`assembly/session-state.ts`) — the always-alive
+   * structured state of the session (goal/plan/todos/notes/files/recall),
+   * pre-rendered by the Executing node. Subsumes the old per-field drive
+   * injection (activePlan / sessionMemory / investigation nudge):
+   *   - standard windows: injected on turn 1, ≤2 turns post-compaction, or
+   *     whenever the block's hash changed (a note was added, a todo moved…).
+   *   - short windows (`sessionStateEveryTurn`): injected EVERY turn — the
+   *     block is what keeps a small model oriented after compaction.
    */
-  activePlan?: { text: string; status: string } | null;
-  sessionMemory?: ReadonlyArray<{ id: string; title: string; body: string }>;
-  lastInjectedSessionMemoryIds?: ReadonlySet<string>;
-  maxSessionMemory?: number;
-  investigationCount?: number;
+  sessionState?: { block: string; hash: string } | null;
+  sessionStateEveryTurn?: boolean;
+  lastInjectedSessionStateHash?: string | null;
+  /**
+   * Project memory index (MEMORY.md-style one-liners, pre-rendered) —
+   * injected on milestones (turn 1 / post-compaction) or when it changed.
+   */
+  projectMemoryIndex?: { text: string; hash: string } | null;
+  lastInjectedProjectIndexHash?: string | null;
   /**
    * Test-mode escape hatch — when true, the provider always returns
    * null so snapshot tests don't see non-deterministic injections.
@@ -102,16 +104,15 @@ export interface DynamicInjectionResult {
   includedFiles: string[];
   /** Memory ids that were included — caller adds to `lastInjectedMemoryIds`. */
   includedMemoryIds: string[];
-  /** Session-memory note ids included — caller adds to `lastInjectedSessionMemoryIds`. */
-  includedSessionMemoryIds: string[];
+  /** Hash of the session-state block included — caller stores for dedup. */
+  includedSessionStateHash?: string | null;
+  /** Hash of the project memory index included — caller stores for dedup. */
+  includedProjectIndexHash?: string | null;
 }
 
 const DEFAULT_MAX_FILES = 6;
 const DEFAULT_MAX_MEMORY = 3;
 const MEMORY_CONTENT_CAP = 300;
-const DEFAULT_MAX_SESSION_MEMORY = 3;
-const SESSION_MEMORY_CAP = 240;
-const PLAN_EXCERPT_CAP = 600;
 
 /**
  * Compute the dynamic injection for the next turn. Returns null when
@@ -153,34 +154,26 @@ export function computeDynamicInjection(
 
   const recentCompaction = ctx.recentCompactionAt != null && (ctx.turn - ctx.recentCompactionAt) <= 2;
 
-  // Session Drive (working memory). Plan + nudge re-surface only on resume
-  // (turn 1) or right after a compaction — keeps them out of the steady-state
-  // turn so most turns still produce no reminder.
+  // Session State Block — every turn on short windows; on milestones (turn 1
+  // / post-compaction) or whenever the block materially changed otherwise.
   const driveMilestone = recentCompaction || ctx.turn === 1;
-  const showPlan = driveMilestone && !!ctx.activePlan;
-
-  // Notes: dedup normally so a new note is announced once; after compaction
-  // re-inject the whole slice to repopulate the model's summarized context.
-  const maxSessionMemory = Math.max(0, ctx.maxSessionMemory ?? DEFAULT_MAX_SESSION_MEMORY);
-  const lastSessionMemoryIds = ctx.lastInjectedSessionMemoryIds ?? new Set<string>();
-  const includedSessionMemory: Array<{ id: string; title: string; body: string }> = [];
-  for (const n of ctx.sessionMemory ?? []) {
-    if (includedSessionMemory.length >= maxSessionMemory) break;
-    const seen = lastSessionMemoryIds.has(n.id);
-    if ((recentCompaction || !seen) && !includedSessionMemory.some((x) => x.id === n.id)) {
-      includedSessionMemory.push(n);
-    }
-  }
-
-  const showInvestigationNudge = driveMilestone && (ctx.investigationCount ?? 0) > 0;
+  const showSessionState = !!ctx.sessionState && (
+    ctx.sessionStateEveryTurn === true ||
+    driveMilestone ||
+    ctx.sessionState.hash !== (ctx.lastInjectedSessionStateHash ?? null)
+  );
+  // Project memory index — milestones, or when the index itself changed.
+  const showProjectIndex = !!ctx.projectMemoryIndex && (
+    driveMilestone ||
+    ctx.projectMemoryIndex.hash !== (ctx.lastInjectedProjectIndexHash ?? null)
+  );
 
   if (
     includedSkillIds.length === 0 &&
     includedFiles.length === 0 &&
     includedMemory.length === 0 &&
-    includedSessionMemory.length === 0 &&
-    !showPlan &&
-    !showInvestigationNudge &&
+    !showSessionState &&
+    !showProjectIndex &&
     !recentCompaction &&
     !ctx.hasReviewableChanges
   ) {
@@ -214,28 +207,11 @@ export function computeDynamicInjection(
       .join('\n');
     lines.push(`relevant project memory (retrieved — verify against current code before relying on it):\n${items}`);
   }
-  if (showPlan && ctx.activePlan) {
-    const text = ctx.activePlan.text.length > PLAN_EXCERPT_CAP
-      ? `${ctx.activePlan.text.slice(0, PLAN_EXCERPT_CAP)}…`
-      : ctx.activePlan.text;
-    lines.push(
-      `active plan (status: ${ctx.activePlan.status}; you submitted this — stay aligned, call \`read_plan\` for the full text):\n${text}`,
-    );
+  if (showProjectIndex && ctx.projectMemoryIndex) {
+    lines.push(ctx.projectMemoryIndex.text);
   }
-  if (includedSessionMemory.length > 0) {
-    const items = includedSessionMemory
-      .map((n) => {
-        const body = n.body.length > SESSION_MEMORY_CAP ? `${n.body.slice(0, SESSION_MEMORY_CAP)}…` : n.body;
-        return `- ${n.title}: ${body.replace(/\s*\n\s*/g, ' ')}`;
-      })
-      .join('\n');
-    lines.push(`session notes (saved with \`save_note\`):\n${items}`);
-  }
-  if (showInvestigationNudge) {
-    lines.push(
-      `${ctx.investigationCount} prior investigation(s) are available — call \`recall_investigations\` ` +
-        'before spawning a new explore to avoid re-running the same query.',
-    );
+  if (showSessionState && ctx.sessionState) {
+    lines.push(ctx.sessionState.block);
   }
   if (ctx.hasReviewableChanges) {
     lines.push(
@@ -249,7 +225,8 @@ export function computeDynamicInjection(
     includedSkillIds,
     includedFiles,
     includedMemoryIds: includedMemory.map((m) => m.id),
-    includedSessionMemoryIds: includedSessionMemory.map((n) => n.id),
+    includedSessionStateHash: showSessionState ? ctx.sessionState!.hash : null,
+    includedProjectIndexHash: showProjectIndex ? ctx.projectMemoryIndex!.hash : null,
   };
 }
 

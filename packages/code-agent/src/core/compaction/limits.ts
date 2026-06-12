@@ -33,8 +33,50 @@ const CHARS_PER_TOKEN = 4;
 //     room to run at least one more tool-emitting turn while summarising.
 //   PROTECT_TOKEN_RATIO — keep ~55% of effective window as verbatim tail.
 // Both are env-overridable for field tuning without a release.
+/** @deprecated Fixed buffer goes negative on short windows — use
+ *  `autocompactBufferTokens(effective)`; kept for the legacy char path. */
 export const AUTOCOMPACT_BUFFER_TOKENS = Number(process.env.CODER_AUTOCOMPACT_BUFFER ?? 50_000);
 export const PROTECT_TOKEN_RATIO = Number(process.env.CODER_PROTECT_RATIO ?? 0.55);
+
+/**
+ * Ratio of the effective window at which compaction fires — the single knob
+ * that drives the post-turn size gate (`shouldCompact90`), the body-after-
+ * prefix gate (ratio − 0.05) and the token-budget backstop below.
+ *
+ * History: 0.90 → 0.75 → 0.70 (Frente B / Fix B — session-887 coherence
+ * degradation) → back to 0.90 by operator decision: the early trigger wasted
+ * ~30% of the window, and continuity across summaries is now carried by the
+ * durable session-state / project-memory injection instead of a longer tail.
+ * Reversible at runtime via `CODER_COMPACT_TRIGGER_RATIO`.
+ */
+export const DEFAULT_COMPACT_TRIGGER_RATIO = 0.90;
+
+/** Env-resolved trigger ratio, clamped so a typo can't disable compaction. */
+export function resolveTriggerRatio(): number {
+  const raw = process.env.CODER_COMPACT_TRIGGER_RATIO;
+  if (!raw) return DEFAULT_COMPACT_TRIGGER_RATIO;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_COMPACT_TRIGGER_RATIO;
+  return Math.min(0.95, Math.max(0.5, n));
+}
+
+/**
+ * Headroom (tokens) reserved below the effective window before the
+ * token-budget backstop fires. Proportional to the configured trigger ratio
+ * so the backstop lands AT the ratio — never before the primary gate — and
+ * capped at 50K for huge windows. The previous fixed 50K went NEGATIVE on a
+ * 32k window (trigger=1 → compaction attempted every turn until the no-op
+ * breaker silenced it). `CODER_AUTOCOMPACT_BUFFER` still wins when set.
+ */
+export function autocompactBufferTokens(effective: number): number {
+  const env = process.env.CODER_AUTOCOMPACT_BUFFER;
+  if (env != null && env !== '') {
+    const n = Number(env);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  const slack = Math.floor(effective * (1 - resolveTriggerRatio()));
+  return Math.min(50_000, Math.max(1_000, slack));
+}
 
 // Phase D multidimensional triggers — see CompactionTriggerInputs.
 export const COMPACT_CUMULATIVE_RATIO = Number(process.env.CODER_COMPACT_CUMULATIVE_RATIO ?? 10);
@@ -208,14 +250,15 @@ export interface TokenLimits {
 /**
  * Token-based compaction limits derived from the effective window.
  *   effective = window − min(max_output, 20K)
- *   trigger   = effective − AUTOCOMPACT_BUFFER_TOKENS
+ *   trigger   = effective − autocompactBufferTokens(effective)
+ *               (≈ resolveTriggerRatio()×effective; 50K-capped on huge windows)
  *   protect   = floor(effective * PROTECT_TOKEN_RATIO)
  */
 export function deriveTokenLimits(model: string): TokenLimits {
   const eff = getEffectiveContextWindow(model);
   return {
     effective: eff.effective,
-    trigger: Math.max(1, eff.effective - AUTOCOMPACT_BUFFER_TOKENS),
+    trigger: Math.max(1, eff.effective - autocompactBufferTokens(eff.effective)),
     protect: Math.max(1, Math.floor(eff.effective * PROTECT_TOKEN_RATIO)),
     rawWindow: eff.window,
     isFallback: eff.isFallback,

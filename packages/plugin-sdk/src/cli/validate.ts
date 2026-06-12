@@ -31,7 +31,9 @@ export async function validatePlugin(dir: string): Promise<ValidateIssue[]> {
       const app = parseAppManifest(JSON.parse(await readFile(appPath, 'utf8')));
       for (const w of app.toolWindows ?? []) {
         if (!existsSync(join(root, w.entry))) {
-          issues.push({ message: `tool window "${w.id}" entry missing: ${w.entry}` });
+          const template = w.entry.replace(/\.html$/, '.template.html');
+          const hint = existsSync(join(root, template)) ? ' (run build to inline the template)' : '';
+          issues.push({ message: `tool window "${w.id}" entry missing: ${w.entry}${hint}` });
         }
       }
       if (app.worker && !existsSync(join(root, app.worker))) {

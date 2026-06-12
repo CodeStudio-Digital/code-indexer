@@ -48,18 +48,6 @@ interface SendMessageBody {
   /** Enable thinking/reasoning mode for providers that support it. */
   thinking?: boolean;
   /**
-   * Simulated deepThink — orthogonal to `thinking`. When true, an auxiliary
-   * cheap model (default Haiku) writes a brief pre-thought before each
-   * main-model turn and the runner prefills it as a `<thinking>` block.
-   */
-  deep_think?: boolean;
-  /** Auxiliary model id for deepThink. Default 'claude-haiku-4-5-20251001'. */
-  deep_think_model?: string;
-  /** Auxiliary provider for deepThink. Default 'anthropic'. */
-  deep_think_provider?: string;
-  /** When false (default), skip pre-think on tool_result turns. */
-  pre_think_on_tool_results?: boolean;
-  /**
    * Composer "Describe images" flag — FORCE the vision-fallback (image → text
    * description) even when the active model can see images. Auto-fallback (when
    * the model lacks the 'image' input modality) happens regardless of this.
@@ -113,31 +101,6 @@ export function mountCoderStreamRoutes(
 ): void {
   const { sessionStore, providerStore } = deps;
   const { activeRuns, BUS_LINGER_MS, wireRunnerToBus } = runtime;
-
-  /**
-   * Resolve the effective deepThink config for a /messages request:
-   * body fields win over operator-pinned admin defaults; admin defaults win
-   * over the hardcoded fallback inside `runner.resolveAuxProvider()`.
-   * Returns `null` for fields the request didn't override AND the admin
-   * didn't pin — runCoder falls through to runner defaults in that case.
-   */
-  function resolveDeepThinkForRequest(body: SendMessageBody): {
-    deepThink: boolean | undefined;
-    deepThinkModel: string | undefined;
-    deepThinkProvider: string | undefined;
-    preThinkOnToolResults: boolean | undefined;
-  } {
-    if (!body.deep_think) {
-      return { deepThink: undefined, deepThinkModel: undefined, deepThinkProvider: undefined, preThinkOnToolResults: undefined };
-    }
-    const admin = providerStore.getDeepThinkDefaults();
-    return {
-      deepThink: true,
-      deepThinkModel: body.deep_think_model ?? admin?.model ?? undefined,
-      deepThinkProvider: body.deep_think_provider ?? admin?.provider ?? undefined,
-      preThinkOnToolResults: body.pre_think_on_tool_results ?? admin?.preThinkOnToolResults ?? undefined,
-    };
-  }
 
   /**
    * Whether the session's active model can consume images. Uses the provider's
@@ -366,7 +329,6 @@ export function mountCoderStreamRoutes(
           modelSupportsVision: resolveModelSupportsVision(id),
           describeImages: body.describe_images,
           previewAvailable: resolvePreviewAvailable(id),
-          ...resolveDeepThinkForRequest(body),
           selectedSkillIds,
           // Apêndice 4 Fase 2 — when the dashboard is resuming via the
           // worker-fallback path, the synthetic tool_result is already
@@ -509,7 +471,6 @@ export function mountCoderStreamRoutes(
           modelSupportsVision: resolveModelSupportsVision(id),
           describeImages: body.describe_images,
           previewAvailable: resolvePreviewAvailable(id),
-          ...resolveDeepThinkForRequest(body),
           selectedSkillIds,
           pluginTools,
           signal: bus.ctrl.signal,
@@ -518,6 +479,8 @@ export function mountCoderStreamRoutes(
           memoryRetriever: deps.memoryRetriever,
           // Mem C write-back — distill durable memory at run-end (in-process path).
           runEndMemory: deps.runEndMemory,
+          // Direct agent ports — save_note scope 'project' + recall_memory.
+          projectMemory: deps.projectMemory,
           // Reuse the long-lived McpExternalPool from server boot so we
           // don't reconnect every external MCP server per chat turn.
           // The pool implements IMcpServerManager directly; runCoder
@@ -634,6 +597,8 @@ export function mountCoderStreamRoutes(
           memoryRetriever: deps.memoryRetriever,
           // Mem C write-back — distill durable memory at run-end (in-process path).
           runEndMemory: deps.runEndMemory,
+          // Direct agent ports — save_note scope 'project' + recall_memory.
+          projectMemory: deps.projectMemory,
           // Same pool reuse as the fresh-run path — `continue` resumes
           // an existing session, but we still spin a fresh runCoder()
           // call which would otherwise rebuild McpServerManager.

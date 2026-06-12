@@ -8,7 +8,7 @@
  * opens a full-screen modal instead of a sidebar panel. The other six
  * tools fit comfortably in a 320-600px resizable panel.
  */
-export type RightPanelId =
+export type BuiltinRightPanelId =
   | 'meta'        // Goal / tasks / files / skills picker (was SessionStateSidebar)
   | 'drive'       // Session Drive: working memory (map/notes/investigations/plans)
   | 'skills'      // Per-session skill enable/disable (was SkillConfigDialog)
@@ -17,6 +17,13 @@ export type RightPanelId =
   | 'tool-stats'  // Aggregated coder_tool_calls breakdown (was ToolStatsModal)
   | 'details'     // Session details + stats (was SessionDetailsModal)
   | 'worker-log'; // Endpoint/hook/tool inspector (was WorkerLogPanel inline 440px)
+
+/**
+ * Plugin-contributed tool windows (side: 'right') join the rail with ids
+ * shaped `plugin:<namespace>:<windowId>` — same convention as the Company
+ * session's SidebarRail, resolved against the contribution registry.
+ */
+export type RightPanelId = BuiltinRightPanelId | `plugin:${string}`;
 
 export interface RightPanelDef {
   id: RightPanelId;

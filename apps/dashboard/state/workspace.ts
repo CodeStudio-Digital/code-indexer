@@ -45,7 +45,40 @@ export interface OpenDiff {
   source: 'git-unstaged' | 'git-staged' | 'other';
 }
 
-export type OpenTab = OpenFile | OpenDiff;
+export interface OpenGitLog {
+  kind: 'git-log';
+  projectId: number;
+  /** Synthetic path used as tab identity (e.g. "gitlog:feature/x"). */
+  path: string;
+  /** Friendly label rendered on the tab (e.g. "Log: feature/x"). */
+  title: string;
+  /** Branch ref the log is scoped to. */
+  branch: string;
+  /** True when `branch` is a remote ref (drives the checkout-as-local path). */
+  isRemote: boolean;
+}
+
+export interface OpenGitStash {
+  kind: 'git-stash';
+  projectId: number;
+  /** Synthetic path used as tab identity (e.g. "gitstash:stash@{0}"). */
+  path: string;
+  /** Friendly label rendered on the tab. */
+  title: string;
+  /** Stash ref (e.g. "stash@{0}"). */
+  stashRef: string;
+}
+
+export type OpenTab = OpenFile | OpenDiff | OpenGitLog | OpenGitStash;
+
+/**
+ * Virtual tabs (diff / git-log / git-stash) carry a `title` and have no
+ * on-disk identity — they never go dirty and render with their own glyph
+ * rather than a file-type icon.
+ */
+export function isVirtualTab(f: OpenTab): f is OpenDiff | OpenGitLog | OpenGitStash {
+  return f.kind === 'diff' || f.kind === 'git-log' || f.kind === 'git-stash';
+}
 
 interface WorkspaceState {
   openFiles: OpenTab[];
@@ -53,6 +86,8 @@ interface WorkspaceState {
 
   openFile: (file: OpenFile) => void;
   openDiff: (diff: OpenDiff) => void;
+  openGitLog: (tab: OpenGitLog) => void;
+  openGitStash: (tab: OpenGitStash) => void;
   closeFile: (path: string) => void;
   /** Close every tab except the given one. Activates the survivor. */
   closeOthers: (keepPath: string) => void;
@@ -96,8 +131,10 @@ export function loadPersistedTabs(projectId: number): PersistedTabs {
 
 export function savePersistedTabs(projectId: number, openFiles: OpenTab[], activeFilePath: string | null): void {
   if (typeof window === 'undefined') return;
-  // Drop diff tabs — they're transient.
-  const realFiles = openFiles.filter((f) => f.kind !== 'diff');
+  // Drop transient surfaces (diffs, git-log/git-stash views) — only real files persist.
+  const realFiles = openFiles.filter(
+    (f) => f.kind !== 'diff' && f.kind !== 'git-log' && f.kind !== 'git-stash',
+  );
   const payload: PersistedTabs = {
     openFiles: realFiles.map((f) => ({ projectId: f.projectId, path: f.path })),
     activeFilePath,
@@ -142,6 +179,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       };
     }),
 
+  openGitLog: (tab) =>
+    set((s) => {
+      const existing = s.openFiles.findIndex(
+        (f) => f.path === tab.path && f.projectId === tab.projectId,
+      );
+      if (existing >= 0) {
+        const next = [...s.openFiles];
+        next[existing] = tab;
+        return { openFiles: next, activeFilePath: tab.path };
+      }
+      return { openFiles: [...s.openFiles, tab], activeFilePath: tab.path };
+    }),
+
+  openGitStash: (tab) =>
+    set((s) => {
+      const existing = s.openFiles.findIndex(
+        (f) => f.path === tab.path && f.projectId === tab.projectId,
+      );
+      if (existing >= 0) {
+        const next = [...s.openFiles];
+        next[existing] = tab;
+        return { openFiles: next, activeFilePath: tab.path };
+      }
+      return { openFiles: [...s.openFiles, tab], activeFilePath: tab.path };
+    }),
+
   closeFile: (path) =>
     set((s) => {
       const idx = s.openFiles.findIndex((f) => f.path === path);
@@ -183,14 +246,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setContent: (path, content) =>
     set((s) => ({
       openFiles: s.openFiles.map((f) =>
-        f.path === path && f.kind !== 'diff' ? { ...f, content, dirty: true } : f,
+        f.path === path && (f.kind === undefined || f.kind === 'file')
+          ? { ...f, content, dirty: true }
+          : f,
       ),
     })),
 
   markClean: (path, lastModified) =>
     set((s) => ({
       openFiles: s.openFiles.map((f) =>
-        f.path === path && f.kind !== 'diff' ? { ...f, dirty: false, lastModified } : f,
+        f.path === path && (f.kind === undefined || f.kind === 'file')
+          ? { ...f, dirty: false, lastModified }
+          : f,
       ),
     })),
 }));

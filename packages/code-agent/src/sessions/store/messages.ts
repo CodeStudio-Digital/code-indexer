@@ -72,28 +72,26 @@ export interface AppendToolCallInput {
    * `result_text` when omitted.
    */
   refusal_kind?: string | null;
+  /**
+   * Links a NESTED invocation (code_exec script call, mig 133) to its parent
+   * code_exec tool_use id. NULL on every top-level call. Nested rows are
+   * audit-only — never synthesized into the paired tool-role message.
+   */
+  parent_tool_use_id?: string | null;
 }
 
-/**
- * Tag a synthesized loop-guard refusal so it isn't miscounted as a tool
- * error. The tuple-hash dedup and failure-streak guards REPLACE the result
- * with a refusal whose text LEADS with a stable marker. Real tool failures
- * and guard REMINDERS (prepended to a real result) stay NULL.
- */
-export function classifyToolRefusal(resultText: string, isError: boolean): string | null {
-  if (!isError || !resultText) return null;
-  if (resultText.startsWith('[loop-refused')) return 'dedup';
-  if (resultText.startsWith('[failure-streak REFUSED')) return 'failure-streak';
-  if (resultText.startsWith('[user-denied')) return 'user_denied';
-  return null;
-}
+// Moved to tool-refusal.ts (dependency-free) so the dbWriter worker mirror
+// classifies identically; re-exported here for existing importers.
+import { classifyToolRefusal } from './tool-refusal.js';
+export { classifyToolRefusal };
 
 export function appendToolCall(db: DB, input: AppendToolCallInput): void {
   db.prepare(`
     INSERT INTO coder_tool_calls
       (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
-       output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
+       parent_tool_use_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.message_id, input.tool_use_id, input.tool_name, JSON.stringify(input.args),
     input.result_text, input.is_error ? 1 : 0, input.duration_ms,
@@ -101,6 +99,7 @@ export function appendToolCall(db: DB, input: AppendToolCallInput): void {
     input.output_chars_shaped ?? null,
     input.truncated ? 1 : 0, input.phase ?? null, input.turn_telemetry_id ?? null,
     input.refusal_kind ?? classifyToolRefusal(input.result_text, input.is_error),
+    input.parent_tool_use_id ?? null,
   );
 }
 
@@ -109,6 +108,13 @@ export interface PersistAssistantTurnInput {
   message: AgentMessage;
   usage: AppendMessageUsage | null;
   tool_calls: Array<Omit<AppendToolCallInput, 'message_id'>>;
+  /**
+   * Nested invocations (code_exec script calls) for this turn. Persisted as
+   * audit rows ONLY — they have no `tool_use` block in the assistant
+   * message, so synthesizing them into the paired tool message would create
+   * orphan tool_results and corrupt the transcript.
+   */
+  nested_tool_calls?: Array<Omit<AppendToolCallInput, 'message_id'>>;
   subagent_usage?: AppendMessageUsage;
 }
 
@@ -130,8 +136,9 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
   const insertTool = db.prepare(`
     INSERT INTO coder_tool_calls
       (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
-       output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
+       parent_tool_use_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const bumpStmt = db.prepare(`
     UPDATE coder_sessions
@@ -156,7 +163,7 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
     );
     const messageId = Number(r.lastInsertRowid);
     touchSession.run(input.session_id);
-    for (const tc of input.tool_calls) {
+    const runInsertTool = (tc: Omit<AppendToolCallInput, 'message_id'>): void => {
       insertTool.run(
         messageId, tc.tool_use_id, tc.tool_name, JSON.stringify(tc.args),
         tc.result_text, tc.is_error ? 1 : 0, tc.duration_ms,
@@ -164,8 +171,14 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
         tc.output_chars_shaped ?? null,
         tc.truncated ? 1 : 0, tc.phase ?? null, tc.turn_telemetry_id ?? null,
         tc.refusal_kind ?? classifyToolRefusal(tc.result_text, tc.is_error),
+        tc.parent_tool_use_id ?? null,
       );
-    }
+    };
+    for (const tc of input.tool_calls) runInsertTool(tc);
+    // Nested rows (code_exec script calls) are AUDIT-ONLY: same table, with
+    // parent_tool_use_id set, and deliberately NOT part of the paired tool
+    // message below — they have no matching tool_use block.
+    for (const tc of input.nested_tool_calls ?? []) runInsertTool(tc);
     // Persist the PAIRED tool-role message in the SAME transaction. The
     // dashboard derives a tool call's status purely from the presence of a
     // matching `tool_result` block, so a tool message that never lands shows a
@@ -216,6 +229,22 @@ function rowsToAgentMessages(rows: CoderMessageRow[]): AgentMessage[] {
       ? { selectedSkillIds: JSON.parse(r.selected_skill_ids_json) as string[] }
       : {}),
   }));
+}
+
+/**
+ * Messages strictly AFTER `afterId` — the idle sweeper's un-distilled span
+ * (everything past the session's `memory_distilled_message_id` mark).
+ */
+export function listAfter(
+  db: DB, sessionId: number, afterId: number,
+): { messages: AgentMessage[]; maxId: number } {
+  const rows = db.prepare(
+    'SELECT * FROM coder_messages WHERE session_id = ? AND id > ? ORDER BY id ASC',
+  ).all(sessionId, afterId) as CoderMessageRow[];
+  return {
+    messages: rowsToAgentMessages(rows),
+    maxId: rows.length ? rows[rows.length - 1].id : afterId,
+  };
 }
 
 /**

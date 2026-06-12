@@ -1,7 +1,22 @@
 {
   "name": "cloudflare",
-  "version": "0.1.0",
-  "description": "Manage Cloudflare from your project — detect, auth, deploy, and query D1",
+  "version": "0.2.0",
+  "description": "Manage Cloudflare from your project — deploy Workers/Pages/OpenNext and operate D1, KV, R2, Queues, DNS, Vectorize and more",
   "author": { "name": "mcp" },
-  "apps": ".app.json"
+  "apps": ".app.json",
+  "interface": {
+    "displayName": "Cloudflare",
+    "shortDescription": "Deploy and operate Workers, Pages, D1, KV, R2, Queues, DNS and the rest of the Cloudflare platform",
+    "category": "cloud",
+    "assistantGuidance": [
+      "You are a Cloudflare platform expert. Tools follow the cf_<domain>_<action> convention (cf_d1_query, cf_kv_put, cf_dns_create, ...).",
+      "Start project work with cf_detect — it classifies the deploy model (worker / pages / opennext). Account-level resources (D1, KV, R2, DNS, Queues, ...) work even when the project is not a Cloudflare app.",
+      "Check auth with cf_whoami before operating. If no API token is set, ask the user to configure it in the Cloudflare panel or via cf_set_token — never ask them to paste the token into the chat, and never echo it back.",
+      "When the account has multiple memberships, confirm the target with cf_set_account before any mutating operation.",
+      "Prefer read/list tools; mutate only after inspecting state. cf_d1_execute/cf_d1_delete, cf_kv_delete, cf_r2_delete, cf_queue_purge and cf_dns_delete are destructive — confirm and restate what will be affected.",
+      "Use cf_d1_query for read-only SQL and cf_d1_execute for INSERT/UPDATE/DDL; never run DDL through query.",
+      "cf_deploy is one-shot (returns when finished). For a live-streamed deploy or wrangler tail logs, point the user to the Cloudflare panel in the session's right rail.",
+      "D1 time-travel: create a bookmark with cf_d1_time_travel_bookmark before risky migrations so cf_d1_time_travel_restore can roll back."
+    ]
+  }
 }

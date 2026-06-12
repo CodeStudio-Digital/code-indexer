@@ -26,8 +26,20 @@ export interface CreateRunContextArgs {
    * Initial tier filter — null disables filtering (the BT sees every tool
    * the registry has). Otherwise `ensureBootstrap` adds `'bootstrap'`
    * before storing on the context.
+   *
+   * Passed BY REFERENCE (same contract as `initialMessages`): the host's
+   * `CoderRunner.promoteTier` (the `expand_toolset` handler) mutates this
+   * Set mid-run, and `buildTools` must observe the promotion on the next
+   * turn. Copying here silently froze every mid-run promotion.
    */
   initialTiers: Set<ToolTier> | null;
+  /**
+   * Pinned tools — registered tools the model called while they were
+   * hidden (tier-hidden or cap-cut). Shared BY REFERENCE with the host
+   * runner so dispatch-time pins are visible to the next `buildTools`.
+   * Monotone: names are only ever added.
+   */
+  initialPins?: Set<string>;
   /**
    * Live messages reference shared with the host (e.g. `CoderRunner.this.messages`).
    * Passed BY REFERENCE — the BT pushes assistant/tool blocks onto this array
@@ -56,12 +68,14 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     turn: 0,
     totalUsage: zeroUsage(),
     activeTiers: ensureBootstrap(args.initialTiers),
+    pinnedTools: args.initialPins ?? new Set<string>(),
     recovery: new Map(),
     dupCalls: new Map(),
     loopRefusals: new Map(),
     autoContinues: 0,
     preEmitCompactions: 0,
     consecutiveNoopCompactions: 0,
+    estimateCalibration: null,
     runId: randomUUID(),
     aborted: false,
     transition: null,
@@ -94,7 +108,8 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
       lastInjectedFiles: new Set<string>(),
       recentCompactionAt: null,
       lastInjectedMemoryIds: new Set<string>(),
-      lastInjectedSessionMemoryIds: new Set<string>(),
+      lastInjectedSessionStateHash: null,
+      lastInjectedProjectIndexHash: null,
       // Fix A — self_review nudge gate state (empty = nudge allowed once
       // there are unreviewed pending changes).
       selfReview: { suppressed: false },
@@ -116,12 +131,16 @@ function zeroUsage(): ChatUsage {
  * tier is added before returning; when tiers are null the caller has
  * disabled filtering entirely (subagents/tests) and bootstrap survives
  * trivially since every tool is exposed.
+ *
+ * Mutates and returns the GIVEN Set — the context must alias the host
+ * runner's `activeTiers` so `promoteTier()` (expand_toolset) reaches the
+ * next turn's `buildTools`. The historical copy here silently disconnected
+ * every mid-run tier promotion from the BT.
  */
 export function ensureBootstrap(tiers: Set<ToolTier> | null): Set<ToolTier> | null {
   if (tiers === null) return null;
-  const out = new Set(tiers);
-  out.add('bootstrap');
-  return out;
+  tiers.add('bootstrap');
+  return tiers;
 }
 
 /** Increment and return the recovery counter for a given kind. */

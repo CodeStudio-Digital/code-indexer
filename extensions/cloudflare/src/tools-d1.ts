@@ -40,7 +40,9 @@ function rowData(args: Record<string, unknown>): Record<string, unknown> {
 export const d1Tools = [
   contributeTool({
     name: 'cf_d1_list',
-    description: 'List D1 databases in the selected account',
+    description:
+      'List D1 databases in the selected account (name + uuid). Every other cf_d1_* tool ' +
+      'accepts either the name or the uuid as its `database` arg.',
     riskLevel: 'read',
     mutates: false,
     parameters: { type: 'object', properties: {} },
@@ -105,7 +107,9 @@ export const d1Tools = [
   }),
   contributeTool({
     name: 'cf_d1_delete',
-    description: 'Delete a D1 database by name or UUID',
+    description:
+      'Permanently delete an entire D1 database by name or UUID — destructive and irreversible; ' +
+      'always confirm with the user and restate which database will be dropped.',
     riskLevel: 'admin',
     mutates: true,
     parameters: { type: 'object', properties: { database: { type: 'string' } }, required: ['database'] },
@@ -117,7 +121,9 @@ export const d1Tools = [
   }),
   contributeTool({
     name: 'cf_d1_tables',
-    description: 'List user tables and views in a D1 database',
+    description:
+      "List user tables and views in a D1 database. Args example: { database: 'my-db' }. " +
+      'Follow up with cf_d1_table_schema or cf_d1_rows to inspect one.',
     riskLevel: 'read',
     mutates: false,
     parameters: { type: 'object', properties: { database: { type: 'string' } }, required: ['database'] },
@@ -156,7 +162,9 @@ export const d1Tools = [
   }),
   contributeTool({
     name: 'cf_d1_rows',
-    description: 'Browse rows in a D1 table using rowid pagination',
+    description:
+      'Browse rows in a D1 table with rowid pagination (default limit 50, max 200). ' +
+      "Args example: { database: 'my-db', table: 'users', limit: 50, offset: 0 }.",
     riskLevel: 'read',
     mutates: false,
     parameters: {
@@ -244,7 +252,10 @@ export const d1Tools = [
   }),
   contributeTool({
     name: 'cf_d1_query',
-    description: 'Run a read SQL query against a D1 database',
+    description:
+      'Run read-only SQL against a D1 database (use ? placeholders with `params`). ' +
+      "Args example: { database: 'my-db', sql: 'SELECT * FROM users WHERE id = ?', params: [7] }. " +
+      'For INSERT/UPDATE/DELETE/DDL use cf_d1_execute instead.',
     riskLevel: 'read',
     mutates: false,
     parameters: {
@@ -259,7 +270,10 @@ export const d1Tools = [
   }),
   contributeTool({
     name: 'cf_d1_execute',
-    description: 'Run mutating SQL against a D1 database',
+    description:
+      'Run mutating SQL (INSERT/UPDATE/DELETE/DDL) against a D1 database — destructive, confirm ' +
+      'intent first; consider cf_d1_time_travel_bookmark before risky migrations. ' +
+      "Args example: { database: 'my-db', sql: 'DELETE FROM logs WHERE ts < ?', params: [123] }.",
     riskLevel: 'admin',
     mutates: true,
     parameters: {

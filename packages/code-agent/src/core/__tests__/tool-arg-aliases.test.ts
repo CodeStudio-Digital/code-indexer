@@ -14,7 +14,7 @@ import type { CoderTool, JsonSchema, ToolContext } from '@mcp/code-agent/core/to
 import {
   normalizeToolArgs,
   aliasNormalizationEnabled,
-  TOOL_ARG_ALIASES,
+  ALIAS_GROUPS,
 } from '../tool-arg-aliases.js';
 import { ToolRegistry } from '../registry.js';
 
@@ -69,31 +69,65 @@ describe('normalizeToolArgs — rule (a): canonical must be a real param', () =>
   });
 });
 
-describe('normalizeToolArgs — rule (d): never steal a legit param', () => {
-  it('leaves LSP/diagnostics tools (real file_path) untouched', () => {
-    const args = { file_path: 'a.ts', line: 3, column: 1 };
-    const out = normalizeToolArgs(schema('file_path', 'line', 'column'), args);
-    expect(out).toBe(args);
+describe('normalizeToolArgs — symmetric groups: the declared member is the target', () => {
+  it('repairs the REVERSE direction: path → file_path for LSP-shaped tools', () => {
+    // The real telemetry gap: lsp_definition declares `file_path`; a model
+    // habituated to fs tools sends `path` and used to hard-fail.
+    const out = normalizeToolArgs(schema('file_path', 'line', 'column'), {
+      path: 'a.ts',
+      line: 3,
+      column: 1,
+    });
+    expect(out).toEqual({ file_path: 'a.ts', line: 3, column: 1 });
   });
 
-  it('leaves exec_command (real cmd) untouched but rewrites run_command (cmd → command)', () => {
+  it('repairs command → cmd and cwd → workdir for exec_command-shaped tools', () => {
+    expect(normalizeToolArgs(schema('cmd', 'workdir'), { command: 'ls' })).toEqual({ cmd: 'ls' });
+    expect(normalizeToolArgs(schema('cmd', 'workdir'), { cmd: 'ls', cwd: '/x' })).toEqual({
+      cmd: 'ls',
+      workdir: '/x',
+    });
+  });
+
+  it('still repairs the original direction (cmd → command for run_command)', () => {
+    expect(normalizeToolArgs(schema('command', 'cwd'), { cmd: 'ls' })).toEqual({ command: 'ls' });
+    expect(normalizeToolArgs(schema('command', 'cwd'), { workdir: '/x', command: 'ls' })).toEqual({
+      command: 'ls',
+      cwd: '/x',
+    });
+  });
+});
+
+describe('normalizeToolArgs — rule (a): exactly one declared member, or hands off', () => {
+  it('leaves correctly-named args untouched (declared member already filled)', () => {
     const execArgs = { cmd: 'ls' };
     expect(normalizeToolArgs(schema('cmd', 'workdir'), execArgs)).toBe(execArgs);
-    expect(normalizeToolArgs(schema('command', 'cwd'), { cmd: 'ls' })).toEqual({ command: 'ls' });
-  });
-
-  it('leaves http_request (real body) and record_memo (real text) untouched', () => {
     const httpArgs = { url: 'x', body: 'payload' };
     expect(normalizeToolArgs(schema('url', 'body', 'method'), httpArgs)).toBe(httpArgs);
     const memoArgs = { text: 'note', kind: 'x' };
     expect(normalizeToolArgs(schema('text', 'kind'), memoArgs)).toBe(memoArgs);
   });
 
-  it('does not move an alias that is itself a declared param even when canonical exists', () => {
-    // Hypothetical tool declaring BOTH path and file_path: file_path is legit.
+  it('never touches a tool that declares TWO members of the same group', () => {
+    // Hypothetical tool declaring BOTH path and file_path: genuinely distinct.
     const args = { file_path: 'x' };
     const out = normalizeToolArgs(schema('path', 'file_path'), args);
     expect(out).toBe(args);
+    const both = { path: 'a' };
+    expect(normalizeToolArgs(schema('path', 'file_path'), both)).toBe(both);
+  });
+});
+
+describe('normalizeToolArgs — rule (e): only string values move', () => {
+  it('never moves a typed value (e.g. a shell:true boolean) into a string param', () => {
+    const args = { shell: true };
+    expect(normalizeToolArgs(schema('command'), args)).toBe(args);
+  });
+
+  it('moves a string value under the same donor name', () => {
+    expect(normalizeToolArgs(schema('command'), { shell: 'bash -lc "x"' })).toEqual({
+      command: 'bash -lc "x"',
+    });
   });
 });
 
@@ -176,10 +210,15 @@ describe('aliasNormalizationEnabled — kill switch (default ON)', () => {
 });
 
 describe('table sanity', () => {
-  it('every alias is distinct from its own canonical and order is deterministic', () => {
-    for (const [canonical, aliases] of TOOL_ARG_ALIASES) {
-      expect(aliases).not.toContain(canonical);
-      expect(new Set(aliases).size).toBe(aliases.length);
+  it('groups have unique members and no member appears in two groups', () => {
+    const seen = new Set<string>();
+    for (const group of ALIAS_GROUPS) {
+      expect(group.length).toBeGreaterThan(1);
+      expect(new Set(group).size).toBe(group.length);
+      for (const name of group) {
+        expect(seen.has(name)).toBe(false);
+        seen.add(name);
+      }
     }
   });
 });

@@ -76,6 +76,13 @@ export interface ShouldCompactPreEmitInputs extends EstimatePendingPayloadArgs {
   model: string;
   /** Trigger ratio applied to TOTAL effective context. Default 0.90. */
   triggerRatio?: number;
+  /**
+   * EMA-learned `real_prompt / estimate` ratio from turns where the provider
+   * reported usage. Multiplies the projection so a chars/4 estimate that
+   * systematically over/under-counts this session's content doesn't fire the
+   * gate prematurely (or never). Default 1 (uncalibrated).
+   */
+  calibration?: number;
 }
 
 export interface PreEmitCompactDecision {
@@ -102,7 +109,11 @@ export function shouldCompactPreEmit(inp: ShouldCompactPreEmitInputs): PreEmitCo
   }
   const limits = deriveTokenLimits(inp.model);
   const triggerRatio = inp.triggerRatio ?? DEFAULT_PRE_EMIT_RATIO;
-  const projectedTokens = estimatePendingPayload(inp);
+  const calibration =
+    inp.calibration != null && Number.isFinite(inp.calibration) && inp.calibration > 0
+      ? inp.calibration
+      : 1;
+  const projectedTokens = Math.round(estimatePendingPayload(inp) * calibration);
   if (limits.effective <= 0) {
     return { shouldCompact: false, projectedTokens, effective: limits.effective, ratio: 0 };
   }

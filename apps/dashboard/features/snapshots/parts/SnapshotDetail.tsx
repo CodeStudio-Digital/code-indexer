@@ -12,7 +12,7 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, Copy, Pencil, Trash2 } from 'lucide-react';
+import { Check, Copy, Pencil, Star, Trash2 } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../components/ui/tabs.js';
 import { useApi } from '../../../hooks/useApi.js';
@@ -29,14 +29,17 @@ interface SnapshotDetailProps {
   snapshot: Snapshot;
   onEdit: () => void;
   onDelete: () => void;
+  /** Pin/unpin = importance boost (retrieval ranking + turn-1 index). */
+  onTogglePin?: () => void;
 }
 
-export function SnapshotDetail({ snapshot, onEdit, onDelete }: SnapshotDetailProps) {
+export function SnapshotDetail({ snapshot, onEdit, onDelete, onTogglePin }: SnapshotDetailProps) {
   const { t } = useTranslation(['projects', 'common']);
   const [copied, setCopied] = useState(false);
   const tags = parseTags(snapshot.tags);
   const visibleTags = tags.filter((tag) => tag !== 'auto-generated');
   const isAuto = tags.includes('auto-generated');
+  const pinned = (snapshot.importance ?? 0.5) >= 0.9;
 
   const handleCopy = async () => {
     try {
@@ -71,8 +74,27 @@ export function SnapshotDetail({ snapshot, onEdit, onDelete }: SnapshotDetailPro
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground min-w-0">
           <span className="truncate">
             {new Date(snapshot.created_at).toLocaleString()} · {snapshot.created_by}
+            {snapshot.source ? ` · ${snapshot.source}` : ''}
+            {typeof snapshot.importance === 'number'
+              ? ` · imp ${snapshot.importance.toFixed(2)}`
+              : ''}
+            {typeof snapshot.access_count === 'number' && snapshot.access_count > 0
+              ? ` · ${snapshot.access_count}× recalled`
+              : ''}
           </span>
           <div className="ml-auto flex items-center gap-0.5 shrink-0">
+            {onTogglePin && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className={cn('h-6 px-2 gap-1 text-[11px]', pinned && 'text-amber-500 hover:text-amber-500')}
+                onClick={onTogglePin}
+                title={pinned ? t('projects:memory.actions.unpin') : t('projects:memory.actions.pin')}
+              >
+                <Star className={cn('h-3 w-3', pinned && 'fill-current')} />
+                {pinned ? t('projects:memory.actions.unpin') : t('projects:memory.actions.pin')}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"

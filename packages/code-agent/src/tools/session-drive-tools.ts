@@ -6,14 +6,17 @@
  *
  *   - read_plan             — re-read the plan you submitted (it's otherwise
  *                             write-only and lost after compaction).
- *   - save_note             — jot a note that survives compaction (this session).
- *   - list_notes            — browse the notes you saved.
+ *   - save_note             — jot a note that survives compaction. scope
+ *                             'session' (default) = this session's scratchpad;
+ *                             scope 'project' = durable cross-session PROJECT
+ *                             MEMORY via `ctx.projectMemory` (dedup'd like the
+ *                             distillers).
+ *   - list_notes            — browse the session notes you saved.
  *   - recall_investigations — find a past sub-agent exploration BEFORE you
  *                             spawn a new one, to avoid re-running the query.
  *
- * NOTE vs MEMORY: these `*_note` tools are SESSION-scoped (ephemeral working
- * scratchpad). They are deliberately distinct from `mcp__save_memory` /
- * `mcp__search_memory`, which are PROJECT-wide and cross-session.
+ * The MCP twins `mcp__save_memory` / `mcp__search_memory` remain the
+ * bridge-only alternative path (company / external MCP clients).
  *
  * All degrade to a clear message when `ctx.sessionDrive` is absent (company
  * sessions / subagents / tests) instead of throwing.
@@ -48,18 +51,30 @@ export const readPlanTool: CoderTool = {
   },
 };
 
+/** save_note kind → durable memory category for scope 'project'. */
+const KIND_TO_CATEGORY: Record<string, string> = {
+  decision: 'decision',
+  gotcha: 'gotcha',
+  convention: 'convention',
+  procedure: 'procedure',
+  risk: 'gotcha',
+  fact: 'note',
+  todo: 'todo',
+};
+
 export const saveNoteTool: CoderTool = {
   name: 'save_note',
   description:
-    "Save a note to THIS session's working scratchpad — re-surfaced to you after context " +
-    'compaction and shown in the Session Drive panel.\n' +
-    'USE: a decision you made and why, a non-obvious fact about the codebase, a risk to watch, ' +
-    'a TODO you must not forget — anything you would regret losing when older turns are summarized.\n' +
-    'SCOPE: this session only (ephemeral). For a durable PROJECT fact that should outlive this ' +
-    'session (a convention, gotcha, architecture note), use `mcp__save_memory` instead.\n' +
-    "DON'T: dump file contents (read them again) or restate the current task. Keep it tight.\n" +
-    '`title` is the key — calling save_note again with the same title updates that note. ' +
-    'Review your notes with `list_notes`.',
+    'Save a note. Default scope "session": a working-scratchpad note for THIS session, ' +
+    're-surfaced to you after context compaction and shown in the Session Drive panel.\n' +
+    'Scope "project": a DURABLE PROJECT MEMORY — persists across sessions and is retrieved in ' +
+    'future work on this codebase (a decision and its why, a confirmed convention, a non-obvious ' +
+    'gotcha you hit, a reusable how-to). Save project memory THE MOMENT you learn something a ' +
+    'future agent would otherwise rediscover the hard way — not at the end.\n' +
+    "DON'T: dump file contents, transient task state, or progress notes into project scope.\n" +
+    '`title` is the key for session notes (re-saving updates); project notes are deduplicated ' +
+    'against existing memory. Review session notes with `list_notes`; search project memory with ' +
+    '`recall_memory`.',
   source: 'native',
   mutates: false,
   parallelSafe: false,
@@ -69,24 +84,54 @@ export const saveNoteTool: CoderTool = {
     properties: {
       title: { type: 'string', description: 'Short unique key for the note (e.g. "auth flow lives in").' },
       body: { type: 'string', description: 'The note content. Concrete > vague.' },
-      kind: { type: 'string', enum: ['decision', 'fact', 'risk', 'todo'], description: 'Soft tag for grouping. Default "fact".' },
+      kind: {
+        type: 'string',
+        enum: ['decision', 'fact', 'risk', 'todo', 'gotcha', 'convention', 'procedure'],
+        description: 'Soft tag. For scope "project" it maps to the memory category. Default "fact".',
+      },
       pinned: { type: 'boolean', description: 'Pin to always surface it after compaction (use sparingly).' },
+      scope: {
+        type: 'string',
+        enum: ['session', 'project'],
+        description:
+          'Where the note lives. "session" (default): this session only. ' +
+          '"project": durable cross-session PROJECT MEMORY for this codebase.',
+      },
     },
     required: ['title', 'body'],
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const d = drive(ctx);
-    if (!d) return err(UNAVAILABLE);
     const title = typeof args.title === 'string' ? args.title.trim() : '';
     const body = typeof args.body === 'string' ? args.body.trim() : '';
     if (!title) return err('save_note: `title` is required and non-empty.');
     if (!body) return err('save_note: `body` is required and non-empty.');
+    const kind = typeof args.kind === 'string' ? args.kind : 'fact';
+
+    if (args.scope === 'project') {
+      const pm = ctx.projectMemory;
+      if (!pm) {
+        return err(
+          'project memory is not available in this context — nothing was saved. ' +
+          'Retry with scope "session" to keep it in the session scratchpad.',
+        );
+      }
+      try {
+        const res = await pm.save({ title, content: body, category: KIND_TO_CATEGORY[kind] ?? 'note' });
+        const what = res && res.merged > 0 ? 'merged into existing memory' : 'saved';
+        return ok(`Project memory "${title}" ${what}. Future sessions on this codebase will retrieve it.`);
+      } catch (e) {
+        return err(`save_note (project) failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    const d = drive(ctx);
+    if (!d) return err(UNAVAILABLE);
     try {
       const saved = d.remember({
         title,
         body,
-        kind: typeof args.kind === 'string' ? args.kind : undefined,
+        kind,
         pinned: args.pinned === true,
       });
       // Live-update the Drive panel (SSE → DOM bridge → refetch).

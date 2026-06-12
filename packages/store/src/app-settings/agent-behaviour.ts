@@ -125,6 +125,38 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     advanced: true,
   },
   {
+    key: 'CODER_COMPACT_TRIGGER_RATIO',
+    label: 'Compaction trigger ratio',
+    description:
+      'Fraction of the effective context window at which auto-compaction fires (one knob drives the size gate, the body gate at −0.05 and the token backstop). Default 0.90 — lower it to summarize earlier and keep more headroom.',
+    type: 'float',
+    category: 'agent',
+    default: '0.9',
+    min: 0.5,
+    max: 0.95,
+    advanced: true,
+  },
+  {
+    key: 'MCP_MEMORY_SWEEPER',
+    label: 'Idle memory sweeper',
+    description:
+      'Distills durable project memory from sessions that went idle (≥10 min) with un-distilled messages. Complements the compaction-time harvest so short sessions also feed project memory. Default on.',
+    type: 'bool',
+    category: 'agent',
+    default: '1',
+  },
+  {
+    key: 'MCP_MEMORY_IDLE_AFTER_MS',
+    label: 'Memory sweeper idle threshold (ms)',
+    description:
+      'How long a session must sit idle before the sweeper distills its pending span. Default 600000 (10 min).',
+    type: 'int',
+    category: 'agent',
+    default: '600000',
+    min: 60000,
+    advanced: true,
+  },
+  {
     key: 'CODER_PROMPTS_WATCH',
     label: 'Hot-reload system prompts',
     description:

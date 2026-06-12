@@ -14,6 +14,7 @@ import * as symbols from './db/symbols.js';
 import * as symbolRelations from './db/symbol-relations.js';
 import * as runs from './db/runs.js';
 import * as snapshots from './db/snapshots.js';
+import * as memoryDistillLog from './db/memory-distill-log.js';
 import * as costs from './db/costs.js';
 import * as webhooks from './db/webhooks.js';
 import * as vectors from './db/vectors.js';
@@ -130,8 +131,16 @@ export class CodeIndexDB {
   deleteSnapshot(id: number): void { snapshots.del(this.db, id); }
   getSnapshotById(id: number): ContextSnapshot | undefined { return snapshots.getById(this.db, id); }
   listSnapshots(projectId: number, category?: SnapshotCategory): ContextSnapshot[] { return snapshots.list(this.db, projectId, category); }
+  listMemoryIndex(projectId: number, limit = 12): snapshots.MemoryIndexEntry[] { return snapshots.listMemoryIndex(this.db, projectId, limit); }
   searchSnapshots(projectId: number, query: string): ContextSnapshot[] { return snapshots.search(this.db, projectId, query); }
   getSnapshotHistory(snapshotId: number): SnapshotVersion[] { return snapshots.getHistory(this.db, snapshotId); }
+
+  // ─── Memory distillation diagnostics (migration 136) ────────────
+  insertMemoryDistillLog(projectId: number, entry: memoryDistillLog.MemoryDistillLogEntry): void { memoryDistillLog.insert(this.db, projectId, entry); }
+  latestMemoryDistill(projectId: number): memoryDistillLog.MemoryDistillLogRow | null { return memoryDistillLog.latestForProject(this.db, projectId); }
+  recentMemoryDistills(projectId: number, limit = 20): memoryDistillLog.MemoryDistillLogRow[] { return memoryDistillLog.recentForProject(this.db, projectId, limit); }
+  countMemoryByCategory(projectId: number): Record<string, number> { return memoryDistillLog.countSnapshotsByCategory(this.db, projectId); }
+  countMemoryBySource(projectId: number): Record<string, number> { return memoryDistillLog.countSnapshotsBySource(this.db, projectId); }
 
   // ─── Costs ──────────────────────────────────────────────────────
   insertCost(data: costs.InsertCostData): void { costs.insert(this.db, data); }

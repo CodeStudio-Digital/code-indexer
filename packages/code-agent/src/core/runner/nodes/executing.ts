@@ -7,15 +7,13 @@
  *      active-context).
  *   3. build tools (via assembly).
  *   4. assemble system prompt (base + quality-feedback suffix).
- *   5. deep-think pre-think (bridge.runPreThink) — prefills
- *      `<thinking data-source="aux">…</thinking>` if produced.
- *   6. stream `provider.chat()` with the full ChatRequest legacy passes.
- *   7. push assistant message.
- *   8. dispatch tools — pre-read + tuple-hash gates, smart-reducer +
+ *   5. stream `provider.chat()` with the full ChatRequest legacy passes.
+ *   6. push assistant message.
+ *   7. dispatch tools — pre-read + tuple-hash gates, smart-reducer +
  *      polling-stuck on results.
- *   9. push tool-role message, emit per-tool telemetry.
- *  10. fire-and-forget quality watchdog (bridge.runQualityCheck).
- *  11. decide next event:
+ *   8. push tool-role message, emit per-tool telemetry.
+ *   9. fire-and-forget quality watchdog (bridge.runQualityCheck).
+ *  10. decide next event:
  *        - dedup refusal         → ToolLoopDetected (→ Planning)
  *        - token usage ≥ 90% eff → TokenThresholdHit (→ Compacting)
  *        - assistant text only   → CleanFinish
@@ -24,6 +22,8 @@
  */
 import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.js';
 import type { ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import { promptTokensTotal } from '@mcp/code-agent/core/messages.js';
+import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 import { events } from '../machine/events.js';
 import { accumulateUsage } from '../machine/context.js';
 import { envTunables } from '@mcp/code-agent/core/tunables.js';
@@ -44,9 +44,16 @@ import {
 import { shouldCompactPreEmit, estimateMessagesTokens } from '../compaction/pending-tokens.js';
 import { evaluateLoopAwareCompaction } from '../compaction/loop-aware-trigger.js';
 import { computeDynamicInjection, type DynamicInjectionResult } from '../assembly/dynamic-injection.js';
+import {
+  renderSessionStateBlock,
+  renderMemoryIndex,
+  hashSessionState,
+} from '../assembly/session-state.js';
+import { resolveInjectionPolicy } from '../assembly/injection-policy.js';
 import { applySelfReviewDecline, computeSelfReviewNudge } from './executing-self-review.js';
 import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
+import { buildNestedToolObserver, nestedGuardsEnabled } from '../guards/nested-observer.js';
 import { evaluatePerTurnLoops } from './executing-loop-guards.js';
 import { applyVisionFallback } from '../vision-fallback.js';
 import { getGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
@@ -160,20 +167,45 @@ export class ExecutingNode implements BehaviorNode {
       // pending changes and hard-stops after a cap / explicit user decline,
       // instead of every turn while any snapshot is pending (the doom-loop).
       const selfReviewNudge = computeSelfReviewNudge(ctx);
-      // Session Drive (working memory) — active plan, saved notes, available
-      // investigations. computeDynamicInjection gates plan/nudge to turn-1 /
-      // post-compaction and dedups notes, so on steady turns this just yields
-      // null; we only need it to NOT short-circuit when there's any content.
-      const drive = ctx.bridge?.getSessionDriveInjection?.() ?? null;
-      const driveHasContent =
-        !!drive && (!!drive.activePlan || drive.sessionMemory.length > 0 || drive.investigationCount > 0);
-      // Skip computing when nothing fresh AND no recent compaction AND no memory AND no nudge.
+      // Session State Block — the always-alive structured state (goal/plan/
+      // todos/notes/files/recall) rendered from persisted data, sized and
+      // paced by the window-scaled policy. Replaces the old per-field drive
+      // injection. Short windows inject it EVERY turn; standard windows on
+      // milestones or when the block's hash changes.
+      const policy = resolveInjectionPolicy(ctx.opts.provider.model, {
+        liveStateCovered: !!ctx.opts.agentLoopV2,
+      });
+      let sessionState: { block: string; hash: string } | null = null;
+      let projectMemoryIndex: { text: string; hash: string } | null = null;
+      if (policy.enabled) {
+        try {
+          const data = ctx.bridge?.getSessionStateData?.() ?? null;
+          if (data) {
+            const block = renderSessionStateBlock(data, policy.budget);
+            if (block) sessionState = { block, hash: hashSessionState(block) };
+          }
+        } catch (e) {
+          dbg('session-state render failed', (e as Error).message);
+        }
+        if (policy.memoryIndexChars > 0) {
+          try {
+            const entries = ctx.bridge?.getProjectMemoryIndex?.() ?? null;
+            const text = entries ? renderMemoryIndex(entries, policy.memoryIndexChars) : null;
+            if (text) projectMemoryIndex = { text, hash: hashSessionState(text) };
+          } catch (e) {
+            dbg('memory-index render failed', (e as Error).message);
+          }
+        }
+      }
+      // Skip computing when nothing fresh AND no recent compaction AND no
+      // memory AND no nudge AND no state block worth (re-)injecting.
       if (
         !signals &&
         recentCompactionAt == null &&
         pendingMemory.length === 0 &&
         !selfReviewNudge &&
-        !driveHasContent
+        !sessionState &&
+        !projectMemoryIndex
       )
         return null;
       const result = computeDynamicInjection({
@@ -186,10 +218,11 @@ export class ExecutingNode implements BehaviorNode {
         relevantMemory: pendingMemory,
         lastInjectedMemoryIds: ctx.injectionState.lastInjectedMemoryIds,
         hasReviewableChanges: selfReviewNudge,
-        activePlan: drive?.activePlan ?? null,
-        sessionMemory: drive?.sessionMemory ?? [],
-        lastInjectedSessionMemoryIds: ctx.injectionState.lastInjectedSessionMemoryIds,
-        investigationCount: drive?.investigationCount ?? 0,
+        sessionState,
+        sessionStateEveryTurn: policy.stateEveryTurn,
+        lastInjectedSessionStateHash: ctx.injectionState.lastInjectedSessionStateHash,
+        projectMemoryIndex,
+        lastInjectedProjectIndexHash: ctx.injectionState.lastInjectedProjectIndexHash,
       });
       // Stash for post-assembly commit so we don't double-update state
       // when the same injection is consulted (e.g. by tests).
@@ -200,8 +233,6 @@ export class ExecutingNode implements BehaviorNode {
       messages: ctx.messages,
       tunables,
       compactionLimits: undefined,
-      preThinkHistoryWindow: ctx.opts.preThinkHistoryWindow ?? 3,
-      persistPreThoughts: ctx.opts.persistPreThoughts !== false,
       agentLoopV2: !!ctx.opts.agentLoopV2,
       buildActiveSkillsBlock: ctx.bridge?.buildActiveSkillsBlock ?? (() => null),
       buildActiveContextBlock: ctx.bridge?.buildActiveContextBlock ?? (() => null),
@@ -222,8 +253,11 @@ export class ExecutingNode implements BehaviorNode {
       for (const mid of injectionToCommit.includedMemoryIds) {
         ctx.injectionState.lastInjectedMemoryIds.add(mid);
       }
-      for (const sid of injectionToCommit.includedSessionMemoryIds) {
-        ctx.injectionState.lastInjectedSessionMemoryIds.add(sid);
+      if (injectionToCommit.includedSessionStateHash) {
+        ctx.injectionState.lastInjectedSessionStateHash = injectionToCommit.includedSessionStateHash;
+      }
+      if (injectionToCommit.includedProjectIndexHash) {
+        ctx.injectionState.lastInjectedProjectIndexHash = injectionToCommit.includedProjectIndexHash;
       }
     }
     if (
@@ -239,6 +273,7 @@ export class ExecutingNode implements BehaviorNode {
       sessionDisabledTools: ctx.opts.sessionDisabledTools,
       externalToolTiers: ctx.opts.externalToolTiers,
       activeTiers: ctx.activeTiers,
+      pinnedTools: ctx.pinnedTools,
       toolContext: ctx.opts.toolContext,
       provider: ctx.opts.provider,
       goalToolAlreadyLogged: false,
@@ -266,6 +301,9 @@ export class ExecutingNode implements BehaviorNode {
       // hasn't emitted the next tool batch yet. Just messages + prefix.
       prefixTokens: prefixTokensEstimate,
       model: ctx.opts.provider.model,
+      // EMA-learned real/estimate ratio — keeps a drifting chars/4 estimate
+      // from compacting prematurely (or never) before the provider call.
+      calibration: ctx.estimateCalibration ?? 1,
     });
     if (preEmit.shouldCompact) {
       // The decrement below means `maxTurns` can't backstop a pre-emit
@@ -300,102 +338,6 @@ export class ExecutingNode implements BehaviorNode {
     // Gate passed — any prior compaction freed enough room, so reset the
     // consecutive-pre-emit counter. A future runaway starts counting fresh.
     ctx.preEmitCompactions = 0;
-
-    // Deep-think pre-think (opt-in via opts.deepThink). Prefills an
-    // auxiliary reasoning block onto BOTH the working window and the
-    // persistent history (legacy parity). Failures degrade silently —
-    // the bridge emits its own diagnostic events.
-    //
-    // Camada 4 — heartbeat around the entire bridge.runPreThink() await
-    // so the StuckBanner doesn't trip when the aux provider's first call
-    // is slow (OAuth refresh, socket warm-up, slow first-token aux model).
-    // Same pattern as Camadas 1/2/3 — independent setInterval cleaned up
-    // in finally.
-    if (ctx.opts.deepThink && ctx.bridge?.runPreThink) {
-      const PRE_THINK_HEARTBEAT_MS =
-        Number(process.env.CODER_PRE_THINK_HEARTBEAT_MS ?? '10000') || 10_000;
-      const preThinkStartedAt = Date.now();
-      const preThinkOpId = `pre-think:${ctx.runId}:${ctx.turn}`;
-      let preThinkFinished = false;
-      ctx.operations.start({
-        opId: preThinkOpId,
-        kind: 'provider',
-        label: 'pre-think',
-        phase: 'awaiting_aux_provider',
-      });
-      const preThinkHeartbeat = setInterval(() => {
-        ctx.operations.progress(preThinkOpId, {
-          phase: 'awaiting_aux_provider',
-          note: 'resolving aux provider / awaiting reasoning',
-        });
-        ctx.emit('tool_progress', {
-          id: preThinkOpId,
-          name: 'pre-think',
-          elapsedMs: Date.now() - preThinkStartedAt,
-          note: 'resolving aux provider / awaiting reasoning…',
-        });
-      }, PRE_THINK_HEARTBEAT_MS);
-      try {
-        // A1 — race against user-abort signal. The bridge's internal
-        // timeouts (resolveAuxProvider 15s, runPreThink 8s) protect the
-        // happy path; this protects the user-cancellation path.
-        const pre = await withAbort(
-          ctx.bridge.runPreThink({
-            messages: messagesForChat,
-            toolNames: toolsBuilt.tools.map((t) => t.name),
-            turn: ctx.turn,
-          }),
-          ctx.opts.toolContext.signal,
-        );
-        if (pre?.text) {
-          const auxModel = ctx.opts.deepThinkModel ?? 'claude-haiku-4-5-20251001';
-          const preThinkBlock: ContentBlock = {
-            type: 'text',
-            text: `<thinking data-source="aux" data-model="${auxModel}">\n${pre.text}\n</thinking>\n\n`,
-          };
-          messagesForChat.push({ role: 'assistant', content: [preThinkBlock] });
-          accumulateUsage(ctx, pre.usage ?? null);
-
-          // Persist into the durable history so the dashboard renders the
-          // emerald `<thinking data-source="aux">` block in the transcript
-          // AND so future turns/resumes see the accumulated reasoning.
-          if (ctx.opts.persistPreThoughts !== false) {
-            const persistMsg = { role: 'assistant' as const, content: [preThinkBlock] };
-            ctx.messages.push(persistMsg);
-            const store = ctx.opts.sessionStore;
-            if (store && ctx.opts.sessionId !== undefined) {
-              try {
-                store.appendMessage(ctx.opts.sessionId, persistMsg);
-              } catch (e) {
-                dbg('pre-think persistence failed', e);
-              }
-            }
-          }
-        }
-      } catch (e) {
-        if (isAbortError(e)) {
-          // Honour the user-abort cleanly — short-circuit the whole turn.
-          clearInterval(preThinkHeartbeat);
-          preThinkFinished = true;
-          ctx.operations.finish(preThinkOpId, 'aborted', { phase: 'aborted', note: 'user/session aborted' });
-          ctx.aborted = true;
-          ctx.stopReason = 'aborted';
-          return events.aborted();
-        }
-        preThinkFinished = true;
-        ctx.operations.finish(preThinkOpId, 'failed', {
-          phase: 'failed',
-          note: e instanceof Error ? e.message : String(e),
-        });
-        dbg('runPreThink threw', e);
-      } finally {
-        clearInterval(preThinkHeartbeat);
-        if (!preThinkFinished) {
-          preThinkFinished = true;
-          ctx.operations.finish(preThinkOpId, 'completed', { phase: 'completed' });
-        }
-      }
-    }
 
     const tempResolution = ctx.bridge?.resolveTemperature?.();
     const prevResponse = ctx.bridge?.getPreviousResponseId?.();
@@ -568,6 +510,7 @@ export class ExecutingNode implements BehaviorNode {
           historyChars,
           systemPromptChars: systemPrompt.length,
           toolsDefChars,
+          visibleToolsCount: toolsBuilt.tools.length,
           responseMeta: result.responseMeta,
           // Compaction never fires INSIDE Executing — the Token-Threshold
           // event we may emit below is the SIGNAL to the orchestrator to
@@ -599,6 +542,34 @@ export class ExecutingNode implements BehaviorNode {
       ctx.emit('message_complete', { role: 'assistant', content: assistantContent }, result.usage);
     }
 
+    // ── Honest context accounting (single source of truth) ──────────────
+    // True prompt size of the call we just made: adapter-normalized usage
+    // (`prompt_tokens_total` — includes cached slices on Anthropic-style
+    // APIs) or the tokenizer estimate, EMA-calibrated against real usage so
+    // usage-less providers don't trip the gates on chars/4 noise. Drives the
+    // compaction gates below AND the `context_status` event the dashboard
+    // context bar renders — one number, no live-vs-persisted jumps.
+    const estPromptTokens = estimateMessagesTokens(messagesForChat) + prefixTokensEstimate;
+    const realPromptTokens = promptTokensTotal(result.usage);
+    if (realPromptTokens != null && estPromptTokens > 0) {
+      const sample = Math.min(3, Math.max(1 / 3, realPromptTokens / estPromptTokens));
+      ctx.estimateCalibration =
+        ctx.estimateCalibration == null ? sample : ctx.estimateCalibration * 0.7 + sample * 0.3;
+    }
+    const promptTokens =
+      realPromptTokens ?? Math.round(estPromptTokens * (ctx.estimateCalibration ?? 1));
+    const usageSource: 'usage' | 'estimate' = realPromptTokens != null ? 'usage' : 'estimate';
+    {
+      const limits = deriveTokenLimits(ctx.opts.provider.model);
+      ctx.emit('context_status', {
+        turn: ctx.turn,
+        prompt_tokens: promptTokens,
+        source: usageSource,
+        context_window: limits.effective,
+        ratio: limits.effective > 0 ? promptTokens / limits.effective : 0,
+      });
+    }
+
     // Dashboard telemetry — preview the batch before dispatch so the UI
     // can render the pending tool list immediately (legacy parity).
     ctx.emit('tool_batch', {
@@ -624,6 +595,17 @@ export class ExecutingNode implements BehaviorNode {
       turn: ctx.turn,
       dupCalls: ctx.dupCalls,
       loopRefusals: ctx.loopRefusals,
+      // Pin mechanism — hidden registered tools execute and join the
+      // visible list next turn; disabled tools hard-block at dispatch.
+      visibleToolNames: new Set(toolsBuilt.tools.map((t) => t.name)),
+      pinnedTools: ctx.pinnedTools,
+      onToolPinned: (name) => ctx.pinnedTools.add(name),
+      isToolBlocked: (name) =>
+        ctx.opts.globalDisabledTools?.has(name)
+          ? `[tool-disabled] '${name}' is disabled globally by the admin — pick another tool (find_tools lists alternatives).`
+          : ctx.opts.sessionDisabledTools?.has(name)
+            ? `[tool-disabled] '${name}' is disabled for this session — pick another tool (find_tools lists alternatives).`
+            : null,
       toolGate: ctx.bridge?.toolGate,
       enforcePreRead: ctx.bridge?.enforcePreRead,
       enforceTaskMode: ctx.bridge?.enforceTaskMode,
@@ -645,6 +627,20 @@ export class ExecutingNode implements BehaviorNode {
       onToolProgress: (id, name, elapsedMs, note) => {
         ctx.operations.progress(`tool:${id}`, { phase: 'running', ...(note ? { note } : {}) });
         ctx.emit('tool_progress', { id, name, elapsedMs, ...(note ? { note } : {}) });
+      },
+      // Nested-call guards (code_exec): one observer per code_exec parent,
+      // closing over the run's OWN dupCalls/failureStreaks so nested calls
+      // count against the same state as direct ones. The telemetry sink
+      // emits `nested_tool_call` for the per-call audit trail.
+      makeNestedObserver: (parentToolUseId, parentToolName) => {
+        if (parentToolName !== 'code_exec' || !nestedGuardsEnabled()) return undefined;
+        return buildNestedToolObserver({
+          dupCalls: ctx.dupCalls,
+          failureStreaks: ctx.failureStreaks,
+          turn: ctx.turn,
+          parentToolUseId,
+          onNestedCall: (e) => ctx.emit('nested_tool_call', e),
+        });
       },
       // PR 5 — wire failure-streak guard. State lives on ctx so it
       // survives across turns within the run. The intervention callback
@@ -686,6 +682,10 @@ export class ExecutingNode implements BehaviorNode {
       });
     }
 
+    // Refused calls never fired tool_call_start, so the telemetry listener in
+    // index.ts has no pending entry to read args from — carry the original
+    // input on the result event itself (along with the refusal kind).
+    const inputByUseId = new Map(result.toolUses.map((t) => [t.id, t.input]));
     for (const r of dispatch.results) {
       ctx.operations.finish(`tool:${r.toolUseId}`, r.isError ? 'failed' : 'completed', {
         phase: r.isError ? 'failed' : 'completed',
@@ -711,6 +711,8 @@ export class ExecutingNode implements BehaviorNode {
           content: r.content,
           isError: r.isError,
           rawChars: r.rawChars,
+          input: inputByUseId.get(r.toolUseId),
+          refusalKind: r.refusalKind,
           ...(img ? { image: { mediaType: img.mediaType, base64: img.base64 } } : {}),
         },
         r.durationMs,
@@ -734,8 +736,9 @@ export class ExecutingNode implements BehaviorNode {
     // compacted). `cumulativeInputTokens` uses the real prompt-token count when
     // present, else the tokenizer estimate of what we just sent.
     const hadText = result.textBlocks.some((t) => t.trim().length > 0);
-    const estPromptTokens = estimateMessagesTokens(messagesForChat) + prefixTokensEstimate;
     ctx.consecutiveNoTextTurns = hadText ? 0 : ctx.consecutiveNoTextTurns + 1;
+    // Burn metric stays on RAW input tokens (uncached slice) — adding cache
+    // reads would re-count the whole cached prefix every turn.
     ctx.cumulativeInputTokens += result.usage?.input_tokens ?? estPromptTokens;
 
     // Insistent-loop enforcement — the same tool+args got hard-refused across
@@ -798,15 +801,14 @@ export class ExecutingNode implements BehaviorNode {
     }
 
     // Fix B — compaction decision. Works WITH or WITHOUT provider `usage`:
-    // when usage is absent (the ChatGPT backend) we fall back to the tokenizer
-    // ESTIMATE of what we just sent, which is the reason compaction never fired
-    // for session 887. Three gates, OR-ed for the earliest trigger:
-    //   - shouldCompact90        — total-context ratio (Frente B, 0.70),
-    //   - shouldCompactBodyAfterPrefix — prefix-cache-aware body ratio (0.85),
+    // when usage is absent (the ChatGPT backend) we fall back to the
+    // calibrated tokenizer ESTIMATE of what we just sent. `promptTokens` is
+    // the honest cache-inclusive total computed above (same number shown in
+    // the dashboard). Three gates, OR-ed for the earliest trigger:
+    //   - shouldCompact90        — total-context ratio (resolveTriggerRatio, 0.90),
+    //   - shouldCompactBodyAfterPrefix — prefix-cache-aware body ratio (−0.05),
     //   - evaluateLoopAwareCompaction  — behavioral (stuck-progress/cumulative)
-    //     + an estimate-based token-budget backstop.
-    const promptTokens = result.usage?.input_tokens ?? estPromptTokens;
-    const usageSource = result.usage?.input_tokens ? 'usage' : 'estimate';
+    //     + a token-budget backstop aligned to the same ratio.
     const loopAware = evaluateLoopAwareCompaction({
       model: ctx.opts.provider.model,
       snapshotTotal: promptTokens,
@@ -823,8 +825,8 @@ export class ExecutingNode implements BehaviorNode {
       // Camada 2 — breaker de no-op. Se as últimas compactações não reduziram
       // nada (contexto irredutível: ex. um tool_result maior que o teto da
       // cauda), parar de rotear para Compacting a cada turno. Diferente do
-      // pre-emit (que ABORTA a >90%), aqui apenas SUPRIMIMOS o churn do gate de
-      // 70% — sem abortar; o modelo segue progredindo. O clamp do recede
+      // pre-emit (que ABORTA a >90%), aqui apenas SUPRIMIMOS o churn do gate
+      // de tamanho — sem abortar; o modelo segue progredindo. O clamp do recede
       // (Camada 1) + o pre-emit tornam isto raro e auto-curável (uma
       // compactação real reseta o contador, ou ele zera quando o gate silencia).
       const noopCap = Number(process.env.CODER_POSTTURN_COMPACT_NOOP_MAX ?? '2') || 2;

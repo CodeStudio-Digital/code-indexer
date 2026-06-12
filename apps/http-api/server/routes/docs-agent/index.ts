@@ -255,6 +255,11 @@ export function mountDocsAgentRoutes(
         crawl: { enabled: false },
       });
       deps.docStore.setSuggestionStatus(id, 'approved', source.id);
+      // The suggestion came from THIS project's manifests, so the resulting
+      // collection is auto-linked (migration 134) — rag_search_docs scopes
+      // to it without a manual link step. Idempotent; a prior manual link
+      // keeps its origin.
+      deps.docStore.linkProjectCollection(suggestion.project_id, collectionId, 'auto');
       return c.json({ ok: true, source });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

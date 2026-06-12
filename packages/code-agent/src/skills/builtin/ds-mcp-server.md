@@ -11,8 +11,8 @@ allowed-tools:
   - ds_audit_package
   - ask_master
   - submit_plan_to_master
-  - kanban_my_comment
-  - kanban_my_checklist
+  - kanban_post_comment
+  - kanban_update_objectives
   - kanban_move_to_review
   - post_to_board
   - read_board

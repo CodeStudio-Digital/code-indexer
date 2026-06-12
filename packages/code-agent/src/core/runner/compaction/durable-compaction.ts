@@ -34,6 +34,9 @@ export interface DurableCompactionResult {
   ok: boolean;
   boundaryId?: number;
   prunedCount?: number;
+  /** The structured summary that was persisted — handed to the memory
+   *  harvest so distillation reuses the LLM call already paid for here. */
+  summary?: import('@mcp/code-agent/core/summarizer.js').CompactionSummaryV2;
   reason?: 'nothing-to-compact' | 'summary-failed' | 'too-short';
 }
 
@@ -74,5 +77,5 @@ export async function runDurableCompaction(args: {
 
   const boundaryId = rows[cutoff - 1].id;
   const res = store.setCompactionBoundary(sessionId, renderSummaryV2(summary), boundaryId, 'auto');
-  return { ok: true, boundaryId: res.boundary_id, prunedCount: res.pruned_count };
+  return { ok: true, boundaryId: res.boundary_id, prunedCount: res.pruned_count, summary };
 }

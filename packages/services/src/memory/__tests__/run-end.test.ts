@@ -132,7 +132,38 @@ describe('createRunEndMemory', () => {
     });
     await expect(
       rem.extractAndPersist(1, 'proj', { summary: 's', errorsAndFixes: ['x -> y'], succeeded: true, toolTrail: ['pnpm test'] }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ created: 0, merged: 0, skipped: 0 });
     expect(w.creates).toHaveLength(0);
+  });
+
+  it('promotes durable session notes as literal candidates and logs the pass', async () => {
+    const w = fakeWriter();
+    const logs: Array<{ projectId: number; entry: Record<string, unknown> }> = [];
+    const noop: MemoryDistiller = { async distill() { return []; } };
+    const rem = createRunEndMemory({
+      writer: w.writer,
+      search: fakeSearch(),
+      distillers: { positive: noop, failure: noop, procedure: noop },
+      distillLog: (projectId, entry) => logs.push({ projectId, entry: entry as unknown as Record<string, unknown> }),
+    });
+
+    const result = await rem.extractAndPersist(7, 'proj', {
+      summary: 's',
+      trigger: 'compaction',
+      sessionId: 42,
+      sessionNotes: [
+        { title: 'ABI mismatch on tests', body: 'rebuild with app closed', kind: 'gotcha', pinned: false },
+        { title: 'WIP scratch', body: 'ignore me', kind: 'fact', pinned: false },
+        { title: '', body: 'no title — dropped', kind: 'decision', pinned: true },
+      ],
+    });
+
+    // gotcha promotes; plain 'fact' promotes as note; empty title dropped.
+    expect(result).toEqual({ created: 2, merged: 0, skipped: 0 });
+    expect(w.creates.map((c) => c.data.category)).toEqual(['gotcha', 'note']);
+    expect(w.creates.map((c) => c.data.source)).toEqual(['session', 'session']);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].projectId).toBe(7);
+    expect(logs[0].entry).toMatchObject({ trigger: 'compaction', sessionId: 42, status: 'ok', created: 2 });
   });
 });

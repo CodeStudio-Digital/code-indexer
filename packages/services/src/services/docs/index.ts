@@ -72,6 +72,11 @@ export type {
 export { CrossEncoderReranker } from './cross-encoder-reranker.js';
 
 export { AutoDiscoveryService, _resetAutoDiscoveryThrottle } from './auto-discovery.js';
+export {
+  makeAutoDiscoveryIndexListener,
+  composeFilesUpdatedListeners,
+} from './discovery-listener.js';
+export type { AutoDiscoveryListenerOpts } from './discovery-listener.js';
 export type {
   AutoDiscoveryServiceOpts,
   DepManifest,

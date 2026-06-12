@@ -8,6 +8,7 @@
  */
 import { BoardPanel } from '../../BoardPanel.js';
 import { KanbanTab } from '../../KanbanTab.js';
+import { MemoryPanel } from '../../MemoryPanel.js';
 import { PipelinesTab } from '../../PipelinesTab.js';
 import { InboxTranscriptPanel } from '../../transcript/InboxTranscriptPanel.js';
 import type { useCompanyStream } from '../../../../hooks/useCompanyStream.js';
@@ -58,6 +59,9 @@ export function WorkZone({
   }
   if (tab === 'kanban') {
     return <KanbanTab companySessionId={sessionId} />;
+  }
+  if (tab === 'memory') {
+    return <MemoryPanel sessionId={sessionId} />;
   }
   if (tab === 'transcript') {
     return <InboxTranscriptPanel sessionId={sessionId} />;

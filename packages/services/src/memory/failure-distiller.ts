@@ -11,7 +11,7 @@
  * what the model emits. Plugs into the generic `MemoryExtractor` (dedup +
  * importance floors + persist) unchanged.
  */
-import type { PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
+import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
 import { pickChatFn } from '../quality/chat-dispatcher.js';
 import { parseMemoryCandidates } from './distiller.js';
 import type { MemoryCandidate, MemoryDistiller, SessionMemoryInput } from './extractor.js';
@@ -19,6 +19,8 @@ import type { MemoryCandidate, MemoryDistiller, SessionMemoryInput } from './ext
 export interface FailureDistillerOptions {
   resolver: PipelineProviderResolver;
   resolveContext?: ResolveContext;
+  /** Zero-config fallback consulted when no binding row resolves (lazy). */
+  getFallbackDefault?: () => FallbackDefault | null;
   /** Skip the LLM (tests) — returns []. */
   skipLlm?: boolean;
 }
@@ -32,7 +34,10 @@ export class FailureDistiller implements MemoryDistiller {
     if (errors.length === 0) return []; // nothing to learn from → cheap exit, no LLM call
 
     const binding = await this.opts.resolver
-      .resolveOrNull('memory_extraction', 'distiller', this.opts.resolveContext ?? {})
+      .resolveOrNull(
+        'memory_extraction', 'distiller', this.opts.resolveContext ?? {},
+        this.opts.getFallbackDefault?.() ?? undefined,
+      )
       .catch(() => null);
     if (!binding) return [];
     try {

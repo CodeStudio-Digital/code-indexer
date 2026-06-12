@@ -44,6 +44,7 @@ import { webTools } from '@mcp/code-agent/tools/web.js';
 import { httpTools } from '@mcp/code-agent/tools/http.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
+import { ragReadDocTools } from '@mcp/code-agent/tools/rag-read-doc.js';
 import { todoTools } from '@mcp/code-agent/tools/todo.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
@@ -68,6 +69,7 @@ const STATIC_TOOLS: NamedTool[] = [
   ...fsTools, applyPatchTool, ...shellTools, ...gitTools, ...planTools, ...specTools,
   ...tasksTools, ...interactionTools, ...toolOutputTools, ...diagnosticsTools, ...lspTools,
   ...execCommandTools, ...webTools, ...httpTools, ...globTools, ...ragSearchDocsTools,
+  ...ragReadDocTools,
   ...todoTools, ...viewImageTools, ...previewTools, ...goalTools, ...listAgentsTools,
   ...waitAgentsTools, ...sendMessageTools, ...sendInputTools, ...followupTaskTools,
   ...worktreeTools, ...sandboxTools, ...docsTools, ...envTools, ...databaseTools,
@@ -84,6 +86,9 @@ const FACTORY_ALWAYS_ON = [
   'invoke_skill', 'get_skills_list', 'get_skill_content', 'list_skill_namespaces', 'create_skill',
   'read_plan', 'save_note', 'list_notes', 'recall_investigations',
   'mcp_list_resources', 'mcp_read_resource',
+  // DocsAgent escalation — installed per-runner via installDocsDeepResearch
+  // (string only: importing @mcp/docs-agent here would create a cycle).
+  'docs_deep_research',
   // DS consumer set (builder project linked to a published design system).
   'ds_components', 'ds_component', 'ds_docs',
 ];
@@ -133,11 +138,20 @@ describe('tier contract — Phase A/B placements are locked', () => {
   it('demotes the cold tools to navigate (off turn-1 surface)', () => {
     for (const n of [
       'list_tasks', 'cancel_tasks', 'delete_tasks', 'archive_task_list', 'update_task',
-      'read_plan', 'list_notes', 'get_goal', 'kanban_my_comment', 'kanban_my_checklist',
+      'read_plan', 'list_notes', 'get_goal',
       'mcp__search_memory', 'mcp__query_snapshots', 'mcp__get_context_for',
       'mcp__list_projects', 'mcp__get_project_stats', 'mcp_list_resources',
     ]) {
       expect(getToolTier(n), n).toBe('navigate');
+    }
+  });
+
+  it('drops the retired kanban aliases from every tier (strict mode throws)', () => {
+    for (const n of [
+      'kanban_my_comment', 'kanban_my_checklist',
+      'kanban_update_card', 'kanban_add_comment', 'kanban_update_checklist',
+    ]) {
+      expect(() => getToolTier(n, undefined, { strict: true }), n).toThrow();
     }
   });
 

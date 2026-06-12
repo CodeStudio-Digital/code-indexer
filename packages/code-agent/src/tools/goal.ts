@@ -116,7 +116,8 @@ function writeGoal(ctx: ToolContext, goal: GoalState): void {
 const CREATE_GOAL_DESC =
   'Record the session goal at the start of a run when the user explicitly states one. ' +
   'Hidden from the tool surface on subsequent turns once a goal is in_progress — use update_goal to mark complete first if you need to set a new one. ' +
-  'Survives turn boundaries (and compaction) so the original ask is recoverable.';
+  'Survives turn boundaries (and compaction) so the original ask is recoverable. ' +
+  'Bootstrap in ONE turn: emit create_goal and todo_write together in the same assistant turn (parallel tool calls are supported) instead of spending a turn on each.';
 
 const GET_GOAL_DESC =
   'Return the current session goal and its status. Use BEFORE making a non-trivial decision to confirm you are still aligned with the original objective. ' +

@@ -38,6 +38,17 @@
   "detail.deletedQueuedDescription": "{{count}} vetor(es) não puderam ser removidos do índice remoto agora e ficaram em fila para retry automático no próximo boot do servidor.",
   "detail.deleteFailedTitle": "Falha ao excluir",
 
+  "projectLinks.heading": "Projetos vinculados",
+  "projectLinks.description": "Sessões de agente nos projetos vinculados buscam esta coleção primeiro (rag_search_docs) e a veem listada no contexto.",
+  "projectLinks.empty": "Sem vínculo com projetos — agentes só encontram esta coleção buscando o corpus inteiro.",
+  "projectLinks.originAuto": "auto",
+  "projectLinks.originManual": "manual",
+  "projectLinks.pickerPlaceholder": "Selecione um projeto…",
+  "projectLinks.linkButton": "Vincular",
+  "projectLinks.unlink": "Desvincular",
+  "projectLinks.linkFailed": "Falha ao vincular projeto",
+  "projectLinks.unlinkFailed": "Falha ao desvincular projeto",
+
   "addSource.button": "Adicionar",
   "addSource.title": "Adicionar source à \"{{collection}}\"",
   "addSource.description": "Anexe um PDF ou cole uma URL. A indexação roda em segundo plano com gate de relevância antes do enriquecimento.",

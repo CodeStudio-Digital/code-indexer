@@ -129,9 +129,6 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // Subordinate-only column transition (in_progress → review with
   // constraint). Distinct from master's generic `kanban_move_card`.
   'kanban_move_to_review',
-  // Deprecated aliases (kanban_my_comment / kanban_my_checklist) demoted to
-  // navigate (Phase B) — still ~12 calls each, so kept reachable (not deleted)
-  // but off the always-on surface. Remove after one release.
   // Design System Creator tools (company mode — DS sessions). All four
   // were previously visible only via the `'bootstrap'` fallback in
   // `getToolTier`; registering them here makes the contract grep-able
@@ -186,7 +183,11 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // RAG over the user-managed documentation corpus (Documentação sidebar).
   // Read-only, parallel-safe; always available so any agent mode can fall
   // back to external docs instead of guessing or hammering web_fetch.
+  // rag_read_doc is the search's companion full-content read — hiding it
+  // behind navigate would recreate the write_stdin-style trap documented
+  // below: search prints chunk_ids on turn 1 that the agent couldn't follow.
   'rag_search_docs',
+  'rag_read_doc',
   // Skill discovery — needed in lazy/compact modes so the agent can fetch
   // skill descriptions and bodies on demand without paying for them up front.
   'get_skills_list',
@@ -224,6 +225,12 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'web_fetch',
   'web_search',
   'http_request',
+  // Multi-step DocsAgent research over the indexed doc corpus (separately
+  // installed via installDocsDeepResearch — not in the static registry).
+  // Expensive (own agent loop, minutes + LLM cost), so it does NOT belong
+  // on the turn-1 bootstrap surface it used to ride via the getToolTier
+  // fallback; rag_search_docs/rag_read_doc cover the cheap path there.
+  'docs_deep_research',
   'run_command',
   // Persistent-shell session trio (exec_command / write_stdin / list_sessions).
   // These are `execute`-risk and mutating — they belong alongside run_command,
@@ -293,9 +300,8 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'update_task',
   'read_plan',
   'list_notes',
+  'recall_memory',
   'get_goal',
-  'kanban_my_comment',
-  'kanban_my_checklist',
   'mcp__query_snapshots',
   'mcp__search_memory',
   'mcp__get_context_for',
@@ -349,9 +355,6 @@ export const MASTER_TOOLS: ReadonlySet<string> = new Set([
   'kanban_create_card',
   'kanban_move_card',
   'kanban_update_meta',
-  'kanban_update_card',
-  'kanban_add_comment',
-  'kanban_update_checklist',
   'kanban_add_dependency',
   'kanban_remove_dependency',
   'kanban_assign_agent',
@@ -541,8 +544,9 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   find_tools: 'Search the full tool catalog by description',
   request_review: 'Spawn a reviewer subagent to second-opinion the diff',
   read_plan: 'Re-read your submitted plan and its approval status',
-  save_note: 'Save a session note that survives compaction (vs project-wide save_memory)',
+  save_note: 'Save a session note or a durable project memory (scope: session|project)',
   list_notes: 'List the notes you saved with save_note this session',
+  recall_memory: 'Fetch full project memories by meaning (decisions/gotchas/recipes)',
   recall_investigations: 'Find a past sub-agent exploration before re-running it',
   get_tool_output: 'Retrieve truncated output from a prior tool call',
   glob: 'Find files matching a glob pattern',
@@ -553,6 +557,8 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   update_goal: 'Update or complete the session goal',
   invoke_skill: 'Invoke a reusable skill by ID',
   rag_search_docs: 'Search the indexed documentation corpus (Documentação)',
+  rag_read_doc: 'Read one doc section in full by chunk_id (+ neighbors)',
+  docs_deep_research: 'Multi-step cited research over the doc corpus (slow, LLM cost)',
   // ─── Subordinate kanban ──────────────────────────────────────
   post_to_board: 'Post to the shared company board',
   read_board: 'Read shared company board messages',
@@ -562,9 +568,6 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   kanban_post_comment: 'Add a comment to a Kanban card (omit card_id as sub)',
   kanban_update_objectives: 'Add or check off objectives (omit card_id as sub)',
   kanban_move_to_review: 'Move your card to Review (done working)',
-  // Deprecated terse descriptions kept synced with deprecated tools.
-  kanban_my_comment: '[deprecated] use kanban_post_comment',
-  kanban_my_checklist: '[deprecated] use kanban_update_objectives',
   // ─── Bootstrap MCP ────────────────────────────────────────────
   mcp__get_project_pulse: 'Ultra-compact project overview (~100 tokens)',
   mcp__query_snapshots: 'Full-text search over project snapshots',

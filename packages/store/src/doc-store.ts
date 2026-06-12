@@ -17,6 +17,7 @@ import * as chunks from './doc/chunks.js';
 import * as vectorMapping from './doc/vector-mapping.js';
 import * as fts from './doc/fts.js';
 import * as suggestions from './doc/suggestions.js';
+import * as projectLinks from './doc/project-links.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -40,6 +41,8 @@ export type {
   DocVectorTombstoneRow,
   DocSuggestionStatus,
   DocSourceSuggestion,
+  DocProjectLinkOrigin,
+  DocProjectLink,
 } from './doc/types.js';
 
 import type {
@@ -51,6 +54,8 @@ import type {
   DocCrawlConfig,
   DocFolderConfig,
   DocFtsHit,
+  DocProjectLink,
+  DocProjectLinkOrigin,
   DocSource,
   DocSourceHealth,
   DocSourceInput,
@@ -115,7 +120,13 @@ export class DocStore {
   countPendingTombstones(): number { return vectorMapping.countPendingTombstones(this.db); }
 
   // ─── FTS5 search ──────────────────────────────────────────────
-  searchChunksFts(query: string, opts: { collectionId?: number; limit?: number } = {}): DocFtsHit[] { return fts.searchChunks(this.db, query, opts); }
+  searchChunksFts(query: string, opts: { collectionId?: number; collectionIds?: readonly number[]; limit?: number } = {}): DocFtsHit[] { return fts.searchChunks(this.db, query, opts); }
+
+  // ─── Project ↔ collection links (migration 134) ───────────────
+  linkProjectCollection(projectId: number, collectionId: number, origin: DocProjectLinkOrigin = 'manual'): boolean { return projectLinks.link(this.db, projectId, collectionId, origin); }
+  unlinkProjectCollection(projectId: number, collectionId: number): boolean { return projectLinks.unlink(this.db, projectId, collectionId); }
+  listCollectionsForProject(projectId: number): DocCollection[] { return projectLinks.listCollectionsForProject(this.db, projectId); }
+  listProjectsForCollection(collectionId: number): DocProjectLink[] { return projectLinks.listProjectsForCollection(this.db, collectionId); }
 
   // ─── Auto-discovery suggestions (migration 096) ───────────────
   upsertSuggestion(input: suggestions.UpsertSuggestionInput): boolean { return suggestions.upsert(this.db, input); }

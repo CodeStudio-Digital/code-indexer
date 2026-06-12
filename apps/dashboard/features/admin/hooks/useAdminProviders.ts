@@ -10,6 +10,7 @@ import {
   setKimiCodeThinkingMode as setKimiCodeThinkingModeApi,
   setModelReasoningLevel,
   setModelContextWindow as setModelContextWindowApi,
+  setModelMaxTools as setModelMaxToolsApi,
   backfillContextWindows as backfillContextWindowsApi,
   setSubagentTarget as setSubagentTargetApi,
   testProvider,
@@ -136,6 +137,24 @@ export function useAdminProviders() {
     }
   };
 
+  const setModelMaxTools = async (
+    providerId: string,
+    modelId: string,
+    mode: string,
+    value: number | null,
+  ) => {
+    try {
+      await setModelMaxToolsApi(providerId, modelId, mode, value);
+      await loadModels(providerId);
+    } catch (e) {
+      await notify({
+        title: 'Tool cap update failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
   const backfillContextWindows = async () => {
     try {
       const result = await backfillContextWindowsApi();
@@ -221,6 +240,7 @@ export function useAdminProviders() {
     toggleModel,
     setModelEffort,
     setModelContextWindow,
+    setModelMaxTools,
     backfillContextWindows,
     setSubagentTarget,
     setKimiCodeThinkingMode,

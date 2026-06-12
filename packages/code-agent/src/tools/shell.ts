@@ -4,6 +4,7 @@ import { RUN_COMMAND_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions
 import { defaultLocalShellPort, type IShellPort } from '@mcp/code-agent/ports/shell-port.js';
 import { pathFor } from '@mcp/code-agent/tools/paths.js';
 import { shellLabel } from '@mcp/code-agent/core/shell-info.js';
+import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 // Ceiling for a one-shot command. One-shot shell work (builds, installs,
@@ -115,7 +116,8 @@ function isReadOnlyCommand(cmd: string): { ok: true } | { ok: false; reason: str
 // formatting). See ../ports/shell-port.ts for implementation invariants.
 
 function truncate(s: string, max = MAX_OUTPUT_BYTES): string {
-  return s.length > max ? s.slice(0, max) + `\n... [truncated, ${s.length - max} bytes omitted]` : s;
+  if (s.length <= max) return s;
+  return s.slice(0, max) + `\n... ${truncationMarker(`${s.length - max} bytes omitted`, 'narrow the command output or write it to a file and read slices')}`;
 }
 
 const runCommandTool: CoderTool = {

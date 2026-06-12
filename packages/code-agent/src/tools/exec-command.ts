@@ -359,6 +359,8 @@ const EXEC_COMMAND_DESC =
   "exec_command holds resources open until you `write_stdin({chars:''})` to confirm exit or the TTL reaps it.\n" +
   "DON'T: spawn long-running servers (`npm run dev`, watch modes) here — the session will be evicted after " +
   '10 min of model inactivity even if the server is healthy. Use a background terminal for those.\n' +
+  'An evicted session is GONE (process killed, no reconnect) — call `list_sessions` to check which session_ids are still alive before writing to one.\n' +
+  "The shell is the platform default (cmd.exe on Windows, /bin/sh on POSIX) — see the system prompt's OS line for shell-specific dos/don'ts.\n" +
   '\n' +
   `Defaults: yield_time_ms=${DEFAULT_EXEC_YIELD_MS}, max_output_tokens=${DEFAULT_MAX_OUTPUT_CHARS}, tty=false (pipe). ` +
   `Output beyond cap is FIFO-truncated; \`output_truncated=true\` in the header signals when this happened.`;

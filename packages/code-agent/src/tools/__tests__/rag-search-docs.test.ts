@@ -108,4 +108,59 @@ describe('rag_search_docs rendering', () => {
     expect(res.isError).toBe(true);
     expect(res.content).toContain('not configured');
   });
+
+  it('prints chunk_id per result and the rag_read_doc footer', async () => {
+    setGlobalDocSearch(
+      backendReturning({
+        results: [
+          {
+            chunk_id: 42,
+            collection: 'react-docs',
+            source_id: 1,
+            source_uri: 'https://react.dev/x',
+            heading_path: 'Hooks > useEffect',
+            snippet: 'snippet',
+            score: 0.01,
+            relevance: 0.8,
+            summary: null,
+            concepts: [],
+          },
+        ],
+        diag: diag(),
+      }),
+    );
+    const res = await ragSearchDocsTool.handler({ query: 'q' }, ctx);
+    expect(res.content).toContain('chunk_id: 42');
+    expect(res.content).toContain('rag_read_doc({chunk_id})');
+  });
+
+  it('passes scope + project_id through and reports the scoped collections', async () => {
+    let seen: Parameters<DocSearchBackend['search']>[0] | null = null;
+    setGlobalDocSearch({
+      search: async (input) => {
+        seen = input;
+        return {
+          results: [],
+          diag: diag({ scope: 'project', scoped_collections: ['react-docs'] }),
+        };
+      },
+    });
+    const projectCtx = { projectId: 7 } as ToolContext;
+    const res = await ragSearchDocsTool.handler({ query: 'q' }, projectCtx);
+    expect(seen).toMatchObject({ scope: 'project', project_id: 7 });
+    expect(res.content).toContain('linked collections (react-docs)');
+    expect(res.content).toContain('scope:"all"');
+  });
+
+  it('honors scope:"all" from the args', async () => {
+    let seen: Parameters<DocSearchBackend['search']>[0] | null = null;
+    setGlobalDocSearch({
+      search: async (input) => {
+        seen = input;
+        return { results: [], diag: diag({ scope: 'all' }) };
+      },
+    });
+    await ragSearchDocsTool.handler({ query: 'q', scope: 'all' }, ctx);
+    expect(seen).toMatchObject({ scope: 'all' });
+  });
 });

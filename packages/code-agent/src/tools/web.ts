@@ -4,6 +4,7 @@ import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 
 /**
  * Web tools — web_fetch and web_search.
@@ -148,7 +149,7 @@ function applyCap(text: string): string {
   if (text.length <= OUTPUT_CAP) return text;
   return (
     text.slice(0, OUTPUT_CAP) +
-    `\n\n[truncated: ${text.length - OUTPUT_CAP} chars elided — the page was too long for inline capture]`
+    `\n\n${truncationMarker(`${text.length - OUTPUT_CAP} chars elided`, 'the page was too long for inline capture')}`
   );
 }
 
@@ -182,6 +183,7 @@ export const webFetch: CoderTool = {
     "DON'T: use on local files (use read_file or mcp__read_file instead).\n" +
     "DON'T: use for code search across the project (use mcp__search or mcp__grep_code).\n" +
     "DON'T: scrape paginated result pages one-by-one — use web_search for that.\n" +
+    'REFUSES localhost/127.0.0.1 and private/loopback hosts (SSRF defense) — to test a LOCAL backend, use http_request instead.\n' +
     `Output is capped at ~${OUTPUT_CAP} chars. Results are cached in-memory for ${Math.round(CACHE_TTL_MS / 60_000)} minutes.`,
   source: 'native',
   parameters: {

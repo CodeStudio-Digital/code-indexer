@@ -22,7 +22,10 @@ interface Account {
 export const tools = [
   contributeTool({
     name: 'cf_detect',
-    description: 'Detect whether the current project is a Cloudflare Worker/Pages project',
+    description:
+      'Classify the current project for Cloudflare: returns whether it is a CF app and the ' +
+      'deploy model (worker / pages / opennext). Run this FIRST before any project action ' +
+      '(cf_deploy/cf_build/cf_preview). Account-level tools (D1/KV/R2/DNS/...) work regardless.',
     riskLevel: 'read',
     mutates: false,
     parameters: { type: 'object', properties: {} },
@@ -44,7 +47,9 @@ export const tools = [
 
   contributeTool({
     name: 'cf_set_token',
-    description: 'Store a Cloudflare API token scoped to this plugin',
+    description:
+      'Store a Cloudflare API token in plugin-scoped storage. Prefer letting the user set it in ' +
+      'the Cloudflare panel; never ask them to paste a token into the chat. Verify with cf_whoami after.',
     riskLevel: 'admin',
     mutates: true,
     parameters: {
@@ -63,7 +68,10 @@ export const tools = [
 
   contributeTool({
     name: 'cf_whoami',
-    description: 'Verify the API token, list accounts, and select the first account by default',
+    description:
+      'Verify the API token and list the accounts it can reach (marks the selected one; ' +
+      'auto-selects the first on first run). Run before account-level operations; if more than ' +
+      'one account shows up, confirm the target with cf_set_account.',
     riskLevel: 'read',
     mutates: false,
     parameters: { type: 'object', properties: {} },
@@ -89,7 +97,9 @@ export const tools = [
 
   contributeTool({
     name: 'cf_set_account',
-    description: 'Select which Cloudflare account this project targets',
+    description:
+      'Select which Cloudflare account subsequent tools target. Args example: ' +
+      "{ accountId: '0748c7…' } — use an id returned by cf_whoami.",
     riskLevel: 'write',
     mutates: true,
     parameters: {

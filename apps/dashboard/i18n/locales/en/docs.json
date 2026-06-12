@@ -38,6 +38,17 @@
   "detail.deletedQueuedDescription": "{{count}} vector(s) couldn't be removed from the remote index right now and were queued for automatic retry on the next server boot.",
   "detail.deleteFailedTitle": "Delete failed",
 
+  "projectLinks.heading": "Linked projects",
+  "projectLinks.description": "Agent sessions on linked projects search this collection first (rag_search_docs) and see it listed in their context.",
+  "projectLinks.empty": "Not linked to any project — agents only find this collection when searching the whole corpus.",
+  "projectLinks.originAuto": "auto",
+  "projectLinks.originManual": "manual",
+  "projectLinks.pickerPlaceholder": "Select a project…",
+  "projectLinks.linkButton": "Link",
+  "projectLinks.unlink": "Unlink",
+  "projectLinks.linkFailed": "Failed to link project",
+  "projectLinks.unlinkFailed": "Failed to unlink project",
+
   "addSource.button": "Add",
   "addSource.title": "Add source to \"{{collection}}\"",
   "addSource.description": "Attach a PDF or paste a URL. Indexing runs in the background with a relevance gate before enrichment.",

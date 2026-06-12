@@ -166,6 +166,42 @@ export async function deleteCollection(id: number): Promise<DocDeleteResult> {
   return jsonFetch(`/api/docs/collections/${id}`, { method: 'DELETE' });
 }
 
+// ─── Project links (migration 134) ──────────────────────────────────
+// Linking a collection to a project scopes agent retrieval: a session's
+// `rag_search_docs` searches the linked collections first. `origin` is
+// 'auto' when the link came from approving a doc-source suggestion.
+
+export interface DocProjectLink {
+  project_id: number;
+  project_name: string;
+  origin: 'manual' | 'auto';
+  created_at: string;
+}
+
+export async function listCollectionProjects(collectionId: number): Promise<DocProjectLink[]> {
+  return jsonFetch(`/api/docs/collections/${collectionId}/projects`);
+}
+
+export async function linkCollectionToProject(
+  collectionId: number,
+  projectId: number,
+): Promise<{ linked: boolean; created: boolean }> {
+  return jsonFetch(`/api/docs/collections/${collectionId}/projects/${projectId}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
+export async function unlinkCollectionFromProject(
+  collectionId: number,
+  projectId: number,
+): Promise<{ unlinked: boolean }> {
+  return jsonFetch(`/api/docs/collections/${collectionId}/projects/${projectId}`, {
+    method: 'DELETE',
+  });
+}
+
 // ─── Sources ────────────────────────────────────────────────────────
 
 export async function listSources(collectionId: number): Promise<DocSource[]> {

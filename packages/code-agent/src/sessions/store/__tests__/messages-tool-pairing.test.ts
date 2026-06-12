@@ -104,7 +104,8 @@ beforeEach(() => {
       truncated INTEGER NOT NULL DEFAULT 0,
       phase TEXT,
       turn_telemetry_id INTEGER,
-      refusal_kind TEXT
+      refusal_kind TEXT,
+      parent_tool_use_id TEXT
     );
   `);
   sessionId = mkSession();
@@ -164,6 +165,105 @@ describe('persistAssistantTurn — paired tool-role message', () => {
     expect(roles.filter((r) => r === 'assistant')).toHaveLength(6);
     expect(roles.filter((r) => r === 'tool')).toHaveLength(6);
     expect(unmatchedToolUses(loaded.messages)).toEqual([]);
+  });
+});
+
+describe('persistAssistantTurn — nested (code_exec) rows are audit-only', () => {
+  it('persists nested rows with parent linkage but keeps them OUT of the paired tool message', () => {
+    messages.persistAssistantTurn(db, {
+      session_id: sessionId,
+      message: assistantWithTools([{ id: 'ce_1', name: 'code_exec' }]),
+      usage: null,
+      tool_calls: toolCalls([{ id: 'ce_1', name: 'code_exec' }]),
+      nested_tool_calls: [
+        {
+          tool_use_id: 'ce_1#1', tool_name: 'read_file', args: { path: 'a.ts' },
+          result_text: 'file content', is_error: false, duration_ms: 4,
+          parent_tool_use_id: 'ce_1',
+        },
+        {
+          tool_use_id: 'ce_1#2', tool_name: 'create_file', args: { path: 'b.md' },
+          result_text: 'File b.md already exists.', is_error: true, duration_ms: 2,
+          parent_tool_use_id: 'ce_1',
+        },
+      ],
+    });
+
+    // Audit rows: outer + 2 nested, nested carry the parent id.
+    const rows = db
+      .prepare('SELECT tool_use_id, tool_name, parent_tool_use_id FROM coder_tool_calls ORDER BY id')
+      .all() as Array<{ tool_use_id: string; tool_name: string; parent_tool_use_id: string | null }>;
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatchObject({ tool_use_id: 'ce_1', parent_tool_use_id: null });
+    expect(rows[1]).toMatchObject({ tool_use_id: 'ce_1#1', parent_tool_use_id: 'ce_1' });
+    expect(rows[2]).toMatchObject({ tool_use_id: 'ce_1#2', parent_tool_use_id: 'ce_1' });
+
+    // Transcript: the paired tool message has EXACTLY the outer tool_result —
+    // a nested block here would be an orphan tool_result (no tool_use match).
+    const loaded = messages.loadWithMessages(db, sessionId)!;
+    expect(loaded.messages).toHaveLength(2);
+    const toolBlocks = loaded.messages[1].content as unknown as Array<Record<string, unknown>>;
+    expect(toolBlocks.map((b) => b.tool_use_id)).toEqual(['ce_1']);
+    expect(unmatchedToolUses(loaded.messages)).toEqual([]);
+  });
+});
+
+describe('persistAssistantTurn — refusal_kind: explicit value wins, classifier is the fallback', () => {
+  function refusalKindOf(toolUseId: string): string | null {
+    return (db
+      .prepare('SELECT refusal_kind AS k FROM coder_tool_calls WHERE tool_use_id = ?')
+      .get(toolUseId) as { k: string | null }).k;
+  }
+
+  it('persists the explicit refusal_kind carried from the dispatch pipeline', () => {
+    messages.persistAssistantTurn(db, {
+      session_id: sessionId,
+      message: assistantWithTools([{ id: 'toolu_pr', name: 'read_file' }]),
+      usage: null,
+      tool_calls: [{
+        tool_use_id: 'toolu_pr',
+        tool_name: 'read_file',
+        args: { path: 'a.md' },
+        result_text: 'Refused: `read_file` called 1 time for `a.md` in last 20 turns.',
+        is_error: true,
+        duration_ms: 0,
+        refusal_kind: 'pre-read',
+      }],
+    });
+    // 'Refused:' is NOT a classifier prefix — only the explicit tag covers it.
+    expect(refusalKindOf('toolu_pr')).toBe('pre-read');
+  });
+
+  it('falls back to classifyToolRefusal for rows without an explicit kind (legacy paths)', () => {
+    messages.persistAssistantTurn(db, {
+      session_id: sessionId,
+      message: assistantWithTools([
+        { id: 'toolu_loop', name: 'run_command' },
+        { id: 'toolu_to', name: 'web_fetch' },
+        { id: 'toolu_real', name: 'run_command' },
+      ]),
+      usage: null,
+      tool_calls: [
+        {
+          tool_use_id: 'toolu_loop', tool_name: 'run_command', args: {},
+          result_text: '[loop-refused: identical call to `run_command` (call #3)]',
+          is_error: true, duration_ms: 0,
+        },
+        {
+          tool_use_id: 'toolu_to', tool_name: 'web_fetch', args: {},
+          result_text: '[tool-timeout: `web_fetch` exceeded 300000ms.]',
+          is_error: true, duration_ms: 300000,
+        },
+        {
+          tool_use_id: 'toolu_real', tool_name: 'run_command', args: {},
+          result_text: 'npm run build exit code: 1',
+          is_error: true, duration_ms: 1200,
+        },
+      ],
+    });
+    expect(refusalKindOf('toolu_loop')).toBe('dedup');
+    expect(refusalKindOf('toolu_to')).toBe('timeout');
+    expect(refusalKindOf('toolu_real')).toBeNull(); // genuine failure stays NULL
   });
 });
 

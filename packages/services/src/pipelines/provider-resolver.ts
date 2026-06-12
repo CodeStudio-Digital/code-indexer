@@ -45,6 +45,9 @@ export interface ResolvedBinding {
 }
 
 export interface FallbackDefault {
+  /** Exact provider to use — preferred over `providerKind` when set and the
+   *  provider is still enabled (avoids landing on a sibling of the same kind). */
+  providerId?: string;
   providerKind: string;
   modelId: string;
   modelMode?: string;
@@ -131,7 +134,7 @@ export class PipelineProviderResolver {
 
     // 4. Caller-supplied fallback default
     if (fallbackDefault) {
-      const provider = this.findFallbackProvider(fallbackDefault.providerKind);
+      const provider = this.findFallbackProvider(fallbackDefault);
       if (provider) {
         return {
           pipelineName,
@@ -190,11 +193,15 @@ export class PipelineProviderResolver {
     };
   }
 
-  private findFallbackProvider(providerKind: string): ProviderConfig | null {
+  private findFallbackProvider(fallback: FallbackDefault): ProviderConfig | null {
     const candidates = this.providerStore.listProviders({ enabled: true });
+    if (fallback.providerId) {
+      const exact = candidates.find((p) => p.id === fallback.providerId);
+      if (exact) return exact;
+    }
     const match =
-      candidates.find((p) => p.kind === providerKind && p.is_default) ??
-      candidates.find((p) => p.kind === providerKind) ??
+      candidates.find((p) => p.kind === fallback.providerKind && p.is_default) ??
+      candidates.find((p) => p.kind === fallback.providerKind) ??
       null;
     return match;
   }

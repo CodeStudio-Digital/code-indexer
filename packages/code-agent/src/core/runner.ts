@@ -3,7 +3,6 @@ import { randomUUID, createHash } from 'node:crypto';
 import { resolve as pathResolve, relative as pathRelative, isAbsolute } from 'node:path';
 import { statSync as fsStatSync } from 'node:fs';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
-import { runPreThink } from '@mcp/code-agent/providers/auxiliary-pre-think.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type {
   AgentMessage,
@@ -46,12 +45,13 @@ import { isSummarizerEnabled, summarizeSpan, summarizeSpanV2, renderSummary, ren
 import { computeSnapshot, type TokenSnapshot } from '@mcp/code-agent/core/token-accounting.js';
 import { filterByTiers, profileToTiers, PREVIEW_TOOLS, type ToolTier, type CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 import { terseDescription } from '@mcp/code-agent/tools/descriptions.js';
-import { applySmartReducer, reducePreThinkInHistory } from '@mcp/code-agent/core/smart-reducers.js';
+import { applySmartReducer } from '@mcp/code-agent/core/smart-reducers.js';
 import { getModelContextWindow, getModelMaxTools, getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilities.js';
 import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { resolveTemperature } from '@mcp/code-agent/inference/temperature.js';
 import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
 import { buildActiveContextBlock } from '@mcp/code-agent/core/active-context.js';
+import { buildIndexedDocsBlock } from '@mcp/code-agent/core/docs-hint.js';
 import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js';
 import type { SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
 import { getGlobalToolSelectionOutcomeObserver } from '@mcp/code-agent/tool-selection/global-filter.js';
@@ -525,8 +525,6 @@ export class CoderRunner extends EventEmitter {
   private opts: RunnerOptions;
   private readonly maxTurns: number;
   private aborted = false;
-  /** Lazy cache for the deepThink auxiliary provider. Reset by `setDeepThink`. */
-  private auxProvider?: ChatProvider;
   /**
    * Live turn counter — mirrored from the loop-local `turn` variable so
    * external observers (e.g. SnapshotRecorder via ctx.runner) can stamp
@@ -968,6 +966,15 @@ export class CoderRunner extends EventEmitter {
   public activeTiers: Set<ToolTier> | null = null;
 
   /**
+   * Tools the model called by name while they were hidden (tier-hidden or
+   * cap-cut by the model's maxTools). Dispatch executes the call anyway,
+   * adds the name here, and the next turn's `buildTools` unions it into
+   * the visible list (protected from the cap). Monotone like activeTiers;
+   * shared BY REFERENCE with the BT's RunContext.
+   */
+  public pinnedTools: Set<string> = new Set();
+
+  /**
    * Last `response.id` returned by the Responses API (ChatGPT/Codex with
    * `store: true`). Updated by `onResponseId` after every turn. Sent as
    * `previous_response_id` on the next turn so the backend reconstructs the
@@ -1343,6 +1350,11 @@ export class CoderRunner extends EventEmitter {
     } else {
       this.activeTiers = null;
     }
+    // Pins re-derived by the host on resume (history tools outside the
+    // active tiers) — never persisted; see runCoder.
+    if (opts.initialPinnedTools) {
+      this.pinnedTools = new Set(opts.initialPinnedTools);
+    }
     // Seed from prior session state so the very first turn after resume can
     // already replay the previous response.
     this.previousResponseId = opts.previousResponseId ?? null;
@@ -1382,14 +1394,16 @@ export class CoderRunner extends EventEmitter {
 
 
   /**
-   * Build the `<active-context>` block from live state. Returns null when
-   * `buildActiveContextBlock` returned null (no goal, no todos, no scope).
+   * Build the `<active-context>` block from live state, plus the sibling
+   * `<indexed-docs>` block (project-linked doc collections). Returns null
+   * when both are empty. Both ride the trailing user message — never the
+   * system prompt — so the prefix cache is untouched.
    */
   private buildActiveContextBlockForTurn(): string | null {
     const ctx = this.opts.toolContext;
     const goal = ctx.getGoalState ? ctx.getGoalState() : null;
     const tasksState = ctx.getTasksState ? ctx.getTasksState() : null;
-    return buildActiveContextBlock({
+    const base = buildActiveContextBlock({
       todos: this.currentTodos,
       goal: goal
         ? {
@@ -1401,6 +1415,9 @@ export class CoderRunner extends EventEmitter {
         : null,
       tasksState: tasksState ?? null,
     });
+    const docs = buildIndexedDocsBlock(ctx.projectId);
+    if (!docs) return base;
+    return base ? `${base}\n\n${docs}` : docs;
   }
 
   /**
@@ -1790,166 +1807,6 @@ export class CoderRunner extends EventEmitter {
   }
 
   /**
-   * Toggle deepThink (simulated deep-thinking via auxiliary model) for
-   * subsequent turns. Optionally swap the auxiliary model/provider — the
-   * cached `auxProvider` instance is invalidated so the next turn re-resolves
-   * via `createProvider`.
-   */
-  setDeepThink(
-    value: boolean | undefined,
-    opts?: { model?: string; provider?: string },
-  ): void {
-    this.opts = {
-      ...this.opts,
-      deepThink: value,
-      ...(opts?.model ? { deepThinkModel: opts.model } : {}),
-      ...(opts?.provider ? { deepThinkProvider: opts.provider } : {}),
-    };
-    this.auxProvider = undefined;
-  }
-
-  /** Lazy-resolve the auxiliary provider used by deepThink. Returns
-   *  undefined when no `createProvider` factory was wired — that disables
-   *  deepThink silently rather than throwing. */
-  private async resolveAuxProvider(): Promise<ChatProvider | undefined> {
-    if (this.auxProvider) return this.auxProvider;
-    if (!this.opts.createProvider) return undefined;
-    const model = this.opts.deepThinkModel ?? 'claude-haiku-4-5-20251001';
-    const providerName = this.opts.deepThinkProvider ?? 'anthropic';
-    // Hard timeout on createProvider() — historically the OAuth/ChatGPT
-    // path could hang for minutes on a stale refresh token. Without this
-    // race, deepthink stalls indefinitely on the first invocation of the
-    // session and the whole Executing node freezes.
-    const TIMEOUT_MS =
-      Number(process.env.CODER_AUX_PROVIDER_TIMEOUT_MS ?? '15000') || 15_000;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      this.auxProvider = await Promise.race([
-        this.opts.createProvider(providerName, model),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error(`aux provider createProvider() exceeded ${TIMEOUT_MS}ms`)),
-            TIMEOUT_MS,
-          );
-        }),
-      ]);
-      return this.auxProvider;
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
-  /** Gate for the per-turn auxiliary call. Returns false when the turn is
-   *  a tool_result follow-up (unless opted-in), or when the trailing user
-   *  text is too short / a trivial confirmation. */
-  private shouldRunPreThink(messages: AgentMessage[]): boolean {
-    if (messages.length === 0) return false;
-    const last = messages[messages.length - 1];
-    const isToolResult = Array.isArray(last.content)
-      && last.content.some((b) => b?.type === 'tool_result');
-    if (isToolResult && !this.opts.preThinkOnToolResults) return false;
-    const minTokens = this.opts.preThinkMinInputTokens ?? 0;
-    if (minTokens > 0 && last.role === 'user') {
-      const userText = last.content
-        .filter((b): b is { type: 'text'; text: string } => b?.type === 'text')
-        .map((b) => b.text)
-        .join(' ')
-        .trim();
-      const approxTokens = Math.ceil(userText.length / 4);
-      if (approxTokens < minTokens) return false;
-      if (/^(ok|sim|s|yes|y|n[ãa]o|no|continue|continua|vai|go)\s*[!.?]*$/i.test(userText)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /** Orchestrates one auxiliary pre-think turn: resolve provider, gate,
-   *  emit events, swallow errors so the main turn never blocks. Returns the
-   *  pre-thought text (empty string when skipped/failed).
-   *
-   *  Failures (provider missing, factory throws, aux call throws/times out)
-   *  ALWAYS emit `pre_think_failed` with a human-readable reason so the
-   *  operator can see in the Worker Log why deepThink degraded — silent
-   *  degradation is intentional for the main turn (we never block it),
-   *  but never silent for observability. */
-  private async runAuxiliaryPreThink(args: {
-    messages: AgentMessage[];
-    toolNames: string[];
-    turn: number;
-  }): Promise<{ text: string; usage: ChatUsage | undefined }> {
-    if (!this.shouldRunPreThink(args.messages)) {
-      return { text: '', usage: undefined };
-    }
-    const model = this.opts.deepThinkModel ?? 'claude-haiku-4-5-20251001';
-    const providerName = this.opts.deepThinkProvider ?? 'anthropic';
-
-    // Emit `pre_think_started` BEFORE any await — including the aux
-    // provider construction. Otherwise a slow `createProvider()` blocks
-    // the Executing node with NO event surfaced to the UI, and the
-    // StuckBanner trips on a silent stall. With the emit upfront, the
-    // dashboard renders "Pré-pensando…" the moment we commit to running
-    // the aux call, even if the provider isn't built yet.
-    this.emit('pre_think_started', {
-      runId: this.runId,
-      turn: args.turn,
-      model,
-      provider: providerName,
-    });
-
-    let provider: ChatProvider | undefined;
-    try {
-      provider = await this.resolveAuxProvider();
-    } catch (err) {
-      // Factory threw — provider not registered, bad credentials, hit
-      // the createProvider() timeout, etc.
-      this.emit('pre_think_failed', {
-        runId: this.runId,
-        turn: args.turn,
-        error: `auxiliary provider could not be constructed (${providerName}/${model}): ${err instanceof Error ? err.message : String(err)}`,
-      });
-      return { text: '', usage: undefined };
-    }
-    if (!provider) {
-      // No createProvider factory wired (test/embed harness, or the
-      // operator forgot to enable any provider at all).
-      this.emit('pre_think_failed', {
-        runId: this.runId,
-        turn: args.turn,
-        error: 'auxiliary provider not available: no createProvider factory wired into RunnerOptions (cannot build aux model)',
-      });
-      return { text: '', usage: undefined };
-    }
-    try {
-      const result = await runPreThink({
-        provider,
-        messages: args.messages,
-        toolNames: args.toolNames,
-        timeoutMs: this.opts.preThinkTimeoutMs ?? 8000,
-        onDelta: (chunk) => this.emit('pre_think_delta', {
-          runId: this.runId,
-          turn: args.turn,
-          text: chunk,
-        }),
-      });
-      this.emit('pre_think_completed', {
-        runId: this.runId,
-        turn: args.turn,
-        text: result.text,
-        usage: result.usage,
-      });
-      return result;
-    } catch (err) {
-      this.emit('pre_think_failed', {
-        runId: this.runId,
-        turn: args.turn,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return { text: '', usage: undefined };
-    }
-  }
-
-  /**
    * Delegate to the Behavior Tree orchestrator. Bridges the legacy
    * `EventEmitter` interface to the BT's typed `emit` callback so listeners
    * attached to this runner (CLI/SSE) continue to receive every event
@@ -1968,7 +1825,9 @@ export class CoderRunner extends EventEmitter {
       `messages=${this.messages.length}`,
     );
     // Pass tiers through unchanged — null means "no filter" so MCP-external
-    // tools and subagent registries don't get accidentally pruned.
+    // tools and subagent registries don't get accidentally pruned. Both the
+    // tier Set and the pin Set are shared BY REFERENCE so `promoteTier()` /
+    // dispatch-time pins reach the next turn's buildTools.
     const initialTiers = this.activeTiers ?? null;
     return runBehaviorTree({
       opts: this.opts,
@@ -1976,6 +1835,7 @@ export class CoderRunner extends EventEmitter {
         (this as unknown as { emit: (e: string, ...a: unknown[]) => boolean }).emit(event, ...args);
       }) as never,
       initialTiers,
+      initialPins: this.pinnedTools,
       // Share the live messages array so `pushUserContent` / system reminders
       // / BT pushes all see the same backing store.
       initialMessages: this.messages,
@@ -1985,7 +1845,8 @@ export class CoderRunner extends EventEmitter {
           this.opts.agentLoopV2 ? this.buildActiveContextBlockForTurn() : null,
         buildQualityFeedbackSuffix: () => this.buildQualityFeedbackSuffix(),
         getRelevantProjectMemory: this.opts.getRelevantProjectMemory,
-        getSessionDriveInjection: this.opts.getSessionDriveInjection,
+        getSessionStateData: this.opts.getSessionStateData,
+        getProjectMemoryIndex: this.opts.getProjectMemoryIndex,
         // Session-drive "guide files": surface the files this session has
         // edited so the dynamic injector can remind the model (the injector
         // dedups, so each file is announced once). Was a dead hook until now.
@@ -2065,10 +1926,6 @@ export class CoderRunner extends EventEmitter {
         finalizeToolResult: (a) => this.finalizeToolResultForBridge(a),
         detectPollingStuck: (toolName, content, isError, isRepeatable, turn) =>
           this.detectPollingStuckForBridge(toolName, content, isError, isRepeatable, turn),
-        runPreThink: async ({ messages, toolNames, turn }) => {
-          const r = await this.runAuxiliaryPreThink({ messages, toolNames, turn });
-          return { text: r.text, usage: r.usage };
-        },
         runQualityCheck: ({ turn, assistantText, toolResults }) => {
           // Mirror the legacy recordToolCallsForWatchdog + maybeRunWatchdog
           // pipeline. recordToolCallsForWatchdog updates the rolling
@@ -2152,6 +2009,7 @@ export class CoderRunner extends EventEmitter {
     historyChars: number;
     systemPromptChars: number;
     toolsDefChars: number;
+    visibleToolsCount?: number;
     responseMeta: ChatProviderResponseMeta | null;
     compactionTriggered: boolean;
     summarizerRan: boolean;
@@ -2172,6 +2030,7 @@ export class CoderRunner extends EventEmitter {
       summarizerRan: input.summarizerRan,
       systemPromptChars: input.systemPromptChars,
       toolsDefChars: input.toolsDefChars,
+      visibleToolsCount: input.visibleToolsCount,
       responseMeta: input.responseMeta,
     });
     this.lastTurnTelemetryId = id;
@@ -2299,10 +2158,11 @@ export class CoderRunner extends EventEmitter {
 
       if (readAutoDowngradeEnabled()) {
         this.setTransition('pre-read-auto-downgraded');
-        return {
-          content: buildAutoDowngradeResponse(toolName, path, prior, window, this.messages),
-          isError: false,
-        };
+        const content = buildAutoDowngradeResponse(toolName, path, prior, window, this.messages);
+        // The downgrade delivered a POINTER, not content — keep the ledger
+        // honest (only calls that put content into context count as reads).
+        prior.pop();
+        return { content, isError: false };
       }
 
       const firstPrior = prior.find((p) => p !== prior[prior.length - 1]) ?? prior[0];
@@ -2317,16 +2177,43 @@ export class CoderRunner extends EventEmitter {
         /* path may not exist anymore */
       }
       this.setTransition('pre-read-blocked');
-      return buildRichRefusal({
+      const refusal = buildRichRefusal({
         toolName,
         path,
         prior: prior.slice(0, -1),
         windowTurns: window,
         currentMtimeMs,
+        // Drives the refusal wording: present → "content is in your context";
+        // absent (prior reads elided/compacted) → honest force_reread pointer.
         contextPreview: preview,
       });
+      // A refused attempt never delivered content — drop it from the ledger
+      // so refusals can't compound into more "prior reads".
+      prior.pop();
+      return refusal;
     }
     return null;
+  }
+
+  /**
+   * Remove a read attempt from the pre-read ledger after it FAILED. The
+   * ledger entry is pushed optimistically in `enforcePreReadForBridge`
+   * (before dispatch); only reads that actually delivered content may count
+   * toward the re-read threshold.
+   */
+  private dropFailedReadFromLedger(
+    toolName: string,
+    input: Record<string, unknown>,
+    toolUseId: string,
+  ): void {
+    if (!REDUCIBLE_READ_TOOLS.has(toolName)) return;
+    const path = getStringField(input, 'path', 'file_path');
+    if (!path) return;
+    const readKey = `${toolName}|${buildReadDedupKey(path, input)}`;
+    const list = this.recentReadKeys.get(readKey);
+    if (!list) return;
+    const idx = list.findIndex((e) => e.useId === toolUseId);
+    if (idx >= 0) list.splice(idx, 1);
   }
 
   /**
@@ -2361,7 +2248,15 @@ export class CoderRunner extends EventEmitter {
     isError: boolean;
     turn: number;
   }): { content: string; isError?: boolean } | null {
-    if (!this.opts.agentLoopV2 || args.isError) return null;
+    if (!this.opts.agentLoopV2) return null;
+    if (args.isError) {
+      // A FAILED read delivered nothing into context — remove the entry that
+      // enforcePreRead optimistically pushed, or the guard later refuses a
+      // retry claiming "content is already in your context above" (observed:
+      // two empty-path read_file failures followed by a refusal citing them).
+      this.dropFailedReadFromLedger(args.name, args.input, args.toolUseId);
+      return null;
+    }
 
     let nextContent = args.content;
     let changed = false;

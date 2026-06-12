@@ -196,6 +196,8 @@ export class SnapshotService {
       referencedFiles?: string[];
       projectId?: number;
       updatedBy?: string;
+      /** 0..1 retrieval salience — the Memory tab "pin" boost. */
+      importance?: number;
     }
   ): Promise<SnapshotMutationResult> {
     this.db.updateSnapshot(id, {
@@ -204,6 +206,7 @@ export class SnapshotService {
       content: updates.content,
       tags: updates.tags,
       updatedBy: updates.updatedBy,
+      importance: updates.importance,
     });
     let skippedFiles: string[] | undefined;
     if (updates.referencedFiles !== undefined) {

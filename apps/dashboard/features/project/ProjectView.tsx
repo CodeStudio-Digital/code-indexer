@@ -672,7 +672,11 @@ function TabContent({
               <>
                 <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
                 <Panel id="builder-preview" order={2} defaultSize={48} minSize={28}>
+                  {/* key: full remount on project switch — local preview state
+                      (detected URL, problems, pop-out) must never leak from
+                      another project's dev server. */}
                   <ProjectPreview
+                    key={projectId}
                     projectId={projectId}
                     pinnedPort={builderJson?.port}
                     selectionEnabled={!!builderJson}
@@ -723,6 +727,7 @@ function TabContent({
   if (tab === 'preview') {
     return (
       <ProjectPreview
+        key={projectId}
         projectId={projectId}
         pinnedPort={builderJson?.port}
         selectionEnabled={!!builderJson}

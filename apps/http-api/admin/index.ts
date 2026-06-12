@@ -30,7 +30,6 @@ import { generalAiRouter } from './general-ai.routes.js';
 import { chromeServiceRouter } from './chrome-service.routes.js';
 import { verdaccioRouter } from './verdaccio.routes.js';
 import { bedrockModelAccessRouter } from './bedrock-model-access.routes.js';
-import { deepthinkRouter } from './deepthink.routes.js';
 import { capabilitiesRouter } from './capabilities.routes.js';
 
 export function createAdminRouter(store: ProviderStore): Hono {
@@ -55,7 +54,6 @@ export function createAdminRouter(store: ProviderStore): Hono {
   app.route('/', generalAiRouter(store));
   app.route('/', chromeServiceRouter());
   app.route('/', verdaccioRouter());
-  app.route('/', deepthinkRouter(store));
   app.route('/', capabilitiesRouter());
 
   return app;

@@ -237,3 +237,172 @@ describe('code_exec permission gate (nested calls)', () => {
     expect(res.content).toContain('run_command-ok');
   });
 });
+
+describe('code_exec import hints (telemetry: "A dynamic import callback was not specified")', () => {
+  it('hints on dynamic import()', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('read_file'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler({ code: `const fs = await import('fs'); return 'x';` }, makeCtx());
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('dynamic import callback');
+    expect(res.content).toContain('NO module loader');
+  });
+
+  it('hints on a static import statement (parse-time failure)', async () => {
+    const registry = new ToolRegistry();
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler({ code: `import fs from 'fs';\nreturn 'x';` }, makeCtx());
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('parse/sync error');
+    expect(res.content).toContain('NO module loader');
+  });
+});
+
+describe('code_exec tools-proxy misses (telemetry: "tools.X is not a function")', () => {
+  it('throws a suggestion-bearing error on an unknown tools.<name> access', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('mcp__grep_code'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `await tools.grep_code({ query: 'x' }); return 'done';` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('tools.grep_code is not an available tool');
+    expect(res.content).toContain('did you mean `tools.mcp__grep_code`?');
+    expect(res.content).toContain('log(Object.keys(tools)');
+  });
+
+  it('the miss is catchable, and introspection still works', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('read_file'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      {
+        code: `
+          let missed = false;
+          try { await tools.not_a_tool({}); } catch (e) { missed = String(e).includes('not an available tool'); }
+          return JSON.stringify({ missed, keys: Object.keys(tools).sort() });
+        `,
+      },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('"missed":true');
+    expect(res.content).toContain('"read_file"');
+  });
+});
+
+describe('code_exec nested loop guards (observer wired via ToolContext)', () => {
+  it('a script looping the SAME nested call is interrupted by the dedup guard', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('read_file'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const { buildNestedToolObserver } = await import('@mcp/code-agent/core/runner/guards/nested-observer.js');
+    const observer = buildNestedToolObserver({
+      dupCalls: new Map(),
+      failureStreaks: { streaks: new Map() },
+      turn: 1,
+      parentToolUseId: 'ce_loop_1',
+    });
+
+    const res = await codeExec.handler(
+      {
+        code: `
+          for (let i = 0; i < 10; i++) {
+            await tools.read_file({ path: 'same.ts' });
+          }
+          return 'finished all 10';
+        `,
+      },
+      { ...makeCtx(), nestedToolObserver: observer },
+    );
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('tool read_file refused');
+    expect(res.content).toContain('[loop-refused');
+    expect(res.content).not.toContain('finished all 10');
+  });
+
+  it('without an observer (tests/subagents/kill-switch) nothing changes', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('read_file'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      {
+        code: `
+          for (let i = 0; i < 5; i++) await tools.read_file({ path: 'same.ts' });
+          return 'finished';
+        `,
+      },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('finished');
+  });
+});
+
+describe('code_exec nested-failure try/catch hint (telemetry: create_file killed the script)', () => {
+  /** A tool that always reports isError, like create_file on an existing path. */
+  function errTool(name: string, message: string): CoderTool {
+    return {
+      name,
+      description: 'always errors',
+      source: 'native',
+      mutates: true,
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => ({ content: message, isError: true }),
+    };
+  }
+
+  it('appends the try/catch hint when a nested tool failure aborts the script', async () => {
+    const registry = new ToolRegistry();
+    registry.register(errTool('create_file', 'File a.md already exists. Use write_file or edit_file.'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      { code: `await tools.create_file({}); return 'unreachable';` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('tool create_file: File a.md already exists');
+    expect(res.content).toContain('aborted the WHOLE script');
+    expect(res.content).toContain('wrap THAT call in try/catch');
+  });
+
+  it('a script that already uses try/catch survives and finishes', async () => {
+    const registry = new ToolRegistry();
+    registry.register(errTool('create_file', 'File a.md already exists.'));
+    registry.register(noopTool('read_file'));
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      {
+        code: `
+          let existed = false;
+          try { await tools.create_file({}); } catch (e) { existed = String(e).includes('already exists'); }
+          const r = await tools.read_file({});
+          return JSON.stringify({ existed, r });
+        `,
+      },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('"existed":true');
+    expect(res.content).toContain('read_file-ok');
+  });
+});

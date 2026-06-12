@@ -20,7 +20,7 @@
  * total-token path) because the body bears all the variance and we
  * want to compact before the body alone fills the window.
  */
-import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
+import { deriveTokenLimits, resolveTriggerRatio } from '@mcp/code-agent/core/compaction/limits.js';
 
 /** Char-count → tokens approximation. Same convention as the legacy path. */
 const CHARS_PER_TOKEN = 4;
@@ -80,6 +80,17 @@ export interface BodyAfterPrefixDecision {
 export const DEFAULT_BODY_AFTER_PREFIX_RATIO = 0.85;
 
 /**
+ * Body gate default derived from the single trigger knob: trigger ratio − 0.05
+ * (0.85 with the default 0.90). Subtracting the prefix from both numerator and
+ * denominator INCREASES the ratio, so the body gate naturally fires slightly
+ * before the total gate — keeping it 5pp tighter preserves that ordering for
+ * any `CODER_COMPACT_TRIGGER_RATIO` override.
+ */
+export function resolveBodyAfterPrefixRatio(): number {
+  return Math.max(0.5, resolveTriggerRatio() - 0.05);
+}
+
+/**
  * Decide whether to compact based on BODY usage, ignoring the prefix
  * (system + tools) which a prompt-cache-aware provider doesn't re-bill.
  *
@@ -92,7 +103,7 @@ export function shouldCompactBodyAfterPrefix(
   inp: ShouldCompactBodyAfterPrefixInputs,
 ): BodyAfterPrefixDecision {
   const limits = deriveTokenLimits(inp.model);
-  const triggerRatio = inp.triggerRatio ?? DEFAULT_BODY_AFTER_PREFIX_RATIO;
+  const triggerRatio = inp.triggerRatio ?? resolveBodyAfterPrefixRatio();
   const bodyTokens = Math.max(0, inp.promptTokens - inp.prefixTokens);
   const bodyCapacity = Math.max(0, limits.effective - inp.prefixTokens);
   if (bodyCapacity <= 0 || bodyTokens <= 0) {

@@ -211,3 +211,16 @@ export interface DocSourceSuggestion {
   decided_at: string | null;
   indexed_source_id: number | null;
 }
+
+// ─── Project ↔ collection links (migration 134) ─────────────────────
+
+/** `'manual'` = linked via dashboard; `'auto'` = linked by suggestion approval. */
+export type DocProjectLinkOrigin = 'manual' | 'auto';
+
+/** One project linked to a collection, with the project name denormalized for UI chips. */
+export interface DocProjectLink {
+  project_id: number;
+  project_name: string;
+  origin: DocProjectLinkOrigin;
+  created_at: string;
+}

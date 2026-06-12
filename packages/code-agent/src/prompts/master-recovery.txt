@@ -97,7 +97,7 @@ Execute the recovery plan you posted. Batch related writes into a single turn wh
   • in_progress + all objectives checked + subordinate reported done → 'review' or 'done'
   • review + stale "ready for review" but never approved → 'done' if no flagged issue
 
-3.3. UPDATE OBJECTIVES via `kanban_update_objectives` (or `kanban_update_checklist`):
+3.3. UPDATE OBJECTIVES via `kanban_update_objectives`:
   • Check items the chat confirms are done
   • Add new items that came up in chat but aren't tracked
 

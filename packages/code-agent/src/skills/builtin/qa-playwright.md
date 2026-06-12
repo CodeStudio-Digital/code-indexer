@@ -7,8 +7,8 @@ allowed-tools:
   - write_file
   - list_services
   - kanban_create_card
-  - kanban_my_comment
-  - kanban_my_checklist
+  - kanban_post_comment
+  - kanban_update_objectives
   - kanban_move_to_review
   - kanban_add_dependency
   - post_to_board
@@ -195,7 +195,7 @@ Call `submit_plan_to_master(plan=<full file content>)`. Your run blocks until th
 
 ### Phase C — Approval
 
-The master may approve, request changes (you iterate), or escalate to the human. Only after `approved=true`, update `kanban_my_checklist` with one item per approved scenario.
+The master may approve, request changes (you iterate), or escalate to the human. Only after `approved=true`, update `kanban_update_objectives` with one item per approved scenario.
 
 ### Phase D — Implementation
 
@@ -237,7 +237,7 @@ The server's QA-Kanban bridge creates a bug card automatically for every failed 
 
 Idempotency: the same `(suite, test)` failing again reuses the existing card and adds a "failure recurred" comment. So your job is:
 - **Never** call `kanban_create_card` to file a bug for a Playwright failure.
-- Use `kanban_my_comment(card_id=<bug_card_id>)` to add reproduction notes / additional context to the auto-created card.
+- Use `kanban_post_comment(card_id=<bug_card_id>)` to add reproduction notes / additional context to the auto-created card.
 - Use `kanban_create_card` only for non-test issues (flaky infra, missing fixture data, env gap, etc.).
 
 ### Feature card status auto-syncs
@@ -265,7 +265,7 @@ dependency: linked to the feature card if `qa_start_run` was called with `kanban
 ```
 
 Your job after the run completes:
-1. `kanban_my_comment(card_id=<auto_bug_card_id>)` — add reproduction tips, root-cause hypothesis, or "I think it's a flaky selector" notes.
+1. `kanban_post_comment(card_id=<auto_bug_card_id>)` — add reproduction tips, root-cause hypothesis, or "I think it's a flaky selector" notes.
 2. `post_to_board(kind='deliverable', mentions=['master'])` — summarise pass/fail + link to the run detail.
 3. `qa_publish_result(...)` — emits the legacy completion event for any consumers still on the SSE stream.
 
@@ -416,7 +416,7 @@ Confirm `playwright.config.ts` still has `globalSetup: require.resolve('./tests/
 3. No sleeps. Use `expect(locator).toBeVisible()` / `waitForURL`.
 4. **`qa_start_run` ALWAYS BEFORE `npx playwright test`.** The watchdog kills runs after 10 min of reporter silence — if you skip this, the dashboard shows a permanent spinner and the run row is marked `error`.
 5. **Never `--reporter=` on the CLI.** Replaces the reporters wired in `playwright.config.ts` and breaks Tab Testes Live + the HTML report.
-6. **Never `kanban_create_card` for a Playwright failure.** The server creates the bug card; you comment on it with `kanban_my_comment`.
+6. **Never `kanban_create_card` for a Playwright failure.** The server creates the bug card; you comment on it with `kanban_post_comment`.
 7. **Always pass `kanban_feature_card_id`** to `qa_start_run` when the master spawned you with a kanban_card_id. The server uses it to auto-sync the feature card status.
 8. Always end the run with `qa_publish_result` (legacy badge consumers depend on it).
 9. When unsure about endpoints, call `qa_get_browser_endpoint`.

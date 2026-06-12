@@ -1,5 +1,4 @@
 import type { Database as DB } from 'better-sqlite3';
-import type { DeepThinkDefaults } from './types.js';
 import * as providers from './providers.js';
 import * as models from './models.js';
 
@@ -61,23 +60,6 @@ export function getGeneralDefault(db: DB): { providerId: string; modelId: string
 
 export function setGeneralDefault(db: DB, providerId: string, modelId: string): void {
   setAppSetting(db, 'general_default_model', JSON.stringify({ providerId, modelId }));
-}
-
-// ─── deepThink Defaults ──────────────────────────────────────────
-
-/**
- * Operator-pinned defaults for the simulated deepThink auxiliary model.
- * Stored in `app_settings['deepthink_defaults']` as a single JSON blob.
- */
-export function getDeepThinkDefaults(db: DB): DeepThinkDefaults | null {
-  const raw = getAppSetting(db, 'deepthink_defaults');
-  if (!raw) return null;
-  try { return JSON.parse(raw) as DeepThinkDefaults; }
-  catch { return null; }
-}
-
-export function setDeepThinkDefaults(db: DB, defaults: DeepThinkDefaults): void {
-  setAppSetting(db, 'deepthink_defaults', JSON.stringify(defaults));
 }
 
 // ─── Fallback Chain ──────────────────────────────────────────────

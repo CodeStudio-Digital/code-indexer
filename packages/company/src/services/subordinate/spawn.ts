@@ -18,6 +18,7 @@
  * deps bag enumerates every collaborator the original method touched.
  */
 import { runCoder, type RunCoderOptions } from '@mcp/code-agent/index.js';
+import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { createBus } from '@apps/http-api/coder-bus.js';
 import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import { SkillStore } from '@mcp/store/skill-store.js';
@@ -58,6 +59,8 @@ import {
 import {
   wireSubordinateInterceptionsForRunner,
 } from '@mcp/company/services/subordinate/runner-wiring.js';
+import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
+import { fetchProjectMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
 
 export interface SpawnSubordinateDeps {
   ctx: SessionContext;
@@ -286,6 +289,17 @@ export async function spawnSubordinate(
     sandbox: subordinateBinding ?? undefined,
   };
 
+  // Mem C — task-relevant project memory, rendered into the system prompt
+  // so the subordinate is born knowing prior runs' decisions/gotchas (and
+  // keeps them through compaction). Best-effort with a 2s ceiling: any
+  // failure → '' and the spawn proceeds without a block.
+  const projectMemory = await fetchProjectMemoryBlock({
+    projectId: spec.projectId,
+    projectName,
+    taskText: spec.task,
+    db: ctx.db,
+  });
+
   const subordinateBlock = buildSubordinateCompanyBlock({
     role: spec.role,
     projects: [
@@ -295,6 +309,7 @@ export async function spawnSubordinate(
         rootPath: project?.root_path ?? '',
       },
     ],
+    projectMemory: projectMemory || undefined,
     builder: subordinateBinding
       ? {
           workdir: subordinateBinding.workdir,
@@ -331,6 +346,12 @@ export async function spawnSubordinate(
   // even when no supervisor was wired.
   let supervisorUnsubscribe: () => void = () => { /* no-op */ };
 
+  // Mem C — bridge-backed memory ports (set in company-worker boot). When
+  // wired, the runner gets per-turn memory injection on task changes AND
+  // run-end distillation (gotchas/decisions/recipes → project snapshots),
+  // so what this subordinate learns reaches every future session.
+  const memoryPorts = getCompanyMemoryPorts();
+
   const handle = await runCoder({
     session: { id: subSession.id },
     userMessage: spec.task,
@@ -338,16 +359,14 @@ export async function spawnSubordinate(
     maxTurns: 50,
     profile: spec.tier ?? 'navigate',
     agent: spec.agent,
+    memoryRetriever: memoryPorts?.memoryRetriever,
+    runEndMemory: memoryPorts?.runEndMemory,
     companyContext,
     companyPromptBlock: subordinateBlock,
     companyRoleOverride: spec.roleOverride,
     roleTemperature: spec.temperature,
     thinking: spec.thinking,
     thinkingBudgetTokens: spec.thinkingBudgetTokens,
-    deepThink: spec.deepThink,
-    deepThinkModel: spec.deepThinkModel,
-    deepThinkProvider: spec.deepThinkProvider,
-    preThinkOnToolResults: spec.preThinkOnToolResults,
     // Wire HumanInTheLoop + meta-bus listeners BEFORE the runner takes
     // turn 1, so a sub that calls `submit_plan_to_master` or
     // `ask_master` immediately on turn 1 doesn't slip through (same
@@ -359,6 +378,11 @@ export async function spawnSubordinate(
     // detection relies on coarse signals only.
     onRunnerReady: (runner) => {
       wireSubordinateInterceptionsForRunner(runner, agentRun.id, spec.role, deps.wireDeps);
+      // docs_deep_research — DocsAgent escalation; per-runner install (the
+      // company-worker's docsResearch RPC shim is the other half). Navigate
+      // tier, and subordinates default to profile 'navigate'+, so it
+      // surfaces without an expand_toolset round-trip.
+      installDocsDeepResearch(runner);
       // Re-assigns the outer `supervisorUnsubscribe` so the
       // completion handler can fire it when the run ends. Without
       // this, listeners would leak after handle.done resolves.

@@ -122,6 +122,13 @@ export interface SubordinatePromptContext {
   /** Same session rules the master sees — injected verbatim so policy survives
    *  reactivation/compaction (it lives in the system prompt, not turn history). */
   operationalRules?: string;
+  /**
+   * Pre-rendered `## PROJECT MEMORY` section (spawn-injection.ts): distilled
+   * decisions/gotchas from previous runs on this project, relevance-ranked
+   * against the spawn task. Already bounded — injected verbatim. Lives in the
+   * system prompt (same rationale as operationalRules: survives compaction).
+   */
+  projectMemory?: string;
 }
 
 /**
@@ -550,6 +557,7 @@ Your LAST action is \`post_to_board(kind="deliverable", …)\`. The master canno
 - **Shared drive (cross-session file pool — use whenever you'd paste >1KB):** \`write_shared_file\`, \`append_shared_file\`, \`read_shared_file\`, \`list_shared_files\`, \`delete_shared_file\`. Paths are logical (\`reports/<topic>.md\`, \`briefs/<role>-<topic>.md\`).
 - **Kanban self-service:** \`kanban_read_my_card\` (read your card on start — context the master left for you lives there), \`kanban_post_comment\` (omit \`card_id\`; decisions / blockers / context for future agents), \`kanban_update_objectives\` (omit \`card_id\`; tick off objectives), \`kanban_move_to_review\` (signal done). Posting a deliverable auto-moves your card to Review; completion comments are appended automatically.
 
+${ctx.projectMemory ?? ''}
 ## FOCUS
 
 Do your task thoroughly. Stay in your project. Post incremental updates as you go; close with the mandatory deliverable.

@@ -5,15 +5,20 @@
  * sanity checks that `claude-haiku-4-5-20251001` has a registered context
  * window (a regression in capabilities.ts would fail here).
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   shouldCompact90,
   computeProtectTokens,
+  resolveTriggerRatio,
   DEFAULT_TRIGGER_RATIO,
   DEFAULT_PROTECT_RATIO,
 } from '../threshold.js';
 
 const MODEL = 'claude-haiku-4-5-20251001';
+
+afterEach(() => {
+  delete process.env.CODER_COMPACT_TRIGGER_RATIO;
+});
 
 describe('shouldCompact90', () => {
   it('does not fire at low usage', () => {
@@ -45,17 +50,46 @@ describe('shouldCompact90', () => {
     expect(decision.ratio).toBe(0);
   });
 
-  it('default trigger ratio is 0.70 — window-relative, lowered in Fix B', () => {
-    expect(DEFAULT_TRIGGER_RATIO).toBe(0.7);
+  it('default trigger ratio is 0.90 — window-relative, raised by operator decision', () => {
+    expect(DEFAULT_TRIGGER_RATIO).toBe(0.9);
     // Window-relative, not a fixed cap: the trigger scales with the model.
     const big = shouldCompact90({ promptTokens: 1, model: MODEL });
     expect(Math.round(big.effective * DEFAULT_TRIGGER_RATIO)).toBeGreaterThan(0);
+  });
+
+  it('does NOT fire at 70% anymore (the old default)', () => {
+    const base = shouldCompact90({ promptTokens: 1, model: MODEL });
+    const at70 = Math.ceil(base.effective * 0.70);
+    expect(shouldCompact90({ promptTokens: at70, model: MODEL }).shouldCompact).toBe(false);
   });
 
   it('reports promptTokens and effective in the decision payload', () => {
     const decision = shouldCompact90({ promptTokens: 12345, model: MODEL });
     expect(decision.promptTokens).toBe(12345);
     expect(decision.effective).toBeGreaterThan(0);
+  });
+});
+
+describe('resolveTriggerRatio', () => {
+  it('defaults to 0.90 without env', () => {
+    expect(resolveTriggerRatio()).toBe(0.9);
+  });
+
+  it('honours CODER_COMPACT_TRIGGER_RATIO and drives shouldCompact90', () => {
+    process.env.CODER_COMPACT_TRIGGER_RATIO = '0.7';
+    expect(resolveTriggerRatio()).toBe(0.7);
+    const base = shouldCompact90({ promptTokens: 1, model: MODEL });
+    const at75 = Math.ceil(base.effective * 0.75);
+    expect(shouldCompact90({ promptTokens: at75, model: MODEL }).shouldCompact).toBe(true);
+  });
+
+  it('clamps typos into [0.5, 0.95] and ignores garbage', () => {
+    process.env.CODER_COMPACT_TRIGGER_RATIO = '0.1';
+    expect(resolveTriggerRatio()).toBe(0.5);
+    process.env.CODER_COMPACT_TRIGGER_RATIO = '5';
+    expect(resolveTriggerRatio()).toBe(0.95);
+    process.env.CODER_COMPACT_TRIGGER_RATIO = 'banana';
+    expect(resolveTriggerRatio()).toBe(0.9);
   });
 });
 

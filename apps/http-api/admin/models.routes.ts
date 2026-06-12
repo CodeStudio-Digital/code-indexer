@@ -87,6 +87,7 @@ export function modelsRouter(store: ProviderStore): Hono {
       name?: string;
       default_reasoning_level?: string | null;
       context_window?: number | null;
+      max_tools?: number | null;
     }>();
     if (body.default_reasoning_level !== undefined && body.default_reasoning_level !== null) {
       // Validate against the model's persisted supported_reasoning_levels — if
@@ -112,10 +113,20 @@ export function modelsRouter(store: ProviderStore): Hono {
         );
       }
     }
+    if (body.max_tools !== undefined && body.max_tools !== null) {
+      // Sanity bounds: below 4 the agent can't even hold the discovery core;
+      // above 256 the cap is meaningless (largest catalogs are ~200).
+      if (body.max_tools < 4 || body.max_tools > 256) {
+        return c.json(
+          { error: `max_tools must be between 4 and 256 (got ${body.max_tools})` },
+          400,
+        );
+      }
+    }
     store.updateModel(id, modelId, mode, body);
-    // If we just changed a context_window, rehydrate the in-memory cache so
+    // If we just changed a capability value, rehydrate the in-memory cache so
     // newly-created sessions pick up the value without a server restart.
-    if (body.context_window !== undefined) {
+    if (body.context_window !== undefined || body.max_tools !== undefined) {
       try {
         mergeDBCapabilities(store.listAllModels());
       } catch {

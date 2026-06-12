@@ -43,10 +43,13 @@ import {
   type CoderAttachment,
 } from '../../../packages/code-agent/src/index.js';
 import type { CoderRunner } from '../../../packages/code-agent/src/core/runner.js';
+import { hydrateWorkerCapabilities } from './worker-capabilities.js';
 import {
   setGlobalDocSearch,
   type DocSearchBackend,
 } from '../../../packages/code-agent/src/tools/rag-search-docs.js';
+import { setGlobalDocsHintProvider } from '../../../packages/code-agent/src/core/docs-hint.js';
+import { DocStore } from '../../../packages/store/src/doc-store.js';
 import {
   setGlobalPreviewDevtools,
   type IPreviewDevtools,
@@ -84,6 +87,7 @@ import {
 } from '../coder-bus.js';
 import { wireRunnerEventsToBus } from '../sse/runnerWiring.js';
 import { RemoteMcpServerManager } from './RemoteMcpServerManager.js';
+import { buildWorkerMemoryShims } from './memory-shims.js';
 
 interface CoderWorkerData {
   sessionId: number;
@@ -96,6 +100,9 @@ if (!port) throw new Error('coder-worker.ts: not running inside a worker_thread'
 const { sessionId, dbPath } = workerData as CoderWorkerData;
 
 const dbConn = openWorkerDb({ dbPath });
+
+// Per-model caps — module-global cache, re-hydrated per worker thread (see worker-capabilities.ts).
+hydrateWorkerCapabilities(dbConn.handle, `coder-worker ${sessionId}`);
 
 const bridge = new MessageBridge({
   port: port as unknown as MessageBridgeOpts['port'],
@@ -125,8 +132,38 @@ const docSearchShim: DocSearchBackend = {
       // need a ceiling to surface stuck-RPC bugs instead of hanging.
       { timeoutMs: 60_000 },
     ),
+  // rag_read_doc — plain SQLite reads on the main side, so a short ceiling.
+  readChunk: async (input) =>
+    bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['readChunk']>>>>(
+      'docReadChunk',
+      input,
+      { timeoutMs: 15_000 },
+    ),
 };
 setGlobalDocSearch(docSearchShim);
+
+// ─── <indexed-docs> hint provider: worker-local DB reads ─────────────
+// Unlike docSearch (which needs the main process's embedder/reranker),
+// the hint only does two SELECTs — a local DocStore over this worker's
+// own WAL handle avoids an RPC round-trip on every turn. Inlined (not
+// imported from server/docs/search-backend.ts) because that module pulls
+// `@mcp/*` aliases, which don't resolve inside worker_threads (see the
+// relative-imports note at the top of this file).
+const workerDocStore = new DocStore(dbConn.handle);
+setGlobalDocsHintProvider({
+  listForProject: (projectId) => {
+    try {
+      return workerDocStore.listCollectionsForProject(projectId).map((c) => ({
+        name: c.name,
+        description: c.description,
+        chunk_count: c.chunk_count,
+      }));
+    } catch {
+      // Pre-migration DB or transient read error — hint silently absent.
+      return [];
+    }
+  },
+});
 
 // ─── Preview DevTools shim: route to the main process via RPC ────────
 // Same rationale as docSearch — the real `PreviewWindowService` (opens a
@@ -150,6 +187,15 @@ const visionShim: IVisionDescriber = {
     bridge.request<string>('visionDescribe', req, { timeoutMs: 60_000 }),
 };
 setGlobalVisionDescriber(visionShim);
+
+// ─── Project-memory shim: route to the main process via RPC ──────────
+// The canonical MemoryRetriever + RunEndMemory (embeddings, hybrid dedup,
+// distiller binding) live once in server/deps.ts. The in-process chat path
+// passes them into runCoder directly (routes/coder/stream.ts); this worker
+// forwards the same calls over the bridge so MCP_CODER_WORKER=1 keeps
+// per-turn memory injection and run-end distillation instead of silently
+// dropping them. Degrades to no-op when main has no memory deps wired.
+const memoryShims = buildWorkerMemoryShims(bridge);
 
 // `DocsResearchBridge` is a CLASS in @mcp/docs-agent; here we only
 // implement the `runResearch` method that `docs_deep_research` actually
@@ -480,10 +526,6 @@ interface RunFreshPayload {
   modelSupportsVision?: boolean;
   describeImages?: boolean;
   previewAvailable?: boolean;
-  deepThink?: boolean;
-  deepThinkModel?: string;
-  deepThinkProvider?: string;
-  preThinkOnToolResults?: boolean;
   selectedSkillIds?: string[];
   /**
    * Apêndice 4 Fase 2 — propagate `resume:true` to `runCoder` so the
@@ -520,13 +562,15 @@ bridge.handle('runFresh', async (payload) => {
       modelSupportsVision: opts.modelSupportsVision,
       describeImages: opts.describeImages,
       previewAvailable: opts.previewAvailable,
-      deepThink: opts.deepThink,
-      deepThinkModel: opts.deepThinkModel,
-      deepThinkProvider: opts.deepThinkProvider,
-      preThinkOnToolResults: opts.preThinkOnToolResults,
       selectedSkillIds: opts.selectedSkillIds,
       resume: opts.resume,
       signal: run.ctrl.signal,
+      // Mem C — same wiring as the in-process path (routes/coder/stream.ts):
+      // proactive per-turn memory injection + run-end distillation + direct
+      // agent ports, RPC'd to the main-process instances via the shims above.
+      memoryRetriever: memoryShims.memoryRetriever,
+      runEndMemory: memoryShims.runEndMemory,
+      projectMemory: memoryShims.projectMemory,
       onSnapshotRecorded: (info) => publish(run.bus, 'session_snapshot_changed', info),
       // Mirror the in-process wiring in routes/coder/stream.ts so the
       // docs_deep_research tool appears on turn 1 of every worker-thread
@@ -649,19 +693,6 @@ bridge.handle('setToolPermissionMode', (payload) => {
   const runner = activeRun?.runner;
   if (!runner) return { ok: false, reason: 'no_runner' };
   runner.setToolPermissionMode(mode);
-  return { ok: true };
-});
-
-bridge.handle('setDeepThink', (payload) => {
-  recordRpc('setDeepThink');
-  const { deepThink, model, provider } = payload as {
-    deepThink: boolean;
-    model?: string;
-    provider?: string;
-  };
-  const runner = activeRun?.runner;
-  if (!runner) return { ok: false, reason: 'no_runner' };
-  runner.setDeepThink(deepThink, { model, provider });
   return { ok: true };
 });
 

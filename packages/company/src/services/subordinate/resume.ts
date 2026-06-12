@@ -39,6 +39,8 @@ import {
 } from '@mcp/company/services/subordinate/completion-handler.js';
 import { wireSubordinateInterceptionsForRunner } from '@mcp/company/services/subordinate/runner-wiring.js';
 import { tryAcquireResume, releaseResume } from '@mcp/company/services/subordinate/resume-guard.js';
+import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
+import { fetchProjectMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
 
 export interface ResumeSubordinateDeps {
   ctx: SessionContext;
@@ -154,6 +156,18 @@ async function resumeSubordinateInner(
     sandbox: resumeBinding ?? undefined,
   };
 
+  const resumeMessage =
+    message ?? 'Continue your task from where you left off. Check the board for context.';
+
+  // Mem C — refresh the PROJECT MEMORY block against the resume message
+  // (the task may have pivoted via forward_to_agent). Best-effort, 2s cap.
+  const projectMemory = await fetchProjectMemoryBlock({
+    projectId,
+    projectName: project?.name ?? `project-${projectId}`,
+    taskText: resumeMessage,
+    db: ctx.db,
+  });
+
   const subordinateBlock = buildSubordinateCompanyBlock({
     role: agentRun.role,
     projects: [
@@ -163,6 +177,7 @@ async function resumeSubordinateInner(
         rootPath: project?.root_path ?? '',
       },
     ],
+    projectMemory: projectMemory || undefined,
     builder: resumeBinding
       ? {
           workdir: resumeBinding.workdir,
@@ -190,10 +205,11 @@ async function resumeSubordinateInner(
     ),
   });
 
-  const resumeMessage =
-    message ?? 'Continue your task from where you left off. Check the board for context.';
-
   deps.board.post('system', agentRun.id, 'message', `Resuming @${agentRun.role} agent...`);
+
+  // Mem C — same bridge-backed ports as spawn: per-turn injection + run-end
+  // distillation for the resumed run.
+  const memoryPorts = getCompanyMemoryPorts();
 
   let handle: Awaited<ReturnType<typeof runCoder>>;
   try {
@@ -202,6 +218,8 @@ async function resumeSubordinateInner(
       userMessage: resumeMessage,
       attachments,
       maxTurns: 50,
+      memoryRetriever: memoryPorts?.memoryRetriever,
+      runEndMemory: memoryPorts?.runEndMemory,
       companyContext,
       companyPromptBlock: subordinateBlock,
       companyRoleOverride: roleOverride,

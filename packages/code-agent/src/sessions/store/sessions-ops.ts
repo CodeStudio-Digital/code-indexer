@@ -63,6 +63,19 @@ export function getStats(db: DB, id: number): CoderSessionStats | null {
       total_tool_duration_ms: number;
     };
 
+  // Cache-inclusive prompt of the LAST assistant turn — the at-rest
+  // counterpart of the live `context_status.prompt_tokens`, so the header
+  // context bar shows the same number before and during a run. The legacy
+  // `last_turn_input_tokens` column is cache-blind (raw input only).
+  const lastTurn = db
+    .prepare(`
+      SELECT input_tokens + COALESCE(cache_read_tokens, 0) + COALESCE(cache_creation_tokens, 0) AS prompt_tokens
+      FROM coder_messages
+      WHERE session_id = ? AND role = 'assistant'
+      ORDER BY id DESC LIMIT 1
+    `)
+    .get(id) as { prompt_tokens: number | null } | undefined;
+
   // Resolve context_window for the dashboard fallback path. Mirrors the
   // runner's resolution chain (DB → registry prefix). Cheap — we look up via
   // the in-memory capabilities cache populated by mergeDBCapabilities() at boot.
@@ -84,6 +97,7 @@ export function getStats(db: DB, id: number): CoderSessionStats | null {
     total_cache_read_tokens: session.total_cache_read_tokens,
     total_cache_creation_tokens: session.total_cache_creation_tokens,
     last_turn_input_tokens: session.last_turn_input_tokens ?? 0,
+    last_turn_prompt_tokens: lastTurn?.prompt_tokens ?? null,
     message_count: msgStats.message_count ?? 0,
     assistant_turns: msgStats.assistant_turns ?? 0,
     tool_call_count: tools.tool_call_count ?? 0,
@@ -94,6 +108,41 @@ export function getStats(db: DB, id: number): CoderSessionStats | null {
     duration_ms: session.duration_ms ?? 0,
     context_window: contextWindow,
   };
+}
+
+export interface MemoryDistillPendingRow {
+  session_id: number;
+  project_id: number;
+  provider: string;
+  model: string;
+  distilled_mark: number;
+}
+
+/**
+ * Sessions whose transcript grew past the memory-distill high-water mark and
+ * went idle — candidates for the idle memory sweeper. All-SQL time math
+ * (sqlite `datetime('now')` is UTC without 'Z'; comparing in SQL avoids the
+ * JS parse pitfall). Joined against `projects.memory_enabled` so disabled
+ * projects never even surface.
+ */
+export function listMemoryDistillPending(
+  db: DB, idleSeconds: number, limit: number,
+): MemoryDistillPendingRow[] {
+  return db.prepare(`
+    SELECT s.id AS session_id, s.project_id, s.provider, s.model,
+           s.memory_distilled_message_id AS distilled_mark
+    FROM coder_sessions s
+    JOIN projects p ON p.id = s.project_id
+    WHERE s.status = 'idle'
+      AND p.memory_enabled = 1
+      AND s.updated_at < datetime('now', '-' || CAST(? AS INTEGER) || ' seconds')
+      AND EXISTS (
+        SELECT 1 FROM coder_messages m
+        WHERE m.session_id = s.id AND m.id > s.memory_distilled_message_id
+      )
+    ORDER BY s.updated_at ASC
+    LIMIT ?
+  `).all(idleSeconds, limit) as MemoryDistillPendingRow[];
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   ApiError,
   type ProjectGitApi,
   type GitStatusFile,
+  type GitCommitFileChange,
   type GitBranch,
   type GitRunResult,
   type GitStashEntry,
@@ -139,6 +140,67 @@ function parseHeadBranchInfo(out: string): {
   return { branch, upstream, ahead, behind };
 }
 
+/**
+ * Build a changed-file list by merging `--name-status` (authoritative
+ * status + rename old/new paths) with `--numstat` (per-file add/remove
+ * counts, keyed by the new path). We avoid `-z` parsing to keep the
+ * splits trivial; for renames the numstat path is a combined `old =>
+ * new` token that won't key-match, so those rows fall back to 0/0 — fine
+ * since renames are usually content-identical.
+ *
+ * `argsWith(flag)` produces the full git argv for the given stat flag —
+ * differs between a commit (`show … <sha>`) and a stash (`stash show …
+ * <ref>`), so the caller supplies it.
+ */
+async function collectChangedFiles(
+  cwd: string,
+  argsWith: (statFlag: string) => string[],
+): Promise<GitCommitFileChange[]> {
+  const mapState = (code: string): GitCommitFileChange['state'] => {
+    const c = code[0];
+    if (c === 'A') return 'added';
+    if (c === 'D') return 'deleted';
+    if (c === 'R') return 'renamed';
+    if (c === 'C') return 'copied';
+    return 'modified'; // M, T (typechange), and anything unexpected
+  };
+
+  const numstat = await runGit(cwd, argsWith('--numstat'));
+  const counts = new Map<string, { additions: number; deletions: number }>();
+  for (const line of numstat.stdout.split('\n')) {
+    if (!line.trim()) continue;
+    const [adds, dels, ...pathParts] = line.split('\t');
+    const path = pathParts.join('\t');
+    if (!path) continue;
+    counts.set(path, {
+      additions: adds === '-' ? 0 : Number(adds) || 0,
+      deletions: dels === '-' ? 0 : Number(dels) || 0,
+    });
+  }
+
+  const nameStatus = await runGit(cwd, argsWith('--name-status'));
+  const files: GitCommitFileChange[] = [];
+  for (const line of nameStatus.stdout.split('\n')) {
+    if (!line.trim()) continue;
+    const parts = line.split('\t');
+    const code = parts[0];
+    if (!code) continue;
+    const state = mapState(code);
+    let path: string;
+    let oldPath: string | undefined;
+    if ((state === 'renamed' || state === 'copied') && parts.length >= 3) {
+      oldPath = parts[1];
+      path = parts[2];
+    } else {
+      path = parts[1] ?? '';
+    }
+    if (!path) continue;
+    const c = counts.get(path) ?? { additions: 0, deletions: 0 };
+    files.push({ path, oldPath, state, additions: c.additions, deletions: c.deletions });
+  }
+  return files;
+}
+
 export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   const { db } = deps;
 
@@ -218,6 +280,44 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
           const [sha, shortSha, author, date, subject] = line.split('\x1f');
           return { sha, shortSha, author, date, subject };
         });
+    },
+
+    async commitDetail({ projectId, sha }) {
+      const root = requireRoot(projectId);
+      // Metadata in one pass. `%P` (parents) is space-separated; `%b`
+      // (body) can contain anything including our separator, so it's
+      // fetched in a second `-s` call where it's the whole output.
+      const metaFmt = '%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%P%x1f%s';
+      const meta = await runGit(root, ['show', '-s', `--format=${metaFmt}`, '--date=iso-strict', sha]);
+      if (meta.code !== 0) {
+        throw new ApiError('git_show_failed', 500, meta.stderr.trim() || 'git show failed');
+      }
+      const [fullSha, shortSha, author, authorEmail, date, parentStr, subject] =
+        meta.stdout.trim().split('\x1f');
+      const body = (await runGit(root, ['show', '-s', '--format=%b', sha])).stdout.replace(/\s+$/, '');
+      const files = await collectChangedFiles(root, (flag) => ['show', flag, '--format=', sha]);
+      return {
+        sha: fullSha,
+        shortSha,
+        author,
+        authorEmail,
+        date,
+        subject: subject ?? '',
+        body,
+        parents: parentStr ? parentStr.trim().split(/\s+/).filter(Boolean) : [],
+        files,
+      };
+    },
+
+    async commitFileDiff({ projectId, sha, path }) {
+      const root = requireRoot(projectId);
+      // Empty `--format=` strips the commit header so we return only the
+      // unified patch — matches the shape `diff` returns.
+      const r = await runGit(root, ['show', '--no-color', '--format=', sha, '--', path]);
+      if (r.code !== 0 && !r.stdout) {
+        throw new ApiError('git_show_failed', 500, r.stderr.trim() || 'git show failed');
+      }
+      return { patch: r.stdout };
     },
 
     async stage({ projectId, paths }) {
@@ -358,6 +458,16 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       const r = await runGit(root, args);
       if (r.code !== 0) {
         throw new ApiError('git_branch_delete_failed', 500, r.stderr.trim() || 'git branch -d failed');
+      }
+      return { ok: true as const };
+    },
+
+    async branchRename({ projectId, oldName, newName, force }) {
+      const root = requireRoot(projectId);
+      const args = ['branch', force ? '-M' : '-m', oldName, newName];
+      const r = await runGit(root, args);
+      if (r.code !== 0) {
+        throw new ApiError('git_branch_rename_failed', 500, r.stderr.trim() || 'git branch -m failed');
       }
       return { ok: true as const };
     },
@@ -526,6 +636,42 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
           500,
           r.stderr.trim() || 'git stash show failed',
         );
+      }
+      return { patch: r.stdout };
+    },
+
+    async stashDetail({ projectId, ref }) {
+      if (!ref) throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
+      const root = requireRoot(projectId);
+      // A stash IS a commit object, so `git show -s` reads its metadata.
+      // %s is the stash subject ("WIP on <branch>: <sha> <subject>").
+      const meta = await runGit(root, ['show', '-s', '--format=%h%x1f%cI%x1f%s', '--date=iso-strict', ref]);
+      if (meta.code !== 0) {
+        throw new ApiError('git_stash_show_failed', 500, meta.stderr.trim() || 'git show failed');
+      }
+      const [shortSha, date, message] = meta.stdout.trim().split('\x1f');
+      const m = message?.match(/^(?:WIP on|On)\s+([^:]+):/);
+      const files = await collectChangedFiles(root, (flag) => ['stash', 'show', flag, ref]);
+      return {
+        ref,
+        shortSha: shortSha ?? '',
+        branch: m ? m[1].trim() : null,
+        message: message ?? '',
+        date: date ?? '',
+        files,
+      };
+    },
+
+    async stashFileDiff({ projectId, ref, path }) {
+      if (!ref) throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
+      const root = requireRoot(projectId);
+      // `git stash show` rejects a `-- <path>` pathspec ("too many
+      // revisions"). A stash IS a commit whose first parent is the base
+      // it was taken from, so diffing base→stash for one path gives the
+      // same per-file patch `stash show` would, but path-scoped.
+      const r = await runGit(root, ['diff', '--no-color', `${ref}^1`, ref, '--', path]);
+      if (r.code !== 0 && !r.stdout) {
+        throw new ApiError('git_stash_show_failed', 500, r.stderr.trim() || 'git diff failed');
       }
       return { patch: r.stdout };
     },

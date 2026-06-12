@@ -22,7 +22,8 @@ export type BindingRole =
   | 'link_extractor'
   | 'rewriter'
   | 'reviewer'
-  | 'vision';
+  | 'vision'
+  | 'distiller';
 
 export interface PipelineCatalogEntry {
   pipelineName: string;
@@ -280,6 +281,25 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
       config: { temperature: 0, max_tokens: 4000 },
     },
     introducedInPhase: '9',
+  },
+
+  // ─── Project memory (Mem C write-back) ───────────────────────────────────
+  // Distills durable project memory from session summaries (decisions,
+  // conventions, gotchas, procedure recipes). OPTIONAL override: when this
+  // binding is unset, the pipeline falls back to the general default AI
+  // model (Admin → General AI) so memory works zero-config; set it here to
+  // force a cheaper/local model for distillation.
+  {
+    pipelineName: 'memory_extraction',
+    bindingRole: 'distiller',
+    description:
+      'Distills durable project memory (decisions, conventions, gotchas, recipes) from session summaries at compaction / idle. Optional — when unset, falls back to the general default AI model (zero-config).',
+    recommendedDefault: {
+      providerKind: 'cloudflare',
+      modelHint: '@cf/meta/llama-3.1-8b-instruct',
+      config: { temperature: 0, max_tokens: 1200 },
+    },
+    introducedInPhase: 'memory',
   },
 
   // ─── Vision fallback (image → text) ──────────────────────────────────────

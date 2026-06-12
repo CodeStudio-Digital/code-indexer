@@ -259,9 +259,9 @@ export class ChatGPTCodexProvider implements ChatProvider {
           : {}),
       },
       // Forward the AbortSignal so the SDK can tear down the underlying
-      // fetch when the runner aborts (e.g. deepThink idle/hard timeout
-      // or user-initiated cancellation). Without this, an idle stream
-      // can wedge for the full HTTP read timeout.
+      // fetch when the runner aborts (e.g. user-initiated cancellation
+      // or an internal timeout). Without this, an idle stream can wedge
+      // for the full HTTP read timeout.
       req.signal ? { signal: req.signal } : undefined,
     )) as AsyncIterable<Record<string, unknown>>;
 
@@ -524,6 +524,8 @@ export class ChatGPTCodexProvider implements ChatProvider {
               input_tokens: inputTokens,
               output_tokens: u.output_tokens ?? 0,
               cache_read_input_tokens: cachedTokens,
+              // Responses API: input_tokens already INCLUDES cached tokens.
+              prompt_tokens_total: inputTokens,
             },
           };
         }

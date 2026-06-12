@@ -4,18 +4,16 @@
  * `this`-bound state.
  *
  * Steps (identical to the legacy `assembleMessagesForChat`):
- *   1. Cap accumulated pre-think blocks (deepThink history window).
- *   2. Apply `compactHistoryForLLM` — rolling reduction + char compaction.
- *   3. Build `<active_skills>` + `<active-context>` blocks (via callbacks
+ *   1. Apply `compactHistoryForLLM` — rolling reduction + char compaction.
+ *   2. Build `<active_skills>` + `<active-context>` blocks (via callbacks
  *      so the caller can keep `this`-bound helpers intact for now).
- *   4. Append the extras onto the trailing user message (or push a new
+ *   3. Append the extras onto the trailing user message (or push a new
  *      user message if the tail is assistant/tool).
  */
 import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import type { CoderTunables } from '@mcp/code-agent/core/tunables.js';
 import type { CompactionLimits } from '@mcp/code-agent/core/compaction.js';
 import { compactHistoryForLLM } from '@mcp/code-agent/core/runner.js';
-import { reducePreThinkInHistory } from '@mcp/code-agent/core/smart-reducers.js';
 import { formatDynamicInjection, type DynamicInjectionResult } from './dynamic-injection.js';
 
 export interface AssembleMessagesArgs {
@@ -25,10 +23,6 @@ export interface AssembleMessagesArgs {
   tunables: CoderTunables;
   /** Char-based compaction limits (legacy path). Undefined => token path. */
   compactionLimits: CompactionLimits | undefined;
-  /** Number of pre-think blocks to retain before compaction. Default 3. */
-  preThinkHistoryWindow: number;
-  /** When false, skips the pre-think cap entirely (matches legacy). */
-  persistPreThoughts: boolean;
   /** When true, the `<active-context>` callback fires (Agent Loop v2). */
   agentLoopV2: boolean;
   /**
@@ -55,11 +49,8 @@ export interface AssembleMessagesArgs {
 }
 
 export function assembleMessagesForChat(args: AssembleMessagesArgs): AgentMessage[] {
-  const messagesAfterPreThinkCap = args.persistPreThoughts === false
-    ? args.messages
-    : reducePreThinkInHistory(args.messages, args.preThinkHistoryWindow);
   const compacted = compactHistoryForLLM(
-    messagesAfterPreThinkCap,
+    args.messages,
     args.compactionLimits,
     args.tunables,
   );

@@ -47,14 +47,19 @@ export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
   'o3-mini':                    { maxTools: 64,  contextWindow: 200_000, maxOutputTokens: 100_000 },
   // ── ZAI / GLM ─────────────────────────────────────────────────────────────
   // Context windows from docs.z.ai/guides/llm/* (verified Apr 2026).
-  'glm-5.1':                    { maxTools: 200, contextWindow: 200_000, maxOutputTokens: 16_000 },
-  'glm-4.7-flash':              { maxTools: 200, contextWindow: 128_000, maxOutputTokens: 16_000 },
-  'glm-4.6':                    { maxTools: 200, contextWindow: 200_000, maxOutputTokens: 16_000 }, // FIX: doc says 200K
-  'glm-4.5':                    { maxTools: 200, contextWindow: 128_000, maxOutputTokens: 16_000 },
-  'glm-4.5-air':                { maxTools: 200, contextWindow: 128_000, maxOutputTokens: 16_000 },
-  'glm-4.5-x':                  { maxTools: 200, contextWindow: 128_000, maxOutputTokens: 16_000 },
-  'glm-4.5-airx':               { maxTools: 200, contextWindow: 128_000, maxOutputTokens: 16_000 },
-  'glm-4.5-flash':              { maxTools: 200, contextWindow: 128_000, maxOutputTokens: 16_000 },
+  // maxTools: GLM degrades on tool selection well below its context limits —
+  // flash/air-class models start confusing tool names above ~30 tools (see
+  // capabilities.ts header). Aggressive tiered caps; the priority-based trim
+  // keeps the hot core and the admin can override per model (provider_models
+  // .max_tools) or via CODER_MODEL_CAPS.
+  'glm-5.1':                    { maxTools: 96,  contextWindow: 200_000, maxOutputTokens: 16_000 },
+  'glm-4.7-flash':              { maxTools: 32,  contextWindow: 128_000, maxOutputTokens: 16_000, note: 'GLM flash degrades above ~30 tools — aggressive cap, admin can override' },
+  'glm-4.6':                    { maxTools: 48,  contextWindow: 200_000, maxOutputTokens: 16_000 }, // FIX: doc says 200K
+  'glm-4.5':                    { maxTools: 48,  contextWindow: 128_000, maxOutputTokens: 16_000 },
+  'glm-4.5-air':                { maxTools: 32,  contextWindow: 128_000, maxOutputTokens: 16_000, note: 'GLM air degrades above ~30 tools — aggressive cap, admin can override' },
+  'glm-4.5-x':                  { maxTools: 32,  contextWindow: 128_000, maxOutputTokens: 16_000, note: 'GLM x degrades above ~30 tools — aggressive cap, admin can override' },
+  'glm-4.5-airx':               { maxTools: 32,  contextWindow: 128_000, maxOutputTokens: 16_000, note: 'GLM airx degrades above ~30 tools — aggressive cap, admin can override' },
+  'glm-4.5-flash':              { maxTools: 32,  contextWindow: 128_000, maxOutputTokens: 16_000, note: 'GLM flash degrades above ~30 tools — aggressive cap, admin can override' },
   // ── DeepSeek ─────────────────────────────────────────────────────────────
   // V4 models (April 2026): 1M context, 384K max output, native thinking mode
   // API hard limit: 128 tools max (https://api-docs.deepseek.com/api/create-chat-completion)

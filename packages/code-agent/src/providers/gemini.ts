@@ -166,6 +166,8 @@ export class GeminiChatProvider implements ChatProvider {
           input_tokens: lastUsage.input,
           output_tokens: lastUsage.output,
           cache_read_input_tokens: lastUsage.cachedRead,
+          // Gemini: promptTokenCount already INCLUDES cached content tokens.
+          prompt_tokens_total: lastUsage.input,
           thinking_tokens: lastUsage.thinking || undefined,
         },
       };
@@ -255,6 +257,8 @@ export class GeminiChatProvider implements ChatProvider {
           input_tokens: lastUsage.input,
           output_tokens: lastUsage.output,
           cache_read_input_tokens: 0,
+          // Gemini: promptTokenCount is the full prompt (no cache split here).
+          prompt_tokens_total: lastUsage.input,
           thinking_tokens: lastUsage.thinking || undefined,
         },
       };

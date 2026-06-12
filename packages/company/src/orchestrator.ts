@@ -63,6 +63,7 @@ import {
   type SandboxPeer,
 } from './orchestrator/sandbox-helpers.js';
 import { readBoardWithWatermarks, type ReadBoardOptions } from './orchestrator/board-helpers.js';
+import { consolidateBoardToMemory } from './services/memory/board-consolidator.js';
 
 export type { SpawnSubordinateSpec };
 
@@ -400,6 +401,17 @@ export class CompanyOrchestrator {
     this.publisher.markEnded('done', { reason: 'aborted' });
   }
   finalizeAllSubordinates(): { finalized: number; alreadyStopped: number } { return this.subordinates.finalizeAll(); }
+  /** Mem C — distill board decisions/blockers/deliverables into per-project
+   *  memory snapshots. Fired (fire-and-forget) by `finalize_subordinates`;
+   *  best-effort and semantically deduped, so a double call is harmless. */
+  consolidateMemory(): Promise<{ projects: number; entries: number }> {
+    return consolidateBoardToMemory({
+      companySessionId: this.companySessionId,
+      companyStore: this.ctx.companyStore,
+      db: this.ctx.db,
+      projects: this.ctx.projects,
+    });
+  }
 
   // ─── Pipelines ─────────────────────────────────────────────────
   pipelineList(opts?: { scope?: 'this' | 'global' | 'all'; templateId?: number | null }): Pipeline[] {

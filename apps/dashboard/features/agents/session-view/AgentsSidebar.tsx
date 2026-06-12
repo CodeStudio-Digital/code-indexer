@@ -8,8 +8,8 @@ import { AgentPane } from '../AgentPane.js';
 import ServicesSidebar from '../ServicesSidebar.js';
 import { ProjectBadge } from './ProjectBadge.js';
 import { ProjectRolesBinding } from './ProjectRolesBinding.js';
-import { RoleModelEditor } from './RoleModelEditor.js';
 import { OperationalRulesEditor } from './OperationalRulesEditor.js';
+import type { RoleConfig } from '../RoleEditModal.js';
 import { SidebarSection } from './SidebarSection.js';
 import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
 import type { AgentStreamState } from '../../../state/company/types.js';
@@ -40,7 +40,8 @@ interface AgentsSidebarProps {
   refetch: () => void;
   onOpenAgentRun: (agentRunId: number, role: string, status: string) => void;
   onOpenPersistedRun: (coderSessionId: number, role: string, status: string) => void;
-  onOpenNewRoleDialog: (defaults: { provider: string; model: string }) => void;
+  /** Open the role modal: `{ draft }` creates, `{ draft, editIdx }` edits that row. */
+  onOpenRoleDialog: (args: { draft: RoleConfig; editIdx?: number }) => void;
 }
 
 /**
@@ -69,10 +70,9 @@ export function AgentsSidebar({
   refetch,
   onOpenAgentRun,
   onOpenPersistedRun,
-  onOpenNewRoleDialog,
+  onOpenRoleDialog,
 }: AgentsSidebarProps) {
   const { t } = useTranslation('agents');
-  const [editingRoleIdx, setEditingRoleIdx] = useState<number | null>(null);
   const [addingProject, setAddingProject] = useState(false);
   const [newProjectId, setNewProjectId] = useState('');
 
@@ -135,29 +135,19 @@ export function AgentsSidebar({
     const masterRow = roleAssignments.find((x) => x.role === 'master');
     const defaultProvider = poolPick?.provider ?? masterRow?.provider ?? providerOptions[0]?.id ?? 'anthropic';
     const defaultModel = poolPick?.model ?? masterRow?.model ?? getDefaultModel(defaultProvider);
-    onOpenNewRoleDialog({ provider: defaultProvider, model: defaultModel });
+    onOpenRoleDialog({ draft: { role: '', provider: defaultProvider, model: defaultModel, tier: 'navigate' } });
   }
 
-  async function applyRoleProviderChange(idx: number, provider: string, model: string) {
-    const updated = roleAssignments.map((role, i) => (i === idx ? { ...role, provider, model } : role));
-    const isMaster = roleAssignments[idx]?.role === 'master';
-    const masterRow = roleAssignments.find((x) => x.role === 'master');
-    await stream.switchProvider(
-      isMaster ? provider : (config?.master_provider as string | undefined) ?? masterRow?.provider ?? provider,
-      isMaster ? model : (config?.master_model as string | undefined) ?? masterRow?.model,
-      updated as Array<{ role: string; provider: string; model: string; tier: string }>,
-    );
-    try {
-      await fetch(`/api/company/sessions/${sessionId}/config`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ role_assignments: updated }),
-      });
-    } catch {
-      /* live swap above already happened — refetch keeps UI in sync */
-    }
-    setEditingRoleIdx(null);
-    refetch();
+  // Row click opens the FULL editor (tier, system prompt, skills, thinking,
+  // fallback) for the existing role. Provider/model hot-swap on a running
+  // session moved into RoleDialog's commit (was the inline RoleModelEditor).
+  function openEditRoleDialog(idx: number) {
+    const r = roleAssignments[idx];
+    if (!r) return;
+    onOpenRoleDialog({
+      draft: { tier: 'navigate', ...(r as unknown as Partial<RoleConfig>), role: r.role ?? '' } as RoleConfig,
+      editIdx: idx,
+    });
   }
 
   const availableProjects = (allProjects ?? []).filter(
@@ -282,7 +272,7 @@ export function AgentsSidebar({
               <div key={i} className="rounded border p-1.5 space-y-1">
                 <div
                   className="flex items-center gap-2 text-[10px] cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5"
-                  onClick={() => setEditingRoleIdx(editingRoleIdx === i ? null : i)}
+                  onClick={() => openEditRoleDialog(i)}
                 >
                   {r.role === 'master' ? (
                     <Crown className="h-3 w-3 text-yellow-400 shrink-0" />
@@ -312,15 +302,6 @@ export function AgentsSidebar({
                     </button>
                   )}
                 </div>
-                {editingRoleIdx === i && (
-                  <RoleModelEditor
-                    role={r as unknown as Record<string, string>}
-                    providerOptions={providerOptions}
-                    getModelsForProvider={getModelsForProvider}
-                    getDefaultModel={getDefaultModel}
-                    onApply={(provider, model) => void applyRoleProviderChange(i, provider, model)}
-                  />
-                )}
               </div>
             ))}
           </div>
@@ -341,14 +322,19 @@ export function AgentsSidebar({
         />
       </SidebarSection>
 
-      {/* ── Microservices ── */}
-      <SidebarSection
-        storageKey="microservices"
-        icon={Server}
-        title="Microservices"
-      >
-        <ServicesSidebar sessionId={sessionId} embedded />
-      </SidebarSection>
+      {/* ── Microservices — only when the session can actually have them:
+          builder mode (sandbox network) or services already attached
+          (session projects with a label). Permanent "No services yet"
+          noise in plain sessions helped nobody. ── */}
+      {(!!config?.builder || projects.some((p) => !!p.label)) && (
+        <SidebarSection
+          storageKey="microservices"
+          icon={Server}
+          title="Microservices"
+        >
+          <ServicesSidebar sessionId={sessionId} embedded />
+        </SidebarSection>
+      )}
 
       {/* ── Agentes (live state) ── */}
       {/*

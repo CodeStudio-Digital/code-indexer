@@ -23,6 +23,15 @@ import {
 export type DevServerStatus = 'stopped' | 'running' | 'exited';
 
 const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/i;
+/**
+ * Lines that announce the server's OWN address (vite "Local:", wrangler
+ * "Ready on", next "started server", CRA, angular, fastify…). A bare URL
+ * match is treated as PROVISIONAL: dev scripts often echo config/proxy
+ * targets first (`VITE_API_URL=http://localhost:8282`), and taking the
+ * first URL made the preview attach to ANOTHER service's port.
+ */
+const READY_LINE_RE =
+  /(local:|ready|listening|running at|started server|server (running|started|listening)|available (at|on)|➜|on port)/i;
 
 function manualKey(projectId: number): string {
   return `mcp.preview.url.${projectId}`;
@@ -43,6 +52,18 @@ export function useProjectDevServer(projectId: number, opts: { pinnedPort?: numb
     initRunningTasks();
   }, []);
 
+  // React reuses this hook instance when the user navigates between
+  // projects (same component position, only the prop changes), so the
+  // per-project manual override must be re-read — otherwise project B
+  // inherits project A's URL until a full remount.
+  useEffect(() => {
+    try {
+      setManualUrlState(localStorage.getItem(manualKey(projectId)) ?? '');
+    } catch {
+      setManualUrlState('');
+    }
+  }, [projectId]);
+
   const devTask: RunnerTask | undefined = useMemo(() => {
     const mine = tasksForProject(tasks, projectId);
     // Prefer a running dev server; fall back to any dev-ish task.
@@ -53,17 +74,35 @@ export function useProjectDevServer(projectId: number, opts: { pinnedPort?: numb
   // pinned and no manual override). Resets when the task changes.
   const terminalId = devTask?.terminalId;
   useEffect(() => {
+    // Stale-URL guard: a URL detected for a PREVIOUS task/project must not
+    // survive the switch. Without this, opening project B while project A's
+    // dev server was detected kept showing A's server inside B's preview
+    // (two runners → previews swapped).
+    setDetectedUrl(null);
     if (opts.pinnedPort || manualUrl || !terminalId) return;
     let cancelled = false;
     (async () => {
       try {
+        // Two-tier match: a URL on a "ready/listening" line is the server's
+        // own address — final, stop scanning. A bare URL is provisional
+        // (config echo? proxy target?): show it for instant feedback but
+        // keep scanning so the real listen line can correct it.
+        let provisional: string | null = null;
         for await (const chunk of apiStream<{ type: string; data?: string }>('terminal.output', { terminalId })) {
           if (cancelled) return;
           if (chunk.type !== 'data' || !chunk.data) continue;
-          const m = URL_RE.exec(chunk.data);
-          if (m) {
-            setDetectedUrl(`http://localhost:${m[1]}`);
-            return; // first hit wins
+          for (const line of chunk.data.split(/\r?\n/)) {
+            const m = URL_RE.exec(line);
+            if (!m) continue;
+            const found = `http://localhost:${m[1]}`;
+            if (READY_LINE_RE.test(line)) {
+              setDetectedUrl(found);
+              return; // authoritative — done
+            }
+            if (!provisional) {
+              provisional = found;
+              setDetectedUrl(found);
+            }
           }
         }
       } catch {

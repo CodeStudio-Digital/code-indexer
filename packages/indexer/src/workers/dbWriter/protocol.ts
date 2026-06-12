@@ -18,13 +18,24 @@ export interface PersistAssistantTurnPayload {
     duration_ms: number;
     /** Char count of result_text at write time. Materialized for cheap aggregations. */
     output_chars?: number;
+    /** Size the LLM actually saw (post reduce+cap). NULL = not recorded. */
+    output_chars_shaped?: number | null;
     /** 1 if the bridge clamped the output. Cheap "is this tool noisy?" signal. */
     truncated?: boolean;
     /** Phase detected by PhaseRouter (Camada 2). NULL until that lands. */
     phase?: string | null;
     /** FK to coder_turn_telemetry(id). Wires per-call metrics to the turn row. */
     turn_telemetry_id?: number | null;
+    /** Harness refusal tag (dedup/failure-streak/timeout/…); NULL on a real call. */
+    refusal_kind?: string | null;
+    /** Nested (code_exec) rows only — parent block's tool_use id (mig 133). */
+    parent_tool_use_id?: string | null;
   }>;
+  /**
+   * Nested code_exec invocations. Audit rows ONLY — excluded from the paired
+   * tool-role message synthesis (no matching tool_use block exists).
+   */
+  nested_tool_calls?: PersistAssistantTurnPayload['tool_calls'];
   subagent_usage?: {
     input_tokens: number;
     output_tokens: number;

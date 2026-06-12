@@ -26,9 +26,19 @@ interface WebviewWindowProps {
   /** Scopes the plugin's tool calls (cwd) to a project, when known. */
   projectId?: number;
   onClose?: () => void;
+  /** Skip the built-in title bar — for hosts that provide their own chrome
+   *  (e.g. the chat right rail wraps the webview in `PanelChrome`). */
+  chromeless?: boolean;
 }
 
-export function WebviewWindow({ namespace, title, entry, projectId, onClose }: WebviewWindowProps) {
+export function WebviewWindow({
+  namespace,
+  title,
+  entry,
+  projectId,
+  onClose,
+  chromeless = false,
+}: WebviewWindowProps) {
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -64,21 +74,23 @@ export function WebviewWindow({ namespace, title, entry, projectId, onClose }: W
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b bg-card/60 px-3 text-xs">
-        <span className="truncate font-medium" title={title}>
-          {title}
-        </span>
-        {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('webview.close')}
-            className="ml-auto text-muted-foreground hover:text-foreground"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
+      {!chromeless && (
+        <div className="flex h-8 shrink-0 items-center gap-2 border-b bg-card/60 px-3 text-xs">
+          <span className="truncate font-medium" title={title}>
+            {title}
+          </span>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t('webview.close')}
+              className="ml-auto text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      )}
       <div className="min-h-0 flex-1">
         {error ? (
           <div className="p-3 text-sm text-status-error">{error}</div>

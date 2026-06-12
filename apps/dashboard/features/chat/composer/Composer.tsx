@@ -85,10 +85,6 @@ interface ComposerProps {
   thinking?: boolean;
   setThinking?: (v: boolean) => void;
   supportsThinking?: boolean;
-  /** Simulated deepThink toggle — auxiliary cheap model writes a pre-thought
-   *  before each main-model turn. Orthogonal to `thinking`. */
-  deepThink?: boolean;
-  setDeepThink?: (v: boolean) => void;
   /** "Describe images" — force the vision-fallback (image → text) even on
    *  vision-capable models. Auto-applies for blind models regardless. */
   describeImages?: boolean;
@@ -449,9 +445,9 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
           {/*
             Markdown formatting toolbar + a slot on the right for the
             "session-level" icons (attachment / pipeline / think /
-            deepthink / cap). Tucking them up here keeps the busier
-            bottom row focused on pickers (agent / provider / model)
-            and the Send button.
+            cap). Tucking them up here keeps the busier bottom row
+            focused on pickers (agent / provider / model) and the
+            Send button.
           */}
           <div className="flex items-center">
             <MarkdownToolbar
@@ -532,35 +528,6 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
                               defaultValue: 'O modelo atual não suporta extended thinking.',
                             })}
                       </TooltipContent>*/}
-                    </Tooltip>
-                  )}
-
-                  {/* deepThink (simulated) — orthogonal to thinking */}
-                  {props.setDeepThink && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => props.setDeepThink?.(!props.deepThink)}
-                          aria-pressed={props.deepThink ?? false}
-                          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
-                            props.deepThink
-                              ? 'bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25'
-                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                          }`}
-                        >
-                          <Sparkles className="h-3.5 w-3.5" />
-                          {props.deepThink && (
-                            <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                          )}
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-[260px]">
-                        {t('toolbar.deepThink', {
-                          defaultValue:
-                            'deepThink (simulado): um modelo auxiliar barato (Haiku) escreve um pré-pensamento antes de cada turno do modelo principal. Ortogonal a "think". Custo extra pequeno, ganho em raciocínio.',
-                        })}
-                      </TooltipContent>
                     </Tooltip>
                   )}
 
@@ -720,8 +687,6 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             thinking={props.thinking}
             setThinking={props.setThinking}
             supportsThinking={props.supportsThinking}
-            deepThink={props.deepThink}
-            setDeepThink={props.setDeepThink}
             describeImages={props.describeImages}
             setDescribeImages={props.setDescribeImages}
           />

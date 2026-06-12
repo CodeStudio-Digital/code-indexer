@@ -204,56 +204,73 @@ describe('computeDynamicInjection', () => {
   });
 });
 
-describe('computeDynamicInjection — session drive channels', () => {
-  it('surfaces the active plan on turn 1 (resume)', () => {
-    const out = computeDynamicInjection(baseCtx({ turn: 1, activePlan: { text: 'my plan', status: 'approved' } }));
+describe('computeDynamicInjection — session state block', () => {
+  const state = { block: '<session-state>\nplan [approved]: my plan\n</session-state>', hash: 'h1' };
+
+  it('injects the block on turn 1 (resume) and reports its hash', () => {
+    const out = computeDynamicInjection(baseCtx({ turn: 1, sessionState: state }));
     expect(out).not.toBeNull();
-    expect(out!.reminder).toContain('active plan');
+    expect(out!.reminder).toContain('<session-state>');
     expect(out!.reminder).toContain('my plan');
+    expect(out!.includedSessionStateHash).toBe('h1');
   });
 
-  it('surfaces the active plan right after a compaction', () => {
-    const out = computeDynamicInjection(baseCtx({ recentCompactionAt: 9, activePlan: { text: 'plan body', status: 'pending' } }));
-    expect(out!.reminder).toContain('active plan');
-    expect(out!.reminder).toContain('plan body');
+  it('injects the block right after a compaction even when hash unchanged', () => {
+    const out = computeDynamicInjection(baseCtx({
+      recentCompactionAt: 9,
+      sessionState: state,
+      lastInjectedSessionStateHash: 'h1',
+    }));
+    expect(out!.reminder).toContain('<session-state>');
   });
 
-  it('does NOT surface the plan on a steady mid-session turn', () => {
-    expect(computeDynamicInjection(baseCtx({ activePlan: { text: 'p', status: 'approved' } }))).toBeNull();
-  });
-
-  it('injects a new session-memory note once and reports its id', () => {
-    const out = computeDynamicInjection(baseCtx({ sessionMemory: [{ id: 'n1', title: 'AuthNote', body: 'jwt here' }] }));
-    expect(out!.reminder).toContain('session notes');
-    expect(out!.reminder).toContain('AuthNote');
-    expect(out!.includedSessionMemoryIds).toEqual(['n1']);
-  });
-
-  it('dedups session-memory notes already injected', () => {
+  it('does NOT re-inject an unchanged block on a steady mid-session turn', () => {
     expect(computeDynamicInjection(baseCtx({
-      sessionMemory: [{ id: 'n1', title: 'AuthNote', body: 'jwt here' }],
-      lastInjectedSessionMemoryIds: new Set(['n1']),
+      sessionState: state,
+      lastInjectedSessionStateHash: 'h1',
     }))).toBeNull();
   });
 
-  it('re-injects already-seen notes after a compaction', () => {
+  it('re-injects when the block hash changed (note added, todo moved…)', () => {
     const out = computeDynamicInjection(baseCtx({
-      recentCompactionAt: 9,
-      sessionMemory: [{ id: 'n1', title: 'AuthNote', body: 'jwt here' }],
-      lastInjectedSessionMemoryIds: new Set(['n1']),
+      sessionState: { ...state, hash: 'h2' },
+      lastInjectedSessionStateHash: 'h1',
     }));
-    expect(out!.reminder).toContain('AuthNote');
-    expect(out!.includedSessionMemoryIds).toEqual(['n1']);
+    expect(out!.reminder).toContain('<session-state>');
+    expect(out!.includedSessionStateHash).toBe('h2');
   });
 
-  it('nudges recall_investigations on turn 1 when investigations exist', () => {
-    const out = computeDynamicInjection(baseCtx({ turn: 1, investigationCount: 3 }));
-    expect(out!.reminder).toContain('recall_investigations');
-    expect(out!.reminder).toContain('3');
+  it('injects EVERY turn in short-window mode (sessionStateEveryTurn)', () => {
+    const out = computeDynamicInjection(baseCtx({
+      sessionState: state,
+      sessionStateEveryTurn: true,
+      lastInjectedSessionStateHash: 'h1', // unchanged — still injected
+    }));
+    expect(out!.reminder).toContain('<session-state>');
   });
 
-  it('does NOT nudge investigations on a steady mid-session turn', () => {
-    expect(computeDynamicInjection(baseCtx({ investigationCount: 3 }))).toBeNull();
+  it('injects the project memory index on milestones with hash dedup', () => {
+    const index = { text: 'project memory index:\n- [gotcha] ABI mismatch', hash: 'i1' };
+    const onMilestone = computeDynamicInjection(baseCtx({ turn: 1, projectMemoryIndex: index }));
+    expect(onMilestone!.reminder).toContain('memory index');
+    expect(onMilestone!.includedProjectIndexHash).toBe('i1');
+    // Steady turn, unchanged index → nothing.
+    expect(computeDynamicInjection(baseCtx({
+      projectMemoryIndex: index,
+      lastInjectedProjectIndexHash: 'i1',
+    }))).toBeNull();
+  });
+
+  it('orders the index BEFORE the state block in the reminder', () => {
+    const out = computeDynamicInjection(baseCtx({
+      turn: 1,
+      sessionState: state,
+      projectMemoryIndex: { text: 'project memory index:\n- [note] X', hash: 'i1' },
+    }));
+    const idx = out!.reminder.indexOf('memory index');
+    const st = out!.reminder.indexOf('<session-state>');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(st).toBeGreaterThan(idx);
   });
 });
 

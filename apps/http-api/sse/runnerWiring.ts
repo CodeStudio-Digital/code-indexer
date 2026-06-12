@@ -147,22 +147,6 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
   runner.on('quality_watchdog_alert', (payload) => {
     publish(bus, 'quality_watchdog_alert', payload);
   });
-  // deepThink (simulated) — auxiliary cheap model pre-thought lifecycle.
-  // Without these the chip toggles on but the operator has no signal as to
-  // whether the auxiliary actually ran, streamed, or failed (and degraded
-  // silently). Mirrors the text_delta / thinking_delta pattern.
-  runner.on('pre_think_started', (payload) => {
-    publish(bus, 'pre_think_started', payload);
-  });
-  runner.on('pre_think_delta', (payload) => {
-    publish(bus, 'pre_think_delta', payload);
-  });
-  runner.on('pre_think_completed', (payload) => {
-    publish(bus, 'pre_think_completed', payload);
-  });
-  runner.on('pre_think_failed', (payload) => {
-    publish(bus, 'pre_think_failed', payload);
-  });
   runner.on('bt_state_dwell', (payload) => {
     publish(bus, 'bt_state_dwell', payload);
   });

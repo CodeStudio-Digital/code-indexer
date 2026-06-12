@@ -2,6 +2,7 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import type { DbWriteReq, DbWriteRes, DbWriterWorkerData, PersistAssistantTurnPayload } from '@mcp/indexer/workers/dbWriter/protocol.js';
+import { classifyToolRefusal } from '@mcp/code-agent/sessions/store/tool-refusal.js';
 
 if (!parentPort) {
   throw new Error('dbWriter worker: must run inside worker_threads');
@@ -26,8 +27,9 @@ const touchSession = db.prepare(
 const insertTool = db.prepare(`
   INSERT INTO coder_tool_calls
     (message_id, tool_use_id, tool_name, args_json, result_text, is_error, duration_ms,
-     output_chars, truncated, phase, turn_telemetry_id)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     output_chars, output_chars_shaped, truncated, phase, turn_telemetry_id, refusal_kind,
+     parent_tool_use_id)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const bumpStmt = db.prepare(`
   UPDATE coder_sessions
@@ -53,7 +55,7 @@ const persistAssistantTurnTx = db.transaction((p: PersistAssistantTurnPayload) =
   );
   const messageId = Number(r.lastInsertRowid);
   touchSession.run(p.session_id);
-  for (const tc of p.tool_calls) {
+  const runInsertTool = (tc: PersistAssistantTurnPayload['tool_calls'][number]): void => {
     insertTool.run(
       messageId,
       tc.tool_use_id,
@@ -63,11 +65,18 @@ const persistAssistantTurnTx = db.transaction((p: PersistAssistantTurnPayload) =
       tc.is_error ? 1 : 0,
       tc.duration_ms,
       tc.output_chars ?? (tc.result_text?.length ?? 0),
+      tc.output_chars_shaped ?? null,
       tc.truncated ? 1 : 0,
       tc.phase ?? null,
       tc.turn_telemetry_id ?? null,
+      tc.refusal_kind ?? classifyToolRefusal(tc.result_text, tc.is_error),
+      tc.parent_tool_use_id ?? null,
     );
-  }
+  };
+  for (const tc of p.tool_calls) runInsertTool(tc);
+  // Nested (code_exec) rows: audit-only — same table, parent linkage set,
+  // EXCLUDED from the paired tool message synthesis below.
+  for (const tc of p.nested_tool_calls ?? []) runInsertTool(tc);
   // Paired tool-role message (mirrors store/messages.ts persistAssistantTurn):
   // the dashboard derives tool status from the presence of a matching
   // tool_result block, so this must land atomically with the assistant turn.

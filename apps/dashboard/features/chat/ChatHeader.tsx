@@ -54,8 +54,17 @@ export function ChatHeader({ session, streaming, runDelta, lastUsage, stats, con
   const totalIn = session.total_input_tokens;
   const totalOut = session.total_output_tokens;
 
-  // Context window usage: prefer live SSE data, fall back to persisted stats.
-  const lastTurnInput = lastUsage?.input_tokens ?? session.last_turn_input_tokens ?? 0;
+  // Context window usage — SINGLE source of truth. Live: the `context_status`
+  // event (the same cache-inclusive number the runner's compaction gates act
+  // on). At rest: the persisted cache-inclusive prompt of the last turn from
+  // stats, falling back to the legacy cache-blind column for old sessions.
+  // `lastUsage.input_tokens` no longer feeds this bar — mixing it with the
+  // persisted value is what made the gauge jump on send (70k → 100k).
+  const lastTurnInput =
+    contextStatus?.prompt_tokens ??
+    stats?.last_turn_prompt_tokens ??
+    session.last_turn_input_tokens ??
+    0;
   const contextWindow = contextStatus?.context_window ?? stats?.context_window ?? null;
   const ctxPct = contextWindow && lastTurnInput > 0
     ? Math.min(Math.round((lastTurnInput / contextWindow) * 100), 100)

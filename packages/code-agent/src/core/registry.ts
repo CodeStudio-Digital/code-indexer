@@ -1,5 +1,6 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { aliasNormalizationEnabled, normalizeToolArgs } from '@mcp/code-agent/core/tool-arg-aliases.js';
+import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
 
 /**
  * In-memory registry that holds the union of native + MCP tools available
@@ -47,7 +48,15 @@ export class ToolRegistry {
   async invoke(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const tool = this.tools.get(name);
     if (!tool) {
-      return { content: `Unknown tool: ${name}`, isError: true };
+      // Deterministic recovery breadcrumbs: a close-name suggestion (telemetry
+      // caught `grep_code` for `mcp__grep_code`) and the discovery tool when
+      // this session actually has it registered.
+      const suggestion = suggestToolName(name, Array.from(this.tools.keys()));
+      const didYouMean = suggestion ? ` Did you mean \`${suggestion}\`?` : '';
+      const discovery = this.tools.has('find_tools')
+        ? ' Call find_tools to list available tools.'
+        : '';
+      return { content: `Unknown tool: ${name}.${didYouMean}${discovery}`, isError: true };
     }
     // Tag the recording filesystem port with the current tool name so its
     // audit log shows the actual mutating tool (apply_patch / edit_file /

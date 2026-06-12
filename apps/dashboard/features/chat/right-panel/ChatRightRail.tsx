@@ -24,12 +24,17 @@ import {
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { cn } from '../../../lib/utils.js';
+import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
+import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 import type { RightPanelId } from './types.js';
 
 interface RailEntry {
   id: RightPanelId | 'snapshots';
   icon: LucideIcon;
-  labelKey: string;
+  /** i18n key under `chat:` — built-in entries. */
+  labelKey?: string;
+  /** Literal label — plugin entries (title comes from the manifest). */
+  label?: string;
   /** Snapshots is special: clicking opens a modal, not a panel. */
   kind: 'panel' | 'modal';
   /** Optional badge count — Snapshots uses it for pending hunks. */
@@ -43,6 +48,8 @@ interface ChatRightRailProps {
   onOpenSnapshots?: () => void;
   /** Pending snapshot count for the Snapshots badge. */
   pendingSnapshots?: number;
+  /** Plugin tool windows (side: 'right') — one rail icon each. */
+  pluginWindows?: ContribToolWindow[];
 }
 
 export function ChatRightRail({
@@ -50,8 +57,18 @@ export function ChatRightRail({
   onSelectPanel,
   onOpenSnapshots,
   pendingSnapshots,
+  pluginWindows = [],
 }: ChatRightRailProps) {
   const { t } = useTranslation(['chat']);
+
+  const pluginEntries: RailEntry[] = pluginWindows
+    .filter((w) => w.side === 'right')
+    .map((w) => ({
+      id: `plugin:${w.pluginNs}:${w.id}` as RightPanelId,
+      icon: pluginWindowIcon(w.icon),
+      label: w.title,
+      kind: 'panel' as const,
+    }));
 
   const entries: RailEntry[] = [
     { id: 'meta', icon: Compass, labelKey: 'rightRail.meta', kind: 'panel' },
@@ -62,6 +79,7 @@ export function ChatRightRail({
     { id: 'tool-stats', icon: BarChart3, labelKey: 'rightRail.toolStats', kind: 'panel' },
     { id: 'worker-log', icon: ScrollText, labelKey: 'rightRail.workerLog', kind: 'panel' },
     { id: 'details', icon: Info, labelKey: 'rightRail.details', kind: 'panel' },
+    ...pluginEntries,
     {
       id: 'snapshots',
       icon: GitCompare,
@@ -79,6 +97,7 @@ export function ChatRightRail({
       {entries.map((entry) => {
         const Icon = entry.icon;
         const active = entry.kind === 'panel' && activePanelId === entry.id;
+        const label = entry.label ?? t(`chat:${entry.labelKey}`, entry.id);
         const handleClick = () => {
           if (entry.kind === 'modal') {
             if (entry.id === 'snapshots') onOpenSnapshots?.();
@@ -93,7 +112,7 @@ export function ChatRightRail({
               <button
                 type="button"
                 onClick={handleClick}
-                aria-label={t(`chat:${entry.labelKey}`, entry.id)}
+                aria-label={label}
                 aria-pressed={active}
                 className={cn(
                   'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
@@ -116,9 +135,7 @@ export function ChatRightRail({
                 )}
               </button>
             </TooltipTrigger>
-            <TooltipContent side="left">
-              {t(`chat:${entry.labelKey}`, entry.id)}
-            </TooltipContent>
+            <TooltipContent side="left">{label}</TooltipContent>
           </Tooltip>
         );
       })}

@@ -13,6 +13,15 @@ export interface Snapshot {
   tags: string;
   created_by: string;
   created_at: string;
+  // Mem C metadata (migration 114) — the API already returns these
+  // (SELECT *); optional so older payload shapes keep working.
+  /** 'manual' | 'agent' | 'session' | 'compaction' | 'index' */
+  source?: string;
+  /** 0..1 — retrieval ranking weight; floors set by the distiller. */
+  importance?: number;
+  /** Times retrieval injected this memory into an agent prompt. */
+  access_count?: number;
+  last_accessed_at?: string | null;
 }
 
 export interface SnapshotVersion {

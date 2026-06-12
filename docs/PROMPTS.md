@@ -198,7 +198,8 @@ Canonical vocabulary the prompts share:
 - **Kanban** — current names only: `kanban_post_comment`,
   `kanban_update_objectives`, `kanban_read_my_card`, `kanban_move_to_review`
   (subordinate); `kanban_create_card`/`kanban_move_card`/… (master). The
-  `kanban_my_comment` / `kanban_my_checklist` aliases are deprecated.
+  old `kanban_my_*` / `kanban_add_comment` / `kanban_update_checklist` /
+  `kanban_update_card` aliases were removed — never reference them.
 
 ---
 

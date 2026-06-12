@@ -86,10 +86,4 @@ export interface AdminApi {
     /** Trigger OAuth flow against the remote server. */
     connect(input: { id: string }, ctx: ApiContext): Promise<{ authorizationUrl: string }>;
   };
-
-  // DeepThink admin
-  deepThink: {
-    getDefaults(input: void, ctx: ApiContext): Promise<{ provider: string; model: string; preThinkOnToolResults: boolean } | null>;
-    setDefaults(input: { provider: string; model: string; preThinkOnToolResults: boolean }, ctx: ApiContext): Promise<void>;
-  };
 }

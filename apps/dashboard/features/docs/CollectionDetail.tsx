@@ -24,6 +24,7 @@ import {
 import { SourceList } from './SourceList.js';
 import { AddSourceDialog } from './AddSourceDialog.js';
 import { SearchTestPanel } from './SearchTestPanel.js';
+import { ProjectLinks } from './ProjectLinks.js';
 
 interface Props {
   collection: DocCollection | null;
@@ -138,6 +139,7 @@ export function CollectionDetail({ collection, onChanged }: Props) {
         </TabsList>
 
         <TabsContent value="sources" className="space-y-3 mt-3">
+          <ProjectLinks collectionId={collection.id} />
           <SourceList
             collection={collection}
             sources={sources}

@@ -31,22 +31,13 @@ import { evaluateToolInvocation, findScopeViolations, type PolicyContext } from 
 import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import { resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
+import { buildCodeExecFailureHint, wrapToolsBinding } from '@mcp/code-agent/tools/code-exec-hints.js';
+import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 30_000;
 const MAX_TOOL_CALLS = 50;
 const MAX_OUTPUT_BYTES = 50_000;
-
-/**
- * Node globals the sandbox intentionally omits (see the `sandbox` object's
- * trailing comment). A script reaching for one of these gets a bare
- * `ReferenceError: <name> is not defined`; we recognize the name to emit a
- * precise nudge toward the registered tools instead of an opaque failure.
- */
-const ABSENT_NODE_GLOBALS = new Set([
-  'require', 'import', 'module', 'exports', 'process', 'Buffer',
-  '__dirname', '__filename', 'global', 'globalThis', 'fetch',
-]);
 
 /**
  * Promises returned by an active code_exec toolsProxy. The module-level
@@ -296,6 +287,25 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
               throw new Error(`tool ${t.name} blocked: ${decision.detail}`);
             }
           }
+          // Nested loop guards (tuple-hash dedup + failure-streak pre-check),
+          // AFTER the policy gate so blocked calls don't pollute the dedup
+          // counter — same ordering as top-level dispatch. A refusal is a
+          // catchable JS exception, like every other nested failure.
+          const observer = ctx.nestedToolObserver;
+          const nestedRefusal =
+            observer?.beforeNestedCall(t.name, argObj, { repeatable: !!t.repeatable }) ?? null;
+          if (nestedRefusal) {
+            observer?.afterNestedCall({
+              name: t.name,
+              args: argObj,
+              isError: true,
+              durationMs: 0,
+              resultChars: nestedRefusal.refusalText.length,
+              resultPreview: nestedRefusal.refusalText,
+              refusalKind: nestedRefusal.kind,
+            });
+            throw new Error(`tool ${t.name} refused: ${nestedRefusal.refusalText}`);
+          }
           // Pause the JS-time budget while this tool runs (the script is not
           // charged for time inside a tool), and bound the tool by its OWN tier
           // so a hung tool can't stall the batch — `run_command` gets its 10-min
@@ -326,6 +336,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                 throw new Error(decision.refusalText);
               }
             }
+            const t0 = Date.now();
             const invocation = registry.invoke(t.name, argObj, ctx);
             const guarded =
               perToolMs === Infinity
@@ -339,7 +350,30 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
                       );
                     }),
                   ]);
-            const result = await guarded;
+            let result: Awaited<typeof invocation>;
+            try {
+              result = await guarded;
+            } catch (e) {
+              // Timeout / unexpected throw — still an invocation outcome the
+              // failure-streak state (and telemetry) must see.
+              observer?.afterNestedCall({
+                name: t.name,
+                args: argObj,
+                isError: true,
+                durationMs: Date.now() - t0,
+                resultChars: 0,
+                resultPreview: e instanceof Error ? e.message : String(e),
+              });
+              throw e;
+            }
+            observer?.afterNestedCall({
+              name: t.name,
+              args: argObj,
+              isError: !!result.isError,
+              durationMs: Date.now() - t0,
+              resultChars: result.content.length,
+              resultPreview: result.content,
+            });
             if (result.isError) {
               throw new Error(`tool ${t.name}: ${result.content}`);
             }
@@ -381,7 +415,9 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         // Bare aliases first so the explicit fields below win on conflict
         // (e.g. a future tool named `JSON` would not shadow the global).
         ...bareGlobals,
-        tools: toolsProxy,
+        // Unknown `tools.<name>` access throws a suggestion-bearing error
+        // instead of yielding undefined → "is not a function" (telemetry).
+        tools: wrapToolsBinding(toolsProxy, exposedNames),
         log: appendLog,
         console: { log: appendLog, warn: appendLog, error: appendLog },
         JSON,
@@ -420,7 +456,11 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         }) as Promise<unknown>;
       } catch (e) {
         if (clockTimer) clearTimeout(clockTimer);
-        return err(`code_exec parse/sync error: ${e instanceof Error ? e.message : String(e)}`);
+        const msg = e instanceof Error ? e.message : String(e);
+        // Parse-time failures get hints too — `import x from 'y'` dies here
+        // ("Cannot use import statement"), never reaching the async catch.
+        const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames });
+        return err(`code_exec parse/sync error: ${msg}${hint}`);
       }
 
       let returnValue: unknown;
@@ -428,49 +468,11 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
         returnValue = await Promise.race([scriptPromise, timeoutPromise]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        // Defense-in-depth hint: a ReferenceError on a name that IS a
-        // registered tool means the model wrote the wrong call shape (e.g.
-        // shadowed by a `let` / typo); on an absent Node builtin it means the
-        // script reached for a runtime that isn't there. We match on the
-        // message text rather than `instanceof ReferenceError`: errors thrown
-        // inside node:vm carry the sandbox realm's constructors, so they are
-        // NOT instances of the host's ReferenceError/Error — `msg` is then the
-        // String(e) form, e.g. "ReferenceError: require is not defined".
-        let hint = '';
-        {
-          const refMatch = /(?:^|ReferenceError:\s*)([A-Za-z_$][\w$]*) is not defined/.exec(msg);
-          if (refMatch) {
-            const name = refMatch[1];
-            if (exposedNames.includes(name)) {
-              hint =
-                `\n\nHint: \`${name}\` is a registered tool. Call it as ` +
-                `\`await ${name}(args)\` or \`await tools.${name}(args)\`.`;
-            } else if (allToolNames.has(name)) {
-              // Registered at top-level but excluded from the sandbox (a
-              // control/lifecycle tool). Weak models loop here retrying it
-              // inside code_exec — steer them to a direct top-level call.
-              hint =
-                `\n\nHint: \`${name}\` is a registered tool but is NOT exposed inside code_exec ` +
-                `— it's a control/lifecycle tool (task_complete, execute_task, expand_toolset, spawn_*, ask_user, submit_*) ` +
-                `that needs the runner's own turn cycle. End this code_exec and call \`${name}\` directly as a top-level tool call.`;
-            } else if (ABSENT_NODE_GLOBALS.has(name)) {
-              // code_exec runs in a node:vm sandbox with NO Node builtins —
-              // not a bug, by design. Steer the model to the registered tools
-              // instead of arbitrary Node I/O.
-              hint =
-                `\n\nHint: \`${name}\` and other Node builtins (require/import/fs/path/process) ` +
-                `are not available — code_exec runs in a node:vm sandbox that only exposes the ` +
-                `\`tools\` proxy plus JSON/Math/etc., not a Node runtime. To write a file, call the ` +
-                `registered tool: \`await write_file({ path, content })\` (or \`create_file\`). ` +
-                `To run a shell command, use \`exec_command\`. code_exec only orchestrates tool calls.`;
-            } else {
-              const close = exposedNames.find((t) => t.toLowerCase() === name.toLowerCase());
-              if (close) {
-                hint = `\n\nHint: did you mean \`${close}\`? (case-sensitive)`;
-              }
-            }
-          }
-        }
+        // Defense-in-depth hints (wrong call shape, control tool, absent Node
+        // builtin, import, nested-failure try/catch) — see code-exec-hints.ts.
+        // Matching is on message text, never instanceof: errors thrown inside
+        // node:vm carry the sandbox realm's constructors.
+        const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames });
         const stderr = logBuffer.length > 0 ? `\n[output before failure]\n${logBuffer.join('\n')}` : '';
         return err(`code_exec failed: ${msg}${hint}${stderr}`);
       } finally {
@@ -495,7 +497,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       }
       const out = lines.join('\n');
       if (out.length > effectiveMaxOutput) {
-        return ok(out.slice(0, effectiveMaxOutput) + `\n[truncated: output exceeded ${effectiveMaxOutput} bytes]`);
+        return ok(out.slice(0, effectiveMaxOutput) + `\n${truncationMarker(`output exceeded ${effectiveMaxOutput} bytes`)}`);
       }
       return ok(out);
     },

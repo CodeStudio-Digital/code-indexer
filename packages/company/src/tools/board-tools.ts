@@ -106,6 +106,9 @@ function postToBoard(
       '"what name should I use?").\n\n' +
       'Prefer interactive mode over a plain post + waiting in a loop — the loop wastes turns and ' +
       'the user has no structured way to reply.\n\n' +
+      'Consolidate: ONE post covering several updates beats a sequence of small posts ' +
+      '(each extra post costs a full turn). Post when you have something complete to report, ' +
+      'not per micro-step.\n\n' +
       'Mention agents via @role.',
     parameters,
     source: 'native',

@@ -40,11 +40,12 @@ export interface RunCoderOptions {
   };
   /**
    * Durable-memory write-back — host callback that distills durable project
-   * memory (decisions/conventions/architecture + `gotcha` failure lessons)
-   * from the FINISHED run and persists it, off the hot path. Structural to
+   * memory (decisions/conventions/architecture + `gotcha` failure lessons +
+   * promoted session notes) and persists it, off the hot path. Structural to
    * avoid a code-agent → services dependency (mirrors `memoryRetriever`).
-   * Invoked once in the run's done-block, gated on `memory_enabled`; the
-   * runner assembles the raw signal via its own summarizer. Best-effort.
+   * Invoked at distill moments that REUSE an already-paid summary: the
+   * compaction harvest (`memory-harvest.ts`) and the host's idle sweeper.
+   * Gated on `memory_enabled`. Best-effort.
    */
   runEndMemory?: {
     extractAndPersist(
@@ -57,11 +58,46 @@ export interface RunCoderOptions {
         errorsAndFixes?: string[];
         toolTrail?: string[];
         succeeded?: boolean;
+        /** Distill moment for the diagnostics log (compaction | manual_clear | idle). */
+        trigger?: string;
+        /** Session that produced the signal — recorded in the distill log. */
+        sessionId?: number;
+        /** Durable session notes promoted to project-memory candidates (no LLM cost). */
+        sessionNotes?: Array<{ title: string; body: string; kind: string; pinned: boolean }>;
       },
-    ): Promise<void>;
-    /** True only when a distiller binding is configured — gate the costly
-     *  end-of-run summary on this so unconfigured projects pay nothing. */
+    ): Promise<{ created: number; merged: number; skipped: number } | void>;
+    /** True when a distiller model resolves (binding or zero-config fallback) —
+     *  gate costly summaries on this so an unconfigurable install pays nothing. */
     isConfigured(): Promise<boolean>;
+  };
+  /**
+   * Direct project-memory ports for the agent tools (`save_note` scope
+   * 'project' + `recall_memory`). Structural mirror of the host's writer /
+   * retriever so code-agent stays decoupled from services. `save` must ride
+   * the same dedup/merge as the distillers; `recall` returns FULL content
+   * (semantic+keyword) and marks access. Wired into `ToolContext.projectMemory`
+   * gated on the project's `memory_enabled`.
+   */
+  projectMemory?: {
+    save(
+      projectId: number,
+      projectName: string,
+      entry: { title: string; content: string; category: string },
+    ): Promise<{ created: number; merged: number; skipped: number } | null>;
+    recall(
+      projectId: number,
+      projectName: string,
+      query: string,
+      limit?: number,
+    ): Promise<Array<{
+      id: string;
+      title: string;
+      content: string;
+      category?: string;
+      source?: string;
+      importance?: number;
+      staleNote?: string;
+    }>>;
   };
   /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
   planMode?: boolean;
@@ -128,19 +164,6 @@ export interface RunCoderOptions {
    * ignore. When undefined the provider falls back to `defaultThinking`.
    */
   thinkingBudgetTokens?: number;
-  /**
-   * Simulated deepThink mode — orthogonal to `thinking`. When true, the
-   * runner asks a cheap auxiliary model (default Haiku) to write a few
-   * sentences of reasoning before each main-model turn and prefills them
-   * as a `<thinking data-source="aux">` block.
-   */
-  deepThink?: boolean;
-  /** Auxiliary model id. Default 'claude-haiku-4-5-20251001'. */
-  deepThinkModel?: string;
-  /** Auxiliary provider name. Default 'anthropic'. */
-  deepThinkProvider?: string;
-  /** When false (default), skip pre-think on tool_result turns. */
-  preThinkOnToolResults?: boolean;
   /**
    * Per-session resolved tunables (push caps, turn budget, intervention
    * cooldown). When omitted, the runner falls back to `envTunables()`
