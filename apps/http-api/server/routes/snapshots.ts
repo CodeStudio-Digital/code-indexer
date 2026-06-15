@@ -75,6 +75,22 @@ export function mountSnapshotsRoutes(app: Hono, deps: ServerDeps): void {
     });
   });
 
+  // Archived snapshots (the reversible GC bin) — feeds the "Restore" dialog.
+  app.get('/api/projects/:id/snapshots/archived', (c) => {
+    const projectId = parseIdParam(c);
+    if (!deps.db.getProject(projectId)) return c.json({ error: 'project not found' }, 404);
+    const limit = Math.min(Number(c.req.query('limit') ?? 50) || 50, 200);
+    return c.json({ archived: deps.db.listArchivedSnapshots(projectId, limit) });
+  });
+
+  // Restore an archived snapshot. Clears its embedding hash so the backfill
+  // re-embeds it (vectors were dropped on archive). Reverses a consolidation GC.
+  app.post('/api/snapshots/:id/unarchive', (c) => {
+    const id = parseIdParam(c);
+    deps.db.unarchiveSnapshot(id);
+    return c.json({ ok: true });
+  });
+
   // Manual "run now" for the memory consolidator — merges near-duplicates and
   // GCs stale/cold/low-importance snapshots for this project on demand. Works
   // even when the periodic timer is disarmed (MCP_MEMORY_CONSOLIDATE off).

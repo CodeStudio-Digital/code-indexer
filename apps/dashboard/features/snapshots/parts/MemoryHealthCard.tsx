@@ -5,12 +5,14 @@
  * (when / which trigger / what landed), totals by category and provenance,
  * and the per-project automatic-memory toggle (projects.memory_enabled).
  */
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, CircleAlert, RefreshCw } from 'lucide-react';
+import { Brain, CircleAlert, RefreshCw, Sparkles, Loader2 } from 'lucide-react';
 import { Switch } from '../../../components/ui/switch.js';
-import { apiPatch, useApi } from '../../../hooks/useApi.js';
+import { apiPatch, apiPost, useApi } from '../../../hooks/useApi.js';
 import { cn, formatRelativeTime } from '../../../lib/utils.js';
 import { CATEGORY_COLORS } from '../snapshot-types.js';
+import { RestoreArchivedDialog } from './RestoreArchivedDialog.js';
 
 interface DistillEntry {
   trigger: string;
@@ -36,6 +38,9 @@ interface MemoryHealth {
 export function MemoryHealthCard({ projectId }: { projectId: number }) {
   const { t } = useTranslation('projects');
   const { data, refetch } = useApi<MemoryHealth>(`/projects/${projectId}/memory/health`);
+  const [consolidating, setConsolidating] = useState(false);
+  const [consolidateMsg, setConsolidateMsg] = useState<string | null>(null);
+  const [restoreOpen, setRestoreOpen] = useState(false);
 
   if (!data) return null;
   const { last, totals } = data;
@@ -43,6 +48,29 @@ export function MemoryHealthCard({ projectId }: { projectId: number }) {
   const toggle = async (enabled: boolean) => {
     await apiPatch(`/projects/${projectId}`, { memory_enabled: enabled });
     refetch();
+  };
+
+  const consolidate = async () => {
+    setConsolidating(true);
+    setConsolidateMsg(null);
+    try {
+      const { results } = await apiPost<{ results: { merged: number; archived: number }[] }>(
+        `/projects/${projectId}/memory/consolidate`, {},
+      );
+      const merged = results.reduce((s, r) => s + (r.merged ?? 0), 0);
+      const archived = results.reduce((s, r) => s + (r.archived ?? 0), 0);
+      setConsolidateMsg(
+        merged || archived
+          ? t('memory.health.consolidateDone', { merged, archived })
+          : t('memory.health.consolidateNoop'),
+      );
+      refetch();
+    } catch (e) {
+      const status = (e as { status?: number }).status;
+      setConsolidateMsg(status === 503 ? t('memory.health.consolidateUnavailable') : (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setConsolidating(false);
+    }
   };
 
   return (
@@ -61,6 +89,17 @@ export function MemoryHealthCard({ projectId }: { projectId: number }) {
         >
           <RefreshCw className="h-3 w-3" />
         </button>
+        <button
+          type="button"
+          onClick={consolidate}
+          disabled={consolidating}
+          aria-label={t('memory.health.consolidate')}
+          title={t('memory.health.consolidate')}
+          className="p-1 rounded hover:bg-muted text-muted-foreground disabled:opacity-50"
+        >
+          {consolidating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+        </button>
+        {consolidateMsg && <span className="text-[10px] text-muted-foreground truncate">{consolidateMsg}</span>}
         <label className="ml-auto flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">
           {t('memory.toggle.label')}
           <Switch checked={data.memory_enabled} onCheckedChange={toggle} />
@@ -127,12 +166,24 @@ export function MemoryHealthCard({ projectId }: { projectId: number }) {
               .join(' · ')}
           </span>
           {!!totals.archived && totals.archived > 0 && (
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-muted text-muted-foreground">
+            <button
+              type="button"
+              onClick={() => setRestoreOpen(true)}
+              title={t('memory.restore.title')}
+              className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-muted text-muted-foreground hover:bg-muted/60"
+            >
               {t('memory.health.archived', { count: totals.archived })}
-            </span>
+            </button>
           )}
         </div>
       )}
+
+      <RestoreArchivedDialog
+        projectId={projectId}
+        open={restoreOpen}
+        onOpenChange={setRestoreOpen}
+        onRestored={refetch}
+      />
     </div>
   );
 }

@@ -161,6 +161,7 @@ import { builderCheckpoints144 } from './144_builder_checkpoints.js';
 import { userMemory145 } from './145_user_memory.js';
 import { snapshotArchive146 } from './146_snapshot_archive.js';
 import { apiCollections147 } from './147_api_collections.js';
+import { apiRequestHistory148 } from './148_api_request_history.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -338,6 +339,7 @@ export const MIGRATIONS: Migration[] = [
   userMemory145,
   snapshotArchive146,
   apiCollections147,
+  apiRequestHistory148,
 ];
 
 /**

@@ -66,6 +66,29 @@ export interface ApiRegressionRun {
   finished_at: string | null;
 }
 
+/** One recorded send of a request (migration 148) — backs the Timeline tab. */
+export interface ApiRequestHistory {
+  id: number;
+  request_id: number;
+  status: number | null;
+  ok: boolean;
+  duration_ms: number | null;
+  url: string | null;
+  error: string | null;
+  source: ApiRequestSource;
+  created_at: string;
+}
+
+export interface InsertRequestHistoryInput {
+  request_id: number;
+  status?: number | null;
+  ok: boolean;
+  duration_ms?: number | null;
+  url?: string | null;
+  error?: string | null;
+  source?: ApiRequestSource;
+}
+
 export interface CreateCollectionInput {
   project_id: number;
   name: string;

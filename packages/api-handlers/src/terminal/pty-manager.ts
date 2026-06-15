@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { delimiter } from 'node:path';
 import { ApiError, type TerminalOutputChunk } from '@mcp/api-bus';
+import { OutputCoalescer, trimReplayBuffer } from './output-coalescer.js';
 
 export interface IPty {
   pid: number;
@@ -74,6 +75,8 @@ export { loadPty };
 export interface PtyEntry {
   pty: IPty;
   buffer: TerminalOutputChunk[];
+  /** Running byte total of `data` chunks in `buffer` — drives replay trimming. */
+  bufferBytes: number;
   listeners: Set<(chunk: TerminalOutputChunk) => void>;
   exited: boolean;
   exitChunk?: TerminalOutputChunk;
@@ -158,6 +161,7 @@ export class PtyManager {
     const entry: PtyEntry = {
       pty: child,
       buffer: [],
+      bufferBytes: 0,
       listeners: new Set(),
       exited: false,
       exitHooks: new Set(),
@@ -165,13 +169,21 @@ export class PtyManager {
     const id = randomUUID();
     this.entries.set(id, entry);
 
-    child.onData((data) => {
-      const chunk: TerminalOutputChunk = { type: 'data', data };
+    // Coalesce the stdout firehose: consecutive `data` chunks within a short
+    // window become ONE buffered chunk + ONE fan-out, instead of one IPC
+    // message per node-pty write. The replay buffer is trimmed to a byte cap
+    // so re-attaching to a long-lived runner stays cheap.
+    const coalescer = new OutputCoalescer((chunk) => {
       entry.buffer.push(chunk);
+      if (chunk.type === 'data') entry.bufferBytes += chunk.data.length;
+      entry.bufferBytes = trimReplayBuffer(entry.buffer, entry.bufferBytes);
       for (const l of entry.listeners) l(chunk);
     });
+    child.onData((data) => coalescer.push(data));
 
     child.onExit((e) => {
+      // Drain any buffered output BEFORE the exit chunk so ordering holds.
+      coalescer.flush();
       const chunk: TerminalOutputChunk = {
         type: 'exit',
         code: e.exitCode ?? null,

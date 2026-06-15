@@ -25,7 +25,7 @@ function fakeDb(project: { structural_indexed_at: string | null; last_indexed: s
 
 const SETTINGS: ProjectIndexSettings = {
   autoIndex: true, autoWatch: false, maxFiles: 20000,
-  maxWatchedProjects: 3, watchDebounceMs: 50,
+  maxWatchedProjects: 3, watchDebounceMs: 50, openDelayMs: 0,
 };
 
 class FakeExecutor implements StructuralExecutor {
@@ -193,6 +193,36 @@ describe('ProjectIndexService', () => {
     await svc.withSemanticRun(1, async () => { order.push('full'); });
     expect(order).toEqual(['structural', 'full']);
     await svc.dispose();
+  });
+
+  it('openDelayMs defers a non-manual run; manual preempts and cancels the timer', async () => {
+    // Non-manual open is deferred by the delay; manual runs immediately.
+    const exec = new FakeExecutor();
+    const svc = new ProjectIndexService(
+      fakeDb({ structural_indexed_at: null, last_indexed: null }),
+      exec, undefined, () => ({ ...SETTINGS, openDelayMs: 40 }),
+    );
+    svc.ensureFresh(1, 'open');
+    await sleep(15);
+    expect(exec.runs).toBe(0);          // still within the delay window
+    await sleep(50);
+    expect(exec.runs).toBe(1);          // fired after the delay
+    await svc.dispose();
+
+    // A manual trigger during the window preempts and cancels the timer:
+    // exactly one run total (no redundant deferred run afterwards).
+    const exec2 = new FakeExecutor();
+    const svc2 = new ProjectIndexService(
+      fakeDb({ structural_indexed_at: null, last_indexed: null }),
+      exec2, undefined, () => ({ ...SETTINGS, openDelayMs: 40 }),
+    );
+    svc2.ensureFresh(1, 'open');        // schedules
+    svc2.ensureFresh(1, 'manual');      // preempts → immediate
+    await sleep(10);
+    expect(exec2.runs).toBe(1);
+    await sleep(60);                     // past the original delay
+    expect(exec2.runs).toBe(1);          // deferred timer was cancelled
+    await svc2.dispose();
   });
 
   it('autoIndex=false gates non-manual triggers', async () => {

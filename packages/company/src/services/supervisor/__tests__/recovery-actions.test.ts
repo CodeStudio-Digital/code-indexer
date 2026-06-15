@@ -77,7 +77,8 @@ describe('abortStuckTool', () => {
   });
 
   it('injects tool_result error when injectToolResultError is available', async () => {
-    const inject = vi.fn();
+    // Returns true → a matching in-flight call was found and unwedged.
+    const inject = vi.fn().mockReturnValue(true);
     const ctx: RecoveryContext = {
       runners: new Map([
         [1, { injectToolResultError: inject, abort: vi.fn() }],
@@ -91,6 +92,22 @@ describe('abortStuckTool', () => {
     expect(out.ok).toBe(true);
     expect(inject).toHaveBeenCalledWith('tu-1', expect.stringContaining('Bash'));
     if (out.ok) expect(out.detail).toContain('tu-1');
+  });
+
+  it('falls back to abort when inject returns false (no in-flight call)', async () => {
+    const inject = vi.fn().mockReturnValue(false);
+    const abort = vi.fn();
+    const ctx: RecoveryContext = {
+      runners: new Map([[1, { injectToolResultError: inject, abort }]]),
+    };
+    const stuck = makeStuck('STUCK_TOOL', 'AWAITING_TOOL', {
+      currentToolUseId: 'tu-1',
+      currentToolName: 'Bash',
+    });
+    const out = await abortStuckTool(stuck, ctx);
+    expect(out.ok).toBe(true);
+    expect(inject).toHaveBeenCalled();
+    expect(abort).toHaveBeenCalled();
   });
 
   it('falls back to runner.abort() when injectToolResultError missing', async () => {

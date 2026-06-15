@@ -52,23 +52,29 @@ export interface RecoveryContext {
     resurrect(reason: string): Promise<unknown>;
   };
   /**
-   * Direct runner handle map. Used by `abortStuckTool` to inject a
-   * tool_result error into the runner that's wedged on a tool call.
-   * The dispatcher looks up `runner = runners.get(agentRunId)`.
-   * When the map is missing OR the runner is gone (race), the action
-   * downgrades to subordinates.abort().
+   * Per-agent runner lookup. Used by `abortStuckTool` to inject a
+   * tool_result error into the runner that's wedged on a tool call —
+   * `runner = runners.get(agentRunId)`. A real `Map` satisfies this, but a
+   * live view over the orchestrator's subordinate registry does too (so the
+   * company-worker doesn't have to keep a parallel map in sync). When the
+   * lookup is missing OR the runner is gone (race), the action downgrades to
+   * subordinates.abort().
    */
-  runners?: Map<number, {
-    /**
-     * Inject a synthetic tool_result error for the given tool_use_id
-     * so the runner can continue past the stuck call. The runner
-     * MUST treat the injected result as if it came from the actual
-     * tool dispatcher.
-     */
-    injectToolResultError?(toolUseId: string, errorMessage: string): void;
-    /** Force-abort the runner. Last resort. */
-    abort(reason?: string): void | Promise<void>;
-  }>;
+  runners?: {
+    get(agentRunId: number): RunnerRecoveryHandle | undefined;
+  };
+}
+
+export interface RunnerRecoveryHandle {
+  /**
+   * Inject a synthetic tool_result error for the given tool_use_id so the
+   * runner can continue past the stuck call. Returns true when a matching
+   * in-flight call was found and unwedged; false (no-op) otherwise, so the
+   * caller falls back to a full abort.
+   */
+  injectToolResultError?(toolUseId: string, errorMessage: string): boolean;
+  /** Force-abort the runner. Last resort. */
+  abort(reason?: string): void | Promise<void>;
 }
 
 export type RecoveryOutcome =
@@ -132,23 +138,32 @@ export const abortStuckTool: RecoveryAction = async (stuck, ctx) => {
   const errorMessage =
     `[supervisor] Tool ${toolName} (id=${toolUseId}) timed out after ` +
     `${Math.round(stuck.ageMs / 1000)}s with no heartbeat. ` +
-    `The supervisor aborted it so the run can continue. ` +
+    `The supervisor unwedged it so the run can continue. ` +
     `Consider a different tool / smaller scope / spawning a subagent.`;
+  // RECOVERY_MODE='abort' forces the blunt path (terminate the run) even when
+  // inject is available — an operator escape hatch if inject ever misbehaves.
+  // Default ('inject'/unset) prefers the elegant unwedge.
+  const forceAbort = (process.env.MCP_SUPERVISOR_RECOVERY_MODE ?? 'inject').toLowerCase() === 'abort';
   try {
-    if (typeof runner.injectToolResultError === 'function') {
-      runner.injectToolResultError(toolUseId, errorMessage);
-      return {
-        ok: true,
-        action: 'abortStuckTool',
-        detail: `injected tool_result error for ${toolName}/${toolUseId}`,
-      };
+    if (!forceAbort && typeof runner.injectToolResultError === 'function') {
+      const injected = runner.injectToolResultError(toolUseId, errorMessage);
+      if (injected) {
+        return {
+          ok: true,
+          action: 'abortStuckTool',
+          detail: `injected tool_result error for ${toolName}/${toolUseId}`,
+        };
+      }
+      // Inject found no matching in-flight call (race) — fall through to abort.
     }
     // Fallback path — abort the runner entirely.
     await runner.abort(`supervisor: stuck tool ${toolName}`);
     return {
       ok: true,
       action: 'abortStuckTool',
-      detail: `injectToolResultError unavailable; aborted runner (fallback)`,
+      detail: forceAbort
+        ? `aborted runner (RECOVERY_MODE=abort)`
+        : `inject unavailable/missed; aborted runner (fallback)`,
     };
   } catch (e) {
     return {

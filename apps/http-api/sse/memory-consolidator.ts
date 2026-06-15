@@ -22,12 +22,16 @@ const DEFAULT_INTERVAL_MS = Number(process.env.MCP_MEMORY_CONSOLIDATE_INTERVAL_M
 const DEFAULT_IDLE_MS = Number(process.env.MCP_MEMORY_CONSOLIDATE_IDLE_MS ?? 30 * 60 * 1000);
 const DEFAULT_MAX_PROJECTS = Number(process.env.MCP_MEMORY_CONSOLIDATE_MAX_PROJECTS ?? 3);
 
-/** Off by default — the consolidator archives rows, so it's explicit opt-in. */
+/**
+ * On by default — archiving is reversible (rows soft-delete with a restore UI
+ * in Admin → Memory) and the pass only touches idle projects. `MCP_MEMORY_CONSOLIDATE`
+ * stays the kill-switch: set it to `0`/`false`/`off` to disarm the periodic timer.
+ */
 export function memoryConsolidateEnabled(): boolean {
   const raw = process.env.MCP_MEMORY_CONSOLIDATE;
-  if (raw == null || raw === '') return false;
+  if (raw == null || raw === '') return true;
   const v = raw.toLowerCase();
-  return v === '1' || v === 'true' || v === 'on';
+  return !(v === '0' || v === 'false' || v === 'off');
 }
 
 function num(env: string | undefined, fallback: number): number {

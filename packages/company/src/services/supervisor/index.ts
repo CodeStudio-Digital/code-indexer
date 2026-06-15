@@ -83,17 +83,28 @@ export {
 } from './state-machine.js';
 
 /**
- * Helper for hosts: build + return the supervisor only when the
- * `MCP_SUPERVISOR_ENABLED=1` env flag is set. Mirrors the pattern of
- * `startInboxWatchdogIfEnabled` from C8. Returns null when disabled.
+ * Helper for hosts: build + return the supervisor unless it's explicitly
+ * disabled. ON by default now that recovery unwedges stuck tools without
+ * terminating the run (`injectToolResultError`, Phase 2.3) and the worker wires
+ * the per-agent `runners` view. `MCP_SUPERVISOR_ENABLED` is the kill-switch:
+ * set it to `0`/`false`/`off` to disarm the supervisor entirely. Recovery
+ * aggressiveness is tuned separately via `MCP_SUPERVISOR_RECOVERY_MODE`.
  */
 import type { AgentSupervisorDeps } from './AgentSupervisor.js';
 import { AgentSupervisor } from './AgentSupervisor.js';
 
+/** On by default; kill-switch via MCP_SUPERVISOR_ENABLED=0/false/off. */
+export function supervisorEnabled(): boolean {
+  const raw = process.env.MCP_SUPERVISOR_ENABLED;
+  if (raw == null || raw === '') return true;
+  const v = raw.toLowerCase();
+  return !(v === '0' || v === 'false' || v === 'off');
+}
+
 export function startAgentSupervisorIfEnabled(
   deps: AgentSupervisorDeps,
 ): AgentSupervisor | null {
-  if (process.env.MCP_SUPERVISOR_ENABLED !== '1') return null;
+  if (!supervisorEnabled()) return null;
   const supervisor = new AgentSupervisor(deps);
   supervisor.start();
   return supervisor;

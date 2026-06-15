@@ -14,7 +14,7 @@
  * popover.
  */
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Circle, GitBranch } from 'lucide-react';
 import { useApi } from '../../../hooks/useApi.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
@@ -23,10 +23,9 @@ import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/
 import { cn } from '../../../lib/utils.js';
 import { fileIconFor } from '../../../lib/file-icon.js';
 import { BranchPopover } from './status-bar/BranchPopover.js';
-import { IndexStatusChip } from './status-bar/IndexStatusChip.js';
+import { IndexStatusSection } from './status-bar/IndexStatusSection.js';
 import { LanguageChip } from './status-bar/LanguageChip.js';
 import { AiCompleteChip } from './status-bar/AiCompleteChip.js';
-import { useIndexStatus } from './status-bar/useIndexStatus.js';
 import { CommitDialog } from './tool-windows/git/CommitDialog.js';
 
 interface StatusBarProps {
@@ -48,20 +47,15 @@ interface GitStatusSummary {
   notARepo?: boolean;
 }
 
-export function StatusBar({ projectId, projectName }: StatusBarProps) {
+function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const dirtyCount = useWorkspaceStore(
     (s) => s.openFiles.filter((f) => f.kind !== 'diff' && f.dirty).length,
   );
-  const { data: stats } = useApi<{ file_count: number; symbol_count: number; total_lines: number }>(
-    `/projects/${projectId}/stats`,
-  );
-  // Live index frames (initial frame arrives immediately on subscribe).
-  // Counters PREFER the stream: the one-shot stats above freezes at page-load
-  // values — during a first index it showed "0 files · 0 symbols" forever.
-  const indexStatus = useIndexStatus(projectId);
-  const fileCount = indexStatus?.fileCount ?? stats?.file_count;
-  const symbolCount = indexStatus?.symbolCount ?? stats?.symbol_count;
+  // The indexing chip + file/symbol counters live in IndexStatusSection,
+  // which owns the live `useIndexStatus` subscription — so progress frames
+  // (~6×/s during a scan) re-render only that tiny section, not this footer
+  // (and its git Popover/Tooltip subtree).
   // projectGit.status returns the branch + ahead/behind/dirty counters
   // so we can echo what JetBrains shows in the bottom-right corner.
   // `refetch` lets the branch popover poke this hook after any
@@ -159,16 +153,7 @@ export function StatusBar({ projectId, projectName }: StatusBarProps) {
         )}
       </span>
       <span className="ml-auto inline-flex items-center gap-3">
-        <IndexStatusChip status={indexStatus} />
-        <span className="opacity-40">·</span>
-        {fileCount !== undefined && symbolCount !== undefined && (
-          <>
-            <span>{fileCount.toLocaleString()} files</span>
-            <span className="opacity-40">·</span>
-            <span>{symbolCount.toLocaleString()} symbols</span>
-            <span className="opacity-40">·</span>
-          </>
-        )}
+        <IndexStatusSection projectId={projectId} />
         {/* Language-intelligence tier for the active file: built-in TS
             service / installed LSP server (green), structural-index
             fallback (sky) or syntax-only (amber). */}
@@ -191,3 +176,6 @@ export function StatusBar({ projectId, projectName }: StatusBarProps) {
     </footer>
   );
 }
+
+/** Memoized: only re-render when projectId/projectName change (parent churn). */
+export const StatusBar = memo(StatusBarImpl);

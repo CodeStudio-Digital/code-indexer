@@ -76,4 +76,30 @@ describe('ApiClientStore', () => {
     expect(runs[0].status).toBe('passed');
     expect(runs[0].passed).toBe(3);
   });
+
+  it('records request history, prunes to a cap, and cascades on delete (mig 148)', () => {
+    const col = h.store.createCollection({ project_id: 1, name: 'C' });
+    const req = h.store.createRequest({ collection_id: col.id, name: 'r', method: 'GET', path_template: '/x' });
+
+    h.store.insertRequestHistory({ request_id: req.id, status: 200, ok: true, duration_ms: 12, url: 'http://x/1' });
+    h.store.insertRequestHistory({ request_id: req.id, status: null, ok: false, duration_ms: 9, url: 'http://x/2', error: 'ECONNREFUSED' });
+
+    const hist = h.store.listRequestHistory(req.id);
+    expect(hist).toHaveLength(2);
+    // Newest first; bool coercion + error round-trip.
+    expect(hist[0].error).toBe('ECONNREFUSED');
+    expect(hist[0].ok).toBe(false);
+    expect(hist[1].ok).toBe(true);
+    expect(hist[1].status).toBe(200);
+
+    // Prune keeps only the newest N.
+    for (let i = 0; i < 10; i++) h.store.insertRequestHistory({ request_id: req.id, status: 200, ok: true, duration_ms: i });
+    const pruned = h.store.pruneRequestHistory(req.id, 5);
+    expect(pruned).toBe(7); // 12 total → keep 5 → delete 7
+    expect(h.store.listRequestHistory(req.id)).toHaveLength(5);
+
+    // Deleting the request removes its history (explicit cascade).
+    h.store.deleteRequest(req.id);
+    expect(h.store.listRequestHistory(req.id)).toHaveLength(0);
+  });
 });

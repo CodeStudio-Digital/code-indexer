@@ -215,8 +215,11 @@ describe('startAgentSupervisorIfEnabled', () => {
     else process.env.MCP_SUPERVISOR_ENABLED = originalEnv;
   });
 
-  it('returns null when env flag unset', () => {
-    expect(startAgentSupervisorIfEnabled(makeDeps())).toBeNull();
+  it('starts supervisor by default when env flag unset (on by default)', () => {
+    const sup = startAgentSupervisorIfEnabled(makeDeps());
+    expect(sup).toBeInstanceOf(AgentSupervisor);
+    expect(sup?.getStatus().isRunning).toBe(true);
+    sup?.stop();
   });
 
   it('creates + starts supervisor when env flag set to "1"', () => {
@@ -227,10 +230,12 @@ describe('startAgentSupervisorIfEnabled', () => {
     sup?.stop();
   });
 
-  it('returns null when env flag is anything other than "1"', () => {
-    process.env.MCP_SUPERVISOR_ENABLED = 'true';
-    expect(startAgentSupervisorIfEnabled(makeDeps())).toBeNull();
+  it('returns null only when explicitly disabled (kill-switch)', () => {
     process.env.MCP_SUPERVISOR_ENABLED = '0';
+    expect(startAgentSupervisorIfEnabled(makeDeps())).toBeNull();
+    process.env.MCP_SUPERVISOR_ENABLED = 'false';
+    expect(startAgentSupervisorIfEnabled(makeDeps())).toBeNull();
+    process.env.MCP_SUPERVISOR_ENABLED = 'off';
     expect(startAgentSupervisorIfEnabled(makeDeps())).toBeNull();
   });
 });

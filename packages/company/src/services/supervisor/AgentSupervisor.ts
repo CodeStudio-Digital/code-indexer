@@ -531,6 +531,12 @@ export class AgentSupervisor {
    */
   private async runRecoveryActionFor(stuck: StuckAgent, nowMs: number): Promise<void> {
     if (!this.recoveryContext) return;
+    // RECOVERY_MODE escape hatches: 'off'/'read_only' detect + emit incidents
+    // but never act (the stuck_detected incident is emitted by the tick before
+    // this runs). 'inject' (default) and 'abort' both recover — the action
+    // picks inject-with-abort-fallback or forced abort respectively.
+    const mode = (process.env.MCP_SUPERVISOR_RECOVERY_MODE ?? 'inject').toLowerCase();
+    if (mode === 'off' || mode === 'read_only') return;
     const agentRunId = stuck.record.agentRunId;
     const role = stuck.record.role;
     try {

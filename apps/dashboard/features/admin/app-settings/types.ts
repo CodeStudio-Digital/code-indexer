@@ -1,6 +1,6 @@
 /** Shared types for the App Settings panel (mirrors the GET /api/admin/settings shape). */
 export type SettingType = 'string' | 'bool' | 'int' | 'float' | 'url' | 'secret';
-export type SettingCategory = 'llm' | 'mcp' | 'agent' | 'company' | 'debug';
+export type SettingCategory = 'llm' | 'mcp' | 'indexing' | 'agent' | 'company' | 'memory' | 'debug';
 export type Source = 'db' | 'env' | 'default' | 'unset';
 
 export interface SettingItem {

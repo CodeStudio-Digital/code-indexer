@@ -43,6 +43,8 @@ export class ProjectIndexService {
   private running = new Set<number>();
   private draining = new Set<number>();
   private lastEnsureAt = new Map<number, number>();
+  /** Deferred-open timers (MCP_INDEX_OPEN_DELAY_MS) — cancelled when a run starts. */
+  private pendingOpen = new Map<number, ReturnType<typeof setTimeout>>();
   /** MRU-first list of watched projects (LRU eviction beyond the cap). */
   private watchOrder: number[] = [];
   /** UI fs-events subscribers (live tree / tab reload), per project. */
@@ -74,12 +76,39 @@ export class ProjectIndexService {
       return; // fresh enough — the watcher is keeping it current
     }
     this.lastEnsureAt.set(projectId, Date.now());
-    // Watch BEFORE the run: changes landing mid-run buffer in the dirty
-    // queue and drain right after — closes the scan/charge race.
+    // Watch BEFORE the run: changes landing mid-delay/mid-run buffer in the
+    // dirty queue and drain right after — closes the scan/charge race.
     if (s.autoWatch) this.ensureWatching(projectId);
+
+    const manual = reason === 'manual';
+    const delay = manual ? 0 : s.openDelayMs;
+    if (delay <= 0) {
+      this.startStructuralRun(projectId, s, manual);
+      return;
+    }
+    if (this.pendingOpen.has(projectId)) return; // already scheduled
+    // Defer the CPU-bound run so the renderer paints the project screen
+    // before the indexer worker pins a core. A manual trigger during the
+    // window preempts — startStructuralRun cancels this timer.
+    const t = setTimeout(() => {
+      this.pendingOpen.delete(projectId);
+      this.startStructuralRun(projectId, s, false);
+    }, delay);
+    t.unref?.();
+    this.pendingOpen.set(projectId, t);
+  }
+
+  /** Kick the locked structural run + drain. Cancels any deferred-open timer. */
+  private startStructuralRun(projectId: number, s: ProjectIndexSettings, manual: boolean): void {
+    const pending = this.pendingOpen.get(projectId);
+    if (pending) {
+      clearTimeout(pending);
+      this.pendingOpen.delete(projectId);
+    }
+    if (this.disposed || this.running.has(projectId)) return;
     this.running.add(projectId);
     void this.mutex
-      .withLock(projectId, () => this.runStructural(projectId, s, reason === 'manual'))
+      .withLock(projectId, () => this.runStructural(projectId, s, manual))
       .catch((err) => this.status.setPhase(projectId, 'error', msg(err)))
       .finally(() => {
         this.running.delete(projectId);
@@ -182,6 +211,8 @@ export class ProjectIndexService {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    for (const t of this.pendingOpen.values()) clearTimeout(t);
+    this.pendingOpen.clear();
     await this.watcher.stopAll();
   }
 

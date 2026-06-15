@@ -7,7 +7,7 @@
 import { apiBaseUrl } from '../../lib/api-client.js';
 import type {
   ApiBodyKind, ApiCollection, ApiEnvironment, ApiRequest, SendResponse,
-  RunReport, ApiRegressionRun, ImportResult,
+  RunReport, ApiRegressionRun, ImportResult, ApiRequestHistory,
 } from './types.js';
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -50,6 +50,8 @@ export const sendRequest = (p: number, rid: number, envId?: number) =>
   req<SendResponse>(`${root(p)}/requests/${rid}/send`, j({ envId }));
 export const verifyRequest = (p: number, rid: number, expectedStatus: number, assert?: unknown) =>
   req<ApiRequest>(`${root(p)}/requests/${rid}/verify`, j({ expectedStatus, assert }));
+export const listRequestHistory = (p: number, rid: number, limit = 50) =>
+  req<{ history: ApiRequestHistory[] }>(`${root(p)}/requests/${rid}/history?limit=${limit}`).then((r) => r.history);
 
 // ─── Environments ──────────────────────────────────────────────────────
 export const listEnvironments = (p: number) =>

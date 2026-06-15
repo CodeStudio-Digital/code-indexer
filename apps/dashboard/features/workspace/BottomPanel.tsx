@@ -12,6 +12,7 @@ import {
   TerminalSquare,
   AlertCircle,
   FileText,
+  Search,
   ChevronDown,
   ChevronUp,
   X,
@@ -24,14 +25,16 @@ import { WebviewWindow } from './jetbrains/tool-windows/WebviewWindow.js';
 import type { ContribToolWindow } from '../../state/contribution-registry.js';
 import { ProblemsPanel } from '../project/bottom/ProblemsPanel.js';
 import { OutputPanel } from '../project/bottom/OutputPanel.js';
+import { FindPanel } from '../project/bottom/FindPanel.js';
 import { useProjectDiagnostics } from '../project/bottom/useProjectDiagnostics.js';
 
-type BuiltinTabId = 'terminal' | 'problems' | 'output';
+type BuiltinTabId = 'terminal' | 'problems' | 'output' | 'find';
 
 const TABS: Array<{ id: BuiltinTabId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'terminal', label: 'Terminal', icon: TerminalSquare },
   { id: 'problems', label: 'Problems', icon: AlertCircle },
   { id: 'output', label: 'Output', icon: FileText },
+  { id: 'find', label: 'Find', icon: Search },
 ];
 
 interface BottomPanelProps {
@@ -151,6 +154,9 @@ export function BottomPanel({
             <ProblemsPanel items={diagnostics.items} onOpenFile={onOpenFile} />
           )}
           {tab === 'output' && !activePlugin && <OutputPanel projectId={projectId} />}
+          {tab === 'find' && !activePlugin && (
+            <FindPanel projectId={projectId} onOpenFile={onOpenFile} />
+          )}
           {activePlugin && (
             <WebviewWindow
               namespace={activePlugin.pluginNs}

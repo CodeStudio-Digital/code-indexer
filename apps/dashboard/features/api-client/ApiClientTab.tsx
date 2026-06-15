@@ -8,13 +8,20 @@ import { useMemo, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Loader2, Settings2, Download, Play } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { cn } from '../../lib/utils.js';
 import { useApiClient } from './useApiClient.js';
 import { CollectionList } from './CollectionList.js';
 import { RequestEditor } from './RequestEditor.js';
 import { ResponseViewer } from './ResponseViewer.js';
+import { RequestTimeline } from './RequestTimeline.js';
 import { EnvEditor } from './EnvEditor.js';
 import { ImportOpenApiDialog } from './ImportOpenApiDialog.js';
 import { RegressionPanel } from './RegressionPanel.js';
+
+const RESP_TABS = [
+  { id: 'response' as const, label: 'Response' },
+  { id: 'history' as const, label: 'History' },
+];
 
 export function ApiClientTab({ projectId }: { projectId: number }) {
   const c = useApiClient(projectId);
@@ -22,6 +29,7 @@ export function ApiClientTab({ projectId }: { projectId: number }) {
   const [envOpen, setEnvOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [regressionOpen, setRegressionOpen] = useState(false);
+  const [respTab, setRespTab] = useState<'response' | 'history'>('response');
 
   const onImported = async (collectionId: number) => {
     await c.refreshCollections();
@@ -95,14 +103,38 @@ export function ApiClientTab({ projectId }: { projectId: number }) {
           </Panel>
           <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
           <Panel defaultSize={34} minSize={20}>
-            <div className="h-full border-l overflow-hidden">
-              <ResponseViewer
-                response={state.response}
-                error={state.error}
-                sending={state.sending}
-                verifiedStatus={activeRequest?.verified ? activeRequest.expected_status : null}
-                onMarkVerified={activeRequest ? (status) => c.verifyRequest(activeRequest.id, status) : undefined}
-              />
+            <div className="h-full border-l overflow-hidden flex flex-col">
+              <div className="flex items-center gap-1 px-2 pt-1.5 text-xs shrink-0 border-b">
+                {RESP_TABS.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setRespTab(t.id)}
+                    className={cn(
+                      'px-2 py-1 rounded-t',
+                      respTab === t.id ? 'bg-muted font-medium' : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex-1 min-h-0">
+                {respTab === 'response' ? (
+                  <ResponseViewer
+                    response={state.response}
+                    error={state.error}
+                    sending={state.sending}
+                    verifiedStatus={activeRequest?.verified ? activeRequest.expected_status : null}
+                    onMarkVerified={activeRequest ? (status) => c.verifyRequest(activeRequest.id, status) : undefined}
+                  />
+                ) : (
+                  <RequestTimeline
+                    projectId={projectId}
+                    requestId={state.activeRequestId}
+                    refreshToken={state.response}
+                  />
+                )}
+              </div>
             </div>
           </Panel>
         </PanelGroup>

@@ -103,11 +103,25 @@ export interface ProjectIndexSettings {
   maxWatchedProjects: number;
   /** MCP_WATCH_DEBOUNCE_MS — chokidar burst coalescing. */
   watchDebounceMs: number;
+  /**
+   * MCP_INDEX_OPEN_DELAY_MS — defer the CPU-bound structural run on a
+   * non-manual open so the renderer's first paint + screen mount finish
+   * before the indexer worker pins a core. 0 = run immediately.
+   */
+  openDelayMs: number;
 }
 
 function envInt(name: string, fallback: number): number {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
+}
+
+/** Like envInt but accepts 0 (an explicit "disable the delay"). */
+function envIntZero(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= 0 ? Math.floor(v) : fallback;
 }
 
 /** Read at call time so admin-settings changes apply without a restart. */
@@ -118,5 +132,6 @@ export function readProjectIndexSettings(): ProjectIndexSettings {
     maxFiles: envInt('MCP_AUTO_INDEX_MAX_FILES', 20000),
     maxWatchedProjects: envInt('MCP_WATCH_MAX_PROJECTS', 3),
     watchDebounceMs: envInt('MCP_WATCH_DEBOUNCE_MS', 1000),
+    openDelayMs: envIntZero('MCP_INDEX_OPEN_DELAY_MS', 700),
   };
 }

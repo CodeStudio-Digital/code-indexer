@@ -1,10 +1,11 @@
 import type { SettingDef } from './types.js';
 
 /**
- * Company / multi-agent: orchestrator lifecycle + the AgentSupervisor safety
- * net (stuck-agent detection + recovery). Supervisor/watchdog toggles boot
- * inside each company worker, so they apply to the NEXT company session — no
- * full backend restart, hence no `restartNeeded`.
+ * Company / multi-agent: orchestrator lifecycle + the cross-agent inbox. The
+ * AgentSupervisor + stall-watchdog knobs live in `company-supervisor.ts` (split
+ * to keep both under the LOC cap). Toggles boot inside each company worker, so
+ * they apply to the NEXT company session — no full backend restart, hence no
+ * `restartNeeded`.
  */
 export const COMPANY_SETTINGS: readonly SettingDef[] = [
   {
@@ -36,15 +37,6 @@ export const COMPANY_SETTINGS: readonly SettingDef[] = [
     default: '1800000',
     min: 60_000,
     advanced: true,
-  },
-  {
-    key: 'MCP_SUPERVISOR_ENABLED',
-    label: 'Agent supervisor (auto-recover stuck agents)',
-    description:
-      'Detects stuck company agents and recovers them (resume / resurrect master / abort), with circuit breakers to bound retries. The single biggest guard against a frozen company session. Applies to sessions started after you toggle it; watch incidents in Admin → Supervisor.',
-    type: 'bool',
-    category: 'company',
-    default: '0',
   },
   {
     key: 'MCP_COMPANY_INBOX_WATCHDOG_ENABLED',
@@ -139,51 +131,6 @@ export const COMPANY_SETTINGS: readonly SettingDef[] = [
     category: 'company',
     default: '30000',
     min: 0,
-    advanced: true,
-  },
-  {
-    key: 'MCP_SUPERVISOR_PERSISTENCE',
-    label: 'Supervisor persistence (ghost cleanup on boot)',
-    description:
-      'Persists supervisor state to agent_supervision so a restart can detect agents whose process died mid-run and mark them terminal. Set 0 to keep the supervisor in-memory only. Only relevant when the supervisor is enabled.',
-    type: 'bool',
-    category: 'company',
-    default: '1',
-    advanced: true,
-  },
-  {
-    key: 'MCP_AGENT_WATCHDOG_MS',
-    label: 'Stall threshold (ms)',
-    description:
-      'How long a company session may go with no activity (master idle, no subordinate running) before the dashboard shows a "stalled" banner with a manual nudge. Default 300000 (5 min).',
-    type: 'int',
-    category: 'company',
-    default: '300000',
-    min: 30_000,
-    advanced: true,
-  },
-  {
-    key: 'MCP_AGENT_WATCHDOG_TICK_MS',
-    label: 'Stall check interval (ms)',
-    description: 'How often the idle watchdog polls for a stalled session. Default 60000 (60s).',
-    type: 'int',
-    category: 'company',
-    default: '60000',
-    min: 10_000,
-    advanced: true,
-  },
-  {
-    key: 'MCP_SUBORDINATE_MASTER_WAIT_MS',
-    label: 'Subordinate → Master wait timeout (ms)',
-    description:
-      'Safety deadline for a subordinate blocked on ask_master / submit_plan_to_master / ' +
-      'submit_tasks_to_master. If the Master never answers (crashed/ended with the supervisor ' +
-      'off) the subordinate is unblocked with an error so it proceeds on its own instead of ' +
-      'hanging forever. Long by design — never fires in a healthy session. Default 1800000 (30 min).',
-    type: 'int',
-    category: 'company',
-    default: '1800000',
-    min: 60_000,
     advanced: true,
   },
 ];

@@ -217,6 +217,12 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       return { url: '/api/editor/complete', init: json(ip!) };
     case 'editor.feedback':
       return { url: '/api/editor/feedback', init: json(ip!) };
+    case 'search.project': {
+      const qp = new URLSearchParams({ q: String(ip!.query), limit: String(Number(ip!.limit ?? 50)) });
+      if (ip!.mode) qp.set('mode', String(ip!.mode));
+      if (ip!.type) qp.set('type', String(ip!.type));
+      return { url: `/api/projects/${ip!.projectId}/search?${qp.toString()}`, init: {} };
+    }
     case 'search.symbols':
       return { url: `/api/projects/${ip!.projectId}/search/symbols?q=${encodeURIComponent(String(ip!.query))}&limit=${Number(ip!.limit ?? 50)}`, init: {} };
     case 'search.text':

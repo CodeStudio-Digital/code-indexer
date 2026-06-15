@@ -335,11 +335,21 @@ const workerSupervisor: AgentSupervisor | null = startAgentSupervisorIfEnabled({
       resume: (agentRunId, message) => orchestrator.resumeSubordinate(agentRunId, message),
       abort: (agentRunId) => Promise.resolve(orchestrator.abortSubordinate(agentRunId)),
     },
-    // `runners` map is intentionally absent — Phase 2.3 will plumb
-    // per-agent runner references through SubordinateLifecycle so
-    // abortStuckTool can inject tool_result errors. Until then,
-    // STUCK_TOOL recovery downgrades to the abort path (still
-    // unwedges the run, just terminates it).
+    // Phase 2.3 — live view over the orchestrator's subordinate registry (no
+    // parallel map to keep in sync). Subordinate runners are in-process in THIS
+    // worker, so `injectToolResultError` unwedges a single stuck tool call
+    // without terminating the run; falls back to `abort()` when inject misses.
+    runners: {
+      get: (agentRunId: number) => {
+        const runner = orchestrator.getSubordinate(agentRunId)?.runner;
+        if (!runner) return undefined;
+        return {
+          injectToolResultError: (toolUseId: string, msg: string) =>
+            runner.injectToolResultError(toolUseId, msg),
+          abort: () => runner.abort(),
+        };
+      },
+    },
   },
   persistence: workerSupervisionPersistence ?? undefined,
 });

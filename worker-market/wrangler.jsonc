@@ -14,7 +14,9 @@
 	"d1_databases": [
 		{
 			"binding": "DB",
-			"database_name": "plugin-market",
+			// The remote D1 was created as `mcp-market` (id below). The binding
+			// resolves by id, but `wrangler d1 execute <name>` needs the real name.
+			"database_name": "mcp-market",
 			"database_id": "e8f20709-12be-4c94-bfe2-fee26d30638c"
 		}
 	],

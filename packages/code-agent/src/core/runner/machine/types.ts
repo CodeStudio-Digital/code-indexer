@@ -319,6 +319,18 @@ export interface BridgeCallbacks {
    */
   enforceTaskMode?: (toolName: string, toolMutates: boolean) => string | null;
   /**
+   * Supervisor recovery (Phase 2.3) — lets an external watcher unwedge a
+   * single stuck tool call WITHOUT terminating the run. The runner tracks
+   * each non-interactive invocation's AbortController by tool_use_id; the
+   * supervisor's `injectToolResultError(toolUseId, msg)` aborts the matching
+   * one and stashes `msg`, which dispatch surfaces as the tool_result so the
+   * loop continues. No-ops when absent (subagents / tests).
+   */
+  registerInFlightTool?: (toolUseId: string, ctl: AbortController) => void;
+  unregisterInFlightTool?: (toolUseId: string) => void;
+  /** Read-and-clear a supervisor-injected error message for an aborted call. */
+  consumeInjectedToolError?: (toolUseId: string) => string | undefined;
+  /**
    * Smart-reducer post-result hook. Receives the raw tool result content
    * and returns a possibly-shortened version (tool-aware truncation, e.g.
    * git_log keeps the head commits, grep keeps the first matches).

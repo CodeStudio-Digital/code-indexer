@@ -57,6 +57,19 @@ export interface SendResponse {
   url: string;
 }
 
+/** One recorded send (migration 148) — a row in the per-request Timeline. */
+export interface ApiRequestHistory {
+  id: number;
+  request_id: number;
+  status: number | null;
+  ok: boolean;
+  duration_ms: number | null;
+  url: string | null;
+  error: string | null;
+  source: string;
+  created_at: string;
+}
+
 /** An env variable as edited in the UI. `secret` masks the value in the list. */
 export interface EnvVariable {
   key: string;

@@ -1,0 +1,4409 @@
+{
+  "generatedFrom": 2224,
+  "report": [
+    {
+      "key": "ALL_PROXY",
+      "prefix": "ALL",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "ANTHROPIC_API_KEY",
+      "prefix": "ANTHROPIC",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/code-agent/src/providers/anthropic.ts",
+        "packages/indexer/src/indexer/providers/anthropic.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "ANTHROPIC_CUSTOM_HEADERS",
+      "prefix": "ANTHROPIC",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "ANTHROPIC_DEFAULT_OPUS_MODEL",
+      "prefix": "ANTHROPIC",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+      "prefix": "ANTHROPIC",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "ANTHROPIC_SMALL_FAST_MODEL",
+      "prefix": "ANTHROPIC",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 3,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "APPDATA",
+      "prefix": "APPDATA",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/runtime/detect-node.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "AWS_DEFAULT_REGION",
+      "prefix": "AWS",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/code-agent/src/providers/bedrock.ts",
+        "packages/indexer/src/indexer/providers/bedrock.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "AWS_REGION",
+      "prefix": "AWS",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 3,
+      "files": [
+        "apps/http-api/admin/model-discovery/bedrock.ts",
+        "packages/code-agent/src/providers/bedrock.ts",
+        "packages/indexer/src/indexer/providers/bedrock.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "BRAVE_API_KEY",
+      "prefix": "BRAVE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/web.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CF_ACCOUNT_ID",
+      "prefix": "CF",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/http-api/admin/model-discovery/cloudflare.ts",
+        "packages/services/src/providers/definitions/cloudflare.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CHATGPT_CODEX_BASE_URL",
+      "prefix": "CHATGPT",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/openai.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CI",
+      "prefix": "CI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/services/src/sandbox/scaffolders/playwright-bootstrap.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_AGENT_SDK_CLIENT_APP",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 6,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CLAUDE_AGENT_SDK_VERSION",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 4,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CLAUDE_CODE_ADDITIONAL_PROTECTION",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_API_BASE_URL",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_CONTAINER_ID",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_DEBUG_REQUEST",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_DISABLE_ATTRIBUTION_HEADER",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_DISABLE_TOKEN_EFFICIENT_TOOLS",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_EFFORT_LEVEL",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_ENTRYPOINT",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 3,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_EXTRA_METADATA",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+      "prefix": "CLAUDE",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_OAUTH_CLIENT_ID",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_OAUTH_PORT",
+      "prefix": "CLAUDE",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_OAUTH_TOKEN",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 3,
+      "files": [
+        "packages/services/src/providers/shared/oauth.ts",
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_PROXY_URL",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_RATE_LIMIT_TIER",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/providers/shared/oauth.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_REMOTE_SESSION_ID",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_SUBSCRIPTION_TYPE",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/providers/shared/oauth.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_USER_AGENT",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_VERSION",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_WORKLOAD",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 4,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_X_APP",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLOUDFLARE_ACCOUNT_ID",
+      "prefix": "CLOUDFLARE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/http-api/admin/model-discovery/cloudflare.ts",
+        "packages/services/src/providers/definitions/cloudflare.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 4,
+      "files": [
+        "packages/code-agent/src/core/runner/constants.ts",
+        "packages/code-agent/src/core/runner/types.ts",
+        "packages/code-agent/src/core/tunables.ts",
+        "packages/code-agent/src/index/types.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_AGENT_LOOP_V2",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_AGENTLESS_MODE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/system-prompt.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_AUTO_NOTES",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_AUTOCOMPACT_BUFFER",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/code-agent/src/core/compaction/limits.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_BT_DEBUG",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/code-agent/src/core/runner/nodes/executing-decisions.ts",
+        "packages/code-agent/src/core/runner/nodes/executing.ts"
+      ],
+      "in_catalog": false,
+      "tier": "tier3-debug"
+    },
+    {
+      "key": "CODER_COMPACT_CUMULATIVE_RATIO",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/compaction/limits.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_COMPACT_POLLING_TRIGGER_RATIO",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/compaction/limits.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_COMPACT_PRESERVE_LAST_N_TURNS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/recovery-config.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_COMPACT_PROTECT_RATIO",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/compaction/threshold.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_COMPACT_RECEDE_TAIL_RATIO",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/compaction/threshold.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_COMPACT_STUCK_TURN_CAP",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/compaction/limits.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_COMPACT_TRIGGER_RATIO",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/compaction/limits.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_COMPANY_IDLE_TIMEOUT_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/IdleController.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_COMPANY_MAX_SUBORDINATES",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/ConcurrencyPolicy.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_COMPANY_ORCHESTRATOR_TTL_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/workerPoolSingleton.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_DISABLE_SUBAGENTS",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_DISABLED_MCP_TOOLS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/mcp-bridge.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_DOMINANCE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/nodes/executing-loop-guards.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_DOMINANCE_RATIO",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/constants.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_DOOM_LOOP",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/nodes/executing-loop-guards.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_DOOM_LOOP_DEBUG",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/constants.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_DOOM_LOOP_FUZZY_TOLERANCE",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/constants.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_FALLBACK_CHAIN",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_FIND_TOOLS_MIN_SCORE_RATIO",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/find-tools.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_FULL_CATALOG_CHARS_EST",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/sessions/store/telemetry-savings.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_GITHUB_TOKEN",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 3,
+      "files": [
+        "packages/code-agent/src/skills/agent-skills-installer.ts",
+        "packages/plugin-host/src/sources/fetch-github.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_GREP_PER_FILE_CAP",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/smart-reducers.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_IMPLEMENT_MAX_TURNS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/implement-subagent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_LOG_TOOLS_COUNT",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_MAX_AUTO_CONTINUES",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/guards/max-turns.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_MCP_DEFAULT_MAX_TOKENS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/mcp-bridge.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_MCP_OUTPUT_HARD_CAP",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/mcp-bridge.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_MODEL_CAPS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/providers/capabilities.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_MODEL_PRICING",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/providers/pricing-cache.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_NESTED_GUARDS_DISABLE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/guards/nested-observer.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_NESTED_TELEMETRY_DISABLE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_NEW_COMPACTION",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/code-agent/src/core/compaction/limits.ts",
+        "packages/code-agent/src/core/summarizer.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_NUDGE_HOLDOUT_RATE",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_PARALLEL_AGENT_MAX",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/implement-subagent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_PARALLEL_HEARTBEAT_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/implement-subagent.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_POSTTURN_COMPACT_NOOP_MAX",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/nodes/executing.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_PREEMIT_COMPACT_MAX",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/nodes/executing.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_PREFLIGHT",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/routes/coder/stream.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_PREFLIGHT_VISIBLE_CAP",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_PRIORITY_TRIM_DISABLE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/assembly/tools.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_PROFILE",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_PROMPTS_WATCH",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/prompts/loader.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_PROTECT_RATIO",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/compaction/limits.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_PROVIDER_DEBUG",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/providers/kimi-code-debug.ts"
+      ],
+      "in_catalog": false,
+      "tier": "tier3-debug"
+    },
+    {
+      "key": "CODER_PRUNE_MINIMUM",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/compaction/limits.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_PRUNE_PROTECT",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/compaction/limits.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_PUSH_TIME_CAP",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/code-agent/src/core/runner.ts",
+        "packages/code-agent/src/tools/tool-output.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_READ_AUTO_DOWNGRADE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/dup-utils.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_READ_DUP_THRESHOLD",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/dup-utils.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_READ_DUP_WINDOW",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/dup-utils.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_READ_FILE_AUTOFULL_DISABLE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 3,
+      "files": [
+        "apps/mcp-server/tools/file.ts",
+        "packages/code-agent/src/tools/fs.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_READ_FILE_HARD_MAX",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/mcp-bridge.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_REDUCER_FLUSH_CHARS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_REPOMAP_TOKENS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/repo-map.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_RESULT_DUP_MODE",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/constants.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_REVIEW_MAX_TURNS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/review-subagent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_ROLLING_REDUCER",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_SELF_REVIEW",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/nodes/executing-self-review.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_SESSION_STATE",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/assembly/injection-policy.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SHORT_WINDOW_TOKENS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/assembly/injection-policy.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SKILLS_PROMPT_MODE",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SPAWN_EXPLORE_MAX_TOOLS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/spawn-agent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_SPAWN_EXPLORE_STALL_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/spawn-agent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_SPAWN_EXPLORE_TIMEOUT_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/spawn-agent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_SPAWN_FULL_MAX_TOOLS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/spawn-agent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_SPAWN_FULL_STALL_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/spawn-agent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_SPAWN_FULL_TIMEOUT_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/spawn-agent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_SPAWN_IMPLEMENT_MAX_TOOLS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/spawn-agent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_SPAWN_IMPLEMENT_STALL_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/spawn-agent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_SPAWN_IMPLEMENT_TIMEOUT_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/spawn-agent.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_STICKY_PROFILE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_STREAM_HEARTBEAT_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/nodes/executing.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_STREAM_IDLE_TIMEOUT_MS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/nodes/executing-stream.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_STREAM_THINKING_ONLY_TIMEOUT_MS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/nodes/executing-stream.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_STRICT_TIERS",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/tiers.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_STRUCTURED_SUMMARY",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/summarizer.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SUBAGENT_MAX_MEMOS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/subagent-collector.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SUBAGENT_MAX_TOOLS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/implement-subagent.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SUBAGENT_PUSH_TIME_CAP",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SUBAGENT_QUALITY_NO_TOOL_MAX",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/implement-subagent.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SUBAGENT_STALL_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/implement-subagent.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SUBAGENT_STREAM_PROGRESS_THROTTLE_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/implement-subagent.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SUBAGENT_TIMEOUT_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/implement-subagent.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SUBORDINATE_MAX_RETRIES",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/RetryPolicy.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SUBORDINATE_REMINDER_INTERVAL",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SUMMARIZER_BUDGET",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/summarizer.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_SUMMARIZER_ENABLE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/summarizer.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_TASKS_DEFAULT_TOKEN_CAP",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/execute-tasks/task-run-budget.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_TASKS_DISABLE_SKIP_STALE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/execute-tasks/task-stale-check.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_TERSE_TOOLS",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/code-agent/src/tools/descriptions.ts",
+        "packages/code-agent/src/tools/mcp-bridge.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_TOOL_ARG_ALIASES_DISABLE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/tool-arg-aliases.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_TOOL_MISUSE_INTERVENTION_COOLDOWN",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/intervention.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_TOOL_OUTPUT_TTL_DAYS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/overlay/tool-output-store.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_TOOL_PIN_DISABLE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/nodes/executing-dispatch.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_TRANSIENT_RETRY_INITIAL_MS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/recovery-config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_TRANSIENT_RETRY_JITTER",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/recovery-config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_TRANSIENT_RETRY_MAX_MS",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/recovery-config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_TRANSIENT_RETRY_MAX_PER_TURN",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/recovery-config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_UNRESTRICTED_CODE_EXEC_BYTES",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/code-exec.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_UNRESTRICTED_MCP_HARD_CAP",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/mcp-bridge.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_UNRESTRICTED_READ_FILE_HARD_MAX",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/mcp-bridge.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_WATCHDOG_INTERVAL_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/coder-watchdog.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_WATCHDOG_STALE_AFTER_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/coder-watchdog.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_WEB_CACHE_TTL_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/web.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_WEB_OUTPUT_CAP",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/web.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_WEB_TIMEOUT_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/web.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_WORKER_POST_RUN_LINGER_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/coderWorkerPoolSingleton.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_WORKER_TTL_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/coderWorkerPoolSingleton.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODESTUDIO_DEBUG_DEVTOOLS",
+      "prefix": "CODESTUDIO",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/electron/src/security-hardening.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODEX_CLIENT_VERSION",
+      "prefix": "CODEX",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/admin/model-discovery/chatgpt.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODEX_IMAGE_GEN_ENABLED",
+      "prefix": "CODEX",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/providers/definitions/chatgpt.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODEX_IMAGE_GEN_MODELS",
+      "prefix": "CODEX",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/providers/definitions/chatgpt.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODEX_STORE_RESPONSES",
+      "prefix": "CODEX",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/providers/chatgpt.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "COHERE_API_KEY",
+      "prefix": "COHERE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/search/reranker.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "COHERE_RERANK_MODEL",
+      "prefix": "COHERE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/search/reranker.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "COMPANY_MAX_CONCURRENT_SUBORDINATES",
+      "prefix": "COMPANY",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/ConcurrencyPolicy.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "COMSPEC",
+      "prefix": "COMSPEC",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 3,
+      "files": [
+        "apps/electron/src/terminal-ipc.ts",
+        "packages/api-handlers/src/terminal/pty-manager.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "DEEPSEEK_API_KEY",
+      "prefix": "DEEPSEEK",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/providers/deepseek.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "DESIGN_SYSTEM_ENABLED",
+      "prefix": "DESIGN",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "DISABLE_INTERLEAVED_THINKING",
+      "prefix": "DISABLE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "DOCS_RAG_RERANK",
+      "prefix": "DOCS",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/docs/search-backend.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "DOCS_RAG_REWRITE",
+      "prefix": "DOCS",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/docs/search-backend.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "DOCS_RERANK_CROSS_ENCODER",
+      "prefix": "DOCS",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/deps.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "DOCS_REVIEW_GATE",
+      "prefix": "DOCS",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/docs-agent/src/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "E2B_API_KEY",
+      "prefix": "E2B",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/drivers/e2b-driver.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "E2B_TEMPLATE",
+      "prefix": "E2B",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/drivers/e2b-driver.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "GEMINI_API_KEY",
+      "prefix": "GEMINI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/code-agent/src/providers/gemini.ts",
+        "packages/indexer/src/indexer/providers/gemini.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "GOOGLE_OAUTH_CLIENT_ID",
+      "prefix": "GOOGLE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/services/src/services/cloudcode.ts",
+        "packages/services/src/services/oauth/google.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "GOOGLE_OAUTH_CLIENT_SECRET",
+      "prefix": "GOOGLE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/services/src/services/cloudcode.ts",
+        "packages/services/src/services/oauth/google.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "HEAP_LOG_INTERVAL_MS",
+      "prefix": "HEAP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "tier3-debug"
+    },
+    {
+      "key": "HOME",
+      "prefix": "HOME",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/electron/src/terminal-ipc.ts",
+        "packages/store/src/sqlite-vec-store.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "HTTP_PROXY",
+      "prefix": "HTTP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "HTTPS_PROXY",
+      "prefix": "HTTPS",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "KIMI_CODE_BASE_URL",
+      "prefix": "KIMI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/kimi-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "KIMI_CODE_CLIENT_ID",
+      "prefix": "KIMI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/kimi-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "KIMI_CODE_CLIENT_VERSION",
+      "prefix": "KIMI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/kimi-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "KIMI_CODE_DEBUG",
+      "prefix": "KIMI",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/providers/kimi-code-debug.ts"
+      ],
+      "in_catalog": false,
+      "tier": "tier3-debug"
+    },
+    {
+      "key": "KIMI_CODE_MAX_TOKENS",
+      "prefix": "KIMI",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/providers/kimi-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "KIMI_CODE_OAUTH_HOST",
+      "prefix": "KIMI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/kimi-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "KIMI_OAUTH_HOST",
+      "prefix": "KIMI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/kimi-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "LOCALAPPDATA",
+      "prefix": "LOCALAPPDATA",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/terminal/shells.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "MCP_AGENT_WATCHDOG_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/IdleWatchdog.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_AGENT_WATCHDOG_TICK_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/IdleWatchdog.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_API_PORT",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 3,
+      "files": [
+        "apps/http-api/admin/app-settings.routes.ts",
+        "apps/http-api/server.ts",
+        "packages/store/src/app-settings-store.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_AUTH_ENABLED",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_AUTH_RATE_LIMIT",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_AUTO_INDEX_STRUCTURAL",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/project-index/types.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_AUTO_WATCH",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/project-index/types.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_CODER_WORKER",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/http-api/sse/coderWorkerPoolSingleton.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_CODER_WORKER_DEBUG",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/http-api/sse/CoderWorkerPool.ts",
+        "apps/http-api/workers/coder-worker.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_CODER_WORKER_STRICT_CRASH",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/workers/coder-worker.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_COMPANY_INBOX_HEALTH_CHECK",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/InboxQueue.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_COMPANY_INBOX_MAX_PENDING",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/company/src/services/inbox-routing-pipeline.ts",
+        "packages/company/src/services/InboxQueue.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_COMPANY_INBOX_STALE_IDLE_MS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/InboxQueue.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_COMPANY_INBOX_WAIT_TIMEOUT_MS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/InboxQueue.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_COMPANY_INBOX_WATCHDOG_ENABLED",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/inbox-message-watchdog.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_COMPANY_INBOX_WATCHDOG_INTERVAL_MS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/inbox-message-watchdog.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_COMPANY_INBOX_WATCHDOG_STUCK_MS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/inbox-message-watchdog.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_COMPANY_MASTER_NUDGE_MS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/RuntimeReconciler.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_COMPANY_RECONCILE_MS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/RuntimeReconciler.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_DASHBOARD_PORT",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/dashboard/vite.config.ts",
+        "apps/electron/dev.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_DASHBOARD_URL",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/http-api/server/routes/company/qa/diagnostics.ts",
+        "packages/services/src/sandbox/manager/util/preview-url.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_DB_PATH",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/orchestrator-host/src/DbConnection.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_DB_WORKER",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/workers/dbWriter/client.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_DEV_HTTP",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/electron/dev.ts",
+        "apps/electron/src/dev-http.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_DEV_HTTP_PORT",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/electron/src/dev-http.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_DURABLE_COMPACTION",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/compaction/threshold.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_ELECTRON_DEV_URL",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/electron/dev.ts",
+        "apps/electron/main.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_EMBED_CONCURRENCY",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/indexer/embed-parallel.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_EMBED_FLUSH_THRESHOLD",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/indexer/embed-batcher.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_EMBED_TIMEOUT_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/indexer/src/search/embeddings.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_FTS_CONTENT_GREP",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/mcp-server/tools/search.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_FTS_CONTENT_STREAM",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/search/hybrid.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_HOST_SHELL",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/routes/terminal-ws.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_HOST_TERMINAL_ENABLED",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 4,
+      "files": [
+        "apps/electron/src/terminal-ipc.ts",
+        "apps/http-api/server/routes/terminal-ws.ts",
+        "packages/api-handlers/src/terminal/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_HTTP_CORS_ORIGINS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_HTTP_ENABLED",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_HTTP_PATH",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_HTTP_REQUEST_TIMEOUT_MS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_HTTP_STATEFUL",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_HYBRID_HYDE_SKIP_FTS",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/indexer/src/search/hybrid-pipeline.ts",
+        "packages/indexer/src/search/hybrid.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_INDEX_BODY_MAX_CHARS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/indexer/embedding-candidates.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_INDEX_BODY_MAX_CHUNKS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/indexer/embedding-candidates.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_INDEX_BODY_MIN_LINES",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/indexer/embedding-candidates.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_INDEX_BODY_OVERLAP_CHARS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/indexer/embedding-candidates.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_INDEX_BUDGET",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_INDEX_CONCURRENCY",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_INDEX_DB",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 3,
+      "files": [
+        "packages/shared/src/utils/config.ts",
+        "packages/store/src/sqlite-vec-store.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_INDEX_MAX_CALLS_PER_FILE",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/tree-sitter/call-extractor.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_INDEX_POOL_IDLE_TTL_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/workers/indexJob/client.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_INDEX_PORT",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 4,
+      "files": [
+        "apps/dashboard/vite.config.ts",
+        "apps/electron/src/dev-http.ts",
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_INDEX_STRUCTURAL_WORKER",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/IndexerWorkerClient.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_INDEX_WORKERS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 4,
+      "files": [
+        "apps/http-api/workers/indexer-worker.ts",
+        "packages/indexer/bench/bench-index-pipeline.ts",
+        "packages/indexer/src/workers/indexJob/client.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_KANBAN_QUALITY_GATE_MIN_CONFIDENCE",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/KanbanService.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_KANBAN_QUALITY_GATE_WINDOW_MS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/KanbanService.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_LSH_DIM",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/deps.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_LSH_INDEXING",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/deps.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_LSP_AUTO_PROMPT",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/lsp/server-backend.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_LSP_ENABLED",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/services/src/lsp/lsp-server-manager.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_LSP_IDLE_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/lsp/lsp-server-manager.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_LSP_WORKER",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/lsp-executor.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_LSP_WORKER_IDLE_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/http-api/sse/lsp-executor.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_MARKET_PUBKEY",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/plugin-host/src/sources/fetch-market.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MARKET_TOKEN",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/plugin-sdk/src/cli/publish.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MARKET_URL",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 3,
+      "files": [
+        "packages/api-handlers/src/plugins/index.ts",
+        "packages/plugin-host/src/sources/fetch-market.ts",
+        "packages/plugin-sdk/src/cli/publish.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MAX_SANDBOXES",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/sandbox-manager.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_ARCHIVE_IMPORTANCE_MAX",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-consolidator.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_ARCHIVE_MAX_ACCESS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-consolidator.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_ARCHIVE_UNUSED_DAYS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-consolidator.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_CONSOLIDATE",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-consolidator.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_CONSOLIDATE_IDLE_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-consolidator.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_CONSOLIDATE_INTERVAL_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-consolidator.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_CONSOLIDATE_MAX_PROJECTS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-consolidator.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_IDLE_AFTER_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-sweeper.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_MEMORY_MAX_MERGES_PER_PASS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-consolidator.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_MAX_SNAPSHOTS_PER_PASS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-consolidator.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_MERGE_COSINE",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-consolidator.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_MERGE_TITLE_JACCARD",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-consolidator.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_SWEEP_INTERVAL_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-sweeper.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_SWEEP_MAX_SESSIONS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-sweeper.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_MEMORY_SWEEPER",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/memory-sweeper.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_MODEL_CACHE_DIR",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 3,
+      "files": [
+        "apps/electron/main.ts",
+        "packages/indexer/src/search/model-cache.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_OAUTH_ACCESS_TTL",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_OAUTH_ALLOW_DCR",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_OAUTH_ENABLED",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_OAUTH_ISSUER",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_OAUTH_JWT_SECRET",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_OAUTH_REDIRECT_BASE",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/electron/main.ts",
+        "apps/http-api/admin/mcp-servers-oauth.routes.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_OAUTH_REFRESH_TTL",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/shared/src/utils/config.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_ONNX_IDLE_TTL_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/search/onnx-idle.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PIPELINES_CONTEXT_RELEVANCE",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PIPELINES_GRAPH_EXPANSION",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/search/hybrid.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PIPELINES_INDEXER_SEARCH_V2",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/search/hybrid.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PIPELINES_POLICY_HARD_BLOCK",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PIPELINES_POLICY_HARD_BLOCK_LLM",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PIPELINES_QUALITY_CLASSIFIERS",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PIPELINES_RECENT_FILES_SOURCE",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/indexer/src/search/hybrid-pipeline.ts",
+        "packages/indexer/src/search/hybrid.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PIPELINES_SUB_AGENT_CACHE",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PIPELINES_TOOL_SELECTION",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/deps.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PLAYWRIGHT_SIDECAR_MEMORY",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/chrome-service/chrome-service.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PLAYWRIGHT_SIDECAR_PIDS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/chrome-service/chrome-service.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PREVIEW_COOKIE",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/scaffolders/playwright-bootstrap.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PREVIEW_SECRET",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/routes/preview-auth.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_PUBLIC_URL",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/http-api/server/routes/company/qa/diagnostics.ts",
+        "packages/services/src/sandbox/manager/util/preview-url.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QA_API_BASE",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/services/src/qa/url-resolver.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QA_ARTIFACT_MAX_BYTES",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/routes/company/qa/artifacts.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QA_PER_TEST_MAX_BYTES",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/qa/playwright-reporter/reporter-template.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QA_PERSIST_MAX_BYTES_PER_RUN",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/qa/report-persistence.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QA_PREVIEW_TTL_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/routes/preview-auth.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QA_RETAIN_RUNS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/qa/report-persistence.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_ALERT_COOLDOWN_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/quality-observer.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_ALERT_FLUSH_INTERVAL_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/quality-observer.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_ALERT_FLUSH_THRESHOLD",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/quality-observer.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_ALERT_IDLE_TRIM_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/quality-observer.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_ALERT_MIN_CONFIDENCE",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/quality-observer.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_NUDGE_WAIT_TIMEOUT_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_WATCHDOG_COOLDOWN_TURNS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_WATCHDOG_ENABLED",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_WATCHDOG_MODEL",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_WATCHDOG_PREFILTER_COUNT",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_WATCHDOG_PREFILTER_WINDOW",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_QUALITY_WATCHDOG_PROVIDER",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_RERANK_WORKER_TOKEN",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/search/reranker.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_RERANK_WORKER_URL",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/search/reranker.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_RSS_WARN_MB",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/indexer/run-telemetry.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_RUNTIME_EVENT_LOG_DIR",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/http-api/sse/runtime-event-log.ts"
+      ],
+      "in_catalog": false,
+      "tier": "tier3-debug"
+    },
+    {
+      "key": "MCP_SANDBOX_AUTO_IDLE_REAPER",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/manager/reaper-loop.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_BINARY",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/network-controller.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_BIND_MOUNT",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/manager/io/env-helpers.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_CPUS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/types.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_DESTROY_AFTER_PAUSE_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/sandbox-manager.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_DEV_PORT",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/orchestrator/sandbox-helpers.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_DROP_CAPS",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/types.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_EGRESS_FIREWALL",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/network-controller.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_HTTP_PROXY",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/types.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_IDLE_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/sandbox-manager.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_MEMORY",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/types.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_NETWORK",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/types.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_NO_NEW_PRIVS",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/types.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_PAUSE_AFTER_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/sandbox-manager.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_PIDS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/types.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_READONLY_ROOT",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/types.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_RUNTIME",
+      "prefix": "MCP",
+      "inferred_type": "enum",
+      "enums": [
+        "podman"
+      ],
+      "usage_count": 3,
+      "files": [
+        "packages/services/src/sandbox/drivers/driver-factory.ts",
+        "packages/services/src/sandbox/manager/persistence/cleanup.ts",
+        "packages/services/src/sandbox/manager/util/naming.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_SECCOMP",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/types.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_STATS_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/sandbox-manager.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SANDBOX_USER",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/types.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SCAN_PARANOID",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/scanner.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SHADOW_TOOL_SELECTION_RATE",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/deps.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SHUTDOWN_TIMEOUT_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/manager/runtime/shutdown.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_SUBORDINATE_MASTER_WAIT_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/tools/subordinate/await-master.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_SUPERVISOR_ENABLED",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/company/src/services/supervisor/index.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_SUPERVISOR_PERSISTENCE",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/workers/company-worker.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_TERMINAL_ORIGINS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/routes/terminal-ws.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_TS_IDLE_TTL_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/incremental.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_VERDACCIO_MEMORY",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/verdaccio/verdaccio-service.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_VERDACCIO_STORAGE_DIR",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/verdaccio/verdaccio-service.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MODEL_PRICING_REFRESH_INTERVAL_MS",
+      "prefix": "MODEL",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/providers/scheduled-pricing-refresh.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "NO_PROXY",
+      "prefix": "NO",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "NODE_ENV",
+      "prefix": "NODE",
+      "inferred_type": "enum",
+      "enums": [
+        "production"
+      ],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/builder/source-stamp/babel-plugin-source.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "NODE_OPTIONS",
+      "prefix": "NODE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/electron/dev.ts",
+        "apps/http-api/sse/workerFileResolution.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "NVM_HOME",
+      "prefix": "NVM",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/api-handlers/src/runtime/detect-node.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "OPENAI_API_KEY",
+      "prefix": "OPENAI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/code-agent/src/providers/openai.ts",
+        "packages/indexer/src/indexer/providers/openai.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "OPENAI_OAUTH_CLIENT_ID",
+      "prefix": "OPENAI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/services/oauth/openai.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "OPENROUTER_APP_TITLE",
+      "prefix": "OPENROUTER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/providers/definitions/openrouter.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "OPENROUTER_HTTP_REFERER",
+      "prefix": "OPENROUTER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/providers/definitions/openrouter.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "OPENROUTER_SITE_URL",
+      "prefix": "OPENROUTER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/providers/definitions/openrouter.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "PATH",
+      "prefix": "PATH",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/api-handlers/src/runtime/detect-node.ts",
+        "packages/api-handlers/src/terminal/shells.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "PLAYWRIGHT_BASE_URL",
+      "prefix": "PLAYWRIGHT",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 6,
+      "files": [
+        "apps/dashboard/features/agents/tests/shared/RestoreQaConfigButton.tsx",
+        "packages/company/src/tools/qa/qa-get-browser-endpoint.ts",
+        "packages/services/src/sandbox/scaffolders/playwright-bootstrap.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "PLAYWRIGHT_QA_ENDPOINT",
+      "prefix": "PLAYWRIGHT",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/qa/playwright-reporter/reporter-template.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "PLAYWRIGHT_QA_RUN_ID",
+      "prefix": "PLAYWRIGHT",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/qa/playwright-reporter/reporter-template.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "PLAYWRIGHT_WS_ENDPOINT",
+      "prefix": "PLAYWRIGHT",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/sandbox/scaffolders/playwright-bootstrap.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "PROVIDER_REFRESH_INTERVAL_MS",
+      "prefix": "PROVIDER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/providers/scheduled-refresh.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "SHELL",
+      "prefix": "SHELL",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 5,
+      "files": [
+        "apps/electron/src/terminal-ipc.ts",
+        "packages/api-handlers/src/terminal/pty-manager.ts",
+        "packages/api-handlers/src/terminal/shells.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "TS_SERVICE_IDLE_MS",
+      "prefix": "TS",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/lsp/ts-service.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "USERPROFILE",
+      "prefix": "USERPROFILE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/electron/src/terminal-ipc.ts",
+        "packages/store/src/sqlite-vec-store.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "ZAI_API_KEY",
+      "prefix": "ZAI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/providers/zai.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "ZAI_BASE_URL",
+      "prefix": "ZAI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 9,
+      "files": [
+        "packages/api-handlers/src/aiJson.ts",
+        "packages/api-handlers/src/projectGit/index.ts",
+        "packages/indexer/src/indexer/providers/zai.ts",
+        "packages/services/src/providers/definitions/zai.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "ZAI_MAX_TOKENS",
+      "prefix": "ZAI",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/providers/openai.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    }
+  ]
+}

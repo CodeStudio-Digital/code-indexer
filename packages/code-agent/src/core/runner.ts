@@ -564,6 +564,15 @@ export class CoderRunner extends EventEmitter {
    *   - `abort()` and `interruptWait()` resolve EVERY pending slot.
    */
   private pendingResolves: Map<string, (value: string) => void> = new Map();
+  /**
+   * Supervisor recovery (Phase 2.3). In-flight non-interactive tool calls,
+   * keyed by tool_use_id — the dispatch loop registers each call's
+   * AbortController so `injectToolResultError` can unwedge a single stuck call
+   * without killing the run. `injectedToolErrors` carries the message dispatch
+   * surfaces as the aborted call's tool_result.
+   */
+  private readonly inFlightTools: Map<string, AbortController> = new Map();
+  private readonly injectedToolErrors: Map<string, string> = new Map();
   private static readonly DEFAULT_INPUT_KEY = '__default__';
   private pendingUserMessages: Array<{ text: string; selectedSkillIds?: string[] }> = [];
   private planApproved = false;
@@ -1750,6 +1759,30 @@ export class CoderRunner extends EventEmitter {
     }
   }
 
+  /**
+   * Supervisor recovery (Phase 2.3) — unwedge a SINGLE stuck tool call without
+   * terminating the run. Aborts the in-flight invocation matching `toolUseId`
+   * and stashes `errorMessage`; the dispatch loop surfaces it as that call's
+   * tool_result (is_error), so the model sees why and continues on the next
+   * turn. Returns false (no-op) when the id isn't an in-flight call — the
+   * supervisor's recovery action then falls back to `abort()`.
+   */
+  injectToolResultError(toolUseId: string, errorMessage: string): boolean {
+    const ctl = this.inFlightTools.get(toolUseId);
+    if (!ctl) return false;
+    this.injectedToolErrors.set(toolUseId, errorMessage);
+    try {
+      ctl.abort();
+    } catch {
+      // Already settled — drop the stashed message so it can't leak onto a
+      // later call that happens to reuse the id (ids are unique per turn, but
+      // be defensive).
+      this.injectedToolErrors.delete(toolUseId);
+      return false;
+    }
+    return true;
+  }
+
   on<K extends keyof RunnerEvents>(event: K, listener: RunnerEvents[K]): this {
     return super.on(event, listener as (...args: unknown[]) => void);
   }
@@ -1916,6 +1949,13 @@ export class CoderRunner extends EventEmitter {
         },
         enforcePreRead: (toolName, input, turn, toolUseId) =>
           this.enforcePreReadForBridge(toolName, input, turn, toolUseId),
+        registerInFlightTool: (toolUseId, ctl) => { this.inFlightTools.set(toolUseId, ctl); },
+        unregisterInFlightTool: (toolUseId) => { this.inFlightTools.delete(toolUseId); },
+        consumeInjectedToolError: (toolUseId) => {
+          const msg = this.injectedToolErrors.get(toolUseId);
+          if (msg !== undefined) this.injectedToolErrors.delete(toolUseId);
+          return msg;
+        },
         postProcessToolResult: (result) => this.postProcessToolResultForBridge(result),
         enforceTaskMode: (toolName, toolMutates) => {
           // Pure guard — reads the persisted tasks state and decides. Same

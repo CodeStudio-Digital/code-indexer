@@ -8,8 +8,8 @@
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import type {
-  ApiCollection, ApiEnvironment, ApiRequest, ApiRegressionRun,
-  ApiRunStatus, ApiRunTrigger,
+  ApiCollection, ApiEnvironment, ApiRequest, ApiRegressionRun, ApiRequestHistory,
+  ApiRunStatus, ApiRunTrigger, InsertRequestHistoryInput,
   CreateCollectionInput, CreateRequestInput, UpsertEnvironmentInput, RequestPatch,
 } from './api-client-types.js';
 
@@ -22,6 +22,7 @@ const hydrateCollection = (r: Row): ApiCollection => r as unknown as ApiCollecti
 const hydrateEnv = (r: Row): ApiEnvironment => ({ ...(r as object), is_default: !!r.is_default } as ApiEnvironment);
 const hydrateRequest = (r: Row): ApiRequest => ({ ...(r as object), verified: !!r.verified } as ApiRequest);
 const hydrateRun = (r: Row): ApiRegressionRun => r as unknown as ApiRegressionRun;
+const hydrateHistory = (r: Row): ApiRequestHistory => ({ ...(r as object), ok: !!r.ok } as ApiRequestHistory);
 
 export class ApiClientStore {
   private db: DB;
@@ -142,7 +143,38 @@ export class ApiClientStore {
   }
 
   deleteRequest(id: number): void {
+    // Explicit child delete — FK cascade only fires when PRAGMA foreign_keys is ON.
+    this.db.prepare('DELETE FROM api_request_history WHERE request_id = ?').run(id);
     this.db.prepare('DELETE FROM api_requests WHERE id = ?').run(id);
+  }
+
+  // ─── Request history (timeline) ──────────────────────────────────────
+  /** Record one send. Caller should prune afterwards to bound growth. */
+  insertRequestHistory(input: InsertRequestHistoryInput): void {
+    this.db.prepare(
+      `INSERT INTO api_request_history (request_id, status, ok, duration_ms, url, error, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      input.request_id, input.status ?? null, input.ok ? 1 : 0,
+      input.duration_ms ?? null, input.url ?? null, input.error ?? null, input.source ?? 'manual',
+    );
+  }
+
+  listRequestHistory(requestId: number, limit = 50): ApiRequestHistory[] {
+    return (this.db.prepare('SELECT * FROM api_request_history WHERE request_id = ? ORDER BY id DESC LIMIT ?')
+      .all(requestId, limit) as Row[]).map(hydrateHistory);
+  }
+
+  /** Keep only the newest `keep` rows for a request; returns rows pruned. */
+  pruneRequestHistory(requestId: number, keep = 50): number {
+    const info = this.db.prepare(
+      `DELETE FROM api_request_history
+        WHERE request_id = ?
+          AND id NOT IN (
+            SELECT id FROM api_request_history WHERE request_id = ? ORDER BY id DESC LIMIT ?
+          )`,
+    ).run(requestId, requestId, keep);
+    return info.changes;
   }
 
   // ─── Regression runs ─────────────────────────────────────────────────

@@ -24,6 +24,30 @@ function jarFor(projectId: number, collectionId: number): CookieJar {
   return j;
 }
 
+/** Keep the timeline bounded — newest N sends per request. */
+const HISTORY_KEEP = 50;
+
+/** Structural slice of ApiClientStore the send route needs for the timeline. */
+interface HistoryStore {
+  insertRequestHistory(input: {
+    request_id: number; status?: number | null; ok: boolean;
+    duration_ms?: number | null; url?: string | null; error?: string | null;
+  }): void;
+  pruneRequestHistory(requestId: number, keep?: number): number;
+}
+
+function recordHistory(
+  store: HistoryStore,
+  requestId: number,
+  entry: { status: number | null; ok: boolean; duration_ms: number; url: string; error?: string },
+): void {
+  // Best-effort: a timeline write must never fail the actual send response.
+  try {
+    store.insertRequestHistory({ request_id: requestId, ...entry });
+    store.pruneRequestHistory(requestId, HISTORY_KEEP);
+  } catch { /* non-fatal */ }
+}
+
 export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
   const store = deps.apiClientStore;
 
@@ -64,6 +88,7 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
       });
       const ms = Date.now() - t0;
       store.updateRequest(rid, { last_status: res.status, last_run_at: new Date().toISOString() });
+      recordHistory(store, rid, { status: res.status, ok: res.status < 400, duration_ms: ms, url: url.href });
       return c.json({
         status: res.status,
         statusText: res.statusText,
@@ -73,7 +98,16 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
         url: url.href,
       });
     } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : String(e), url: url.href }, 502);
+      const msg = e instanceof Error ? e.message : String(e);
+      recordHistory(store, rid, { status: null, ok: false, duration_ms: Date.now() - t0, url: url.href, error: msg });
+      return c.json({ error: msg, url: url.href }, 502);
     }
+  });
+
+  // Per-request timeline — newest first, capped by HISTORY_KEEP on write.
+  app.get('/api/projects/:projectId/api-client/requests/:rid/history', (c) => {
+    const rid = parseIdParam(c, 'rid');
+    const limit = Math.min(Number(c.req.query('limit') ?? HISTORY_KEEP) || HISTORY_KEEP, HISTORY_KEEP);
+    return c.json({ history: store.listRequestHistory(rid, limit) });
   });
 }

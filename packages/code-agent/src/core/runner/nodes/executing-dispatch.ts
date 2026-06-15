@@ -240,6 +240,17 @@ export interface DispatchArgs {
    * the refusal text, or null when the tool is allowed.
    */
   isToolBlocked?: (name: string) => string | null;
+  /**
+   * Supervisor recovery hooks (Phase 2.3). When provided, each non-interactive
+   * invocation registers its AbortController by tool_use_id so an external
+   * watcher can abort a single stuck call; on abort, `consumeInjectedToolError`
+   * yields the supervisor's message to surface as the tool_result (vs the
+   * generic "cancelled by user/session" text). All optional — absent in
+   * subagents / tests, where behaviour is unchanged.
+   */
+  registerInFlightTool?: (toolUseId: string, ctl: AbortController) => void;
+  unregisterInFlightTool?: (toolUseId: string) => void;
+  consumeInjectedToolError?: (toolUseId: string) => string | undefined;
 }
 
 export interface DispatchResult {
@@ -494,6 +505,10 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     const toolTimeoutMs = (interactive || !Number.isFinite(resolvedTimeout)) ? 0 : resolvedTimeout;
     const parentSignal = interactive ? undefined : args.toolContext.signal;
     const invocationAbort = interactive ? undefined : new AbortController();
+    // Supervisor recovery — expose this call's controller so a stuck-tool
+    // watcher can abort THIS invocation by tool_use_id. Interactive tools opt
+    // out (they pause on user input, not a stuck signal).
+    if (invocationAbort) args.registerInFlightTool?.(tu.id, invocationAbort);
     let relayParentAbort: (() => void) | undefined;
     if (invocationAbort && parentSignal) {
       relayParentAbort = (): void => {
@@ -545,7 +560,11 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           `Tune MCP_TOOL_NORMAL_TIMEOUT_MS / MCP_TOOL_SLOW_TIMEOUT_MS, or declare timeoutMs on the tool.]`;
         refusalKind = 'timeout';
       } else if (isAbortError(e)) {
-        invocationContent = `[tool-aborted: \`${tu.name}\` cancelled by user/session.]`;
+        // A supervisor inject aborts the controller AND stashes a message —
+        // surface it so the model sees WHY (timeout/stuck) and can adapt,
+        // instead of the generic user/session abort text.
+        const injected = args.consumeInjectedToolError?.(tu.id);
+        invocationContent = injected ?? `[tool-aborted: \`${tu.name}\` cancelled by user/session.]`;
         refusalKind = 'abort';
       } else {
         invocationContent = e instanceof Error ? e.message : String(e);
@@ -553,6 +572,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       invocationIsError = true;
     } finally {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (invocationAbort) args.unregisterInFlightTool?.(tu.id);
       if (relayParentAbort && parentSignal) {
         parentSignal.removeEventListener('abort', relayParentAbort);
       }
