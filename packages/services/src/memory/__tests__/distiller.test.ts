@@ -51,4 +51,12 @@ describe('parseMemoryCandidates', () => {
     );
     expect(out[0].category).toBe('gotcha');
   });
+
+  it('accepts user/feedback categories (the positive distiller can emit them)', () => {
+    const out = parseMemoryCandidates(
+      '[{"title":"Solo dev","content":"PT-BR","category":"user","importance":0.8},' +
+      '{"title":"Small files","content":"≤200 LOC","category":"feedback","importance":0.9}]',
+    );
+    expect(out.map((c) => c.category)).toEqual(['user', 'feedback']);
+  });
 });

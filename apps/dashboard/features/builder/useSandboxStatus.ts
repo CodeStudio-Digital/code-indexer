@@ -112,7 +112,7 @@ export function useSandboxStatus(sessionId: number | null): {
   /**
    * Explicit retry: hits `POST /sandbox?retry=1`, which tells the manager
    * to tear down any existing `error` record before provisioning. Used by
-   * the PreviewPanel's Retry button when scaffolding failed.
+   * the sandbox status surfaces when provisioning failed.
    */
   async function retry(): Promise<void> {
     if (sessionId === null) return;

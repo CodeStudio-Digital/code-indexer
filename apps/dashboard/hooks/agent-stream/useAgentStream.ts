@@ -70,7 +70,7 @@ export function useAgentStream(sessionId: number | null) {
       extras?: {
         attachments?: AgentAttachment[];
         /** Agent preset: explore | plan | build | admin. */
-        agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
+        agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api';
         /** Tool tier profile override (takes precedence over agent). */
         profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
         /** Override max turns for this run. null/undefined = use default. */

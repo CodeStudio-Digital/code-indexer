@@ -46,7 +46,6 @@ import type { PersistedSandboxStatus } from '@mcp/store/company-sandbox-store.js
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 import { getNetworkController } from '@mcp/services/sandbox/network-controller.js';
 import { getScaffolder } from '@mcp/services/sandbox/scaffolders/registry.js';
-import { getSourceStampPlugin } from '@mcp/services/sandbox/builder/source-stamp/registry.js';
 import { archivePath, loadArchive } from '@mcp/services/sandbox/archive.js';
 import { previewPathPrefixOf } from '@mcp/services/sandbox/manager/util/preview-url.js';
 import {
@@ -410,15 +409,7 @@ export async function provisionPrimarySandbox(
     } else {
       const scaffolder = getScaffolder(req.stack, {
         includeE2e: req.includeE2e,
-        studio: req.studio,
       });
-      // Persist the Builder source-stamp on the sandbox BEFORE scaffolding
-      // so a restart mid-provision still re-applies it. Undefined for
-      // non-studio sessions and stacks without stamping support.
-      if (req.studio) {
-        const stamp = getSourceStampPlugin(req.stack);
-        if (stamp) seed.viteStamp = stamp.contribution().vite;
-      }
       await scaffolder.scaffold({
         sandboxId: req.sessionId,
         containerId,

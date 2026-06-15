@@ -13,6 +13,7 @@ import { mountCoderPipelineRoutes } from './pipelines.js';
 import { mountCoderSnapshotRoutes } from './snapshot.js';
 import { mountCoderDriveRoutes } from './drive.js';
 import { mountCoderSummarizeClearRoute } from './summarize-clear.js';
+import { mountApiClientRoutes } from '../api-client/index.js';
 import { mountCompanyRoutes } from '../company/index.js';
 
 export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
@@ -29,5 +30,6 @@ export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
   mountCoderSnapshotRoutes(app, deps);
   mountCoderDriveRoutes(app, deps);
   mountCoderSummarizeClearRoute(app, deps, runtime);
+  mountApiClientRoutes(app, deps);
   mountCompanyRoutes(app, deps);
 }

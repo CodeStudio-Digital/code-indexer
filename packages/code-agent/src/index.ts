@@ -73,8 +73,10 @@ import { buildSubordinateKanbanTools } from '@mcp/company/tools/subordinate-kanb
 import { isMasterAllowed } from '@mcp/company/tools/master-filter.js';
 import { RuntimeHookRegistry } from '@mcp/code-agent/core/hook-registry.js';
 import { registerCompanyHooks } from '@mcp/code-agent/core/company-hooks.js';
-import { inferProfileFromMessage, inferProfileFromHistory, profileToTiers, getToolTier, type CoderProfile } from '@mcp/code-agent/tools/tiers.js';
+import { profileToTiers, getToolTier, type CoderProfile, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
+import { parseToolsetState, resolveSessionProfile } from '@mcp/code-agent/tools/profile-resolution.js';
 import { getModelMaxTools } from '@mcp/code-agent/providers/capabilities.js';
+import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
 import { AGENTS, isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { ToolOutputStore } from '@mcp/code-agent/overlay/tool-output-store.js';
@@ -84,6 +86,7 @@ import { lspTools } from '@mcp/code-agent/tools/lsp.js';
 import { execCommandTools } from '@mcp/code-agent/tools/exec-command.js';
 import { webTools } from '@mcp/code-agent/tools/web.js';
 import { httpTools } from '@mcp/code-agent/tools/http.js';
+import { apiClientTools } from '@mcp/code-agent/tools/api-client/index.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { ragReadDocTools } from '@mcp/code-agent/tools/rag-read-doc.js';
@@ -127,10 +130,11 @@ import type {
   CoderAttachment,
   IndexStatus,
   MasterStartResult,
+  PreflightSeed,
   RunCoderHandle,
   RunCoderOptions,
 } from './index/types.js';
-export type { CoderAttachment, IndexStatus, MasterStartResult, RunCoderHandle, RunCoderOptions };
+export type { CoderAttachment, IndexStatus, MasterStartResult, PreflightSeed, RunCoderHandle, RunCoderOptions };
 import { extractFilePathsFromText, defaultModelFor } from './index/helpers.js';
 
 // (Type bodies moved to './index/types.ts'.)
@@ -278,21 +282,19 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // (`company_session_envs`). They work with NO container alive, so they are
   // registered for EVERY company session — master + subordinates — not just
   // builder/sandbox ones. A session can define shared envs (BACKEND_URL,
-  // JWT_TOKEN, …) while targeting an EXTERNAL backend with no builderStack;
-  // gating these behind sandbox/builderStack hid them from `find_tools`, so
+  // JWT_TOKEN, …) while targeting an EXTERNAL backend with no container;
+  // gating these behind the sandbox binding hid them from `find_tools`, so
   // the master had to relay env values to subordinates by hand. The master
   // filter (`filterInPlace(isMasterAllowed)` below) trims the master to the
   // read-only trio (env_list/env_read/env_validate); subordinates keep all 5.
   if (opts.companyContext) {
     registry.registerAll(envTools);
   }
-  // Builder-mode tools: offered to both master and subordinates in builder
-  // sessions. The gate is on session configuration (`builderStack`) rather
-  // than a live sandbox binding so the master can access database tools
-  // even when the primary container is temporarily unavailable.
-  // Tools that actually need a live container (sandboxTools, docsTools) are
-  // still registered — they will return clear errors if called without one.
-  if (opts.companyContext?.sandbox || opts.companyContext?.builderStack) {
+  // Sandbox-bound tools: offered to agents whose company session has a
+  // live container binding (service-bound subordinates). Tools that
+  // actually need a live container (sandboxTools, docsTools) fail with
+  // clear errors when called while it is down.
+  if (opts.companyContext?.sandbox) {
     registry.registerAll(sandboxTools);
     // Docs tools write into `<workdir>/docs/` inside the container.
     // Registered for all builder sessions; fail gracefully when the
@@ -310,6 +312,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(execCommandTools);
   registry.registerAll(webTools);
   registry.registerAll(httpTools);
+  // API client (auto-test/auto-fix) tools — gated to the `api` tool tier, so
+  // they only surface for the `api` agent (or after expand_toolset('api')).
+  // They read ctx.projectId + the module-global ApiClientStore.
+  registry.registerAll(apiClientTools);
   registry.registerAll(globTools);
   registry.registerAll(ragSearchDocsTools);
   registry.registerAll(ragReadDocTools);
@@ -875,6 +881,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             recall: (query, limit) => opts.projectMemory!.recall(project.id, project.name, query, limit),
           }
         : undefined,
+    // Global USER memory (save_note scope 'user') — NOT gated by the project
+    // toggle. Reuses the project-memory host port pointed at the reserved user
+    // project (id 0); db.create derives scope='user' from the category.
+    userMemory: opts.projectMemory
+      ? { save: (entry) => opts.projectMemory!.save(0, '__user__', entry) }
+      : undefined,
     companyContext: opts.companyContext,
     // Coder session id — keys per-agent resources (preview/devtools window).
     sessionId: session.id,
@@ -926,13 +938,48 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     }
   }
-  const rawProfile0 =
-    opts.profile ??
-    (process.env.CODER_PROFILE as CoderProfile | 'auto' | undefined) ??
-    (agentDef?.profile) ??
-    (hasHistory0 ? inferProfileFromHistory(historyToolNames) : 'bootstrap');
-  const preResolvedProfile: CoderProfile =
-    rawProfile0 === 'auto' ? inferProfileFromMessage(opts.userMessage ?? '') : rawProfile0;
+  // Task-preflight seed — meaningful only for a FRESH session; a resumed
+  // conversation carries better signals (history profile + re-pins). The
+  // seed's profile beats the turn-1 keyword heuristic but loses to any
+  // explicit choice (opts.profile / CODER_PROFILE / agentDef).
+  const preflightSeed = !hasHistory0 ? opts.preflight : undefined;
+  // Sticky toolset (mig 142): profile/pins/cap persist on the session and
+  // only ever WIDEN. Re-inferring from the loaded history tail every run
+  // made the visible tool array flip between runs (118 ↔ ~60 observed in
+  // session 991) — and the tools array is the FIRST prompt-cache segment,
+  // so every flip busted the whole prefix on the next round's turn 1.
+  const stickyToolset = process.env.CODER_STICKY_PROFILE !== '0';
+  const persistedToolset = stickyToolset
+    ? parseToolsetState(session.tool_profile, session.tool_state_json)
+    : null;
+  // Seeded sessions cap the visible tool list at min(model cap, this) —
+  // real reduction even on large-catalog models. NEVER_TRIM + pins survive.
+  // The cap is persisted (widen-only state) so resumes rebuild the SAME
+  // visible membership instead of dropping the cut and re-flipping the array.
+  const preflightCapRaw = Number.parseInt(process.env.CODER_PREFLIGHT_VISIBLE_CAP ?? '', 10);
+  const seededToolCap = preflightSeed
+    ? (Number.isFinite(preflightCapRaw) && preflightCapRaw > 0 ? preflightCapRaw : 48)
+    : undefined;
+  const sessionToolCap = seededToolCap ?? persistedToolset?.visibleCap ?? undefined;
+  if (stickyToolset && seededToolCap != null) {
+    try { store.mergeSessionToolsetState(session.id, { visibleCap: seededToolCap }); } catch { /* best-effort */ }
+  }
+  const profileResolution = resolveSessionProfile({
+    explicitProfile:
+      opts.profile ??
+      (process.env.CODER_PROFILE as CoderProfile | 'auto' | undefined) ??
+      (agentDef?.profile),
+    hasHistory: hasHistory0,
+    historyToolNames,
+    persisted: persistedToolset,
+    preflightProfile: preflightSeed?.profile,
+    userMessage: opts.userMessage ?? '',
+    stickyEnabled: stickyToolset,
+  });
+  const preResolvedProfile: CoderProfile = profileResolution.profile;
+  if (stickyToolset && profileResolution.persistAs) {
+    try { store.setSessionToolProfile(session.id, profileResolution.persistAs); } catch { /* best-effort */ }
+  }
 
   // ─── Skills ────────────────────────────────────────────────────
   // Opens a long-lived SkillStore that survives until the runner's `done`
@@ -1071,11 +1118,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     agentLoopV2: agentLoopV2EnvFlag,
     agentId: effectiveAgentId ?? undefined,
     sessionDrive: !opts.companyContext,
+    // "Images & vision" section is only rendered when the model can't see
+    // images natively (or the composer forces the describe-images path).
+    modelCanSeeImages: opts.describeImages ? false : opts.modelSupportsVision,
     // Tool-visibility hint for small-catalog models (GLM flash class).
     // Registry is fully populated by now (native + company + MCP); the
     // count is a session-start approximation, which is all the hint needs.
     toolCap: {
-      maxTools: getModelMaxTools(session.model),
+      maxTools: sessionToolCap != null
+        ? Math.min(getModelMaxTools(session.model), sessionToolCap)
+        : getModelMaxTools(session.model),
       approxCatalog: registry.list().length,
     },
   });
@@ -1207,6 +1259,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (opts.previewAvailable) {
     activeTiers.add('preview');
   }
+  // Auto-activate the `api` tier for the API verification agent so the api_*
+  // tools are present from turn 1 (stable for the whole run → prompt-cache
+  // safe). Other sessions unlock on demand via `expand_toolset('api')`.
+  if (effectiveAgentId === 'api') {
+    activeTiers.add('api');
+  }
+  // Sticky extra tiers (mig 142): master/preview/custom tiers this session
+  // unlocked in PRIOR runs via `expand_toolset`. A persisted tier name that
+  // no longer exists simply never matches in `filterByTiers` — harmless.
+  if (persistedToolset) {
+    for (const t of persistedToolset.extraTiers) activeTiers.add(t as ToolTier);
+  }
   if (process.env.CODER_LOG_TOOLS_COUNT === '1') {
     console.log(
       `[coder] agent=${effectiveAgentId ?? 'none'} profile=${preResolvedProfile} planMode=${opts.planMode ?? false} active_tiers=${Array.from(activeTiers).sort().join(',')}`,
@@ -1217,12 +1281,28 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // tier is not active now — master/preview/custom-tier calls that
   // inferProfileFromHistory cannot cover (it only widens across the 3 core
   // profiles). Without this a resumed session would hide tools it
-  // demonstrably used. Never persisted — cheap to recompute every resume.
+  // demonstrably used. Unioned with the pins persisted on the session row
+  // (mig 142) so a pin earned in a prior run survives even after the message
+  // that used it was compacted out of the loaded tail — pinned membership
+  // must stay byte-stable across runs for the provider prompt-cache prefix.
   const initialPinnedTools = [
-    ...new Set(historyToolNames.filter((n) => !activeTiers.has(getToolTier(n, externalToolTiers)))),
+    ...new Set([
+      ...(persistedToolset?.pins ?? []),
+      ...historyToolNames.filter((n) => !activeTiers.has(getToolTier(n, externalToolTiers))),
+      // Preflight pins — already validated against the catalog by the host
+      // service; pins traverse the tier filter and survive the tool cap.
+      ...(preflightSeed?.pinTools ?? []),
+    ]),
   ];
+  if (stickyToolset && initialPinnedTools.length > 0) {
+    const known = new Set(persistedToolset?.pins ?? []);
+    const freshPins = initialPinnedTools.filter((p) => !known.has(p));
+    if (freshPins.length > 0) {
+      try { store.mergeSessionToolsetState(session.id, { addPins: freshPins }); } catch { /* best-effort */ }
+    }
+  }
   if (initialPinnedTools.length > 0 && process.env.CODER_LOG_TOOLS_COUNT === '1') {
-    console.log(`[coder] re-pinned from history: ${initialPinnedTools.sort().join(',')}`);
+    console.log(`[coder] initial pins (persisted+history+preflight): ${initialPinnedTools.slice().sort().join(',')}`);
   }
 
   // ─── Runtime hooks ─────────────────────────────────────────────
@@ -1467,6 +1547,19 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             }
           }
         : undefined,
+    // Global user-preferences index — NOT gated by the project toggle; injected
+    // into every (non-company) session. Company subordinates get it via spawn
+    // injection (system prompt) instead.
+    getUserMemoryIndex:
+      !opts.companyContext
+        ? () => {
+            try {
+              return db.listMemoryIndex(0, 12);
+            } catch {
+              return null;
+            }
+          }
+        : undefined,
     // (assignment below) — keeps recorder in sync with runner.turn
     // even though the runner is constructed after recorder. The recorder
     // reads `runnerRef?.turn` lazily, so this assignment closes the loop.
@@ -1479,6 +1572,21 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     describeImages: opts.describeImages,
     activeTiers,
     initialPinnedTools: initialPinnedTools.length > 0 ? initialPinnedTools : undefined,
+    // Sticky toolset (mig 142): persist mid-run tier promotions so the next
+    // resume rebuilds the SAME tool array (prompt-cache prefix stability).
+    // navigate/admin widen the core profile; master/preview/custom land in
+    // extraTiers. Persistence must never break the run.
+    onTierPromoted: stickyToolset
+      ? (tier) => {
+          try {
+            if (tier === 'navigate') store.setSessionToolProfile(session.id, 'navigate');
+            else if (tier === 'admin') store.setSessionToolProfile(session.id, 'full');
+            else store.mergeSessionToolsetState(session.id, { addExtraTiers: [tier] });
+          } catch { /* best-effort */ }
+        }
+      : undefined,
+    preflightHint: preflightSeed ? renderPreflightHint(preflightSeed) : undefined,
+    sessionToolCap,
     globalDisabledTools,
     sessionDisabledTools: sessionDisabledTools.size > 0 ? sessionDisabledTools : undefined,
     externalToolTiers,
@@ -1990,6 +2098,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       await mcpServerManager.closeAll();
       await bridge.close();
       for (const b of extraBridges) await b.close();
+      // Sticky toolset (mig 142): capture pins earned mid-run (hidden tools
+      // the model called by name get pinned at dispatch) before the store
+      // closes, so the next resume rebuilds the same tool array.
+      if (stickyToolset && runner.pinnedTools.size > 0) {
+        try { store.mergeSessionToolsetState(session.id, { addPins: [...runner.pinnedTools] }); } catch { /* best-effort */ }
+      }
       store.close();
       try { skillStore.close(); } catch { /* best-effort */ }
       db.close();

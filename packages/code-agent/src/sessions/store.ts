@@ -85,6 +85,8 @@ export class SessionStore {
   setSessionUnrestrictedToolOutput(id: number, enabled: boolean | null): void { state.setUnrestrictedToolOutput(this.db, id, enabled); }
   setSessionToolPermissionMode(id: number, mode: 'ask' | 'auto' | 'unrestricted' | null): void { state.setToolPermissionMode(this.db, id, mode); }
   addToolPermissionGrant(id: number, toolName: string): void { state.addToolPermissionGrant(this.db, id, toolName); }
+  setSessionToolProfile(id: number, profile: 'bootstrap' | 'navigate' | 'full'): void { state.setToolProfile(this.db, id, profile); }
+  mergeSessionToolsetState(id: number, patch: { addExtraTiers?: readonly string[]; addPins?: readonly string[]; visibleCap?: number | null }): void { state.mergeToolsetState(this.db, id, patch); }
   touchSession(id: number): void { state.touchSession(this.db, id); }
   setLastResponseState(id: number, responseId: string | null, messageCount: number | null): void { state.setLastResponseState(this.db, id, responseId, messageCount); }
   setSessionArchived(id: number, archived: boolean): void { state.setArchived(this.db, id, archived); }

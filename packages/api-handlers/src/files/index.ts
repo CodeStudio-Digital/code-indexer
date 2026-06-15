@@ -77,12 +77,19 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       return { ...file, symbols, dependencies, dependents };
     },
 
-    async read({ projectId, path: rel }) {
+    async read({ projectId, path: rel, ifModifiedSince }) {
       const project = requireProject(projectId);
       const abs = resolveSafe(project.root_path, rel);
       try {
+        // Stat first: the SWR caller (tab activation, fs-event echo) skips
+        // the payload entirely when mtime matches what it already has.
+        const stat = await fs.stat(abs);
+        const lastModified = stat.mtime.toISOString();
+        if (ifModifiedSince && ifModifiedSince === lastModified) {
+          return { notModified: true as const, last_modified: lastModified };
+        }
         const content = await fs.readFile(abs, 'utf8');
-        return { content, encoding: 'utf8' as const };
+        return { content, encoding: 'utf8' as const, last_modified: lastModified };
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           throw new ApiError('not_found', 404, 'file not found on disk');
@@ -100,6 +107,9 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       await fs.mkdir(path.dirname(abs), { recursive: true });
       await fs.writeFile(abs, buf);
       const stat = await fs.stat(abs);
+      // Fast-path: symbols/FTS fresh in ~ms instead of waiting for the
+      // chokidar debounce (the watcher event later short-circuits on hash).
+      deps.projectIndexService.markDirty(projectId, [{ path: rel.replace(/\\/g, '/'), kind: 'upsert' }]);
       return { ok: true as const, last_modified: stat.mtime.toISOString() };
     },
 
@@ -114,8 +124,10 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
         const stat = await fs.stat(abs);
         if (stat.isDirectory()) {
           await fs.rm(abs, { recursive: recursive ?? false, force: false });
+          // Children removals arrive via the watcher (per-file unlink events).
         } else {
           await fs.unlink(abs);
+          deps.projectIndexService.markDirty(projectId, [{ path: rel.replace(/\\/g, '/'), kind: 'delete' }]);
         }
         return { ok: true as const };
       } catch (err) {
@@ -142,11 +154,21 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
         throw err;
       }
       let lastModified: string | null = null;
+      let isFile = false;
       try {
         const stat = await fs.stat(absTo);
+        isFile = stat.isFile();
         lastModified = stat.mtime.toISOString();
       } catch {
         /* renamed away (directory): mtime not meaningful */
+      }
+      if (isFile) {
+        // Directory renames fan out via the watcher; the single-file case
+        // gets the instant delete+create the index models a rename as.
+        deps.projectIndexService.markDirty(projectId, [
+          { path: from.replace(/\\/g, '/'), kind: 'delete' },
+          { path: to.replace(/\\/g, '/'), kind: 'upsert' },
+        ]);
       }
       return { ok: true as const, last_modified: lastModified };
     },
@@ -155,12 +177,52 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       const project = requireProject(projectId);
       const abs = resolveSafe(project.root_path, rel);
       await fs.mkdir(abs, { recursive: true });
+      // Watcher would surface this after the debounce; publish directly so
+      // the tree shows the new folder instantly.
+      deps.projectIndexService.publishFsEvents(projectId, [
+        { path: rel.replace(/\\/g, '/'), kind: 'upsert', isDir: true },
+      ]);
       return { ok: true as const };
     },
 
     async tree({ projectId, maxDepth = 6, root = '.' }) {
       const project = requireProject(projectId);
       const startAbs = resolveSafe(project.root_path, root);
+      const startRel = root === '.' ? '' : root;
+
+      // Fast path — the lazy explorer (maxDepth 1) is the hot caller. ONE
+      // readdir; entry types come from the Dirents (the old walk re-statted
+      // every child: a 300-entry folder cost 300 stats + a readdir PEEK per
+      // subdirectory, seconds on Windows+Defender). Chevrons are drawn
+      // optimistically for dirs (IntelliJ/VS Code do the same — an empty
+      // dir just expands to nothing).
+      if (maxDepth <= 1) {
+        const entries = await fs.readdir(startAbs, { withFileTypes: true }).catch(() => []);
+        const filtered = entries.filter((e) => !TREE_BLOCK.has(e.name));
+        const children = await Promise.all(filtered.map(async (e): Promise<FileTreeNode> => {
+          const relPath = path.posix.join(startRel, e.name);
+          // Symlinked dirs (pnpm links) report as symlink, not directory —
+          // they're the only case worth a stat (rare outside node_modules).
+          let isDir = e.isDirectory();
+          if (!isDir && e.isSymbolicLink()) {
+            const st = await fs.stat(path.join(startAbs, e.name)).catch(() => null);
+            isDir = st?.isDirectory() ?? false;
+          }
+          return isDir
+            ? { name: e.name, path: relPath, type: 'dir', hasChildren: true }
+            : { name: e.name, path: relPath, type: 'file' };
+        }));
+        children.sort((a, b) => {
+          if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+        return {
+          name: path.basename(startAbs) || project.name,
+          path: startRel,
+          type: 'dir',
+          children,
+        };
+      }
 
       async function walk(absPath: string, relPath: string, depth: number): Promise<FileTreeNode> {
         const name = path.basename(absPath) || project.name;
@@ -172,7 +234,10 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           return { name, path: relPath, type: 'file' };
         }
         if (depth >= maxDepth) {
-          return { name, path: relPath, type: 'dir' };
+          // Peek so the lazy tree knows whether to draw an expand chevron.
+          const peek = await fs.readdir(absPath, { withFileTypes: true }).catch(() => []);
+          const hasChildren = peek.some((e) => !TREE_BLOCK.has(e.name));
+          return { name, path: relPath, type: 'dir', hasChildren };
         }
         const entries = await fs.readdir(absPath, { withFileTypes: true }).catch(() => []);
         // Stable, case-insensitive ordering: dirs first, then files alphabetically.
@@ -191,7 +256,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
 
       // The root node carries '.' as its relative path so descendants
       // are reachable via plain posix joins (consistent across OSes).
-      return walk(startAbs, root === '.' ? '' : root, 0);
+      return walk(startAbs, startRel, 0);
     },
 
     async symbol({ id }) {

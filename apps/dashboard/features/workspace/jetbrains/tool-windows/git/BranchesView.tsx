@@ -145,8 +145,15 @@ export function BranchesView({ projectId, onMutated }: BranchesViewProps) {
 
   const pushBranch = async (b: GitBranch) => {
     try {
+      // `git push` needs an explicit remote when a refspec is given —
+      // otherwise the lone positional (`b.name`) is read as the REMOTE
+      // name (`git push -u main` → "main is not a repository"). Derive it
+      // from the upstream (`origin/main` → `origin`); default to origin
+      // for a branch that doesn't track one yet.
+      const remote = b.upstream ? b.upstream.split('/')[0] : 'origin';
       const r = await apiCall<GitRunResult>('projectGit.push', {
         projectId,
+        remote,
         branch: b.name,
         setUpstream: !b.upstream,
       });

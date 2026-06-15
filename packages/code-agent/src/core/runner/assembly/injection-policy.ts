@@ -27,6 +27,10 @@ export interface InjectionPolicy {
   budget: SessionStateBudget;
   /** Char budget for the project memory index (0 = off). */
   memoryIndexChars: number;
+  /** Char budget for the global user-preferences block (migration 145). Small
+   *  + always-on (carried even on minimal windows) — prefs are cheap and
+   *  always relevant. */
+  userMemoryChars: number;
 }
 
 const MINIMAL_WINDOW_TOKENS = 16_000;
@@ -67,6 +71,7 @@ export function resolveInjectionPolicy(
         todoLines: 3, fileSlots: 0, includeLiveState,
       },
       memoryIndexChars: 0,
+      userMemoryChars: 200,
     };
   }
 
@@ -80,6 +85,7 @@ export function resolveInjectionPolicy(
         todoLines: 5, fileSlots: 3, includeLiveState,
       },
       memoryIndexChars: 400,
+      userMemoryChars: 300,
     };
   }
 
@@ -92,5 +98,6 @@ export function resolveInjectionPolicy(
       todoLines: 8, fileSlots: 6, includeLiveState,
     },
     memoryIndexChars: 1200,
+    userMemoryChars: 600,
   };
 }

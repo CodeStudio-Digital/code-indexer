@@ -13,9 +13,9 @@ function fakeNative(name: string): CoderTool {
 }
 
 describe('isMasterAllowed — design-system tools', () => {
-  // Regression guard: master never publishes / fails-explicitly when the
-  // ds_* tools are stripped here. Adding 'ds_' to COMPANY_TOOL_PREFIXES
-  // is what unblocks Phase 6 of the DS pipeline.
+  // The company DS pipeline was retired (mig 132): DS Studio runs as a
+  // single coder session, so the company master never hosts ds_* tools.
+  // The 'ds_' prefix was removed from COMPANY_TOOL_PREFIXES — lock that.
   it.each([
     'ds_get_session_info',
     'ds_record_component',
@@ -23,17 +23,16 @@ describe('isMasterAllowed — design-system tools', () => {
     'ds_audit_package',
     'ds_set_version_status',
     'ds_publish_version',
-  ])('keeps "%s" through the master filter', (toolName) => {
-    expect(isMasterAllowed(fakeNative(toolName))).toBe(true);
+  ])('strips "%s" through the master filter', (toolName) => {
+    expect(isMasterAllowed(fakeNative(toolName))).toBe(false);
   });
 
-  it('keeps any future ds_* tool by prefix (the contract is the prefix, not the names)', () => {
-    expect(isMasterAllowed(fakeNative('ds_future_tool_we_havent_thought_of'))).toBe(true);
+  it('still keeps company orchestration tools so the filter remains effective', () => {
+    expect(isMasterAllowed(fakeNative('post_to_board'))).toBe(true);
+    expect(isMasterAllowed(fakeNative('kanban_create_card'))).toBe(true);
   });
 
-  it('still strips unrelated native tools so the filter remains effective', () => {
-    // Sanity check — without these, the test would pass even if we
-    // accidentally let everything through.
+  it('still strips unrelated native tools', () => {
     expect(isMasterAllowed(fakeNative('read_file'))).toBe(false);
     expect(isMasterAllowed(fakeNative('write_file'))).toBe(false);
     expect(isMasterAllowed(fakeNative('run_command'))).toBe(false);

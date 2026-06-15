@@ -19,41 +19,24 @@
 import { useCallback, useEffect, useRef } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type * as MonacoNs from 'monaco-editor';
-import { apiCall } from '../../../lib/api-client.js';
+import { Loader2 } from 'lucide-react';
+// Single source of truth shared with the backend's language router — the
+// model's language id doubles as the LSP dispatch key (didOpen.languageId).
+import { languageIdForPath as inferLanguage } from '@mcp/shared/utils/language-id.js';
 import { useWorkspaceStore, type OpenFile } from '../../../state/workspace.js';
 import { registerLspProviders } from './lspProvider.js';
-
-/** Map common file extensions to Monaco language ids. */
-function inferLanguage(path: string): string {
-  const ext = path.toLowerCase().split('.').pop() ?? '';
-  switch (ext) {
-    case 'ts': case 'cts': case 'mts': return 'typescript';
-    case 'tsx': return 'typescript';
-    case 'js': case 'cjs': case 'mjs': return 'javascript';
-    case 'jsx': return 'javascript';
-    case 'json': return 'json';
-    case 'md': case 'markdown': return 'markdown';
-    case 'css': return 'css';
-    case 'scss': return 'scss';
-    case 'less': return 'less';
-    case 'html': case 'htm': return 'html';
-    case 'xml': return 'xml';
-    case 'yaml': case 'yml': return 'yaml';
-    case 'py': return 'python';
-    case 'rb': return 'ruby';
-    case 'go': return 'go';
-    case 'rs': return 'rust';
-    case 'java': return 'java';
-    case 'cs': return 'csharp';
-    case 'cpp': case 'cc': case 'cxx': case 'hpp': return 'cpp';
-    case 'c': case 'h': return 'c';
-    case 'sql': return 'sql';
-    case 'sh': case 'bash': return 'shell';
-    case 'ps1': return 'powershell';
-    case 'dockerfile': return 'dockerfile';
-    default: return 'plaintext';
-  }
-}
+import {
+  initEditorModels,
+  restoreViewStateFor,
+  saveViewStateFor,
+  setActiveEditor,
+  touchModel,
+} from './editor-models.js';
+import { consumePendingReveal } from './pending-reveal.js';
+import { registerChatActions } from './chat-actions.js';
+import { useEnsureFileContent } from './useEnsureFileContent.js';
+import { applyMonacoKeymap } from './monaco-keymap.js';
+import { useKeymapStore } from '../../../keymap/keymap-store.js';
 
 function detectDarkMode(): boolean {
   if (typeof document === 'undefined') return true;
@@ -66,72 +49,105 @@ interface MonacoMountProps {
 
 export function MonacoMount({ file }: MonacoMountProps) {
   const editorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
+  const currentPathRef = useRef(file.path);
   const setContent = useWorkspaceStore((s) => s.setContent);
-  const markClean = useWorkspaceStore((s) => s.markClean);
+
+  // Lazy content: tabs open with null and fetch on activation; loaded tabs
+  // revalidate by mtime (stat-only round trip when unchanged).
+  useEnsureFileContent(file);
 
   const handleMount = useCallback<OnMount>(
     (editor, monaco) => {
       editorRef.current = editor;
+      initEditorModels(monaco);
+      setActiveEditor(editor);
+      // Editor-level keymap (Ctrl+D duplicate, Ctrl+B declaration, …) per
+      // the active preset — IntelliJ by default.
+      applyMonacoKeymap(monaco, useKeymapStore.getState().preset);
       // Wire LSP providers on first mount for this project. The registry
       // is idempotent per projectId, so re-mounts (tab switches) are
       // cheap. Switching project tears the previous set down.
       registerLspProviders(monaco, file.projectId);
+      // Copilot-rail actions: "Add Selection to Chat" (Ctrl/Cmd+I) and
+      // "Add File to Chat" in the context menu. They read the active file
+      // from the workspace store at run time, so registering once is safe.
+      registerChatActions(editor, monaco);
+      // Cursor/scroll/selection across UNMOUNTS (diff/welcome detours) —
+      // while mounted, the wrapper handles per-path swaps itself.
+      restoreViewStateFor(file.path, editor);
     },
-    [file.projectId],
+    [file.projectId, file.path],
   );
+
+  // Release the active-editor handle on unmount (commands no-op cleanly).
+  useEffect(() => () => {
+    if (editorRef.current) setActiveEditor(null);
+  }, []);
+
+  // Track the active path: save view state when leaving a file (or
+  // unmounting) and bump the model-LRU on every activation.
+  useEffect(() => {
+    currentPathRef.current = file.path;
+    touchModel(file.path);
+    return () => {
+      const editor = editorRef.current;
+      if (editor) saveViewStateFor(currentPathRef.current, editor);
+    };
+  }, [file.path]);
+
+  // One-shot reveal handoff (selection chip "open in editor", problems,
+  // search). Waits for content — the wrapper swaps models a tick after the
+  // path changes, hence the small delay (same trick as lspProvider's opener).
+  useEffect(() => {
+    if (file.content === null) return;
+    const target = consumePendingReveal(file.path);
+    if (!target) return;
+    const t = setTimeout(() => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.revealLineInCenter(target.line);
+      editor.setPosition({ lineNumber: target.line, column: target.column });
+      editor.focus();
+    }, 60);
+    return () => clearTimeout(t);
+  }, [file.path, file.content]);
 
   const handleChange = useCallback(
     (value: string | undefined) => {
       // Monaco emits undefined when the model is being swapped out; ignore
-      // those — only real edits should flag dirty.
+      // those — only real edits should flag dirty. The MODEL is the source
+      // of truth; the store mirror exists for dirty-tracking + persistence.
       if (value === undefined) return;
-      if (value === file.content) return;
       setContent(file.path, value);
     },
-    [file.path, file.content, setContent],
+    [file.path, setContent],
   );
 
-  // Ctrl/Cmd+S → write current buffer to disk. Bound via window listener
-  // rather than Monaco's keybindings so saves work even when focus is on
-  // the tab bar or any other Workspace surface.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const isSave = (e.ctrlKey || e.metaKey) && e.key === 's' && !e.shiftKey && !e.altKey;
-      if (!isSave) return;
-      e.preventDefault();
-      // Read latest content from the live editor (the store may lag by a
-      // microtask after the last keystroke).
-      const value = editorRef.current?.getValue() ?? file.content;
-      void apiCall<{ ok: true; last_modified: string }>('files.write', {
-        projectId: file.projectId,
-        path: file.path,
-        content: value,
-      })
-        .then((res) => {
-          markClean(file.path, res.last_modified);
-        })
-        .catch((err) => {
-          // Surface to console for now; a Day-7-late polish item is a
-          // toast/banner near the editor. Don't swallow silently — the
-          // dirty flag stays so the user knows it didn't persist.
-          console.error('[workspace] save failed:', err);
-        });
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [file.projectId, file.path, file.content, markClean]);
+  // Ctrl+S lives in the command registry now ('file.save', allowInInputs)
+  // — dispatched by the global keymap dispatcher, preset-rebindable.
 
   const language = inferLanguage(file.path);
   const dark = detectDarkMode();
+
+  if (file.content === null) {
+    return (
+      <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <Editor
       height="100%"
       width="100%"
-      // Key forces model recreation when the file changes, so undo history
-      // doesn't leak across tabs.
+      // Multi-model mode: `path` keys the model; keepCurrentModel keeps it
+      // (and its undo stack) alive across tab switches and detours through
+      // diff/welcome surfaces. UNCONTROLLED on purpose — a controlled
+      // `value` makes the wrapper issue spurious full-range edits.
       path={file.path}
-      value={file.content}
+      defaultValue={file.content}
+      keepCurrentModel
       defaultLanguage={language}
       language={language}
       theme={dark ? 'vs-dark' : 'vs'}
@@ -187,8 +203,15 @@ export function MonacoMount({ file }: MonacoMountProps) {
         foldingHighlight: true,
         showFoldingControls: 'mouseover',
         unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false },
-        suggest: { showStatusBar: true },
-        wordBasedSuggestions: 'matchingDocuments',
+        // IntelliJ-style completion widget: no generic word-soup (`abc`),
+        // namespace/signature columns, locality bonus on top of our sortText.
+        suggest: {
+          showStatusBar: true,
+          showWords: false,        // kill `abc php`/`abc public` word completions
+          showInlineDetails: true, // signature inline after the label
+          localityBonus: true,     // nearby symbols float up (additive to sortText)
+        },
+        wordBasedSuggestions: 'off',
         inlayHints: { enabled: 'onUnlessPressed' },
         // Navigation behaviour for Ctrl+Click on a symbol.
         //   - definitions:        goto first result immediately. The

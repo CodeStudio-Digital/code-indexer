@@ -70,6 +70,7 @@ export const MESSAGES_PT_BR: Record<string, string> = {
   'd1.insertRow': 'Inserir linha',
   'd1.insertRowTitle': 'Inserir linha em {name} (objeto JSON)',
   'd1.updateRowTitle': 'Atualizar linha {id} (objeto JSON de patch)',
+  'd1.rowJsonPh': '{ "coluna": "valor" }',
   'd1.deleteRowTitle': 'Excluir linha',
   'kv.title': 'KV',
   'kv.sub': 'Namespaces e chaves',

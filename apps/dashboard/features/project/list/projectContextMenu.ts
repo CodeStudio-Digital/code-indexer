@@ -12,6 +12,7 @@
  */
 import { Copy, ExternalLink, FolderOpen, FolderSymlink, Pencil } from 'lucide-react';
 import type { ContextMenuItem } from '../../../components/ui/context-menu.js';
+import { toast } from '../../../components/ui/prompt-dialog.js';
 import type { ProjectCardData } from './ProjectCard.js';
 
 export interface BuildProjectMenuArgs {
@@ -79,7 +80,12 @@ export function buildProjectContextMenuItems({
     icon: Copy,
     separatorBefore: true,
     onSelect: () => {
-      void navigator.clipboard?.writeText(project.root_path);
+      void navigator.clipboard
+        ?.writeText(project.root_path)
+        .then(() => toast.info(labels.copied, { description: project.root_path }))
+        .catch(() => {
+          /* clipboard unavailable (no secure context / permission) — no-op */
+        });
     },
   });
 

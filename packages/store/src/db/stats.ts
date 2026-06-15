@@ -17,6 +17,11 @@ export function projectStats(db: DB, projectId: number, project: Project | undef
   const runCount = db.prepare('SELECT COUNT(*) as cnt FROM runs WHERE project_id = ?')
     .get(projectId) as { cnt: number };
 
+  const staleSemantic = db.prepare(`
+    SELECT COUNT(*) as cnt FROM files
+    WHERE project_id = ? AND (semantic_hash IS NULL OR semantic_hash != content_hash)
+  `).get(projectId) as { cnt: number };
+
   return {
     file_count: fileCounts.file_count,
     symbol_count: symbolCount.cnt,
@@ -24,6 +29,8 @@ export function projectStats(db: DB, projectId: number, project: Project | undef
     total_lines: fileCounts.total_lines,
     total_size: fileCounts.total_size,
     last_indexed: project?.last_indexed ?? null,
+    structural_indexed_at: project?.structural_indexed_at ?? null,
+    semantic_stale_count: staleSemantic.cnt,
     run_count: runCount.cnt,
   };
 }
@@ -48,8 +55,10 @@ export function getFilesByConcept(db: DB, projectId: number, concept: string): D
 }
 
 export function getLastTwoRunIds(db: DB, projectId: number): [number, number] | null {
+  // Full runs only — structural runs write no file_snapshots, so pairing one
+  // would produce an empty/false diff.
   const runs = db.prepare(
-    "SELECT id FROM runs WHERE project_id = ? AND status = 'completed' ORDER BY started_at DESC LIMIT 2"
+    "SELECT id FROM runs WHERE project_id = ? AND status = 'completed' AND kind = 'full' ORDER BY started_at DESC LIMIT 2"
   ).all(projectId) as Array<{ id: number }>;
 
   if (runs.length < 2) return null;

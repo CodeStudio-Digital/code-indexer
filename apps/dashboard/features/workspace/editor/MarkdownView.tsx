@@ -17,6 +17,7 @@ import remarkGfm from 'remark-gfm';
 import { Eye, FileEdit, LayoutPanelLeft, Loader2 } from 'lucide-react';
 import type { OpenFile } from '../../../state/workspace.js';
 import { cn } from '../../../lib/utils.js';
+import { useEnsureFileContent } from './useEnsureFileContent.js';
 
 const MonacoMount = lazy(() =>
   import('./MonacoMount.js').then((m) => ({ default: m.MonacoMount })),
@@ -52,6 +53,9 @@ function saveMode(filePath: string, mode: Mode): void {
 
 export function MarkdownView({ file }: MarkdownViewProps) {
   const [mode, setMode] = useState<Mode>(() => loadMode(file.path));
+  // Lazy tab content (preview mode doesn't mount MonacoMount, so this view
+  // owns its own fetch-on-activate).
+  useEnsureFileContent(file);
 
   const change = (next: Mode) => {
     setMode(next);
@@ -97,7 +101,7 @@ export function MarkdownView({ file }: MarkdownViewProps) {
           </Suspense>
         )}
         {mode === 'split' && <div className="border-l" />}
-        {mode !== 'edit' && <MarkdownRender source={file.content} />}
+        {mode !== 'edit' && <MarkdownRender source={file.content ?? ''} />}
       </div>
     </div>
   );

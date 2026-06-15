@@ -9,6 +9,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import type { ProblemMessage } from '../studio-context-store.js';
+import { classifyProblem } from './severity.js';
 
 export interface Problem extends Record<string, unknown> {
   id: string;
@@ -40,6 +41,9 @@ export function usePreviewProblems() {
   const seen = useRef<Map<string, number>>(new Map());
 
   const add = useCallback((m: ProblemMessage) => {
+    // Noise (favicon 404s, sourcemaps, HMR plumbing, console warnings)
+    // never enters the feed — the badge and auto-fix only see real issues.
+    if (classifyProblem(m) === 'noise') return;
     const signature = signatureOf(m);
     const now = m.ts || Date.now();
     const last = seen.current.get(signature) ?? 0;

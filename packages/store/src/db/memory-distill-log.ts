@@ -7,7 +7,7 @@
  */
 import type { DB } from './types.js';
 
-export type DistillTrigger = 'compaction' | 'manual_clear' | 'idle' | 'agent' | 'promotion';
+export type DistillTrigger = 'compaction' | 'manual_clear' | 'idle' | 'agent' | 'promotion' | 'consolidation';
 export type DistillStatus = 'ok' | 'empty' | 'error' | 'skipped';
 
 export interface MemoryDistillLogEntry {
@@ -62,18 +62,18 @@ export function recentForProject(db: DB, projectId: number, limit = 20): MemoryD
   ).all(projectId, Math.max(1, Math.min(100, limit))) as MemoryDistillLogRow[];
 }
 
-/** Memory totals by snapshot category — feeds the health card. */
+/** Memory totals by snapshot category (live only) — feeds the health card. */
 export function countSnapshotsByCategory(db: DB, projectId: number): Record<string, number> {
   const rows = db.prepare(
-    'SELECT category, COUNT(*) AS c FROM snapshots WHERE project_id = ? GROUP BY category',
+    'SELECT category, COUNT(*) AS c FROM snapshots WHERE project_id = ? AND archived_at IS NULL GROUP BY category',
   ).all(projectId) as Array<{ category: string; c: number }>;
   return Object.fromEntries(rows.map((r) => [r.category, r.c]));
 }
 
-/** Memory totals by provenance (`source`, migration 114) — feeds the health card. */
+/** Memory totals by provenance (`source`, migration 114; live only) — feeds the health card. */
 export function countSnapshotsBySource(db: DB, projectId: number): Record<string, number> {
   const rows = db.prepare(
-    'SELECT source, COUNT(*) AS c FROM snapshots WHERE project_id = ? GROUP BY source',
+    'SELECT source, COUNT(*) AS c FROM snapshots WHERE project_id = ? AND archived_at IS NULL GROUP BY source',
   ).all(projectId) as Array<{ source: string; c: number }>;
   return Object.fromEntries(rows.map((r) => [r.source, r.c]));
 }

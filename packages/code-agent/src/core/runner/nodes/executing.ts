@@ -28,7 +28,8 @@ import { events } from '../machine/events.js';
 import { accumulateUsage } from '../machine/context.js';
 import { envTunables } from '@mcp/code-agent/core/tunables.js';
 import { assembleMessagesForChat } from '../assembly/messages.js';
-import { buildTools } from '../assembly/tools.js';
+import { buildTools, fingerprintToolsJson } from '../assembly/tools.js';
+import { computePrefixHeadHash } from '../telemetry/prefix-head.js';
 import { filterByTiers } from '@mcp/code-agent/tools/tiers.js';
 import { buildLoopEnforcementMarker } from '../markers.js';
 import { shouldCompact90 } from '../compaction/threshold.js';
@@ -47,6 +48,7 @@ import { computeDynamicInjection, type DynamicInjectionResult } from '../assembl
 import {
   renderSessionStateBlock,
   renderMemoryIndex,
+  renderUserMemoryBlock,
   hashSessionState,
 } from '../assembly/session-state.js';
 import { resolveInjectionPolicy } from '../assembly/injection-policy.js';
@@ -177,6 +179,7 @@ export class ExecutingNode implements BehaviorNode {
       });
       let sessionState: { block: string; hash: string } | null = null;
       let projectMemoryIndex: { text: string; hash: string } | null = null;
+      let userMemoryIndex: { text: string; hash: string } | null = null;
       if (policy.enabled) {
         try {
           const data = ctx.bridge?.getSessionStateData?.() ?? null;
@@ -196,7 +199,23 @@ export class ExecutingNode implements BehaviorNode {
             dbg('memory-index render failed', (e as Error).message);
           }
         }
+        // Global user preferences (migration 145) — NOT gated by the project's
+        // memory toggle; carried even on minimal windows.
+        if (policy.userMemoryChars > 0) {
+          try {
+            const entries = ctx.bridge?.getUserMemoryIndex?.() ?? null;
+            const text = entries ? renderUserMemoryBlock(entries, policy.userMemoryChars) : null;
+            if (text) userMemoryIndex = { text, hash: hashSessionState(text) };
+          } catch (e) {
+            dbg('user-memory render failed', (e as Error).message);
+          }
+        }
       }
+      // Task-preflight hint — fixed for the whole run; the hash only guards
+      // double-injection (turn 1 + post-compaction re-inject).
+      const preflightHint = ctx.opts.preflightHint
+        ? { text: ctx.opts.preflightHint, hash: hashSessionState(ctx.opts.preflightHint) }
+        : null;
       // Skip computing when nothing fresh AND no recent compaction AND no
       // memory AND no nudge AND no state block worth (re-)injecting.
       if (
@@ -205,7 +224,9 @@ export class ExecutingNode implements BehaviorNode {
         pendingMemory.length === 0 &&
         !selfReviewNudge &&
         !sessionState &&
-        !projectMemoryIndex
+        !projectMemoryIndex &&
+        !userMemoryIndex &&
+        !preflightHint
       )
         return null;
       const result = computeDynamicInjection({
@@ -223,12 +244,17 @@ export class ExecutingNode implements BehaviorNode {
         lastInjectedSessionStateHash: ctx.injectionState.lastInjectedSessionStateHash,
         projectMemoryIndex,
         lastInjectedProjectIndexHash: ctx.injectionState.lastInjectedProjectIndexHash,
+        userMemoryIndex,
+        lastInjectedUserMemoryHash: ctx.injectionState.lastInjectedUserMemoryHash,
+        preflightHint,
+        lastInjectedPreflightHash: ctx.injectionState.lastInjectedPreflightHash,
       });
       // Stash for post-assembly commit so we don't double-update state
       // when the same injection is consulted (e.g. by tests).
       if (result) injectionResultForCommit = result;
       return result;
     };
+    let reducerStats: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number } | null = null;
     const messagesForChat = assembleMessagesForChat({
       messages: ctx.messages,
       tunables,
@@ -237,6 +263,7 @@ export class ExecutingNode implements BehaviorNode {
       buildActiveSkillsBlock: ctx.bridge?.buildActiveSkillsBlock ?? (() => null),
       buildActiveContextBlock: ctx.bridge?.buildActiveContextBlock ?? (() => null),
       computeDynamicInjection: dynamicInjectionFn,
+      onReducerStats: (s) => { reducerStats = s; },
     });
     // Commit injection state AFTER assembly succeeds — we now know the
     // skill ids and file paths the reminder included; record them so the
@@ -259,6 +286,12 @@ export class ExecutingNode implements BehaviorNode {
       if (injectionToCommit.includedProjectIndexHash) {
         ctx.injectionState.lastInjectedProjectIndexHash = injectionToCommit.includedProjectIndexHash;
       }
+      if (injectionToCommit.includedUserMemoryHash) {
+        ctx.injectionState.lastInjectedUserMemoryHash = injectionToCommit.includedUserMemoryHash;
+      }
+      if (injectionToCommit.includedPreflightHash) {
+        ctx.injectionState.lastInjectedPreflightHash = injectionToCommit.includedPreflightHash;
+      }
     }
     if (
       ctx.injectionState.recentCompactionAt != null &&
@@ -274,9 +307,9 @@ export class ExecutingNode implements BehaviorNode {
       externalToolTiers: ctx.opts.externalToolTiers,
       activeTiers: ctx.activeTiers,
       pinnedTools: ctx.pinnedTools,
+      sessionToolCap: ctx.opts.sessionToolCap,
       toolContext: ctx.opts.toolContext,
       provider: ctx.opts.provider,
-      goalToolAlreadyLogged: false,
     });
     dbg(`tools=${toolsBuilt.tools.length} tiers=${ctx.activeTiers === null ? '*' : Array.from(ctx.activeTiers).join(',')}`);
 
@@ -491,9 +524,15 @@ export class ExecutingNode implements BehaviorNode {
     // the host emits `turn_start` post-Compacting. Acceptable trade-off
     // — the metric stays consistent within a session, just shifted by
     // one row.
-    const toolsDefChars = (() => {
-      try { return JSON.stringify(toolsBuilt.tools).length; } catch { return 0; }
+    const { toolsDefChars, toolsFingerprint } = (() => {
+      try {
+        const json = JSON.stringify(toolsBuilt.tools);
+        return { toolsDefChars: json.length, toolsFingerprint: fingerprintToolsJson(json) };
+      } catch {
+        return { toolsDefChars: 0, toolsFingerprint: null };
+      }
     })();
+    const prefixHeadHash = computePrefixHeadHash(messagesForChat);
     const runPersistTelemetry = (toolResultBlocks: ReadonlyArray<ContentBlock>): void => {
       if (!ctx.bridge?.persistTurnTelemetry) return;
       try {
@@ -511,6 +550,9 @@ export class ExecutingNode implements BehaviorNode {
           systemPromptChars: systemPrompt.length,
           toolsDefChars,
           visibleToolsCount: toolsBuilt.tools.length,
+          toolsFingerprint,
+          prefixHeadHash,
+          reducerStats,
           responseMeta: result.responseMeta,
           // Compaction never fires INSIDE Executing — the Token-Threshold
           // event we may emit below is the SIGNAL to the orchestrator to

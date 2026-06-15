@@ -49,6 +49,23 @@ export interface ChatCallOptions {
   baseUrlOverride?: string;
   /** Optional fetch implementation — pass `vi.fn()` or a stub in tests. */
   fetchFn?: typeof fetch;
+  /**
+   * Stop sequences (editor autocomplete: cut at fences/blank-runs). Mapped
+   * per dialect: openai `stop`, anthropic `stop_sequences` (whitespace-only
+   * entries filtered — the API rejects them), gemini `stopSequences`.
+   * OAuth coder kinds ignore it — callers keep a client-side cut.
+   */
+  stop?: string[];
+  /** External cancel (single-flight autocomplete) — chained into the per-call controller. */
+  signal?: AbortSignal;
+  /**
+   * Ask the model to skip its reasoning phase (latency-critical callers:
+   * editor autocomplete). Mapped per dialect — openai-compatible sends the
+   * GLM-style `thinking: {type:'disabled'}`, gemini sends
+   * `thinkingConfig.thinkingBudget: 0`. The CALLER gates this per
+   * provider/model (OpenAI proper 400s on unknown body params).
+   */
+  disableThinking?: boolean;
 }
 
 interface OpenAiChatBodyOpts {
@@ -56,6 +73,9 @@ interface OpenAiChatBodyOpts {
   messages: ChatMessage[];
   temperature?: number;
   max_tokens?: number;
+  stop?: string[];
+  thinking?: { type: 'disabled' };
+  chat_template_kwargs?: { enable_thinking: boolean };
   /**
    * OpenAI-compatible JSON-mode flag. When set, the server constrains the
    * response to a valid JSON object. Supported by OpenAI, DeepSeek, Mistral,
@@ -124,9 +144,23 @@ export async function openAiCompatibleChat(
   if (cfg.json_mode === true) {
     body.response_format = { type: 'json_object' };
   }
+  if (options.stop && options.stop.length > 0) {
+    body.stop = options.stop.slice(0, 4);
+  }
+  if (options.disableThinking) {
+    // Both dialects of the same knob — hosts ignore the one they don't
+    // know (verified live): ZAI native reads `thinking`, vLLM-style hosts
+    // (Cloudflare Workers AI) only honor `chat_template_kwargs`.
+    body.thinking = { type: 'disabled' };
+    body.chat_template_kwargs = { enable_thinking: false };
+  }
   const timeoutMs = options.timeoutMs ?? Math.max(1000, toNumber(cfg.timeout) ?? 30_000);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  if (options.signal) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
   const fetchImpl = options.fetchFn ?? fetch;
   try {
     const res = await fetchImpl(url, {

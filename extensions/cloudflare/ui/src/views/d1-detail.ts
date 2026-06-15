@@ -15,7 +15,7 @@ const PAGE = 50;
 
 /** Prompt for a JSON object (host dialog), null on cancel/bad JSON. */
 async function promptJson(title: string): Promise<Record<string, unknown> | null> {
-  const text = await mcp.ui.prompt({ title, placeholder: '{ "col": "value" }' });
+  const text = await mcp.ui.prompt({ title, placeholder: t('d1.rowJsonPh') });
   if (text == null) return null;
   const parsed = parseJsonOr(text, {});
   return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;

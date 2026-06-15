@@ -305,21 +305,18 @@ export interface InteractionPending {
 }
 
 /**
- * Bus event payload emitted whenever a loop-detection guard
- * (`dup-call-cap`, `doom-loop-strict`, `doom-loop-fuzzy`, `dominance`)
- * fires OR the dup-result marker triggers (informational — content was
- * prefixed but still delivered). Dashboard renders a banner so the user
- * sees the intervention live instead of having to scrape the server
- * log. Apêndice 3 — silent-failure work.
+ * Bus event payload emitted whenever a loop-detection guard or related
+ * intervention fires. Dashboard renders a banner so the user sees the
+ * intervention live instead of having to scrape the server log.
  *
- * Discriminated by `kind`: the four guard variants carry the full
- * count/threshold/snapshot shape; `dup-result-marker` carries only
- * the originalTurn/mode metadata (no snapshot — it's not a guard,
- * it's a content-delivery hint and `severity` is `'informational'`,
- * NOT a failure mode).
+ * Discriminated by `kind`: the guard variants carry the full
+ * count/threshold/window shape and usually a snapshot; other intervention
+ * families carry their own metadata and do not include a snapshot.
  */
 export type ToolLoopIntervention =
   | (ToolLoopGuardIntervention & { receivedAt: number })
+  | (FailureStreakIntervention & { receivedAt: number })
+  | (LoopEnforcedIntervention & { receivedAt: number })
   | (DupResultMarkerIntervention & { receivedAt: number });
 
 export interface ToolLoopGuardIntervention {
@@ -333,12 +330,40 @@ export interface ToolLoopGuardIntervention {
   reason: string;
   /** Diagnostic snapshot of the three guard arrays — explains WHY
    *  the other guards didn't fire (e.g. fuzzy was 4/6 when dominance
-   *  fired). */
-  snapshot: {
+   *  fired). Current servers include this for guard events; optional here
+   *  so older or malformed stream payloads cannot crash the dashboard. */
+  snapshot?: {
     strict: string[];
     fuzzy: string[];
     dominance: Array<{ name: string; hadText: boolean }>;
   };
+}
+
+export interface FailureStreakIntervention {
+  kind: 'failure-streak';
+  turn: number;
+  toolName: string;
+  /** Consecutive failure count that triggered the verdict. */
+  count: number;
+  /** Turn of the very first failure in the current streak. */
+  firstFailureTurn: number;
+  /** First ~200 chars of the most recent error content. */
+  lastError: string;
+  severity: 'informational' | 'refused';
+  reason: string;
+}
+
+export interface LoopEnforcedIntervention {
+  kind: 'loop-enforced';
+  turn: number;
+  toolName: string;
+  /**
+   * Cross-cycle hard-refusal count for this exact tool+args. Counts refusals
+   * that survive the per-Planning dedup reset.
+   */
+  count: number;
+  severity: 'enforced';
+  reason: string;
 }
 
 export interface DupResultMarkerIntervention {

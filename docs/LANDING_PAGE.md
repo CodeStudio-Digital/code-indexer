@@ -378,7 +378,7 @@ Cada alegação da landing tem respaldo no código. / Every landing claim is bac
 | Treino local (QLoRA + Ollama) | `packages/store/src/migrations/121_training_datasets.ts` |
 | Plugins (marketplace assinado) + pipelines | `packages/plugin-market-client/src/index.ts`; `packages/services/src/pipelines/catalog.ts` |
 | Vision fallback | `packages/code-agent/src/core/vision-describer.ts` |
-| Builder Studio (V0-style) | `packages/company/src/prompts/builder-studio-rules.ts` |
+| Builder de projeto (V0-style) | `packages/code-agent/src/prompts/builder.txt`; `apps/dashboard/features/project/builder/` |
 | BYOK / local-first / sandbox opt-in (copy real) | `apps/dashboard/i18n/locales/en/common.json` (`onboarding.*`, `preflight.*`) |
 | Paleta de cores (tokens) | `apps/dashboard/index.css` |
 | Multi-provedor + caps de modelo | `packages/code-agent/src/providers/model-registry.ts` |

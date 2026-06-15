@@ -74,13 +74,13 @@ arquivo, o chat único continua mais simples.
 navegação/edição" o papel recebe. `bootstrap` = mínimo (tarefas rápidas e bem escopadas);
 `navigate` = intermediário; `full` = conjunto completo. O Master usa `full`.
 
-### Modo Builder × Tradicional
+### Builder agora é feature de projeto
 
-- **Tradicional** (`Desligado`): os agentes trabalham nos arquivos dos projetos ligados. Requer **≥1 projeto**.
-- **Builder** (preview ao vivo): provisiona um **container sandbox** ao iniciar a sessão e abre um
-  painel de **preview com HMR**. Projetos são **opcionais** (o builder cria o próprio). Stacks
-  disponíveis: **React + Vite**, **Vue 3 + Vite**, **Angular 19**, **API — Hono + Vite**,
-  **API — Cloudflare Worker**.
+Sessões company sempre trabalham nos arquivos dos projetos ligados (requer **≥1 projeto**).
+O antigo "Modo Builder" de sessão company foi **aposentado** — a experiência V0 (preview ao
+vivo + seleção de elementos) virou feature de **projeto**: crie um projeto pelo wizard
+**Novo Projeto → Modo Builder** e use sessões de chat normais sobre ele. Microsserviços em
+container (Add Service) continuam disponíveis em qualquer sessão company.
 
 ---
 
@@ -88,10 +88,10 @@ navegação/edição" o papel recebe. `bootstrap` = mínimo (tarefas rápidas e 
 
 1. **Providers e modelos configurados** em **Admin → AI** (você precisa de pelo menos um provider
    com chave válida; o Master e cada papel escolhem dentre esses modelos).
-2. **Projetos cadastrados/indexados** (para o modo tradicional). Sem projetos, o seletor mostra
+2. **Projetos cadastrados/indexados**. Sem projetos, o seletor mostra
    *"Nenhum projeto indexado encontrado."*
-3. **Podman ou Docker** instalado e acessível **somente se** você for usar o **Modo Builder** ou
-   microsserviços em container. O modo tradicional não exige container.
+3. **Podman ou Docker** instalado e acessível **somente se** você for usar
+   microsserviços em container. O fluxo padrão não exige container.
 4. *(Opcional)* **Skills** habilitadas em **Admin → Skills** — papéis podem ativar skills
    específicas (ex.: `qa-playwright`).
 
@@ -139,9 +139,8 @@ Clique em **"Nova Empresa"** para abrir o diálogo **"Iniciar Sessão de Empresa
 |---|---|---|
 | **Nome da Sessão** | Sim | ex.: *Feature Sprint Q2* |
 | **Template (opcional)** | Não | Escolha um modelo, ou **"Custom (sem template)"**. Com template, o provider/modelo do Master e de cada papel ficam **travados** pelo template. |
-| **Projetos** | Sim (no tradicional) | Lista de checkboxes. No Builder é **opcional**. |
+| **Projetos** | Sim | Lista de checkboxes. |
 | **Provider/Modelo do Master** | Sim | Desabilitado se um template foi escolhido (o template manda). |
-| **Modo builder + recursos** | Não | Stack (off/React/Vue/Angular/Hono/CF Worker), preset de recursos do container (Padrão/Pequeno/Médio/Grande/Customizado), imagem base e flags de runtime. |
 | **Fallback do Master** | Não | Provider/modelo de reserva. |
 | **Pool de modelos permitidos** | Não | Lista curada de `(provider, modelo)` que o Master pode usar ao spawnar. **Vazio = sem restrição.** Não-vazio = o servidor **rejeita** qualquer spawn fora do pool. |
 | **Master observa peer-to-peer** | Não | Cada mensagem entre subordinados gera uma cópia *notify* para o Master (aparece como `[INBOX-OBSERVED]`). |
@@ -150,18 +149,13 @@ Clique em **"Nova Empresa"** para abrir o diálogo **"Iniciar Sessão de Empresa
 Clique em **"Criar & Iniciar"** (`POST /api/company/sessions`). A sessão aparece na lista e abre;
 o Master sobe e fica **em standby**, pronto para sua primeira instrução — envie-a no composer (ver §4.6).
 
-> **Builder com projeto externo.** Se você ligar projetos **e** ativar um stack builder, escolha o
-> **Projeto principal** e o **runtime**: **Imagem Node dev** (roda o script `dev`/`start`/`serve`
-> do `package.json`, com HMR) ou **Dockerfile** (roda o `CMD`/`ENTRYPOINT`; exige `EXPOSE`). Os
-> arquivos do projeto externo ficam **no disco e são preservados** ao excluir.
-
 ### 4.4 Vincular e gerenciar Projetos
 
 - **Na criação**: marque os projetos na lista de checkboxes.
 - **Depois**: no painel lateral de agentes, seção **Projetos**. Vincular/desvincular é dinâmico.
   - Projetos **reais**: ao desvincular, os **arquivos são preservados** no disco.
-  - Projetos **virtuais** (`_builder_*`, criados pelo builder): são **derrubados** por completo
-    (remove o serviço e a linha do projeto).
+  - Projetos **virtuais** (`_builder_*`, criados por serviços em container): são **derrubados**
+    por completo (remove o serviço e a linha do projeto).
 
 ### 4.5 Ajustar papéis depois da criação
 
@@ -219,7 +213,7 @@ antes de avançar). Escopo: **sessão** (multi-projeto) ou **global**.
 
 | Painel | O que faz |
 |---|---|
-| **Preview** | Saída do dev server (HMR) no Modo Builder. |
+| **Preview** | Saída do dev server (HMR) de serviços em container. |
 | **Inbox** | Fila de mensagens entre agentes (status: *pending, delivered, answered, cancelled, expired*). Você pode **cancelar** uma mensagem travada ou **"Responder como humano"** no lugar do destinatário. |
 | **Env** | Variáveis de ambiente compartilhadas da sessão (ver abaixo). |
 | **Bancos** | Registra Postgres/MySQL/Supabase/Neon; as connection strings viram env vars e ficam acessíveis ao agente via `db_list`/`db_schema`/`db_query`. |
@@ -316,8 +310,8 @@ sobrevivem a reativações e compactações.
 - **`COMPANY_TOOLS`** — registradas em **toda** sessão de empresa: shared drive
   (`read/write/append/delete/list_shared_file`), comunicação (`send_message`, `list_agents`,
   `wait_agents`, inbox), e env (`env_list/read/set/delete/validate` — Master só lê).
-- **`BUILDER_TOOLS`** — só quando há sandbox/builderStack: `db_*`, `docs_*`, controle de
-  sandbox/pipeline/serviços.
+- **`BUILDER_TOOLS`** — só quando há binding de sandbox (subordinado ligado a serviço em
+  container): `db_*`, `docs_*`, controle de sandbox/pipeline/serviços.
 
 ### Pool de modelos e concorrência
 
@@ -336,12 +330,13 @@ Tabelas centrais (migration `018_company_agents.ts`):
 |---|---|
 | `company_templates` | `id`, `name`, `description`, `roles_json`, `created_at`, `updated_at` |
 | `company_sessions` | `id`, `template_id` → templates, `name`, `status` *(idle/running/paused/completed/error)*, `master_session_id` → `coder_sessions`, `config_json` (default `{}`), timestamps |
-| `company_session_projects` | PK (`company_session_id`, `project_id`), `label` *(null = projeto real; preenchido = serviço virtual `_builder_*`)* |
+| `company_session_projects` | PK (`company_session_id`, `project_id`), `label` *(null = projeto real; preenchido = serviço virtual `_builder_*` — prefixo herdado de sessões legadas)* |
 | `company_agent_runs` | `id`, `company_session_id`, `role`, `coder_session_id`, `project_ids_json`, `provider`, `model`, `status` *(idle/running/waiting_plan/completed/error/aborted)*, timestamps |
 | `company_board` | `id`, `company_session_id`, `author_role`, `agent_run_id`, `kind` (default `message`), `content`, `mentions_json`, `created_at` |
 
 **`config_json`** (na `company_sessions`) carrega: `role_assignments[]`, `allowed_models[]`,
-`operational_rules` (string), `master_broadcast_subscribe` (bool) e `builder` (stack + limites).
+`operational_rules` (string) e `master_broadcast_subscribe` (bool). (Sessões legadas podem
+carregar uma chave `builder` do modo aposentado — ignorada pelo runtime atual.)
 
 Tabelas adicionais por migrations posteriores: `034` sandbox, `035` serviços, `036` env vars
 (`company_session_envs`), `038` arquivos (`company_archives`), `040` bancos
@@ -400,8 +395,8 @@ Tabelas adicionais por migrations posteriores: `034` sandbox, `035` serviços, `
 
 **Glossário.** *Master* = agente orquestrador. *Subordinado* = agente executor. *Template/Modelo* =
 blueprint de papéis. *Sessão/Empresa* = instância de trabalho. *Tier* = nível de ferramentas de um
-papel. *Regras operacionais* = política injetada em todos os agentes. *Builder* = sessão com sandbox
-+ preview. *Quadro/Board* = feed do time. *Pool de modelos* = lista permitida de provider/modelo.
+papel. *Regras operacionais* = política injetada em todos os agentes. *Quadro/Board* = feed do
+time. *Pool de modelos* = lista permitida de provider/modelo.
 
 **Mapa de arquivos (para devs).**
 
@@ -482,12 +477,13 @@ chat is still simpler.
 gets. `bootstrap` = minimal (quick, well-scoped tasks); `navigate` = intermediate; `full` = the
 complete set. The Master uses `full`.
 
-### Builder vs Traditional
+### Builder is now a project feature
 
-- **Traditional** (`Off`): agents work on the files of the linked projects. Requires **≥1 project**.
-- **Builder** (live preview): provisions a **sandbox container** on session start and opens an
-  **HMR preview** pane. Projects are **optional** (builder creates its own). Available stacks:
-  **React + Vite**, **Vue 3 + Vite**, **Angular 19**, **API — Hono + Vite**, **API — Cloudflare Worker**.
+Company sessions always work on the files of the linked projects (requires **≥1 project**).
+The old company-session "Builder mode" was **retired** — the V0 experience (live preview +
+element selection) became a **project** feature: create a project via the
+**New Project → Builder mode** wizard and use normal chat sessions over it. Containerized
+microservices (Add Service) remain available in any company session.
 
 ---
 
@@ -495,10 +491,10 @@ complete set. The Master uses `full`.
 
 1. **Providers and models configured** in **Admin → AI** (you need at least one provider with a
    valid key; the Master and each role pick from those models).
-2. **Registered/indexed projects** (for traditional mode). Without projects the picker shows
+2. **Registered/indexed projects**. Without projects the picker shows
    *"No indexed projects found."*
-3. **Podman or Docker** installed and reachable **only if** you use **Builder mode** or
-   containerized microservices. Traditional mode needs no container.
+3. **Podman or Docker** installed and reachable **only if** you use
+   containerized microservices. The default flow needs no container.
 4. *(Optional)* **Skills** enabled in **Admin → Skills** — roles can enable specific skills
    (e.g. `qa-playwright`).
 
@@ -545,9 +541,8 @@ Click **"New Company"** to open the **"Start Company Session"** dialog:
 |---|---|---|
 | **Session Name** | Yes | e.g. *Feature Sprint Q2* |
 | **Template (optional)** | No | Pick a template, or **"Custom (no template)"**. With a template, the Master's and each role's provider/model are **locked** by the template. |
-| **Projects** | Yes (traditional) | Checkbox list. **Optional** in Builder. |
+| **Projects** | Yes | Checkbox list. |
 | **Master Provider/Model** | Yes | Disabled if a template is selected (the template wins). |
-| **Builder mode + resources** | No | Stack (off/React/Vue/Angular/Hono/CF Worker), container resource preset (Default/Small/Medium/Large/Custom), base image and runtime flags. |
 | **Master fallback** | No | Backup provider/model. |
 | **Allowed models pool** | No | Curated list of `(provider, model)` the Master may spawn with. **Empty = no restriction.** Non-empty = the server **rejects** any spawn outside the pool. |
 | **Master observes peer-to-peer** | No | Every message between subordinates yields a *notify* copy for the Master (shows up as `[INBOX-OBSERVED]`). |
@@ -556,17 +551,12 @@ Click **"New Company"** to open the **"Start Company Session"** dialog:
 Click **"Create & Start"** (`POST /api/company/sessions`). The session appears in the list and
 opens; the Master comes up **on standby**, ready for your first instruction — send it in the composer (see §4.6).
 
-> **Builder with an external project.** If you link projects **and** enable a builder stack, pick
-> the **Main project** and **runtime**: **Node dev image** (runs the `package.json`
-> `dev`/`start`/`serve` script with HMR) or **Dockerfile** (runs the `CMD`/`ENTRYPOINT`; needs
-> `EXPOSE`). The external project's files stay **on disk and are preserved** on delete.
-
 ### 4.4 Link and manage Projects
 
 - **At creation**: check the projects in the checkbox list.
 - **Afterwards**: in the agents sidebar, **Projects** section. Linking/unlinking is dynamic.
   - **Real** projects: unlinking **preserves files** on disk.
-  - **Virtual** projects (`_builder_*`, created by the builder): they are **torn down** fully
+  - **Virtual** projects (`_builder_*`, created by containerized services): they are **torn down** fully
     (the service is removed and the project row deleted).
 
 ### 4.5 Adjust roles after creation
@@ -625,7 +615,7 @@ Scope: **session** (multi-project) or **global**.
 
 | Panel | What it does |
 |---|---|
-| **Preview** | Dev server output (HMR) in Builder mode. |
+| **Preview** | Dev server output (HMR) of containerized services. |
 | **Inbox** | Inter-agent message queue (statuses: *pending, delivered, answered, cancelled, expired*). You can **cancel** a stuck message or **"Respond as human"** in place of the recipient. |
 | **Env** | Session-wide shared environment variables (see below). |
 | **Databases** | Register Postgres/MySQL/Supabase/Neon; connection strings become env vars and are reachable by the agent via `db_list`/`db_schema`/`db_query`. |
@@ -720,7 +710,7 @@ survive reactivations and compactions.
 - **`COMPANY_TOOLS`** — registered in **every** company session: shared drive
   (`read/write/append/delete/list_shared_file`), comms (`send_message`, `list_agents`,
   `wait_agents`, inbox), and env (`env_list/read/set/delete/validate` — Master read-only).
-- **`BUILDER_TOOLS`** — only when a sandbox/builderStack is present: `db_*`, `docs_*`,
+- **`BUILDER_TOOLS`** — only when a sandbox binding is present (service-bound subordinate): `db_*`, `docs_*`,
   sandbox/pipeline/service control.
 
 ### Model pool and concurrency
@@ -740,12 +730,13 @@ Core tables (migration `018_company_agents.ts`):
 |---|---|
 | `company_templates` | `id`, `name`, `description`, `roles_json`, `created_at`, `updated_at` |
 | `company_sessions` | `id`, `template_id` → templates, `name`, `status` *(idle/running/paused/completed/error)*, `master_session_id` → `coder_sessions`, `config_json` (default `{}`), timestamps |
-| `company_session_projects` | PK (`company_session_id`, `project_id`), `label` *(null = real project; set = virtual `_builder_*` service)* |
+| `company_session_projects` | PK (`company_session_id`, `project_id`), `label` *(null = real project; set = virtual `_builder_*` service — prefix inherited from legacy sessions)* |
 | `company_agent_runs` | `id`, `company_session_id`, `role`, `coder_session_id`, `project_ids_json`, `provider`, `model`, `status` *(idle/running/waiting_plan/completed/error/aborted)*, timestamps |
 | `company_board` | `id`, `company_session_id`, `author_role`, `agent_run_id`, `kind` (default `message`), `content`, `mentions_json`, `created_at` |
 
 **`config_json`** (on `company_sessions`) carries: `role_assignments[]`, `allowed_models[]`,
-`operational_rules` (string), `master_broadcast_subscribe` (bool) and `builder` (stack + limits).
+`operational_rules` (string) and `master_broadcast_subscribe` (bool). (Legacy sessions may carry
+a `builder` key from the retired mode — ignored by the current runtime.)
 
 Additional tables in later migrations: `034` sandbox, `035` services, `036` env vars
 (`company_session_envs`), `038` archives (`company_archives`), `040` databases
@@ -804,7 +795,7 @@ Additional tables in later migrations: `034` sandbox, `035` services, `036` env 
 
 **Glossary.** *Master* = orchestrator agent. *Subordinate* = executor agent. *Template* = role
 blueprint. *Session/Company* = work instance. *Tier* = a role's tool level. *Operational rules* =
-policy injected into all agents. *Builder* = a session with sandbox + preview. *Board* = the team
+policy injected into all agents. *Board* = the team
 feed. *Model pool* = the allowed list of provider/model.
 
 **File map (for devs).**

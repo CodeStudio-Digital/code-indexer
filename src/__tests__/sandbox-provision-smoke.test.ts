@@ -93,7 +93,9 @@ describe('SandboxManager → provision (happy path)', () => {
     expect(driver.calls.create.length).toBe(1);
     expect(scaffolder.calls.length).toBe(1);
     expect(scaffolder.calls[0].sandboxId).toBe('42');
-    expect(scaffolder.calls[0].previewUrl).toBe('/preview/42/');
+    // Phase C removed the `/preview/:id/` proxy — previews are direct
+    // loopback URLs to the published host port now (see preview-url.ts).
+    expect(scaffolder.calls[0].previewUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
   });
 
   it('emits provisioning → ready events through the observer', async () => {
@@ -199,7 +201,8 @@ describe('SandboxManager → provision (scaffolder context)', () => {
     await manager.provision({ sessionId: '80', stack: 'react-ts' });
 
     expect(scaffolder.calls[0].devServerPort).toBe(5173);
-    expect(scaffolder.calls[0].previewPathPrefix).toBe('/preview/80/');
+    // Direct loopback preview → Vite `base` is the bare root.
+    expect(scaffolder.calls[0].previewPathPrefix).toBe('/');
   });
 
   it('forwards `includeE2e` flag from the provision request', async () => {

@@ -25,11 +25,13 @@ import { createApp } from '@apps/http-api/server.js';
 import { mountIpcHandlers } from './src/handlers-mount.js';
 import { setGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { PreviewWindowService } from './src/preview-window/service.js';
+import { buildRunnerBridge } from './src/preview-window/build-runner-bridge.js';
 import { startOptionalDevHttp } from './src/dev-http.js';
 import { OAUTH_LOOPBACK_PORT, startOAuthLoopback, stopOAuthLoopback } from './src/oauth-loopback.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
 import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
+import { APP_USER_MODEL_ID, resolveAppIconPath } from './src/app-icon.js';
 import type { Hono } from 'hono';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -113,6 +115,11 @@ async function bootstrap() {
   const { app: honoApp, deps } = createApp();
   await startOptionalDevHttp(honoApp);
 
+  // Perf monitor: hand the backend the Electron process tree
+  // (GPU/renderer/utility working sets — what Task Manager shows).
+  // Read lazily per sampler tick, so assigning after createApp is fine.
+  deps.processMetricsProvider = () => app.getAppMetrics();
+
   // Wire the admin "Restart backend" button to Electron's relaunch
   // primitives — without this, `process.exit(75)` would kill the main
   // process directly and the user would see the window vanish without
@@ -127,6 +134,10 @@ async function bootstrap() {
 
   await app.whenReady();
 
+  if (process.platform === 'win32') {
+    app.setAppUserModelId(APP_USER_MODEL_ID);
+  }
+
   // Production lockdown: strip the application menu + install the renderer
   // CSP. No-op in dev (gated on app.isPackaged inside). Runs before the
   // first window loads so the CSP header applies to the document.
@@ -136,7 +147,7 @@ async function bootstrap() {
   // every IPC channel not yet covered by a pure handler in
   // @mcp/api-handlers. The fallback dispatches via `app.fetch(Request)`
   // in-process — same routes, zero port. See hono-dispatch.ts.
-  mountIpcHandlers(deps, honoApp);
+  const handlers = mountIpcHandlers(deps, honoApp);
   mountTerminalIpc(deps);
   registerNativeIpc();
   registerWindowIpc();
@@ -146,13 +157,40 @@ async function bootstrap() {
   // Agent preview/devtools: wire the main-process service so the `preview_*`
   // tools (coder + company) can open a dedicated window + read CDP. Reaches
   // the runner workers via the bridge handler in the worker pools.
-  const previewService = new PreviewWindowService();
+  // Inject the runner bridge so `preview_open` (no url) can reuse the
+  // project's running dev server — or start a tracked one we own and stop
+  // at session end — instead of the agent spawning a server in the shell.
+  const previewService = new PreviewWindowService(
+    handlers.runner ? buildRunnerBridge(handlers.runner, deps) : null,
+  );
   setGlobalPreviewDevtools(previewService);
   // Dashboard "Inspect": reuse the SAME service so universal element-selection
   // windows are managed alongside the agent's preview windows.
   mountPreviewInspectIpc(previewService);
   app.on('before-quit', () => previewService.closeAll());
   app.on('before-quit', () => stopOAuthLoopback());
+
+  // Windows GUI quit emits NO SIGINT/SIGTERM, so the http-api signal
+  // handlers never fire in the desktop app — without this, pending dbWriter
+  // writes could be lost and worker pools die unflushed on quit. `will-quit`
+  // is deferred once (preventDefault → async cleanup → app.quit()).
+  let quitCleanupDone = false;
+  app.on('will-quit', (e) => {
+    if (quitCleanupDone) return;
+    e.preventDefault();
+    void (async () => {
+      try {
+        const { runShutdownTasks } = await import('../http-api/server/shutdown-tasks.js');
+        const { disposeIndexerProcessResources } = await import('@mcp/indexer/bootstrap/dispose.js');
+        await Promise.allSettled([runShutdownTasks(), disposeIndexerProcessResources()]);
+      } catch (err) {
+        console.error('[electron] quit cleanup failed:', err);
+      } finally {
+        quitCleanupDone = true;
+        app.quit();
+      }
+    })();
+  });
 
   await createAppWindow();
 
@@ -235,12 +273,14 @@ function attachWindowHandlers(win: BrowserWindow) {
  * `/company/sessions/7/main/work/chat`.
  */
 async function createAppWindow(routeSuffix?: string): Promise<BrowserWindow> {
+  const appIconPath = resolveAppIconPath();
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 1024,
     minHeight: 720,
     title: 'CodeStudio',
+    ...(appIconPath ? { icon: appIconPath } : {}),
     autoHideMenuBar: true,
     webPreferences: {
       preload: PRELOAD_PATH,

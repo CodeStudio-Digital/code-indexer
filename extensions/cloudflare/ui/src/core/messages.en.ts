@@ -70,6 +70,7 @@ export const MESSAGES_EN: Record<string, string> = {
   'd1.insertRow': 'Insert row',
   'd1.insertRowTitle': 'Insert row into {name} (JSON object)',
   'd1.updateRowTitle': 'Update row {id} (patch JSON object)',
+  'd1.rowJsonPh': '{ "col": "value" }',
   'd1.deleteRowTitle': 'Delete row',
   'kv.title': 'KV',
   'kv.sub': 'Namespaces and keys',

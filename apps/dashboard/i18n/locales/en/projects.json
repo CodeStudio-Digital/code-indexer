@@ -347,6 +347,8 @@
   "memory.health.total": "{{count}} memories",
   "memory.health.refresh": "Refresh",
   "memory.health.lastDistill": "last distilled {{when}} ({{trigger}}): +{{created}} new, {{merged}} merged",
+  "memory.health.lastConsolidation": "consolidated {{when}}: {{merged}} merged, {{archived}} archived",
+  "memory.health.archived": "archived {{count}}",
   "memory.health.never": "No distillation yet — memory is written automatically when sessions compact or go idle, and whenever the agent saves a project note.",
   "memory.toggle.label": "Automatic memory",
   "memory.actions.pin": "Pin",
@@ -355,5 +357,13 @@
   "memory.source.agent": "agent",
   "memory.source.session": "session",
   "memory.source.compaction": "compaction",
-  "memory.source.index": "index"
+  "memory.source.index": "index",
+  "userMemory.title": "User preferences",
+  "userMemory.subtitle": "global — applies to every project",
+  "userMemory.titlePlaceholder": "Short title (e.g. \"keep files small\")",
+  "userMemory.contentPlaceholder": "The fact or preference (e.g. \"keep files under 200 LOC\")",
+  "userMemory.cat.feedback": "preference",
+  "userMemory.cat.user": "about me",
+  "userMemory.empty": "No user preferences yet. The agent saves these when you state a preference; you can also add your own here.",
+  "userMemory.delete": "Delete"
 }

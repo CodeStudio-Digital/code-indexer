@@ -21,6 +21,7 @@ interface AnthropicRequestBody {
   system?: string;
   messages: AnthropicMessage[];
   temperature?: number;
+  stop_sequences?: string[];
 }
 interface AnthropicResponse {
   content?: Array<{ type?: string; text?: string }>;
@@ -84,10 +85,18 @@ export async function anthropicChat(
     temperature: options.temperature ?? toNumber(cfg.temperature),
   };
   if (system) body.system = system;
+  // Anthropic rejects whitespace-only stop sequences — filter them out
+  // (callers pass things like '\n\n' for single-line autocomplete cuts).
+  const stop = (options.stop ?? []).filter((s) => s.trim().length > 0);
+  if (stop.length > 0) body.stop_sequences = stop.slice(0, 4);
 
   const timeoutMs = options.timeoutMs ?? Math.max(1000, toNumber(cfg.timeout) ?? 30_000);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  if (options.signal) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
   const fetchImpl = options.fetchFn ?? fetch;
   try {
     const res = await fetchImpl(url, {

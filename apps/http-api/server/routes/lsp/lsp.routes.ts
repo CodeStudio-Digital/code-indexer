@@ -13,8 +13,9 @@
  */
 
 import type { Context, Hono } from 'hono';
+import { streamSSE } from 'hono/streaming';
 import { createLspHandlers, createContext } from '@mcp/api-handlers';
-import { ApiError, type Position } from '@mcp/api-bus';
+import { ApiError, type DocChange, type Position } from '@mcp/api-bus';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam } from '../_helpers.js';
 
@@ -33,11 +34,143 @@ function mapApiError(c: Context, err: unknown) {
 export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
   const h = createLspHandlers(deps);
 
+  // ─── Stateful document sync ───────────────────────────────────────
+  app.post('/api/lsp/:projectId/did-open', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string; languageId: string; version: number; content: string }>();
+      return c.json(await h.didOpen({ projectId, ...body }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/did-change', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string; version: number; changes: DocChange[] }>();
+      return c.json(await h.didChange({ projectId, ...body }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/did-close', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string }>();
+      return c.json(await h.didClose({ projectId, ...body }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  // ─── External LSP servers (status / catalog / install / lifecycle) ──
+  app.post('/api/lsp/:projectId/server-status', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ languageId: string }>();
+      return c.json(await h.serverStatus({ projectId, languageId: body.languageId }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.get('/api/lsp/servers', async (c) => {
+    try {
+      return c.json(await h.listServers(undefined, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.get('/api/lsp/instances', async (c) => {
+    try {
+      return c.json(await h.instances(undefined, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.delete('/api/lsp/servers/:serverId', async (c) => {
+    try {
+      return c.json(await h.removeServer({ serverId: c.req.param('serverId') }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/servers/:serverId/restart', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      return c.json(await h.restartServer({ projectId, serverId: c.req.param('serverId') }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  /** Consent-gated install with streamed progress (SSE; MessagePort on Electron). */
+  app.get('/api/lsp/servers/:serverId/install/stream', async (c) => {
+    const serverId = c.req.param('serverId');
+    return streamSSE(c, async (stream) => {
+      let seq = 0;
+      try {
+        for await (const frame of h.installServerStream({ serverId }, createContext())) {
+          await stream.writeSSE({ id: String(seq++), event: 'install', data: JSON.stringify(frame) });
+        }
+      } finally {
+        await stream.close();
+      }
+    });
+  });
+
+  /** Diagnostics push (browser-dev parity for the Electron MessagePort stream). */
+  app.get('/api/lsp/:projectId/diagnostics/stream', async (c) => {
+    const projectId = parseIdParam(c, 'projectId');
+    if (!deps.db.getProject(projectId)) return c.json({ error: 'not_found' }, 404);
+    return streamSSE(c, async (stream) => {
+      let seq = 0;
+      try {
+        for await (const frame of h.diagnosticsStream({ projectId }, createContext())) {
+          await stream.writeSSE({ id: String(seq++), event: 'diagnostics', data: JSON.stringify(frame) });
+        }
+      } finally {
+        await stream.close();
+      }
+    });
+  });
+
+  /** Server-status push (live language chip) — browser-dev parity. */
+  app.get('/api/lsp/:projectId/server-status/stream', async (c) => {
+    const projectId = parseIdParam(c, 'projectId');
+    if (!deps.db.getProject(projectId)) return c.json({ error: 'not_found' }, 404);
+    return streamSSE(c, async (stream) => {
+      let seq = 0;
+      try {
+        for await (const frame of h.serverStatusStream({ projectId }, createContext())) {
+          await stream.writeSSE({ id: String(seq++), event: 'serverStatus', data: JSON.stringify(frame) });
+        }
+      } finally {
+        await stream.close();
+      }
+    });
+  });
+
   app.post('/api/lsp/:projectId/completion', async (c) => {
     try {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<PositionBody>();
       return c.json(await h.completion({ projectId, ...body }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/resolve-completion', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string; item: unknown }>();
+      return c.json(await h.resolveCompletion({ projectId, ...body }, createContext()));
     } catch (err) {
       return mapApiError(c, err);
     }

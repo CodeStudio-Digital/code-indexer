@@ -290,6 +290,31 @@ export function findScopeViolations(
 }
 
 /**
+ * Execution-intent workflow verbs that must reach their handler even in
+ * plan mode, despite carrying `mutates: true`. The handler itself runs the
+ * human-gated transition (present the plan, wait for approval, switch to
+ * build) instead of editing the workspace directly — mirroring how
+ * `submit_plan` / `submit_tasks` are allowed because they pause for approval
+ * rather than mutating.
+ *
+ * Scope is deliberately narrow: only the "I'm done planning, execute" verb,
+ * and only PLAN mode (the handler has no spec→build path, so spec mode stays
+ * strict). Direct mutating tools (`edit_file`, `write_file`, `git_commit`,
+ * `run_command`) stay gated so plan mode keeps meaning something.
+ */
+const PLAN_MODE_WORKFLOW_TOOLS: ReadonlySet<string> = new Set(['execute_tasks']);
+
+/**
+ * True when the tool is an execution-intent workflow verb that the plan gate
+ * must let through to its handler. Consumed by both gate sites — this module's
+ * `evaluateToolInvocation` and the BT-bridge `toolGate` in runner.ts — so the
+ * exemption can't drift between them.
+ */
+export function isPlanModeWorkflowTool(name: string): boolean {
+  return PLAN_MODE_WORKFLOW_TOOLS.has(name);
+}
+
+/**
  * Decide whether `tool` may be invoked with `args` under `ctx`.
  *
  * Path-scope enforcement is split: we tell the caller *whether* the
@@ -322,7 +347,12 @@ export function evaluateToolInvocation(
   //    inline-task-scope unlock when `metadata.scopeAware` is set, by
   //    looking at this decision's reason and re-running the tool when the
   //    paths are inside scope. See runner.ts dispatch site.
-  if (metadata.mutates && ctx.planMode && !ctx.planApproved) {
+  if (
+    metadata.mutates
+    && ctx.planMode
+    && !ctx.planApproved
+    && !isPlanModeWorkflowTool(tool.name)
+  ) {
     return {
       allowed: false,
       reason: 'plan_mode',

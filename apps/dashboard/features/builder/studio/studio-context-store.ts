@@ -1,9 +1,8 @@
 /**
- * Tiny module-level bridge between the Builder studio's preview pane (which
+ * Tiny module-level bridge between a builder project's preview pane (which
  * produces element selections + error problems) and the chat pane (which
  * consumes them into outgoing messages). Keeps the two panes decoupled —
- * the preview writes here, the composer reads here — mirroring the existing
- * `sandbox:file-changed:<id>` window-event pattern used by BuilderView.
+ * the preview writes here, the composer reads here.
  */
 import { useEffect } from 'react';
 import type { PreviewToParentMessage } from '@mcp/services/sandbox/builder/protocol.js';
@@ -15,20 +14,67 @@ export type ProblemMessage = Extract<
 >;
 
 // ── Selection state (per session) ───────────────────────────────────
-const selectedBySession = new Map<number, SelectedElement | null>();
+// A LIST of selected elements: Ctrl/Cmd-click accumulates, a plain click
+// replaces. The visual-edit panel — single-element by nature — reads the
+// PRIMARY (the most-recently picked, i.e. the last); the chips + message
+// citation read the whole list.
+const selectedBySession = new Map<number, SelectedElement[]>();
 const listeners = new Map<number, Set<() => void>>();
 
 function notify(sid: number) {
   listeners.get(sid)?.forEach((cb) => cb());
 }
 
+/** Stable identity for dedup/removal — source loc, else CSS selector, else tag+text. */
+export function selectionKey(s: SelectedElement): string {
+  return s.loc || s.selector || `${s.tag}|${s.text}`;
+}
+
+/** Every selected element, in pick order (chips + citation). */
+export function getSelections(sid: number): SelectedElement[] {
+  return selectedBySession.get(sid) ?? [];
+}
+
+/** The primary (most-recently picked) element — visual editing targets this. */
+export function getSelected(sid: number): SelectedElement | null {
+  const list = getSelections(sid);
+  return list.length ? list[list.length - 1] : null;
+}
+
+/** Plain click / programmatic set: replace the whole set with one element (or clear with null). */
 export function setSelected(sid: number, sel: SelectedElement | null): void {
-  selectedBySession.set(sid, sel);
+  selectedBySession.set(sid, sel ? [sel] : []);
   notify(sid);
 }
-export function getSelected(sid: number): SelectedElement | null {
-  return selectedBySession.get(sid) ?? null;
+
+/** Ctrl/Cmd-click: toggle an element's membership in the set (dedup by key). */
+export function toggleSelected(sid: number, sel: SelectedElement): void {
+  const list = getSelections(sid);
+  const k = selectionKey(sel);
+  const idx = list.findIndex((s) => selectionKey(s) === k);
+  selectedBySession.set(sid, idx >= 0 ? list.filter((_, i) => i !== idx) : [...list, sel]);
+  notify(sid);
 }
+
+/** Remove one element from the set (chip ✕). */
+export function removeSelected(sid: number, key: string): void {
+  selectedBySession.set(sid, getSelections(sid).filter((s) => selectionKey(s) !== key));
+  notify(sid);
+}
+
+/**
+ * Patch the element identified by `key` (visual-edit loc chase) WITHOUT
+ * collapsing the rest of the set — the server moves a `loc` after a rewrite,
+ * and every other citation must stay intact.
+ */
+export function updateSelected(sid: number, key: string, patch: Partial<SelectedElement>): void {
+  const next = getSelections(sid).map((s) =>
+    selectionKey(s) === key ? ({ ...s, ...patch } as SelectedElement) : s,
+  );
+  selectedBySession.set(sid, next);
+  notify(sid);
+}
+
 export function subscribeSelected(sid: number, cb: () => void): () => void {
   let set = listeners.get(sid);
   if (!set) listeners.set(sid, (set = new Set()));
@@ -36,12 +82,12 @@ export function subscribeSelected(sid: number, cb: () => void): () => void {
   return () => set!.delete(cb);
 }
 
-/** Format the active selection as a message prefix and CLEAR it. Empty when none. */
+/** Format ALL active selections as a message prefix and CLEAR them. Empty when none. */
 export function consumeSelectionPrefix(sid: number): string {
-  const sel = getSelected(sid);
-  if (!sel) return '';
+  const sels = getSelections(sid);
+  if (!sels.length) return '';
   setSelected(sid, null);
-  return formatSelectedElement(sel);
+  return sels.map(formatSelectedElement).join('');
 }
 
 export function formatSelectedElement(sel: SelectedElement): string {

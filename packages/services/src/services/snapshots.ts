@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { CodeIndexDB } from '@mcp/store/db.js';
-import type { ContextSnapshot, SnapshotCategory, SnapshotVersion, VectorRecord } from '@mcp/shared/types.js';
+import type { ContextSnapshot, SnapshotCategory, SnapshotScope, SnapshotVersion, VectorRecord } from '@mcp/shared/types.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import { slidingWindows } from '@mcp/shared/utils/sliding-window.js';
@@ -173,6 +173,9 @@ export class SnapshotService {
       source?: string;
       /** 0..1 salience. */
       importance?: number;
+      /** Memory scope (migration 145). Defaults to 'project' (or 'user' for
+       *  user/feedback categories). */
+      scope?: SnapshotScope;
     }
   ): Promise<SnapshotMutationResult> {
     const snap = this.db.createSnapshot(projectId, data);
@@ -250,6 +253,30 @@ export class SnapshotService {
   delete(id: number): void {
     this.db.deleteSnapshot(id);
     void this.removeFromVectorStore(id);
+  }
+
+  /**
+   * Reversible soft-delete used by the memory consolidator. Archives the row
+   * (excluded from every agent-facing read path) and drops its vectors so an
+   * archived memory can never surface — even before the SQL filter applies.
+   * Best-effort on the vector side; the row's `archived_at IS NULL` filter is
+   * the hard guarantee.
+   */
+  async archive(id: number, reason: string): Promise<void> {
+    const snap = this.db.getSnapshotById(id);
+    this.db.archiveSnapshot(id, reason);
+    await this.removeFromVectorStore(id);
+    if (snap) {
+      const vectorIds: string[] = [];
+      for (let i = 0; i < MAX_SNAPSHOT_CHUNKS; i++) vectorIds.push(snapshotVecId(id, i));
+      try { this.db.deleteVectorIdRows(snap.project_id, vectorIds); } catch { /* best-effort */ }
+    }
+  }
+
+  /** Restore an archived snapshot. The DB layer NULLs the embedding hash so
+   *  the backfill re-embeds it on the next sweep. */
+  unarchive(id: number): void {
+    this.db.unarchiveSnapshot(id);
   }
 
   list(projectId: number, category?: SnapshotCategory): ContextSnapshot[] {

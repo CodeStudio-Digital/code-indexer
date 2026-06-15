@@ -8,12 +8,17 @@
     "./*": "./src/*"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.7",
     "@mcp/candidate-pipeline": "workspace:*",
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
     "cheerio": "^1.2.0",
+    "magic-string": "^0.30.21",
     "playwright-core": "^1.60.0",
     "turndown": "^7.2.4",
     "unpdf": "^1.6.2"
+  },
+  "devDependencies": {
+    "@babel/types": "^7.29.7"
   }
 }

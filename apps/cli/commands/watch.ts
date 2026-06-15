@@ -8,6 +8,7 @@ import { WebhookDispatcher } from '@mcp/services/services/webhooks.js';
 import { FileWatcherService } from '@mcp/services/services/watcher.js';
 import { getEmbeddingService, getVectorStore } from '../helpers.js';
 import { createAndSeedProviderStore } from '@mcp/indexer/bootstrap/index.js';
+import { disposeIndexerProcessResources } from '@mcp/indexer/bootstrap/dispose.js';
 import type { ProviderName } from '@mcp/shared/types.js';
 
 export function register(program: Command): void {
@@ -39,11 +40,11 @@ export function register(program: Command): void {
           rootPath: project.root_path,
           debounce: 2000,
         }, {
-          onFileChanged: async (files) => {
-            console.log(`[watch] ${project.name}: ${files.length} files changed, re-indexing...`);
+          onFileChanged: async (events) => {
+            console.log(`[watch] ${project.name}: ${events.length} files changed, re-indexing...`);
             await agent.indexProject(project.root_path);
             try {
-              await webhookDispatcher.dispatch('watch.changed', project, { files });
+              await webhookDispatcher.dispatch('watch.changed', project, { files: events.map((e) => e.path) });
             } catch { /* ignore */ }
           },
         });
@@ -53,6 +54,7 @@ export function register(program: Command): void {
       const shutdown = async () => {
         console.log('\nStopping watchers...');
         await watcher.stopAll();
+        await disposeIndexerProcessResources();
         db.close();
         process.exit(0);
       };

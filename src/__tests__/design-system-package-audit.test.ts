@@ -7,8 +7,16 @@ import {
   formatPackageAudit,
 } from '@mcp/design-system/package-audit.js';
 import { dsAuditPackage } from '@mcp/company/tools/design-system/ds-audit-package.js';
-import { companyBinding, studioBinding } from '@mcp/company/tools/design-system/binding.js';
+import { studioBinding, type DsToolBinding } from '@mcp/company/tools/design-system/binding.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+
+/** Strict-profile binding stub — the company host factory was retired
+ *  (mig 132), but profile 'company' remains the audit's strict mode. */
+const strictBinding: DsToolBinding = {
+  profile: 'company',
+  resolveDsSession: () => null,
+  describeBinding: () => 'test-strict',
+};
 
 describe('design-system package audit and tools', () => {
   let dir: string;
@@ -297,7 +305,7 @@ export default {
     });
     writeJson('pkg/manifest.json', validManifest());
 
-    const tool = dsAuditPackage(companyBinding({ effectiveSessionId: 1 } as never));
+    const tool = dsAuditPackage(strictBinding);
     const result = await tool.handler(
       { pkg_dir: 'pkg' },
       { cwd: dir, projectName: 'test-project' } satisfies ToolContext,

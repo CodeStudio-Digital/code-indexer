@@ -61,6 +61,7 @@ const HARD_EXCLUDE_BASENAMES = new Set([
 const HARD_EXCLUDE_DIRS = [
   'node_modules/',
   '.git/',
+  '.mcp-indexer/',
   'dist/',
   'build/',
   '.next/',

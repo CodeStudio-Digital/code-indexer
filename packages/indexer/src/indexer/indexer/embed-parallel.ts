@@ -14,6 +14,13 @@ import type { EmbeddingCandidate } from './embedding-candidates.js';
  * of a cycle with embed-executor.ts.
  */
 
+/**
+ * Candidates per `embed()` call. The network services re-batch internally by
+ * token budget (Cloudflare 35k) — this is the upper bound per HTTP request
+ * and the unit of hash-commit atomicity.
+ */
+export const EMBED_CHUNK_SIZE = 50;
+
 export interface EmbedChunkFailure {
   chunkIndex: number;
   size: number;

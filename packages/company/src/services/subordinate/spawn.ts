@@ -60,7 +60,7 @@ import {
   wireSubordinateInterceptionsForRunner,
 } from '@mcp/company/services/subordinate/runner-wiring.js';
 import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
-import { fetchProjectMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
+import { fetchProjectMemoryBlock, fetchUserMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
 
 export interface SpawnSubordinateDeps {
   ctx: SessionContext;
@@ -293,12 +293,18 @@ export async function spawnSubordinate(
   // so the subordinate is born knowing prior runs' decisions/gotchas (and
   // keeps them through compaction). Best-effort with a 2s ceiling: any
   // failure → '' and the spawn proceeds without a block.
-  const projectMemory = await fetchProjectMemoryBlock({
-    projectId: spec.projectId,
-    projectName,
-    taskText: spec.task,
-    db: ctx.db,
-  });
+  // PROJECT MEMORY (this codebase) + global USER PREFERENCES — both rendered
+  // into the system prompt so a fresh subordinate is born knowing prior
+  // decisions AND how the user wants it to work. Best-effort, 2s cap each.
+  const [projectMemory, userMemory] = await Promise.all([
+    fetchProjectMemoryBlock({
+      projectId: spec.projectId,
+      projectName,
+      taskText: spec.task,
+      db: ctx.db,
+    }),
+    fetchUserMemoryBlock({ taskText: spec.task }),
+  ]);
 
   const subordinateBlock = buildSubordinateCompanyBlock({
     role: spec.role,
@@ -309,7 +315,7 @@ export async function spawnSubordinate(
         rootPath: project?.root_path ?? '',
       },
     ],
-    projectMemory: projectMemory || undefined,
+    projectMemory: [projectMemory, userMemory].filter(Boolean).join('\n') || undefined,
     builder: subordinateBinding
       ? {
           workdir: subordinateBinding.workdir,

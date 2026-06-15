@@ -96,10 +96,25 @@ export interface RunnerOptions {
   /**
    * Seed for the runner's pinned-tool set — hidden tools the model called
    * by name in a PRIOR run of this session (re-derived from history on
-   * resume; never persisted). Pinned tools bypass the tier filter and
-   * survive the model's maxTools cap.
+   * resume AND unioned with the session-persisted pins, mig 142). Pinned
+   * tools bypass the tier filter and survive the model's maxTools cap.
    */
   initialPinnedTools?: Iterable<string>;
+  /**
+   * Fired when `expand_toolset` promotes a tier mid-run. The host persists
+   * the widen (mig 142) so the next resume rebuilds the SAME tool array —
+   * membership must stay byte-stable across runs or the provider
+   * prompt-cache prefix busts on the next round's first turn.
+   */
+  onTierPromoted?: (tier: ToolTier) => void;
+  /**
+   * Task-preflight seed (fresh sessions only). `preflightHint` is the
+   * rendered `<preflight>` block injected on turn 1 and re-injected after
+   * compaction; `sessionToolCap` caps the visible tool list at
+   * `min(model cap, sessionToolCap)` for the whole session.
+   */
+  preflightHint?: string;
+  sessionToolCap?: number;
   /**
    * Profile shorthand — expanded into `activeTiers` if not explicitly set.
    * 'bootstrap' → ~13 essentials; 'navigate' adds edit/git read; 'full' adds admin.
@@ -225,6 +240,11 @@ export interface RunnerOptions {
    * learned (full bodies via the recall_memory tool). Unset = off.
    */
   getProjectMemoryIndex?: () => ReadonlyArray<{ title: string; category: string }> | null;
+  /**
+   * Global user-preferences index (migration 145) — top-N user/feedback
+   * memories injected into every project, NOT gated by the project toggle.
+   */
+  getUserMemoryIndex?: () => ReadonlyArray<{ title: string; category?: string; excerpt?: string }> | null;
   /**
    * Phase 2 hardening: explicit escape hatch for admin-level operations.
    * Today the runner constructs the policy context with `strict: false`.

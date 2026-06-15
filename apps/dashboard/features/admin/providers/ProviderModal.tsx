@@ -20,6 +20,7 @@ import {
 } from '../../../components/ui/dialog.js';
 import { cn } from '../../../lib/utils.js';
 import { ProviderCard } from '../ProviderCard.js';
+import type { AddModelInput } from './AddModelForm.js';
 import type { AdminModel, AdminProvider, TestResult } from '../types.js';
 import { providerVisual } from './provider-icons.js';
 
@@ -39,6 +40,8 @@ export interface ProviderModalProps {
   onConnect?: () => void;
   onRemove: () => void;
   onToggleModel: (modelId: string, mode: string, enabled: boolean) => void;
+  onAddModel: (input: AddModelInput) => void;
+  onDeleteModel: (modelId: string, mode: string) => void;
   onSetModelEffort: (modelId: string, mode: string, level: string | null) => void;
   onSetModelContextWindow: (modelId: string, mode: string, value: number | null) => void;
   onSetModelMaxTools: (modelId: string, mode: string, value: number | null) => void;

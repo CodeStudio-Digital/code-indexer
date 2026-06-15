@@ -16,7 +16,7 @@
  *  │ │  └─────────────────────────────────────────────────────┘  │
  *  │ │  ─── resize handle (only when bottom panel open) ──────  │
  *  │ │  ┌─────────────────────────────────────────────────────┐  │
- *  │ │  │  BottomPanel — Terminal / Problems / Output / Search│  │
+ *  │ │  │  BottomPanel — Terminal / Problems / Output         │  │
  *  │ │  └─────────────────────────────────────────────────────┘  │
  *  ├─┴───────────────────────────────────────────────────────────┤
  *  │  StatusBar — git branch · file · counts · LSP indicator     │
@@ -65,6 +65,7 @@ import {
   Puzzle,
   Search,
   TerminalSquare,
+  Webhook,
   type LucideIcon,
 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -84,8 +85,17 @@ import { useWorkspaceLayout } from '../../state/workspace-layout.js';
 import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
 import type { ContribToolWindow } from '../../state/contribution-registry.js';
 import { WebviewWindow } from '../workspace/jetbrains/tool-windows/WebviewWindow.js';
-import { FileTreeRail } from '../workspace/FileTreeRail.js';
-import { EditorPane } from '../workspace/EditorPane.js';
+import { FileTreeView } from '../workspace/file-tree/FileTreeView.js';
+import { useFsEvents, type FsEventDTO } from '../../hooks/useFsEvents.js';
+import { useFileTreeStore } from '../../state/file-tree.js';
+import { apiCall as apiCallFs } from '../../lib/api-client.js';
+import { installKeymapDispatcher } from '../../keymap/dispatcher.js';
+import { registerProjectCommands } from './project-commands.js';
+import { startRecentFilesTracking } from '../../state/recent-files.js';
+import { SearchEverywhere } from '../search-everywhere/SearchEverywhere.js';
+import { FileStructurePopup } from '../search-everywhere/FileStructurePopup.js';
+import { KeymapDialog } from '../search-everywhere/KeymapDialog.js';
+import { EditorChatLayout } from './EditorChatLayout.js';
 import { BottomPanel } from '../workspace/BottomPanel.js';
 import { StatusBar } from '../workspace/jetbrains/StatusBar.js';
 import { GitWindow } from '../workspace/jetbrains/tool-windows/GitWindow.js';
@@ -99,6 +109,7 @@ import { DependenciesTab } from './tabs/DependenciesTab.js';
 import { FilesTab as IndexedFilesTab } from './tabs/FilesTab.js';
 import { RunsTab } from './tabs/RunsTab.js';
 import { RunnersTab } from './tabs/RunnersTab.js';
+import { ApiClientTab } from '../api-client/ApiClientTab.js';
 import { Button } from '../../components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
@@ -123,6 +134,7 @@ const TABS: TabDef[] = [
   { id: 'git',          label: 'Git',           icon: GitBranch,         group: 'core' },
   { id: 'snapshots',    label: 'Snapshots',     icon: BookOpen,          group: 'core' },
   { id: 'runners',      label: 'Runners',       icon: Play,              group: 'core' },
+  { id: 'api',          label: 'API',           icon: Webhook,           group: 'core' },
   // Indexed lives in analytics — it's the per-project file table with
   // sumarização/complexity/layer/flags, distinct from the IDE-style
   // file tree (`files`). The Search tab already exposes the vector
@@ -152,6 +164,41 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const openFiles = useWorkspaceStore((s) => s.openFiles);
   const closeFile = useWorkspaceStore((s) => s.closeFile);
+
+  // Live filesystem events — ONE stream per project feeds both consumers:
+  // the lazy file tree (incremental upsert/delete) and the open tabs
+  // (non-dirty → silent reload from disk; dirty → conflict badge).
+  const applyFsEventsToTree = useFileTreeStore((s) => s.applyFsEvents);
+  useFsEvents(projectId, (events: FsEventDTO[]) => {
+    applyFsEventsToTree(events);
+    const ws = useWorkspaceStore.getState();
+    for (const e of events) {
+      if (e.isDir) continue;
+      const tab = ws.openFiles.find(
+        (f) => (f.kind === undefined || f.kind === 'file') && f.path === e.path && f.projectId === projectId,
+      );
+      if (!tab || tab.kind === 'diff' || tab.kind === 'git-log' || tab.kind === 'git-stash') continue;
+      if (e.kind === 'delete' || tab.dirty) {
+        ws.markExternallyChanged(e.path);
+        continue;
+      }
+      // Never-loaded tab (content null) loads on activation anyway.
+      if (tab.content === null) continue;
+      // External change on a clean, loaded tab — refresh silently via the
+      // live-model patcher (pushEditOperations keeps the undo stack). Our
+      // own saves echo here too; ifModifiedSince makes that a stat-only
+      // round trip with no payload.
+      void apiCallFs<
+        { content: string; last_modified: string } | { notModified: true; last_modified: string }
+      >('files.read', { projectId, path: e.path, ifModifiedSince: tab.lastModified ?? undefined })
+        .then(async (res) => {
+          if ('notModified' in res) return;
+          const { applyExternalContent } = await import('../workspace/editor/editor-models.js');
+          applyExternalContent(e.path, res.content, res.last_modified);
+        })
+        .catch(() => undefined);
+    }
+  });
 
   // Builder project? Read `builder_json` to enable the live-preview pane
   // beside the chat. Null/parse-fail → ordinary project (no preview).
@@ -204,61 +251,48 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   //     legacy Workspace component so tabs persist + the editor sees
   //     them ───
   const handleOpen = useCallback(
-    async (path: string) => {
-      try {
-        const result = await apiCall<{ content: string; encoding: 'utf8' | 'base64' }>(
-          'files.read',
-          { projectId, path },
-        );
-        openFile({
-          projectId,
-          path,
-          content: result.content,
-          dirty: false,
-          lastModified: null,
-        });
-      } catch {
-        /* silent — surface inline once we ship a toast/banner for editor errors */
-      }
+    (path: string) => {
+      // Instant open — content: null; MonacoMount fetches on activation
+      // (SWR via ifModifiedSince once loaded). No await, no flicker.
+      openFile({ projectId, path, content: null, dirty: false, lastModified: null });
       // Switch to the files tab so the editor surfaces what was just opened.
       setTab('files');
     },
     [projectId, openFile],
   );
 
-  // ─── Tab restoration across reloads (lifted verbatim from Workspace) ───
+  // Cross-pane "show me the editor" requests (selection chip's open-in-
+  // editor). The opener already put the tab in the workspace store; we
+  // only need to surface the files tab.
+  useEffect(() => {
+    function onOpenFilesTab(e: Event) {
+      const d = (e as CustomEvent).detail as { projectId?: number } | undefined;
+      if (d?.projectId === projectId) setTab('files');
+    }
+    window.addEventListener('mcp:open-files-tab', onOpenFilesTab as EventListener);
+    return () => window.removeEventListener('mcp:open-files-tab', onOpenFilesTab as EventListener);
+  }, [projectId]);
+
+  // ─── Tab restoration across reloads — INSTANT: tabs come back with
+  //     content: null (no serial fetch loop); the active one loads on
+  //     mount, the rest on first activation. A deleted-on-disk file shows
+  //     its loading state until the user activates it and the read 404s —
+  //     acceptable for a restored ghost. ───
   useEffect(() => {
     const persisted = loadPersistedTabs(projectId);
     if (persisted.openFiles.length === 0) return;
-    let cancelled = false;
-    void (async () => {
-      for (const entry of persisted.openFiles) {
-        if (cancelled) return;
-        try {
-          const result = await apiCall<{ content: string; encoding: 'utf8' | 'base64' }>(
-            'files.read',
-            { projectId: entry.projectId, path: entry.path },
-          );
-          if (cancelled) return;
-          openFile({
-            projectId: entry.projectId,
-            path: entry.path,
-            content: result.content,
-            dirty: false,
-            lastModified: null,
-          });
-        } catch {
-          /* file may have been deleted on disk — skip silently */
-        }
-      }
-      if (cancelled) return;
-      if (persisted.activeFilePath) {
-        useWorkspaceStore.getState().setActive(persisted.activeFilePath);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    for (const entry of persisted.openFiles) {
+      openFile({
+        projectId: entry.projectId,
+        path: entry.path,
+        content: null,
+        dirty: false,
+        lastModified: null,
+      });
+    }
+    if (persisted.activeFilePath) {
+      useWorkspaceStore.getState().setActive(persisted.activeFilePath);
+    }
     // Only re-runs on projectId change. Re-running on `openFile` would
     // restart the restore loop because openFile mutates the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -271,43 +305,28 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     return () => unsubscribe();
   }, [projectId]);
 
-  // ─── Global keybindings ───
+  // ─── Keymap: command registry + ONE capture-phase dispatcher ───
+  // Replaces the old hardcoded Ctrl+J/W/B listener. Bindings come from the
+  // active preset (IntelliJ by default) + user overrides; the Keymap dialog
+  // (Ctrl+Alt+S) edits them live.
   useEffect(() => {
-    const inEditable = (target: EventTarget | null): boolean => {
-      const el = target as HTMLElement | null;
-      const tag = el?.tagName;
-      return tag === 'INPUT' || tag === 'TEXTAREA' || !!el?.isContentEditable;
+    startRecentFilesTracking();
+    const uninstall = installKeymapDispatcher();
+    const unregister = registerProjectCommands({
+      projectId,
+      setTab: (t) => setTab(t as ProjectTabId),
+      toggleBottomTerminal: () => layout.toggleBottom('terminal'),
+      toggleChat: () => setTab((cur) => (cur === 'chat' ? 'files' : 'chat')),
+    });
+    return () => {
+      unregister();
+      uninstall();
     };
-    const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (!mod) return;
-      const key = e.key.toLowerCase();
-
-      // Ctrl+J → toggle terminal (bottom panel)
-      if (key === 'j' && !e.shiftKey && !e.altKey) {
-        e.preventDefault();
-        layout.toggleBottom('terminal');
-        return;
-      }
-      // Ctrl+W → close active editor tab when on the files surface
-      if (key === 'w' && !e.shiftKey && !e.altKey) {
-        if (inEditable(e.target)) return;
-        if (tab !== 'files') return;
-        e.preventDefault();
-        if (activeFilePath) closeFile(activeFilePath);
-        return;
-      }
-      // Ctrl+B → toggle file tree side via tab switch (focus convenience)
-      if (key === 'b' && !e.shiftKey && !e.altKey) {
-        if (inEditable(e.target)) return;
-        e.preventDefault();
-        setTab((cur) => (cur === 'files' ? 'chat' : 'files'));
-        return;
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [layout, tab, activeFilePath, closeFile]);
+    // layout.toggleBottom identity is stable in the store; setTab is a
+    // useState setter. Registering once per project keeps closures fresh
+    // enough (they read live state via getState()).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   // When the user toggles Files via the rail and there are NO files
   // open yet, surface a helpful empty state so the editor pane isn't
@@ -385,6 +404,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
                     isOpen={true}
                     onToggle={() => layout.toggleBottom(layout.activeBottom!)}
                     onClose={() => layout.setActiveBottom(null)}
+                    onOpenFile={handleOpen}
                     pluginWindows={bottomPluginWindows}
                   />
                 </Panel>
@@ -394,6 +414,10 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
         </div>
       </div>
       <StatusBar projectId={projectId} projectName={projectName} />
+      {/* Keymap-driven overlays — open via Shift Shift / Ctrl+F12 / Ctrl+Alt+S. */}
+      <SearchEverywhere projectId={projectId} onOpenFile={handleOpen} />
+      <FileStructurePopup projectId={projectId} />
+      <KeymapDialog />
     </div>
   );
 }
@@ -605,12 +629,12 @@ function TabContent({
       <PanelGroup direction="horizontal" autoSaveId="mcp-project-files-horiz">
         <Panel defaultSize={20} minSize={12} maxSize={40}>
           <div className="h-full border-r overflow-hidden">
-            <FileTreeRail projectId={projectId} activePath={activeFilePath} onOpen={onOpenFile} />
+            <FileTreeView projectId={projectId} activePath={activeFilePath} onOpen={onOpenFile} />
           </div>
         </Panel>
         <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
         <Panel minSize={30}>
-          <EditorPane />
+          <EditorChatLayout projectId={projectId} projectName={projectName} />
         </Panel>
       </PanelGroup>
     );
@@ -635,7 +659,7 @@ function TabContent({
         </Panel>
         <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
         <Panel minSize={30}>
-          <EditorPane />
+          <EditorChatLayout projectId={projectId} projectName={projectName} />
         </Panel>
       </PanelGroup>
     );
@@ -720,6 +744,12 @@ function TabContent({
   // output), so it bypasses the padded scroll container like snapshots.
   if (tab === 'runners') {
     return <RunnersTab projectId={projectId} />;
+  }
+
+  // API client owns a full-height 3-pane layout (like snapshots/runners), so
+  // it bypasses the padded scroll container below.
+  if (tab === 'api') {
+    return <ApiClientTab projectId={projectId} />;
   }
 
   // Preview tab — the live dev-server preview, full-width. Shown for

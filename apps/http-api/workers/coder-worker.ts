@@ -67,6 +67,8 @@ import {
 } from '../../../packages/docs-agent/src/bridges/docs-bridge.js';
 import type { DocsResearchResult } from '../../../packages/docs-agent/src/types.js';
 import { DesignSystemStore } from '../../../packages/store/src/design-system-store.js';
+import { ApiClientStore } from '../../../packages/store/src/api-client-store.js';
+import { setApiClientStore } from '../../../packages/code-agent/src/tools/api-client/index.js';
 import { SkillStore } from '../../../packages/store/src/skill-store.js';
 import { VerdaccioStore } from '../../../packages/store/src/verdaccio-store.js';
 import {
@@ -88,6 +90,8 @@ import {
 import { wireRunnerEventsToBus } from '../sse/runnerWiring.js';
 import { RemoteMcpServerManager } from './RemoteMcpServerManager.js';
 import { buildWorkerMemoryShims } from './memory-shims.js';
+import { installWorkerLspShim } from './lsp-shim.js';
+import { registerPerfStatsHandler } from './perf-stats.js';
 
 interface CoderWorkerData {
   sessionId: number;
@@ -110,6 +114,9 @@ const bridge = new MessageBridge({
     console.warn(`[coder-worker ${sessionId}] listener error in ${context}:`, err);
   },
 });
+
+// Per-isolate heap stats for the admin perf monitor (best-effort RPC).
+registerPerfStatsHandler(bridge);
 
 // ─── Doc-corpus shim: route to the main process via RPC ──────────────
 // `worker_threads` don't share module state, so the `setGlobalDocSearch`
@@ -197,6 +204,11 @@ setGlobalVisionDescriber(visionShim);
 // dropping them. Degrades to no-op when main has no memory deps wired.
 const memoryShims = buildWorkerMemoryShims(bridge);
 
+// Multi-language LSP nav for agent tools (lsp_definition/references/hover on
+// non-TS files) — RPC to the main-process router (external servers + index
+// fallback). Degrades to "TS only" when main hasn't wired the deps.
+installWorkerLspShim(bridge);
+
 // `DocsResearchBridge` is a CLASS in @mcp/docs-agent; here we only
 // implement the `runResearch` method that `docs_deep_research` actually
 // calls. The structural cast is honest — a deep-research run takes
@@ -227,6 +239,10 @@ setGlobalDocsResearcher(docsResearcherShim);
 // state from the DB, so fresh instances here are equivalent to main's.
 setDesignSystemStore(new DesignSystemStore(dbPath));
 setDesignSystemSkillStore(new SkillStore(dbPath));
+// API client store for the `api_*` agent tools (auto-test/auto-fix). Single
+// `api`-agent sessions run in this worker, so the main-thread binding is null
+// here — re-wire a fresh dual-mode instance against the same dbPath.
+setApiClientStore(new ApiClientStore(dbPath));
 setVerdaccioService(new VerdaccioService({ store: new VerdaccioStore(dbPath) }));
 
 // External-MCP proxy. Constructed once per worker; reuses the main
@@ -527,6 +543,8 @@ interface RunFreshPayload {
   describeImages?: boolean;
   previewAvailable?: boolean;
   selectedSkillIds?: string[];
+  /** Task-preflight seed — forwarded verbatim to `runCoder({ preflight })`. */
+  preflight?: import('@mcp/code-agent/index.js').PreflightSeed;
   /**
    * Apêndice 4 Fase 2 — propagate `resume:true` to `runCoder` so the
    * worker can pick up from history when the previous worker died
@@ -563,6 +581,7 @@ bridge.handle('runFresh', async (payload) => {
       describeImages: opts.describeImages,
       previewAvailable: opts.previewAvailable,
       selectedSkillIds: opts.selectedSkillIds,
+      preflight: opts.preflight,
       resume: opts.resume,
       signal: run.ctrl.signal,
       // Mem C — same wiring as the in-process path (routes/coder/stream.ts):

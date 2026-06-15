@@ -30,12 +30,42 @@ interface ToolCallIndex {
   useId: string;
 }
 
+/** A detected retirement, ordered by the SUPERSEDING call's position. */
+interface RetirementCandidate {
+  useId: string;
+  reason: string;
+  /** Position of the superseding read/search — append-only as history grows. */
+  orderMsgIdx: number;
+  orderBlockIdx: number;
+  /** Chars the retirement would free (0 for non-string content). */
+  freedChars: number;
+}
+
+export interface RollingReductionOpts {
+  protectTail?: number;
+  /**
+   * Tranche flush threshold in chars. `0` (default) = legacy behavior: apply
+   * every detected retirement immediately. When > 0, retirements are
+   * DETECTED every pass but only APPLIED in batches: with `total` = chars
+   * across all candidates, the applied prefix covers `floor(total/T)*T`
+   * chars. Between flushes the output is byte-identical to the input, so the
+   * provider prompt-cache prefix survives; each flush is ONE deep bust
+   * instead of a trickle of small ones (one per turn was observed busting
+   * ~90k cached tokens to free ~2k chars).
+   */
+  flushThresholdChars?: number;
+}
+
 export interface RollingReductionResult {
   messages: AgentMessage[];
-  /** How many tool_result contents were replaced. */
+  /** How many tool_result contents were replaced (applied in this view). */
   reduced: number;
-  /** Approximate chars freed by the reduction. */
+  /** Approximate chars freed by the applied retirements. */
   freedChars: number;
+  /** Retirements detected but deferred by the tranche threshold. */
+  pendingRetired: number;
+  /** Chars the deferred retirements would free once flushed. */
+  pendingChars: number;
 }
 
 export function getStringField(input: Record<string, unknown> | undefined, ...keys: string[]): string {
@@ -67,28 +97,48 @@ export function buildReadDedupKey(path: string, inp: Record<string, unknown> | u
   return `${path}#${JSON.stringify(slice)}`;
 }
 
+const ELIDED_PREFIXES = ['[stale:', '[compacted:', '[duplicate-read elided]'];
+
+function isAlreadyElided(content: string): boolean {
+  return ELIDED_PREFIXES.some((p) => content.startsWith(p));
+}
+
 /**
  * Rolling reduction (Camada 5 — AgentDiet pattern).
  *
- * Run on every turn (cheap). Replaces tool_result content for stale repeats
- * BEFORE the size-based compactMessages even runs — so sessions grow more
- * slowly and the heavy compaction kicks in less often. Two heuristics:
+ * Run on every turn (cheap, pure — `ctx.messages` is never mutated; this is
+ * the per-turn LLM view). Replaces tool_result content for stale repeats so
+ * sessions grow sublinearly. Two heuristics:
  *
  *   1. **Same-file re-reads.** Identical slice of the same path keeps only
  *      the most recent; others get `[duplicate-read elided]`.
- *   2. **Stale searches.** Two consecutive `grep_code`/`search` results in
- *      the protected window: replace earlier with the elided marker.
+ *   2. **Stale searches.** A search is superseded by any later search.
  *
- * Determinism: pure function over the input array. The same sequence of
- * messages always reduces to the same output — prefix cache stable.
+ * PROMPT-CACHE CONTRACT (`flushThresholdChars`): retiring a result rewrites
+ * an OLD message in place, which busts the provider prefix cache from that
+ * point on. With a threshold T, candidates are ordered by their superseding
+ * call's position — a sequence that only ever APPENDS as the conversation
+ * grows, with fixed per-candidate sizes (the raw array is immutable between
+ * durable compactions). Applying the prefix of candidates covered by
+ * `floor(total/T)*T` is therefore MONOTONIC: the same input always reduces
+ * to the same output (resume-safe, no hidden state), output bytes change
+ * only when a new tranche completes, and durable compaction rewrites the
+ * raw array anyway (cold prefix → candidates reset for free).
+ *
+ * The deferred `[duplicate-read elided]` marker is NOT the anti-re-read
+ * brake: `enforcePreReadForBridge` (pre-read dedup refusal/downgrade) and
+ * the dispatch tuple-hash dedup hold that line — with verbatim priors the
+ * pre-read guard refuses instead of allowing the re-read, so deferral makes
+ * the brake stricter, not weaker.
  */
 export function applyRollingReduction(
   messages: AgentMessage[],
-  opts: { protectTail?: number } = {},
+  opts: RollingReductionOpts = {},
 ): RollingReductionResult {
   const protectTail = opts.protectTail ?? 6; // last 6 messages stay verbatim
+  const flushThreshold = opts.flushThresholdChars ?? 0;
   if (messages.length <= protectTail + 2) {
-    return { messages, reduced: 0, freedChars: 0 };
+    return { messages, reduced: 0, freedChars: 0, pendingRetired: 0, pendingChars: 0 };
   }
 
   // Walk forward and index every tool_use that looks reducible.
@@ -115,11 +165,12 @@ export function applyRollingReduction(
     }
   }
 
-  // Decide which tool_use_ids to retire. A read is retired ONLY when a later
-  // read of the same SLICE (path + range/symbol) exists — distinct chunks of
-  // the same file are kept verbatim because they carry independent
-  // information. A search is retired if a LATER search exists.
-  const retiredIds = new Map<string, string>(); // useId → reason
+  // Decide which tool_use_ids COULD be retired. A read is retired ONLY when a
+  // later read of the same SLICE (path + range/symbol) exists — distinct
+  // chunks of the same file are kept verbatim because they carry independent
+  // information. A search is retired if a LATER search exists. Each candidate
+  // is stamped with its superseder's position for the tranche ordering.
+  const proposed = new Map<string, RetirementCandidate>(); // useId → candidate
   const lastBySlice = new Map<string, ToolCallIndex>();
   for (const r of readCalls) {
     const prev = lastBySlice.get(r.pathKey);
@@ -128,17 +179,79 @@ export function applyRollingReduction(
       // version said "superseded by later identical read" which models
       // sometimes interpreted as "stale → re-read it". The current version
       // is a direct instruction NOT to re-call.
-      retiredIds.set(prev.useId, `${r.pathLabel} — DO NOT re-call this tool with these args`);
+      proposed.set(prev.useId, {
+        useId: prev.useId,
+        reason: `${r.pathLabel} — DO NOT re-call this tool with these args`,
+        orderMsgIdx: r.msgIdx,
+        orderBlockIdx: r.blockIdx,
+        freedChars: 0,
+      });
     }
     lastBySlice.set(r.pathKey, r);
   }
   for (let i = 0; i < searchCalls.length - 1; i++) {
     const r = searchCalls[i];
-    retiredIds.set(r.useId, `superseded by later ${searchCalls[i + 1].name} query`);
+    const next = searchCalls[i + 1];
+    proposed.set(r.useId, {
+      useId: r.useId,
+      reason: `superseded by later ${next.name} query`,
+      orderMsgIdx: next.msgIdx,
+      orderBlockIdx: next.blockIdx,
+      freedChars: 0,
+    });
   }
-  if (retiredIds.size === 0) {
-    return { messages, reduced: 0, freedChars: 0 };
+  if (proposed.size === 0) {
+    return { messages, reduced: 0, freedChars: 0, pendingRetired: 0, pendingChars: 0 };
   }
+
+  // Resolve each candidate's tool_result size. Blocks already elided by a
+  // previous durable pass are dropped entirely — nothing to free, nothing to
+  // rewrite, and excluding them keeps the candidate sequence stable.
+  for (const m of messages) {
+    if (m.role !== 'tool') continue;
+    for (const b of m.content) {
+      if (b.type !== 'tool_result') continue;
+      const tid = (b as { tool_use_id?: string }).tool_use_id;
+      if (!tid) continue;
+      const cand = proposed.get(tid);
+      if (!cand) continue;
+      const original = typeof b.content === 'string' ? b.content : '';
+      if (isAlreadyElided(original)) {
+        proposed.delete(tid);
+      } else {
+        cand.freedChars = original.length;
+      }
+    }
+  }
+  if (proposed.size === 0) {
+    return { messages, reduced: 0, freedChars: 0, pendingRetired: 0, pendingChars: 0 };
+  }
+
+  // Tranche math: order candidates by superseder position (append-only as
+  // the conversation grows), apply the prefix covered by completed tranches.
+  const candidates = Array.from(proposed.values()).sort((a, b) =>
+    a.orderMsgIdx - b.orderMsgIdx || a.orderBlockIdx - b.orderBlockIdx || (a.useId < b.useId ? -1 : a.useId > b.useId ? 1 : 0),
+  );
+  const total = candidates.reduce((s, c) => s + c.freedChars, 0);
+  let applyCount = candidates.length;
+  if (flushThreshold > 0) {
+    const completed = Math.floor(total / flushThreshold) * flushThreshold;
+    let cum = 0;
+    applyCount = 0;
+    for (const c of candidates) {
+      if (cum + c.freedChars > completed) break;
+      cum += c.freedChars;
+      applyCount++;
+    }
+  }
+  const applied = candidates.slice(0, applyCount);
+  const pending = candidates.slice(applyCount);
+  const pendingChars = pending.reduce((s, c) => s + c.freedChars, 0);
+  if (applied.length === 0) {
+    return { messages, reduced: 0, freedChars: 0, pendingRetired: pending.length, pendingChars };
+  }
+  const retiredIds = new Map<string, string>(); // useId → reason
+  for (const c of applied) retiredIds.set(c.useId, c.reason);
 
   // Walk again, replace tool_result content for retired ids. Stable ordering
   // → cache-safe.
@@ -154,11 +267,7 @@ export function applyRollingReduction(
       const original = typeof b.content === 'string' ? b.content : '';
       // Idempotent: skip blocks that were already retired/compacted by a
       // previous reducer pass.
-      if (
-        original.startsWith('[stale:') ||
-        original.startsWith('[compacted:') ||
-        original.startsWith('[duplicate-read elided]')
-      ) return b;
+      if (isAlreadyElided(original)) return b;
       reduced++;
       freed += original.length;
       touched = true;
@@ -172,5 +281,5 @@ export function applyRollingReduction(
     return touched ? { ...m, content: newContent } : m;
   });
 
-  return { messages: out, reduced, freedChars: freed };
+  return { messages: out, reduced, freedChars: freed, pendingRetired: pending.length, pendingChars };
 }

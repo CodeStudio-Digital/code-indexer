@@ -30,6 +30,22 @@ export async function deleteProvider(id: string): Promise<void> {
   await fetch(`/api/admin/providers/${id}`, { method: 'DELETE' });
 }
 
+/** Delete a manually-added model. Only `source='manual'` rows are removable. */
+export async function deleteProviderModel(
+  providerId: string,
+  modelId: string,
+  mode: string,
+): Promise<void> {
+  const r = await fetch(
+    `/api/admin/providers/${providerId}/models/${encodeURIComponent(modelId)}?mode=${encodeURIComponent(mode)}`,
+    { method: 'DELETE' },
+  );
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+}
+
 export async function testProvider(id: string): Promise<TestResult> {
   const r = await fetch(`/api/admin/providers/${id}/test`, { method: 'POST' });
   return (await r.json()) as TestResult;
@@ -40,6 +56,26 @@ export async function refreshProviderModels(
 ): Promise<{ ok: boolean; count?: number; error?: string }> {
   const r = await fetch(`/api/admin/providers/${id}/models/refresh`, { method: 'POST' });
   return (await r.json()) as { ok: boolean; count?: number; error?: string };
+}
+
+/**
+ * Manually add a model to a provider (free-text model id). The backend tags
+ * it `source='manual'` so a subsequent live refresh won't wipe it. Used for
+ * experimental models that live discovery doesn't return yet.
+ */
+export async function addProviderModel(
+  id: string,
+  input: { model_id: string; name: string; mode?: string },
+): Promise<void> {
+  const r = await fetch(`/api/admin/providers/${id}/models`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
 }
 
 export async function setFallbackProvider(

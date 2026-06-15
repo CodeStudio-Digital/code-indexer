@@ -6,11 +6,11 @@ import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import type { CostTracker } from '@mcp/services/services/costs.js';
 import type { IndexerConfig } from '@mcp/shared/utils/config.js';
-import type { IndexResult, ProgressCallback, RunStatus, ScannedFile } from '@mcp/shared/types.js';
+import type { IndexResult, ProgressCallback, RunStatus, ScannedFile, ScanResult } from '@mcp/shared/types.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import { FileScanner } from '@mcp/indexer/indexer/scanner.js';
-import { TreeSitterExtractor, type TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js';
-import { getIndexJobPool, isIndexWorkersEnabled } from '@mcp/indexer/workers/indexJob/client.js';
+import type { TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js';
+import { buildTreeSitterDispatch } from '@mcp/indexer/indexer/tree-sitter-dispatch.js';
 import { NullLshIndexingSink, type LshIndexingSink } from '@mcp/indexer/indexer/lsh-indexing-sink.js';
 import type {
   IndexerFilesUpdatedEvent,
@@ -20,13 +20,14 @@ import type {
 import { enrichReferencesWithLines, withConcurrency } from './indexer/enrich-references.js';
 import { cosineSimilarity } from './indexer/cosine.js';
 import { processFile } from './indexer/process-file.js';
+import { createEmbedBatcher } from './indexer/embed-batcher.js';
 import {
-  processEmbeddings,
   retryEmbeddings as retryEmbeddingsFn,
   type EmbeddingProgress,
   type EmbeddingRetryResult,
-  type IndexedFileEntry,
-} from './indexer/embed-executor.js';
+} from './indexer/embed-retry.js';
+import { flushStructEmbeddings, type StructEmbedItem } from './indexer/struct-embed-queue.js';
+import { createRunTelemetry, resolveRssWarnMb, type RunTelemetry } from './indexer/run-telemetry.js';
 import { sweepOrphanVectors } from './indexer/post-run-sweep.js';
 import { generateAutoSnapshots } from './indexer/auto-snapshots.js';
 
@@ -93,6 +94,22 @@ export class IndexAgent {
   }
 
   async indexProject(projectNameOrPath: string, options?: IndexOptions): Promise<IndexResult> {
+    // Telemetry wrapper: `finish()` in finally stops the RSS sampler on
+    // EVERY exit path (budget throw included) — an unstopped interval per
+    // failed run would be its own small leak.
+    const telemetry = createRunTelemetry();
+    try {
+      return await this.indexProjectInner(projectNameOrPath, telemetry, options);
+    } finally {
+      telemetry.finish();
+    }
+  }
+
+  private async indexProjectInner(
+    projectNameOrPath: string,
+    telemetry: RunTelemetry,
+    options?: IndexOptions,
+  ): Promise<IndexResult> {
     const startTime = Date.now();
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
@@ -124,11 +141,18 @@ export class IndexAgent {
     }
 
     const scanner = new FileScanner(project.root_path, this.config.ignorePatterns, this.config.maxFileSize);
-    const scanResult = await scanner.scan(this.db, project.id);
+    const scanResult = await telemetry.phase('scan', () => scanner.scan(this.db, project.id));
+    if (scanResult.stats) {
+      console.error(`[indexer] Scan: ${scanResult.stats.statOnly} stat-only, ${scanResult.stats.hashed} hashed, ${scanResult.stats.skippedTooLarge} too large`);
+    }
 
+    // Dumb→smart catch-up: structural runs (project open / watcher) advance
+    // content_hash without a semantic pass, so the scanner reports those
+    // files unchanged — without this they would never re-enter the LLM
+    // pipeline. Force mode already reprocesses all of `unchanged`.
     const toIndex = options?.force
       ? [...scanResult.toIndex, ...this.rebuildForcedScans(project.id, scanResult.unchanged)]
-      : scanResult.toIndex;
+      : [...scanResult.toIndex, ...this.rebuildForcedScans(project.id, this.staleSemanticPaths(project.id, scanResult))];
 
     await this.removeDeletedFiles(project.id, scanResult.toRemove);
 
@@ -149,53 +173,89 @@ export class IndexAgent {
 
     const runId = this.db.startRun(project.id, this.provider.name, this.provider.model);
 
+    // Resolved BEFORE the analyze loop — the embed batcher streams candidates
+    // per analyzed file (content is released immediately after addFile; the
+    // old flow retained every file's content until a single post-loop pass).
+    const vectorsAvailable = this.vectorStore && !(this.embeddingService instanceof NullEmbeddingService)
+      ? await this.vectorStore.isAvailable() : false;
+    const batcher = vectorsAvailable && this.vectorStore
+      ? createEmbedBatcher(this.embedDeps(), project, runId)
+      : null;
+
     const treeSitter = this.buildTreeSitter();
     let treeSitterHits = 0;
     let llmSkipped = 0;
-    const indexedFiles: IndexedFileEntry[] = [];
-
-    await withConcurrency(toIndex, async (file, idx) => {
-      try {
-        const result = await processFile(
-          { db: this.db, provider: this.provider, embeddingService: this.embeddingService, costTracker: this.costTracker },
-          project, runId, file, treeSitter,
-        );
-        if (result.treeSitterHit) treeSitterHits++;
-        if (result.llmSkipped) llmSkipped++;
-        totalInputTokens += result.inputTokens;
-        totalOutputTokens += result.outputTokens;
-        totalCostUsd += result.costUsd;
-        indexedFiles.push({
-          path: file.relativePath, fileId: result.fileId, analysis: result.analysis,
-          content: result.content, tier: file.tier,
-        });
-        // Release scanner copy + indexedFiles content kept for the embedding step.
-        (file as { content: string }).content = '';
-        options?.onProgress?.({
-          current: idx + 1, total: toIndex.length, currentFile: file.relativePath,
-          elapsedMs: Date.now() - startTime, costUsd: totalCostUsd,
-        });
-      } catch (err) {
-        errorCount++;
-        console.error(`[indexer] Error processing ${file.relativePath}:`, err);
-      }
-    }, options?.concurrency ?? this.config.concurrency);
-
-    // Embeddings (if available). Pipeline failures are tracked separately
-    // from per-file errors: they must surface as completed_with_errors, but
-    // they shouldn't trip the "failed" majority rule that is calibrated to
-    // file counts (1 pipeline error on a 1-file run is not a failed run).
-    const vectorsAvailable = this.vectorStore && !(this.embeddingService instanceof NullEmbeddingService)
-      ? await this.vectorStore.isAvailable() : false;
+    let indexedCount = 0;
     let pipelineErrorCount = 0;
-    if (vectorsAvailable && this.vectorStore) {
-      try {
-        await processEmbeddings(this.embedDeps(), project, runId, indexedFiles);
-      } catch (err) {
-        // The run must not report plain 'completed' when vectors are missing.
-        pipelineErrorCount++;
-        console.error('[indexer] Embedding pipeline error:', err);
-      }
+    const structQueue: StructEmbedItem[] = [];
+
+    try {
+      await telemetry.phase('analyze', () => withConcurrency(toIndex, async (file, idx) => {
+        try {
+          const result = await processFile(
+            { db: this.db, provider: this.provider, embeddingService: this.embeddingService, costTracker: this.costTracker },
+            project, runId, file, treeSitter,
+          );
+          if (result.treeSitterHit) treeSitterHits++;
+          if (result.llmSkipped) llmSkipped++;
+          totalInputTokens += result.inputTokens;
+          totalOutputTokens += result.outputTokens;
+          totalCostUsd += result.costUsd;
+          indexedCount++;
+          if (result.pendingStructSig && vectorsAvailable) {
+            structQueue.push({ fileId: result.fileId, structSig: result.pendingStructSig });
+          }
+          // Hard backpressure: addFile may await an embedding wave, which is
+          // exactly what bounds this loop's memory. Content is unreferenced
+          // once addFile returns.
+          await batcher?.addFile({
+            path: file.relativePath, fileId: result.fileId, analysis: result.analysis,
+            content: result.content, tier: file.tier,
+          });
+          options?.onProgress?.({
+            current: idx + 1, total: toIndex.length, currentFile: file.relativePath,
+            elapsedMs: Date.now() - startTime, costUsd: totalCostUsd,
+          });
+        } catch (err) {
+          errorCount++;
+          console.error(`[indexer] Error processing ${file.relativePath}:`, err);
+        }
+      }, options?.concurrency ?? this.config.concurrency));
+
+      await telemetry.phase('embed', async () => {
+        // Deferred structure-signature embeddings (storage-only — see
+        // struct-embed-queue.ts): one batched call per 50 files instead of one
+        // embedQuery HTTP round-trip per file inside the analyze loop.
+        if (structQueue.length > 0 && vectorsAvailable) {
+          const structRes = await flushStructEmbeddings(
+            { db: this.db, embeddingService: this.embeddingService, costTracker: this.costTracker },
+            project, runId, structQueue,
+          );
+          if (structRes.embedded > 0) {
+            console.error(`[indexer] Structure embeddings: ${structRes.embedded} stored in batch (${structRes.failed} failed)`);
+          }
+        }
+
+        // Embeddings tail. Pipeline failures are tracked separately from
+        // per-file errors: they must surface as completed_with_errors, but
+        // they shouldn't trip the "failed" majority rule that is calibrated to
+        // file counts (1 pipeline error on a 1-file run is not a failed run).
+        if (batcher) {
+          const embedRes = await batcher.finish();
+          if (embedRes.failures.length > 0) {
+            pipelineErrorCount++;
+            const attempted = embedRes.embedded + embedRes.failures.reduce((n, f) => n + f.size, 0);
+            console.error(
+              `[indexer] Embedding pipeline error: ${embedRes.failures.length} batch(es) failed — ${embedRes.embedded}/${attempted} records embedded. First error: ${embedRes.failures[0].error}`,
+            );
+          }
+        }
+      });
+    } finally {
+      // In-process extractors are per-run (workers-off path or the broken-
+      // pool fallback) — without the finally an exception leaked the wasm
+      // parsers of the run. Pool dispatch dispose is a no-op by design.
+      treeSitter.dispose();
     }
 
     // Model-change sweep: the pass above only embedded files CHANGED in this
@@ -206,7 +266,8 @@ export class IndexAgent {
     // (re-clearing already-NULL hashes is idempotent).
     if (fingerprintChanged && vectorsAvailable && embFingerprint) {
       try {
-        const sweep = await retryEmbeddingsFn(this.embedDeps(), project.root_path, { runId });
+        const sweep = await telemetry.phase('embed', () =>
+          retryEmbeddingsFn(this.embedDeps(), project.root_path, { runId }));
         if (sweep.failedBatches > 0) {
           // Partial sweep — some hashes never committed. Keep the OLD
           // fingerprint so the mismatch re-triggers the sweep next run.
@@ -222,11 +283,6 @@ export class IndexAgent {
       }
     }
 
-    // Release file content from indexedFiles — embeddings are done, these
-    // strings can be hundreds of MB in aggregate for large codebases.
-    for (const f of indexedFiles) (f as { content: string }).content = '';
-
-    treeSitter.dispose();
     if (treeSitterHits > 0) {
       console.error(`[indexer] Tree-sitter: ${treeSitterHits}/${toIndex.length} files from AST; ${llmSkipped} LLM calls skipped (structure unchanged)`);
     }
@@ -234,7 +290,8 @@ export class IndexAgent {
     // Post-run orphan sweep — vector_ids rows whose file no longer exists.
     // Failure is counted but never blocks the run from finishing.
     try {
-      const sweep = await sweepOrphanVectors(this.db, this.vectorStore, this.lshSink, project);
+      const sweep = await telemetry.phase('sweep', () =>
+        sweepOrphanVectors(this.db, this.vectorStore, this.lshSink, project));
       if (sweep.orphans > 0) {
         console.error(`[indexer] Orphan sweep: ${sweep.orphans} stale vector id(s) (${sweep.remoteDeleted} deleted remotely, ${sweep.tombstoned} tombstoned)`);
       }
@@ -252,23 +309,35 @@ export class IndexAgent {
       : totalErrors > 0
         ? 'completed_with_errors'
         : 'completed';
+    const phases = telemetry.finish();
+    console.error(`[indexer] run ${runId} phases: ${telemetry.summary()}`);
+    const endRssMb = Math.round(process.memoryUsage().rss / 1e6);
+    const warnMb = resolveRssWarnMb();
+    if (endRssMb > warnMb) {
+      console.warn(`[indexer] rss ${endRssMb}MB > ${warnMb}MB after run — possible leak (check dispose paths / ONNX sessions / worker pools)`);
+    }
     this.db.finishRun(runId, {
       status,
       totalFiles: scanResult.toIndex.length + scanResult.unchanged.length,
-      indexedFiles: indexedFiles.length,
+      indexedFiles: indexedCount,
       skippedFiles: scanResult.unchanged.length,
       errorCount: totalErrors,
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
       embeddingTokens: totalEmbeddingTokens,
       estimatedCostUsd: totalCostUsd,
+      phaseTimingsJson: JSON.stringify({
+        scan_ms: phases.scan_ms, analyze_ms: phases.analyze_ms,
+        embed_ms: phases.embed_ms, sweep_ms: phases.sweep_ms,
+      }),
+      peakRssMb: phases.peak_rss_mb,
     });
 
-    await this.dispatchWebhook(status, project, { run_id: runId, indexed_files: indexedFiles.length, error_count: totalErrors, cost_usd: totalCostUsd });
+    await this.dispatchWebhook(status, project, { run_id: runId, indexed_files: indexedCount, error_count: totalErrors, cost_usd: totalCostUsd });
 
     await this.emitFilesUpdated({
       projectId: project.id, projectName: project.name, runId,
-      indexedCount: indexedFiles.length,
+      indexedCount,
       removedCount: scanResult.toRemove?.length ?? 0,
       status,
       finishedAtMs: Date.now(),
@@ -279,11 +348,12 @@ export class IndexAgent {
     return {
       runId,
       totalFiles: scanResult.toIndex.length + scanResult.unchanged.length,
-      indexedFiles: indexedFiles.length,
+      indexedFiles: indexedCount,
       skippedFiles: scanResult.unchanged.length,
       errorCount: totalErrors,
       durationMs: Date.now() - startTime,
       costUsd: totalCostUsd,
+      phases,
     };
   }
 
@@ -307,21 +377,27 @@ export class IndexAgent {
 
   /**
    * Tree-sitter parsing is CPU-bound and was the largest source of main-thread
-   * blocking during indexing. When `MCP_INDEX_WORKERS=1`, dispatch to a worker
-   * pool sized to ~min(8, available cores). Result objects are plain JS and
-   * structured-clone safe. Worker lifecycle is managed at the process level.
+   * blocking during indexing — dispatched to the worker pool by default
+   * (`MCP_INDEX_WORKERS=0` opts out), with a per-process in-process fallback
+   * when workers can't run in this environment. See tree-sitter-dispatch.ts.
    */
   private buildTreeSitter(): { extract(filePath: string, content: string): Promise<TreeSitterResult>; dispose(): void } {
-    if (isIndexWorkersEnabled()) {
-      return {
-        extract: (filePath, content) => getIndexJobPool().extract(filePath, content),
-        dispose: () => { /* pool persists across runs */ },
-      };
-    }
-    return new TreeSitterExtractor();
+    return buildTreeSitterDispatch();
   }
 
-  /** Re-read unchanged files for force mode by faking ScannedFile entries from DB rows. */
+  /** Files advanced by structural runs whose semantic layer never caught up. */
+  private staleSemanticPaths(projectId: number, scan: ScanResult): string[] {
+    const inRun = new Set(scan.toIndex.map((f) => f.relativePath));
+    const removeSet = new Set(scan.toRemove);
+    const stale = this.db.listSemanticStalePaths(projectId)
+      .filter((p) => !inRun.has(p) && !removeSet.has(p));
+    if (stale.length > 0) {
+      console.error(`[indexer] Semantic catch-up: ${stale.length} structurally-indexed file(s) joined this run`);
+    }
+    return stale;
+  }
+
+  /** Rebuild ScannedFile entries from DB rows for force mode — processFile reads content lazily. */
   private rebuildForcedScans(projectId: number, unchangedPaths: string[]): ScannedFile[] {
     const out: ScannedFile[] = [];
     for (const path of unchangedPaths) {
@@ -330,7 +406,6 @@ export class IndexAgent {
       out.push({
         path: `${this.db.getProject(projectId)?.root_path ?? ''}/${path}`,
         relativePath: path,
-        content: '',  // will need to re-read
         hash: file.content_hash,
         sizeBytes: file.size,
         lineCount: file.line_count,

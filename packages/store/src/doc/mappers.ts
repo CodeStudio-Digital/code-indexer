@@ -6,6 +6,7 @@ import type {
   DocSourceStatus,
   DocSourceType,
 } from './types.js';
+import { buildFtsMatch } from '../db/fts-query.js';
 
 export function boolFromInt(n: number | boolean): boolean {
   return typeof n === 'number' ? n !== 0 : !!n;
@@ -123,12 +124,5 @@ export function normalizeRequiredPath(raw: string | null | undefined): string | 
  * instead of zero results.
  */
 export function sanitizeFtsQuery(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return '';
-  const tokens = trimmed
-    .replace(/["()*:.,;]/g, ' ')
-    .split(/\s+/)
-    .filter((t) => t && !/^(AND|OR|NOT|NEAR)$/i.test(t));
-  if (tokens.length === 0) return '';
-  return tokens.map((t) => `"${t.replace(/"/g, '')}"`).join(' ');
+  return buildFtsMatch(raw, 'AND');
 }

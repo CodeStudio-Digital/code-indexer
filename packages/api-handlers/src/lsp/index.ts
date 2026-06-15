@@ -1,12 +1,20 @@
 /**
- * Handlers for the `lsp` namespace — Monaco editor completions, hover,
- * definitions, references, diagnostics. Delegates to the in-process
- * `getTsService(projectRoot)` from @mcp/code-agent. The worker-pool
- * variant (Dia 9 of the plan) wraps this same handler in an `lsp` worker.
+ * Handlers for the `lsp` namespace — the language-intelligence router.
  *
- * MVP: only .ts / .tsx / .js / .jsx are fully wired. Other languages
- * still get Monaco's built-in syntax highlight but return empty for
- * LSP calls (no error, just nothing helpful).
+ * Stateful document sync (didOpen/didChange/didClose → document-store) feeds
+ * every backend; position-based calls carry only `{file, position}` now
+ * (`content` remains accepted for backwards compat). Dispatch per language:
+ *
+ *   ts/js            → in-process TS service (kept — fast and project-aware)
+ *   php/python/...   → external LSP servers (Onda 3, via the same router)
+ *   everything else  → index fallback (structural index: def/refs/completion/
+ *                      hover for all tree-sitter languages, offline, $0)
+ *
+ * Diagnostics are PUSHED via `diagnosticsStream` (diagnostics-hub): the TS
+ * backend publishes ~500ms after a didChange; the renderer's 1s polling
+ * loop is gone. All cross-cutting state lives in module singletons —
+ * `createLspHandlers(deps)` is instantiated twice on Electron (IPC mount +
+ * Hono dispatch fallback).
  */
 
 import {
@@ -17,11 +25,38 @@ import {
   type HoverInfo,
   type DiagnosticItem,
 } from '@mcp/api-bus';
-import { getTsService, isTsFile } from '@mcp/code-agent/lsp/ts-service.js';
+import { isTsFile } from '@mcp/code-agent/lsp/ts-service.js';
+import { languageIdForPath } from '@mcp/shared/utils/language-id.js';
 import type { HandlerDeps } from '../types.js';
+import { openDoc, changeDoc, closeDoc, getDoc } from './document-store.js';
+import { publishDiagnostics, subscribeDiagnostics, hasDiagnosticsSubscribers } from './diagnostics-hub.js';
+import { subscribeServerStatus } from './server-status-hub.js';
+import {
+  ensureLspManager,
+  serverCompletion,
+  serverDefinition,
+  serverHover,
+  serverReferences,
+  serverResolveCompletion,
+  serverStatusFor,
+} from './server-backend.js';
+import { installServer, listServers as listLspServers, removeServer as removeLspServer } from '@mcp/services/lsp/server-installer.js';
+import { createInProcessLspExecutor } from './executor-inproc.js';
+import { getLspExecutor } from './executor-holder.js';
+import type { LspBackendExecutor, LspOpCtx } from './executor-types.js';
+
+const TS_DIAG_DEBOUNCE_MS = 500;
+/** Module singleton — debounce timers survive the dual handler instances. */
+const tsDiagTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 export function createLspHandlers(deps: HandlerDeps): LspApi {
   const { db } = deps;
+
+  // Synchronous compute goes through the executor: the worker-backed one
+  // from the holder when server.ts wired it, else this local in-process
+  // default (identical code — see executor-inproc.ts).
+  const inproc = createInProcessLspExecutor(db);
+  const exec = (): LspBackendExecutor => getLspExecutor() ?? inproc;
 
   function requireProjectRoot(projectId: number): string {
     const project = db.getProject(projectId);
@@ -29,46 +64,129 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
     return project.root_path;
   }
 
-  function emptyIfUnsupported<T>(file: string, fallback: T): T | null {
-    return isTsFile(file) ? null : fallback;
+  /** Op context for the executor; docVersion guards worker-mirror staleness. */
+  function opCtx(
+    projectId: number, root: string, file: string,
+    position?: { line: number; column: number }, content?: string, languageId?: string,
+  ): LspOpCtx {
+    return { projectId, root, file, position, content, languageId, docVersion: getDoc(projectId, file)?.version };
   }
 
-  // When the renderer ships its current model text in `content`, push
-  // it into the TS service BEFORE computing. Without this, all
-  // position-based queries see the on-disk file and miss unsaved
-  // keystrokes — the textbook symptom is autocomplete returning no
-  // suggestions right after the user types `.`, because the dot
-  // hasn't been written to disk yet.
-  function syncContent(root: string, file: string, content?: string): void {
-    if (content === undefined) return;
-    try {
-      getTsService(root).setFileSnapshot(file, content);
-    } catch {
-      /* setFileSnapshot is best-effort; if it fails we still try the call */
-    }
+  /** Debounced TS diagnostics → hub (rel path = the editor's model key). */
+  function scheduleTsDiagnostics(projectId: number, root: string, file: string): void {
+    if (!isTsFile(file) || !hasDiagnosticsSubscribers(projectId)) return;
+    const k = `${projectId}:${file}`;
+    const prev = tsDiagTimers.get(k);
+    if (prev) clearTimeout(prev);
+    const timer = setTimeout(() => {
+      tsDiagTimers.delete(k);
+      exec().tsDiagnostics(opCtx(projectId, root, file))
+        .then((diags) => {
+          publishDiagnostics(projectId, {
+            file,
+            source: 'ts',
+            diagnostics: diags.map<DiagnosticItem>((d) => ({
+              file,
+              range: { start: { line: d.line, column: d.column }, end: { line: d.line, column: d.column } },
+              severity: d.severity,
+              message: d.message,
+              source: 'ts',
+              code: d.code,
+            })),
+          });
+        })
+        .catch(() => undefined); // diagnostics are best-effort
+    }, TS_DIAG_DEBOUNCE_MS);
+    timer.unref?.();
+    tsDiagTimers.set(k, timer);
   }
 
   return {
-    async completion({ projectId, file, position, content }) {
-      const empty = emptyIfUnsupported(file, [] as CompletionItem[]);
-      if (empty) return empty;
+    async didOpen({ projectId, file, languageId, version, content }) {
       const root = requireProjectRoot(projectId);
-      syncContent(root, file, content);
-      const svc = getTsService(root);
-      const entries = svc.getCompletions(file, position.line, position.column);
+      openDoc(projectId, file, languageId || languageIdForPath(file), version, content);
+      // No eager TS sync here — every executor op syncs the live buffer at
+      // use time, and the diagnostics tick below does too.
+      if (isTsFile(file)) scheduleTsDiagnostics(projectId, root, file);
+      return { ok: true as const };
+    },
+
+    async didChange({ projectId, file, version, changes }) {
+      const root = requireProjectRoot(projectId);
+      if (!changeDoc(projectId, file, version, changes)) return { resync: true as const };
+      if (isTsFile(file)) scheduleTsDiagnostics(projectId, root, file);
+      return { ok: true as const };
+    },
+
+    async didClose({ projectId, file }) {
+      closeDoc(projectId, file);
+      const k = `${projectId}:${file}`;
+      const timer = tsDiagTimers.get(k);
+      if (timer) { clearTimeout(timer); tsDiagTimers.delete(k); }
+      // Clear markers on the renderer side too.
+      publishDiagnostics(projectId, { file, source: 'ts', diagnostics: [] });
+      return { ok: true as const };
+    },
+
+    diagnosticsStream({ projectId }) {
+      requireProjectRoot(projectId);
+      return subscribeDiagnostics(projectId);
+    },
+
+    async completion({ projectId, file, position, content, context }) {
+      const root = requireProjectRoot(projectId);
+      if (!isTsFile(file)) {
+        const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+        // Race the LSP server against a soft deadline. A WARM server answers
+        // in ~30ms and wins; while it's still indexing (or blocked) the
+        // structural index fills the gap INSTANTLY instead of stalling on the
+        // server's 5s hard timeout. Dumb→smart per keystroke: the provider
+        // marks results incomplete so Monaco re-queries once the server warms.
+        const serverP = serverCompletion(db, projectId, root, file, lang, position, context);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const SOFT = Symbol('lsp-soft-deadline');
+        const raced = await Promise.race([
+          serverP,
+          new Promise<typeof SOFT>((r) => { timer = setTimeout(() => r(SOFT), 600); }),
+        ]);
+        if (timer) clearTimeout(timer);
+        if (raced !== SOFT && raced && raced.length > 0) return raced as CompletionItem[];
+        void serverP.catch(() => undefined); // abandoned if it lost the race
+        return exec().fallbackCompletion(opCtx(projectId, root, file, position, undefined, lang));
+      }
+      const entries = await exec().tsCompletions(opCtx(projectId, root, file, position, content));
       return entries.map<CompletionItem>((e) => ({
         label: e.name,
         kind: e.kind,
         detail: e.detail,
         insertText: e.insertText,
+        // The TS service already ranks (sortText) and marks snippets — pass
+        // them through or Monaco re-sorts alphabetically (free TS/JS win).
+        sortText: e.sortText,
+        insertTextFormat: e.isSnippet ? 2 : 1,
       }));
     },
 
+    async resolveCompletion({ projectId, file, item }) {
+      // Only external LSP servers defer fields to resolve; TS service and
+      // index-fallback items are already complete.
+      if (isTsFile(file)) return null;
+      requireProjectRoot(projectId);
+      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+      return serverResolveCompletion(db, projectId, lang, item);
+    },
+
     async hover({ projectId, file, position, content }) {
-      if (!isTsFile(file)) return null;
       const root = requireProjectRoot(projectId);
-      syncContent(root, file, content);
-      const info = getTsService(root).getHover(file, position.line, position.column);
+      if (!isTsFile(file)) {
+        const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+        // undefined = no server reachable → index fallback; null = the
+        // server answered "nothing here" (authoritative).
+        const viaServer = await serverHover(db, projectId, root, file, lang, position);
+        if (viaServer !== undefined) return viaServer;
+        return exec().fallbackHover(opCtx(projectId, root, file, position, undefined, lang));
+      }
+      const info = await exec().tsHover(opCtx(projectId, root, file, position, content));
       if (!info) return null;
       const lines: string[] = [];
       if (info.displayString) lines.push('```ts\n' + info.displayString + '\n```');
@@ -78,11 +196,14 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
     },
 
     async definition({ projectId, file, position, content }) {
-      const empty = emptyIfUnsupported(file, [] as LspLocation[]);
-      if (empty) return empty;
       const root = requireProjectRoot(projectId);
-      syncContent(root, file, content);
-      const { targets } = getTsService(root).getDefinition(file, position.line, position.column);
+      if (!isTsFile(file)) {
+        const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+        const viaServer = await serverDefinition(db, projectId, root, file, lang, position);
+        if (viaServer && viaServer.length > 0) return viaServer;
+        return exec().fallbackDefinition(opCtx(projectId, root, file, position));
+      }
+      const { targets } = await exec().tsDefinition(opCtx(projectId, root, file, position, content));
       return targets.map<LspLocation>((t) => ({
         file: t.file,
         range: { start: { line: t.line, column: t.column }, end: { line: t.line, column: t.column } },
@@ -90,11 +211,14 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
     },
 
     async references({ projectId, file, position, content }) {
-      const empty = emptyIfUnsupported(file, [] as LspLocation[]);
-      if (empty) return empty;
       const root = requireProjectRoot(projectId);
-      syncContent(root, file, content);
-      const { references } = getTsService(root).getReferences(file, position.line, position.column);
+      if (!isTsFile(file)) {
+        const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+        const viaServer = await serverReferences(db, projectId, root, file, lang, position);
+        if (viaServer && viaServer.length > 0) return viaServer;
+        return exec().fallbackReferences(opCtx(projectId, root, file, position));
+      }
+      const { references } = await exec().tsReferences(opCtx(projectId, root, file, position, content));
       return references.map<LspLocation>((r) => ({
         file: r.file,
         range: { start: { line: r.line, column: r.column }, end: { line: r.line, column: r.column } },
@@ -102,11 +226,13 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
     },
 
     async diagnostics({ projectId, file, content }) {
+      // Legacy pull path — kept for agent tools and HTTP compat. The editor
+      // uses diagnosticsStream. NOTE: this path reports ABSOLUTE d.file
+      // (agent-facing) while the push path reports the rel model key.
       if (!file) return [];
       if (!isTsFile(file)) return [];
       const root = requireProjectRoot(projectId);
-      syncContent(root, file, content);
-      const diags = getTsService(root).getDiagnostics(file);
+      const diags = await exec().tsDiagnostics(opCtx(projectId, root, file, undefined, content));
       return diags.map<DiagnosticItem>((d) => ({
         file: d.file,
         range: {
@@ -125,9 +251,45 @@ export function createLspHandlers(deps: HandlerDeps): LspApi {
       // non-script files (md, css, etc.) skip entirely.
       if (!isTsFile(file)) return { data: [] };
       const root = requireProjectRoot(projectId);
-      syncContent(root, file, content);
-      const data = getTsService(root).getSemanticTokens(file);
+      const data = await exec().tsSemanticTokens(opCtx(projectId, root, file, undefined, content));
       return { data };
+    },
+
+    async serverStatus({ projectId, languageId }) {
+      requireProjectRoot(projectId);
+      return serverStatusFor(db, projectId, languageId);
+    },
+
+    serverStatusStream({ projectId }) {
+      requireProjectRoot(projectId);
+      // Ensure the manager (and its onStateChange → hub wiring) exists so
+      // transitions actually reach this subscriber.
+      ensureLspManager(db);
+      return subscribeServerStatus(projectId);
+    },
+
+    async listServers() {
+      return listLspServers();
+    },
+
+    async instances() {
+      return ensureLspManager(db).listInstances();
+    },
+
+    installServerStream({ serverId }) {
+      // AsyncGenerator IS an AsyncIterable — streamed as-is (MessagePort on
+      // Electron via the Stream suffix; SSE route for browser dev).
+      return installServer(serverId);
+    },
+
+    async removeServer({ serverId }) {
+      return { ok: removeLspServer(serverId) };
+    },
+
+    async restartServer({ projectId, serverId }) {
+      requireProjectRoot(projectId);
+      await ensureLspManager(db).restart(projectId, serverId);
+      return { ok: true as const };
     },
 
     async rename(_input) {

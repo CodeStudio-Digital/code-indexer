@@ -19,6 +19,7 @@ import { createRunnerHandlers } from './runner/index.js';
 import { createRuntimeHandlers } from './runtime/index.js';
 import { createCoderHandlers } from './coder/index.js';
 import { createLspHandlers } from './lsp/index.js';
+import { createEditorHandlers } from './editor/index.js';
 import { createSnapshotsHandlers } from './snapshots/index.js';
 import { createRunsHandlers } from './runs/index.js';
 import { createSearchHandlers } from './search/index.js';
@@ -34,6 +35,7 @@ export { runScaffoldStream } from './projects/scaffold.js';
 export { runDsStudioScaffoldStream } from './design-system/studio-scaffold.js';
 export type { DsStudioCreateInput, DsStudioStreamEvent } from './design-system/studio-scaffold.js';
 export { reinstrumentBuilder, type ReinstrumentResult } from './projects/reinstrument.js';
+export { visualEdit, type VisualEditBody, type VisualEditOkResult } from './projects/visual-edit.js';
 export {
   linkDesignSystem,
   unlinkDesignSystem,
@@ -43,9 +45,39 @@ export {
 export { createFilesHandlers } from './files/index.js';
 export { createTerminalHandlers } from './terminal/index.js';
 export { createRunnerHandlers } from './runner/index.js';
+export { sharedPtyManager } from './terminal/pty-manager.js';
 export { createRuntimeHandlers } from './runtime/index.js';
 export { createCoderHandlers } from './coder/index.js';
 export { createLspHandlers } from './lsp/index.js';
+// Boot-time wiring: ensureLspManager wires the onDocEvent listener + the
+// status hub before the first didOpen can arrive (closes the cold-start
+// spawn race). Idempotent (module singleton + wired flag).
+export { ensureLspManager } from './lsp/server-backend.js';
+// lsp-worker plumbing: executor surface + holder + doc-store hooks the
+// main-thread client (apps/http-api/sse) needs to mirror/replay buffers.
+export { createInProcessLspExecutor } from './lsp/executor-inproc.js';
+export { setLspExecutor, getLspExecutor } from './lsp/executor-holder.js';
+export {
+  EMPTY_RESULTS as LSP_EMPTY_RESULTS,
+  isStaleSentinel,
+  type LspBackendExecutor,
+  type LspOpCtx,
+  type LspExecutorOp,
+  type LspCallPayload,
+  type DocOpenEvent,
+  type DocChangeEvent,
+  type DocCloseEvent,
+} from './lsp/executor-types.js';
+export {
+  onDocEvent,
+  allDocs,
+  getDoc,
+  openDoc,
+  closeDoc,
+  type StoredDoc,
+  type DocListener,
+} from './lsp/document-store.js';
+export { createEditorHandlers } from './editor/index.js';
 export { createSnapshotsHandlers } from './snapshots/index.js';
 export { createRunsHandlers } from './runs/index.js';
 export { createSearchHandlers } from './search/index.js';
@@ -73,6 +105,7 @@ export function createHandlers(deps: HandlerDeps): Partial<Api> {
     runtime: createRuntimeHandlers(deps),
     coder: createCoderHandlers(deps),
     lsp: createLspHandlers(deps),
+    editor: createEditorHandlers(deps),
     snapshots: createSnapshotsHandlers(deps),
     runs: createRunsHandlers(deps),
     search: createSearchHandlers(deps),

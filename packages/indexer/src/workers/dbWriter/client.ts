@@ -1,4 +1,4 @@
-import { createPool, resolveWorkerUrl, type Pool } from '@mcp/indexer/workers/pool.js';
+import { createPool, resolveWorkerSpec, type Pool } from '@mcp/indexer/workers/pool.js';
 import type { DbWriteReq, DbWriteRes, PersistAssistantTurnPayload } from '@mcp/indexer/workers/dbWriter/protocol.js';
 
 export interface DbWriter {
@@ -11,10 +11,16 @@ export interface DbWriter {
 const createWorkerDbWriter = (dbPath: string): DbWriter => {
   // size=1: better-sqlite3 single-writer model. Multiple workers writing the
   // same file would just contend on the WAL writer lock with extra IPC cost.
+  // idleTtlMs=0 on purpose: this worker holds the better-sqlite3 handle and
+  // writes are small + frequent during sessions — bouncing the DB connection
+  // on idle buys almost no RAM and risks dropping a handle mid-burst.
+  const spec = resolveWorkerSpec(import.meta.url, './worker');
   const pool: Pool<DbWriteReq, DbWriteRes> = createPool({
-    workerUrl: resolveWorkerUrl(import.meta.url, './worker'),
+    workerUrl: spec.url,
     size: 1,
-    workerData: { dbPath },
+    workerData: { dbPath, ...spec.bootstrapData },
+    name: 'dbWriter',
+    idleTtlMs: 0,
   });
 
   // Per-session FIFO chain. The single worker already serializes, but chaining

@@ -23,13 +23,23 @@ export interface OpenFile {
   projectId: number;
   /** project-relative posix path, e.g. "src/index.ts" */
   path: string;
-  /** Last loaded contents (the editor model is the source of truth while open). */
-  content: string;
+  /**
+   * Last loaded contents — `null` means "not fetched yet" (tabs open
+   * instantly; the editor fetches on activation). While a Monaco model is
+   * live it is the source of truth; the store only mirrors.
+   */
+  content: string | null;
   /** Tracked separately from content so a Cmd+Z that returns to the original
    * mtime can clear the dirty flag without a string compare on every keystroke. */
   dirty: boolean;
   /** Last on-disk mtime from files.read/write — used to detect external edits. */
   lastModified: string | null;
+  /**
+   * The file changed ON DISK while this tab had unsaved edits (fs-events
+   * stream). Cleared by save (markClean) or by an external reload
+   * (applyExternalContent). Drives the conflict badge on the tab.
+   */
+  externallyChanged?: boolean;
 }
 
 export interface OpenDiff {
@@ -97,6 +107,10 @@ interface WorkspaceState {
   setActive: (path: string | null) => void;
   setContent: (path: string, content: string) => void;
   markClean: (path: string, lastModified: string) => void;
+  /** External (disk) content landed on a NON-dirty tab — replace without dirtying. */
+  applyExternalContent: (path: string, content: string, lastModified: string | null) => void;
+  /** Disk changed under a DIRTY tab — flag the conflict, keep the user's buffer. */
+  markExternallyChanged: (path: string) => void;
 }
 
 // ─── Tab persistence per project ──────────────────────────────────
@@ -114,14 +128,25 @@ interface PersistedTabs {
   activeFilePath: string | null;
 }
 
+/**
+ * Indexer scratch/trash paths (`.mcp-indexer/`) are ephemeral internals
+ * that get deleted out from under any tab pointing at them. Never persist
+ * or restore them — a restored phantom tab drives the LSP diagnostics poll
+ * into a "Could not find source file" loop.
+ */
+const isIndexerInternalPath = (path: string): boolean => /(^|\/)\.mcp-indexer\//.test(path);
+
 export function loadPersistedTabs(projectId: number): PersistedTabs {
   if (typeof window === 'undefined') return { openFiles: [], activeFilePath: null };
   try {
     const raw = window.localStorage.getItem(`${TABS_STORAGE_PREFIX}${projectId}`);
     if (!raw) return { openFiles: [], activeFilePath: null };
     const parsed = JSON.parse(raw) as PersistedTabs;
+    const openFiles = (Array.isArray(parsed.openFiles) ? parsed.openFiles : []).filter(
+      (f) => !isIndexerInternalPath(f.path),
+    );
     return {
-      openFiles: Array.isArray(parsed.openFiles) ? parsed.openFiles : [],
+      openFiles,
       activeFilePath: typeof parsed.activeFilePath === 'string' ? parsed.activeFilePath : null,
     };
   } catch {
@@ -133,7 +158,11 @@ export function savePersistedTabs(projectId: number, openFiles: OpenTab[], activ
   if (typeof window === 'undefined') return;
   // Drop transient surfaces (diffs, git-log/git-stash views) — only real files persist.
   const realFiles = openFiles.filter(
-    (f) => f.kind !== 'diff' && f.kind !== 'git-log' && f.kind !== 'git-stash',
+    (f) =>
+      f.kind !== 'diff' &&
+      f.kind !== 'git-log' &&
+      f.kind !== 'git-stash' &&
+      !isIndexerInternalPath(f.path),
   );
   const payload: PersistedTabs = {
     openFiles: realFiles.map((f) => ({ projectId: f.projectId, path: f.path })),
@@ -256,7 +285,25 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     set((s) => ({
       openFiles: s.openFiles.map((f) =>
         f.path === path && (f.kind === undefined || f.kind === 'file')
-          ? { ...f, dirty: false, lastModified }
+          ? { ...f, dirty: false, lastModified, externallyChanged: false }
+          : f,
+      ),
+    })),
+
+  applyExternalContent: (path, content, lastModified) =>
+    set((s) => ({
+      openFiles: s.openFiles.map((f) =>
+        f.path === path && (f.kind === undefined || f.kind === 'file')
+          ? { ...f, content, dirty: false, lastModified, externallyChanged: false }
+          : f,
+      ),
+    })),
+
+  markExternallyChanged: (path) =>
+    set((s) => ({
+      openFiles: s.openFiles.map((f) =>
+        f.path === path && (f.kind === undefined || f.kind === 'file')
+          ? { ...f, externallyChanged: true }
           : f,
       ),
     })),

@@ -34,9 +34,6 @@ export function PipelineRuntimeSection({ sessionId, pipelineRuntime }: PipelineR
   const detailApi = useApi<Detail>(execId ? `/coder/sessions/${sessionId}/pipelines/executions/${execId}` : '');
   const refetch = detailApi.refetch;
 
-  // eslint-disable-next-line no-console
-  console.log('[PRS render]', { hintId, execId, listUrl: hintId ? '' : 'exec', listData: listApi.data?.length, detailUrl: execId ? 'detail' : '', detailData: !!detailApi.data, rt: pipelineRuntime });
-
   const status = pipelineRuntime?.status ?? detailApi.data?.execution.status;
   useEffect(() => {
     if (!status || !ACTIVE.has(status)) return;
@@ -45,8 +42,6 @@ export function PipelineRuntimeSection({ sessionId, pipelineRuntime }: PipelineR
   }, [status, refetch]);
   // Snappier refresh when the live runtime advances a node.
   useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[PRS refetch effect]', { currentNodeId: pipelineRuntime?.currentNodeId, status: pipelineRuntime?.status });
     refetch();
   }, [pipelineRuntime?.currentNodeId, pipelineRuntime?.status, refetch]);
 

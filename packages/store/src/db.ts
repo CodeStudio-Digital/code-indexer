@@ -3,17 +3,22 @@ import type {
   Project, DBFile, DBSymbol, IndexRun, CostSummary, ContextSnapshot, Webhook,
   FileSnapshot, VectorIdRecord, ProjectStats, DiscoveredModel, SnapshotCategory,
   SnapshotVersion, LLMSymbol, DBFileDependency, DBFileDependent,
-  DBSymbolReference, DBSymbolRelation,
+  DBSymbolReference, DBSymbolRelation, RunKind,
 } from '@mcp/shared/types.js';
 import { Database, type DB, type PathAlias } from './db/types.js';
+import { applyTuningPragmas } from './db/pragmas.js';
 import { initSchema } from './db/schema/index.js';
 import { repairCodeFtsIndexes } from './db/schema/fts.js';
 import * as projects from './db/projects.js';
 import * as files from './db/files.js';
+import * as filesStructural from './db/files-structural.js';
+import * as fileContents from './db/file-contents.js';
 import * as symbols from './db/symbols.js';
 import * as symbolRelations from './db/symbol-relations.js';
 import * as runs from './db/runs.js';
 import * as snapshots from './db/snapshots.js';
+import * as snapshotsArchive from './db/snapshots-archive.js';
+import * as memoryConsolidation from './db/memory-consolidation.js';
 import * as memoryDistillLog from './db/memory-distill-log.js';
 import * as costs from './db/costs.js';
 import * as webhooks from './db/webhooks.js';
@@ -36,6 +41,7 @@ export class CodeIndexDB {
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('cache_size = 10000');
     this.db.pragma('foreign_keys = ON');
+    applyTuningPragmas(this.db);
     // Schema must exist before migrations that ALTER it.
     initSchema(this.db);
     runMigrations(this.db);
@@ -72,11 +78,25 @@ export class CodeIndexDB {
   getFileById(id: number): DBFile | undefined { return files.getById(this.db, id); }
   getFileByPath(projectId: number, path: string): DBFile | undefined { return files.get(this.db, projectId, path); }
   listFiles(projectId: number, language?: string): DBFile[] { return files.list(this.db, projectId, language); }
+  listFileScanMeta(projectId: number): files.FileScanMeta[] { return files.listScanMeta(this.db, projectId); }
+  touchFileMtime(projectId: number, path: string, mtimeMs: number): void { files.touchMtime(this.db, projectId, path, mtimeMs); }
   deleteFile(projectId: number, path: string): void { files.del(this.db, projectId, path); }
   deleteFilesByProject(projectId: number): void { files.delByProject(this.db, projectId); }
   searchFiles(projectId: number, query: string, limit: number = 20): DBFile[] { return files.search(this.db, projectId, query, limit); }
   saveFileSnapshot(data: files.FileSnapshotData): void { files.saveSnapshot(this.db, data); }
   getFileSnapshots(runId: number): FileSnapshot[] { return files.listSnapshots(this.db, runId); }
+
+  // ─── Structural layer (migration 139/140) ───────────────────────
+  /** Partial upsert that NEVER touches the semantic columns — see files-structural.ts. */
+  upsertFileStructural(projectId: number, data: filesStructural.UpsertStructuralData): { fileId: number; created: boolean } { return filesStructural.upsertStructural(this.db, projectId, data); }
+  setFileSemanticHash(projectId: number, path: string, contentHash: string): void { filesStructural.setSemanticHash(this.db, projectId, path, contentHash); }
+  listSemanticStalePaths(projectId: number, limit?: number): string[] { return filesStructural.listSemanticStalePaths(this.db, projectId, limit); }
+  countSemanticStale(projectId: number): number { return filesStructural.countSemanticStale(this.db, projectId); }
+  upsertFileContent(fileId: number, content: string, sizeBytes?: number): boolean { return fileContents.upsertContent(this.db, fileId, content, sizeBytes); }
+  removeFileContent(fileId: number): void { fileContents.removeContent(this.db, fileId); }
+  searchFileContents(projectId: number, match: string, limit?: number): fileContents.ContentMatch[] { return fileContents.searchContent(this.db, projectId, match, limit); }
+  missingContentFiles(projectId: number, limit?: number): Array<{ id: number; path: string }> { return fileContents.missingContentFiles(this.db, projectId, limit); }
+  countFileContents(projectId: number): number { return fileContents.countContent(this.db, projectId); }
 
   // ─── Symbols ────────────────────────────────────────────────────
   upsertSymbols(projectId: number, fileId: number, filePath: string, syms: LLMSymbol[]): void { symbols.upsert(this.db, projectId, fileId, filePath, syms); }
@@ -89,6 +109,8 @@ export class CodeIndexDB {
   getClassMembers(parentName: string, projectId: number): DBSymbol[] { return symbols.classMembers(this.db, parentName, projectId); }
   listAllSymbols(projectId: number): DBSymbol[] { return symbols.listAll(this.db, projectId); }
   searchSymbols(projectId: number, query: string, limit: number = 20): DBSymbol[] { return symbols.search(this.db, projectId, query, limit); }
+  /** Identifier-prefix completion (b-tree range scan — see symbols.searchByPrefix). */
+  searchSymbolsByPrefix(projectId: number, prefix: string, limit: number = 50, opts?: { exportedOnly?: boolean }): DBSymbol[] { return symbols.searchByPrefix(this.db, projectId, prefix, limit, opts); }
   listSymbolsByKind(projectId: number, kind: string, limit: number = 50): DBSymbol[] { return symbols.listByKind(this.db, projectId, kind, limit); }
 
   // ─── Symbol References & Relations ──────────────────────────────
@@ -102,7 +124,7 @@ export class CodeIndexDB {
   traceSymbolUsage(projectId: number, symbolName: string, maxDepth: number = 3): symbolRelations.UsageTraceResult { return symbolRelations.traceUsage(this.db, projectId, symbolName, maxDepth); }
 
   // ─── Runs ───────────────────────────────────────────────────────
-  startRun(projectId: number, provider?: string, model?: string): number { return runs.start(this.db, projectId, provider, model); }
+  startRun(projectId: number, provider?: string, model?: string, kind?: RunKind): number { return runs.start(this.db, projectId, provider, model, kind); }
   finishRun(runId: number, data: runs.FinishRunData): void { runs.finish(this.db, runId, data); }
   getRun(id: number): IndexRun | undefined { return runs.get(this.db, id); }
   getRuns(projectId: number, limit: number = 20): IndexRun[] { return runs.list(this.db, projectId, limit); }
@@ -134,6 +156,14 @@ export class CodeIndexDB {
   listMemoryIndex(projectId: number, limit = 12): snapshots.MemoryIndexEntry[] { return snapshots.listMemoryIndex(this.db, projectId, limit); }
   searchSnapshots(projectId: number, query: string): ContextSnapshot[] { return snapshots.search(this.db, projectId, query); }
   getSnapshotHistory(snapshotId: number): SnapshotVersion[] { return snapshots.getHistory(this.db, snapshotId); }
+  // ─── Snapshot archive / merge (migration 146, memory consolidator) ──
+  archiveSnapshot(id: number, reason: string): void { snapshotsArchive.archive(this.db, id, reason); }
+  unarchiveSnapshot(id: number): void { snapshotsArchive.unarchive(this.db, id); }
+  unionSnapshotFiles(winnerId: number, loserIds: number[]): void { snapshotsArchive.unionFiles(this.db, winnerId, loserIds); }
+  setSnapshotAccessStats(id: number, accessCount: number, lastAccessedAt: string | null): void { snapshotsArchive.setAccessStats(this.db, id, accessCount, lastAccessedAt); }
+  countArchivedSnapshots(projectId: number): number { return snapshotsArchive.countArchived(this.db, projectId); }
+  listArchivedSnapshots(projectId: number, limit = 50): ContextSnapshot[] { return snapshotsArchive.listArchived(this.db, projectId, limit); }
+  listConsolidationCandidates(idleSeconds: number, limit: number): memoryConsolidation.ConsolidationCandidate[] { return memoryConsolidation.listConsolidationCandidates(this.db, idleSeconds, limit); }
 
   // ─── Memory distillation diagnostics (migration 136) ────────────
   insertMemoryDistillLog(projectId: number, entry: memoryDistillLog.MemoryDistillLogEntry): void { memoryDistillLog.insert(this.db, projectId, entry); }

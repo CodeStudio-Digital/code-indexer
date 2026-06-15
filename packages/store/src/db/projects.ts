@@ -4,7 +4,8 @@ import { repairCodeFtsIndexes } from './schema/fts.js';
 
 type ProjectUpdates = Partial<Pick<Project,
   'name' | 'description' | 'group_name' | 'root_path' | 'provider' | 'model' |
-  'last_indexed' | 'file_count' | 'symbol_count' | 'embeddings_enabled' | 'search_mode' |
+  'last_indexed' | 'structural_indexed_at' | 'file_count' | 'symbol_count' |
+  'embeddings_enabled' | 'search_mode' |
   'node_version' | 'runner_shell' | 'builder_json'
 >>;
 
@@ -25,14 +26,27 @@ export function getByName(db: DB, name: string): Project | undefined {
   return db.prepare('SELECT * FROM projects WHERE name = ?').get(name) as Project | undefined;
 }
 
+/** Windows-tolerant root comparison: slashes, trailing separator, case. */
+function normalizeRootPath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
 export function getByPath(db: DB, rootPath: string): Project | undefined {
   const exact = db.prepare('SELECT * FROM projects WHERE root_path = ?').get(rootPath) as Project | undefined;
   if (exact) return exact;
-  return db.prepare("SELECT * FROM projects WHERE root_path LIKE '%' || ?").get(rootPath) as Project | undefined;
+  // The old fallback was `LIKE '%' || ?` — a SUFFIX match that could resolve
+  // a DIFFERENT project (e.g. any root ending in "\backend") and feed the
+  // structural indexer the wrong root (worst case: empty scan → index wipe,
+  // now also blocked by the anti-wipe guard). Normalized equality only.
+  const target = normalizeRootPath(rootPath);
+  return (db.prepare('SELECT * FROM projects').all() as Project[])
+    .find((p) => p.root_path && normalizeRootPath(p.root_path) === target);
 }
 
 export function list(db: DB): Project[] {
-  return db.prepare('SELECT * FROM projects ORDER BY name').all() as Project[];
+  // id 0 is the reserved hidden "__user__" project that holds user-scope
+  // memory (migration 145) — never a real, listable project.
+  return db.prepare('SELECT * FROM projects WHERE id <> 0 ORDER BY name').all() as Project[];
 }
 
 export function update(db: DB, id: number, updates: ProjectUpdates): void {
@@ -95,7 +109,8 @@ export function clearData(db: DB, id: number): void {
     }
     db.prepare(
       `UPDATE projects
-         SET file_count = 0, symbol_count = 0, last_indexed = NULL, updated_at = datetime('now')
+         SET file_count = 0, symbol_count = 0, last_indexed = NULL,
+             structural_indexed_at = NULL, updated_at = datetime('now')
        WHERE id = ?`,
     ).run(projectId);
   });

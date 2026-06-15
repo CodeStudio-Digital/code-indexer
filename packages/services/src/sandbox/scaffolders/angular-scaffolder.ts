@@ -13,9 +13,8 @@
  *
  * Like the Vite scaffolders, the dev-server settings that the preview
  * proxy relies on are OWNED by this scaffolder — the agent must not
- * mutate `projects.*.architect.serve.options` at runtime. The snapshot
- * seeded into the session's project(s) (`stack-seeds.ts > ANGULAR_SEEDS
- * > "Sandbox reserved files — Angular"`) tells the agent so.
+ * mutate `projects.*.architect.serve.options` at runtime. The container
+ * prompt block (`buildBuilderInstructions`) tells the agent so.
  */
 
 import type { IScaffolder, ScaffoldContext } from './scaffolder-port.js';

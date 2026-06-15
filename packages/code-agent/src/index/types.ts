@@ -14,6 +14,20 @@ export interface CoderAttachment {
   text?: string;
 }
 
+/**
+ * Task-preflight seed for a FRESH coder session (canonical shape — the
+ * producer in @mcp/services/services/task-preflight keeps a structural
+ * twin; http-api type-checks both sides together). Fully serializable.
+ */
+export interface PreflightSeed {
+  profile?: 'bootstrap' | 'navigate' | 'full';
+  /** Tool names to pin visible from turn 1 (validated against the catalog). */
+  pinTools?: string[];
+  /** Project memories the agent should READ (titles only, never content). */
+  memories?: Array<{ title: string; reason: string }>;
+  taskKind?: string;
+}
+
 export interface RunCoderOptions {
   /** Numeric session id (existing) or "new" to create one */
   session: { id: number } | { create: { project_id: number; title: string; provider: CoderProviderName; model?: string } };
@@ -157,6 +171,17 @@ export interface RunCoderOptions {
    */
   modelSupportsVision?: boolean;
   describeImages?: boolean;
+  /**
+   * Task-preflight seed — produced by the host (`TaskPreflightService` in
+   * @mcp/services) from the FIRST user prompt of a fresh session and passed
+   * down serialized (crosses the worker boundary like `modelSupportsVision`).
+   * Structural type to avoid a hard code-agent → services type dependency
+   * (mirrors `memoryRetriever`). Ignored on resumed sessions. Effects:
+   * seeds the profile (beats the turn-1 keyword heuristic, loses to an
+   * explicit profile), pins `pinTools` visible from turn 1, applies the
+   * session visible-tool cap, and injects the `<preflight>` hint.
+   */
+  preflight?: PreflightSeed;
   /**
    * Per-request thinking budget (in tokens). Forwarded to the runner via
    * `runner.opts.thinkingBudgetTokens` and into every `ChatRequest`.

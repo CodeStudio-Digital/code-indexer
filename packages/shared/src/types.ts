@@ -9,7 +9,10 @@ export type ProviderName =
   | 'zai'
   | 'kimi-code';
 
-export type SnapshotCategory = 'architecture' | 'decision' | 'pattern' | 'convention' | 'todo' | 'note' | 'gotcha' | 'procedure';
+export type SnapshotCategory = 'architecture' | 'decision' | 'pattern' | 'convention' | 'todo' | 'note' | 'gotcha' | 'procedure' | 'user' | 'feedback';
+
+/** Memory scope: project-bound facts vs. global facts about the user (migration 145). */
+export type SnapshotScope = 'project' | 'user';
 
 export type ExportFormat = 'markdown' | 'json';
 
@@ -79,6 +82,12 @@ export interface Project {
   created_at: string;
   updated_at: string;
   last_indexed: string | null;
+  /**
+   * Last STRUCTURAL pass (tree-sitter symbols + FTS, no LLM/embeddings) —
+   * migration 139. `last_indexed` keeps meaning "semantic index". A project
+   * is tool-usable (symbols/grep/skeleton) when EITHER is set.
+   */
+  structural_indexed_at: string | null;
   file_count: number;
   symbol_count: number;
 }
@@ -89,6 +98,8 @@ export interface LLMReference {
   symbol_name: string;
   kind: SymbolKind;
   line?: number;
+  /** Start column of the reference (1-based). Tree-sitter only; migration 141. */
+  col?: number;
   snippet?: string;
 }
 
@@ -105,6 +116,14 @@ export interface LLMSymbol {
   line: number | null;
   /** End line of the symbol (1-indexed). Provided by tree-sitter; may be absent for LLM-extracted symbols. */
   end_line?: number;
+  /** Start column (1-based, UTF-16 units — Monaco-compatible). Tree-sitter only; migration 141. */
+  col?: number;
+  /**
+   * Per-language visibility (migration 141): TS export/default, Rust pub,
+   * Go uppercase, PHP non-private member, Python non-underscore top-level;
+   * fallback = top-level. Drives project-wide prefix completion.
+   */
+  exported?: boolean;
   comment: string | null;
   tags: string[];
 }
@@ -153,6 +172,12 @@ export interface DBFile {
   is_entry_point: number; // SQLite boolean
   is_test: number;
   is_generated: number;
+  /**
+   * Content hash at the last SEMANTIC (LLM) pass — migration 139. Diverging
+   * from `content_hash` marks the file's summary/concepts as stale; NULL on
+   * structurally-indexed files that never saw the LLM.
+   */
+  semantic_hash: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -170,6 +195,12 @@ export interface DBSymbol {
   return_type: string | null;
   parameters: string | null;
   line: number | null;
+  /** Start column (1-based) — migration 141; NULL on pre-141 rows until re-extract. */
+  col: number | null;
+  /** End line (1-based) — migration 141. */
+  end_line: number | null;
+  /** Visibility flag (migration 141) — see LLMSymbol.exported. */
+  exported: number;
   comment: string | null;
   tags: string; // JSON array
   created_at: string;
@@ -183,6 +214,9 @@ export interface DBSymbol {
 }
 
 // ─── Index Run ────────────────────────────────────────────────────
+
+/** 'structural' = tree-sitter + FTS only (no LLM/embeddings). Migration 139. */
+export type RunKind = 'full' | 'structural';
 
 export interface IndexRun {
   id: number;
@@ -200,6 +234,10 @@ export interface IndexRun {
   output_tokens: number;
   embedding_tokens: number;
   estimated_cost_usd: number;
+  /** JSON `{scan_ms, analyze_ms, embed_ms, sweep_ms}` (migration 138). */
+  phase_timings_json: string | null;
+  peak_rss_mb: number | null;
+  kind: RunKind;
 }
 
 // ─── Cost Tracking ────────────────────────────────────────────────
@@ -253,6 +291,14 @@ export interface ContextSnapshot {
   /** Usage signal for retrieval ranking / decay (migration 114). */
   last_accessed_at: string | null;
   access_count: number;
+  /** Soft-delete timestamp (migration 146). NULL = live; non-null = archived
+   *  by the consolidator and excluded from every agent-facing read path. */
+  archived_at?: string | null;
+  /** Why the row was archived: "merged:<winnerId>" | "stale+cold+low-importance". */
+  archived_reason?: string | null;
+  /** Memory scope (migration 145). 'project' (default) or 'user' (global, on
+   *  the reserved project 0). */
+  scope?: SnapshotScope;
 }
 
 // ─── Webhooks ─────────────────────────────────────────────────────
@@ -376,10 +422,17 @@ export interface VectorMatch {
 export interface ScannedFile {
   path: string;
   relativePath: string;
-  content: string;
+  /**
+   * NOT populated by the scanner anymore — content is read lazily by
+   * `processFile`, so the scan's peak memory is O(1 file) instead of the
+   * whole changed set. Still present for tests/fixtures that inject it.
+   */
+  content?: string;
   hash: string;
   sizeBytes: number;
   lineCount: number;
+  /** fs.stat mtime (ms) captured at scan time; persisted via files.mtime_ms. */
+  mtimeMs?: number;
   /**
    * Mapper tier — `core`, `support`, or `on_demand`. `excluded` files
    * never reach this stage, so the field is one of the three positive
@@ -390,13 +443,35 @@ export interface ScannedFile {
   mapperReason?: string;
 }
 
+/** How each scanned file was classified — doubles as test observability. */
+export interface ScanStats {
+  /** Unchanged proven by mtime+size alone — zero bytes read. */
+  statOnly: number;
+  /** Files read + hashed (stat differed, or no stored mtime yet). */
+  hashed: number;
+  /** Skipped via stat size before any read. */
+  skippedTooLarge: number;
+  /** Listed by the glob but excluded by ignore rules (gitignore/.mcpindexignore/hard excludes). */
+  ignored?: number;
+}
+
 export interface ScanResult {
   toIndex: ScannedFile[];
   unchanged: string[];
   toRemove: string[];
+  stats?: ScanStats;
 }
 
 // ─── Index Result ─────────────────────────────────────────────────
+
+/** Per-phase wall-clock + peak process RSS sampled during an index run. */
+export interface RunPhaseTelemetry {
+  scan_ms: number;
+  analyze_ms: number;
+  embed_ms: number;
+  sweep_ms: number;
+  peak_rss_mb: number;
+}
 
 export interface IndexResult {
   runId: number;
@@ -406,6 +481,7 @@ export interface IndexResult {
   errorCount: number;
   durationMs: number;
   costUsd: number;
+  phases?: RunPhaseTelemetry;
 }
 
 // ─── Model Discovery ─────────────────────────────────────────────
@@ -451,6 +527,10 @@ export interface ProjectStats {
   total_lines: number;
   total_size: number;
   last_indexed: string | null;
+  /** Last structural (tree-sitter only) pass; see Project.structural_indexed_at. */
+  structural_indexed_at: string | null;
+  /** Files whose semantic layer (LLM summary/embeddings) lags current content. */
+  semantic_stale_count: number;
   run_count: number;
 }
 
@@ -491,6 +571,8 @@ export interface DBSymbolReference {
   referencing_file_id: number;
   referencing_file_path: string;
   line: number | null;
+  /** Start column (1-based) — migration 141; NULL on pre-141 rows. */
+  col: number | null;
   context: string | null;
 }
 

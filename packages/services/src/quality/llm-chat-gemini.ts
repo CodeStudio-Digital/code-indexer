@@ -19,6 +19,8 @@ interface GeminiRequestBody {
   generationConfig?: {
     temperature?: number;
     maxOutputTokens?: number;
+    stopSequences?: string[];
+    thinkingConfig?: { thinkingBudget: number };
   };
 }
 interface GeminiResponse {
@@ -74,16 +76,25 @@ export async function geminiChat(
   if (systemText) body.systemInstruction = { parts: [{ text: systemText }] };
   const temperature = options.temperature ?? toNumber(cfg.temperature);
   const maxTokens = options.maxTokens ?? toNumber(cfg.max_tokens);
-  if (temperature !== undefined || maxTokens !== undefined) {
+  const stop = (options.stop ?? []).slice(0, 4);
+  if (temperature !== undefined || maxTokens !== undefined || stop.length > 0 || options.disableThinking) {
     body.generationConfig = {
       ...(temperature !== undefined ? { temperature } : {}),
       ...(maxTokens !== undefined ? { maxOutputTokens: maxTokens } : {}),
+      ...(stop.length > 0 ? { stopSequences: stop } : {}),
+      // Gemini 2.5+ default-ON reasoning eats the whole token budget on
+      // latency-critical calls; budget 0 turns it off.
+      ...(options.disableThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
     };
   }
 
   const timeoutMs = options.timeoutMs ?? Math.max(1000, toNumber(cfg.timeout) ?? 30_000);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  if (options.signal) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
   const fetchImpl = options.fetchFn ?? fetch;
   try {
     const res = await fetchImpl(url, {

@@ -26,6 +26,18 @@ function tsCanonical(p: string): string {
 }
 
 /**
+ * True when a canonical path lives under the indexer's private working
+ * dir (`.mcp-indexer/`, which holds the trash bin and `.tmp` scratch
+ * files the doc-indexer writes-then-deletes). These are ephemeral
+ * implementation details and must never enter the TS program — otherwise
+ * a deleted `.mcp-indexer/trash/.../.tmp/*.cjs` lingers as a phantom root
+ * and `getDiagnostics` spams "Could not find source file" forever.
+ */
+function isIndexerInternalPath(canonical: string): boolean {
+  return /(^|\/)\.mcp-indexer(\/|$)/.test(canonical);
+}
+
+/**
  * In-process TypeScript language service.
  *
  * This is "LSP Phase 2" from the implementation plan. Instead of spawning a
@@ -445,6 +457,8 @@ export class TsLanguageService {
    */
   setFileSnapshot(file: string, content: string): void {
     const abs = this.toAbs(file);
+    // Never track indexer scratch/trash — see isIndexerInternalPath.
+    if (isIndexerInternalPath(abs)) return;
     const cached = this.files.get(abs);
     if (cached && cached.content === content) return;
     const nextVersion = String((cached ? Number(cached.version) : 0) + 1);
@@ -459,7 +473,25 @@ export class TsLanguageService {
     }
   }
 
+  /**
+   * Remove a path from the program's root set + snapshot map and tear the
+   * service down so the next `ensureService()` rebuilds without it. Called
+   * when a tracked file has vanished from disk (deleted/trashed) — without
+   * this the stale root keeps throwing "Could not find source file" on
+   * every diagnostics poll. Mirrors the teardown idiom in setFileSnapshot.
+   */
+  private untrack(absCanonical: string): void {
+    const inRoots = this.rootFiles.includes(absCanonical);
+    const inFiles = this.files.delete(absCanonical);
+    if (inRoots) this.rootFiles = this.rootFiles.filter((f) => f !== absCanonical);
+    if (inRoots || inFiles) {
+      this.service?.dispose();
+      this.service = null;
+    }
+  }
+
   private ensureFileTracked(absCanonical: string): void {
+    if (isIndexerInternalPath(absCanonical)) return;
     if (this.rootFiles.includes(absCanonical)) return;
     if (this.files.has(absCanonical)) return;
     // Use readFileSync (not existsSync) as the existence probe — it
@@ -629,6 +661,16 @@ export class TsLanguageService {
 
   getDiagnostics(file: string): DiagnosticResult[] {
     const abs = this.toAbs(file);
+    // Self-heal: a path that's an indexer-internal scratch file, or that no
+    // longer exists on disk (deleted/trashed) AND has no live in-memory
+    // snapshot to serve, must not be fed to the language service — it would
+    // throw "Could not find source file" on every 1 s diagnostics poll.
+    // Prune it once and return clean. (An unsaved buffer lives in `files`,
+    // so we still diagnose those even when absent from disk.)
+    if (isIndexerInternalPath(abs) || (!this.files.has(abs) && !existsSync(abs))) {
+      this.untrack(abs);
+      return [];
+    }
     this.ensureFileTracked(abs);
     const service = this.ensureService();
     // The TS LanguageService will throw `Could not find source file: <path>`

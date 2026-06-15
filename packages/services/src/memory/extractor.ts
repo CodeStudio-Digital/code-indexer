@@ -1,4 +1,5 @@
 import type { ContextSnapshot, SnapshotCategory } from '@mcp/shared/types.js';
+import { titleSimilarity } from './text-sim.js';
 
 /**
  * Distills durable project memory from a coding session and persists it,
@@ -58,7 +59,10 @@ export interface MemoryWriter {
       referencedFiles?: string[];
     },
   ): Promise<unknown>;
-  update(id: number, updates: { content?: string; projectId?: number }): Promise<unknown>;
+  update(
+    id: number,
+    updates: { content?: string; projectId?: number; importance?: number },
+  ): Promise<unknown>;
 }
 
 export interface MemoryDedupeSearch {
@@ -77,6 +81,8 @@ export interface ExtractResult {
 }
 
 const IMPORTANCE_FLOOR: Partial<Record<SnapshotCategory, number>> = {
+  feedback: 0.75,
+  user: 0.7,
   decision: 0.7,
   procedure: 0.7,
   gotcha: 0.65,
@@ -126,12 +132,19 @@ export class MemoryExtractor {
 
       if (dup) {
         // Merge: enrich the existing memory rather than spawning a near-dup.
-        // (Importance bump on merge is a follow-up — UpdateSnapshotData
-        // doesn't carry importance yet.)
-        const content = dup.content.includes(c.content.trim())
+        // Corroboration bumps importance slightly (capped at 1) so a fact the
+        // session keeps re-deriving rises above the injection bar. When the
+        // body doesn't actually grow, the importance-only update stays on the
+        // cheap metadata path (no version row, no embedding invalidation).
+        const merged = dup.content.includes(c.content.trim())
           ? dup.content
           : `${dup.content}\n\n${c.content.trim()}`;
-        await this.writer.update(dup.id, { content, projectId });
+        const importanceBump = Math.min(1, (dup.importance ?? 0.5) + 0.02);
+        await this.writer.update(dup.id, {
+          ...(merged !== dup.content ? { content: merged } : {}),
+          projectId,
+          importance: importanceBump,
+        });
         out.merged++;
       } else {
         await this.writer.create(projectId, {
@@ -147,14 +160,4 @@ export class MemoryExtractor {
     }
     return out;
   }
-}
-
-/** Word-overlap (Jaccard-min) similarity of two titles, 0..1. */
-function titleSimilarity(a: string, b: string): number {
-  const wa = new Set(a.toLowerCase().split(/\W+/).filter(Boolean));
-  const wb = new Set(b.toLowerCase().split(/\W+/).filter(Boolean));
-  if (wa.size === 0 || wb.size === 0) return 0;
-  let inter = 0;
-  for (const w of wa) if (wb.has(w)) inter++;
-  return inter / Math.min(wa.size, wb.size);
 }

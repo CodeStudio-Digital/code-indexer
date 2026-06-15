@@ -1,0 +1,494 @@
+import { Fragment, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  Activity,
+  AlertTriangle,
+  AppWindow,
+  Blocks,
+  BookOpen,
+  Database,
+  GitFork,
+  Globe,
+  KeyRound,
+  Network,
+  Package,
+  Plug,
+  Plus,
+  Search,
+  Settings2,
+  Wand2,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react';
+import { Button } from '../../components/ui/button.js';
+import { cn } from '../../lib/utils.js';
+import { BedrockCredentialsDialog } from './BedrockCredentialsDialog.js';
+import { ChatgptConnectionDialog } from './ChatgptConnectionDialog.js';
+import { ClaudeCodeConnectionDialog } from './ClaudeCodeConnectionDialog.js';
+import { CopilotConnectionDialog } from './CopilotConnectionDialog.js';
+import { GoogleConnectionDialog } from './GoogleConnectionDialog.js';
+import { KimiCodeConnectionDialog } from './KimiCodeConnectionDialog.js';
+import { EditDialog } from './EditDialog.js';
+import { ProviderTile } from './providers/ProviderTile.js';
+import { ProviderModal } from './providers/ProviderModal.js';
+import { McpServersPanel } from './McpServersPanel.js';
+import { McpHttpStatusPanel } from './McpHttpStatusPanel.js';
+import { AppSettingsPanel } from './AppSettingsPanel.js';
+import { CapabilityFallbacksPanel } from './CapabilityFallbacksPanel.js';
+import { SkillsPanel } from './SkillsPanel.js';
+import { PluginsPanel } from './PluginsPanel.js';
+import { StoragePanel } from './StoragePanel.js';
+import { HydePanel } from './HydePanel.js';
+import { HygienePanel } from './HygienePanel.js';
+import { LspServersPanel } from './LspServersPanel.js';
+import { ToolsPanel } from './ToolsPanel.js';
+import { AuthPanel } from './AuthPanel.js';
+import { GeneralAiPanel } from './GeneralAiPanel.js';
+import { ChromeServicePanel } from './ChromeServicePanel.js';
+import { VerdaccioPanel } from './VerdaccioPanel.js';
+import { PipelineBindingsPanel } from './PipelineBindingsPanel.js';
+// PipelineTelemetryPanel / QualityPanel were moved to the `/telemetry`
+// page (they're observability surfaces, not config). The Pipelines tab
+// below is the only one that stays here.
+import { useAdminProviders } from './hooks/useAdminProviders.js';
+import type { AdminProvider } from './types.js';
+
+type SectionId =
+  | 'providers'
+  | 'capabilities'
+  | 'app-settings'
+  | 'storage'
+  | 'hygiene'
+  | 'search'
+  | 'tools'
+  | 'mcp-servers'
+  | 'mcp-http'
+  | 'skills'
+  | 'plugins'
+  | 'ai-geral'
+  | 'chrome-service'
+  | 'verdaccio'
+  | 'pipeline-bindings'
+  | 'auth';
+
+type GroupId = 'models' | 'knowledge' | 'extensions' | 'services' | 'system';
+
+interface SectionDef {
+  id: SectionId;
+  label: string;
+  icon: LucideIcon;
+  /** Which rail group this section is filed under (see `groups`). */
+  group: GroupId;
+  /** Optional descriptor — surfaces as muted-fg sub-text under each rail
+   *  row so the user knows what the section covers without clicking. */
+  hint?: string;
+}
+
+export default function Admin() {
+  const { t } = useTranslation(['admin', 'common']);
+  const {
+    providers,
+    loading,
+    models,
+    expanded,
+    setExpanded,
+    testResults,
+    refreshing,
+    load,
+    loadModels,
+    save,
+    remove,
+    test,
+    refresh,
+    toggleModel,
+    setModelEffort,
+    setModelContextWindow,
+    setModelMaxTools,
+    backfillContextWindows,
+    setSubagentTarget,
+    setKimiCodeThinkingMode,
+    setFallback,
+  } = useAdminProviders();
+
+  // Pre-fetch the model list for every provider so the grid tile can
+  // render its "models count" badge on first paint instead of after
+  // the user opens the modal. Parallel — each `loadModels` call hits
+  // its own row of `provider_models`, so concurrency is safe and the
+  // worst-case is N parallel cached fetches.
+  useEffect(() => {
+    if (!providers.length) return;
+    for (const p of providers) {
+      if (!models[p.id]) void loadModels(p.id);
+    }
+    // We intentionally don't depend on `models` — re-running on every
+    // mutation would loop. Re-running on `providers` is enough to pick
+    // up newly added providers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providers]);
+
+  const [section, setSection] = useState<SectionId>('providers');
+  const [editing, setEditing] = useState<Partial<AdminProvider> | null>(null);
+  const [bedrockOpen, setBedrockOpen] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [claudeCodeProviderId, setClaudeCodeProviderId] = useState<string | null>(null);
+  const [claudeCodeOpen, setClaudeCodeOpen] = useState(false);
+  const [chatgptOpen, setChatgptOpen] = useState(false);
+  const [googleOpen, setGoogleOpen] = useState(false);
+  const [kimiCodeOpen, setKimiCodeOpen] = useState(false);
+
+  const handleConnected = async (providerId?: string) => {
+    await load();
+    if (providerId) {
+      setExpanded(providerId);
+      await loadModels(providerId);
+    }
+  };
+
+  // The rail is organised into fixed, always-visible groups. `groups`
+  // drives header order (top → bottom: everyday model/AI tuning down to
+  // system/infra); each section declares its `group` and the render
+  // filters by it, so within-group order follows the `sections` array.
+  const groups: { id: GroupId; label: string }[] = [
+    { id: 'models',     label: t('admin:tabs.group.models') },
+    { id: 'knowledge',  label: t('admin:tabs.group.knowledge') },
+    { id: 'extensions', label: t('admin:tabs.group.extensions') },
+    { id: 'services',   label: t('admin:tabs.group.services') },
+    { id: 'system',     label: t('admin:tabs.group.system') },
+  ];
+
+  const sections: SectionDef[] = [
+    // Modelos & IA
+    { id: 'providers',         label: t('admin:tabs.providers'),  icon: Plug,          group: 'models',
+      hint: 'Conexões com modelos (OpenAI, Anthropic, …)' },
+    { id: 'pipeline-bindings', label: 'Pipelines',                icon: GitFork,       group: 'models',
+      hint: 'Bindings de provider/model por pipeline' },
+    { id: 'capabilities',      label: 'Capabilities',             icon: AlertTriangle, group: 'models',
+      hint: 'Modelos rodando em fallback de context window' },
+    { id: 'ai-geral',          label: 'IA Geral',                 icon: Activity,      group: 'models',
+      hint: 'Quality watchdog, intervention policies' },
+    // Busca & Conhecimento
+    { id: 'storage',           label: t('admin:tabs.embeddings'), icon: Database,      group: 'knowledge',
+      hint: 'Embeddings, vector store, índices' },
+    { id: 'search',            label: t('admin:tabs.search'),     icon: Search,        group: 'knowledge',
+      hint: 'HyDE, reranking, configuração de busca' },
+    { id: 'hygiene',           label: 'Higiene',                  icon: Wand2,         group: 'knowledge',
+      hint: 'Limpeza de dados órfãos, reconciliação' },
+    // Ferramentas & Extensões
+    { id: 'tools',             label: t('admin:tabs.tools'),      icon: Wrench,        group: 'extensions',
+      hint: 'Ferramentas internas do coder' },
+    { id: 'skills',            label: t('admin:tabs.skills'),     icon: BookOpen,      group: 'extensions',
+      hint: 'Skills (custom + builtin)' },
+    { id: 'plugins',           label: 'Plugins',                  icon: Blocks,        group: 'extensions',
+      hint: 'Instalar/gerenciar plugins + navegar o Market' },
+    { id: 'mcp-servers',       label: t('admin:tabs.mcpServers'), icon: Network,       group: 'extensions',
+      hint: 'Servidores MCP externos conectados' },
+    { id: 'mcp-http',          label: 'MCP HTTP',                 icon: Globe,         group: 'extensions',
+      hint: 'Expor nossas tools (incl. RAG) pra outros agentes' },
+    // Serviços
+    { id: 'chrome-service',    label: 'Chrome Service',           icon: AppWindow,     group: 'services',
+      hint: 'Browser headless pra docs / web tools' },
+    { id: 'verdaccio',         label: 'Verdaccio',                icon: Package,       group: 'services',
+      hint: 'Registry npm embarcado pra Design System' },
+    // Sistema
+    { id: 'app-settings',      label: 'Configurações',            icon: Settings2,     group: 'system',
+      hint: 'Env vars persistidas: limites, flags, tuning' },
+    { id: 'auth',              label: t('admin:tabs.auth'),       icon: KeyRound,      group: 'system',
+      hint: 'OAuth 2.1, API tokens, audit log' },
+  ];
+
+  const active = sections.find((s) => s.id === section) ?? sections[0];
+
+  // One rail row. Extracted so the grouped render can reuse it per group
+  // without duplicating the button JSX.
+  const renderRow = (def: SectionDef) => {
+    const Icon = def.icon;
+    const isActive = section === def.id;
+    return (
+      <button
+        key={def.id}
+        type="button"
+        onClick={() => setSection(def.id)}
+        aria-current={isActive ? 'page' : undefined}
+        title={def.hint}
+        className={cn(
+          'relative text-left rounded-sm px-2 py-1.5 transition-colors flex items-center gap-2',
+          isActive
+            ? 'bg-accent text-accent-foreground'
+            : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+        )}
+      >
+        {/* Active accent bar — flush against the rail edge. */}
+        {isActive && (
+          <span
+            aria-hidden
+            className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-primary"
+          />
+        )}
+        <Icon
+          className={cn(
+            'h-3.5 w-3.5 shrink-0',
+            isActive ? 'text-primary' : 'text-muted-foreground/70',
+          )}
+        />
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate text-[12.5px] font-medium',
+            isActive ? 'text-foreground' : '',
+          )}
+        >
+          {def.label}
+        </span>
+      </button>
+    );
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold">{t('admin:title')}</h1>
+        <p className="text-sm text-muted-foreground">
+          {t('admin:description')}
+        </p>
+      </div>
+
+      <div className="flex gap-6">
+        {/* Left rail — list of settings sections. Each row is a single
+            line: icon + label + (when active) accent bar. The section
+            hint moved to a `title` tooltip + a strip above the content
+            area, so the rail itself stays compact. Sticky so the rail
+            stays in view when the content area scrolls (large panels
+            like Providers can be tall). */}
+        <aside className="w-52 shrink-0">
+          <nav
+            aria-label="Settings sections"
+            className="sticky top-0 flex flex-col gap-0.5 border rounded-md bg-card/40 p-1"
+          >
+            {groups.map((g, gi) => (
+              <Fragment key={g.id}>
+                <div
+                  className={cn(
+                    'px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60',
+                    gi === 0 ? 'pt-1' : 'pt-2.5',
+                  )}
+                >
+                  {g.label}
+                </div>
+                {sections.filter((s) => s.group === g.id).map(renderRow)}
+              </Fragment>
+            ))}
+          </nav>
+        </aside>
+
+        {/* Content pane — renders the active section. The header strip
+            inside shows the section label so the user has a visible
+            anchor after they leave the rail (helps when the rail
+            scrolls out of view on small screens / narrow windows). */}
+        <section className="flex-1 min-w-0 space-y-4">
+          <div className="flex items-center gap-2 pb-2 border-b">
+            <active.icon className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold">{active.label}</h2>
+            {active.hint && (
+              <span className="text-[11.5px] text-muted-foreground hidden sm:inline">
+                · {active.hint}
+              </span>
+            )}
+          </div>
+
+          {section === 'providers' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-end gap-2 flex-wrap">
+                <Button variant="outline" onClick={() => setCopilotOpen(true)}>
+                  {t('admin:connectCopilot')}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setClaudeCodeProviderId(null);
+                    setClaudeCodeOpen(true);
+                  }}
+                >
+                  {t('admin:connectClaudeCode')}
+                </Button>
+                <Button variant="outline" onClick={() => setGoogleOpen(true)}>
+                  <Globe className="h-4 w-4 mr-2" /> {t('admin:connectGoogle')}
+                </Button>
+                <Button variant="outline" onClick={() => setChatgptOpen(true)}>
+                  {t('admin:connectChatgpt')}
+                </Button>
+                <Button variant="outline" onClick={() => setKimiCodeOpen(true)}>
+                  {t('admin:connectKimiCode')}
+                </Button>
+                <Button variant="outline" onClick={() => setBedrockOpen(true)}>
+                  {t('admin:awsBedrock')}
+                </Button>
+                <Button
+                  onClick={() =>
+                    setEditing({
+                      kind: 'openai',
+                      auth_mode: 'api_key',
+                      enabled: true,
+                      use_for_agent: true,
+                      use_for_coder: true,
+                    })
+                  }
+                >
+                  <Plus className="h-4 w-4 mr-2" /> {t('admin:addProvider')}
+                </Button>
+              </div>
+
+              {loading && <div className="text-sm text-muted-foreground">{t('common:actions.loading')}</div>}
+
+              {/* Grid de tiles quadrados — flex-wrap pra quebra automática.
+                  Click no tile abre `ProviderModal` (renderizado abaixo do
+                  grid) com todos os controles avançados do provider. A
+                  contagem de modelos no badge precisa ter sido carregada
+                  ao menos uma vez — fazemos lazy-load no primeiro hover/
+                  open. Pra o badge inicial, `models[p.id]` pode ser
+                  `undefined`; nesse caso o tile mostra `?`. */}
+              <div className="flex flex-wrap gap-3">
+                {providers.map((p) => {
+                  const known = models[p.id];
+                  return (
+                    <ProviderTile
+                      key={p.id}
+                      provider={p}
+                      modelCount={known ? known.length : null}
+                      testResult={testResults[p.id]}
+                      onOpen={async () => {
+                        setExpanded(p.id);
+                        if (!known) await loadModels(p.id);
+                      }}
+                    />
+                  );
+                })}
+                {!loading && providers.length === 0 && (
+                  <div className="text-sm text-muted-foreground border rounded-lg p-6 text-center w-full">
+                    {t('admin:noProviders')}
+                  </div>
+                )}
+              </div>
+
+              <ProviderModal
+                provider={expanded ? (providers.find((p) => p.id === expanded) ?? null) : null}
+                allProviders={providers}
+                models={expanded ? (models[expanded] ?? []) : []}
+                providerModelsById={models}
+                testResult={expanded ? testResults[expanded] : undefined}
+                refreshing={refreshing === expanded}
+                onClose={() => setExpanded(null)}
+                onTest={() => expanded && test(expanded)}
+                onLoadProviderModels={loadModels}
+                onRefresh={() => expanded && refresh(expanded)}
+                onEdit={() => {
+                  const p = providers.find((x) => x.id === expanded);
+                  if (p) setEditing(p);
+                }}
+                onConnect={(() => {
+                  const p = providers.find((x) => x.id === expanded);
+                  if (!p) return undefined;
+                  if (p.kind === 'kimi-code') return () => setKimiCodeOpen(true);
+                  if (p.kind === 'claude-code') {
+                    return () => {
+                      setClaudeCodeProviderId(p.id);
+                      setClaudeCodeOpen(true);
+                    };
+                  }
+                  return undefined;
+                })()}
+                onRemove={() => {
+                  if (!expanded) return;
+                  void remove(expanded);
+                  setExpanded(null);
+                }}
+                onToggleModel={(modelId, mode, enabled) =>
+                  expanded && toggleModel(expanded, modelId, mode, enabled)
+                }
+                onSetModelEffort={(modelId, mode, level) =>
+                  expanded && setModelEffort(expanded, modelId, mode, level)
+                }
+                onSetModelContextWindow={(modelId, mode, value) =>
+                  expanded && setModelContextWindow(expanded, modelId, mode, value)
+                }
+                onSetModelMaxTools={(modelId, mode, value) => expanded && setModelMaxTools(expanded, modelId, mode, value)}
+                onBackfillContextWindows={backfillContextWindows}
+                onSetFallback={setFallback}
+                onSetSubagentTarget={setSubagentTarget}
+                onSetKimiCodeThinkingMode={setKimiCodeThinkingMode}
+              />
+            </div>
+          )}
+
+          {section === 'capabilities'      && <CapabilityFallbacksPanel />}
+          {section === 'app-settings'      && <AppSettingsPanel />}
+          {section === 'storage'           && <StoragePanel />}
+          {section === 'hygiene'           && <HygienePanel />}
+          {section === 'search'            && <HydePanel />}
+          {section === 'tools'             && <ToolsPanel />}
+          {section === 'mcp-servers'       && <McpServersPanel />}
+          {section === 'mcp-http'          && <McpHttpStatusPanel />}
+          {section === 'skills'            && <SkillsPanel />}
+          {section === 'plugins'           && <PluginsPanel />}
+          {section === 'ai-geral'          && <GeneralAiPanel />}
+          {section === 'chrome-service'    && <ChromeServicePanel />}
+          {section === 'verdaccio'         && <VerdaccioPanel />}
+          {section === 'pipeline-bindings' && <PipelineBindingsPanel />}
+          {section === 'auth'              && <AuthPanel />}
+        </section>
+      </div>
+
+      {editing && (
+        <EditDialog
+          initial={editing}
+          onClose={() => setEditing(null)}
+          onSave={async (p) => {
+            await save(p);
+            setEditing(null);
+          }}
+        />
+      )}
+      {copilotOpen && (
+        <CopilotConnectionDialog
+          onClose={() => setCopilotOpen(false)}
+          onConnected={handleConnected}
+        />
+      )}
+      {chatgptOpen && (
+        <ChatgptConnectionDialog
+          onClose={() => setChatgptOpen(false)}
+          onConnected={handleConnected}
+        />
+      )}
+      {claudeCodeOpen && (
+        <ClaudeCodeConnectionDialog
+          providerId={claudeCodeProviderId ?? undefined}
+          onClose={() => {
+            setClaudeCodeOpen(false);
+            setClaudeCodeProviderId(null);
+          }}
+          onConnected={handleConnected}
+        />
+      )}
+      {googleOpen && (
+        <GoogleConnectionDialog
+          onClose={() => setGoogleOpen(false)}
+          onConnected={handleConnected}
+        />
+      )}
+      {kimiCodeOpen && (
+        <KimiCodeConnectionDialog
+          onClose={() => setKimiCodeOpen(false)}
+          onConnected={handleConnected}
+        />
+      )}
+      {bedrockOpen && (
+        <BedrockCredentialsDialog
+          onClose={() => setBedrockOpen(false)}
+          onSaved={() => {
+            setBedrockOpen(false);
+            void load();
+          }}
+        />
+      )}
+    </div>
+  );
+}

@@ -12,7 +12,7 @@
  * importance floors + persist) unchanged.
  */
 import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
-import { pickChatFn } from '../quality/chat-dispatcher.js';
+import { pickChatFn, suppressThinkingFor } from '../quality/chat-dispatcher.js';
 import { parseMemoryCandidates } from './distiller.js';
 import type { MemoryCandidate, MemoryDistiller, SessionMemoryInput } from './extractor.js';
 
@@ -45,7 +45,7 @@ export class FailureDistiller implements MemoryDistiller {
       const result = await chat(binding, [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: buildPrompt(input, errors) },
-      ]);
+      ], { disableThinking: suppressThinkingFor(binding) });
       // This distiller mints lessons only — force the category so a model that
       // forgets/mislabels it still lands as a retrievable gotcha.
       return parseMemoryCandidates(result.content).map((c) => ({ ...c, category: 'gotcha' as const }));

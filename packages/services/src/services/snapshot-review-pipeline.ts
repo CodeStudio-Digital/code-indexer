@@ -8,9 +8,11 @@ import {
   type ResolveContext,
   type ResolvedBinding,
 } from '../pipelines/index.js';
-import { createChatProviderAsync } from '../providers/factory.js';
-import { pickChatFn } from '../quality/chat-dispatcher.js';
-import type { ChatCallOptions, ChatCallResult, ChatMessage } from '../quality/llm-chat.js';
+import {
+  bindingProblem,
+  callConfiguredChat,
+  friendlyProviderError,
+} from '../quality/binding-chat.js';
 import type { FileDiff } from './session-snapshots.js';
 import { buildMessages } from './snapshot-review-prompt.js';
 import { filterReviewableDiffs } from './snapshot-review-ignore.js';
@@ -48,25 +50,8 @@ export interface SnapshotReviewInput {
 
 const PIPELINE_NAME = 'snapshot_review';
 const ROLE = 'reviewer';
+const LABEL = `${PIPELINE_NAME}/${ROLE}`;
 const MAX_DIFF_CHARS = 60_000;
-const DIRECT_CHAT_KINDS = new Set([
-  'anthropic',
-  'cloudflare',
-  'deepseek',
-  'gemini',
-  'moonshot',
-  'openai',
-  'openrouter',
-  'zai',
-]);
-const CODER_CHAT_KINDS = new Set([
-  'bedrock',
-  'chatgpt',
-  'claude-code',
-  'copilot',
-  'google-oauth',
-  'kimi-code',
-]);
 
 function toNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
@@ -143,100 +128,6 @@ function toOptionalString(value: unknown, max: number): string | null {
   return typeof value === 'string' && value.trim() ? truncate(value.trim(), max) : null;
 }
 
-function bindingProblem(binding: ResolvedBinding): { code: string; message: string } | null {
-  const kind = binding.provider.kind;
-  const providerName = binding.provider.name || binding.provider.id;
-  if (!DIRECT_CHAT_KINDS.has(kind) && !CODER_CHAT_KINDS.has(kind)) {
-    return {
-      code: 'review_pipeline_provider_unsupported',
-      message:
-        `snapshot_review/reviewer is bound to "${providerName}" (${kind}), which cannot be called by this pipeline. ` +
-        'Use OpenAI, Anthropic, Gemini, OpenRouter, Cloudflare, DeepSeek, ZAI, Moonshot, ChatGPT/Codex, Claude Code, Copilot, Google OAuth, Kimi, or Bedrock.',
-    };
-  }
-  if (DIRECT_CHAT_KINDS.has(kind) && !binding.provider.api_key) {
-    return {
-      code: 'review_pipeline_missing_credentials',
-      message: `snapshot_review/reviewer provider "${providerName}" is missing an API key.`,
-    };
-  }
-  if (kind === 'cloudflare' && !binding.provider.extra?.account_id && !binding.provider.base_url?.includes('{account_id}')) {
-    return {
-      code: 'review_pipeline_missing_credentials',
-      message: `snapshot_review/reviewer provider "${providerName}" is missing Cloudflare account_id.`,
-    };
-  }
-  return null;
-}
-
-async function coderProviderChat(
-  binding: ResolvedBinding,
-  messages: ChatMessage[],
-  options: ChatCallOptions,
-): Promise<ChatCallResult> {
-  const startedAt = performance.now();
-  try {
-    const provider = await createChatProviderAsync(binding.provider.id, binding.modelId, {
-      providerId: binding.provider.id,
-    });
-    const system = messages
-      .filter((message) => message.role === 'system')
-      .map((message) => message.content)
-      .join('\n\n');
-    const agentMessages = messages
-      .filter((message) => message.role !== 'system')
-      .map((message) => ({
-        role: message.role === 'assistant' ? 'assistant' as const : 'user' as const,
-        content: [{ type: 'text' as const, text: message.content }],
-      }));
-    let content = '';
-    let tokensIn: number | undefined;
-    let tokensOut: number | undefined;
-    for await (const delta of provider.chat({
-      system,
-      messages: agentMessages,
-      tools: [],
-      thinking: false,
-      inference: { temperature: options.temperature },
-    })) {
-      if (delta.type === 'text_delta') content += delta.text;
-      if (delta.type === 'usage') {
-        tokensIn = delta.usage.input_tokens;
-        tokensOut = delta.usage.output_tokens;
-      }
-    }
-    return { content, tokensIn, tokensOut, latencyMs: performance.now() - startedAt };
-  } catch (e) {
-    return {
-      content: '',
-      errorBody: e instanceof Error ? e.message : String(e),
-      latencyMs: performance.now() - startedAt,
-    };
-  }
-}
-
-async function callConfiguredChat(
-  binding: ResolvedBinding,
-  messages: ChatMessage[],
-  options: ChatCallOptions,
-): Promise<ChatCallResult> {
-  if (CODER_CHAT_KINDS.has(binding.provider.kind)) {
-    return coderProviderChat(binding, messages, options);
-  }
-  return pickChatFn(binding)(binding, messages, options);
-}
-
-function friendlyProviderError(binding: ResolvedBinding, errorBody: string): string {
-  const providerName = binding.provider.name || binding.provider.id;
-  if (/^\s*</.test(errorBody) || /<html[\s>]/i.test(errorBody) || /<!doctype html/i.test(errorBody)) {
-    return (
-      `Provider "${providerName}" returned an HTML page instead of an API response. ` +
-      'Check that snapshot_review/reviewer uses an API-compatible provider and base URL.'
-    );
-  }
-  return truncate(errorBody.replace(/\s+/g, ' ').trim(), 700);
-}
-
 function parseFindings(raw: string): SnapshotReviewFinding[] {
   const parsed = extractJson(raw) as { findings?: unknown };
   if (!Array.isArray(parsed.findings)) return [];
@@ -284,7 +175,7 @@ export class SnapshotReviewPipeline {
         });
       }
 
-      const problem = bindingProblem(binding);
+      const problem = bindingProblem(binding, { label: LABEL, codePrefix: 'review_pipeline' });
       if (problem) {
         return this.finish(input, startedAt, 0, 0, true, {
           ok: false,
@@ -312,7 +203,7 @@ export class SnapshotReviewPipeline {
           providerId: binding.provider.id,
           modelId: binding.modelId,
           errorCode: 'review_pipeline_provider_error',
-          error: friendlyProviderError(binding, result.errorBody),
+          error: friendlyProviderError(binding, result.errorBody, LABEL),
         });
       }
 

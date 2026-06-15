@@ -1,4 +1,5 @@
 import type { DB } from '../types.js';
+import { createFileContentsFts, repairFileContentsFts } from './content-fts.js';
 
 export function createFtsTables(db: DB): void {
   db.exec(`
@@ -53,6 +54,8 @@ export function createFtsTables(db: DB): void {
       VALUES ('delete', old.id, old.title, old.content, old.tags);
     END;
   `);
+
+  createFileContentsFts(db);
 }
 
 const CODE_FTS_TRIGGERS = [
@@ -93,6 +96,9 @@ export function repairCodeFtsIndexes(db: DB): void {
     try { db.exec(`DROP TRIGGER IF EXISTS ${t}`); } catch { /* ignore */ }
   }
   for (const t of CODE_FTS_TABLES) dropFtsHard(db, t);
+  // Contentless — cannot 'rebuild' (no external content source). Recreated
+  // EMPTY here; the next structural run's coverage sweep repopulates it.
+  repairFileContentsFts(db);
   createFtsTables(db); // recreate vtabs + triggers
   for (const t of CODE_FTS_TABLES) {
     try { db.exec(`INSERT INTO ${t}(${t}) VALUES('rebuild')`); } catch { /* base table empty/absent */ }

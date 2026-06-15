@@ -110,6 +110,8 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
       lastInjectedMemoryIds: new Set<string>(),
       lastInjectedSessionStateHash: null,
       lastInjectedProjectIndexHash: null,
+      lastInjectedUserMemoryHash: null,
+      lastInjectedPreflightHash: null,
       // Fix A — self_review nudge gate state (empty = nudge allowed once
       // there are unreviewed pending changes).
       selfReview: { suppressed: false },

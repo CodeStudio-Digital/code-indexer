@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, Crosshair, ExternalLink, MousePointerClick, PanelRightClose, Play, RotateCw, Wrench } from 'lucide-react';
 import {
   isPreviewMessage,
+  type ParentToPreviewMessage,
   type PreviewToParentMessage,
 } from '@mcp/services/sandbox/builder/protocol.js';
-import { setSelected } from '../../builder/studio/studio-context-store.js';
+import { setSelected, toggleSelected } from '../../builder/studio/studio-context-store.js';
 import { SelectionChip } from '../../builder/studio/selection/SelectionChip.js';
 import { usePreviewProblems } from '../../builder/studio/problems/usePreviewProblems.js';
 import { useAutoFix } from '../../builder/studio/problems/useAutoFix.js';
@@ -14,6 +15,8 @@ import {
   DEVICE_WIDTH,
   type DeviceFrame,
 } from '../../builder/studio/DeviceFrameSwitcher.js';
+import { VisualEditPanel } from '../../builder/studio/visual-edit/VisualEditPanel.js';
+import { CheckpointsTimeline } from '../../builder/checkpoints/CheckpointsTimeline.js';
 import { useProjectDevServer } from './useProjectDevServer.js';
 import { PreviewUrlEditor } from './PreviewUrlEditor.js';
 import { useUniversalInspect } from './useUniversalInspect.js';
@@ -69,7 +72,15 @@ export function ProjectPreview({
   // Run-end revalidation: reload the iframe so only errors that still exist
   // re-emit (and fire); fixed ones stay silent. The badge list is kept.
   const onAutoFixRevalidate = useCallback(() => setReloadKey((k) => k + 1), []);
-  const { autoFixEnabled, setAutoFixEnabled } = useAutoFix(projectId, problems, {
+  const {
+    autoFixEnabled,
+    setAutoFixEnabled,
+    autoFixMode,
+    setAutoFixMode,
+    pendingFix,
+    acceptPendingFix,
+    dismissPendingFix,
+  } = useAutoFix(projectId, problems, {
     onRevalidate: onAutoFixRevalidate,
   });
   const [repairing, setRepairing] = useState(false);
@@ -86,7 +97,7 @@ export function ProjectPreview({
   selectModeRef.current = selectMode;
 
   const post = useCallback(
-    (msg: { type: 'mcp:arm' | 'mcp:disarm' }) => {
+    (msg: ParentToPreviewMessage) => {
       if (origin) iframeRef.current?.contentWindow?.postMessage(msg, origin);
     },
     [origin],
@@ -130,7 +141,10 @@ export function ProjectPreview({
       if (e.origin !== origin || !isPreviewMessage(e.data)) return;
       const msg = e.data as PreviewToParentMessage;
       if (msg.type === 'mcp:ready' && selectModeRef.current) post({ type: 'mcp:arm' });
-      else if (msg.type === 'mcp:select') setSelected(projectId, msg);
+      else if (msg.type === 'mcp:select') {
+        if (msg.additive) toggleSelected(projectId, msg);
+        else setSelected(projectId, msg);
+      }
       else if (msg.type === 'mcp:clear') setSelected(projectId, null);
       else if (msg.type === 'mcp:runtime-error' || msg.type === 'mcp:network' || msg.type === 'mcp:console') add(msg);
     }
@@ -242,7 +256,7 @@ export function ProjectPreview({
               title={
                 repairError
                   ? `Repair failed: ${repairError}`
-                  : 'Repair element selection — re-instrument + restart the dev server. Use if hovering/clicking the preview selects nothing.'
+                  : 'Update preview tooling — re-instrument + restart the dev server. Use if element picking or visual editing does nothing (older projects need this once).'
               }
             >
               <Wrench className={`h-3.5 w-3.5 ${repairing ? 'animate-pulse' : ''} ${repairError ? 'text-destructive' : ''}`} />
@@ -257,6 +271,8 @@ export function ProjectPreview({
           onClear={clear}
           autoFixEnabled={autoFixEnabled}
           onToggleAutoFix={() => setAutoFixEnabled(!autoFixEnabled)}
+          autoFixMode={autoFixMode}
+          onSetAutoFixMode={setAutoFixMode}
         />
         <button
           onClick={() => { void restart(); setReloadKey((k) => k + 1); }}
@@ -348,11 +364,34 @@ export function ProjectPreview({
           </div>
         )}
       </div>
-      {(selectionEnabled || windowOpen) && (
-        <div className="px-2 py-1 border-t empty:hidden">
-          <SelectionChip sessionId={projectId} />
+      {pendingFix && (
+        <div className="flex items-center gap-2 px-2 py-1 border-t bg-amber-50 dark:bg-amber-950/30 text-xs">
+          <Wrench className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+          <span className="flex-1 truncate text-muted-foreground" title={pendingFix.problem.label}>
+            Fix staged: {pendingFix.problem.label}
+          </span>
+          <button onClick={acceptPendingFix} className="text-indigo-600 hover:underline shrink-0">
+            Send to agent
+          </button>
+          <button onClick={dismissPendingFix} className="text-muted-foreground hover:text-foreground shrink-0">
+            Dismiss
+          </button>
         </div>
       )}
+      {(selectionEnabled || windowOpen) && (
+        <div className="px-2 py-1 border-t empty:hidden">
+          <SelectionChip sessionId={projectId} projectId={projectId} />
+        </div>
+      )}
+      {/* Two-way visual editing — stamped iframe only (loc write-back). */}
+      <VisualEditPanel
+        projectId={projectId}
+        postToPreview={post}
+        origin={origin}
+        enabled={selectionEnabled && !poppedOut && !agentPreview && !windowOpen && !!url}
+      />
+      {/* Checkpoint timeline — every agent run lands as a restorable commit. */}
+      <CheckpointsTimeline projectId={projectId} />
     </div>
   );
 }

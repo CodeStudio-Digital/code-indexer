@@ -8,6 +8,7 @@ import { CostTracker } from '@mcp/services/services/costs.js';
 import { WebhookDispatcher } from '@mcp/services/services/webhooks.js';
 import { getEmbeddingService, getVectorStore } from '../helpers.js';
 import { createAndSeedProviderStore } from '@mcp/indexer/bootstrap/index.js';
+import { disposeIndexerProcessResources } from '@mcp/indexer/bootstrap/dispose.js';
 import type { ProviderName } from '@mcp/shared/types.js';
 import type { IndexProfile } from '@mcp/shared/utils/config.js';
 
@@ -35,57 +36,62 @@ export function register(program: Command): void {
         config.indexProfile = opts.profile as IndexProfile;
       }
       const db = new CodeIndexDB(config.dbPath);
-      const embeddingService = getEmbeddingService(config.dbPath);
-      const vectorStore = getVectorStore(config.dbPath);
-      const costTracker = new CostTracker(db);
-      const webhookDispatcher = new WebhookDispatcher(db);
-      const projectPath = resolve(path ?? process.cwd());
+      // The worker pools keep the event loop alive — without the dispose in
+      // `finally` the CLI process would hang after the run (workers default ON).
+      try {
+        const embeddingService = getEmbeddingService(config.dbPath);
+        const vectorStore = getVectorStore(config.dbPath);
+        const costTracker = new CostTracker(db);
+        const webhookDispatcher = new WebhookDispatcher(db);
+        const projectPath = resolve(path ?? process.cwd());
 
-      if (opts.embeddingsOnly) {
-        // Embeddings-only mode: no LLM provider needed, just retry
-        // failed/missing embeddings using data already in the DB.
-        const dummyProvider = { name: 'none', model: 'none', analyzeFile: () => { throw new Error('not used'); } } as unknown as import('@mcp/indexer/indexer/providers/base.js').LLMProvider;
-        const agent = new IndexAgent(db, dummyProvider, embeddingService, vectorStore, costTracker, webhookDispatcher, config);
+        if (opts.embeddingsOnly) {
+          // Embeddings-only mode: no LLM provider needed, just retry
+          // failed/missing embeddings using data already in the DB.
+          const dummyProvider = { name: 'none', model: 'none', analyzeFile: () => { throw new Error('not used'); } } as unknown as import('@mcp/indexer/indexer/providers/base.js').LLMProvider;
+          const agent = new IndexAgent(db, dummyProvider, embeddingService, vectorStore, costTracker, webhookDispatcher, config);
 
-        console.log(`Retrying embeddings for ${projectPath}...`);
+          console.log(`Retrying embeddings for ${projectPath}...`);
+          const startTime = Date.now();
+
+          const result = await agent.retryEmbeddings(projectPath, {
+            onProgress: (p) => {
+              process.stderr.write(`\r[embeddings] ${p.current}/${p.total} (${p.percent}%)`);
+            },
+          });
+
+          console.log('\n');
+          console.log(`Done in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
+          console.log(`Embedded: ${result.embedded}, Skipped: ${result.skipped}, Tokens: ${result.tokens}`);
+          return;
+        }
+
+        const providerStore = createAndSeedProviderStore(config.dbPath);
+        const defaults = providerStore.getDefaultProviderAndModel();
+        // No explicit provider → pass undefined so the factory resolves the
+        // default ProviderStore row with its stored credentials/base_url
+        // (passing `defaults.kind` would strip them and fall back to env vars).
+        const provider = await createProviderAsync(opts.provider as ProviderName | undefined, opts.model ?? defaults.model);
+        const agent = new IndexAgent(db, provider, embeddingService, vectorStore, costTracker, webhookDispatcher, config);
+
+        console.log(`Indexing ${projectPath} with ${provider.name}/${provider.model}...`);
         const startTime = Date.now();
 
-        const result = await agent.retryEmbeddings(projectPath, {
+        const result = await agent.indexProject(projectPath, {
+          force: opts.force,
+          concurrency: opts.concurrency,
           onProgress: (p) => {
-            process.stderr.write(`\r[embeddings] ${p.current}/${p.total} (${p.percent}%)`);
+            process.stderr.write(`\r[${p.current}/${p.total}] ${p.currentFile.padEnd(60)} $${p.costUsd.toFixed(4)}`);
           },
         });
 
         console.log('\n');
         console.log(`Done in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
-        console.log(`Embedded: ${result.embedded}, Skipped: ${result.skipped}, Tokens: ${result.tokens}`);
+        console.log(`Files: ${result.indexedFiles} indexed, ${result.skippedFiles} skipped, ${result.errorCount} errors`);
+        console.log(`Cost: $${result.costUsd.toFixed(4)}`);
+      } finally {
+        await disposeIndexerProcessResources();
         db.close();
-        return;
       }
-
-      const providerStore = createAndSeedProviderStore(config.dbPath);
-      const defaults = providerStore.getDefaultProviderAndModel();
-      // No explicit provider → pass undefined so the factory resolves the
-      // default ProviderStore row with its stored credentials/base_url
-      // (passing `defaults.kind` would strip them and fall back to env vars).
-      const provider = await createProviderAsync(opts.provider as ProviderName | undefined, opts.model ?? defaults.model);
-      const agent = new IndexAgent(db, provider, embeddingService, vectorStore, costTracker, webhookDispatcher, config);
-
-      console.log(`Indexing ${projectPath} with ${provider.name}/${provider.model}...`);
-      const startTime = Date.now();
-
-      const result = await agent.indexProject(projectPath, {
-        force: opts.force,
-        concurrency: opts.concurrency,
-        onProgress: (p) => {
-          process.stderr.write(`\r[${p.current}/${p.total}] ${p.currentFile.padEnd(60)} $${p.costUsd.toFixed(4)}`);
-        },
-      });
-
-      console.log('\n');
-      console.log(`Done in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
-      console.log(`Files: ${result.indexedFiles} indexed, ${result.skippedFiles} skipped, ${result.errorCount} errors`);
-      console.log(`Cost: $${result.costUsd.toFixed(4)}`);
-      db.close();
     });
 }

@@ -1,32 +1,40 @@
 /**
  * Wire the @mcp/api-bus lsp.* methods into Monaco's provider registry.
  *
- * Registered providers (TS/JS only for MVP — other languages get
- * Monaco's built-in syntax highlight but no IntelliSense):
- *   - completion (debounced 300 ms via Monaco's trigger system)
- *   - hover
- *   - definition (Ctrl+Click)
- *   - references
- *   - diagnostics (polled per active model, 1s, scoped to current file)
+ * Onda 2 architecture (IDE-grade):
+ *   - documentSync streams didOpen/didChange/didClose — position-based
+ *     calls carry ONLY {file, position}; the full-buffer-per-keystroke
+ *     payload is gone (the backend serves the live buffer to every
+ *     language backend).
+ *   - diagnostics are PUSHED (diagnosticsStream) — the 1s polling loop
+ *     over every open model is gone.
+ *   - providers register for '*': the BACKEND routes by language
+ *     (ts/js → in-process TS service; languages with an installed LSP
+ *     server → that server; everything else → the structural-index
+ *     fallback with real line/col). The old client-side "weak definition"
+ *     grep fallback died — ranking by import-graph lives server-side now.
  *
  * Registration is idempotent per projectId — calling it multiple times
- * with the same projectId is a no-op. Switching projects (rare in
- * Workspace mode) tears down the old providers and re-registers.
- *
- * Latency target: <300 ms p95 for completion. apiCall uses Electron IPC
- * when available (sub-millisecond bridge cost) or HTTP fallback. In-process
- * LSP service is already plenty fast; pushing to a worker thread (Dia 8
- * pool) lands when we hit a project size where the main-thread block
- * matters.
+ * with the same projectId is a no-op. Switching projects tears down the
+ * old providers and re-registers.
  */
 
 import type * as MonacoNs from 'monaco-editor';
 import { apiCall } from '../../../lib/api-client.js';
+import { startDocumentSync } from './documentSync.js';
+import { startDiagnosticsStream } from './diagnosticsStream.js';
+import { registerInlineCompletions } from './inlineCompletionProvider.js';
+import { throttledPerKey, clearThrottleKey } from './semanticTokensThrottle.js';
 
 type Monaco = typeof MonacoNs;
 
-const SUPPORTED_LANGUAGES = ['typescript', 'javascript'];
-const TRIGGER_CHARACTERS = ['.', '"', "'", '/', '@', '<', '#'];
+/** Trigger characters per language family; '*' (manual Ctrl+Space) covers the rest. */
+const COMPLETION_TRIGGERS: Record<string, string[]> = {
+  typescript: ['.', '"', "'", '/', '@', '<', '#'],
+  javascript: ['.', '"', "'", '/', '@', '<', '#'],
+  php: ['$', '>', ':', '\\'],
+  python: ['.'],
+};
 
 // One disposer set per projectId. New project = wipe and re-register.
 const registrations = new Map<number, { disposers: MonacoNs.IDisposable[] }>();
@@ -40,7 +48,34 @@ interface CompletionItemDTO {
   label: string;
   kind: string;
   detail?: string;
+  documentation?: string;
   insertText?: string;
+  additionalTextEdits?: Array<{ range: { start: Position; end: Position }; newText: string }>;
+  raw?: unknown;
+  // Fidelity fields (mirror api-bus CompletionItem — hand-maintained DTO).
+  sortText?: string;
+  filterText?: string;
+  insertTextFormat?: 1 | 2;
+  preselect?: boolean;
+  labelDetails?: { detail?: string; description?: string };
+  commitCharacters?: string[];
+  textEdit?: { range: { start: Position; end: Position }; newText: string };
+}
+
+/** Our suggestion carries the opaque LSP item + file for lazy resolve. */
+type SuggestionWithMeta = MonacoNs.languages.CompletionItem & {
+  _raw?: unknown;
+  _file?: string;
+};
+
+function toEditOps(
+  monaco: Monaco,
+  edits: NonNullable<CompletionItemDTO['additionalTextEdits']>,
+): MonacoNs.editor.ISingleEditOperation[] {
+  return edits.map((e) => ({
+    range: new monaco.Range(e.range.start.line, e.range.start.column, e.range.end.line, e.range.end.column),
+    text: e.newText,
+  }));
 }
 
 interface HoverDTO {
@@ -53,22 +88,12 @@ interface LspLocationDTO {
   range: { start: Position; end: Position };
 }
 
-interface DiagnosticDTO {
-  file: string;
-  range: { start: Position; end: Position };
-  severity: 'error' | 'warning' | 'info' | 'hint';
-  message: string;
-  source?: string;
-  code?: string | number;
-}
-
 function toMonacoRange(monaco: Monaco, r: { start: Position; end: Position }): MonacoNs.IRange {
   return new monaco.Range(r.start.line, r.start.column, r.end.line, r.end.column);
 }
 
 function mapCompletionKind(monaco: Monaco, kind: string): MonacoNs.languages.CompletionItemKind {
-  // Monaco's enum is a superset of TS's `ScriptElementKind`. Map the
-  // common ones; the rest fall through to `Text` which renders fine.
+  // Superset of TS ScriptElementKind + the index fallback's symbol kinds.
   const k = monaco.languages.CompletionItemKind;
   switch (kind) {
     case 'method': return k.Method;
@@ -79,93 +104,28 @@ function mapCompletionKind(monaco: Monaco, kind: string): MonacoNs.languages.Com
     case 'let':
     case 'const':
     case 'local var':
+    case 'variable':
     case 'parameter': return k.Variable;
-    case 'class': return k.Class;
+    case 'constant': return k.Constant;
+    case 'class':
+    case 'trait': return k.Class;
     case 'interface': return k.Interface;
+    case 'struct': return k.Struct;
     case 'enum': return k.Enum;
     case 'enum member': return k.EnumMember;
+    case 'field': return k.Field;
+    case 'event': return k.Event;
+    case 'namespace':
     case 'module': return k.Module;
     case 'keyword': return k.Keyword;
+    case 'type':
     case 'type parameter': return k.TypeParameter;
     default: return k.Text;
   }
 }
 
-function mapSeverity(monaco: Monaco, sev: DiagnosticDTO['severity']): MonacoNs.MarkerSeverity {
-  const s = monaco.MarkerSeverity;
-  switch (sev) {
-    case 'error': return s.Error;
-    case 'warning': return s.Warning;
-    case 'info': return s.Info;
-    case 'hint': return s.Hint;
-  }
-}
-
-/**
- * Walk every TS/JS model that belongs to the active project and refresh
- * its diagnostics via `lsp.diagnostics`. Uses a 1 s polling interval —
- * plenty for "show me red squigglies a moment after I stop typing"
- * without paying for a per-model `onDidChangeContent` listener.
- *
- * Earlier attempt called `monaco.editor.onDidChangeModelContent`, which
- * doesn't exist on the editor namespace — that method only lives on
- * `IStandaloneCodeEditor` instances. The polling approach also handles
- * external file changes (writing through the agent or via files.write)
- * without extra plumbing.
- */
-function startDiagnosticsLoop(monaco: Monaco, projectId: number): MonacoNs.IDisposable {
-  let stopped = false;
-  let inflight = 0;
-
-  async function refresh(model: MonacoNs.editor.ITextModel) {
-    if (stopped) return;
-    if (!SUPPORTED_LANGUAGES.includes(model.getLanguageId())) return;
-    const path = model.uri.path.replace(/^\//, '');
-    inflight += 1;
-    try {
-      const diags = await apiCall<DiagnosticDTO[]>('lsp.diagnostics', {
-        projectId,
-        file: path,
-        // Diagnostics run on a 1s poll — passing the live model text
-        // every tick is what keeps red squigglies in sync with what
-        // the user actually typed (vs the last-saved disk content).
-        content: model.getValue(),
-      });
-      if (stopped) return;
-      monaco.editor.setModelMarkers(
-        model,
-        'mcp-lsp',
-        diags.map((d) => ({
-          severity: mapSeverity(monaco, d.severity),
-          message: d.message,
-          startLineNumber: d.range.start.line,
-          startColumn: d.range.start.column,
-          endLineNumber: Math.max(d.range.start.line, d.range.end.line),
-          endColumn: Math.max(d.range.start.column, d.range.end.column),
-          source: d.source ?? 'ts',
-          code: d.code != null ? String(d.code) : undefined,
-        })),
-      );
-    } catch {
-      /* swallow — diagnostics are best-effort */
-    } finally {
-      inflight -= 1;
-    }
-  }
-
-  const timer = setInterval(() => {
-    if (inflight > 2) return; // backpressure
-    for (const model of monaco.editor.getModels()) {
-      void refresh(model);
-    }
-  }, 1000);
-
-  return {
-    dispose() {
-      stopped = true;
-      clearInterval(timer);
-    },
-  };
+function relPath(model: MonacoNs.editor.ITextModel): string {
+  return model.uri.path.replace(/^\//, '');
 }
 
 export function registerLspProviders(monaco: Monaco, projectId: number): void {
@@ -180,22 +140,14 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
 
   const disposers: MonacoNs.IDisposable[] = [];
 
-  // ─── Semantic token provider ────────────────────────────────────
-  //
-  // Monaco's built-in TS worker can't classify symbols correctly
-  // because it doesn't know the user's project (no tsconfig, no
-  // node_modules). Without semantic tokens, `this.router` is just
-  // a plain identifier — same colour as a local variable.
-  //
-  // Our LSP HAS the project context (real tsconfig, real
-  // node_modules walk via the TS Compiler API). It returns proper
-  // classifications (`property` for `.router`, `type` for `Router`,
-  // `method` for `.navigate`, etc.) which Monaco's default themes
-  // already have colour rules for — we get correct colours for free.
-  //
-  // The legend below MUST match the indices emitted by the backend's
-  // `getSemanticTokens` (see SEMANTIC_TOKEN_TYPES / MODIFIERS in
-  // ts-service.ts).
+  // Document sync FIRST — didOpen lands before the first provider request
+  // in the common path, so the backend reads the live buffer (a lost race
+  // degrades to disk content, never an error).
+  disposers.push(startDocumentSync(monaco, projectId));
+  disposers.push(startDiagnosticsStream(monaco, projectId));
+
+  // ─── Semantic token provider (TS/JS — needs the project-aware TS
+  // service; Monaco's bundled TS worker has no tsconfig/node_modules) ───
   const SEMANTIC_TOKEN_LEGEND: MonacoNs.languages.SemanticTokensLegend = {
     tokenTypes: [
       'class', 'enum', 'interface', 'namespace', 'typeParameter',
@@ -206,25 +158,25 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
       'declaration', 'static', 'async', 'readonly', 'defaultLibrary', 'local',
     ],
   };
-  for (const lang of SUPPORTED_LANGUAGES) {
+  for (const lang of ['typescript', 'javascript']) {
     disposers.push(
       monaco.languages.registerDocumentSemanticTokensProvider(lang, {
         getLegend: () => SEMANTIC_TOKEN_LEGEND,
         async provideDocumentSemanticTokens(model) {
-          const path = model.uri.path;
+          // Monaco re-requests after every change — throttle per model so a
+          // typing burst costs one trailing RPC instead of one per keystroke.
+          const key = model.uri.toString();
           try {
-            const result = await apiCall<{ data: number[]; resultId?: string }>(
-              'lsp.semanticTokens',
-              {
-                projectId,
-                file: path,
-                content: model.getValue(),
-              },
-            );
-            return {
-              data: new Uint32Array(result.data),
-              resultId: result.resultId,
-            };
+            const result = await throttledPerKey(key, () =>
+              apiCall<{ data: number[]; resultId?: string }>(
+                'lsp.semanticTokens',
+                { projectId, file: relPath(model) },
+              ));
+            if (model.isDisposed()) {
+              clearThrottleKey(key);
+              return { data: new Uint32Array(0) };
+            }
+            return { data: new Uint32Array(result.data), resultId: result.resultId };
           } catch {
             return { data: new Uint32Array(0) };
           }
@@ -236,122 +188,193 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
     );
   }
 
-  for (const lang of SUPPORTED_LANGUAGES) {
+  // ─── Completion — per-family trigger characters + a '*' fallback for
+  // every other language (manual Ctrl+Space). The backend decides which
+  // backend answers; registering '*' on top of a specific language would
+  // double-call, so the fallback skips covered ids. ───
+  const wordRange = (model: MonacoNs.editor.ITextModel, position: MonacoNs.Position): MonacoNs.IRange => {
+    const word = model.getWordUntilPosition(position);
+    return {
+      startLineNumber: position.lineNumber, startColumn: word.startColumn,
+      endLineNumber: position.lineNumber, endColumn: word.endColumn,
+    };
+  };
+
+  const mapSuggestion = (
+    monaco: Monaco, e: CompletionItemDTO, model: MonacoNs.editor.ITextModel,
+    position: MonacoNs.Position, file: string,
+  ): SuggestionWithMeta => ({
+    // Rich label (type/namespace columns) when the server sent labelDetails.
+    label: e.labelDetails ? { label: e.label, detail: e.labelDetails.detail, description: e.labelDetails.description } : e.label,
+    kind: mapCompletionKind(monaco, e.kind),
+    insertText: e.insertText ?? e.label,
+    detail: e.detail,
+    documentation: e.documentation,
+    // Snippet ONLY when the producer declared format 2 — else a literal
+    // `${1:..}`/`$1` would be inserted verbatim.
+    insertTextRules: e.insertTextFormat === 2
+      ? monaco.languages.CompletionItemInsertTextRules.InsertAsSnippet
+      : undefined,
+    // Preserve the producer's relevance order; without sortText Monaco
+    // re-sorts alphabetically and the ranking collapses.
+    sortText: e.sortText,
+    filterText: e.filterText,
+    preselect: e.preselect,
+    commitCharacters: e.commitCharacters,
+    // Server-chosen replace range is authoritative for `::`/`->` members;
+    // fall back to the current word range.
+    range: e.textEdit
+      ? new monaco.Range(
+        e.textEdit.range.start.line, e.textEdit.range.start.column,
+        e.textEdit.range.end.line, e.textEdit.range.end.column,
+      )
+      : wordRange(model, position),
+    additionalTextEdits: e.additionalTextEdits ? toEditOps(monaco, e.additionalTextEdits) : undefined,
+    _raw: e.raw,
+    _file: file,
+  });
+
+  // ─── Completion — per-family trigger characters + a '*' fallback for
+  // every other language (manual Ctrl+Space). The backend decides which
+  // backend answers; registering '*' on top of a specific language would
+  // double-call, so the fallback skips covered ids. ───
+  const completionProvider: MonacoNs.languages.CompletionItemProvider = {
+    async provideCompletionItems(model, position, context) {
+      const file = relPath(model);
+      const lang = model.getLanguageId();
+      try {
+        const entries = await apiCall<CompletionItemDTO[]>('lsp.completion', {
+          projectId,
+          file,
+          position: { line: position.lineNumber, column: position.column },
+          // Monaco triggerKind (Invoke 0 / TriggerCharacter 1 / Incomplete 2)
+          // → LSP (1 / 2 / 3): +1.
+          context: { triggerKind: context.triggerKind + 1, triggerCharacter: context.triggerCharacter },
+        });
+        // Non-TS languages go through the LSP/index race (dumb→smart): mark
+        // incomplete so Monaco re-queries each keystroke and picks up the
+        // server once it warms (instead of caching the index's first answer).
+        // TS/JS are served by the in-process service — only flag big lists.
+        const builtin = lang === 'typescript' || lang === 'javascript';
+        return {
+          suggestions: entries.map((e) => mapSuggestion(monaco, e, model, position, file)),
+          incomplete: !builtin || entries.length >= 120,
+        };
+      } catch {
+        return { suggestions: [] };
+      }
+    },
+
+    // Called by Monaco when an item is focused in the widget — fetch the
+    // deferred fields (Intelephense/Pyright attach the use/import edit
+    // ONLY here) before the user can accept.
+    async resolveCompletionItem(item) {
+      const it = item as SuggestionWithMeta;
+      if (!it._raw || (it.additionalTextEdits && it.additionalTextEdits.length > 0)) return item;
+      try {
+        const resolved = await apiCall<CompletionItemDTO | null>('lsp.resolveCompletion', {
+          projectId, file: it._file, item: it._raw,
+        });
+        if (resolved?.additionalTextEdits?.length) {
+          it.additionalTextEdits = toEditOps(monaco, resolved.additionalTextEdits);
+        }
+        if (resolved?.detail && !it.detail) it.detail = resolved.detail;
+        if (resolved?.documentation) it.documentation = resolved.documentation;
+      } catch { /* keep the unresolved item — completion still inserts */ }
+      return item;
+    },
+  };
+  for (const [lang, triggerCharacters] of Object.entries(COMPLETION_TRIGGERS)) {
     disposers.push(
       monaco.languages.registerCompletionItemProvider(lang, {
-        triggerCharacters: TRIGGER_CHARACTERS,
-        async provideCompletionItems(model, position) {
-          const path = model.uri.path.replace(/^\//, '');
-          const word = model.getWordUntilPosition(position);
-          try {
-            const entries = await apiCall<CompletionItemDTO[]>('lsp.completion', {
-              projectId,
-              file: path,
-              position: { line: position.lineNumber, column: position.column },
-              // Live buffer — without this the backend reads the file
-              // from disk and misses unsaved keystrokes (e.g. the `.`
-              // that triggered this very completion).
-              content: model.getValue(),
-            });
-            return {
-              suggestions: entries.map((e) => ({
-                label: e.label,
-                kind: mapCompletionKind(monaco, e.kind),
-                insertText: e.insertText ?? e.label,
-                detail: e.detail,
-                range: {
-                  startLineNumber: position.lineNumber,
-                  startColumn: word.startColumn,
-                  endLineNumber: position.lineNumber,
-                  endColumn: word.endColumn,
-                },
-              })),
-            };
-          } catch {
-            return { suggestions: [] };
-          }
-        },
-      }),
-    );
-
-    disposers.push(
-      monaco.languages.registerHoverProvider(lang, {
-        async provideHover(model, position) {
-          const path = model.uri.path.replace(/^\//, '');
-          try {
-            const hover = await apiCall<HoverDTO | null>('lsp.hover', {
-              projectId,
-              file: path,
-              position: { line: position.lineNumber, column: position.column },
-              content: model.getValue(),
-            });
-            if (!hover) return null;
-            return {
-              contents: [{ value: hover.contents }],
-              range: hover.range ? toMonacoRange(monaco, hover.range) : undefined,
-            };
-          } catch {
-            return null;
-          }
-        },
-      }),
-    );
-
-    disposers.push(
-      monaco.languages.registerDefinitionProvider(lang, {
-        async provideDefinition(model, position) {
-          // Backend tsCanonical normalises whatever we send (`/D:/...`,
-          // `D:\\...`, relative), so we hand it the raw model path.
-          const path = model.uri.path;
-          try {
-            const locs = await apiCall<LspLocationDTO[]>('lsp.definition', {
-              projectId,
-              file: path,
-              position: { line: position.lineNumber, column: position.column },
-              content: model.getValue(),
-            });
-            return locs.map((loc) => ({
-              // monaco.Uri.file expects an absolute filesystem path. The
-              // backend returns absolute canonical paths (`d:/MCP/foo.ts`
-              // on Windows) precisely so this call round-trips and Monaco
-              // can match against the open model — or open a new one via
-              // the editor opener if the target file isn't in a tab yet.
-              uri: monaco.Uri.file(loc.file),
-              range: toMonacoRange(monaco, loc.range),
-            }));
-          } catch {
-            return [];
-          }
-        },
-      }),
-    );
-
-    disposers.push(
-      monaco.languages.registerReferenceProvider(lang, {
-        async provideReferences(model, position) {
-          const path = model.uri.path;
-          try {
-            const locs = await apiCall<LspLocationDTO[]>('lsp.references', {
-              projectId,
-              file: path,
-              position: { line: position.lineNumber, column: position.column },
-              content: model.getValue(),
-            });
-            return locs.map((loc) => ({
-              uri: monaco.Uri.file(loc.file),
-              range: toMonacoRange(monaco, loc.range),
-            }));
-          } catch {
-            return [];
-          }
-        },
+        triggerCharacters,
+        provideCompletionItems: completionProvider.provideCompletionItems.bind(completionProvider),
+        resolveCompletionItem: completionProvider.resolveCompletionItem?.bind(completionProvider),
       }),
     );
   }
+  disposers.push(
+    monaco.languages.registerCompletionItemProvider('*', {
+      async provideCompletionItems(model, position, context, token) {
+        if (model.getLanguageId() in COMPLETION_TRIGGERS) return { suggestions: [] };
+        return completionProvider.provideCompletionItems(
+          model, position, context, token,
+        ) as MonacoNs.languages.ProviderResult<MonacoNs.languages.CompletionList>;
+      },
+      resolveCompletionItem: completionProvider.resolveCompletionItem?.bind(completionProvider),
+    }),
+  );
 
-  disposers.push(startDiagnosticsLoop(monaco, projectId));
-  disposers.push(registerWeakDefinitionProvider(monaco, projectId));
+  // ─── Hover / definition / references — one '*' provider each; the
+  // backend router answers for EVERY language (TS service, LSP server or
+  // index fallback) ───
+  disposers.push(
+    monaco.languages.registerHoverProvider('*', {
+      async provideHover(model, position) {
+        try {
+          const hover = await apiCall<HoverDTO | null>('lsp.hover', {
+            projectId,
+            file: relPath(model),
+            position: { line: position.lineNumber, column: position.column },
+          });
+          if (!hover) return null;
+          return {
+            contents: [{ value: hover.contents }],
+            range: hover.range ? toMonacoRange(monaco, hover.range) : undefined,
+          };
+        } catch {
+          return null;
+        }
+      },
+    }),
+  );
+
+  disposers.push(
+    monaco.languages.registerDefinitionProvider('*', {
+      async provideDefinition(model, position) {
+        try {
+          const locs = await apiCall<LspLocationDTO[]>('lsp.definition', {
+            projectId,
+            file: relPath(model),
+            position: { line: position.lineNumber, column: position.column },
+          });
+          return locs.map((loc) => ({
+            // Backend returns absolute canonical paths so Monaco can match
+            // open models or hand off to the editor opener below.
+            uri: monaco.Uri.file(loc.file),
+            range: toMonacoRange(monaco, loc.range),
+          }));
+        } catch {
+          return [];
+        }
+      },
+    }),
+  );
+
+  disposers.push(
+    monaco.languages.registerReferenceProvider('*', {
+      async provideReferences(model, position) {
+        try {
+          const locs = await apiCall<LspLocationDTO[]>('lsp.references', {
+            projectId,
+            file: relPath(model),
+            position: { line: position.lineNumber, column: position.column },
+          });
+          return locs.map((loc) => ({
+            uri: monaco.Uri.file(loc.file),
+            range: toMonacoRange(monaco, loc.range),
+          }));
+        } catch {
+          return [];
+        }
+      },
+    }),
+  );
+
   disposers.push(registerEditorOpener(monaco, projectId));
+
+  // AI ghost text — heavily gated (default OFF; see inlineCompletionProvider).
+  disposers.push(registerInlineCompletions(monaco, projectId));
 
   registrations.set(projectId, { disposers });
 }
@@ -362,14 +385,6 @@ export function registerLspProviders(monaco: Monaco, projectId: number): void {
  * Without an opener, Ctrl+Click in Monaco gives the model URI to its
  * built-in opener — which assumes a hosted Monaco workbench, not our
  * dashboard. The user sees a flicker and nothing else.
- *
- * Our opener:
- *   1. Receives `resource` = `file:///d:/MCP/apps/dashboard/foo.ts`
- *   2. Looks up the project's root_path (cached) to strip the prefix
- *   3. Computes the project-relative path Monaco models are keyed by
- *   4. Pushes onto the workspace store via openFile + fetches content
- *      asynchronously — by the time the user blinks, MonacoMount has
- *      swapped to the new tab.
  *
  * Returns `true` to tell Monaco "we handled it". Returns `false` only
  * if the resource isn't a `file:` URI (e.g. clicking through to an
@@ -431,33 +446,17 @@ function registerEditorOpener(monaco: Monaco, projectId: number): MonacoNs.IDisp
       if (existing) {
         store.setActive(rel);
       } else {
-        // Fetch content first so MonacoMount has it on mount — saves a
-        // visible flicker between "empty model" and "file loaded".
-        try {
-          const file = await apiCall<{ content: string; last_modified: string }>('files.read', {
-            projectId,
-            path: rel,
-          });
-          store.openFile({
-            kind: 'file',
-            projectId,
-            path: rel,
-            content: file.content,
-            dirty: false,
-            lastModified: file.last_modified,
-          });
-        } catch {
-          // Read failed (file gone? permissions?). Fall back to opening
-          // an empty tab — better than swallowing the navigation.
-          store.openFile({
-            kind: 'file',
-            projectId,
-            path: rel,
-            content: '',
-            dirty: false,
-            lastModified: null,
-          });
-        }
+        // Open INSTANTLY with content: null — MonacoMount's
+        // useEnsureFileContent fetches on activation (no navigation-blocking
+        // round trip, no flicker thanks to the loading skeleton).
+        store.openFile({
+          kind: 'file',
+          projectId,
+          path: rel,
+          content: null,
+          dirty: false,
+          lastModified: null,
+        });
       }
 
       // Position the cursor at the requested range/position once the
@@ -478,88 +477,6 @@ function registerEditorOpener(monaco: Monaco, projectId: number): MonacoNs.IDisp
         }, 50);
       }
       return true;
-    },
-  });
-}
-
-/**
- * Fallback "go to definition" for languages that don't have an LSP yet
- * (PHP, Java, C#, Python, Go, …). When the user Ctrl/Cmd+Clicks a word,
- * we ask the indexer to grep the codebase for that symbol and offer up
- * to a handful of matches — better than the current Monaco no-op.
- *
- * Registered as a `*` language provider AFTER the TS/JS-specific ones,
- * so for supported languages the real LSP still wins (Monaco merges
- * provider results — the LSP responses are richer + accurate).
- *
- * Path resolution: `search.project` returns `file_path` relative to the
- * project root. Monaco needs an absolute URI to either match an open
- * model or open a new tab via the editor opener. We fetch the project
- * root once at registration and construct `monaco.Uri.file(rootJoin)`.
- */
-function registerWeakDefinitionProvider(monaco: Monaco, projectId: number): MonacoNs.IDisposable {
-  // Cache the project root the first time we need it. Failures are
-  // tolerated — the worst case is "no weak fallback for this projectId".
-  let projectRoot: string | null = null;
-  const ensureRoot = async (): Promise<string | null> => {
-    if (projectRoot !== null) return projectRoot;
-    try {
-      const project = await apiCall<{ root_path?: string }>('projects.get', { id: projectId });
-      if (project?.root_path) projectRoot = project.root_path;
-    } catch {
-      /* keep null; fallback degrades to "no results" instead of crashing */
-    }
-    return projectRoot;
-  };
-
-  function joinAbs(root: string, rel: string): string {
-    // Strip leading "./" and any leading slash so the join doesn't
-    // double-up separators. Use forward slashes throughout — Monaco
-    // accepts both but consistency makes the URIs grep-friendly.
-    const cleaned = rel.replace(/^\.\//, '').replace(/^[/\\]+/, '');
-    const rootFwd = root.replace(/\\/g, '/').replace(/\/$/, '');
-    return `${rootFwd}/${cleaned.replace(/\\/g, '/')}`;
-  }
-
-  return monaco.languages.registerDefinitionProvider('*', {
-    async provideDefinition(model, position) {
-      const word = model.getWordAtPosition(position);
-      if (!word || word.word.length < 2) return [];
-      // Skip the symbol-search hop for languages we already covered
-      // properly above — TS/JS responses there are exact.
-      if (SUPPORTED_LANGUAGES.includes(model.getLanguageId())) return [];
-      const root = await ensureRoot();
-      if (!root) return [];
-      try {
-        const r = await apiCall<{ results: Array<{ file_path: string; line?: number; name?: string }> }>(
-          'search.project',
-          {
-            projectId,
-            query: word.word,
-            mode: 'hybrid',
-            type: 'symbols',
-            limit: 8,
-          },
-        );
-        const candidates = r.results ?? [];
-        // Bias matches whose name === the clicked word; rest come after.
-        candidates.sort((a, b) => {
-          const ax = a.name === word.word ? 0 : 1;
-          const bx = b.name === word.word ? 0 : 1;
-          return ax - bx;
-        });
-        return candidates.slice(0, 5).map((m) => ({
-          uri: monaco.Uri.file(joinAbs(root, m.file_path)),
-          range: new monaco.Range(
-            Math.max(1, m.line ?? 1),
-            1,
-            Math.max(1, m.line ?? 1),
-            1 + word.word.length,
-          ),
-        }));
-      } catch {
-        return [];
-      }
     },
   });
 }

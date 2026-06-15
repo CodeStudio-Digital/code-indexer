@@ -94,10 +94,14 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       return { url: `/api/projects/${ip!.id}/stats`, init: {} };
     case 'files.list':
       return { url: `/api/projects/${ip!.projectId}/files`, init: {} };
-    case 'files.tree':
-      return { url: `/api/projects/${ip!.projectId}/file-tree?root=${encodeURIComponent(String(ip!.root ?? '.'))}`, init: {} };
-    case 'files.read':
-      return { url: `/api/projects/${ip!.projectId}/file?path=${encodeURIComponent(String(ip!.path))}`, init: {} };
+    case 'files.tree': {
+      const depth = ip!.maxDepth != null ? `&maxDepth=${Number(ip!.maxDepth)}` : '';
+      return { url: `/api/projects/${ip!.projectId}/file-tree?root=${encodeURIComponent(String(ip!.root ?? '.'))}${depth}`, init: {} };
+    }
+    case 'files.read': {
+      const ims = ip!.ifModifiedSince ? `&ifModifiedSince=${encodeURIComponent(String(ip!.ifModifiedSince))}` : '';
+      return { url: `/api/projects/${ip!.projectId}/file?path=${encodeURIComponent(String(ip!.path))}${ims}`, init: {} };
+    }
     case 'files.write':
       return { url: `/api/projects/${ip!.projectId}/file`, init: { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: ip!.path, content: ip!.content }) } };
     case 'files.delete':
@@ -189,6 +193,38 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       const op = path.split('.')[1];
       return { url: `/api/lsp/${ip!.projectId}/${op}`, init: json({ file: ip!.file, position: ip!.position }) };
     }
+    case 'lsp.didOpen':
+      return {
+        url: `/api/lsp/${ip!.projectId}/did-open`,
+        init: json({ file: ip!.file, languageId: ip!.languageId, version: ip!.version, content: ip!.content }),
+      };
+    case 'lsp.didChange':
+      return {
+        url: `/api/lsp/${ip!.projectId}/did-change`,
+        init: json({ file: ip!.file, version: ip!.version, changes: ip!.changes }),
+      };
+    case 'lsp.didClose':
+      return { url: `/api/lsp/${ip!.projectId}/did-close`, init: json({ file: ip!.file }) };
+    case 'lsp.resolveCompletion':
+      return { url: `/api/lsp/${ip!.projectId}/resolve-completion`, init: json({ file: ip!.file, item: ip!.item }) };
+    case 'lsp.serverStatus':
+      return { url: `/api/lsp/${ip!.projectId}/server-status`, init: json({ languageId: ip!.languageId }) };
+    case 'lsp.listServers':
+      return { url: '/api/lsp/servers', init: { method: 'GET' } };
+    case 'lsp.instances':
+      return { url: '/api/lsp/instances', init: { method: 'GET' } };
+    case 'editor.complete':
+      return { url: '/api/editor/complete', init: json(ip!) };
+    case 'editor.feedback':
+      return { url: '/api/editor/feedback', init: json(ip!) };
+    case 'search.symbols':
+      return { url: `/api/projects/${ip!.projectId}/search/symbols?q=${encodeURIComponent(String(ip!.query))}&limit=${Number(ip!.limit ?? 50)}`, init: {} };
+    case 'search.text':
+      return { url: `/api/projects/${ip!.projectId}/search/text?q=${encodeURIComponent(String(ip!.query))}&limit=${Number(ip!.limit ?? 50)}`, init: {} };
+    case 'lsp.removeServer':
+      return { url: `/api/lsp/servers/${ip!.serverId}`, init: { method: 'DELETE' } };
+    case 'lsp.restartServer':
+      return { url: `/api/lsp/${ip!.projectId}/servers/${ip!.serverId}/restart`, init: json({}) };
     default:
       return null;
   }

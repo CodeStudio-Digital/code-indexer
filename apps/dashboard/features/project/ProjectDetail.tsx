@@ -25,6 +25,7 @@ import CostDashboard from '../costs/index.js';
 import DiffViewer from '../diff/index.js';
 import SearchPanel from '../search/index.js';
 import SnapshotEditor from '../snapshots/index.js';
+import { UserMemoryPanel } from '../user-memory/UserMemoryPanel.js';
 import { StatCard } from './StatCard.js';
 import { ArchitectureTab } from './tabs/ArchitectureTab.js';
 import { DependenciesTab } from './tabs/DependenciesTab.js';
@@ -120,11 +121,18 @@ export default function ProjectDetail({
               </Card>
             )}
             {tab === 'snapshots' && (
-              <Card>
-                <CardContent className="p-6">
-                  <SnapshotEditor projectId={projectId} />
-                </CardContent>
-              </Card>
+              <div className="space-y-4">
+                <Card>
+                  <CardContent className="p-6">
+                    <SnapshotEditor projectId={projectId} />
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <UserMemoryPanel />
+                  </CardContent>
+                </Card>
+              </div>
             )}
             {tab === 'diff' && (
               <Card>

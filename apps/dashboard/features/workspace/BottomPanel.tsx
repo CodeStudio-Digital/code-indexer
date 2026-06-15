@@ -12,7 +12,6 @@ import {
   TerminalSquare,
   AlertCircle,
   FileText,
-  Search,
   ChevronDown,
   ChevronUp,
   X,
@@ -23,14 +22,16 @@ import { Button } from '../../components/ui/button.js';
 import { WorkspaceTerminal } from './WorkspaceTerminal.js';
 import { WebviewWindow } from './jetbrains/tool-windows/WebviewWindow.js';
 import type { ContribToolWindow } from '../../state/contribution-registry.js';
+import { ProblemsPanel } from '../project/bottom/ProblemsPanel.js';
+import { OutputPanel } from '../project/bottom/OutputPanel.js';
+import { useProjectDiagnostics } from '../project/bottom/useProjectDiagnostics.js';
 
-type BuiltinTabId = 'terminal' | 'problems' | 'output' | 'search';
+type BuiltinTabId = 'terminal' | 'problems' | 'output';
 
 const TABS: Array<{ id: BuiltinTabId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'terminal', label: 'Terminal', icon: TerminalSquare },
   { id: 'problems', label: 'Problems', icon: AlertCircle },
   { id: 'output', label: 'Output', icon: FileText },
-  { id: 'search', label: 'Search', icon: Search },
 ];
 
 interface BottomPanelProps {
@@ -38,6 +39,8 @@ interface BottomPanelProps {
   isOpen: boolean;
   onToggle: () => void;
   onClose: () => void;
+  /** Open a file in the editor (used by Problems rows to jump to a problem). */
+  onOpenFile?: (path: string) => void;
   /** Plugin tool windows that declared `side: 'bottom'` — appended as tabs. */
   pluginWindows?: ContribToolWindow[];
 }
@@ -47,11 +50,15 @@ export function BottomPanel({
   isOpen,
   onToggle,
   onClose,
+  onOpenFile,
   pluginWindows = [],
 }: BottomPanelProps) {
   // `tab` is an open string so plugin window ids (not in BuiltinTabId) can win.
   const [tab, setTab] = useState<string>('terminal');
   const activePlugin = pluginWindows.find((w) => w.id === tab);
+  // Live count drives the Problems tab badge even while that tab is inactive.
+  const diagnostics = useProjectDiagnostics(projectId);
+  const problemCount = diagnostics.errorCount + diagnostics.warningCount;
 
   return (
     <div className="h-full flex flex-col bg-card/40 border-t min-h-0">
@@ -77,6 +84,18 @@ export function BottomPanel({
               >
                 <Icon className="h-3 w-3" />
                 <span>{def.label}</span>
+                {def.id === 'problems' && problemCount > 0 && (
+                  <span
+                    className={cn(
+                      'ml-0.5 min-w-[16px] rounded px-1 text-[10px] leading-4 text-center tabular-nums',
+                      diagnostics.errorCount > 0
+                        ? 'bg-red-500/15 text-red-500'
+                        : 'bg-amber-500/15 text-amber-500',
+                    )}
+                  >
+                    {problemCount}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -128,6 +147,10 @@ export function BottomPanel({
       {isOpen && (
         <div className="flex-1 min-h-0 overflow-hidden">
           {tab === 'terminal' && <WorkspaceTerminal projectId={projectId} />}
+          {tab === 'problems' && !activePlugin && (
+            <ProblemsPanel items={diagnostics.items} onOpenFile={onOpenFile} />
+          )}
+          {tab === 'output' && !activePlugin && <OutputPanel projectId={projectId} />}
           {activePlugin && (
             <WebviewWindow
               namespace={activePlugin.pluginNs}
@@ -135,13 +158,6 @@ export function BottomPanel({
               entry={activePlugin.entry}
               projectId={projectId}
             />
-          )}
-          {tab !== 'terminal' && !activePlugin && (
-            <div className="h-full grid place-items-center text-xs text-muted-foreground p-2">
-              {tab === 'problems' && 'Problems panel coming with LSP diagnostics integration.'}
-              {tab === 'output' && 'Tool output / build logs panel.'}
-              {tab === 'search' && 'Search across files — coming soon.'}
-            </div>
           )}
         </div>
       )}

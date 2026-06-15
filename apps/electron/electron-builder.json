@@ -7,6 +7,7 @@
   },
   "files": [
     "dist/apps/electron/**/*",
+    "dist/apps/http-api/**/*",
     "dist/dashboard/**/*",
     "dist/packages/**/*",
     "package.json",
@@ -22,6 +23,12 @@
     "node_modules/onnxruntime-node/**/*",
     "node_modules/onnxruntime-web/**/*",
     "node_modules/sharp/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "apps/electron/build/icon.png",
+      "to": "icon.png"
+    }
   ],
   "win": {
     "target": ["nsis"],

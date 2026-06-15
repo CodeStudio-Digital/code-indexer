@@ -19,6 +19,17 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     default: '0',
   },
   {
+    key: 'CODER_STICKY_PROFILE',
+    label: 'Sticky tool profile per session',
+    description:
+      'Persist the resolved tool profile/pins on the session and reuse them on resume (widen-only). ' +
+      'Off = legacy per-run inference, which can flip the visible toolset between rounds and bust the provider prompt cache.',
+    type: 'bool',
+    category: 'agent',
+    default: '1',
+    advanced: true,
+  },
+  {
     key: 'CODER_SELF_REVIEW',
     label: 'Auto-review reminder',
     description:
@@ -154,6 +165,49 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     category: 'agent',
     default: '600000',
     min: 60000,
+    advanced: true,
+  },
+  {
+    key: 'CODER_PREFLIGHT',
+    label: 'Task preflight (first-prompt analysis)',
+    description:
+      'When the code-agent/preflight binding is set (Admin → Pipelines), a cheap model analyzes ' +
+      'the first prompt of a fresh session and seeds it: minimal tool profile, pinned tools, and ' +
+      'which project memories to read. This is the kill-switch; the binding is what enables it.',
+    type: 'bool',
+    category: 'agent',
+    default: '1',
+  },
+  {
+    key: 'CODER_PREFLIGHT_TIMEOUT_MS',
+    label: 'Task preflight timeout (ms)',
+    description: 'Hard ceiling for the preflight analysis call. On timeout the session starts unseeded.',
+    type: 'int',
+    category: 'agent',
+    default: '4000',
+    min: 500,
+    advanced: true,
+  },
+  {
+    key: 'CODER_PREFLIGHT_MAX_TOOLS',
+    label: 'Task preflight max pinned tools',
+    description: 'How many tools the analyzer may pin visible from turn 1.',
+    type: 'int',
+    category: 'agent',
+    default: '12',
+    min: 1,
+    advanced: true,
+  },
+  {
+    key: 'CODER_PREFLIGHT_VISIBLE_CAP',
+    label: 'Task preflight visible-tool cap',
+    description:
+      'Seeded sessions cap their visible tool list at min(model cap, this). NEVER_TRIM tools and ' +
+      'preflight pins always survive; hidden tools stay callable via find_tools.',
+    type: 'int',
+    category: 'agent',
+    default: '48',
+    min: 16,
     advanced: true,
   },
   {

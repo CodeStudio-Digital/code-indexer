@@ -36,11 +36,14 @@ import {
 import type { CoderAttachment } from '@mcp/code-agent/index.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { getGlobalPreviewDevtools, type PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
+import { closePreviewWindow, closePreviewSession } from './closeCoderPreview.js';
+import { notifyBuilderRunEnded } from './builder-checkpoint.js';
 import type { IVisionDescriber, VisionDescribeRequest } from '@mcp/code-agent/core/vision-describer.js';
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import type { McpExternalPool } from './McpExternalPool.js';
 import { installRuntimeEventLog } from './runtime-event-log.js';
 import { registerWorkerMemoryHandlers, type WorkerMemoryDeps } from './worker-memory-handlers.js';
+import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
 
 /**
  * Optional doc-corpus deps the host wires AFTER `boot/createApp` has built
@@ -152,6 +155,11 @@ export interface RunFreshOpts {
   /** Skill IDs the user pre-selected in the sidebar; forwarded to runCoder. */
   selectedSkillIds?: string[];
   /**
+   * Task-preflight seed (fresh sessions) — POJO, survives structuredClone
+   * across the MessagePort. Forwarded verbatim to `runCoder({ preflight })`.
+   */
+  preflight?: import('@mcp/code-agent/index.js').PreflightSeed;
+  /**
    * When true, the worker calls `runCoder({ resume: true })` so the runner
    * picks up from history (last DB message must be `role:'tool'`) instead
    * of pushing a brand-new user turn. Used by the Apêndice 4 Fase 2
@@ -218,6 +226,35 @@ export class CoderWorkerPool {
       });
     }
     return out;
+  }
+
+  /**
+   * Per-isolate heap stats for the admin perf monitor — symmetric with
+   * `WorkerOrchestratorPool.memStats()`. Best-effort; doesn't touch TTL.
+   */
+  async memStats(
+    timeoutMs = 2_000,
+  ): Promise<Array<{ sessionId: number; stats: import('../workers/perf-stats.js').WorkerMemStats | null }>> {
+    const jobs = Array.from(this.entries.entries()).map(async ([sessionId, entry]) => {
+      try {
+        const stats = (await entry.host
+          .requireBridge()
+          .request('perf.memStats', {}, { timeoutMs })) as import('../workers/perf-stats.js').WorkerMemStats;
+        return { sessionId, stats };
+      } catch {
+        return { sessionId, stats: null };
+      }
+    });
+    return Promise.all(jobs);
+  }
+
+  /** V8 CPU profile of one session's worker isolate (admin perf panel). */
+  async cpuProfile(sessionId: number, durationMs: number): Promise<object | null> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return null;
+    return (await entry.host
+      .requireBridge()
+      .request('perf.cpuProfile', { durationMs }, { timeoutMs: durationMs + 10_000 })) as object;
   }
 
   /**
@@ -366,6 +403,10 @@ export class CoderWorkerPool {
     if (!entry) return;
     this.entries.delete(sessionId);
     this.cancelPostRunEvict(entry);
+    // Session truly going away → close the preview window AND stop the dev
+    // server the preview started for it ("owned"). The user's own runner is
+    // never owned, so it stays up.
+    closePreviewSession(sessionId);
     entry.detachBusMirror();
     const aliveMs = Date.now() - entry.lastTouchedAt;
     try {
@@ -573,6 +614,11 @@ export class CoderWorkerPool {
     // in routes/coder/stream.ts, which passes deps.memoryRetriever directly).
     const offMemory = registerWorkerMemoryHandlers(bridge, () => this.opts.docDeps);
 
+    // Agent LSP nav (lsp_definition/references/hover on non-TS files) —
+    // routed to the main-process LSP router (external servers + structural
+    // index fallback). Deps land via setWorkerLspDeps in server.ts.
+    const offLsp = registerWorkerLspHandlers(bridge);
+
     // ─── External-MCP pool bridge ─────────────────────────────────────
     // Worker's `RemoteMcpServerManager` requests a snapshot once per run
     // (in `connectAll()`) and routes every tool invocation through
@@ -629,6 +675,15 @@ export class CoderWorkerPool {
       // now consider this entry for eviction once ttlMs elapses without
       // a follow-up `runFresh`/`pushUserMessage`.
       e.runInProgress = false;
+      // Turn ended → close the agent's dedicated preview WINDOW (frees the
+      // BrowserWindow) but keep any preview-owned dev server up for reuse
+      // on the next turn. This fulfils the dashboard's existing assumption
+      // ("the pool closes the agent's preview window") and matches the
+      // `coder:agent_preview {open:false}` it already emits on `done`.
+      closePreviewWindow(sessionId);
+      // Builder projects: land the run's dirty tree as a checkpoint commit
+      // (+ timeline thumbnail). Fire-and-forget; no-op for non-builder.
+      notifyBuilderRunEnded(sessionId);
       // Fast-evict on run completion. We can't synchronously evict
       // here because a follow-up `/messages` POST may arrive within
       // a few seconds and would have to pay the cold-start cost
@@ -662,6 +717,7 @@ export class CoderWorkerPool {
         try { offPreviewDevtools(); } catch { /* best-effort */ }
         try { offVisionDescribe(); } catch { /* best-effort */ }
         try { offMemory(); } catch { /* best-effort */ }
+        try { offLsp(); } catch { /* best-effort */ }
         try { offMcpSnapshot(); } catch { /* best-effort */ }
         try { offMcpCallTool(); } catch { /* best-effort */ }
       },

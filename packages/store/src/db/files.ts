@@ -21,6 +21,12 @@ export interface UpsertFileData {
   /** Mapper tier persisted by migration 071. Optional for backwards compat. */
   indexTier?: 'core' | 'support' | 'on_demand';
   mapperReason?: string;
+  /**
+   * fs.stat mtime in ms (migration 137) — drives the stat-first scanner.
+   * Omitted/null keeps the stored value (COALESCE) so callers without a
+   * fresh stat (force re-scan) don't regress it to NULL.
+   */
+  mtimeMs?: number | null;
 }
 
 export function upsert(db: DB, projectId: number, data: UpsertFileData): number {
@@ -46,6 +52,7 @@ export function upsert(db: DB, projectId: number, data: UpsertFileData): number 
           layer = ?, is_entry_point = ?, is_test = ?, is_generated = ?,
           index_tier = COALESCE(?, index_tier),
           mapper_reason = COALESCE(?, mapper_reason),
+          mtime_ms = COALESCE(?, mtime_ms),
           updated_at = datetime('now')
         WHERE id = ?
       `).run(
@@ -55,6 +62,7 @@ export function upsert(db: DB, projectId: number, data: UpsertFileData): number 
         JSON.stringify(data.notes), data.complexity,
         data.layer ?? 'unknown', data.isEntryPoint ? 1 : 0, data.isTest ? 1 : 0, data.isGenerated ? 1 : 0,
         data.indexTier ?? null, data.mapperReason ?? null,
+        data.mtimeMs ?? null,
         existing.id
       );
 
@@ -65,15 +73,15 @@ export function upsert(db: DB, projectId: number, data: UpsertFileData): number 
       const result = db.prepare(`
         INSERT INTO files (project_id, path, language, size, line_count, content_hash,
           summary, concepts, dependencies, internal_deps, external_deps, notes, complexity,
-          layer, is_entry_point, is_test, is_generated, index_tier, mapper_reason)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          layer, is_entry_point, is_test, is_generated, index_tier, mapper_reason, mtime_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         projectId, data.path, data.language, data.size, data.lineCount, data.contentHash,
         data.summary, JSON.stringify(data.concepts), JSON.stringify(data.dependencies),
         JSON.stringify(data.internalDeps), JSON.stringify(data.externalDeps),
         JSON.stringify(data.notes), data.complexity,
         data.layer ?? 'unknown', data.isEntryPoint ? 1 : 0, data.isTest ? 1 : 0, data.isGenerated ? 1 : 0,
-        data.indexTier ?? null, data.mapperReason ?? null
+        data.indexTier ?? null, data.mapperReason ?? null, data.mtimeMs ?? null
       );
       fileId = result.lastInsertRowid as number;
     }
@@ -108,6 +116,34 @@ export function list(db: DB, projectId: number, language?: string): DBFile[] {
   }
   return db.prepare('SELECT * FROM files WHERE project_id = ? ORDER BY path')
     .all(projectId) as DBFile[];
+}
+
+export interface FileScanMeta {
+  path: string;
+  content_hash: string;
+  mtime_ms: number | null;
+  size: number;
+}
+
+/**
+ * Slim per-file metadata for the stat-first scanner — 4 columns instead of
+ * the full row (the old scan dragged summary/concepts/notes of EVERY file
+ * into memory on every scan just to read content_hash).
+ */
+export function listScanMeta(db: DB, projectId: number): FileScanMeta[] {
+  return db.prepare(
+    'SELECT path, content_hash, mtime_ms, size FROM files WHERE project_id = ?'
+  ).all(projectId) as FileScanMeta[];
+}
+
+/**
+ * Stamp a fresh mtime on an unchanged file (hash matched after a read) so
+ * the NEXT scan takes the stat-only shortcut. Also the automatic backfill
+ * path for rows created before migration 137.
+ */
+export function touchMtime(db: DB, projectId: number, path: string, mtimeMs: number): void {
+  db.prepare('UPDATE files SET mtime_ms = ? WHERE project_id = ? AND path = ?')
+    .run(mtimeMs, projectId, path);
 }
 
 export function del(db: DB, projectId: number, path: string): void {

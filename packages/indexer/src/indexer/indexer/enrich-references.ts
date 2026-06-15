@@ -23,12 +23,14 @@ export function enrichReferencesWithLines(
       }
     }
 
-    // Fallback: regex scan for first occurrence.
+    // Fallback: regex scan for first occurrence. The relocated line makes any
+    // pre-existing col meaningless — recompute it from the match position.
     const escaped = ref.symbol_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp(`\\b${escaped}\\b`);
     for (let i = 0; i < lines.length; i++) {
-      if (re.test(lines[i])) {
-        return { ...ref, line: i + 1, snippet: ref.snippet ?? lines[i].trim().slice(0, 200) };
+      const m = re.exec(lines[i]);
+      if (m) {
+        return { ...ref, line: i + 1, col: m.index + 1, snippet: ref.snippet ?? lines[i].trim().slice(0, 200) };
       }
     }
     return ref; // No match found anywhere — leave as-is (line will be null).

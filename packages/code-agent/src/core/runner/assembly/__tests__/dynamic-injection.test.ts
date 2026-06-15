@@ -274,6 +274,89 @@ describe('computeDynamicInjection — session state block', () => {
   });
 });
 
+describe('computeDynamicInjection — user preferences', () => {
+  const userMem = { text: '<user-preferences>\n- keep files under 200 LOC', hash: 'u1' };
+
+  it('injects on milestones (turn 1) and dedups on unchanged hash', () => {
+    const onMilestone = computeDynamicInjection(baseCtx({ turn: 1, userMemoryIndex: userMem }));
+    expect(onMilestone!.reminder).toContain('<user-preferences>');
+    expect(onMilestone!.includedUserMemoryHash).toBe('u1');
+    // Steady turn, unchanged block → nothing.
+    expect(computeDynamicInjection(baseCtx({
+      userMemoryIndex: userMem,
+      lastInjectedUserMemoryHash: 'u1',
+    }))).toBeNull();
+  });
+
+  it('re-injects when the user-preferences hash changes', () => {
+    const out = computeDynamicInjection(baseCtx({
+      userMemoryIndex: { text: '<user-preferences>\n- new pref', hash: 'u2' },
+      lastInjectedUserMemoryHash: 'u1',
+    }));
+    expect(out!.reminder).toContain('<user-preferences>');
+    expect(out!.includedUserMemoryHash).toBe('u2');
+  });
+
+  it('orders user preferences ABOVE the project memory index', () => {
+    const out = computeDynamicInjection(baseCtx({
+      turn: 1,
+      userMemoryIndex: userMem,
+      projectMemoryIndex: { text: 'project memory index:\n- [note] X', hash: 'i1' },
+    }));
+    const user = out!.reminder.indexOf('<user-preferences>');
+    const proj = out!.reminder.indexOf('memory index');
+    expect(user).toBeGreaterThanOrEqual(0);
+    expect(proj).toBeGreaterThan(user);
+  });
+});
+
+describe('computeDynamicInjection — preflight hint', () => {
+  const hint = { text: '<preflight>\ntask_kind: bugfix\n</preflight>', hash: 'p1' };
+
+  it('injects on turn 1 and reports the hash', () => {
+    const out = computeDynamicInjection(baseCtx({ turn: 1, preflightHint: hint }));
+    expect(out).not.toBeNull();
+    expect(out!.reminder).toContain('<preflight>');
+    expect(out!.includedPreflightHash).toBe('p1');
+  });
+
+  it('re-injects ≤2 turns after a compaction even when already injected', () => {
+    const out = computeDynamicInjection(baseCtx({
+      turn: 10,
+      recentCompactionAt: 9,
+      preflightHint: hint,
+      lastInjectedPreflightHash: 'p1',
+    }));
+    expect(out!.reminder).toContain('<preflight>');
+    expect(out!.includedPreflightHash).toBe('p1');
+  });
+
+  it('does NOT re-inject on a steady mid-session turn once injected', () => {
+    expect(computeDynamicInjection(baseCtx({
+      preflightHint: hint,
+      lastInjectedPreflightHash: 'p1',
+    }))).toBeNull();
+  });
+
+  it('injects on any turn while never injected yet (hash mismatch)', () => {
+    const out = computeDynamicInjection(baseCtx({ turn: 5, preflightHint: hint }));
+    expect(out!.reminder).toContain('<preflight>');
+  });
+
+  it('renders the preflight block before skill/file/memory lines', () => {
+    const out = computeDynamicInjection(baseCtx({
+      turn: 1,
+      preflightHint: hint,
+      newlyRegisteredSkillIds: ['s1'],
+      recentlyEditedFiles: ['a.ts'],
+    }));
+    const pf = out!.reminder.indexOf('<preflight>');
+    const skills = out!.reminder.indexOf('skills registered');
+    expect(pf).toBeGreaterThanOrEqual(0);
+    expect(skills).toBeGreaterThan(pf);
+  });
+});
+
 describe('formatDynamicInjection', () => {
   it('wraps body in <system-reminder> tags', () => {
     expect(formatDynamicInjection('hello world')).toBe(

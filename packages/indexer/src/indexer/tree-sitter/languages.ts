@@ -156,3 +156,15 @@ export async function createParser(wasmFile: string): Promise<Parser> {
 export function getSupportedExtensions(): string[] {
   return Object.keys(EXTENSION_MAP);
 }
+
+/**
+ * Drop the cached `Parser.Language` references so future loads re-read the
+ * wasm. NOTE: this does NOT return memory to the OS — web-tree-sitter
+ * 0.24.7 has no `Language.delete()` and the emscripten heap never shrinks.
+ * It is a growth ceiling + clean-shutdown affordance, paired with the
+ * shared extractor's idle disposal. `initialized` is intentionally left
+ * set: `Parser.init` is once-per-process in web-tree-sitter.
+ */
+export function clearLanguageCache(): void {
+  languageCache.clear();
+}

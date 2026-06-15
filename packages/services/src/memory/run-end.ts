@@ -103,6 +103,9 @@ export interface RunEndMemoryDeps {
 }
 
 const SOURCE = 'session';
+/** Reserved hidden project that holds global user-scope memory (migration 145). */
+const USER_PROJECT_ID = 0;
+const USER_PROJECT_NAME = '__user__';
 const NOOP_DISTILLER: MemoryDistiller = { async distill() { return []; } };
 
 /** Build the run-end orchestrator. Constructs both distillers once and reuses
@@ -118,9 +121,19 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
   const procedureDistiller =
     deps.distillers?.procedure ??
     (resolver ? new ProcedureDistiller({ resolver, resolveContext, getFallbackDefault }) : NOOP_DISTILLER);
-  const positive = new MemoryExtractor(positiveDistiller, writer, search);
   const failure = new MemoryExtractor(failureDistiller, writer, search);
   const procedure = new MemoryExtractor(procedureDistiller, writer, search);
+
+  // Persist already-distilled candidates to a project, reusing the generic
+  // dedup/merge machinery via a literal (no-LLM) distiller. Used to split the
+  // single positive-distiller call into project-scope and user-scope writes.
+  const persistLiteral = (
+    cands: MemoryCandidate[], pid: number, pname: string, source: string,
+  ): Promise<{ created: number; merged: number; skipped: number }> =>
+    new MemoryExtractor({ distill: async () => cands }, writer, search)
+      .extractAndPersist(pid, pname, source, {});
+  const isUserScope = (c: MemoryCandidate): boolean =>
+    c.category === 'user' || c.category === 'feedback';
 
   // Never-silent posture: log the resolved state once per distinct outcome
   // (binding vs fallback vs nothing) instead of every run-end.
@@ -154,6 +167,7 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
     },
     async extractAndPersist(projectId, projectName, input) {
       const totals = { created: 0, merged: 0, skipped: 0 };
+      let userTotals: { created: number; merged: number; skipped: number } | undefined;
       let lastError: string | null = null;
       const add = (r: { created: number; merged: number; skipped: number } | undefined): void => {
         if (!r) return;
@@ -166,16 +180,29 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
         return undefined;
       };
 
-      // Positive durable facts (decisions/conventions/architecture). Only worth
-      // an LLM call with some signal.
+      // Positive durable facts — ONE distiller call. Project-scope facts
+      // (decisions/conventions/architecture) go to the project; user/feedback
+      // facts ride the SAME call (zero extra LLM cost) and go to the global
+      // user memory (project 0). Only worth a call with some signal.
       if (input.primaryRequest || input.summary) {
-        add(await positive
-          .extractAndPersist(projectId, projectName, SOURCE, {
+        let cands: MemoryCandidate[] = [];
+        try {
+          cands = await positiveDistiller.distill({
             primaryRequest: input.primaryRequest,
             summary: input.summary,
             filesTouched: input.filesTouched,
-          })
-          .catch(swallow));
+          });
+        } catch (e) {
+          swallow(e);
+        }
+        const projCands = cands.filter((c) => !isUserScope(c));
+        const userCands = cands.filter(isUserScope);
+        if (projCands.length) {
+          add(await persistLiteral(projCands, projectId, projectName, SOURCE).catch(swallow));
+        }
+        if (userCands.length) {
+          userTotals = await persistLiteral(userCands, USER_PROJECT_ID, USER_PROJECT_NAME, SOURCE).catch(swallow) ?? undefined;
+        }
       }
       // Failure lessons → `gotcha`. The distiller short-circuits to [] when
       // there are no errors, so guard here to skip even the call.
@@ -220,6 +247,17 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
           ...totals,
           error: lastError,
         });
+        // User-memory pass logs to project 0 so the user-memory health card
+        // shows its own learning timeline, separate from the project's.
+        if (userTotals) {
+          deps.distillLog?.(USER_PROJECT_ID, {
+            sessionId: input.sessionId ?? null,
+            trigger: input.trigger ?? 'run',
+            status: userTotals.created + userTotals.merged + userTotals.skipped === 0 ? 'empty' : 'ok',
+            ...userTotals,
+            error: null,
+          });
+        }
       } catch {
         /* diagnostics must never affect the pass */
       }

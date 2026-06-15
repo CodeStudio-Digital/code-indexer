@@ -11,6 +11,8 @@ import { UNIVERSAL_TOOLBAR_SOURCE } from '@mcp/services/sandbox/builder/inspecto
 import { PreviewWindow, DEFAULT_VIEWPORT, type Viewport } from './cdp.js';
 import { dispatchInteraction } from './interact.js';
 import { resolveViewport, applyViewport, clampToScreen, VIEWPORT_PRESETS } from './viewport.js';
+import { resolveAppIconPath } from '../app-icon.js';
+import { resolveDevUrl, type RunnerBridge } from './dev-server-resolver.js';
 
 export class PreviewWindowService implements IPreviewDevtools {
   private byKey = new Map<string, PreviewWindow>();
@@ -19,14 +21,46 @@ export class PreviewWindowService implements IPreviewDevtools {
   private inspectListeners = new Map<string, Set<(d: unknown) => void>>();
   /** Windows whose CDP selection events are already forwarded to the map. */
   private inspectForwarded = new WeakSet<PreviewWindow>();
+  /** Dev servers THIS service started for a preview (key → runner taskId).
+   *  Kept SEPARATE from byKey so closing the window (turn end) doesn't drop
+   *  ownership — the owned server is stopped only on closeSession (evict). */
+  private ownedTaskByKey = new Map<string, string>();
+
+  /** Injected in main.ts (null in tests / non-runner contexts). Enables
+   *  url-less preview_open: reuse the project's running runner or start one. */
+  constructor(private runnerBridge: RunnerBridge | null = null) {}
+
+  setRunnerBridge(bridge: RunnerBridge | null): void {
+    this.runnerBridge = bridge;
+  }
 
   async invoke(req: PreviewInvoke): Promise<unknown> {
     const { key, method } = req;
     const args = req.args ?? {};
-    if (method === 'open') return this.open(key, String(args.url ?? ''), args);
+    if (method === 'open') return this.open(key, args);
+    // Standalone offscreen capture — no per-key window involved.
+    if (method === 'thumbnail') {
+      const { captureThumbnail } = await import('./thumbnail.js');
+      return captureThumbnail({
+        url: String(args.url ?? ''),
+        outPath: String(args.outPath ?? ''),
+        width: typeof args.width === 'number' ? args.width : undefined,
+        thumbWidth: typeof args.thumbWidth === 'number' ? args.thumbWidth : undefined,
+      });
+    }
 
     if (method === 'close') {
       this.closeKey(key);
+      return { ok: true };
+    }
+    // Backend lifecycle (not agent-facing): closeWindow frees the window but
+    // keeps the owned dev server for reuse; closeSession also stops it.
+    if (method === 'closeWindow') {
+      this.closeKey(key);
+      return { ok: true };
+    }
+    if (method === 'closeSession') {
+      await this.closeSession(key);
       return { ok: true };
     }
     const pw = this.byKey.get(key);
@@ -136,23 +170,42 @@ export class PreviewWindowService implements IPreviewDevtools {
 
   private async open(
     key: string,
-    url: string,
     args: Record<string, unknown> = {},
-  ): Promise<{ windowId: number; url: string; viewport: Viewport }> {
+  ): Promise<{ windowId: number; url: string; viewport: Viewport; reused: boolean }> {
     const initial = resolveViewport(args, DEFAULT_VIEWPORT);
+    // Resolve the URL: explicit `url` wins; otherwise reuse/start the
+    // project's dev server via the runner (and remember ownership so we
+    // can stop exactly what we started, never the user's runner).
+    let url = String(args.url ?? '').trim();
+    let reused = true;
+    if (!url) {
+      const projectId = typeof args.projectId === 'number' ? args.projectId : null;
+      if (projectId == null || !this.runnerBridge) {
+        throw new Error(
+          'preview_open needs a `url` (no project dev-server resolver available here). ' +
+            'Pass url=http://localhost:PORT.',
+        );
+      }
+      const resolved = await resolveDevUrl(this.runnerBridge, projectId);
+      url = resolved.url;
+      reused = !resolved.ownedTaskId;
+      if (resolved.ownedTaskId) this.ownedTaskByKey.set(key, resolved.ownedTaskId);
+    }
     const existing = this.byKey.get(key);
     if (existing && !existing.win.isDestroyed()) {
       existing.clearBuffers();
       await existing.win.loadURL(url);
       existing.url = url;
       const v = applyViewport(existing, initial);
-      return { windowId: existing.id, url, viewport: v };
+      return { windowId: existing.id, url, viewport: v, reused };
     }
     const { width, height } = clampToScreen(initial.width, initial.height);
+    const appIconPath = resolveAppIconPath();
     const win = new BrowserWindow({
       width,
       height,
       title: `Preview · ${key}`,
+      ...(appIconPath ? { icon: appIconPath } : {}),
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
     });
     win.on('closed', () => {
@@ -168,7 +221,7 @@ export class PreviewWindowService implements IPreviewDevtools {
     this.byKey.set(key, pw);
     await win.loadURL(url);
     pw.viewport = initial;
-    return { windowId: pw.id, url, viewport: initial };
+    return { windowId: pw.id, url, viewport: initial, reused };
   }
 
   // ── Dashboard-driven "Inspect" (universal element selection) ──────────
@@ -195,7 +248,7 @@ export class PreviewWindowService implements IPreviewDevtools {
    * "Inspect" (arm) and "Open in new window" (navigate) entry points.
    */
   async openInspect(key: string, url: string, opts: { arm?: boolean } = {}): Promise<{ windowId: number; url: string }> {
-    const res = await this.open(key, url, {});
+    const res = await this.open(key, { url });
     const pw = this.byKey.get(key);
     if (pw) {
       if (!this.inspectForwarded.has(pw)) {
@@ -236,14 +289,39 @@ export class PreviewWindowService implements IPreviewDevtools {
     // Notify the dashboard BEFORE teardown; delete synchronously so a quick
     // re-open never reuses a closing window. The window 'closed' handler then
     // no-ops (byKey already cleared), so the sentinel fires exactly once.
+    // NOTE: leaves ownedTaskByKey intact — the owned dev server survives a
+    // window close (turn end) for reuse; only closeSession stops it.
     this.fanoutSelect(key, { type: 'mcp:closed' });
     this.byKey.get(key)?.close();
     this.byKey.delete(key);
     this.inspectListeners.delete(key);
   }
+
+  /** Session evict: close the window AND stop the dev server we started for
+   *  it (if any). The user's own runner is never owned, so it stays up. */
+  async closeSession(key: string): Promise<void> {
+    this.closeKey(key);
+    const taskId = this.ownedTaskByKey.get(key);
+    if (taskId && this.runnerBridge) {
+      this.ownedTaskByKey.delete(key);
+      try {
+        await this.runnerBridge.stop(taskId);
+      } catch {
+        /* runner already gone — best-effort */
+      }
+    }
+  }
+
   closeAll(): void {
     for (const pw of this.byKey.values()) pw.close();
     this.byKey.clear();
     this.inspectListeners.clear();
+    // Stop every preview-owned dev server (app quit). Fire-and-forget.
+    if (this.runnerBridge) {
+      for (const taskId of this.ownedTaskByKey.values()) {
+        void this.runnerBridge.stop(taskId).catch(() => undefined);
+      }
+    }
+    this.ownedTaskByKey.clear();
   }
 }

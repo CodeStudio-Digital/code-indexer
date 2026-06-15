@@ -1,7 +1,16 @@
 import { watch, type FSWatcher } from 'chokidar';
 
+export interface WatcherFileEvent {
+  /** Absolute path as emitted by chokidar (backslashes on win32 — callers normalize). */
+  path: string;
+  /** add/change/addDir → upsert; unlink/unlinkDir → delete. Latest event per path wins. */
+  kind: 'upsert' | 'delete';
+  /** Directory event (addDir/unlinkDir) — consumed by the UI fs-events stream, not the indexer. */
+  isDir?: boolean;
+}
+
 export interface WatcherEvents {
-  onFileChanged(files: string[]): void | Promise<void>;
+  onFileChanged(events: WatcherFileEvent[]): void | Promise<void>;
 }
 
 export interface WatcherOptions {
@@ -12,7 +21,7 @@ export interface WatcherOptions {
 
 export class FileWatcherService {
   private watchers = new Map<number, FSWatcher>();
-  private pendingChanges = new Map<number, Set<string>>();
+  private pendingChanges = new Map<number, Map<string, { kind: WatcherFileEvent['kind']; isDir: boolean }>>();
   private debounceTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
   startWatching(projectId: number, options: WatcherOptions, events: WatcherEvents): void {
@@ -21,6 +30,11 @@ export class FileWatcherService {
     const ignored = [
       '**/node_modules/**',
       '**/.git/**',
+      // Indexer's private working dir (trash bin + `.tmp` scratch the
+      // doc-indexer writes-then-deletes). Watching it floods the pipeline
+      // with add/unlink for ephemeral files and feeds phantom paths to the
+      // LSP — see ts-service isIndexerInternalPath.
+      '**/.mcp-indexer/**',
       '**/dist/**',
       '**/build/**',
       '**/.next/**',
@@ -38,30 +52,34 @@ export class FileWatcherService {
       },
     });
 
-    this.pendingChanges.set(projectId, new Set());
+    this.pendingChanges.set(projectId, new Map());
 
-    const handleChange = (filePath: string) => {
+    const handleChange = (kind: WatcherFileEvent['kind'], isDir = false) => (filePath: string) => {
       const pending = this.pendingChanges.get(projectId)!;
-      pending.add(filePath);
+      // Key carries the dir flag so a file and a dir at the same path (rare
+      // rename races) don't clobber each other's semantics.
+      pending.set(filePath, { kind, isDir }); // unlink after change collapses to delete
 
       // Reset debounce timer
       const existingTimer = this.debounceTimers.get(projectId);
       if (existingTimer) clearTimeout(existingTimer);
 
       const timer = setTimeout(async () => {
-        const files = Array.from(pending);
+        const batch = Array.from(pending, ([path, v]) => ({ path, kind: v.kind, isDir: v.isDir }));
         pending.clear();
-        if (files.length > 0) {
-          await events.onFileChanged(files);
+        if (batch.length > 0) {
+          await events.onFileChanged(batch);
         }
       }, options.debounce);
 
       this.debounceTimers.set(projectId, timer);
     };
 
-    watcher.on('add', handleChange);
-    watcher.on('change', handleChange);
-    watcher.on('unlink', handleChange);
+    watcher.on('add', handleChange('upsert'));
+    watcher.on('change', handleChange('upsert'));
+    watcher.on('unlink', handleChange('delete'));
+    watcher.on('addDir', handleChange('upsert', true));
+    watcher.on('unlinkDir', handleChange('delete', true));
 
     this.watchers.set(projectId, watcher);
   }

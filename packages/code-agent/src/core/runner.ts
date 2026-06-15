@@ -38,7 +38,7 @@ import {
   buildRichRefusal,
   buildAutoDowngradeResponse,
 } from "@mcp/code-agent/core/compaction.js";
-import { evaluateToolInvocation, findScopeViolations, isIrreversibleTool, type PolicyContext } from '@mcp/code-agent/core/policy.js';
+import { evaluateToolInvocation, findScopeViolations, isIrreversibleTool, isPlanModeWorkflowTool, type PolicyContext } from '@mcp/code-agent/core/policy.js';
 import { type CoderTunables, envTunables } from '@mcp/code-agent/core/tunables.js';
 import { AGENTS } from '@mcp/code-agent/agents/index.js';
 import { isSummarizerEnabled, summarizeSpan, summarizeSpanV2, renderSummary, renderSummaryV2, isStructuredSummaryEnabled, overlayLiveState } from '@mcp/code-agent/core/summarizer.js';
@@ -248,15 +248,14 @@ const SUBORDINATE_REMINDER_MSG =
 import { toolCallsSignature, toolNamesSignature } from './runner/signatures.js';
 export { toolCallsSignature, toolNamesSignature };
 
-// (filterGoalToolsByState + approxChars + shouldSpillToolOutput moved to './runner/pure-helpers.ts'.)
+// (approxChars + shouldSpillToolOutput moved to './runner/pure-helpers.ts'.)
 import {
-  filterGoalToolsByState,
   approxChars,
   shouldSpillToolOutput,
   capToolContent,
   finalizeToolOutput,
 } from './runner/pure-helpers.js';
-export { filterGoalToolsByState, approxChars, shouldSpillToolOutput, capToolContent };
+export { approxChars, shouldSpillToolOutput, capToolContent };
 
 /**
  * Build a tool_result block, applying push-time truncation if the content
@@ -339,19 +338,33 @@ export function compactHistoryForLLM(
    * flow through to the turn-budget warning threshold.
    */
   tunables?: CoderTunables,
+  /** Per-turn reducer stats observer (telemetry — mig 143). */
+  onReducerStats?: (s: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number }) => void,
 ): AgentMessage[] {
   const effectiveTunables = tunables ?? envTunables();
   // Camada 5 — rolling reduction runs FIRST and is cheap (linear scan,
   // pure function, deterministic). It retires stale repeated reads/searches
   // before the size-based compaction even sees them, so sessions grow
   // sublinearly. Disabled via CODER_ROLLING_REDUCER=0 for diagnostics.
+  // Retirements flush in tranches of CODER_REDUCER_FLUSH_CHARS so the
+  // in-place rewrites (which bust the provider prompt-cache from that point
+  // on) land as ONE batch instead of a per-turn trickle; 0 = legacy
+  // apply-immediately.
   let working = messages;
   if (process.env.CODER_ROLLING_REDUCER !== '0') {
-    const rolled = applyRollingReduction(messages);
+    const flushRaw = Number.parseInt(process.env.CODER_REDUCER_FLUSH_CHARS ?? '', 10);
+    const flushThresholdChars = Number.isFinite(flushRaw) && flushRaw >= 0 ? flushRaw : 32768;
+    const rolled = applyRollingReduction(messages, { flushThresholdChars });
+    onReducerStats?.({
+      retired: rolled.reduced,
+      freedChars: rolled.freedChars,
+      pendingRetired: rolled.pendingRetired,
+      pendingChars: rolled.pendingChars,
+    });
     if (rolled.reduced > 0) {
       console.log(
         `[coder] rolling reducer retired ${rolled.reduced} stale tool_result(s) ` +
-          `(~${rolled.freedChars} chars freed)`,
+          `(~${rolled.freedChars} chars freed, ${rolled.pendingRetired} pending below flush threshold)`,
       );
       working = rolled.messages;
     }
@@ -578,15 +591,6 @@ export class CoderRunner extends EventEmitter {
    * this — subagents have their own runner).
    */
   private currentTaskScope: { id: string; files: string[] } | null = null;
-
-  /**
-   * One-shot flag for the `create_goal hidden` log. Flipped true the first
-   * turn buildTools() removes the tool from the surface; reset to false
-   * any turn the goal isn't in_progress. Keeps the dashboard log readable
-   * (one line per transition) instead of spamming it every turn while a
-   * goal is active.
-   */
-  private goalToolHiddenLogged = false;
 
   /**
    * PR-5 (Row 32) — pre-read enforcement. Tracks recent read-family tool
@@ -1350,8 +1354,8 @@ export class CoderRunner extends EventEmitter {
     } else {
       this.activeTiers = null;
     }
-    // Pins re-derived by the host on resume (history tools outside the
-    // active tiers) — never persisted; see runCoder.
+    // Pins seeded by the host on resume — history tools outside the active
+    // tiers, unioned with the session-persisted pins (mig 142); see runCoder.
     if (opts.initialPinnedTools) {
       this.pinnedTools = new Set(opts.initialPinnedTools);
     }
@@ -1371,6 +1375,9 @@ export class CoderRunner extends EventEmitter {
     if (!this.activeTiers) return; // no filtering → nothing to promote
     if (this.activeTiers.has(tier)) return;
     this.activeTiers.add(tier);
+    // Sticky toolset (mig 142): let the host persist the widen so resumes
+    // rebuild the same tool array. Persistence never breaks the promotion.
+    try { this.opts.onTierPromoted?.(tier); } catch { /* best-effort */ }
     console.log(
       `[coder] tier promoted → ${tier}. Active tiers: ${Array.from(this.activeTiers).sort().join(',')}`,
     );
@@ -1892,7 +1899,14 @@ export class CoderRunner extends EventEmitter {
           const tool = this.findTool(toolName);
           if (!tool) return null;
           const mutates = tool.mutates ?? (tool.source === 'mcp_external');
-          if (this.opts.planMode && !this.planApproved && mutates) {
+          // Execution-intent workflow verbs (execute_tasks) reach their
+          // handler even unapproved in PLAN mode — the handler runs the
+          // human-gated plan→build transition instead of mutating directly.
+          // Spec mode stays strict (the handler has no spec→build path), so
+          // execute_tasks remains gated there. Shared predicate keeps this in
+          // sync with policy.ts. See isPlanModeWorkflowTool.
+          const planWorkflowExempt = isPlanModeWorkflowTool(toolName);
+          if (this.opts.planMode && !this.planApproved && mutates && !planWorkflowExempt) {
             return '[plan-mode: mutating tool blocked. Call `submit_plan` first; tools unlock after approval.]';
           }
           if (this.opts.specMode && !this.specApproved && mutates) {
@@ -2010,6 +2024,9 @@ export class CoderRunner extends EventEmitter {
     systemPromptChars: number;
     toolsDefChars: number;
     visibleToolsCount?: number;
+    toolsFingerprint?: string | null;
+    prefixHeadHash?: string | null;
+    reducerStats?: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number } | null;
     responseMeta: ChatProviderResponseMeta | null;
     compactionTriggered: boolean;
     summarizerRan: boolean;
@@ -2031,6 +2048,9 @@ export class CoderRunner extends EventEmitter {
       systemPromptChars: input.systemPromptChars,
       toolsDefChars: input.toolsDefChars,
       visibleToolsCount: input.visibleToolsCount,
+      toolsFingerprint: input.toolsFingerprint,
+      prefixHeadHash: input.prefixHeadHash,
+      reducerStats: input.reducerStats,
       responseMeta: input.responseMeta,
     });
     this.lastTurnTelemetryId = id;

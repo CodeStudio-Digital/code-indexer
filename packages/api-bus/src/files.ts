@@ -33,6 +33,11 @@ export interface FileTreeNode {
   path: string;
   type: 'file' | 'dir';
   children?: FileTreeNode[];
+  /**
+   * Set on dirs whose children were cut off by maxDepth — tells the lazy
+   * tree whether to draw an expand chevron without fetching first.
+   */
+  hasChildren?: boolean;
 }
 
 export interface FilesApi {
@@ -40,8 +45,19 @@ export interface FilesApi {
   manifest(input: { projectId: number }, ctx: ApiContext): Promise<ManifestInfo>;
   get(input: { projectId: number; path: string }, ctx: ApiContext): Promise<unknown>;
 
-  /** Raw read of file contents from disk (used by the Monaco editor). */
-  read(input: { projectId: number; path: string }, ctx: ApiContext): Promise<{ content: string; encoding: 'utf8' | 'base64' }>;
+  /**
+   * Raw read of file contents from disk (used by the Monaco editor).
+   * Always returns the on-disk mtime; with `ifModifiedSince` matching it,
+   * skips the read entirely (`notModified: true`, no content) — the SWR
+   * revalidation path for tab switches and fs-event echoes.
+   */
+  read(
+    input: { projectId: number; path: string; ifModifiedSince?: string },
+    ctx: ApiContext,
+  ): Promise<
+    | { content: string; encoding: 'utf8' | 'base64'; last_modified: string }
+    | { notModified: true; last_modified: string }
+  >;
 
   /**
    * Persist editor content to disk. Returns the new on-disk mtime so the

@@ -17,6 +17,12 @@ export interface EmbeddingService {
    * single-session backend (local ONNX) must stay at 1.
    */
   maxConcurrency?(): number;
+  /**
+   * Release process-held resources (local ONNX sessions). Optional —
+   * network backends and test fakes have nothing to free. Implementations
+   * must tolerate further calls after dispose (lazy re-create).
+   */
+  dispose?(): Promise<void>;
 }
 
 export class CloudflareEmbeddingService implements EmbeddingService {

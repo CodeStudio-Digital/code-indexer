@@ -26,6 +26,9 @@ import { EditorTabBar } from './EditorTabBar.js';
 const MonacoMount = lazy(() =>
   import('./editor/MonacoMount.js').then((m) => ({ default: m.MonacoMount })),
 );
+const LspInstallPrompt = lazy(() =>
+  import('./editor/LspInstallPrompt.js').then((m) => ({ default: m.LspInstallPrompt })),
+);
 const DiffMount = lazy(() =>
   import('./editor/DiffMount.js').then((m) => ({ default: m.DiffMount })),
 );
@@ -70,7 +73,11 @@ export function EditorPane() {
             ) : isMarkdownPath(activeFile.path) ? (
               <MarkdownView file={activeFile} />
             ) : (
-              <MonacoMount file={activeFile} />
+              <>
+                <MonacoMount file={activeFile} />
+                {/* Consent CTA: language has a tier-1 LSP server not yet installed. */}
+                <LspInstallPrompt projectId={activeFile.projectId} filePath={activeFile.path} />
+              </>
             )}
           </Suspense>
         ) : (

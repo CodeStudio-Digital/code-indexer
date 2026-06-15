@@ -34,7 +34,12 @@
 // list. Static prefix changed → invalidate stale fingerprints.
 // 2026-06-05.3 bump — added the gated "Session working memory" section
 // (save_note/list_notes/read_plan/recall_investigations) for non-company sessions.
-export const SYSTEM_PROMPT_VERSION = '20260605.3';
+// 2026-06-12.1 bump — Fase 1 da redução do prompt: re-read/preambles enxutos
+// (runner já enforça dedup), plan.txt sem allowlist enumerada e sem duplicar
+// o lifecycle de tasks, subagents/overlay/tierHint/not-indexed comprimidos,
+// memória unificada ({{memorySection}}), "Images & vision" condicional a
+// modelCanSeeImages. Static prefix mudou → invalida fingerprints stale.
+export const SYSTEM_PROMPT_VERSION = '20260612.1';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

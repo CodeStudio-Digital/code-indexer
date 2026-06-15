@@ -1,17 +1,7 @@
 import type { Hono } from 'hono';
-import { mkdirSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import { virtualProjectDir } from '@mcp/shared/utils/data-paths.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
-import type { BuilderStack } from '@mcp/services/sandbox/types.js';
-import { StackSnapshotSeeder } from '@mcp/company/services/stack-snapshot-seeder.js';
 import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
-import {
-  isBuilderStack,
-  isExternalProjectRuntime,
-  validateLimits,
-} from './sandbox-helpers.js';
 import { removeServiceAndProject } from './service-helpers.js';
 import {
   validateAllowedModels,
@@ -20,8 +10,7 @@ import {
 } from './session-create-validation.js';
 
 export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore, db, snapshotService } = deps;
-  const stackSnapshotSeeder = new StackSnapshotSeeder(snapshotService);
+  const { companyStore, db } = deps;
 
   // Phase 8 part 2 (continuation): the following helpers + routes moved out:
   //   - `removeServiceAndProject`            → `service-helpers.ts` (used by
@@ -203,91 +192,17 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
 
   app.post('/api/company/sessions', async (c) => {
     const body = await parseJsonBody<CreateSessionBody>(c);
-    const isBuilder = !!body.builder;
-    // Builder sessions run inside an ephemeral container and don't need
-    // a pre-existing host project. For the traditional flow a project
-    // link is still mandatory (the orchestrator wouldn't know which
-    // workspace to operate on).
-    if (!body.name || (!isBuilder && !body.project_ids?.length)) {
-      return c.json(
-        { error: isBuilder ? 'name required' : 'name and project_ids required' },
-        400,
-      );
+    // A project link is mandatory — the orchestrator wouldn't know which
+    // workspace to operate on without one.
+    if (!body.name || !body.project_ids?.length) {
+      return c.json({ error: 'name and project_ids required' }, 400);
     }
 
-    // Validate all user-provided projects exist (may be empty for builder).
-    for (const pid of body.project_ids ?? []) {
+    for (const pid of body.project_ids) {
       const proj = db.getProject(pid);
       if (!proj) return c.json({ error: `Project ${pid} not found` }, 404);
     }
 
-    if (body.builder && (body.project_ids?.length ?? 0) > 0) {
-      const mainProjectId = body.builder.main_project_id;
-      if (!Number.isInteger(mainProjectId)) {
-        return c.json(
-          {
-            error:
-              'builder.main_project_id is required when creating a builder session from existing projects',
-          },
-          400,
-        );
-      }
-      if (!(body.project_ids ?? []).includes(mainProjectId!)) {
-        return c.json(
-          { error: 'builder.main_project_id must be included in project_ids' },
-          400,
-        );
-      }
-      if (
-        body.builder.main_project_runtime !== undefined &&
-        !isExternalProjectRuntime(body.builder.main_project_runtime)
-      ) {
-        return c.json(
-          { error: "builder.main_project_runtime must be 'dockerfile' or 'node'" },
-          400,
-        );
-      }
-    }
-
-    // Builder + no explicit projects → spin up a virtual project so the
-    // rest of the orchestrator (which assumes one project per session
-    // minimum) keeps working. The project is a pure bookkeeping row:
-    // its `root_path` points at an empty host directory that nobody
-    // writes into during a builder session (runCoder pins `cwd` to the
-    // sandbox workdir; see ../../../../../core/coder/index.ts).
-    let effectiveProjectIds = body.project_ids ?? [];
-    if (isBuilder && effectiveProjectIds.length === 0) {
-      const uuid = randomUUID();
-      const rootPath = virtualProjectDir(uuid);
-      try {
-        mkdirSync(rootPath, { recursive: true });
-      } catch (e) {
-        return c.json(
-          { error: `Failed to prepare virtual-project directory: ${e instanceof Error ? e.message : String(e)}` },
-          500,
-        );
-      }
-      // `_builder_<uuid>` keeps these synthetic rows identifiable in
-      // the projects table (UI can filter them out if desired) and
-      // avoids colliding with the UNIQUE `name` constraint.
-      const virtualProject = db.createProject(
-        `_builder_${uuid}`,
-        rootPath,
-        `Virtual project auto-created for builder session "${body.name.trim()}"`,
-      );
-      effectiveProjectIds = [virtualProject.id];
-    }
-
-    // Validate `builder.stack` early — a bad stack at this layer will
-    // surface as a scaffolder lookup failure deep in session start,
-    // which is a worse user experience than a 400 here.
-    if (body.builder && !isBuilderStack(body.builder.stack)) {
-      return c.json({ error: `Unsupported builder.stack: ${body.builder.stack}` }, 400);
-    }
-    if (body.builder) {
-      const limitsErr = validateLimits(body.builder.limits);
-      if (limitsErr) return c.json({ error: limitsErr }, 400);
-    }
     if (body.allowed_models && body.allowed_models.length > 0) {
       const poolErr = validateAllowedModels(body.allowed_models, body);
       if (poolErr) return c.json({ error: poolErr }, 400);
@@ -318,48 +233,15 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         ...(body.operational_rules?.trim()
           ? { operational_rules: body.operational_rules.trim() }
           : {}),
-        // Builder config is persisted inside the free-form config_json so
-        // no migration is required. SandboxService reads it back on start.
-        ...(body.builder
-          ? {
-              builder: {
-                stack: body.builder.stack,
-                ...(body.builder.studio ? { studio: true } : {}),
-                ...(body.builder.limits ? { limits: body.builder.limits } : {}),
-                ...(body.builder.main_project_id
-                  ? { main_project_id: body.builder.main_project_id }
-                  : {}),
-                ...(body.builder.main_project_runtime
-                  ? { main_project_runtime: body.builder.main_project_runtime }
-                  : {}),
-              },
-            }
-          : {}),
       }),
     });
 
-    // Link projects (may be the virtual one we just created)
-    for (const pid of effectiveProjectIds) {
+    for (const pid of body.project_ids) {
       companyStore.addProjectToCompanySession(
         session.id,
         pid,
         body.project_labels?.[pid],
       );
-    }
-
-    // Seed stack-specific snapshots so the master agent can retrieve
-    // current (2026) idiomatic patterns via `query_snapshots`. Failure
-    // here MUST NOT break session creation — snapshots are augmentation,
-    // not a hard dependency.
-    if (body.builder && isBuilderStack(body.builder.stack)) {
-      try {
-        await stackSnapshotSeeder.seedForSession(effectiveProjectIds, body.builder.stack);
-      } catch (err) {
-        console.error(
-          '[company/sessions] stack-snapshot seeding failed:',
-          (err as Error).message,
-        );
-      }
     }
 
     return c.json(companyStore.getCompanySessionFull(session.id), 201);

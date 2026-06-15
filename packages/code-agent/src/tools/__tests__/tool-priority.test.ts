@@ -59,7 +59,6 @@ function makeArgs(model: string) {
     externalToolTiers,
     toolContext: { cwd: tmpdir(), projectName: 'test' } as unknown as ToolContext,
     provider: { name: 'zai', model } as unknown as ChatProvider,
-    goalToolAlreadyLogged: false,
   };
 }
 
@@ -175,6 +174,44 @@ describe('buildTools — pinned tools', () => {
       pinnedTools: new Set(['git_commit', 'preview_open']),
     }).tools.map((t) => t.name);
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+  });
+});
+
+describe('buildTools — session tool cap (task preflight)', () => {
+  it('caps a large-catalog model at the session cap and reports it in capInfo', () => {
+    const res = buildTools({ ...makeArgs('claude-opus-4-7'), sessionToolCap: 40 });
+    expect(res.capInfo).not.toBeNull();
+    expect(res.capInfo!.cap).toBe(40);
+    expect(res.tools.length).toBeLessThanOrEqual(40);
+    // Cold tiers die first under the session cap, hot core survives.
+    expect(res.tools.map((t) => t.name)).toContain('edit_file');
+    expect(res.tools.map((t) => t.name)).not.toContain('cf__deploy_worker');
+  });
+
+  it('the model cap wins when smaller than the session cap', () => {
+    const res = buildTools({ ...makeArgs('glm-4.5-flash'), sessionToolCap: 100 });
+    expect(res.capInfo!.cap).toBe(32);
+  });
+
+  it('12 preflight pins all survive a 32-tool model cap', () => {
+    const pins = [
+      'write_file', 'edit_file', 'multi_edit', 'create_file', 'run_command', 'get_diagnostics',
+      'git_status', 'git_diff', 'git_log', 'web_fetch', 'mcp__find_references', 'git_commit',
+    ];
+    const names = buildTools({
+      ...makeArgs('glm-4.5-flash'),
+      pinnedTools: new Set(pins),
+    }).tools.map((t) => t.name);
+    for (const pin of pins) {
+      expect(names, `preflight pin ${pin} must survive the cap`).toContain(pin);
+    }
+  });
+
+  it('session cap does NOT flip descriptions to terse on a large model', () => {
+    const tools = buildTools({ ...makeArgs('claude-opus-4-7'), sessionToolCap: 40 }).tools;
+    expect(tools.find((t) => t.name === 'mcp__search')?.description).toBe(
+      `mcp__search description. ${TAIL}`,
+    );
   });
 });
 

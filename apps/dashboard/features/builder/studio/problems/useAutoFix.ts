@@ -7,18 +7,26 @@
  * and only errors that re-emit after that reload — still real in the final
  * state — fire a single auto-fix message.
  *
+ * Two dispatch modes (persisted per browser):
+ *   - 'auto'   — the fix prompt is sent immediately (legacy behaviour).
+ *   - 'review' — the fix is staged as `pendingFix`; the user approves it
+ *                from the preview toolbar before anything reaches the chat.
+ *
  * The decision rules (suspect watermark, freshness, attempt cap, cooldown,
  * console exclusion) live in autofix-policy.ts as a pure function; this
  * hook owns the React wiring and the mutable counters. The busy signal is
- * published by the chat pane (usePublishAgentBusy in AgentChat for the
- * single-session/DS path, CompanySessionView for the company path).
+ * published by the chat pane (usePublishAgentBusy in AgentChat).
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatProblem, isAgentBusy, requestStudioSend } from '../studio-context-store.js';
 import { decideAutoFix, TICK_MS } from './autofix-policy.js';
+import { recordAutoFix } from './autofix-history.js';
 import type { Problem } from './usePreviewProblems.js';
 
 const STORAGE_KEY = 'mcp.studio.autofix';
+const MODE_KEY = 'mcp.studio.autofix.mode';
+
+export type AutoFixMode = 'auto' | 'review';
 
 function readEnabled(): boolean {
   if (typeof window === 'undefined') return true;
@@ -28,6 +36,21 @@ function readEnabled(): boolean {
   } catch {
     return true;
   }
+}
+
+function readMode(): AutoFixMode {
+  if (typeof window === 'undefined') return 'auto';
+  try {
+    return window.localStorage.getItem(MODE_KEY) === 'review' ? 'review' : 'auto';
+  } catch {
+    return 'auto';
+  }
+}
+
+export interface PendingFix {
+  /** Problem the staged prompt targets (label for the chip, raw for send). */
+  problem: Problem;
+  stagedAt: number;
 }
 
 export interface AutoFixOptions {
@@ -40,6 +63,8 @@ export interface AutoFixOptions {
 
 export function useAutoFix(sessionId: number, problems: Problem[], opts?: AutoFixOptions) {
   const [enabled, setEnabledState] = useState(readEnabled);
+  const [mode, setModeState] = useState<AutoFixMode>(readMode);
+  const [pendingFix, setPendingFix] = useState<PendingFix | null>(null);
   const attempts = useRef<Map<string, number>>(new Map());
   // Warm-up: pretend we just fired, so a freshly mounted pane (dashboard
   // reload mid-run → busy publishes a beat late) can't fire instantly.
@@ -60,6 +85,49 @@ export function useAutoFix(sessionId: number, problems: Problem[], opts?: AutoFi
       /* ignore */
     }
   }
+
+  function setMode(v: AutoFixMode) {
+    setModeState(v);
+    try {
+      window.localStorage.setItem(MODE_KEY, v);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const dispatchFix = useCallback(
+    (target: Problem, via: 'auto' | 'review') => {
+      attempts.current.set(target.signature, (attempts.current.get(target.signature) ?? 0) + 1);
+      lastFireAt.current = Date.now();
+      recordAutoFix(sessionId, { ts: Date.now(), label: target.label, via });
+      requestStudioSend(
+        sessionId,
+        `Auto-fix: resolve this error, then confirm the preview compiles.\n\n${formatProblem(target.raw)}`,
+      );
+    },
+    [sessionId],
+  );
+
+  const acceptPendingFix = useCallback(() => {
+    setPendingFix((cur) => {
+      if (cur) dispatchFix(cur.problem, 'review');
+      return null;
+    });
+  }, [dispatchFix]);
+
+  const dismissPendingFix = useCallback(() => {
+    setPendingFix((cur) => {
+      // Burn an attempt so the same signature isn't re-staged immediately.
+      if (cur) {
+        attempts.current.set(
+          cur.problem.signature,
+          (attempts.current.get(cur.problem.signature) ?? 0) + 1,
+        );
+        lastFireAt.current = Date.now();
+      }
+      return null;
+    });
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -82,17 +150,26 @@ export function useAutoFix(sessionId: number, problems: Problem[], opts?: AutoFi
         return;
       }
       if (decision.kind !== 'fire') return;
-      const target = decision.target;
-      attempts.current.set(target.signature, (attempts.current.get(target.signature) ?? 0) + 1);
-      lastFireAt.current = now;
-      requestStudioSend(
-        sessionId,
-        `Auto-fix: resolve this error, then confirm the preview compiles.\n\n${formatProblem(target.raw)}`,
-      );
+      if (mode === 'review') {
+        // Stage instead of sending; reset the cooldown so the loop doesn't
+        // keep re-deciding while the chip waits for the user.
+        lastFireAt.current = now;
+        setPendingFix({ problem: decision.target, stagedAt: now });
+        return;
+      }
+      dispatchFix(decision.target, 'auto');
     };
     const id = setInterval(tick, TICK_MS);
     return () => clearInterval(id);
-  }, [enabled, problems, sessionId]);
+  }, [enabled, mode, problems, sessionId, dispatchFix]);
 
-  return { autoFixEnabled: enabled, setAutoFixEnabled: setEnabled };
+  return {
+    autoFixEnabled: enabled,
+    setAutoFixEnabled: setEnabled,
+    autoFixMode: mode,
+    setAutoFixMode: setMode,
+    pendingFix,
+    acceptPendingFix,
+    dismissPendingFix,
+  };
 }

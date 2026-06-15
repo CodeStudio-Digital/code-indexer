@@ -45,6 +45,7 @@ import {
 } from './supervisor-incident-bus.js';
 import { installRuntimeEventLog } from './runtime-event-log.js';
 import { registerWorkerMemoryHandlers } from './worker-memory-handlers.js';
+import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
 
 interface PoolEntry {
   host: WorkerHost;
@@ -222,6 +223,36 @@ export class WorkerOrchestratorPool {
     return out;
   }
 
+  /**
+   * Per-isolate heap stats for the admin perf monitor. Best-effort: a
+   * worker that can't answer within the timeout reports `stats: null`.
+   * Does NOT bump `lastTouchedAt` — observing a worker isn't activity.
+   */
+  async memStats(
+    timeoutMs = 2_000,
+  ): Promise<Array<{ sessionId: number; stats: import('../workers/perf-stats.js').WorkerMemStats | null }>> {
+    const jobs = Array.from(this.entries.entries()).map(async ([sessionId, entry]) => {
+      try {
+        const stats = (await entry.host
+          .requireBridge()
+          .request('perf.memStats', {}, { timeoutMs })) as import('../workers/perf-stats.js').WorkerMemStats;
+        return { sessionId, stats };
+      } catch {
+        return { sessionId, stats: null };
+      }
+    });
+    return Promise.all(jobs);
+  }
+
+  /** V8 CPU profile of one session's worker isolate (admin perf panel). */
+  async cpuProfile(sessionId: number, durationMs: number): Promise<object | null> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return null;
+    return (await entry.host
+      .requireBridge()
+      .request('perf.cpuProfile', { durationMs }, { timeoutMs: durationMs + 10_000 })) as object;
+  }
+
   /** Gracefully evict a session — sends `stop` and waits for worker exit. */
   async evict(sessionId: number): Promise<void> {
     const entry = this.entries.get(sessionId);
@@ -382,6 +413,8 @@ export class WorkerOrchestratorPool {
     // `setCompanyMemoryPorts` in company-worker.ts (spawn-time PROJECT MEMORY
     // block + run-end distillation for subordinates).
     const offMemory = registerWorkerMemoryHandlers(bridge, () => this.opts.docDeps);
+    // Agent LSP nav for master + subordinates — same main-side router.
+    const offLsp = registerWorkerLspHandlers(bridge);
 
     // Keep the pool entry warm while the worker is doing observable work.
     // The TTL sweep evicts on `lastTouchedAt`, which `getOrSpawn`/`get`/RPC
@@ -455,6 +488,7 @@ export class WorkerOrchestratorPool {
       try { offPreviewDevtools(); } catch { /* best-effort */ }
       try { offVisionDescribe(); } catch { /* best-effort */ }
       try { offMemory(); } catch { /* best-effort */ }
+      try { offLsp(); } catch { /* best-effort */ }
     };
 
     const orchestrator = createOrchestratorProxy(host, sessionId, bus);

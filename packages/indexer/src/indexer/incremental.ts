@@ -18,17 +18,44 @@
  */
 import { extname } from 'node:path';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import { createIdleResource } from '@mcp/shared/utils/idle-disposer.js';
 import { TreeSitterExtractor } from '@mcp/indexer/indexer/tree-sitter/extractor.js';
-import { getGrammarForExtension, initTreeSitter } from '@mcp/indexer/indexer/tree-sitter/languages.js';
+import { getGrammarForExtension, initTreeSitter, clearLanguageCache } from '@mcp/indexer/indexer/tree-sitter/languages.js';
 
-const sharedExtractor = new TreeSitterExtractor();
-let initialized = false;
+/**
+ * Idle TTL for the shared extractor. The coder runner calls this after
+ * every edit, so usage comes in bursts; five quiet minutes means the agent
+ * stopped and the parsers can go. Re-creation is cheap (~10-50ms/grammar,
+ * wasm in page cache). Honest caveat: disposing does NOT shrink RSS on the
+ * main process (emscripten heap never returns memory and `Language` has no
+ * `delete()` in web-tree-sitter 0.24.7) — this is a growth ceiling and a
+ * clean shutdown path; the real tree-sitter RAM return is the worker pool's
+ * idle shutdown. Default in code; `MCP_TS_IDLE_TTL_MS` overrides, 0 = off.
+ */
+const DEFAULT_TS_IDLE_TTL_MS = 5 * 60_000;
 
-async function ensureInit(): Promise<void> {
-  if (!initialized) {
+const resolveTsIdleTtlMs = (): number => {
+  const raw = Number(process.env.MCP_TS_IDLE_TTL_MS);
+  if (Number.isFinite(raw) && raw >= 0) return raw;
+  return DEFAULT_TS_IDLE_TTL_MS;
+};
+
+const extractorLease = createIdleResource<TreeSitterExtractor>({
+  name: 'tree-sitter-shared',
+  idleTtlMs: resolveTsIdleTtlMs(),
+  create: async () => {
     await initTreeSitter();
-    initialized = true;
-  }
+    return new TreeSitterExtractor();
+  },
+  destroy: (ex) => {
+    ex.dispose();
+    clearLanguageCache();
+  },
+});
+
+/** Wired into process shutdown via `disposeIndexerProcessResources()`. */
+export async function disposeSharedExtractor(): Promise<void> {
+  return extractorLease.dispose();
 }
 
 /**
@@ -45,8 +72,7 @@ export async function treeSitterSymbols(
   const ext = extname(relPath).replace(/^\./, '').toLowerCase();
   if (!getGrammarForExtension(ext)) return null;
   try {
-    await ensureInit();
-    const result = await sharedExtractor.extract(relPath, content);
+    const result = await extractorLease.acquire((ex) => ex.extract(relPath, content));
     if (!result.supported || !result.analysis.symbols) return null;
     return {
       symbols: result.analysis.symbols.map((s) => ({
@@ -81,8 +107,7 @@ export async function indexFileNow(
     const fileRow = db.getFile(projectId, relPath);
     if (!fileRow) return false;
 
-    await ensureInit();
-    const result = await sharedExtractor.extract(relPath, content);
+    const result = await extractorLease.acquire((ex) => ex.extract(relPath, content));
     if (!result.supported || !result.analysis.symbols) return false;
 
     db.upsertSymbols(projectId, fileRow.id, relPath, result.analysis.symbols);

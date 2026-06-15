@@ -16,6 +16,11 @@ export interface PreviewInvoke {
   method:
     | 'open'
     | 'close'
+    // Lifecycle (backend-triggered, not agent-facing): closeWindow frees the
+    // BrowserWindow at turn end but keeps any preview-owned dev server alive
+    // for reuse; closeSession also stops the owned server (session evict).
+    | 'closeWindow'
+    | 'closeSession'
     | 'navigate'
     | 'viewport'
     | 'console'
@@ -34,7 +39,10 @@ export interface PreviewInvoke {
     | 'scroll'
     | 'hover'
     | 'double_click'
-    | 'right_click';
+    | 'right_click'
+    // Backend-only: offscreen screenshot of a URL (no agent window needed).
+    // Used by builder checkpoints for timeline thumbnails.
+    | 'thumbnail';
   args?: Record<string, unknown>;
 }
 

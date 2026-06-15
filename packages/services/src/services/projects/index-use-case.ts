@@ -9,6 +9,7 @@ import type { ProviderName, IndexProgress, IndexResult } from '@mcp/shared/types
 import { createProviderAsync } from '../../providers/factory.js';
 import type { LLMProvider } from '@mcp/indexer/indexer/providers/base.js';
 import { IndexAgent, type EmbeddingProgress } from '@mcp/indexer/indexer/indexer.js';
+import { runStructuralIndex, type StructuralIndexResult } from '@mcp/indexer/indexer/structural.js';
 import type { LshIndexingSink } from '@mcp/indexer/indexer/lsh-indexing-sink.js';
 import type { IndexerFilesUpdatedListener } from '@mcp/indexer/indexer/indexer-events.js';
 import { ProjectError } from './errors.js';
@@ -18,6 +19,11 @@ export interface IndexProjectInput {
   model?: string;
   force?: boolean;
   concurrent?: number;
+  /**
+   * 'structural' = tree-sitter + FTS only — no provider resolution, no LLM,
+   * no embeddings, $0. Default 'full' (unchanged behavior).
+   */
+  mode?: 'full' | 'structural';
 }
 
 export interface IndexUseCaseDeps {
@@ -87,6 +93,19 @@ export interface RetryEmbeddingsStreamCallbacks {
   onError?: (message: string) => Promise<void> | void;
 }
 
+/** Map a structural run onto the IndexResult wire shape (cost is always $0). */
+function toIndexResult(r: StructuralIndexResult): IndexResult {
+  return {
+    runId: r.runId ?? 0,
+    totalFiles: r.totalFiles,
+    indexedFiles: r.indexed,
+    skippedFiles: r.skipped,
+    errorCount: r.errorCount,
+    durationMs: r.durationMs,
+    costUsd: 0,
+  };
+}
+
 /**
  * Orchestrates `IndexAgent` runs behind a use-case façade. Routes, CLI, and
  * MCP tools share this path so the provider-resolution, progress-coalescing
@@ -103,6 +122,10 @@ export class IndexProjectUseCase {
     const { db } = this.deps;
     const project = db.getProject(projectId);
     if (!project) throw new ProjectError('not_found', 'Not found');
+
+    if (input.mode === 'structural') {
+      return toIndexResult(await this.runStructural(projectId, input));
+    }
 
     const { provider } = await this.resolveProvider(input);
     const agent = this.buildAgent(provider);
@@ -122,6 +145,36 @@ export class IndexProjectUseCase {
     const { db, config } = this.deps;
     const project = db.getProject(projectId);
     if (!project) throw new ProjectError('not_found', 'Not found');
+
+    if (input.mode === 'structural') {
+      try {
+        await callbacks.onStart?.({
+          project_id: project.id,
+          project_name: project.name,
+          provider: 'tree-sitter',
+          model: undefined,
+          force: !!input.force,
+          started_at: new Date().toISOString(),
+          concurrent: input.concurrent ?? 5,
+        });
+        const startedAt = Date.now();
+        let lastFlushed = 0;
+        const result = await this.runStructural(projectId, input, (p) => {
+          const now = Date.now();
+          if (p.current !== p.total && now - lastFlushed <= 120) return;
+          lastFlushed = now;
+          void callbacks.onProgress?.({
+            current: p.current, total: p.total, current_file: p.currentFile,
+            elapsed_ms: now - startedAt, cost_usd: 0,
+            percent: p.total > 0 ? Math.round((p.current / p.total) * 100) : 0,
+          });
+        });
+        await callbacks.onDone?.(toIndexResult(result));
+      } catch (err) {
+        await callbacks.onError?.(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
 
     try {
       const { provider, kind, model } = await this.resolveProvider(input);
@@ -240,6 +293,21 @@ export class IndexProjectUseCase {
   }
 
   // ─── Internals ──────────────────────────────────────────────────────
+
+  /** Structural run via the shared module — no provider, no IndexAgent. */
+  private async runStructural(
+    projectId: number,
+    input: IndexProjectInput,
+    onProgress?: (p: { current: number; total: number; currentFile: string }) => void,
+  ): Promise<StructuralIndexResult> {
+    const { db, config } = this.deps;
+    return runStructuralIndex(db, projectId, {
+      concurrency: input.concurrent ?? config.concurrency,
+      ignorePatterns: config.ignorePatterns,
+      maxFileSizeKB: config.maxFileSize,
+      onProgress,
+    });
+  }
 
   private async resolveProvider(input: IndexProjectInput) {
     const defaults = this.deps.providerStore.getDefaultProviderAndModel();

@@ -26,7 +26,48 @@ export interface ProjectStats {
   total_lines: number;
   total_size: number;
   last_indexed: string | null;
+  /** Last structural-only (tree-sitter) pass — migration 139. */
+  structural_indexed_at: string | null;
+  /** Files whose LLM/embedding layer lags current content. */
+  semantic_stale_count: number;
   run_count: number;
+}
+
+// ─── Structural auto-index status (IntelliJ-style dumb→smart) ──────
+
+export type ProjectIndexPhase =
+  | 'none'
+  | 'scanning'
+  | 'structural_indexing'
+  | 'structural_ready'
+  | 'semantic_indexing'
+  | 'semantic_ready'
+  | 'too_large'
+  | 'error';
+
+export interface ProjectIndexStatus {
+  projectId: number;
+  phase: ProjectIndexPhase;
+  watcherActive: boolean;
+  dirtyPending: number;
+  fileCount: number;
+  symbolCount: number;
+  semanticStaleCount: number;
+  progress?: { current: number; total: number };
+  lastStructuralAt: string | null;
+  lastSemanticAt: string | null;
+  error?: string;
+}
+
+/** Live filesystem change (project-relative path) — feeds the file tree + tab reload. */
+export interface FsEventWire {
+  path: string;
+  kind: 'upsert' | 'delete';
+  isDir: boolean;
+}
+
+export interface FsEventsFrame {
+  events: FsEventWire[];
 }
 
 export interface CreateProjectInput {
@@ -49,6 +90,8 @@ export interface IndexProjectInput {
   model?: string;
   /** Force a full re-index instead of incremental. */
   force?: boolean;
+  /** 'structural' = tree-sitter + FTS only, $0, no provider needed. Default 'full'. */
+  mode?: 'full' | 'structural';
 }
 
 /**
@@ -156,6 +199,23 @@ export interface ProjectsApi {
   }>;
 
   stats(input: { id: number }, ctx: ApiContext): Promise<ProjectStats>;
+
+  /** Live structural-index status (phase, watcher, dirty queue, staleness). */
+  indexStatus(input: { id: number }, ctx: ApiContext): Promise<ProjectIndexStatus>;
+
+  /**
+   * Streaming status — initial frame + one frame per transition (coalesced
+   * ~150ms). The `Stream` suffix is load-bearing: handlers-mount auto-routes
+   * it to a MessagePort on Electron; the Hono route adapts it to SSE.
+   */
+  indexStatusStream(input: { id: number }, ctx: ApiContext): AsyncStream<ProjectIndexStatus>;
+
+  /**
+   * Live filesystem events (watcher + editor mutations), coalesced ~200ms.
+   * Subscribing arms the project watcher. Feeds the live file tree and
+   * open-tab external-change handling.
+   */
+  fsEventsStream(input: { id: number }, ctx: ApiContext): AsyncStream<FsEventsFrame>;
 
   /** One-shot index (no streaming progress). */
   index(input: { id: number } & IndexProjectInput, ctx: ApiContext): Promise<IndexResult>;

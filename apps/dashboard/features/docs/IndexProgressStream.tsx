@@ -125,8 +125,8 @@ export function IndexProgressStream({ start, onClose, onFinished }: Props) {
                   : t('progress.starting')}
           </span>
         </div>
-        <Button size="sm" variant="ghost" disabled={running} onClick={() => void onClose()}>
-          {t('progress.close')}
+        <Button size="sm" variant="ghost" onClick={() => void onClose()}>
+          {running ? t('progress.runInBackground') : t('progress.close')}
         </Button>
       </div>
       <div className="px-4 py-3 space-y-3">

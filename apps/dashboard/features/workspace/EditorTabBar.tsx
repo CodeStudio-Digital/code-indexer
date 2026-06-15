@@ -128,6 +128,9 @@ function TabChip({
   const isVirtual = isVirtualTab(file);
   const display = isVirtual ? file.title : (file.path.split('/').pop() ?? file.path);
   const dirty = !isVirtual && file.dirty;
+  // Disk changed under unsaved edits (or the file was deleted) — fs-events
+  // stream sets this; saving or reloading clears it.
+  const conflicted = !isVirtual && file.externallyChanged === true;
   const { Icon: TypeIcon, colorClass } = tabIcon(file);
 
   const items: ContextMenuItem[] = [
@@ -191,9 +194,16 @@ function TabChip({
             !active && 'opacity-80',
           )}
         />
-        <span className={cn('text-[11.5px] truncate font-medium', active && 'tracking-tight')}>
+        <span className={cn('text-[11.5px] truncate font-medium', active && 'tracking-tight', conflicted && 'text-amber-400')}>
           {display}
         </span>
+        {conflicted && (
+          <span
+            aria-hidden
+            title="Changed on disk while you have unsaved edits — saving overwrites the disk version"
+            className="shrink-0 h-1.5 w-1.5 rounded-full bg-amber-400"
+          />
+        )}
         <button
           type="button"
           onClick={(e) => {

@@ -10,7 +10,7 @@ import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
 import { FallbackPicker } from '../../../components/FallbackPicker.js';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api';
 
 interface ComposerToolbarProps {
   hasInput: boolean;

@@ -132,7 +132,7 @@ const get_file_structure = defineTool({
       file.is_test ? 'Test File: yes' : '',
       '',
       `## Summary`,
-      file.summary,
+      file.summary || '(not semantically indexed yet — structural data below is current)',
       '',
       `## Concepts`,
       concepts.join(', '),

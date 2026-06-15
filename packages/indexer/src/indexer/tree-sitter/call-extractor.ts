@@ -102,6 +102,7 @@ export function extractCalls(
             symbol_name: name,
             kind: 'function' as SymbolKind,
             line,
+            col: node.startPosition.column + 1,
             snippet: node.text.split('\n')[0]?.trim().slice(0, 120),
           });
         }

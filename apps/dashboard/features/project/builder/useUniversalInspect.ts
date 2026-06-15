@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiCall, apiStream, electronApi } from '../../../lib/api-client.js';
-import { setSelected, type SelectedElement } from '../../builder/studio/studio-context-store.js';
+import { setSelected, toggleSelected, type SelectedElement } from '../../builder/studio/studio-context-store.js';
 
 export interface UniversalInspect {
   /** Electron + a resolved dev URL → the window/inspect affordances are usable. */
@@ -41,7 +41,9 @@ export function useUniversalInspect(projectId: number, url: string | null): Univ
         for await (const d of apiStream<SelectedElement | { type: 'mcp:closed' }>('previewInspect.events', { projectId })) {
           if (cancelled) break;
           if ((d as { type?: string })?.type === 'mcp:closed') { setWindowOpen(false); break; }
-          setSelected(projectId, d as SelectedElement);
+          const sel = d as SelectedElement;
+          if (sel.additive) toggleSelected(projectId, sel);
+          else setSelected(projectId, sel);
         }
       } catch { /* stream ended / unavailable */ }
     })();

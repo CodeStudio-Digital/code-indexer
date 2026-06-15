@@ -19,14 +19,6 @@ import { ViteApiScaffolder } from './vite-api-scaffolder.js';
 import { CfWorkerScaffolder } from './cf-worker-scaffolder.js';
 import { AngularScaffolder } from './angular-scaffolder.js';
 import { NodeOnlyScaffolder } from './node-only-scaffolder.js';
-import { BuilderScaffolder } from './builder-scaffolder.js';
-import { getSourceStampPlugin } from '../builder/source-stamp/registry.js';
-
-/** Vite `--template` arg per stack, for Builder scaffolds that share a base. */
-const VITE_TEMPLATE: Partial<Record<SandboxStack, string>> = {
-  'react-ts': 'react-ts',
-  'vue-ts': 'vue-ts',
-};
 
 export interface GetScaffolderOptions {
   /**
@@ -35,14 +27,6 @@ export interface GetScaffolderOptions {
    * sessions started before the per-session UI shipped still work.
    */
   includeE2e?: boolean;
-  /**
-   * Builder studio mode. When true and a `SourceStampPlugin` exists for
-   * the stack, returns the `BuilderScaffolder` (Tailwind + shadcn +
-   * element-selection instrumentation) instead of the plain scaffolder.
-   * Falls through to the normal scaffolder for stacks without stamping
-   * support yet (e.g. Vue until its stamp plugin lands).
-   */
-  studio?: boolean;
 }
 
 /** Test / plugin hook: register a scaffolder for a new stack at runtime. */
@@ -73,17 +57,6 @@ export function getScaffolder(
   if (override) return override;
 
   const includeE2e = resolveIncludeE2e(opts);
-
-  // Builder studio: swap in the instrumented scaffolder when stamping is
-  // supported for this stack. Keeps the stack identity (`react-ts`) intact
-  // — only the scaffolder implementation changes.
-  if (opts.studio) {
-    const sourceStamp = getSourceStampPlugin(stack);
-    const viteTemplate = VITE_TEMPLATE[stack];
-    if (sourceStamp && viteTemplate) {
-      return new BuilderScaffolder({ stack, viteTemplate, sourceStamp, includeE2e });
-    }
-  }
 
   switch (stack) {
     case 'react-ts':

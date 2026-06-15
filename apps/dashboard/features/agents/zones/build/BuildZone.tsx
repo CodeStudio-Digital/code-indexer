@@ -14,7 +14,7 @@ import DocsTab from '../../DocsTab.js';
 import { TestsTab } from '../../tests/TestsTab.js';
 import { FilesTab as BuilderFilesTab } from '../../../builder/preview/files/FilesTab.js';
 import { GitTab as BuilderGitTab } from '../../../builder/preview/git/GitTab.js';
-import { CompanyApiReferenceTab } from '../../CompanyApiReferenceTab.js';
+import { CompanyApiTab } from '../../CompanyApiTab.js';
 import { CompanyTerminalPanel } from '../../terminal/CompanyTerminalPanel.js';
 import { RunnersTab as BuilderRunnersTab } from './RunnersTab.js';
 import { useSessionProjects } from '../../../builder/preview/useSessionProjects.js';
@@ -38,7 +38,6 @@ export function BuildZone({ sessionId, tab }: BuildZoneProps) {
 
   if (tab === 'docs') return <DocsTab companySessionId={sessionId} />;
   if (tab === 'tests') return <TestsTab sessionId={sessionId} />;
-  if (tab === 'api') return <CompanyApiReferenceTab sessionId={sessionId} />;
   if (tab === 'terminal') {
     return (
       <CompanyTerminalPanel
@@ -56,6 +55,9 @@ export function BuildZone({ sessionId, tab }: BuildZoneProps) {
   }
   if (error) {
     return <div className="p-4 text-xs text-destructive">{error}</div>;
+  }
+  if (tab === 'api') {
+    return <CompanyApiTab sessionId={sessionId} projects={projects} />;
   }
   if (tab === 'files') {
     return <BuilderFilesTab sessionId={sessionId} projects={projects} />;

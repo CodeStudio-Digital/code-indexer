@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { RunnerTask } from '@mcp/api-bus';
+import { DEV_URL_RE, DEV_READY_LINE_RE } from '@mcp/shared/utils/dev-server-url.js';
 import { apiStream } from '../../../lib/api-client.js';
 import {
   useRunningTasks,
@@ -21,17 +22,6 @@ import {
 } from '../../../state/running-tasks.js';
 
 export type DevServerStatus = 'stopped' | 'running' | 'exited';
-
-const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/i;
-/**
- * Lines that announce the server's OWN address (vite "Local:", wrangler
- * "Ready on", next "started server", CRA, angular, fastify…). A bare URL
- * match is treated as PROVISIONAL: dev scripts often echo config/proxy
- * targets first (`VITE_API_URL=http://localhost:8282`), and taking the
- * first URL made the preview attach to ANOTHER service's port.
- */
-const READY_LINE_RE =
-  /(local:|ready|listening|running at|started server|server (running|started|listening)|available (at|on)|➜|on port)/i;
 
 function manualKey(projectId: number): string {
   return `mcp.preview.url.${projectId}`;
@@ -92,10 +82,10 @@ export function useProjectDevServer(projectId: number, opts: { pinnedPort?: numb
           if (cancelled) return;
           if (chunk.type !== 'data' || !chunk.data) continue;
           for (const line of chunk.data.split(/\r?\n/)) {
-            const m = URL_RE.exec(line);
+            const m = DEV_URL_RE.exec(line);
             if (!m) continue;
             const found = `http://localhost:${m[1]}`;
-            if (READY_LINE_RE.test(line)) {
+            if (DEV_READY_LINE_RE.test(line)) {
               setDetectedUrl(found);
               return; // authoritative — done
             }

@@ -29,4 +29,10 @@ export interface RerankerService {
    * Returns candidates sorted by score descending.
    */
   rerank(query: string, candidates: RerankCandidate[], topK?: number): Promise<RerankResult[]>;
+  /**
+   * Release process-held resources (local ONNX sessions). Optional —
+   * network rerankers and the Null passthrough have nothing to free.
+   * Implementations must tolerate further calls after dispose.
+   */
+  dispose?(): Promise<void>;
 }

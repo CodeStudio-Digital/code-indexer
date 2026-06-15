@@ -64,6 +64,12 @@ export interface PersistTurnTelemetryArgs {
   toolsDefChars?: number;
   /** How many tools were visible to the model this turn (mig 135). */
   visibleToolsCount?: number;
+  /** SHA-1 of the serialized tools array (mig 143) — cache-prefix segment 1. */
+  toolsFingerprint?: string | null;
+  /** SHA-1 sample of the assembled history head (mig 143). */
+  prefixHeadHash?: string | null;
+  /** Rolling-reducer counters for this turn's LLM view (mig 143). */
+  reducerStats?: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number } | null;
   /** Sanitized provider request/response metadata (mig 093). */
   responseMeta?: ChatProviderResponseMeta | null;
 }
@@ -142,6 +148,11 @@ export function persistTurnTelemetry(args: PersistTurnTelemetryArgs): number | n
       system_prompt_chars: args.systemPromptChars ?? null,
       tools_def_chars: args.toolsDefChars ?? null,
       visible_tools_count: args.visibleToolsCount ?? null,
+      tools_fingerprint: args.toolsFingerprint ?? null,
+      prefix_head_hash: args.prefixHeadHash ?? null,
+      reducer_retired_count: args.reducerStats?.retired ?? null,
+      reducer_freed_chars: args.reducerStats?.freedChars ?? null,
+      reducer_pending_chars: args.reducerStats?.pendingChars ?? null,
       estimated_cost_usd: cost > 0 ? cost : null,
       response_meta: args.responseMeta ?? null,
     });

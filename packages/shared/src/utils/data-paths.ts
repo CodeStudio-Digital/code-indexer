@@ -60,3 +60,8 @@ export function verdaccioStorageDir(env: NodeJS.ProcessEnv = process.env): strin
 export function qaReportsDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(mcpDataDir(env), 'qa-reports');
 }
+
+/** Managed LSP server installs — `<dataDir>/lsp-servers/<id>@<version>/`. */
+export function lspServersBaseDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(mcpDataDir(env), 'lsp-servers');
+}

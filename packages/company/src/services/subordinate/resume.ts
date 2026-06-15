@@ -40,7 +40,7 @@ import {
 import { wireSubordinateInterceptionsForRunner } from '@mcp/company/services/subordinate/runner-wiring.js';
 import { tryAcquireResume, releaseResume } from '@mcp/company/services/subordinate/resume-guard.js';
 import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
-import { fetchProjectMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
+import { fetchProjectMemoryBlock, fetchUserMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
 
 export interface ResumeSubordinateDeps {
   ctx: SessionContext;
@@ -159,14 +159,18 @@ async function resumeSubordinateInner(
   const resumeMessage =
     message ?? 'Continue your task from where you left off. Check the board for context.';
 
-  // Mem C — refresh the PROJECT MEMORY block against the resume message
-  // (the task may have pivoted via forward_to_agent). Best-effort, 2s cap.
-  const projectMemory = await fetchProjectMemoryBlock({
-    projectId,
-    projectName: project?.name ?? `project-${projectId}`,
-    taskText: resumeMessage,
-    db: ctx.db,
-  });
+  // Mem C — refresh the PROJECT MEMORY + global USER PREFERENCES blocks against
+  // the resume message (the task may have pivoted via forward_to_agent).
+  // Best-effort, 2s cap each.
+  const [projectMemory, userMemory] = await Promise.all([
+    fetchProjectMemoryBlock({
+      projectId,
+      projectName: project?.name ?? `project-${projectId}`,
+      taskText: resumeMessage,
+      db: ctx.db,
+    }),
+    fetchUserMemoryBlock({ taskText: resumeMessage }),
+  ]);
 
   const subordinateBlock = buildSubordinateCompanyBlock({
     role: agentRun.role,
@@ -177,7 +181,7 @@ async function resumeSubordinateInner(
         rootPath: project?.root_path ?? '',
       },
     ],
-    projectMemory: projectMemory || undefined,
+    projectMemory: [projectMemory, userMemory].filter(Boolean).join('\n') || undefined,
     builder: resumeBinding
       ? {
           workdir: resumeBinding.workdir,

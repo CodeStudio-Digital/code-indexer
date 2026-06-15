@@ -30,7 +30,7 @@ export {
   getDesignSystemStore,
   setSkillStore as setDesignSystemSkillStore,
 } from '@mcp/company/tools/design-system/store-binding.js';
-export { companyBinding, studioBinding } from '@mcp/company/tools/design-system/binding.js';
+export { studioBinding } from '@mcp/company/tools/design-system/binding.js';
 export type { DsToolBinding, DsToolProfile } from '@mcp/company/tools/design-system/binding.js';
 export { buildDesignSystemConsumerTools } from '@mcp/company/tools/design-system/consumer-tools.js';
 export {
@@ -48,11 +48,10 @@ export { dsSetVersionStatus } from '@mcp/company/tools/design-system/ds-set-vers
 export { dsPublishVersion } from '@mcp/company/tools/design-system/ds-publish-version.js';
 
 /**
- * DS Studio set — sessão single sobre o projeto-workspace. Sem os gates
- * do pipeline company aposentado (`ds_validate_manifest`/`ds_validate_stories`
- * foram deletados junto com ele): o registro nasce de `ds_record_component`
- * aprovado pelo usuário no preview, e o manifest é warning do audit, não
- * contrato. `companyBinding` permanece exportado só para testes do audit.
+ * DS Studio set — sessão single sobre o projeto-workspace. O pipeline
+ * company de Design System foi aposentado (mig 132); o registro nasce de
+ * `ds_record_component` aprovado pelo usuário no preview, e o manifest é
+ * warning do audit, não contrato.
  */
 export function buildDesignSystemStudioTools(projectId: number): CoderTool[] {
   const binding = studioBinding(projectId);

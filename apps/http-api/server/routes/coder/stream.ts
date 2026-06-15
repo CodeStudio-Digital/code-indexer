@@ -1,8 +1,9 @@
 import type { Hono } from 'hono';
 import { runCoder } from '@mcp/code-agent/index.js';
-import type { CoderAttachment } from '@mcp/code-agent/index.js';
+import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
+import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
 import {
   createBus,
   publish,
@@ -13,6 +14,8 @@ import {
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
+import { closePreviewWindow, closePreviewSession } from '../../../sse/closeCoderPreview.js';
+import { notifyBuilderRunEnded } from '../../../sse/builder-checkpoint.js';
 import {
   coderWorkerEnabled,
   getCoderWorkerPool,
@@ -139,6 +142,78 @@ export function mountCoderStreamRoutes(
   }
 
   /**
+   * Task preflight — when the `code-agent/preflight` binding is configured
+   * (Admin → Pipelines), analyze the FIRST prompt of a fresh session with a
+   * cheap model and seed the run: minimal profile, pinned tools, and which
+   * project memories to read. Runs OUTSIDE the session lock (up to ~4s);
+   * worst case two racing POSTs pay the analysis twice and the lock loser's
+   * seed is discarded with its run. Fail-open by construction: any non-ok
+   * status (unconfigured / timeout / provider error / unparseable output)
+   * returns undefined and the session starts exactly as before.
+   */
+  async function maybeRunPreflight(
+    id: number,
+    body: SendMessageBody,
+  ): Promise<PreflightSeed | undefined> {
+    try {
+      if (process.env.CODER_PREFLIGHT === '0') return undefined;
+      // Only resume runs are never fresh tasks. An explicit agent/profile no
+      // longer blocks preflight: it still runs on a fresh session to seed
+      // tools + relevant memories, and its profile seed loses to the explicit
+      // choice downstream (resolveSessionProfile: explicit > seed > heuristic).
+      // The dashboard always sends the default agent='explore', which used to
+      // suppress preflight on every chat — that's the bug this removes.
+      if (body.resume) return undefined;
+      if (!body.content?.trim()) return undefined;
+      const session = sessionStore.getSession(id);
+      if (!session) return undefined;
+      // Fresh = zero messages AND no durable compaction summary (mirrors
+      // runCoder's own hasHistory check) AND no live bus (attach path).
+      if (session.compaction_summary) return undefined;
+      if (sessionStore.getMessageCount(id) > 0) return undefined;
+      const liveBus = coderWorkerEnabled()
+        ? getCoderWorkerPool().getBus(id)
+        : activeRuns.get(id);
+      if (liveBus && !liveBus.ended) return undefined;
+
+      const result = await deps.taskPreflight.run({
+        sessionId: id,
+        projectId: session.project_id,
+        userMessage: body.content,
+      });
+      if (result.status === 'unconfigured') return undefined;
+
+      // Input-tab trail (kind 'preflight') — hint body on success, short
+      // diagnostic on failure; meta feeds the effectiveness funnel.
+      try {
+        sessionStore.recordSessionInput({
+          session_id: id,
+          kind: 'preflight',
+          source_label: 'turn-start',
+          content: result.status === 'ok' && result.seed
+            ? renderPreflightHint(result.seed)
+            : (result.error ?? result.status),
+          meta: {
+            status: result.status,
+            latency_ms: result.latencyMs,
+            provider_id: result.providerId ?? null,
+            model_id: result.modelId ?? null,
+            resolved_from: result.resolvedFrom ?? null,
+            task_kind: result.seed?.taskKind ?? null,
+            profile: result.seed?.profile ?? null,
+            tools: result.seed?.pinTools ?? [],
+            memories: result.seed?.memories?.map((m) => m.title) ?? [],
+          },
+        });
+      } catch { /* input log is best-effort */ }
+
+      return result.status === 'ok' ? result.seed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Reattach to an in-flight run via SSE. Replays buffered events from
    * (Last-Event-ID + 1) and then forwards live events until the run ends
    * or the client disconnects.
@@ -258,6 +333,21 @@ export function mountCoderStreamRoutes(
         ? body.selected_skill_ids
         : undefined;
 
+    // Structural auto-index — agents work live against symbols/grep/FTS, so
+    // a session turn counts as "project became active". Memory-only no-op
+    // when fresh (cooldown + watcher); MUST stay on the main side: inside
+    // the coder worker the service singleton doesn't exist.
+    {
+      const session = sessionStore.getSession(id);
+      if (session?.project_id != null) {
+        deps.projectIndexService.ensureFresh(session.project_id, 'session');
+      }
+    }
+
+    // Task preflight (fresh sessions only) — deliberately OUTSIDE the lock
+    // so a slow analyzer (≤ ~4s) never serializes an attach to a live run.
+    const preflight = await maybeRunPreflight(id, body);
+
     // Serialize the "do we have an active run?" decision per session so two
     // concurrent POSTs cannot both observe `activeRuns.get(id) === undefined`
     // and each spin up a fresh `runCoder`. Inside the lock we either:
@@ -330,6 +420,7 @@ export function mountCoderStreamRoutes(
           describeImages: body.describe_images,
           previewAvailable: resolvePreviewAvailable(id),
           selectedSkillIds,
+          preflight,
           // Apêndice 4 Fase 2 — when the dashboard is resuming via the
           // worker-fallback path, the synthetic tool_result is already
           // in history. runCoder({resume:true}) picks up from there
@@ -472,6 +563,7 @@ export function mountCoderStreamRoutes(
           describeImages: body.describe_images,
           previewAvailable: resolvePreviewAvailable(id),
           selectedSkillIds,
+          preflight,
           pluginTools,
           signal: bus.ctrl.signal,
           mcpBearerResolver: deps.mcpBearerResolver,
@@ -511,10 +603,20 @@ export function mountCoderStreamRoutes(
         markEnded(bus, 'error', { message });
       } finally {
         void pluginHost?.dispose();
+        // Turn ended → free the agent's preview WINDOW now (keep any
+        // preview-owned dev server up for the next turn). In-process mirror
+        // of the worker pool's bus.end → closeWindow.
+        closePreviewWindow(id);
+        // Builder checkpoint (in-process mirror of the pool's bus.end hook).
+        notifyBuilderRunEnded(id);
         // Linger in the map so a late reattach (tab closed near done) still
-        // sees the full buffer. After BUS_LINGER_MS the entry is evicted.
+        // sees the full buffer. After BUS_LINGER_MS the entry is evicted —
+        // at which point we also stop any preview-owned dev server.
         setTimeout(() => {
-          if (activeRuns.get(id) === bus) activeRuns.delete(id);
+          if (activeRuns.get(id) === bus) {
+            activeRuns.delete(id);
+            closePreviewSession(id);
+          }
         }, BUS_LINGER_MS);
       }
     })();
@@ -622,8 +724,15 @@ export function mountCoderStreamRoutes(
         markEnded(bus, 'error', { message });
       } finally {
         void pluginHost?.dispose();
+        // Turn ended → free the agent's preview window (see /fresh path).
+        closePreviewWindow(id);
+        // Builder checkpoint (in-process mirror of the pool's bus.end hook).
+        notifyBuilderRunEnded(id);
         setTimeout(() => {
-          if (activeRuns.get(id) === bus) activeRuns.delete(id);
+          if (activeRuns.get(id) === bus) {
+            activeRuns.delete(id);
+            closePreviewSession(id);
+          }
         }, BUS_LINGER_MS);
       }
     })();

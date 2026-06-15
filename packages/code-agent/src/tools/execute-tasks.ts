@@ -37,6 +37,7 @@ import {
   IMPLEMENT_SYSTEM_PROMPT,
   type SubagentDeps,
 } from '@mcp/code-agent/tools/subagent.js';
+import { applyPlanApproval } from '@mcp/code-agent/tools/plan.js';
 import {
   type ExecuteTasksMode,
   type TaskLimit,
@@ -198,6 +199,80 @@ const executeTasksSchema: JsonSchema = {
   additionalProperties: false,
 } as unknown as JsonSchema;
 
+/**
+ * Plan/spec-mode handling for `execute_tasks`. The gate lets execute_tasks
+ * reach the handler even unapproved (see isPlanModeWorkflowTool); this drives
+ * the human-gated transition that the gate used to dead-end.
+ *
+ * Two cases:
+ *  - An approved task list already exists → the user approved it via
+ *    submit_tasks, which IS the human gate. Don't re-prompt: apply the
+ *    plan→build transition and return null so the caller runs the waves.
+ *  - No approved list (the model used execute_tasks as a "plan is ready, go"
+ *    signal without submitting one) → present for approval, reusing the
+ *    submit_plan pause flow. On approval, switch to build and return a build
+ *    guide; on rejection, return guidance to keep planning.
+ *
+ * Returns a ToolResult to short-circuit the handler, or null to fall through
+ * to normal wave execution.
+ */
+async function handleExecuteTasksInPlanMode(
+  ctx: ToolContext,
+  runner: NonNullable<ToolContext['runner']>,
+  state: TasksState | null | undefined,
+): Promise<ToolResult | null> {
+  const hasApprovedTasks = !!state?.approved && state.tasks.length > 0;
+  if (hasApprovedTasks) {
+    // submit_tasks already collected the user's approval — unlock + switch to
+    // build, then let the waves run. Fixes the pre-existing dead-end where
+    // markTasksApproved() left planApproved=false and execute_tasks got gated.
+    applyPlanApproval(runner, ctx);
+    return null;
+  }
+
+  const id = `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const planText =
+    state && state.tasks.length > 0
+      ? `Execute the proposed task list:\n${state.tasks
+          .map((t, i) => `${i + 1}. ${t.title}`)
+          .join('\n')}`
+      : 'The agent called execute_tasks to start working but has not submitted a written ' +
+        'plan or task list. Approve leaving plan mode to begin?';
+  ctx.recordPlan?.(id, planText);
+  runner.emit('plan_posted', { type: 'plan', id, plan: planText, kind: 'mutating' });
+
+  const raw = await runner.waitForUserInput();
+  let parsed: { approved?: boolean; feedback?: string; aborted?: boolean; interrupted?: boolean };
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = { approved: false, feedback: raw };
+  }
+
+  if (parsed.interrupted) return err('execute_tasks: plan review interrupted.');
+  if (parsed.aborted) {
+    ctx.resolvePlan?.(id, 'aborted', parsed.feedback);
+    return err('execute_tasks: plan review aborted by user.');
+  }
+  if (!parsed.approved) {
+    ctx.resolvePlan?.(id, 'rejected', parsed.feedback);
+    return ok(
+      `Plan rejected by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''} ` +
+        `Refine the approach and call submit_plan (or submit_tasks) again before executing.`,
+    );
+  }
+
+  ctx.resolvePlan?.(id, 'approved', parsed.feedback);
+  const extras = applyPlanApproval(runner, ctx);
+  return {
+    content:
+      `Plan approved by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''} ` +
+      `Switched to build mode. No approved task list to dispatch — proceed with direct edits ` +
+      `per build-mode instructions, or call submit_tasks to decompose the work into parallel waves.`,
+    ...extras,
+  };
+}
+
 export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
   return {
     name: 'execute_tasks',
@@ -207,6 +282,18 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
     mutates: true,
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
       const state = ctx.getTasksState?.();
+
+      // Plan/spec mode: execute_tasks is the model's "done planning, execute"
+      // signal. The gate now lets it reach here (instead of dead-ending);
+      // drive the human-gated plan→build transition. Returns a result to
+      // short-circuit (rejected / no-list cases) or null to fall through and
+      // run the waves (an already-approved list — the approval was the gate).
+      const planRunner = ctx.runner;
+      if (planRunner && planRunner.planMode && !planRunner.isPlanApproved()) {
+        const gated = await handleExecuteTasksInPlanMode(ctx, planRunner, state);
+        if (gated) return gated;
+      }
+
       if (!state) return err('execute_tasks: no tasks state found. Call submit_tasks first.');
       if (!state.approved) return err('execute_tasks: task list not approved yet.');
       if (state.tasks.length === 0) return err('execute_tasks: empty task list.');

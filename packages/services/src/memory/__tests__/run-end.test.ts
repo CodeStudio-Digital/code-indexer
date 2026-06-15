@@ -109,6 +109,35 @@ describe('createRunEndMemory', () => {
     expect(calls).toBe(0);
   });
 
+  it('routes user/feedback candidates to the global user project (0) and logs them separately', async () => {
+    const w = fakeWriter();
+    const logs: Array<{ projectId: number; entry: Record<string, unknown> }> = [];
+    const rem = createRunEndMemory({
+      writer: w.writer,
+      search: fakeSearch(),
+      distillers: {
+        positive: fakeDistiller([
+          { title: 'Use X', content: 'because Y', category: 'decision', importance: 0.8 },
+          { title: 'Keep files small', content: 'under 200 LOC', category: 'feedback', importance: 0.9 },
+          { title: 'Solo PT-BR dev', content: 'works alone', category: 'user', importance: 0.8 },
+        ]),
+        failure: noop,
+        procedure: noop,
+      },
+      distillLog: (projectId, entry) => logs.push({ projectId, entry: entry as Record<string, unknown> }),
+    });
+    const result = await rem.extractAndPersist(5, 'proj', { summary: 's' });
+
+    const byProject: Record<number, unknown[]> = {};
+    for (const c of w.creates) (byProject[c.projectId] ??= []).push(c.data.category);
+    expect(byProject[5]).toEqual(['decision']); // project-scope fact → the project
+    expect((byProject[0] as string[]).sort()).toEqual(['feedback', 'user']); // user-scope → project 0
+    // Project totals exclude the user-scope writes.
+    expect(result).toEqual({ created: 1, merged: 0, skipped: 0 });
+    // Two log rows: the project run + the user-memory pass.
+    expect(logs.map((l) => l.projectId).sort()).toEqual([0, 5]);
+  });
+
   it('isConfigured reflects whether the distiller binding resolves', async () => {
     const withResolver = (binding: unknown) =>
       createRunEndMemory({

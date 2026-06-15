@@ -62,6 +62,12 @@ const KIND_TO_CATEGORY: Record<string, string> = {
   todo: 'todo',
 };
 
+/** For scope 'user': "who the user is" (fact) → user; everything else (a
+ *  working preference / correction) → feedback. */
+function userCategoryForKind(kind: string): string {
+  return kind === 'fact' ? 'user' : 'feedback';
+}
+
 export const saveNoteTool: CoderTool = {
   name: 'save_note',
   description:
@@ -71,6 +77,10 @@ export const saveNoteTool: CoderTool = {
     'future work on this codebase (a decision and its why, a confirmed convention, a non-obvious ' +
     'gotcha you hit, a reusable how-to). Save project memory THE MOMENT you learn something a ' +
     'future agent would otherwise rediscover the hard way — not at the end.\n' +
+    'Scope "user": a GLOBAL fact about the USER or how they want you to work — applies to EVERY ' +
+    'project, not just this one (e.g. "always keep files under 200 LOC", "never git stash my WIP", ' +
+    '"prefers PT-BR"). Save when the user states a preference or repeats a correction. Use kind ' +
+    '"fact" for who-they-are, any other kind for a working preference.\n' +
     "DON'T: dump file contents, transient task state, or progress notes into project scope.\n" +
     '`title` is the key for session notes (re-saving updates); project notes are deduplicated ' +
     'against existing memory. Review session notes with `list_notes`; search project memory with ' +
@@ -92,10 +102,11 @@ export const saveNoteTool: CoderTool = {
       pinned: { type: 'boolean', description: 'Pin to always surface it after compaction (use sparingly).' },
       scope: {
         type: 'string',
-        enum: ['session', 'project'],
+        enum: ['session', 'project', 'user'],
         description:
           'Where the note lives. "session" (default): this session only. ' +
-          '"project": durable cross-session PROJECT MEMORY for this codebase.',
+          '"project": durable cross-session PROJECT MEMORY for this codebase. ' +
+          '"user": GLOBAL fact about the user / how they want you to work, applied to every project.',
       },
     },
     required: ['title', 'body'],
@@ -122,6 +133,23 @@ export const saveNoteTool: CoderTool = {
         return ok(`Project memory "${title}" ${what}. Future sessions on this codebase will retrieve it.`);
       } catch (e) {
         return err(`save_note (project) failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    if (args.scope === 'user') {
+      const um = ctx.userMemory;
+      if (!um) {
+        return err(
+          'user memory is not available in this context — nothing was saved. ' +
+          'Retry with scope "session" to keep it in the session scratchpad.',
+        );
+      }
+      try {
+        const res = await um.save({ title, content: body, category: userCategoryForKind(kind) });
+        const what = res && res.merged > 0 ? 'merged into existing memory' : 'saved';
+        return ok(`User memory "${title}" ${what}. It will inform you in every project going forward.`);
+      } catch (e) {
+        return err(`save_note (user) failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 

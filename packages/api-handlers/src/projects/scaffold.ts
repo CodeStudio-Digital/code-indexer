@@ -124,6 +124,9 @@ export async function runScaffoldStream(
       deps.db.updateProject(project.id, { builder_json: builderJson });
     }
     const finalProject = builderJson ? (deps.db.getProject(project.id) ?? project) : project;
+    // Fresh scaffold is small — the structural index lands in <1s, so the
+    // project opens already usable for symbols/grep. Fire-and-forget.
+    deps.projectIndexService.ensureFresh(finalProject.id, 'scaffold');
     emit({ event: 'done', data: { project: finalProject } });
   } catch (err) {
     const message = err instanceof ProjectError || err instanceof Error ? err.message : String(err);

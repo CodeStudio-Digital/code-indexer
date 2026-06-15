@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useConfirm, useNotify } from '../../../components/ui/dialog-provider.js';
 import {
+  addProviderModel,
   deleteProvider,
+  deleteProviderModel,
   fetchProviderModels,
   fetchProviders,
   refreshProviderModels,
@@ -99,6 +101,42 @@ export function useAdminProviders() {
   const toggleModel = async (providerId: string, modelId: string, mode: string, enabled: boolean) => {
     await toggleModelEnabled(providerId, modelId, mode, enabled);
     await loadModels(providerId);
+  };
+
+  const addModel = async (
+    providerId: string,
+    input: { model_id: string; name: string; mode?: string },
+  ) => {
+    try {
+      await addProviderModel(providerId, input);
+      await loadModels(providerId);
+    } catch (e) {
+      await notify({
+        title: 'Add model failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const deleteModel = async (providerId: string, modelId: string, mode: string) => {
+    const ok = await confirm({
+      title: `Delete model ${modelId}?`,
+      description: 'Removes this manually-added model. The action cannot be undone.',
+      variant: 'destructive',
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    try {
+      await deleteProviderModel(providerId, modelId, mode);
+      await loadModels(providerId);
+    } catch (e) {
+      await notify({
+        title: 'Delete model failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
   };
 
   const setModelEffort = async (
@@ -238,6 +276,8 @@ export function useAdminProviders() {
     test,
     refresh,
     toggleModel,
+    addModel,
+    deleteModel,
     setModelEffort,
     setModelContextWindow,
     setModelMaxTools,

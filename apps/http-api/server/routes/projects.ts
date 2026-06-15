@@ -1,6 +1,6 @@
 import type { Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { createProjectsHandlers, createContext, reinstrumentBuilder } from '@mcp/api-handlers';
+import { createProjectsHandlers, createContext, reinstrumentBuilder, visualEdit, type VisualEditBody } from '@mcp/api-handlers';
 import { ApiError } from '@mcp/api-bus';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
@@ -94,6 +94,20 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  // Visual edit — deterministic (no-AI) source rewrite for a stamped element
+  // of a Builder project: inline text + Tailwind classes. 409 = stale
+  // selection (re-pick), 422 = shape the engine refuses (dynamic className…).
+  app.post('/api/projects/:id/builder/visual-edit', async (c) => {
+    try {
+      const id = parseIdParam(c);
+      const body = await parseJsonBody<VisualEditBody>(c);
+      return c.json(visualEdit(deps, id, body));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return notFound(c);
+      return mapApiError(c, err);
+    }
+  });
+
   app.post('/api/projects/:id/clear-data', async (c) => {
     try {
       return c.json(await h.clearData({ id: parseIdParam(c) }, createContext()));
@@ -101,6 +115,47 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
       if (err instanceof ApiError && err.status === 404) return notFound(c);
       return mapApiError(c, err);
     }
+  });
+
+  app.get('/api/projects/:id/index-status', async (c) => {
+    try {
+      return c.json(await h.indexStatus({ id: parseIdParam(c) }, createContext()));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return notFound(c);
+      return mapApiError(c, err);
+    }
+  });
+
+  /** Live filesystem events (SSE) — coalesced batches from the watcher. */
+  app.get('/api/projects/:id/fs-events/stream', async (c) => {
+    const id = parseIdParam(c);
+    if (!deps.db.getProject(id)) return notFound(c);
+    return streamSSE(c, async (stream) => {
+      let seq = 0;
+      try {
+        for await (const frame of h.fsEventsStream({ id }, createContext())) {
+          await stream.writeSSE({ id: String(seq++), event: 'fs', data: JSON.stringify(frame) });
+        }
+      } finally {
+        await stream.close();
+      }
+    });
+  });
+
+  /** Live status stream (SSE) — initial frame + one per transition. */
+  app.get('/api/projects/:id/index-status/stream', async (c) => {
+    const id = parseIdParam(c);
+    if (!deps.db.getProject(id)) return notFound(c);
+    return streamSSE(c, async (stream) => {
+      let seq = 0;
+      try {
+        for await (const status of h.indexStatusStream({ id }, createContext())) {
+          await stream.writeSSE({ id: String(seq++), event: 'status', data: JSON.stringify(status) });
+        }
+      } finally {
+        await stream.close();
+      }
+    });
   });
 
   app.post('/api/projects/:id/index', async (c) => {

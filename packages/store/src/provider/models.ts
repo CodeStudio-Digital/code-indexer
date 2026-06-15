@@ -178,6 +178,21 @@ export function update(
 }
 
 /**
+ * Delete a single MANUAL model row. Scoped to `source='manual'` so live or
+ * seeded rows can't be removed here (they'd reappear on the next refresh
+ * anyway — the admin disables those via the `enabled` toggle instead).
+ * Returns the number of rows deleted (0 = nothing matched).
+ */
+export function remove(db: DB, providerId: string, modelId: string, mode: string): number {
+  const r = db
+    .prepare(
+      `DELETE FROM provider_models WHERE provider_id = ? AND model_id = ? AND mode = ? AND source = 'manual'`,
+    )
+    .run(providerId, modelId, mode);
+  return r.changes;
+}
+
+/**
  * Backfill context_window for every model row that has it null. Pulls the
  * value from the static registry's prefix-aware lookup. Cheap, idempotent,
  * no network.

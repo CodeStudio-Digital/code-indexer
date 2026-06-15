@@ -16,6 +16,7 @@ import { BABEL_STAMP_SOURCE } from './babel-plugin-source.js';
 import { VITE_STAMP_SOURCE } from './vite-stamp-source.js';
 import { CONSOLE_BRIDGE_SOURCE } from '../inspector/console-bridge-source.js';
 import { INSPECTOR_RUNTIME_SOURCE } from '../inspector/runtime-source.js';
+import { EDIT_RUNTIME_SOURCE } from '../inspector/edit-runtime-source.js';
 
 const BABEL_PLUGIN_PATH = '.mcp/babel-mcp-stamp.cjs';
 const VITE_STAMP_PATH = '.mcp/vite-mcp-stamp.mjs';
@@ -30,8 +31,10 @@ function inspectorModule(): string {
     'const __mcpPost = (msg) => { try { window.parent.postMessage(msg, "*"); } catch (e) {} };',
     CONSOLE_BRIDGE_SOURCE,
     INSPECTOR_RUNTIME_SOURCE,
+    EDIT_RUNTIME_SOURCE,
     'try { initMcpConsoleBridge(__mcpPost); } catch (e) {}',
     'try { initMcpInspector(__mcpPost); } catch (e) {}',
+    'try { initMcpVisualEdit(__mcpPost); } catch (e) {}',
     '__mcpPost({ type: "mcp:ready" });',
     'export {};',
     '',

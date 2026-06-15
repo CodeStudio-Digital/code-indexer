@@ -29,7 +29,17 @@ export interface RectLike {
 /** Messages the dashboard (parent) posts INTO the preview iframe. */
 export type ParentToPreviewMessage =
   | { type: 'mcp:arm' }
-  | { type: 'mcp:disarm' };
+  | { type: 'mcp:disarm' }
+  // ── Visual editing (two-way): optimistic DOM ops the panel applies
+  //    instantly while the server rewrites the source behind them ──
+  /** Replace the class list of every element stamped with `loc`. */
+  | { type: 'mcp:set-classes'; loc: SourceLoc; classes: string[] }
+  /** Make the first element stamped with `loc` contenteditable; commit on blur/Enter (→ `mcp:text-committed`), cancel on Escape. */
+  | { type: 'mcp:begin-text-edit'; loc: SourceLoc }
+  /** Live theme preview: set CSS custom properties on documentElement. */
+  | { type: 'mcp:set-css-vars'; vars: Record<string, string> }
+  /** Ask how many rendered elements share `loc` (→ `mcp:loc-count`). */
+  | { type: 'mcp:query-loc'; loc: SourceLoc };
 
 /** Messages the preview iframe posts OUT to the dashboard (parent). */
 export type PreviewToParentMessage =
@@ -55,8 +65,17 @@ export type PreviewToParentMessage =
       sourceLine?: number;
       /** `data-testid` / `id`, if present — extra anchors for the model. */
       testId?: string;
+      /**
+       * Ctrl/Cmd-click: accumulate into the selection set (multi-citation)
+       * instead of replacing it. Absent/false → plain click → single select.
+       */
+      additive?: boolean;
     }
   | { type: 'mcp:clear' }
+  /** Inline text edit committed in the preview (blur/Enter). */
+  | { type: 'mcp:text-committed'; loc: SourceLoc; text: string; ts: number }
+  /** Reply to `mcp:query-loc` — how many rendered nodes share the stamp. */
+  | { type: 'mcp:loc-count'; loc: SourceLoc; count: number }
   | { type: 'mcp:console'; level: 'error' | 'warn'; message: string; stack?: string; ts: number }
   | { type: 'mcp:runtime-error'; message: string; stack?: string; source?: SourceLoc; ts: number }
   | {
@@ -75,6 +94,8 @@ const PREVIEW_TYPES = new Set<PreviewToParentMessage['type']>([
   'mcp:hover',
   'mcp:select',
   'mcp:clear',
+  'mcp:text-committed',
+  'mcp:loc-count',
   'mcp:console',
   'mcp:runtime-error',
   'mcp:network',

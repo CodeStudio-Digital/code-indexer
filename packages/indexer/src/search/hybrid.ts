@@ -1,5 +1,6 @@
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
+import { buildFtsMatch, ftsTokens } from '@mcp/store/db/fts-query.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { HyDEService } from '@mcp/indexer/search/hyde.js';
@@ -43,6 +44,13 @@ export interface SearchDiagnostics {
    * (hybrid mode, `MCP_PIPELINES_GRAPH_EXPANSION=1`). Unset when off.
    */
   graphExpansionCount?: number;
+  /**
+   * Results contributed by the raw-content word index
+   * (`file_contents_fts`, migration 140) — the lexical stream that works on
+   * structural-only projects and matches text living only in code bodies.
+   * Unset when the stream is off (`MCP_FTS_CONTENT_STREAM=0`) or empty.
+   */
+  contentCount?: number;
 }
 
 const RRF_K = 60;
@@ -250,6 +258,19 @@ export class HybridSearch {
     if (mode === 'fts') {
       const results = await this.ftsSearch(projectId, query, type, limit);
       diag.ftsCount = results.length;
+      // Top-up from the raw-content index: on structural-only projects
+      // files_fts has empty summaries/concepts, so identifier queries that
+      // live in code bodies would otherwise return nothing.
+      if (results.length < limit) {
+        const seen = new Set(results.filter((r) => r.type === 'file').map((r) => r.id));
+        const extra = this.runContentSearch(projectId, query, type, limit)
+          .filter((c) => !seen.has(c.id))
+          .slice(0, limit - results.length);
+        if (extra.length > 0) {
+          results.push(...extra);
+          diag.contentCount = extra.length;
+        }
+      }
       return cacheAndReturn({ results, diagnostics: diag });
     }
 
@@ -284,17 +305,20 @@ export class HybridSearch {
       return { results: v2Results, diagnostics: hybridDiag };
     }
 
-    const [ftsResults, vectorResults, recentResults] = await Promise.allSettled([
+    const [ftsResults, vectorResults, recentResults, contentResults] = await Promise.allSettled([
       this.ftsSearch(projectId, query, type, overFetch),
       this.vectorSearchExpanded(projectId, projectName, query, type, overFetch, hybridDiag),
       this.runRecentSearch(projectId, query, type, Math.max(5, limit)),
+      Promise.resolve(this.runContentSearch(projectId, query, type, Math.max(10, limit))),
     ]);
 
     const fts = ftsResults.status === 'fulfilled' ? ftsResults.value : [];
     const vec = vectorResults.status === 'fulfilled' ? vectorResults.value : [];
     const recent = recentResults.status === 'fulfilled' ? recentResults.value : [];
+    const content = contentResults.status === 'fulfilled' ? contentResults.value : [];
     hybridDiag.ftsCount = fts.length;
     if (recent.length > 0) hybridDiag.recentFilesCount = recent.length;
+    if (content.length > 0) hybridDiag.contentCount = content.length;
 
     // 1-hop graph expansion (flag-gated, default OFF) — seeds from the primary
     // FTS+vector union and surfaces callers/importers/imports as an extra stream.
@@ -304,13 +328,14 @@ export class HybridSearch {
     // How many fused candidates the reranker scores (cross-encoder cost is
     // linear in this). Default keeps the historical limit*2.
     const rerankDepth = envInt('MCP_RERANK_DEPTH', limit * 2);
-    const merged = recent.length > 0 || graph.length > 0
+    const merged = recent.length > 0 || graph.length > 0 || content.length > 0
       ? this.rrfMergeStreams(
           [
             { name: 'fts', results: fts },
             { name: 'vector', results: vec },
             ...(recent.length > 0 ? [{ name: 'recent', results: recent }] : []),
             ...(graph.length > 0 ? [{ name: 'graph', results: graph }] : []),
+            ...(content.length > 0 ? [{ name: 'content', results: content }] : []),
           ],
           rerankDepth,
         )
@@ -344,6 +369,36 @@ export class HybridSearch {
     return cacheAndReturn({ results: merged.slice(0, limit), diagnostics: hybridDiag });
   }
 
+  /**
+   * Content stream — MATCH over `file_contents_fts` (raw code text). The
+   * lexical signal that still works on STRUCTURAL-only projects (files_fts
+   * carries empty summaries there) and finds terms that live only in
+   * function bodies. Same AND→OR fallback as ftsSearch. Synchronous; errors
+   * (vtab missing on a pre-migration DB, malformed MATCH) degrade to [].
+   * Kill switch: MCP_FTS_CONTENT_STREAM=0.
+   */
+  private runContentSearch(projectId: number, query: string, type: SearchType, limit: number): HybridSearchResult[] {
+    if (process.env.MCP_FTS_CONTENT_STREAM === '0') return [];
+    if (type === 'symbols') return [];
+    try {
+      const andQuery = this.sanitizeFtsQuery(query, 'AND');
+      if (andQuery.length === 0) return [];
+      let matches = this.db.searchFileContents(projectId, andQuery, limit);
+      if (matches.length === 0 && ftsTokens(query).length > 1) {
+        matches = this.db.searchFileContents(projectId, this.sanitizeFtsQuery(query, 'OR'), limit);
+      }
+      const out: HybridSearchResult[] = [];
+      for (let i = 0; i < matches.length; i++) {
+        const file = this.db.getFileById(matches[i].id);
+        if (!file) continue;
+        out.push({ id: file.id, type: 'file', score: 0, fts_rank: i + 1, vector_score: null, data: file });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
   private async ftsSearch(projectId: number, query: string, type: SearchType, limit: number): Promise<HybridSearchResult[]> {
     // Precision-first: require ALL terms (FTS5 AND). A multi-word query like
     // "user service create" should not match every doc mentioning just one of
@@ -351,7 +406,7 @@ export class HybridSearch {
     // only some terms is still recoverable (single-term queries are identical
     // either way, so the fallback is a no-op there).
     const results = this.runFtsQuery(projectId, query, type, limit, 'AND');
-    if (results.length === 0 && this.ftsTerms(query).length > 1) {
+    if (results.length === 0 && ftsTokens(query).length > 1) {
       return this.runFtsQuery(projectId, query, type, limit, 'OR');
     }
     return results;
@@ -784,7 +839,9 @@ export class HybridSearch {
             if (!refId || seen.has(refId)) continue;
             seen.add(refId);
             const snap = this.db.getSnapshotById(refId);
-            if (snap && snap.project_id === projectId) vectorSnaps.push(snap);
+            // Archived snapshots have their vectors dropped, but a stale vector
+            // could linger until the delete drains — filter defensively.
+            if (snap && snap.project_id === projectId && !snap.archived_at) vectorSnaps.push(snap);
           }
         }
       } catch (err) {
@@ -815,21 +872,13 @@ export class HybridSearch {
       .map((e) => e.snap);
   }
 
-  /** Sanitized FTS terms — FTS5 special chars stripped, empties dropped. */
-  private ftsTerms(query: string): string[] {
-    return query
-      .replace(/[-*"(){}[\]^~\\:]/g, ' ')
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
-  }
-
   /**
    * Build an FTS5 MATCH expression. Defaults to AND (every term must appear)
    * for precision; callers fall back to OR when AND returns nothing so recall
    * is preserved. Single-term queries are identical under either connector.
+   * Delegates to the canonical quote-per-token builder in @mcp/store.
    */
   private sanitizeFtsQuery(query: string, connector: 'AND' | 'OR' = 'AND'): string {
-    return this.ftsTerms(query).join(` ${connector} `);
+    return buildFtsMatch(query, connector);
   }
 }

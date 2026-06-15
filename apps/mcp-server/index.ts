@@ -15,6 +15,7 @@ import { allResources, collectListedResources, readResource } from './resources/
 import { coerceArgs } from './utils.js';
 import { VERSION, PACKAGE_NAME } from '@mcp/shared/version.js';
 import { backfillSnapshotEmbeddings } from '@mcp/services/services/snapshot-backfill.js';
+import { disposeIndexerProcessResources } from '@mcp/indexer/bootstrap/dispose.js';
 
 const ctx = buildContext();
 const registry = buildToolRegistry();
@@ -110,7 +111,16 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
 async function main() {
   const transport = new StdioServerTransport();
+  process.on('SIGINT', () => {
+    void disposeIndexerProcessResources().finally(() => process.exit(0));
+  });
   await server.connect(transport);
+  // Stdio close = host went away. Drain worker pools (dbWriter writes,
+  // tree-sitter workers) before exiting so nothing is lost mid-flight.
+  // (`server.onclose` — the SDK overwrites `transport.onclose` on connect.)
+  server.onclose = () => {
+    void disposeIndexerProcessResources().finally(() => process.exit(0));
+  };
   console.error(
     `MCP Code Indexer server running on stdio (${allTools.length} tools, ${allResources.length} resources)`,
   );

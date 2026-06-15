@@ -4,6 +4,7 @@ import { ApiError } from '@mcp/api-bus';
 import type { SnapshotCategory } from '@mcp/shared/types.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam } from './_helpers.js';
+import { getMemoryConsolidator } from '../../sse/memory-consolidator.js';
 
 function mapApiError(c: Context, err: unknown) {
   if (err instanceof ApiError) {
@@ -69,8 +70,21 @@ export function mountSnapshotsRoutes(app: Hono, deps: ServerDeps): void {
         total: deps.db.countSnapshots(projectId),
         byCategory: deps.db.countMemoryByCategory(projectId),
         bySource: deps.db.countMemoryBySource(projectId),
+        archived: deps.db.countArchivedSnapshots(projectId),
       },
     });
+  });
+
+  // Manual "run now" for the memory consolidator — merges near-duplicates and
+  // GCs stale/cold/low-importance snapshots for this project on demand. Works
+  // even when the periodic timer is disarmed (MCP_MEMORY_CONSOLIDATE off).
+  app.post('/api/projects/:id/memory/consolidate', async (c) => {
+    const projectId = parseIdParam(c);
+    if (!deps.db.getProject(projectId)) return c.json({ error: 'project not found' }, 404);
+    const consolidator = getMemoryConsolidator();
+    if (!consolidator) return c.json({ error: 'consolidator not available' }, 503);
+    const results = await consolidator.runOnce(projectId);
+    return c.json({ results });
   });
 
   app.delete('/api/snapshots/:id', async (c) => {

@@ -40,8 +40,7 @@ export interface SandboxState {
    * Same pattern for `/services` list mutations
    * (`sandbox.service.added`, `sandbox.service.removed`,
    * `sandbox.service.status_changed`). Replaces the 4-5s polls
-   * across `useServicesPolling`, `useExtraServices`, and the
-   * `BuilderView` inline poller.
+   * across `useServicesPolling` and `useExtraServices`.
    */
   servicesSeq: number;
 }

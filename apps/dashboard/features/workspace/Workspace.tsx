@@ -109,61 +109,30 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
   const openFiles = useWorkspaceStore((s) => s.openFiles);
 
   const handleOpen = useCallback(
-    async (path: string) => {
-      try {
-        const result = await apiCall<{ content: string; encoding: 'utf8' | 'base64' }>('files.read', {
-          projectId,
-          path,
-        });
-        openFile({
-          projectId,
-          path,
-          content: result.content,
-          dirty: false,
-          lastModified: null,
-        });
-      } catch {
-        /* surface inline once we ship a toast system */
-      }
+    (path: string) => {
+      // Instant open — content: null; the editor fetches on activation.
+      openFile({ projectId, path, content: null, dirty: false, lastModified: null });
     },
     [projectId, openFile],
   );
 
-  // Restore the user's previous tab set on first mount of this project.
-  // Skipped when there's nothing persisted to avoid hammering files.read
-  // on a fresh project.
+  // Restore the user's previous tab set on first mount — instant (no
+  // serial fetch loop); each tab loads on first activation.
   useEffect(() => {
     const persisted = loadPersistedTabs(projectId);
     if (persisted.openFiles.length === 0) return;
-    let cancelled = false;
-    void (async () => {
-      for (const entry of persisted.openFiles) {
-        if (cancelled) return;
-        try {
-          const result = await apiCall<{ content: string; encoding: 'utf8' | 'base64' }>(
-            'files.read',
-            { projectId: entry.projectId, path: entry.path },
-          );
-          if (cancelled) return;
-          openFile({
-            projectId: entry.projectId,
-            path: entry.path,
-            content: result.content,
-            dirty: false,
-            lastModified: null,
-          });
-        } catch {
-          /* file may have been deleted on disk — skip silently */
-        }
-      }
-      if (cancelled) return;
-      if (persisted.activeFilePath) {
-        useWorkspaceStore.getState().setActive(persisted.activeFilePath);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    for (const entry of persisted.openFiles) {
+      openFile({
+        projectId: entry.projectId,
+        path: entry.path,
+        content: null,
+        dirty: false,
+        lastModified: null,
+      });
+    }
+    if (persisted.activeFilePath) {
+      useWorkspaceStore.getState().setActive(persisted.activeFilePath);
+    }
     // Only re-runs on projectId change. Re-running on `openFile` would
     // restart the restore loop because openFile mutates the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -218,19 +187,10 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
         shortcut: 'Ctrl+Shift+S',
         icon: Save,
         run: async () => {
-          for (const f of openFiles) {
-            if (!f.dirty) continue;
-            try {
-              const res = await apiCall<{ ok: true; last_modified: string }>('files.write', {
-                projectId: f.projectId,
-                path: f.path,
-                content: f.content,
-              });
-              useWorkspaceStore.getState().markClean(f.path, res.last_modified);
-            } catch {
-              /* surface via toast when we ship one */
-            }
-          }
+          // Reads live Monaco models (store can lag a keystroke) and skips
+          // never-loaded tabs (content null) — see editor/save.ts.
+          const { saveAllDirty } = await import('./editor/save.js');
+          await saveAllDirty(projectId);
         },
       },
       {

@@ -23,6 +23,7 @@ import {
   dispatchHono,
   dispatchStreaming,
 } from './hono-dispatch.js';
+import { timeCall } from '@apps/http-api/server/perf/slow-ipc.js';
 
 type AnyFn = (...args: unknown[]) => unknown;
 type AnyRecord = Record<string, unknown>;
@@ -82,7 +83,9 @@ function bind(handlers: AnyRecord, basePath: string[], boundChannels: Set<string
 function mountInvoke(channel: string, fn: AnyFn) {
   ipcMain.handle(channel, async (_event, input: unknown) => {
     try {
-      const result = await fn(input as never, createContext());
+      // Slow-call instrumentation: calls >50ms aggregate per channel in
+      // the perf monitor (Admin → Performance → Chamadas lentas).
+      const result = await timeCall(channel, () => fn(input as never, createContext()));
       return { ok: true, value: result };
     } catch (err) {
       return { ok: false, error: serializeError(err) };
@@ -116,10 +119,16 @@ async function pumpStream(port: Electron.MessagePortMain, fn: AnyFn, payload: un
   }
 }
 
-export function mountIpcHandlers(deps: ServerDeps, honoApp?: Hono): void {
-  const handlers = createHandlers(deps) as AnyRecord;
+/**
+ * Mount every pure handler over IPC and return the built handlers object,
+ * so main.ts can reuse the SAME instances (e.g. the runner registry the
+ * preview resolver borrows — a second `createHandlers` would have its own,
+ * empty task list and never see the dashboard's running dev servers).
+ */
+export function mountIpcHandlers(deps: ServerDeps, honoApp?: Hono): ReturnType<typeof createHandlers> {
+  const handlers = createHandlers(deps);
   const boundChannels = new Set<string>();
-  bind(handlers, [], boundChannels);
+  bind(handlers as AnyRecord, [], boundChannels);
 
   // ─── Hono dispatch fallback ─────────────────────────────────
   //
@@ -144,12 +153,13 @@ export function mountIpcHandlers(deps: ServerDeps, honoApp?: Hono): void {
       }
     }
   }
+  return handlers;
 }
 
 function mountHonoInvoke(channel: string, methodPath: string, app: Hono) {
   ipcMain.handle(channel, async (_event, input: unknown) => {
     try {
-      const result = await dispatchHono(app, methodPath, input);
+      const result = await timeCall(channel, () => dispatchHono(app, methodPath, input));
       return { ok: true, value: result };
     } catch (err) {
       return { ok: false, error: serializeError(err) };

@@ -11,6 +11,7 @@
     "./coder": "./src/coder/index.ts",
     "./plugins": "./src/plugins/index.ts",
     "./context": "./src/context.ts",
-    "./types": "./src/types.ts"
+    "./types": "./src/types.ts",
+    "./*": "./src/*"
   }
 }

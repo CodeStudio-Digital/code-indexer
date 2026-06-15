@@ -37,4 +37,27 @@ export function mountSearchRoutes(app: Hono, deps: ServerDeps): void {
       return mapApiError(c, err);
     }
   });
+
+  /** Search Everywhere — thin FTS tabs (Symbols / Text), <20ms targets. */
+  app.get('/api/projects/:id/search/symbols', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const query = c.req.query('q') ?? '';
+      const limit = parseIntQuery(c, 'limit', 50);
+      return c.json(await h.symbols({ projectId, query, limit }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.get('/api/projects/:id/search/text', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const query = c.req.query('q') ?? '';
+      const limit = parseIntQuery(c, 'limit', 50);
+      return c.json(await h.text({ projectId, query, limit }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
 }

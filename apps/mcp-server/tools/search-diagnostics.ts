@@ -4,6 +4,12 @@ import type { SearchDiagnostics } from '@mcp/indexer/search/hybrid.js';
 export interface CoverageCounts {
   files_total: number;
   files_embedded: number;
+  /**
+   * Files whose semantic layer (LLM summary/embeddings) lags current content
+   * — structurally re-indexed by the watcher/auto-index but not yet seen by
+   * a full run. Optional: older callers don't compute it.
+   */
+  files_semantic_stale?: number;
 }
 
 /**
@@ -48,12 +54,28 @@ export function renderZeroResultDiagnostics(
     );
   }
 
-  // Tier-coverage honesty: under the aggressive profile, on_demand files
-  // (tests/docs/migrations/fixtures) are indexed for FTS but never embedded.
   const cov = safeCoverage(getCoverage);
-  if (cov && cov.files_total > 0 && cov.files_embedded < cov.files_total) {
+  if (cov && cov.files_total === 0) {
+    // No structural index at all — symbols/FTS/content are all empty.
+    lines.push(
+      'This project has NO index yet (not even the structural layer) — zero results are meaningless. Open the project to trigger the auto structural index, or run indexing manually; grep_code disk fallback works meanwhile.',
+    );
+  } else if (cov && cov.files_total > 0 && cov.files_embedded === 0) {
+    // Structural-only ("dumb mode"): symbols + FTS + content index work,
+    // semantic summaries/embeddings don't exist yet.
+    lines.push(
+      'Index is STRUCTURAL-ONLY (symbols/FTS/content — no LLM summaries, no embeddings yet). Prefer exact identifiers or grep_code; semantic absence is NOT evidence of absence.',
+    );
+  } else if (cov && cov.files_total > 0 && cov.files_embedded < cov.files_total) {
+    // Tier-coverage honesty: under the aggressive profile, on_demand files
+    // (tests/docs/migrations/fixtures) are indexed for FTS but never embedded.
     lines.push(
       `Embeddings cover ${cov.files_embedded}/${cov.files_total} indexed files — semantic search cannot see the rest (e.g. on_demand-tier files under the aggressive profile); grep_code covers them.`,
+    );
+  }
+  if (cov?.files_semantic_stale && cov.files_semantic_stale > 0) {
+    lines.push(
+      `${cov.files_semantic_stale} file(s) changed since the last semantic pass (summaries/embeddings stale there) — structural data (symbols/grep) is current.`,
     );
   }
   return lines.join('\n');

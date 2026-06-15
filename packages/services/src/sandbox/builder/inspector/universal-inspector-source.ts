@@ -147,6 +147,9 @@ export const UNIVERSAL_INSPECTOR_SOURCE = String.raw`(function () {
     var info = detect(el);
     var classes = ((el.getAttribute && el.getAttribute('class')) || '').split(/\s+/).filter(Boolean);
     var testId = (el.getAttribute && el.getAttribute('data-testid')) || el.id || '';
+    // Ctrl (Win/Linux) / Cmd (Mac) → add to the selection set instead of
+    // replacing it, so the user can cite several elements in one message.
+    var additive = !!(e.ctrlKey || e.metaKey);
     var payload = {
       type: 'mcp:select',
       loc: info.sourceFile ? (info.sourceFile + (info.sourceLine ? ':' + info.sourceLine : '')) : '',
@@ -160,6 +163,7 @@ export const UNIVERSAL_INSPECTOR_SOURCE = String.raw`(function () {
       sourceFile: info.sourceFile || undefined,
       sourceLine: info.sourceLine || undefined,
       testId: testId || undefined,
+      additive: additive || undefined,
     };
     try { window.__mcpSelect(JSON.stringify(payload)); } catch (e) {}
     hideOverlay();

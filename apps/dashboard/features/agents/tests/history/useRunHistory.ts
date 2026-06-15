@@ -3,7 +3,7 @@
  * while there's an active run (so the table picks up the freshly
  * completed row without the user reloading).
  *
- * Polling cadence: 4s — same as the BuilderView's services poll, kept
+ * Polling cadence: 4s — same as the company services polls, kept
  * consistent so the network panel doesn't blink with mismatched frequencies.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';

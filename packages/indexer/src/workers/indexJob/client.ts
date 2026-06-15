@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { createPool, resolveWorkerUrl, type Pool } from '@mcp/indexer/workers/pool.js';
+import { createPool, resolveWorkerSpec, type Pool } from '@mcp/indexer/workers/pool.js';
 import type { IndexJobReq, IndexJobRes } from '@mcp/indexer/workers/indexJob/protocol.js';
 import type { TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js';
 
@@ -22,10 +22,29 @@ const resolveSize = (): number => {
   return Math.max(2, Math.min(8, cores));
 };
 
+/**
+ * Idle TTL for the tree-sitter workers. Index runs come in bursts; two
+ * minutes of silence means the run is over and the pool's N wasm isolates
+ * (tens of MB each) can go back to the OS — the next run respawns lazily
+ * (~100-300ms/worker). Default lives in code; env is an operator override
+ * (`MCP_INDEX_POOL_IDLE_TTL_MS`, 0 = keep workers forever).
+ */
+const DEFAULT_POOL_IDLE_TTL_MS = 120_000;
+
+const resolvePoolIdleTtlMs = (): number => {
+  const raw = Number(process.env.MCP_INDEX_POOL_IDLE_TTL_MS);
+  if (Number.isFinite(raw) && raw >= 0) return raw;
+  return DEFAULT_POOL_IDLE_TTL_MS;
+};
+
 const createWorkerIndexJobPool = (size: number): IndexJobPool => {
+  const spec = resolveWorkerSpec(import.meta.url, './worker');
   const pool: Pool<IndexJobReq, IndexJobRes> = createPool({
-    workerUrl: resolveWorkerUrl(import.meta.url, './worker'),
+    workerUrl: spec.url,
     size,
+    name: 'indexJob',
+    idleTtlMs: resolvePoolIdleTtlMs(),
+    workerData: spec.bootstrapData ? { ...spec.bootstrapData } : undefined,
   });
 
   return {
@@ -52,7 +71,9 @@ let singleton: IndexJobPool | null = null;
 
 export const getIndexJobPool = (): IndexJobPool => {
   if (!singleton) {
-    singleton = createWorkerIndexJobPool(resolveSize());
+    const size = resolveSize();
+    singleton = createWorkerIndexJobPool(size);
+    console.error(`[indexer] tree-sitter worker pool: ${size} thread(s) (MCP_INDEX_WORKERS=0 disables)`);
   }
   return singleton;
 };
@@ -64,9 +85,15 @@ export const closeIndexJobPool = async (): Promise<void> => {
   await p.close();
 };
 
+/**
+ * Workers are ON by default — tree-sitter parsing off the main thread is
+ * the difference between an index run and a frozen event loop in the
+ * desktop app. `MCP_INDEX_WORKERS` is an operator override: `0`/`off`/
+ * `false` forces in-process parsing; a number both enables and sizes the
+ * pool. The default (unset) used to be OFF, which left the whole pool
+ * dormant in production.
+ */
 export const isIndexWorkersEnabled = (): boolean => {
-  const v = process.env.MCP_INDEX_WORKERS;
-  if (!v) return false;
-  if (v === '0' || v === 'off' || v === 'false') return false;
-  return true;
+  const v = (process.env.MCP_INDEX_WORKERS ?? '').trim().toLowerCase();
+  return !(v === '0' || v === 'off' || v === 'false');
 };

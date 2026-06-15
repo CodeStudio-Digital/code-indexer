@@ -5,29 +5,22 @@
  */
 
 import { buildSddMasterBlock } from '@mcp/company/prompts/sdd-master-block.js';
-import { BUILDER_STUDIO_RULES } from '@mcp/company/prompts/builder-studio-rules.js';
 
 /**
- * Builder-mode context. When present, the prompt gets a dedicated
- * section explaining the sandbox environment and — critically — the
- * reserved files the agent must not modify (vite.config.ts, because
- * the preview proxy relies on its exact shape).
+ * Container-binding context for service-bound subordinates. When
+ * present, the prompt gets a dedicated section explaining the sandbox
+ * environment and — critically — the reserved files the agent must not
+ * modify (vite.config.ts, because the preview proxy relies on its
+ * exact shape).
  */
 export interface BuilderPromptContext {
   /**
    * Container-side workdir (typically `/app`). Optional — omitted when
-   * the session is in builder mode but the primary container is not yet
-   * running (e.g. provision failure). Master prompts still get the
-   * builder block; subordinate prompts should always have this set.
+   * the container is not yet running (e.g. provision failure).
    */
   workdir?: string;
   /** Stack name (`react-ts`, `vue-ts`, etc.). */
   stack: string;
-  /**
-   * Builder studio mode — appends the design-first, element-targeted,
-   * self-healing studio rules. Set when `config_json.builder.studio` is on.
-   */
-  studio?: boolean;
   /**
    * Public URL of the live preview iframe. Optional for the same reason
    * as `workdir` — may be absent when the container is down.
@@ -85,7 +78,6 @@ export interface MasterPromptContext {
     rootPath: string;
     label?: string;
   }>;
-  builder?: BuilderPromptContext;
   /**
    * Curated pool of (provider, model) tuples the master is allowed to
    * spawn subordinates with. When non-empty, the prompt includes a
@@ -132,12 +124,8 @@ export interface SubordinatePromptContext {
 }
 
 /**
- * Shared builder-mode instructions appended to both master and
- * subordinate prompts when a sandbox binding is active. Pass
- * `isMaster: true` for the master copy so it omits subordinate-only
- * tooling (stack-snapshot reads, docs_* tools, env/db mutations,
- * list_services) that the master's hard tool filter strips — see
- * `master-filter.ts`.
+ * Container-environment instructions appended to subordinate prompts
+ * when a sandbox binding is active (service-bound agents).
  *
  * Reserved files matter: agents have a habit of rewriting
  * `vite.config.ts` with a plain-template config, which strips
@@ -147,22 +135,20 @@ export interface SubordinatePromptContext {
  * changes). Phase C removed the `/preview/:id/` proxy — `base` is
  * no longer reserved.
  */
-function buildBuilderInstructions(b: BuilderPromptContext, isMaster = false): string {
-  // When workdir/previewUrl are absent the primary container is not running.
-  // Return a lightweight awareness block so the agent knows the session is
-  // in builder mode but avoids container-specific instructions that would
-  // be misleading without a live sandbox.
+function buildBuilderInstructions(b: BuilderPromptContext): string {
+  // When workdir/previewUrl are absent the container is not running.
+  // Return a lightweight awareness block so the agent knows it is
+  // container-bound but avoids container-specific instructions that
+  // would be misleading without a live sandbox.
   if (!b.workdir || !b.previewUrl) {
-    const envCapability = isMaster
-      ? `You can read shared environment variables (\`env_read\`, \`env_list\`, \`env_validate\`) to answer subordinate questions; env mutations and database queries are delegated to subordinates.`
-      : `You can manage environment variables (\`env_list\`, \`env_set\`, \`env_delete\`) and databases (\`db_query\`, \`db_list\`) for this session.`;
     return `
 
-## BUILDER MODE — ${b.stack} session (primary container unavailable)
+## CONTAINER SESSION — ${b.stack} (container unavailable)
 
-This is a **${b.stack}** builder session. The primary container is not
-currently running. Subordinate agents will be spawned into their own
-containers when you delegate tasks. ${envCapability}
+This agent is bound to a **${b.stack}** service container that is not
+currently running. You can manage environment variables (\`env_list\`,
+\`env_set\`, \`env_delete\`) and databases (\`db_query\`, \`db_list\`) for
+this session.
 `;
   }
 
@@ -212,31 +198,13 @@ ${lines.join('\n')}
 
 The same URLs are also exposed as env vars \`SERVICE_URL_<ID>\` (internal)
 and \`PREVIEW_URL_<ID>\` (public). Read them with \`env_read\` or
-\`env_list\` when you need the value dynamically. Call \`${isMaster ? 'list_containers' : 'list_services'}\`
+\`env_list\` when you need the value dynamically. Call \`list_services\`
 for the live status snapshot.
 `;
         })()
       : '';
 
-  // Subordinate-only sections: the master's hard tool filter strips
-  // query_snapshots and the docs_* tools, so a master copy must omit them.
-  const stackGuidanceBlock = isMaster
-    ? ''
-    : `
-### Stack guidance lives in project snapshots
-
-Before writing code for this stack, call \`query_snapshots\` on the
-attached project with queries like \`"stack conventions"\`, \`"forms"\`,
-\`"styling"\`, \`"components"\`, and stack-specific terms (\`"signals"\` for
-Angular, \`"actions"\` for React, \`"composition"\` for Vue). These
-snapshots were seeded specifically for this builder session and reflect
-current (2026) idiomatic patterns for **${b.stack}** — they OVERRIDE any
-older conventions you may remember from training data.
-`;
-
-  const docsBlock = isMaster
-    ? ''
-    : `
+  const docsBlock = `
 ### Documentation discipline
 
 The sandbox exposes dedicated **docs_*** tools (\`docs_write\`, \`docs_read\`,
@@ -261,12 +229,12 @@ specific container's docs.
 
   return `
 
-## BUILDER MODE — Live-preview sandbox
+## CONTAINER SESSION — Live-preview sandbox
 
-This session is running inside an ephemeral **${b.stack}** container.
+This agent is running inside an ephemeral **${b.stack}** container.
 Your working directory is \`${b.workdir}\`. The project is served live
 via the dashboard preview at \`${b.previewUrl}\` with hot reload enabled.
-${peersBlock}${stackGuidanceBlock}
+${peersBlock}
 ### Reserved files (DO NOT MODIFY)
 
 ${reservedFiles}
@@ -298,30 +266,7 @@ are NOT present in this agent tool's own shell environment.
 - To add or change one: \`env_set('KEY', 'value')\` — persists and re-syncs \`${b.workdir}/.env\` to
   every live container. (Master has read-only access; only subordinates can \`env_set\`.)
 
-${docsBlock}${b.studio ? BUILDER_STUDIO_RULES : ''}`;
-}
-
-/**
- * Master-only appendix (added after the shared builder block) that
- * points the master at its container-diagnostics tools. Subordinates
- * don't receive these tools, so this guidance is intentionally not in
- * `buildBuilderInstructions`.
- */
-function buildMasterContainerOversight(): string {
-  return `
-
-### Container oversight (master-only)
-
-After any subordinate finishes work that could affect a service's build
-or runtime (scaffolder changes, dependency installs, dev-server config,
-config files), call \`list_containers\` to confirm the relevant service
-is \`running\` with no non-zero exit code. If a container is \`stopped\`,
-\`gone\`, or shows \`oomKilled=true\` / \`exitCode\` ≠ 0, call
-\`read_container_logs(service_id='<that-service>', tail=200)\`, then
-spawn a fix subordinate with the log tail and the failing service id
-included verbatim in the task description. Don't trust a subordinate's
-"task complete" report over what the container actually says.
-`;
+${docsBlock}`;
 }
 
 function projectSlug(name: string): string {
@@ -521,7 +466,7 @@ Tools self-document via their schemas — the short notes here only call out beh
 ## SESSION-KEEPING
 
 You operate in phases (explore → delegate → iterate → close). Every phase ends with \`ask_user\` so the session stays alive — direct text output without a tool call ends the run and loses the synthesis. Synthesis goes to \`post_to_board\`; \`ask_user\` carries a SHORT prompt. Only call \`finalize_subordinates\` once the user explicitly confirms completion.
-${buildQaTeamBlock(ctx.roster)}${ctx.sddMode ? buildSddMasterBlock() : ''}${ctx.builder ? buildBuilderInstructions(ctx.builder, true) : ''}${ctx.builder ? buildMasterContainerOversight() : ''}`;
+${buildQaTeamBlock(ctx.roster)}${ctx.sddMode ? buildSddMasterBlock() : ''}`;
 
 }
 

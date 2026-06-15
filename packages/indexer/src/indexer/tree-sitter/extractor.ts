@@ -339,6 +339,7 @@ export class TreeSitterExtractor {
 
     const line = node.startPosition.row + 1; // 1-indexed
     const endLine = node.endPosition.row + 1;
+    const col = node.startPosition.column + 1; // 1-based, Monaco-compatible
     const modifiers = this.getModifiers(node, language);
     const signature = this.buildSignature(node, kind, name, language);
     const params = this.getParameters(node, language);
@@ -360,9 +361,53 @@ export class TreeSitterExtractor {
       parameters: params,
       line,
       end_line: endLine,
+      col,
+      exported: this.computeExported(language, modifiers, parentName, name),
       comment,
       tags,
     } as LLMSymbol & { end_line: number };
+  }
+
+  /**
+   * Per-language visibility — honest semantics, biased toward INCLUDE when a
+   * language has no explicit export concept (better to over-offer in
+   * completion than hide real API surface).
+   */
+  private computeExported(
+    language: string,
+    modifiers: string[],
+    parent: string | null,
+    name: string,
+  ): boolean {
+    switch (language) {
+      case 'typescript':
+      case 'tsx':
+      case 'javascript':
+        return modifiers.includes('export') || modifiers.includes('default');
+      case 'python':
+        return parent === null && !name.startsWith('_');
+      case 'go':
+        return /^[A-Z]/.test(name); // the language rule itself
+      case 'rust':
+        // Covers `pub`, `pub(crate)`, `pub(super)` and the legacy 'export' tag.
+        return modifiers.some((m) => m.startsWith('pub')) || modifiers.includes('export');
+      case 'php':
+        // PHP members default to public; only explicit private/protected hide.
+        return parent === null
+          ? true
+          : !modifiers.includes('private') && !modifiers.includes('protected');
+      case 'java':
+      case 'csharp':
+      case 'kotlin':
+      case 'swift':
+        return modifiers.includes('public') || modifiers.includes('open');
+      case 'css':
+      case 'html':
+      case 'vue':
+        return false;
+      default:
+        return parent === null;
+    }
   }
 
   /** Extract symbol name from node based on language conventions. */
@@ -462,6 +507,9 @@ export class TreeSitterExtractor {
       if (child.type === 'modifiers' || child.type === 'modifier') {
         mods.push(...child.text.split(/\s+/).filter(Boolean));
       }
+      // Shared node type with per-language TEXT: Rust `pub`/`pub(crate)`,
+      // PHP `private`/`protected`/`public` — push the actual keyword.
+      if (child.type === 'visibility_modifier') mods.push(child.text.trim());
       // TS/JS: async keyword
       if (child.type === 'async') mods.push('async');
     }
@@ -759,6 +807,8 @@ export class TreeSitterExtractor {
         parameters: params,
         line: node.startPosition.row + 1,
         end_line: node.endPosition.row + 1,
+        col: node.startPosition.column + 1,
+        exported: this.computeExported('typescript', modifiers, parentName, name),
         comment: this.getLeadingComment(node, lines),
         tags: this.inferTags(name, 'function', modifiers, node, 'typescript'),
       } as LLMSymbol & { end_line: number };
@@ -779,6 +829,8 @@ export class TreeSitterExtractor {
       parameters: null,
       line: node.startPosition.row + 1,
       end_line: node.endPosition.row + 1,
+      col: node.startPosition.column + 1,
+      exported: this.computeExported('typescript', modifiers, parentName, name),
       comment: this.getLeadingComment(node, lines),
       tags: this.inferTags(name, kind, modifiers, node, 'typescript'),
     } as LLMSymbol & { end_line: number };
@@ -799,6 +851,8 @@ export class TreeSitterExtractor {
       return_type: null, parameters: null,
       line: node.startPosition.row + 1,
       end_line: node.endPosition.row + 1,
+      col: node.startPosition.column + 1,
+      exported: this.computeExported('go', [], parentName, name),
       comment: this.getLeadingComment(node, lines),
       tags: [],
     } as LLMSymbol & { end_line: number };
@@ -810,7 +864,7 @@ export class TreeSitterExtractor {
     const name = nameNode.text;
     const kind: SymbolKind = node.type === 'const_item' ? 'constant' : 'variable';
     const modifiers: string[] = [];
-    if (node.children.some(c => c.type === 'pub')) modifiers.push('export');
+    if (node.children.some(c => c.type === 'pub' || c.type === 'visibility_modifier')) modifiers.push('pub');
     return {
       name, kind,
       signature: node.text.split('\n')[0]?.trim().slice(0, 200) ?? name,
@@ -818,6 +872,8 @@ export class TreeSitterExtractor {
       return_type: null, parameters: null,
       line: node.startPosition.row + 1,
       end_line: node.endPosition.row + 1,
+      col: node.startPosition.column + 1,
+      exported: this.computeExported('rust', modifiers, parentName, name),
       comment: this.getLeadingComment(node, lines),
       tags: [],
     } as LLMSymbol & { end_line: number };
@@ -838,6 +894,8 @@ export class TreeSitterExtractor {
       return_type: null, parameters: null,
       line: node.startPosition.row + 1,
       end_line: node.endPosition.row + 1,
+      col: node.startPosition.column + 1,
+      exported: this.computeExported('python', [], parentName, name),
       comment: this.getLeadingComment(node, lines),
       tags: [],
     } as LLMSymbol & { end_line: number };
@@ -882,6 +940,7 @@ export class TreeSitterExtractor {
               symbol_name: name,
               kind: 'other' as SymbolKind,
               line: node.startPosition.row + 1,
+              col: node.startPosition.column + 1,
               snippet: node.text.split('\n')[0]?.trim().slice(0, 120),
             });
           }

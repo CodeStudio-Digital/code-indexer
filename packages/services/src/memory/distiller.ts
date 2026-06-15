@@ -10,11 +10,14 @@
  */
 import type { SnapshotCategory } from '@mcp/shared/types.js';
 import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
-import { pickChatFn } from '../quality/chat-dispatcher.js';
+import { pickChatFn, suppressThinkingFor } from '../quality/chat-dispatcher.js';
 import type { MemoryCandidate, MemoryDistiller, SessionMemoryInput } from './extractor.js';
 
 const CATEGORIES: ReadonlySet<SnapshotCategory> = new Set<SnapshotCategory>([
   'architecture', 'decision', 'convention', 'pattern', 'todo', 'note', 'gotcha', 'procedure',
+  // User-scope categories — the positive distiller may emit these for durable
+  // facts about the user; run-end routes them to the global user memory.
+  'user', 'feedback',
 ]);
 
 export interface LlmMemoryDistillerOptions {
@@ -41,10 +44,13 @@ export class LlmMemoryDistiller implements MemoryDistiller {
     if (!binding) return [];
     try {
       const chat = pickChatFn(binding);
+      // Suppress reasoning: this is one-shot structured extraction, and a
+      // thinking model (Gemini 2.5 / GLM) otherwise burns the token budget
+      // reasoning and returns empty/truncated JSON → zero candidates.
       const result = await chat(binding, [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: buildPrompt(input) },
-      ]);
+      ], { disableThinking: suppressThinkingFor(binding) });
       return parseMemoryCandidates(result.content);
     } catch {
       return [];
@@ -62,11 +68,15 @@ Capture ONLY things that stay true beyond this task:
 
 Do NOT capture transient state: "currently editing X", "next I will…", task progress, or one-off file lists.
 
+ALSO capture durable facts about the USER and how they want the agent to work — these apply across ALL projects, not just this codebase. Only when CLEARLY evidenced (an explicit instruction, a stated preference, or a correction the user gave), never inferred from a single ambiguous action:
+- category "user": who the user is — role, expertise, language, environment, constraints
+- category "feedback": how they want the agent to work — a preference or a recurring correction (e.g. "always keep files under 200 LOC", "never run git stash on my working tree")
+
 For each memory return:
 - title: short, specific (e.g. "Embeddings switch requires re-index")
 - content: 1-4 sentences, self-contained
-- category: one of architecture | decision | convention | pattern | todo | note
-- importance: 0..1 — how reusable/durable (decisions/conventions high; minor notes low)
+- category: one of architecture | decision | convention | pattern | todo | note | user | feedback
+- importance: 0..1 — how reusable/durable (decisions/conventions/user-feedback high; minor notes low)
 
 Respond ONLY with a JSON array, no prose. Empty array if nothing durable:
 [{"title":"…","content":"…","category":"decision","importance":0.8}]`;

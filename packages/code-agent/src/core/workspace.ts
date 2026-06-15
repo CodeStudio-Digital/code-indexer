@@ -36,13 +36,22 @@ export interface WorkspaceContext {
 }
 
 export function workspaceFromProject(
-  project: { id: number; name: string; root_path: string; last_indexed?: string | null },
+  project: {
+    id: number;
+    name: string;
+    root_path: string;
+    last_indexed?: string | null;
+    /** Structural-only pass stamp (migration 139) — symbols/FTS usable without LLM. */
+    structural_indexed_at?: string | null;
+  },
   sandboxBinding?: { workdir: string } | null,
 ): WorkspaceContext {
   return {
     rootPath: sandboxBinding?.workdir ?? resolvePath(project.root_path),
     displayName: project.name,
     projectId: project.id,
-    isIndexed: project.last_indexed != null,
+    // "Symbol DB usable" — what grep/find_references/skeleton and the
+    // in-session incremental hook actually need. Structural counts.
+    isIndexed: project.last_indexed != null || project.structural_indexed_at != null,
   };
 }

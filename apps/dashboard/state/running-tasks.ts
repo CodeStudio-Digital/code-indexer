@@ -14,6 +14,7 @@
 
 import { create } from 'zustand';
 import type { RunnerTask } from '@mcp/api-bus';
+import { isDevServerCommand } from '@mcp/shared/utils/dev-server-url.js';
 import { apiCall, apiStream, electronApi } from '../lib/api-client.js';
 
 interface RunningTasksState {
@@ -36,14 +37,12 @@ export function tasksForProject(tasks: RunnerTask[], projectId: number): RunnerT
 
 /**
  * Heuristic: does this runner task look like a long-running dev/preview
- * server (so the project view should surface a live preview)? Covers the
- * common script names across npm/yarn/wrangler/vite/next/angular. Broad on
- * purpose — a false positive just shows an empty preview with a manual URL
- * field, never breaks anything.
+ * server (so the project view should surface a live preview)? Delegates to
+ * the shared `isDevServerCommand` so the dashboard and the agent's backend
+ * preview resolver agree on what counts as a dev server.
  */
-const DEV_SERVER_RE = /(^|[\s:/])(dev|serve|preview|start|watch|wrangler|vite|http-server|live-server)([\s:]|$)/i;
 export function isDevServerTask(task: RunnerTask): boolean {
-  return DEV_SERVER_RE.test(task.command) || DEV_SERVER_RE.test(task.label ?? '');
+  return isDevServerCommand(task.command, task.label ?? undefined);
 }
 
 /** Count of currently-running tasks (across all projects). */

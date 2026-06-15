@@ -138,3 +138,28 @@ export function renderMemoryIndex(
   }
   return lines.length > 1 ? lines.join('\n') : null;
 }
+
+/**
+ * Render the GLOBAL user-preferences block (migration 145): who the user is +
+ * how they want the agent to work, applied to EVERY project. Unlike the
+ * project index this carries short bodies (the preference itself is the
+ * payload, not a pointer). Returns null when empty or maxChars=0.
+ */
+export function renderUserMemoryBlock(
+  entries: ReadonlyArray<{ title: string; category?: string; excerpt?: string }>,
+  maxChars: number,
+): string | null {
+  if (maxChars <= 0 || entries.length === 0) return null;
+  const header =
+    'user preferences (global — who this user is and how they want you to work; apply across all projects):';
+  const lines: string[] = [header];
+  let used = header.length;
+  for (const e of entries) {
+    const detail = e.excerpt ? `: ${excerpt(e.excerpt, 160)}` : '';
+    const line = `- ${excerpt(e.title, 90)}${detail}`;
+    if (used + line.length + 1 > maxChars) break;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return lines.length > 1 ? `<user-preferences>\n${lines.join('\n')}\n</user-preferences>` : null;
+}

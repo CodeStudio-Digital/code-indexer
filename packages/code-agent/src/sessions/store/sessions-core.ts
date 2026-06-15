@@ -18,25 +18,21 @@ export interface CreateSessionInput {
    * to project/global defaults. Null falls back to the cascade.
    */
   phase_profile_id?: number | null;
-  /**
-   * Decoupled Builder config (JSON `{stack, studio}`). When set, this is a
-   * Builder session: a coder session with a bound sandbox container, run
-   * by the `builder` agent. Null/absent for ordinary coder sessions.
-   */
-  builder_json?: string | null;
 }
 
 export function create(db: DB, input: CreateSessionInput): CoderSession {
+  // NOTE: the legacy `builder_json` column (migration 122) still exists in
+  // SQLite but is no longer written — builder config is project-scoped
+  // (`projects.builder_json`, migration 123).
   const stmt = db.prepare(`
-    INSERT INTO coder_sessions (project_id, title, provider, model, cloudcode_session_id, agent, phase_profile_id, builder_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO coder_sessions (project_id, title, provider, model, cloudcode_session_id, agent, phase_profile_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const r = stmt.run(
     input.project_id, input.title, input.provider, input.model,
     input.cloudcode_session_id ?? null,
     input.agent ?? null,
     input.phase_profile_id ?? null,
-    input.builder_json ?? null,
   );
   return get(db, Number(r.lastInsertRowid))!;
 }

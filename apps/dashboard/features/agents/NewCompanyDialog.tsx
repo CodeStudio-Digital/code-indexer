@@ -3,15 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import { useApi, apiPost } from '../../hooks/useApi.js';
 import { useProviders } from '../../hooks/useProviders.js';
-import { BuilderModeSection } from './new-company-dialog/BuilderModeSection.js';
-import {
-  resolveLimitsFromForm,
-  type BuilderStack,
-  type LimitsPreset,
-  type Project,
-  type ProjectManifestResponse,
-  type Template,
-} from './new-company-dialog/types.js';
+import { type Project, type Template } from './new-company-dialog/types.js';
 
 interface NewCompanyDialogProps {
   onClose: () => void;
@@ -20,9 +12,9 @@ interface NewCompanyDialogProps {
 
 /**
  * Creation wizard, intentionally minimal: name + projects + master model.
- * Everything else (template, builder/sandbox) lives behind the collapsed
- * "Advanced" section; post-create config (roles, fallback, operational
- * rules, services) belongs to the session sidebar. The rarely-used
+ * Everything else (template) lives behind the collapsed "Advanced"
+ * section; post-create config (roles, fallback, operational rules,
+ * services) belongs to the session sidebar. The rarely-used
  * `allowed_models` pool and `master_broadcast_subscribe` flag are API-only
  * now — the server still accepts and enforces both.
  */
@@ -30,11 +22,6 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   const { t } = useTranslation(['agents', 'common']);
   const { data: templates, loading: templatesLoading } = useApi<Template[]>('/company/templates');
   const { data: projects } = useApi<Project[]>('/projects');
-  // Host OCI image catalog for the builder base-image picker.
-  const { data: imageCatalog } = useApi<{ runtime: string; images: { reference: string }[] }>(
-    '/company/sandbox/images',
-  );
-  const availableImages = imageCatalog?.images?.map((i) => i.reference) ?? [];
   const { providerOptions, getModelsForProvider, getDefaultModel } = useProviders();
 
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
@@ -42,24 +29,6 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
   const [selectedProjectIds, setSelectedProjectIds] = useState<number[]>([]);
   const [masterProvider, setMasterProvider] = useState(providerOptions[0]?.id ?? 'anthropic');
   const [masterModel, setMasterModel] = useState('claude-sonnet-4-6');
-  // Builder mode: when the user picks a stack, the backend provisions a
-  // sandbox and enables the live-preview pane. 'off' preserves the
-  // traditional company-session flow (no sandbox, no preview).
-  const [builderStack, setBuilderStack] = useState<BuilderStack>('off');
-  const [mainProjectId, setMainProjectId] = useState<number | null>(null);
-  const [mainProjectRuntime, setMainProjectRuntime] = useState<'node' | 'dockerfile'>('node');
-  const [mainProjectManifest, setMainProjectManifest] = useState<ProjectManifestResponse | null>(null);
-  const [mainProjectManifestLoading, setMainProjectManifestLoading] = useState(false);
-  // Per-session CPU/memory preset. `default` uses server env defaults
-  // (1g/1cpu unless MCP_SANDBOX_* is set). `custom` reveals three
-  // inputs for operators who need something specific.
-  const [limitsPreset, setLimitsPreset] = useState<LimitsPreset>('default');
-  const [customMemory, setCustomMemory] = useState('1g');
-  const [customCpus, setCustomCpus] = useState('1');
-  const [customPids, setCustomPids] = useState('256');
-  // Per-session base image + raw run flags. Empty image = server default.
-  const [customImage, setCustomImage] = useState('');
-  const [customRunArgs, setCustomRunArgs] = useState('');
   const [creating, setCreating] = useState(false);
 
   const selectedTemplate = templates?.find((t) => t.id === selectedTemplateId);
@@ -94,66 +63,9 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
     }
   }, [templateMaster?.provider, templateMaster?.model]);
 
-  const builderEnabled = builderStack !== 'off';
-  // Builder mode creates its own sandbox-backed project automatically,
-  // so picking host projects is optional (advanced use: reference an
-  // existing codebase while scaffolding a new one). Traditional mode
-  // still requires at least one linked project.
-  const projectsRequired = !builderEnabled;
-  const needsExternalMainProject = builderEnabled && selectedProjectIds.length > 0;
-  const mainProjectNodeOk =
-    !needsExternalMainProject ||
-    (mainProjectManifest?.manifest?.kind === 'node' &&
-      !!mainProjectManifest.manifest.devScriptName);
-  const mainProjectDockerfileOk =
-    !needsExternalMainProject || !!mainProjectManifest?.dockerfile?.exposedPorts?.[0];
-  const mainProjectRuntimeOk =
-    mainProjectRuntime === 'node' ? mainProjectNodeOk : mainProjectDockerfileOk;
-
-  useEffect(() => {
-    if (!needsExternalMainProject) {
-      setMainProjectId(null);
-      return;
-    }
-    if (!mainProjectId || !selectedProjectIds.includes(mainProjectId)) {
-      setMainProjectId(selectedProjectIds[0] ?? null);
-    }
-  }, [needsExternalMainProject, selectedProjectIds, mainProjectId]);
-
-  useEffect(() => {
-    if (!needsExternalMainProject || !mainProjectId) {
-      setMainProjectManifest(null);
-      return;
-    }
-    let cancelled = false;
-    setMainProjectManifestLoading(true);
-    fetch(`/api/projects/${mainProjectId}/manifest`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body: ProjectManifestResponse | null) => {
-        if (!cancelled) {
-          setMainProjectManifest(body);
-          if (body?.manifest?.kind === 'node' && body.manifest.devScriptName) {
-            setMainProjectRuntime('node');
-          } else if (body?.dockerfile?.exposedPorts?.[0]) {
-            setMainProjectRuntime('dockerfile');
-          }
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setMainProjectManifest(null);
-      })
-      .finally(() => {
-        if (!cancelled) setMainProjectManifestLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [needsExternalMainProject, mainProjectId]);
-
   async function handleCreate() {
     if (!name.trim()) return;
-    if (projectsRequired && selectedProjectIds.length === 0) return;
-    if (needsExternalMainProject && (!mainProjectId || !mainProjectRuntimeOk)) return;
+    if (selectedProjectIds.length === 0) return;
 
     setCreating(true);
     try {
@@ -164,34 +76,6 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
         master_provider: masterProvider,
         master_model: masterModel,
         role_assignments: selectedTemplate?.roles.filter((r) => r.role !== 'master') ?? [],
-        // Only send `builder` when the user picked a real stack. Leaving
-        // the field absent keeps the payload identical to the legacy
-        // format, so nothing about non-builder sessions changes server-side.
-        ...(builderStack !== 'off'
-          ? {
-              builder: {
-                stack: builderStack,
-                ...(mainProjectId ? { main_project_id: mainProjectId } : {}),
-                ...(mainProjectId ? { main_project_runtime: mainProjectRuntime } : {}),
-                ...(resolveLimitsFromForm(limitsPreset, customMemory, customCpus, customPids)
-                  ? {
-                      limits: resolveLimitsFromForm(
-                        limitsPreset,
-                        customMemory,
-                        customCpus,
-                        customPids,
-                      )!,
-                    }
-                  : {}),
-                // Base image + raw run flags — only when set, so non-builder
-                // and default-image sessions keep the legacy payload shape.
-                ...(customImage.trim() ? { image: customImage.trim() } : {}),
-                ...(customRunArgs.trim()
-                  ? { runArgs: customRunArgs.split('\n').map((s) => s.trim()).filter(Boolean) }
-                  : {}),
-              },
-            }
-          : {}),
       });
       onCreated(res.session.id);
       onClose();
@@ -225,11 +109,6 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
           <div>
             <label className="text-xs font-medium text-muted-foreground">
               {t('agents:newCompanyDialog.projects', { count: selectedProjectIds.length })}
-              {!projectsRequired && (
-                <span className="ml-1 text-[10px] font-normal italic opacity-70">
-                  (optional — builder creates its own)
-                </span>
-              )}
             </label>
             <div className="mt-1 max-h-40 overflow-y-auto border rounded-md divide-y">
               {projects?.map((p) => (
@@ -300,9 +179,9 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
             </div>
           </div>
 
-          {/* Advanced — template + builder/sandbox. Collapsed by default;
-              post-create knobs (roles, fallback, rules, services) live in
-              the session sidebar, not here. */}
+          {/* Advanced — template. Collapsed by default; post-create knobs
+              (roles, fallback, rules, services) live in the session
+              sidebar, not here. */}
           <details className="rounded-md border">
             <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/30">
               {t('agents:newCompanyDialog.advanced')}
@@ -340,113 +219,6 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
                   </div>
                 ) : null}
               </div>
-
-              {/* Builder mode + container resources. */}
-              <BuilderModeSection
-                builderStack={builderStack}
-                setBuilderStack={setBuilderStack}
-                limitsPreset={limitsPreset}
-                setLimitsPreset={setLimitsPreset}
-                customMemory={customMemory}
-                setCustomMemory={setCustomMemory}
-                customCpus={customCpus}
-                setCustomCpus={setCustomCpus}
-                customPids={customPids}
-                setCustomPids={setCustomPids}
-                availableImages={availableImages}
-                customImage={customImage}
-                setCustomImage={setCustomImage}
-                customRunArgs={customRunArgs}
-                setCustomRunArgs={setCustomRunArgs}
-              />
-
-              {needsExternalMainProject && (
-                <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {t('agents:mainProject.label')}
-                  </label>
-                  <select
-                    value={mainProjectId ?? ''}
-                    onChange={(e) => setMainProjectId(e.target.value ? Number(e.target.value) : null)}
-                    className="w-full mt-1 rounded-md border bg-background px-3 py-1.5 text-sm"
-                  >
-                    {selectedProjectIds.map((id) => {
-                      const project = projects?.find((p) => p.id === id);
-                      return (
-                        <option key={id} value={id}>
-                          {project?.name ?? `project-${id}`} — {project?.root_path ?? ''}
-                        </option>
-                      );
-                    })}
-                  </select>
-                  <div className="mt-2 grid grid-cols-2 gap-1">
-                    <button
-                      type="button"
-                      className={
-                        'rounded border px-2 py-1 text-[10px] ' +
-                        (mainProjectRuntime === 'node'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-background hover:bg-accent')
-                      }
-                      onClick={() => setMainProjectRuntime('node')}
-                    >
-                      {t('agents:mainProject.nodeRuntime')}
-                    </button>
-                    <button
-                      type="button"
-                      className={
-                        'rounded border px-2 py-1 text-[10px] ' +
-                        (mainProjectRuntime === 'dockerfile'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-background hover:bg-accent')
-                      }
-                      onClick={() => setMainProjectRuntime('dockerfile')}
-                    >
-                      {t('agents:mainProject.dockerfileRuntime')}
-                    </button>
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-1 text-[10px]">
-                    <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">
-                      {t('agents:mainProject.preserved')}
-                    </span>
-                    {mainProjectManifestLoading && (
-                      <span className="rounded bg-muted px-1.5 py-0.5">
-                        {t('agents:mainProject.checking')}
-                      </span>
-                    )}
-                    {mainProjectManifest?.manifest && (
-                      <span className="rounded bg-muted px-1.5 py-0.5">
-                        {mainProjectManifest.manifest.kind}
-                        {mainProjectManifest.manifest.packageManager
-                          ? ` (${mainProjectManifest.manifest.packageManager})`
-                          : ''}
-                        {mainProjectManifest.manifest.devScriptName
-                          ? ` · ${mainProjectManifest.manifest.devScriptName}`
-                          : ''}
-                      </span>
-                    )}
-                    {mainProjectRuntime === 'node' && !mainProjectNodeOk && !mainProjectManifestLoading && (
-                      <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-600">
-                        {t('agents:mainProject.nodeRuntimeRequired')}
-                      </span>
-                    )}
-                    {mainProjectManifest?.dockerfile?.exposedPorts?.[0] ? (
-                      <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-emerald-600">
-                        {t('agents:mainProject.dockerfileDetected', {
-                          port: mainProjectManifest.dockerfile.exposedPorts[0],
-                        })}
-                      </span>
-                    ) : mainProjectRuntime === 'dockerfile' && !mainProjectManifestLoading ? (
-                      <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-600">
-                        {t('agents:mainProject.dockerfileRequired')}
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="mt-2 text-[10px] text-muted-foreground">
-                    {t('agents:mainProject.helper')}
-                  </p>
-                </div>
-              )}
             </div>
           </details>
         </div>
@@ -456,12 +228,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
           <Button variant="outline" onClick={onClose} size="sm">{t('common:actions.cancel')}</Button>
           <Button
             onClick={handleCreate}
-            disabled={
-              creating ||
-              !name.trim() ||
-              (projectsRequired && selectedProjectIds.length === 0) ||
-              (needsExternalMainProject && (!mainProjectId || !mainProjectRuntimeOk))
-            }
+            disabled={creating || !name.trim() || selectedProjectIds.length === 0}
             size="sm"
           >
             {creating ? t('agents:newCompanyDialog.creating') : t('agents:newCompanyDialog.createStart')}

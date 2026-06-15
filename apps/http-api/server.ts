@@ -5,12 +5,14 @@ import { loadConfig } from '@mcp/shared/utils/config.js';
 import { createAdminRouter } from './admin/index.js';
 import { createDeps } from './server/deps.js';
 import { mountProjectsRoutes } from './server/routes/projects.js';
+import { mountBuilderCheckpointRoutes } from './server/routes/builder-checkpoints.js';
 import { mountProjectScaffoldRoute } from './server/routes/projects-scaffold.js';
 import { mountHygieneRoutes } from './server/routes/hygiene.js';
 import { mountSearchRoutes } from './server/routes/search.js';
 import { mountFilesRoutes } from './server/routes/files.js';
 import { mountGraphRoutes } from './server/routes/graph.js';
 import { mountSnapshotsRoutes } from './server/routes/snapshots.js';
+import { mountUserMemoryRoutes } from './server/routes/user-memory.js';
 import { mountRunsRoutes } from './server/routes/runs.js';
 import { mountTrainingRoutes } from './server/routes/training.js';
 import { mountDiffRoutes } from './server/routes/diff.js';
@@ -29,6 +31,7 @@ import { mountWorkersDiagnosticRoute } from './server/routes/admin/workers.js';
 import { mountSupervisorAdminRoutes } from './server/routes/admin/supervisor.js';
 import { mountCoderRoutes } from './server/routes/coder/index.js';
 import { mountLspRoutes } from './server/routes/lsp/lsp.routes.js';
+import { mountEditorRoutes } from './server/routes/editor.js';
 import { mountProjectGitRoutes } from './server/routes/project-git.js';
 import { attachCompanyStreamUpgrade } from './server/routes/company/ws.js';
 import { attachTerminalUpgrade, mountTerminalDiagnoseRoute } from './server/routes/terminal-ws.js';
@@ -92,6 +95,7 @@ import {
 } from '@mcp/company/tools/qa/index.js';
 import { startQaWatchdog } from '@mcp/services/qa/watchdog.js';
 import { setDesignSystemStore, setDesignSystemSkillStore } from '@mcp/company/tools/design-system/index.js';
+import { setApiClientStore } from '@mcp/code-agent/tools/api-client/index.js';
 import { ChromeService, setChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { VerdaccioService, setVerdaccioService } from '@mcp/services/verdaccio/verdaccio-service.js';
 import {
@@ -113,13 +117,35 @@ import {
   DocsResearchBridge,
   setGlobalDocsResearcher,
 } from '@mcp/docs-agent/bridges/docs-bridge.js';
-import { setCoderWorkerDocDeps, setCoderWorkerMcpPool } from './sse/coderWorkerPoolSingleton.js';
-import { setCompanyWorkerDocDeps } from './sse/workerPoolSingleton.js';
+import {
+  setCoderWorkerDocDeps,
+  setCoderWorkerMcpPool,
+  coderWorkerEnabled,
+  getCoderWorkerPool,
+} from './sse/coderWorkerPoolSingleton.js';
+import { createIndexerExecutor } from './sse/IndexerWorkerClient.js';
+import { startPerfSampler } from './server/perf/perf-sampler.js';
+import { getMemoryLedger } from './server/perf/memory-ledger.js';
+import { mountPerfRoutes } from './server/routes/admin/perf.js';
+import { createInProcessStructuralExecutor } from '@mcp/services/services/project-index/index.js';
+import { registerShutdownTask } from './server/shutdown-tasks.js';
+import {
+  createLspHandlers,
+  createContext,
+  createInProcessLspExecutor,
+  setLspExecutor,
+  ensureLspManager,
+} from '@mcp/api-handlers';
+import { createLspExecutor } from './sse/lsp-executor.js';
+import { setWorkerLspDeps } from './sse/worker-lsp-handlers.js';
+import { setGlobalAgentLspBackend } from '@mcp/code-agent/lsp/agent-lsp-backend.js';
+import { setCompanyWorkerDocDeps, getWorkerOrchestratorPool } from './sse/workerPoolSingleton.js';
 import { McpExternalPool, setGlobalMcpExternalPool } from './sse/McpExternalPool.js';
 // Frente E — periodic watchdog for stuck coder_sessions. Started during
 // server bootstrap below; auto-`unref()` so it never holds process exit.
 import { startCoderWatchdog } from './sse/coder-watchdog.js';
 import { startMemorySweeper, memorySweeperEnabled } from './sse/memory-sweeper.js';
+import { startMemoryConsolidator, memoryConsolidateEnabled } from './sse/memory-consolidator.js';
 import { AppSettingsStore } from '@mcp/store/app-settings-store.js';
 import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
@@ -328,6 +354,8 @@ export function createApp() {
     setDesignSystemStore(deps.designSystemStore);
     setDesignSystemSkillStore(deps.skillStore);
   }
+  // API client (auto-test/auto-fix) store — wired for the `api_*` agent tools.
+  setApiClientStore(deps.apiClientStore);
   setSandboxServiceEnvStore(deps.companySessionEnvStore);
 
   // Wire QA preview-routing config (v4.3). Lets `syncManagedEnvs` mint
@@ -493,6 +521,21 @@ export function createApp() {
     }
   }
 
+  // Periodic memory consolidator — merges near-duplicate snapshots and GCs
+  // stale/cold/low-importance ones (reversible archive). Always constructed so
+  // the manual "run now" route works, but the periodic timer only arms when
+  // MCP_MEMORY_CONSOLIDATE=1 (it archives rows, so it's explicit opt-in).
+  try {
+    startMemoryConsolidator({
+      db: deps.db,
+      snapshotService: deps.snapshotService,
+      embeddingService: deps.embeddingService,
+      armed: memoryConsolidateEnabled(),
+    });
+  } catch (e) {
+    console.warn(`[memory/consolidator] failed to start: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   // Phase A "living company": surface any sessions that carry pending
   // master inbox messages from before the restart. Orchestrators are
   // lazy (built on first dashboard visit / stream reconnect), so the
@@ -656,12 +699,14 @@ export function createApp() {
   }
 
   mountProjectsRoutes(app, deps);
+  mountBuilderCheckpointRoutes(app, deps);
   mountProjectScaffoldRoute(app, deps);
   mountHygieneRoutes(app, deps);
   mountSearchRoutes(app, deps);
   mountFilesRoutes(app, deps);
   mountGraphRoutes(app, deps);
   mountSnapshotsRoutes(app, deps);
+  mountUserMemoryRoutes(app, deps);
   mountRunsRoutes(app, deps);
   mountTrainingRoutes(app, deps);
   mountDiffRoutes(app, deps);
@@ -677,10 +722,12 @@ export function createApp() {
   mountAdminLshRoutes(app, deps);
   mountAdminDriftRoutes(app, deps);
   mountWorkersDiagnosticRoute(app);
+  mountPerfRoutes(app);
   mountSupervisorAdminRoutes(app, { dbPath: deps.config.dbPath });
   app.route('/api/admin', createAdminRouter(deps.providerStore));
   mountCoderRoutes(app, deps);
   mountLspRoutes(app, deps);
+  mountEditorRoutes(app, deps);
   mountProjectGitRoutes(app, deps);
   mountConfigRoutes(app, deps);
   // Design System Creator routes (sessions / versions / storybook proxy).
@@ -768,6 +815,106 @@ export function createApp() {
     projectMemory: deps.projectMemory,
   });
   mountDocsAgentRoutes(app, deps, docsResearchBridge);
+
+  // Structural auto-index: upgrade the in-process executor to the dedicated
+  // indexer worker_thread (scanner + tree-sitter + SQLite writes off the
+  // main thread — in Electron the main thread IS the whole backend). Falls
+  // back per-call to in-process on worker errors; no-op when the worker
+  // entry can't resolve or MCP_INDEX_STRUCTURAL_WORKER=0. Single chokepoint
+  // for BOTH modes — Electron main imports this same createApp().
+  const indexerExecutorCfg = {
+    ignorePatterns: deps.config.ignorePatterns,
+    maxFileSizeKB: deps.config.maxFileSize,
+    concurrency: deps.config.concurrency,
+  };
+  const indexer = createIndexerExecutor(
+    { dbPath: deps.config.dbPath, ...indexerExecutorCfg },
+    createInProcessStructuralExecutor(deps.db, indexerExecutorCfg),
+  );
+  deps.projectIndexService.setExecutor(indexer.executor);
+  if (indexer.client) {
+    const client = indexer.client;
+    registerShutdownTask('indexer-worker-evict', () => client.dispose());
+  }
+
+  // LSP worker — the synchronous language compute (TS LanguageService +
+  // index-fallback SQLite) moves off the main thread. Every consumer of
+  // createLspHandlers (editor IPC, Hono fallback, agent adapter below)
+  // dispatches through the module-singleton holder, so this single wiring
+  // upgrades them all; with the worker unavailable the holder's executor
+  // degrades per-call to the same in-process code as before.
+  const lsp = createLspExecutor(
+    { dbPath: deps.config.dbPath },
+    createInProcessLspExecutor(deps.db),
+  );
+  setLspExecutor(lsp.executor);
+  if (lsp.client) {
+    const lspClient = lsp.client;
+    registerShutdownTask('lsp-worker-evict', () => lspClient.dispose());
+  }
+
+  // Perf monitor sampler — feeds /api/admin/perf/*. Pool getters are
+  // resolved lazily per tick (a pool that hasn't initialized yet just
+  // contributes an empty list). `processMetricsProvider` is injected by
+  // the Electron main process (app.getAppMetrics); null on web deploys.
+  startPerfSampler({
+    // Closure over `deps`, NOT the field value: Electron assigns
+    // `deps.processMetricsProvider` only AFTER createApp() returns, so
+    // capturing the value here would freeze it as undefined forever
+    // (the panel would show the "web deploy" fallback inside Electron).
+    processMetricsProvider: () => deps.processMetricsProvider?.() ?? null,
+    companyMemStats: async () => {
+      try { return await getWorkerOrchestratorPool().memStats(); } catch { return []; }
+    },
+    coderMemStats: async () => {
+      if (!coderWorkerEnabled()) return [];
+      try { return await getCoderWorkerPool().memStats(); } catch { return []; }
+    },
+    indexerMemStats: async () => indexer.client?.memStats() ?? null,
+  });
+
+  // Agent LSP nav (lsp_definition/references/hover beyond TS) — ONE router
+  // instance feeds three consumers: in-process coder runs (global backend),
+  // worker bridges (deps box read by registerWorkerLspHandlers) and, via its
+  // own handler instances, the editor. State is in module singletons, so the
+  // extra createLspHandlers here shares buffers/manager with the editor's.
+  const agentLsp = createLspHandlers(deps);
+  setWorkerLspDeps({ handlers: agentLsp, db: deps.db });
+  // Wire the LSP manager NOW (not lazily on first completion) so the
+  // onDocEvent listener + status hub exist before the renderer's first
+  // didOpen — closes the cold-start race that left the chip stuck blue.
+  ensureLspManager(deps.db);
+
+  // Perf-monitor ledger: LSP servers are separate OS processes spawned by
+  // the manager — they do NOT show up in Electron's app.getAppMetrics(),
+  // so we surface them here (count + ids) for the admin perf panel.
+  getMemoryLedger().register('lsp.servers', async () => {
+    const list = await agentLsp.instances(undefined, createContext());
+    const rows = list as Array<{ projectId: number; serverId: string; state: string }>;
+    return {
+      count: rows.length,
+      detail: rows.map((r) => `${r.serverId}#${r.projectId}(${r.state})`).join(', ') || 'nenhum server ativo',
+    };
+  });
+  const resolveLspProjectId = (root: string, projectName: string): number | null =>
+    deps.db.getProjectByPath(root)?.id ?? deps.db.getProjectByName(projectName)?.id ?? null;
+  setGlobalAgentLspBackend({
+    async definition({ root, projectName, file, position }) {
+      const projectId = resolveLspProjectId(root, projectName);
+      if (projectId == null) return null;
+      return agentLsp.definition({ projectId, file, position }, createContext());
+    },
+    async references({ root, projectName, file, position }) {
+      const projectId = resolveLspProjectId(root, projectName);
+      if (projectId == null) return null;
+      return agentLsp.references({ projectId, file, position }, createContext());
+    },
+    async hover({ root, projectName, file, position }) {
+      const projectId = resolveLspProjectId(root, projectName);
+      if (projectId == null) return null;
+      return (await agentLsp.hover({ projectId, file, position }, createContext())) ?? null;
+    },
+  });
 
   // External-MCP connection pool. Boots async so the dashboard
   // starts serving immediately; the first chat session may pay a
@@ -894,9 +1041,13 @@ const gracefulShutdown = (signal: NodeJS.Signals): void => {
     try {
       const { disposeWorkerOrchestratorPool } = await import('./sse/workerPoolSingleton.js');
       const { disposeCoderWorkerPool } = await import('./sse/coderWorkerPoolSingleton.js');
+      const { runShutdownTasks } = await import('./server/shutdown-tasks.js');
+      const { disposeIndexerProcessResources } = await import('@mcp/indexer/bootstrap/dispose.js');
       await Promise.allSettled([
         closeDbWriter(),
         closeIndexJobPool(),
+        disposeIndexerProcessResources(), // re-runs the two above (idempotent) + shared extractor
+        runShutdownTasks(),               // registered disposables (ONNX sessions, …)
         disposeWorkerOrchestratorPool(),
         disposeCoderWorkerPool(),
       ]);

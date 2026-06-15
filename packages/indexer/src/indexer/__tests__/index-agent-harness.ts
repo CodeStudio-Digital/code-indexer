@@ -45,6 +45,8 @@ function fakeVector(text: string): number[] {
 
 export class FakeEmbeddingService implements EmbeddingService {
   calls = 0;
+  /** Inline embedQuery() calls — the struct-deferral tests assert this stays 0 on first index. */
+  queryCalls = 0;
   /** Return true to make the Nth (0-based) embed() call throw. */
   failOn: ((callIndex: number) => boolean) | null = null;
   private fp: string;
@@ -56,6 +58,7 @@ export class FakeEmbeddingService implements EmbeddingService {
     return { vectors: texts.map(fakeVector), tokens: texts.length * 5 };
   }
   async embedQuery(text: string): Promise<{ vector: number[]; tokens: number }> {
+    this.queryCalls++;
     return { vector: fakeVector(text), tokens: 5 };
   }
   fingerprint(): string { return this.fp; }

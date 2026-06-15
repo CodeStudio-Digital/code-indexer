@@ -162,16 +162,16 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
 
   function handleOpenChange(next: boolean) {
     if (!next) {
-      // Mid-stream: bloqueia o close pra evitar abortar uma indexação
-      // que pode estar a meio caminho (especialmente embedding, que é
-      // caro). Quando a stream conclui, `streamFinished` fica true e o
-      // X passa a funcionar — converge no mesmo `onStreamClosed` que o
-      // botão "Fechar" interno chama.
-      if (running && !streamFinished) return;
       if (streamFinished) {
         void onStreamClosed();
         return;
       }
+      // Mid-stream: fechar é permitido — a indexação roda server-side
+      // (não está atrelada a esta conexão), então dispensar o painel
+      // só esconde o progresso; o run continua em segundo plano. Antes
+      // o X ficava bloqueado até a stream concluir. Refaz a lista pra
+      // que a source em andamento já apareça enquanto indexa.
+      if (running) void onAdded();
       reset();
     }
     setOpen(next);

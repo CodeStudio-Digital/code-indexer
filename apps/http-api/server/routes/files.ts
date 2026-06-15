@@ -65,7 +65,8 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
       const projectId = parseIdParam(c);
       const filePath = c.req.query('path');
       if (!filePath) return c.json({ error: 'path query param required' }, 400);
-      return c.json(await h.read({ projectId, path: filePath }, createContext()));
+      const ifModifiedSince = c.req.query('ifModifiedSince') || undefined;
+      return c.json(await h.read({ projectId, path: filePath, ifModifiedSince }, createContext()));
     } catch (err) {
       return mapApiError(c, err);
     }

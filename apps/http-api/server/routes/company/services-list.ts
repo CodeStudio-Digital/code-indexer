@@ -10,7 +10,6 @@ import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import { getSandboxManager, inferPreviewStrategy } from '@mcp/services/sandbox/index.js';
-import { isProvisionableStack } from './sandbox-helpers.js';
 
 export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void {
   const { companyStore, db } = deps;
@@ -85,14 +84,7 @@ export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void
     if (!alreadyHasPrimary) {
       const sandboxRow = deps.companySandboxStore.get(id);
       const liveMain = manager.get(String(id));
-      let builderStack = '';
-      try {
-        const cfg = JSON.parse(session.config_json || '{}') as { builder?: { stack?: string } };
-        if (isProvisionableStack(cfg.builder?.stack)) builderStack = cfg.builder.stack;
-      } catch {
-        /* non-builder */
-      }
-      if (sandboxRow || liveMain || builderStack) {
+      if (sandboxRow || liveMain) {
         const runtimePaused = !!liveMain?.runtimePaused;
         const mountKind = (liveMain?.mountKind ?? sandboxRow?.mount_kind ?? 'owned') as 'owned' | 'external';
         const imageSource = (liveMain?.imageSource ?? sandboxRow?.image_source ?? 'default') as
@@ -101,14 +93,14 @@ export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void
         services.unshift({
           service_id: 'main',
           name: 'main',
-          stack: liveMain?.stack ?? sandboxRow?.stack ?? builderStack,
+          stack: liveMain?.stack ?? sandboxRow?.stack ?? '',
           status: runtimePaused ? 'paused' : liveMain?.status ?? sandboxRow?.status ?? 'paused',
           runtime_paused: runtimePaused,
           step: liveMain?.step ?? 'queued',
           host_port: liveMain?.hostPort ?? sandboxRow?.host_port ?? 0,
           preview_url: liveMain?.previewUrl ?? null,
           preview_strategy: inferPreviewStrategy({
-            stack: liveMain?.stack ?? sandboxRow?.stack ?? builderStack,
+            stack: liveMain?.stack ?? sandboxRow?.stack ?? '',
             mountKind,
             fromProjectDockerfile: imageSource === 'project_dockerfile',
           }),

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolResult, ToolContext } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { SUBMIT_PLAN_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { formatInterruptedResult } from '@mcp/code-agent/tools/interaction.js';
@@ -27,6 +27,41 @@ export function formatPlanResult(approved: boolean, feedback?: string): string {
     return `Plan approved by user.${feedback ? ` Feedback: ${feedback}` : ''} You may now proceed with mutating tools.`;
   }
   return `Plan rejected by user.${feedback ? ` Feedback: ${feedback}` : ''} Revise the plan and call submit_plan again before mutating tools.`;
+}
+
+/**
+ * Apply the plan→build transition after a plan is approved. Unlocks mutating
+ * tools in-memory for this run (`approvePlan`) and, when the run started in the
+ * `plan` agent, persists the switch to `build` for the next runner creation
+ * (`setSessionAgent`) plus returns a `<system-reminder>` block so the live
+ * model switches gears in the same turn.
+ *
+ * Single-sourced here and reused by `submit_plan` (canonical approval path) and
+ * `execute_tasks` (when a model uses execute_tasks as its "plan is ready, go"
+ * signal in plan mode). The reminder rides as `extraUserBlocks` — not a direct
+ * appendSystemReminder — so it lands AFTER the tool_result, preserving the
+ * `assistant(tool_use) → tool → user` adjacency strict providers require.
+ */
+export function applyPlanApproval(
+  runner: NonNullable<ToolContext['runner']>,
+  ctx: ToolContext,
+): Pick<ToolResult, 'extraUserBlocks'> {
+  runner.approvePlan();
+  if (runner.agentId !== 'plan') return {};
+  ctx.setSessionAgent?.('build');
+  return {
+    extraUserBlocks: [
+      {
+        type: 'text',
+        text:
+          '<system-reminder>Mode transition: Plan → Build. The plan was approved. ' +
+          'Now execute it per build-mode instructions: read with prepare_edit / get_symbol_body ' +
+          'before editing, apply changes, run the project verify (npm test / pnpm typecheck / ' +
+          'appropriate) after each batch, and report concrete diffs. No further plan submission ' +
+          'needed — proceed directly to edits.</system-reminder>',
+      },
+    ],
+  };
 }
 
 /**
@@ -124,40 +159,14 @@ export const submitPlan: CoderTool = {
     }
     if (parsed.approved) {
       ctx.resolvePlan?.(id, 'approved', parsed.feedback);
-      runner.approvePlan();
       // A new approval clears prior rejections — the model has moved on, and
       // any future plan with the same text would be a legitimately new ask.
       rejected.clear();
-      // Iteration 2: auto plan→build after approval. When the runner was
-      // started in `plan` agent, the user has now signaled "ok, execute" —
-      // flip the persisted agent to `build` so the NEXT runner creation
-      // picks up build's defaults (planMode=false, build.txt prompt),
-      // and inject a <system-reminder> so the model in this live run
-      // immediately switches gears without waiting for a fresh turn.
-      //
-      // The reminder rides as `extraUserBlocks` on the tool result instead
-      // of a direct `appendSystemReminder` push: pushing a `user` message
-      // from inside the handler lands it BEFORE the tool_result the runner
-      // emits on return, producing `assistant(tool_use) → user → tool` —
-      // strict OpenAI-compatible providers (Kimi Code) reject that with
-      // "400 tool_call_ids did not have response messages". extraUserBlocks
-      // is consumed by the runner AFTER the tool_result is pushed, keeping
-      // the required `assistant → tool → user` adjacency.
-      const transitioning = runner.agentId === 'plan';
-      if (transitioning) {
-        ctx.setSessionAgent?.('build');
-      }
-      const result: ToolResult = { content: formatPlanResult(true, parsed.feedback) };
-      if (transitioning) {
-        result.extraUserBlocks = [
-          {
-            type: 'text',
-            text:
-              '<system-reminder>Mode transition: Plan → Build. The plan was approved. Now execute it per build-mode instructions: read with prepare_edit / get_symbol_body before editing, apply changes, run the project verify (npm test / pnpm typecheck / appropriate) after each batch, and report concrete diffs. No further plan submission needed — proceed directly to edits.</system-reminder>',
-          },
-        ];
-      }
-      return result;
+      // Auto plan→build after approval: unlock this run, persist `build` for
+      // the next runner, and inject a <system-reminder> so the live model
+      // switches gears immediately. See applyPlanApproval.
+      const extras = applyPlanApproval(runner, ctx);
+      return { content: formatPlanResult(true, parsed.feedback), ...extras };
     }
     rejected.add(hash);
     ctx.resolvePlan?.(id, 'rejected', parsed.feedback);

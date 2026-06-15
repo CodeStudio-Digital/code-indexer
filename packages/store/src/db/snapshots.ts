@@ -1,5 +1,6 @@
-import type { ContextSnapshot, SnapshotCategory, SnapshotVersion } from '@mcp/shared/types.js';
+import type { ContextSnapshot, SnapshotCategory, SnapshotScope, SnapshotVersion } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
+import { buildFtsMatch } from './fts-query.js';
 
 export interface CreateSnapshotData {
   title: string;
@@ -11,6 +12,8 @@ export interface CreateSnapshotData {
   source?: string;
   /** 0..1 salience (migration 114). Defaults to 0.5. */
   importance?: number;
+  /** Memory scope (migration 145). Defaults to 'project'. */
+  scope?: SnapshotScope;
 }
 
 export type UpdateSnapshotData = Partial<Pick<ContextSnapshot, 'title' | 'category' | 'content'>> & {
@@ -22,13 +25,17 @@ export type UpdateSnapshotData = Partial<Pick<ContextSnapshot, 'title' | 'catego
 };
 
 export function create(db: DB, projectId: number, data: CreateSnapshotData): ContextSnapshot {
+  // Invariant: user/feedback categories are always user-scope, even when the
+  // generic distiller writer doesn't pass an explicit scope.
+  const scope =
+    data.scope ?? (data.category === 'user' || data.category === 'feedback' ? 'user' : 'project');
   const result = db.prepare(`
-    INSERT INTO snapshots (project_id, title, category, content, tags, created_by, source, importance)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO snapshots (project_id, title, category, content, tags, created_by, source, importance, scope)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     projectId, data.title, data.category, data.content,
     JSON.stringify(data.tags ?? []), data.createdBy ?? 'manual',
-    data.source ?? 'manual', data.importance ?? 0.5
+    data.source ?? 'manual', data.importance ?? 0.5, scope
   );
   return db.prepare('SELECT * FROM snapshots WHERE id = ?')
     .get(result.lastInsertRowid) as ContextSnapshot;
@@ -204,10 +211,13 @@ export function updateEmbeddingHash(db: DB, id: number, hash: string): void {
 }
 
 export function listMissingEmbedding(db: DB, projectId?: number): ContextSnapshot[] {
+  // Archived rows are excluded — their vectors were dropped on archive and we
+  // don't want backfill re-embedding them. Un-archive NULLs the hash again so
+  // a restored row is picked back up here.
   if (projectId === undefined) {
-    return db.prepare('SELECT * FROM snapshots WHERE embedding_hash IS NULL ORDER BY id').all() as ContextSnapshot[];
+    return db.prepare('SELECT * FROM snapshots WHERE embedding_hash IS NULL AND archived_at IS NULL ORDER BY id').all() as ContextSnapshot[];
   }
-  return db.prepare('SELECT * FROM snapshots WHERE project_id = ? AND embedding_hash IS NULL ORDER BY id')
+  return db.prepare('SELECT * FROM snapshots WHERE project_id = ? AND embedding_hash IS NULL AND archived_at IS NULL ORDER BY id')
     .all(projectId) as ContextSnapshot[];
 }
 
@@ -216,6 +226,8 @@ export interface MemoryIndexEntry {
   title: string;
   category: string;
   importance: number;
+  /** First ~200 chars of the body — fed to the task-preflight analyzer. */
+  excerpt?: string;
 }
 
 /**
@@ -226,12 +238,13 @@ export interface MemoryIndexEntry {
  */
 export function listMemoryIndex(db: DB, projectId: number, limit = 12): MemoryIndexEntry[] {
   const rows = db.prepare(`
-    SELECT id, title, category, importance, last_accessed_at, created_at
-    FROM snapshots WHERE project_id = ?
+    SELECT id, title, category, importance, last_accessed_at, created_at,
+           substr(content, 1, 200) AS excerpt
+    FROM snapshots WHERE project_id = ? AND archived_at IS NULL
     ORDER BY importance DESC LIMIT 100
   `).all(projectId) as Array<{
     id: number; title: string; category: string; importance: number;
-    last_accessed_at: string | null; created_at: string;
+    last_accessed_at: string | null; created_at: string; excerpt: string | null;
   }>;
   const now = Date.now();
   const HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000; // same half-life as the retriever
@@ -243,11 +256,12 @@ export function listMemoryIndex(db: DB, projectId: number, limit = 12): MemoryIn
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, Math.max(1, limit)).map(({ r }) => ({
     id: r.id, title: r.title, category: r.category, importance: r.importance ?? 0.5,
+    excerpt: r.excerpt ?? undefined,
   }));
 }
 
 export function count(db: DB, projectId: number): number {
-  const row = db.prepare('SELECT COUNT(*) AS c FROM snapshots WHERE project_id = ?')
+  const row = db.prepare('SELECT COUNT(*) AS c FROM snapshots WHERE project_id = ? AND archived_at IS NULL')
     .get(projectId) as { c: number };
   return row.c;
 }
@@ -268,27 +282,27 @@ export function getById(db: DB, id: number): ContextSnapshot | undefined {
 
 export function list(db: DB, projectId: number, category?: SnapshotCategory): ContextSnapshot[] {
   if (category) {
-    return db.prepare('SELECT * FROM snapshots WHERE project_id = ? AND category = ? ORDER BY created_at DESC')
+    return db.prepare('SELECT * FROM snapshots WHERE project_id = ? AND category = ? AND archived_at IS NULL ORDER BY created_at DESC')
       .all(projectId, category) as ContextSnapshot[];
   }
-  return db.prepare('SELECT * FROM snapshots WHERE project_id = ? ORDER BY created_at DESC')
+  return db.prepare('SELECT * FROM snapshots WHERE project_id = ? AND archived_at IS NULL ORDER BY created_at DESC')
     .all(projectId) as ContextSnapshot[];
 }
 
 export function search(db: DB, projectId: number, query: string): ContextSnapshot[] {
-  const ftsQuery = query.replace(/[-*"(){}[\]^~\\:]/g, ' ').trim().split(/\s+/).filter(Boolean).join(' OR ');
+  const ftsQuery = buildFtsMatch(query, 'OR');
   if (!ftsQuery) return [];
   try {
     return db.prepare(`
       SELECT s.* FROM snapshots_fts fts
       JOIN snapshots s ON s.id = fts.rowid
-      WHERE fts.snapshots_fts MATCH ? AND s.project_id = ?
+      WHERE fts.snapshots_fts MATCH ? AND s.project_id = ? AND s.archived_at IS NULL
       ORDER BY rank
     `).all(ftsQuery, projectId) as ContextSnapshot[];
   } catch {
     const pattern = `%${query}%`;
     return db.prepare(
-      'SELECT * FROM snapshots WHERE project_id = ? AND (title LIKE ? OR content LIKE ?) ORDER BY created_at DESC'
+      'SELECT * FROM snapshots WHERE project_id = ? AND archived_at IS NULL AND (title LIKE ? OR content LIKE ?) ORDER BY created_at DESC'
     ).all(projectId, pattern, pattern) as ContextSnapshot[];
   }
 }

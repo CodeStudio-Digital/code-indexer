@@ -85,24 +85,27 @@ describe('goal — DB-persisted across runner restarts', () => {
     expect(g.content).toContain('tagged v2.0.0');
   });
 
-  it('replace_active=false is currently ignored — supersede happens regardless (user disabled the strict branch in goal.ts)', async () => {
-    // Historical: this test asserted the strict refusal path. The user
-    // commented out the `if (!replaceActive)` block to make create_goal
-    // always supersede. Test now mirrors the live behaviour.
+  it('refuses a redundant create against a persisted in_progress goal (no silent supersede)', async () => {
+    // create_goal stays visible the whole run now (prompt-cache prefix
+    // stability), so the handler refuses a second create while a goal is
+    // in_progress instead of auto-superseding it.
     await createGoal.handler({ goal: 'first' }, ctxFor(sessionId));
     const fresh = ctxFor(sessionId);
-    const r = await createGoal.handler({ goal: 'second', replace_active: false }, fresh);
-    expect(r.isError).toBeFalsy();
-    expect(r.content).toContain('superseded');
+    const r = await createGoal.handler({ goal: 'second' }, fresh);
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('already in_progress');
+    // The original persisted goal is untouched.
+    const fresh2 = ctxFor(sessionId);
+    const g = await getGoal.handler({}, fresh2);
+    expect(g.content).toContain('Goal: first');
+    expect(g.content).toContain('in_progress');
   });
 
-  it('auto-supersedes a persisted in-progress goal by default and persists the new one', async () => {
+  it('allows a pivot only after completing the persisted goal first', async () => {
     await createGoal.handler({ goal: 'phase 1' }, ctxFor(sessionId));
-    const fresh = ctxFor(sessionId);
-    // No replace_active arg → default true → auto-replace.
-    const r = await createGoal.handler({ goal: 'phase 2' }, fresh);
+    await updateGoal.handler({ status: 'complete' }, ctxFor(sessionId));
+    const r = await createGoal.handler({ goal: 'phase 2' }, ctxFor(sessionId));
     expect(r.isError).toBeFalsy();
-    expect(r.content).toContain('superseded');
 
     // The new goal is what survives a runner restart.
     const fresh2 = ctxFor(sessionId);

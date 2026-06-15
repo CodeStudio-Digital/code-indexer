@@ -5,6 +5,8 @@ export interface SymbolReferenceInput {
   symbol_name: string;
   kind: string;
   line?: number;
+  /** Start column of the reference (1-based) — migration 141. */
+  col?: number;
   snippet?: string;
 }
 
@@ -13,8 +15,8 @@ export function upsertReferences(db: DB, projectId: number, fileId: number, file
     db.prepare('DELETE FROM symbol_references WHERE referencing_file_id = ?').run(fileId);
 
     const insert = db.prepare(`
-      INSERT INTO symbol_references (project_id, symbol_id, symbol_name, referencing_file_id, referencing_file_path, line, context)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO symbol_references (project_id, symbol_id, symbol_name, referencing_file_id, referencing_file_path, line, col, context)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (const ref of references) {
@@ -29,6 +31,7 @@ export function upsertReferences(db: DB, projectId: number, fileId: number, file
         fileId,
         filePath,
         ref.line ?? null,
+        ref.col ?? null,
         ref.snippet ?? null
       );
     }

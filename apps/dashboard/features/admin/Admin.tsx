@@ -6,7 +6,9 @@ import {
   AppWindow,
   Blocks,
   BookOpen,
+  Languages,
   Database,
+  Gauge,
   GitFork,
   Globe,
   KeyRound,
@@ -40,12 +42,14 @@ import { PluginsPanel } from './PluginsPanel.js';
 import { StoragePanel } from './StoragePanel.js';
 import { HydePanel } from './HydePanel.js';
 import { HygienePanel } from './HygienePanel.js';
+import { LspServersPanel } from './LspServersPanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
 import { AuthPanel } from './AuthPanel.js';
 import { GeneralAiPanel } from './GeneralAiPanel.js';
 import { ChromeServicePanel } from './ChromeServicePanel.js';
 import { VerdaccioPanel } from './VerdaccioPanel.js';
 import { PipelineBindingsPanel } from './PipelineBindingsPanel.js';
+import PerfMonitorPanel from './perf/PerfMonitorPanel.js';
 // PipelineTelemetryPanel / QualityPanel were moved to the `/telemetry`
 // page (they're observability surfaces, not config). The Pipelines tab
 // below is the only one that stays here.
@@ -68,6 +72,7 @@ type SectionId =
   | 'chrome-service'
   | 'verdaccio'
   | 'pipeline-bindings'
+  | 'perf'
   | 'auth';
 
 type GroupId = 'models' | 'knowledge' | 'extensions' | 'services' | 'system';
@@ -100,6 +105,8 @@ export default function Admin() {
     test,
     refresh,
     toggleModel,
+    addModel,
+    deleteModel,
     setModelEffort,
     setModelContextWindow,
     setModelMaxTools,
@@ -184,6 +191,8 @@ export default function Admin() {
     { id: 'mcp-http',          label: 'MCP HTTP',                 icon: Globe,         group: 'extensions',
       hint: 'Expor nossas tools (incl. RAG) pra outros agentes' },
     // Serviços
+    { id: 'lsp-servers',       label: 'Language Servers',         icon: Languages,     group: 'services',
+      hint: 'LSP por linguagem (PHP, Python, …) — instalar/gerenciar' },
     { id: 'chrome-service',    label: 'Chrome Service',           icon: AppWindow,     group: 'services',
       hint: 'Browser headless pra docs / web tools' },
     { id: 'verdaccio',         label: 'Verdaccio',                icon: Package,       group: 'services',
@@ -191,6 +200,8 @@ export default function Admin() {
     // Sistema
     { id: 'app-settings',      label: 'Configurações',            icon: Settings2,     group: 'system',
       hint: 'Env vars persistidas: limites, flags, tuning' },
+    { id: 'perf',              label: t('admin:perf.tabLabel'),   icon: Gauge,         group: 'system',
+      hint: t('admin:perf.hint') },
     { id: 'auth',              label: t('admin:tabs.auth'),       icon: KeyRound,      group: 'system',
       hint: 'OAuth 2.1, API tokens, audit log' },
   ];
@@ -402,6 +413,8 @@ export default function Admin() {
                 onToggleModel={(modelId, mode, enabled) =>
                   expanded && toggleModel(expanded, modelId, mode, enabled)
                 }
+                onAddModel={(input) => expanded && addModel(expanded, input)}
+                onDeleteModel={(modelId, mode) => expanded && deleteModel(expanded, modelId, mode)}
                 onSetModelEffort={(modelId, mode, level) =>
                   expanded && setModelEffort(expanded, modelId, mode, level)
                 }
@@ -428,9 +441,11 @@ export default function Admin() {
           {section === 'skills'            && <SkillsPanel />}
           {section === 'plugins'           && <PluginsPanel />}
           {section === 'ai-geral'          && <GeneralAiPanel />}
+          {section === 'lsp-servers'       && <LspServersPanel />}
           {section === 'chrome-service'    && <ChromeServicePanel />}
           {section === 'verdaccio'         && <VerdaccioPanel />}
           {section === 'pipeline-bindings' && <PipelineBindingsPanel />}
+          {section === 'perf'              && <PerfMonitorPanel />}
           {section === 'auth'              && <AuthPanel />}
         </section>
       </div>

@@ -16,7 +16,7 @@ This project is a **Design System workspace**. You and the user are building a c
 
 ## Build → verify → register loop
 1. Build/change the component in `pkg/`, update its gallery demo.
-2. VERIFY visually: `preview_screenshot` (use `lookFor` if you can't see images) and `preview_console` for errors. Fix before declaring done.
+2. VERIFY visually: call `preview_open()` with NO url (we attach to this workspace's gallery dev server — reusing the running one, starting it only if needed, and closing what we start at run end; never launch `npm run dev` yourself), then `preview_screenshot` (use `lookFor` if you can't see images) and `preview_console` for errors. Fix before declaring done.
 3. When the USER approves the component in the preview, call `ds_record_component({ name, kind, props_schema_json, example_code })`. Never record unapproved work. Use `ds_list_components` to know what's registered vs new.
 
 ## Element-targeted edits

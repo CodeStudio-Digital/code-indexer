@@ -1,0 +1,208 @@
+/**
+ * Lazy file-tree store (IntelliJ model): directories load on first expand
+ * (`files.tree` depth=1 with hasChildren), live fs-events mutate the loaded
+ * slices in place, and expansion + scroll persist per project. The view
+ * flattens `children`+`expanded` into virtualized rows.
+ */
+import { create } from 'zustand';
+import { apiCall } from '../lib/api-client.js';
+
+export interface TreeEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'dir';
+  hasChildren?: boolean;
+}
+
+interface TreeNodeDTO extends TreeEntry { children?: TreeNodeDTO[] }
+export interface FsEventDTO { path: string; kind: 'upsert' | 'delete'; isDir: boolean }
+
+const PERSIST_PREFIX = 'mcp-ide:file-tree:';
+const MAX_PERSISTED = 500;
+
+function parentOf(p: string): string {
+  const ix = p.lastIndexOf('/');
+  return ix < 0 ? '' : p.slice(0, ix);
+}
+function nameOf(p: string): string {
+  const ix = p.lastIndexOf('/');
+  return ix < 0 ? p : p.slice(ix + 1);
+}
+export function compareTreeEntries(a: TreeEntry, b: TreeEntry): number {
+  if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+  return a.name.localeCompare(b.name);
+}
+
+function loadPersisted(projectId: number): string[] {
+  try {
+    const raw = localStorage.getItem(`${PERSIST_PREFIX}${projectId}`);
+    return raw ? (JSON.parse(raw) as string[]).slice(0, MAX_PERSISTED) : [];
+  } catch { return []; }
+}
+function persist(projectId: number, expanded: Set<string>): void {
+  try {
+    localStorage.setItem(`${PERSIST_PREFIX}${projectId}`, JSON.stringify([...expanded].slice(0, MAX_PERSISTED)));
+  } catch { /* quota — non-fatal */ }
+}
+
+interface FileTreeState {
+  projectId: number | null;
+  /** parentPath ('' = root) → sorted entries. Presence = loaded. */
+  children: Map<string, TreeEntry[]>;
+  expanded: Set<string>;
+  loading: Set<string>;
+  error: string | null;
+  /** Bumped on every mutation so memoized row flattening recomputes. */
+  version: number;
+
+  init: (projectId: number) => void;
+  ensureLoaded: (dir: string) => Promise<void>;
+  toggle: (dir: string) => void;
+  /** Expand every ancestor of `path` (loading as needed). */
+  reveal: (path: string) => Promise<void>;
+  applyFsEvents: (events: FsEventDTO[]) => void;
+  refresh: () => void;
+}
+
+export const useFileTreeStore = create<FileTreeState>((set, get) => ({
+  projectId: null,
+  children: new Map(),
+  expanded: new Set(),
+  loading: new Set(),
+  error: null,
+  version: 0,
+
+  init: (projectId) => {
+    const expanded = new Set(loadPersisted(projectId));
+    set({
+      projectId,
+      children: new Map(),
+      expanded,
+      loading: new Set(),
+      error: null,
+      version: 0,
+    });
+    void get().ensureLoaded('');
+    // Restore the persisted expansion eagerly (parallel) — without this the
+    // reopened tree showed expanded-but-EMPTY folders until re-clicked.
+    // Each load is a single readdir on the fast path, so 100s are fine.
+    for (const dir of expanded) void get().ensureLoaded(dir);
+  },
+
+  ensureLoaded: async (dir) => {
+    const { projectId, children, loading } = get();
+    if (projectId == null || children.has(dir) || loading.has(dir)) return;
+    set((s) => ({ loading: new Set(s.loading).add(dir) }));
+    try {
+      const node = await apiCall<TreeNodeDTO>('files.tree', {
+        projectId, root: dir === '' ? '.' : dir, maxDepth: 1,
+      });
+      const entries = (node.children ?? [])
+        .map<TreeEntry>((c) => ({ name: c.name, path: c.path, type: c.type, hasChildren: c.hasChildren ?? (c.children?.length ?? 0) > 0 }))
+        .sort(compareTreeEntries);
+      set((s) => {
+        if (s.projectId !== projectId) return {};
+        const next = new Map(s.children);
+        next.set(dir, entries);
+        const loadingNext = new Set(s.loading);
+        loadingNext.delete(dir);
+        return { children: next, loading: loadingNext, error: null, version: s.version + 1 };
+      });
+    } catch (err) {
+      set((s) => {
+        const loadingNext = new Set(s.loading);
+        loadingNext.delete(dir);
+        return { loading: loadingNext, error: err instanceof Error ? err.message : String(err) };
+      });
+    }
+  },
+
+  toggle: (dir) => {
+    const { expanded, projectId } = get();
+    const next = new Set(expanded);
+    if (next.has(dir)) next.delete(dir);
+    else {
+      next.add(dir);
+      void get().ensureLoaded(dir);
+    }
+    set((s) => ({ expanded: next, version: s.version + 1 }));
+    if (projectId != null) persist(projectId, next);
+  },
+
+  reveal: async (path) => {
+    const ancestors: string[] = [];
+    let dir = parentOf(path);
+    while (dir) { ancestors.unshift(dir); dir = parentOf(dir); }
+    for (const a of ['', ...ancestors]) await get().ensureLoaded(a);
+    set((s) => {
+      const next = new Set(s.expanded);
+      for (const a of ancestors) next.add(a);
+      if (s.projectId != null) persist(s.projectId, next);
+      return { expanded: next, version: s.version + 1 };
+    });
+  },
+
+  applyFsEvents: (events) => {
+    if (events.length > 500) { get().refresh(); return; }
+    set((s) => {
+      const children = new Map(s.children);
+      const expanded = new Set(s.expanded);
+      let touched = false;
+      for (const e of events) {
+        const parent = parentOf(e.path);
+        if (e.kind === 'delete') {
+          // Drop the entry from its parent (if loaded) + every loaded slice
+          // and expansion under it (dir subtree cleanup).
+          const list = children.get(parent);
+          if (list?.some((x) => x.path === e.path)) {
+            children.set(parent, list.filter((x) => x.path !== e.path));
+            touched = true;
+          }
+          for (const key of [...children.keys()]) {
+            if (key === e.path || key.startsWith(`${e.path}/`)) { children.delete(key); touched = true; }
+          }
+          for (const key of [...expanded]) {
+            if (key === e.path || key.startsWith(`${e.path}/`)) { expanded.delete(key); touched = true; }
+          }
+        } else {
+          const list = children.get(parent);
+          if (!list) continue; // parent not loaded — will appear on expand
+          if (list.some((x) => x.path === e.path)) continue; // content change, not creation
+          const entry: TreeEntry = {
+            name: nameOf(e.path), path: e.path,
+            type: e.isDir ? 'dir' : 'file',
+            // Optimistic chevron, matching the tree handler's fast path.
+            hasChildren: e.isDir ? true : undefined,
+          };
+          const next = [...list, entry].sort(compareTreeEntries);
+          children.set(parent, next);
+          touched = true;
+        }
+      }
+      return touched ? { children, expanded, version: s.version + 1 } : {};
+    });
+  },
+
+  refresh: () => {
+    const { projectId, expanded } = get();
+    if (projectId == null) return;
+    set((s) => ({ children: new Map(), loading: new Set(), version: s.version + 1 }));
+    void get().ensureLoaded('');
+    for (const dir of expanded) void get().ensureLoaded(dir);
+  },
+}));
+
+/** Flatten loaded children + expansion into render rows (depth for indent). */
+export function visibleRows(state: Pick<FileTreeState, 'children' | 'expanded'>): Array<{ entry: TreeEntry; depth: number }> {
+  const out: Array<{ entry: TreeEntry; depth: number }> = [];
+  const walk = (dir: string, depth: number): void => {
+    const entries = state.children.get(dir);
+    if (!entries) return;
+    for (const entry of entries) {
+      out.push({ entry, depth });
+      if (entry.type === 'dir' && state.expanded.has(entry.path)) walk(entry.path, depth + 1);
+    }
+  };
+  walk('', 0);
+  return out;
+}

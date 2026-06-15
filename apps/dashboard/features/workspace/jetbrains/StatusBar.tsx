@@ -15,15 +15,18 @@
  */
 
 import { useState } from 'react';
-import { Activity, Circle, GitBranch, Languages } from 'lucide-react';
+import { Circle, GitBranch } from 'lucide-react';
 import { useApi } from '../../../hooks/useApi.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
-import { inferLanguage } from '../../../lib/language-detect.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/popover.js';
 import { cn } from '../../../lib/utils.js';
 import { fileIconFor } from '../../../lib/file-icon.js';
 import { BranchPopover } from './status-bar/BranchPopover.js';
+import { IndexStatusChip } from './status-bar/IndexStatusChip.js';
+import { LanguageChip } from './status-bar/LanguageChip.js';
+import { AiCompleteChip } from './status-bar/AiCompleteChip.js';
+import { useIndexStatus } from './status-bar/useIndexStatus.js';
 import { CommitDialog } from './tool-windows/git/CommitDialog.js';
 
 interface StatusBarProps {
@@ -53,6 +56,12 @@ export function StatusBar({ projectId, projectName }: StatusBarProps) {
   const { data: stats } = useApi<{ file_count: number; symbol_count: number; total_lines: number }>(
     `/projects/${projectId}/stats`,
   );
+  // Live index frames (initial frame arrives immediately on subscribe).
+  // Counters PREFER the stream: the one-shot stats above freezes at page-load
+  // values — during a first index it showed "0 files · 0 symbols" forever.
+  const indexStatus = useIndexStatus(projectId);
+  const fileCount = indexStatus?.fileCount ?? stats?.file_count;
+  const symbolCount = indexStatus?.symbolCount ?? stats?.symbol_count;
   // projectGit.status returns the branch + ahead/behind/dirty counters
   // so we can echo what JetBrains shows in the bottom-right corner.
   // `refetch` lets the branch popover poke this hook after any
@@ -65,7 +74,6 @@ export function StatusBar({ projectId, projectName }: StatusBarProps) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [commitOpen, setCommitOpen] = useState(false);
 
-  const lang = inferLanguage(activeFilePath);
   const { Icon: TypeIcon, colorClass: typeColor } = fileIconFor(activeFilePath ?? '');
   // Reduce `files` once — gitDirty drives the amber dot, stagedCount
   // gates the Commit dialog's button. The handler returns one entry
@@ -151,49 +159,22 @@ export function StatusBar({ projectId, projectName }: StatusBarProps) {
         )}
       </span>
       <span className="ml-auto inline-flex items-center gap-3">
-        {stats && (
+        <IndexStatusChip status={indexStatus} />
+        <span className="opacity-40">·</span>
+        {fileCount !== undefined && symbolCount !== undefined && (
           <>
-            <span>{stats.file_count.toLocaleString()} files</span>
+            <span>{fileCount.toLocaleString()} files</span>
             <span className="opacity-40">·</span>
-            <span>{stats.symbol_count.toLocaleString()} symbols</span>
+            <span>{symbolCount.toLocaleString()} symbols</span>
             <span className="opacity-40">·</span>
           </>
         )}
-        {/* Language + LSP status — single chip with a tooltip explaining
-            what 'syntax only' means so the user isn't left wondering why
-            their PHP file lacks completion. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              className={cn(
-                'inline-flex items-center gap-1 cursor-default',
-                lang.lspSupported ? 'text-emerald-500/90' : 'text-amber-500/80',
-              )}
-            >
-              {lang.lspSupported ? (
-                <Activity className="h-2.5 w-2.5" />
-              ) : (
-                <Languages className="h-2.5 w-2.5" />
-              )}
-              <span>
-                {lang.label}
-                {!activeFilePath ? '' : lang.lspSupported ? ' · LSP' : ' · syntax only'}
-              </span>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-[260px]">
-            {lang.lspSupported ? (
-              <span>Full IntelliSense — completion · hover · Ctrl+Click · diagnostics.</span>
-            ) : activeFilePath ? (
-              <span>
-                Syntax highlight only. {lang.label} IntelliSense (completion / go-to-definition)
-                needs an external LSP — coming in v1.1.
-              </span>
-            ) : (
-              <span>Open a file to see language status.</span>
-            )}
-          </TooltipContent>
-        </Tooltip>
+        {/* Language-intelligence tier for the active file: built-in TS
+            service / installed LSP server (green), structural-index
+            fallback (sky) or syntax-only (amber). */}
+        <LanguageChip projectId={projectId} activeFilePath={activeFilePath} />
+        <span className="opacity-40">·</span>
+        <AiCompleteChip />
       </span>
 
       {commitOpen && (

@@ -36,13 +36,6 @@ export interface CoderSession {
   /** Selected agent preset (explore | plan | build | admin). Sticky across turns so resume paths honour the user's choice. */
   agent: string | null;
   /**
-   * Decoupled Builder config — JSON `{"stack":"react-ts","studio":true}`.
-   * When set, this is a Builder session: a coder session bound to a
-   * sandbox container, run by the `builder` agent. Null for ordinary
-   * coder sessions.
-   */
-  builder_json: string | null;
-  /**
    * Last `response.id` returned by the Responses API for this session, used as
    * `previous_response_id` on the next turn. Only populated for ChatGPT/Codex
    * sessions running with `store: true`. Null for other providers.
@@ -88,6 +81,19 @@ export interface CoderSession {
    * approvals are skipped. NULL → no grants.
    */
   tool_permission_grants: string | null;
+  /**
+   * Sticky tier profile (migration 142). Resolved once (explicit > preflight >
+   * heuristic), then reused on every resume so the visible tool array stays
+   * byte-stable across runs (prompt-cache prefix). Widen-only — see
+   * `setToolProfile`. NULL → legacy session: adopt once from
+   * `inferProfileFromHistory` on the next run and persist.
+   */
+  tool_profile: 'bootstrap' | 'navigate' | 'full' | null;
+  /**
+   * Widen-only toolset companion state (migration 142):
+   * `{v:1, extraTiers:[], pins:[], visibleCap:null}` JSON. NULL → empty.
+   */
+  tool_state_json: string | null;
   /**
    * Durable compaction boundary (migration 128). When non-null, every message
    * loader (runner seed + dashboard GET) only returns rows with
@@ -232,7 +238,13 @@ export type SessionInputKind =
    * per session run (dedup'd by content_hash) so the dashboard can flag
    * "your profile was partially ignored". Body is JSON of skipped samples.
    */
-  | 'phase_route_skip_summary';
+  | 'phase_route_skip_summary'
+  /**
+   * Task-preflight outcome for the session's FIRST prompt. Body is the
+   * rendered `<preflight>` hint on success, or a short diagnostic on
+   * failure; meta carries status/latency/model/picks for the funnel.
+   */
+  | 'preflight';
 
 /**
  * One row per hidden prompt the agent sees: the run-start system prompt,

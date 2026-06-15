@@ -347,6 +347,8 @@
   "memory.health.total": "{{count}} memórias",
   "memory.health.refresh": "Atualizar",
   "memory.health.lastDistill": "última destilação {{when}} ({{trigger}}): +{{created}} novas, {{merged}} mescladas",
+  "memory.health.lastConsolidation": "consolidada {{when}}: {{merged}} mescladas, {{archived}} arquivadas",
+  "memory.health.archived": "{{count}} arquivadas",
   "memory.health.never": "Nenhuma destilação ainda — a memória é escrita automaticamente quando sessões compactam ou ficam ociosas, e sempre que o agente salva uma nota de projeto.",
   "memory.toggle.label": "Memória automática",
   "memory.actions.pin": "Fixar",
@@ -355,5 +357,13 @@
   "memory.source.agent": "agente",
   "memory.source.session": "sessão",
   "memory.source.compaction": "compactação",
-  "memory.source.index": "índice"
+  "memory.source.index": "índice",
+  "userMemory.title": "Preferências do usuário",
+  "userMemory.subtitle": "global — vale para todos os projetos",
+  "userMemory.titlePlaceholder": "Título curto (ex.: \"arquivos pequenos\")",
+  "userMemory.contentPlaceholder": "O fato ou preferência (ex.: \"arquivos ≤ 200 LOC\")",
+  "userMemory.cat.feedback": "preferência",
+  "userMemory.cat.user": "sobre mim",
+  "userMemory.empty": "Nenhuma preferência ainda. O agente salva quando você declara uma preferência; você também pode adicionar aqui.",
+  "userMemory.delete": "Excluir"
 }

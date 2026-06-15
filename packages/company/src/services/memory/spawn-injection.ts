@@ -89,3 +89,42 @@ ${rendered.join('\n')}\n`;
     return '';
   }
 }
+
+/**
+ * Returns the rendered `## USER PREFERENCES` section (global user memory,
+ * migration 145), or `''` when there's nothing. Targets the reserved user
+ * project (id 0) and is NOT gated by any per-project toggle — these facts
+ * apply to every project. Same best-effort posture as the project block.
+ */
+export async function fetchUserMemoryBlock(opts: { taskText: string; timeoutMs?: number }): Promise<string> {
+  try {
+    const ports = getCompanyMemoryPorts();
+    if (!ports) return '';
+    const task = opts.taskText.trim();
+    if (!task) return '';
+
+    const items = await raceWithTimeout(
+      ports.memoryRetriever.retrieve(0, '__user__', task),
+      opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    );
+    if (!items || items.length === 0) return '';
+
+    const rendered: string[] = [];
+    let used = 0;
+    for (const item of items) {
+      const block = renderItem(item);
+      if (used + block.length > BLOCK_CHAR_CAP) break;
+      rendered.push(block);
+      used += block.length;
+    }
+    if (rendered.length === 0) return '';
+
+    return `\n## USER PREFERENCES (how I want you to work)
+
+Global facts about the user and how they want you to work — these apply to EVERY project. Honor them unless they conflict with an explicit instruction in this task.
+
+${rendered.join('\n')}\n`;
+  } catch {
+    return '';
+  }
+}

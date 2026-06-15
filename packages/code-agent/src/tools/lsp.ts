@@ -1,24 +1,46 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { getTsService, isTsFile } from '@mcp/code-agent/lsp/ts-service.js';
+import { getGlobalAgentLspBackend, type AgentLspLocation } from '@mcp/code-agent/lsp/agent-lsp-backend.js';
 import { resolveProjectFile as resolveProjectFilePath } from '@mcp/code-agent/tools/paths.js';
 
 /**
- * LSP tools (TypeScript/JavaScript only in Phase 2).
+ * LSP tools — multi-language.
  *
- * These use an in-process TypeScript language service — same engine as
- * tsserver / VSCode's language features, but run directly inside the coder
- * process. Much faster than spawning a full LSP over stdio, and we already
- * depend on `typescript` anyway.
+ * TS/JS run on the in-process TypeScript language service (same engine as
+ * tsserver, zero IPC). Every OTHER language routes through the global
+ * AgentLspBackend (wired by the host): installed LSP servers
+ * (PHP/Intelephense, Python/Pyright, …) when available, otherwise the
+ * structural-index fallback (tree-sitter symbols with exact line/col).
+ * No backend wired (tests, stripped hosts) → honest "TS only" error.
  *
  * Why 1-based line/column? That's what editors show and what the rest of
  * the agent outputs (grep, diagnostics, stack traces). Converting internally
  * is cheap; making the agent juggle 0-based offsets would be hostile.
- *
- * Python, Go, Rust are intentionally NOT covered here — `get_diagnostics`
- * from Phase 1 (shelling out to ruff/go vet/cargo check) already handles
- * the most common "did my edit break anything?" question for those.
  */
+
+function viaBackend(
+  op: 'definition' | 'references' | 'hover',
+  rel: string,
+  ctx: ToolContext,
+  line: number,
+  column: number,
+): Promise<AgentLspLocation[] | { contents: string } | null> | null {
+  const backend = getGlobalAgentLspBackend();
+  if (!backend) return null;
+  const input = { root: ctx.cwd, projectName: ctx.projectName, file: rel, position: { line, column } };
+  return backend[op](input) as Promise<AgentLspLocation[] | { contents: string } | null>;
+}
+
+function formatLocations(kind: string, locs: AgentLspLocation[], origin: string): string {
+  const lines = [`Found ${locs.length} ${kind}(s):`];
+  for (const l of locs.slice(0, 50)) {
+    lines.push(`  ${l.file}:${l.range.start.line}:${l.range.start.column}`);
+  }
+  if (locs.length > 50) lines.push(`  … ${locs.length - 50} more`);
+  lines.push(`(via ${origin})`);
+  return lines.join('\n');
+}
 
 function resolveProjectFile(filePath: string, ctx: ToolContext): { abs: string; rel: string } | null {
   return resolveProjectFilePath(filePath, ctx.cwd);
@@ -33,11 +55,10 @@ function formatPosition(p: { file: string; line: number; column: number }): stri
 const lspDefinition: CoderTool = {
   name: 'lsp_definition',
   description:
-    'Go to definition: find where a symbol is declared, using the in-process TypeScript language service.\n' +
+    'Go to definition: find where a symbol is declared. TS/JS use the in-process TypeScript service; other languages (PHP, Python, Go, …) route through installed language servers or the structural index.\n' +
     "USE: to jump from a call site / reference to the actual declaration of a function, class, type, or variable.\n" +
     "USE: as a faster alternative to mcp__get_symbol_body when you have a precise (line, column) already.\n" +
     "DON'T: use without knowing the exact line/column — call mcp__grep_code or mcp__search first.\n" +
-    "DON'T: use on non-TS/JS files. Only .ts/.tsx/.js/.jsx/.mts/.cts/.mjs/.cjs are supported.\n" +
     '1-based line and column, matching what editors and stack traces show.',
   source: 'native',
   parameters: {
@@ -57,11 +78,15 @@ const lspDefinition: CoderTool = {
     if (!file || !Number.isFinite(line) || !Number.isFinite(column)) {
       return err('file_path, line, column are required (line/column are 1-based)');
     }
-    if (!isTsFile(file)) {
-      return err(`lsp_definition only supports TypeScript/JavaScript files. Got: ${file}`);
-    }
     const resolved = resolveProjectFile(file, ctx);
     if (!resolved) return err(`file not found or outside project root: ${file}`);
+    if (!isTsFile(file)) {
+      const call = viaBackend('definition', resolved.rel, ctx, line, column);
+      if (!call) return err(`lsp_definition: no multi-language backend wired in this context — use mcp__find_references for ${file}`);
+      const locs = (await call) as AgentLspLocation[] | null;
+      if (!locs || locs.length === 0) return ok(`No definition found at ${resolved.rel}:${line}:${column}`);
+      return ok(formatLocations('definition', locs, 'language server / structural index'));
+    }
     try {
       const svc = getTsService(ctx.cwd);
       const result = svc.getDefinition(resolved.rel, line, column);
@@ -84,7 +109,7 @@ const lspReferences: CoderTool = {
     "USE: to answer 'where is this used?' across the whole project — semantically, not textually.\n" +
     "USE: before renaming/removing a symbol, to audit impact.\n" +
     "DON'T: use grep/mcp__grep_code for this — grep matches text, LSP matches the actual symbol, so it skips comments, shadowed names, and identically-named symbols in other scopes.\n" +
-    "DON'T: use on non-TS/JS files. Use mcp__find_references instead for cross-language coverage via the indexer.\n" +
+    'Non-TS/JS files route through installed language servers (PHP/Python) or the structural index.\n' +
     '1-based line and column.',
   source: 'native',
   parameters: {
@@ -104,11 +129,15 @@ const lspReferences: CoderTool = {
     if (!file || !Number.isFinite(line) || !Number.isFinite(column)) {
       return err('file_path, line, column are required (line/column are 1-based)');
     }
-    if (!isTsFile(file)) {
-      return err(`lsp_references only supports TypeScript/JavaScript files. Got: ${file}`);
-    }
     const resolved = resolveProjectFile(file, ctx);
     if (!resolved) return err(`file not found or outside project root: ${file}`);
+    if (!isTsFile(file)) {
+      const call = viaBackend('references', resolved.rel, ctx, line, column);
+      if (!call) return err(`lsp_references: no multi-language backend wired in this context — use mcp__find_references for ${file}`);
+      const locs = (await call) as AgentLspLocation[] | null;
+      if (!locs || locs.length === 0) return ok(`No references found for symbol at ${resolved.rel}:${line}:${column}`);
+      return ok(formatLocations('reference', locs, 'language server / structural index'));
+    }
     try {
       const svc = getTsService(ctx.cwd);
       const result = svc.getReferences(resolved.rel, line, column);
@@ -136,6 +165,7 @@ const lspHover: CoderTool = {
     "USE: to check the actual type of a variable/parameter when it's not obvious from the source (inferred generics, utility types, overloads).\n" +
     "USE: to read the JSDoc attached to a function/class without opening the definition.\n" +
     "DON'T: use as a substitute for reading the source — hover gives types, not implementation. Use lsp_definition or mcp__get_symbol_body for the body.\n" +
+    'Non-TS/JS files route through installed language servers (PHP/Python) or the structural index.\n' +
     '1-based line and column.',
   source: 'native',
   parameters: {
@@ -155,11 +185,15 @@ const lspHover: CoderTool = {
     if (!file || !Number.isFinite(line) || !Number.isFinite(column)) {
       return err('file_path, line, column are required (line/column are 1-based)');
     }
-    if (!isTsFile(file)) {
-      return err(`lsp_hover only supports TypeScript/JavaScript files. Got: ${file}`);
-    }
     const resolved = resolveProjectFile(file, ctx);
     if (!resolved) return err(`file not found or outside project root: ${file}`);
+    if (!isTsFile(file)) {
+      const call = viaBackend('hover', resolved.rel, ctx, line, column);
+      if (!call) return err(`lsp_hover: no multi-language backend wired in this context — use mcp__get_symbol_body for ${file}`);
+      const hover = (await call) as { contents: string } | null;
+      if (!hover?.contents) return ok(`No symbol info at ${resolved.rel}:${line}:${column}`);
+      return ok(hover.contents);
+    }
     try {
       const svc = getTsService(ctx.cwd);
       const info = svc.getHover(resolved.rel, line, column);

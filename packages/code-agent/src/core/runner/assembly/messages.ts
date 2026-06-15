@@ -46,6 +46,8 @@ export interface AssembleMessagesArgs {
    * appear twice — see `dynamic-injection.ts`.
    */
   computeDynamicInjection?: () => DynamicInjectionResult | null;
+  /** Rolling-reducer stats observer for per-turn telemetry (mig 143). */
+  onReducerStats?: (s: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number }) => void;
 }
 
 export function assembleMessagesForChat(args: AssembleMessagesArgs): AgentMessage[] {
@@ -53,6 +55,7 @@ export function assembleMessagesForChat(args: AssembleMessagesArgs): AgentMessag
     args.messages,
     args.compactionLimits,
     args.tunables,
+    args.onReducerStats,
   );
 
   const activeSkillsBlock = args.buildActiveSkillsBlock(compacted);

@@ -115,7 +115,7 @@ function writeGoal(ctx: ToolContext, goal: GoalState): void {
 
 const CREATE_GOAL_DESC =
   'Record the session goal at the start of a run when the user explicitly states one. ' +
-  'Hidden from the tool surface on subsequent turns once a goal is in_progress — use update_goal to mark complete first if you need to set a new one. ' +
+  'Call this ONCE per objective. If a goal is already in_progress, do NOT call it again — execute the task; to set a different objective, call update_goal (status=complete) first. ' +
   'Survives turn boundaries (and compaction) so the original ask is recoverable. ' +
   'Bootstrap in ONE turn: emit create_goal and todo_write together in the same assistant turn (parallel tool calls are supported) instead of spending a turn on each.';
 
@@ -175,20 +175,21 @@ const createGoal: CoderTool = {
       );
     }
 
+    // A goal already in_progress is NOT superseded silently. `create_goal`
+    // stays visible the whole run (so the tool array — and thus the prompt
+    // cache prefix — is byte-stable), which means the model CAN still call it
+    // redundantly; we reject firmly here instead. This is the primary loop
+    // guard now that the tool is no longer hidden from the surface: re-stating
+    // the goal is not progress. To genuinely pivot, the model must close the
+    // current goal with update_goal(status=complete) first.
     const existing = readGoal(ctx);
-    let supersededNote = '';
-    if (existing && existing.status !== 'complete') {
-      const supersededAt = new Date().toISOString();
-      const newPreview = text.length > 120 ? `${text.slice(0, 120)}…` : text;
-      const note = `Superseded by new goal: "${newPreview}"`;
-      writeGoal(ctx, {
-        ...existing,
-        status: 'complete',
-        updatedAt: supersededAt,
-        completionNote: note,
-      });
+    if (existing && existing.status === 'in_progress') {
       const oldPreview = existing.text.length > 120 ? `${existing.text.slice(0, 120)}…` : existing.text;
-      supersededNote = `Previous goal "${oldPreview}" auto-completed (superseded). `;
+      return err(
+        `Refused: a goal is already in_progress ("${oldPreview}"). Do NOT call create_goal again — ` +
+          `execute the actual task now. To replace the objective (a real pivot), call ` +
+          `update_goal(status="complete") first, then create the new goal.`,
+      );
     }
 
     const now = new Date().toISOString();
@@ -201,15 +202,12 @@ const createGoal: CoderTool = {
       budgetTokens: budget,
       completionNote: null,
     });
-    // Quiet success message. Earlier we appended an action nudge ("DO NOT
-    // call create_goal again — execute the task now") on burst.count >= 2,
-    // but that paradoxically reinforced the loop by keeping the tool name
-    // in the model's context. The runner-level filter (filterGoalToolsByState
-    // in runner.ts) now removes create_goal from the tool surface entirely
-    // once a goal is in_progress, so the model can't see it on the next
-    // turn anyway — no nudge needed in the result body.
+    // Quiet success message. The redundant-call loop is handled by the
+    // in_progress rejection above plus `bumpCreateBurst`, so no nudge is
+    // needed in the result body (an in-body nudge paradoxically reinforced
+    // the loop by keeping the tool name fresh in the model's context).
     return ok(
-      `${supersededNote}Goal set. Status: in_progress${budget ? ` (budget: ${budget} tokens)` : ''}.`,
+      `Goal set. Status: in_progress${budget ? ` (budget: ${budget} tokens)` : ''}.`,
     );
   },
 };

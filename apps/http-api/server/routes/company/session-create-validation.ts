@@ -6,9 +6,6 @@
  * pools) and from session config patch (PATCH /:id/config) — when the
  * latter moves out of `sessions.ts` it can import the same helper.
  */
-import type { BuilderStack } from '@mcp/services/sandbox/types.js';
-import type { ExternalProjectRuntime } from './sandbox-helpers.js';
-
 export interface CreateSessionBody {
   template_id?: number;
   name: string;
@@ -27,29 +24,6 @@ export interface CreateSessionBody {
     /** Phase E: Anthropic-specific thinking budget. Ignored by other providers. */
     thinkingBudgetTokens?: number;
   }>;
-  /**
-   * When set, flips the session into builder ("v0-style") mode. The
-   * company orchestrator provisions an ephemeral OCI sandbox on start,
-   * pipes tool writes into it and exposes a live dev-server preview.
-   * Absence of this field preserves the traditional company-session flow.
-   */
-  builder?: {
-    stack: BuilderStack;
-    /** Builder studio mode (focused V0-style 2-pane builder with element
-     *  selection). Enables the instrumented scaffolder + studio shell. */
-    studio?: boolean;
-    /** Per-session CPU/memory/pids override. Partial — any missing field
-     *  falls back to process-level defaults (MCP_SANDBOX_* env). */
-    limits?: {
-      memory?: string;
-      cpus?: string;
-      pids?: number;
-    };
-    /** Existing linked project to run via bind-mount + project Dockerfile. */
-    main_project_id?: number;
-    /** Runtime for existing main project: production Dockerfile or dev package.json. */
-    main_project_runtime?: ExternalProjectRuntime;
-  };
   /**
    * Curated pool of `(provider, model)` tuples the master is allowed
    * to spawn subordinates with. When present (length > 0), the master's

@@ -200,49 +200,34 @@ describe('goal — create / get / update', () => {
     expect(g.content).toContain('Migrate auth to OAuth2');
   });
 
-  it('replace_active=false is currently ignored — supersede happens regardless (user disabled the strict branch in goal.ts)', async () => {
-    // Historical: this test asserted the strict refusal path. The user
-    // commented out the `if (!replaceActive)` block to make create_goal
-    // always supersede. Test now mirrors the live behaviour.
+  it('refuses a redundant create while a goal is in_progress (no silent supersede)', async () => {
+    // create_goal now stays visible the whole run (prompt-cache prefix
+    // stability), so the handler — not the tool surface — enforces the
+    // loop guard: a second create while in_progress is REFUSED, and the
+    // original goal is left untouched rather than auto-superseded.
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
     _resetCreateBurstForKey(runner as unknown as object);
     await createGoal.handler({ goal: 'first' }, ctx(runner));
-    const r = await createGoal.handler(
-      { goal: 'second', replace_active: false },
-      ctx(runner),
-    );
-    expect(r.isError).toBeFalsy();
-    expect(r.content).toContain('superseded');
-  });
-
-  it('auto-supersedes an active goal by default (replace_active defaults to true)', async () => {
-    const runner = new FakeRunner();
-    _resetGoalForKey(runner as unknown as object);
-    await createGoal.handler({ goal: 'old objective' }, ctx(runner));
-    // No replace_active arg → default true → auto-replace.
-    const r = await createGoal.handler({ goal: 'new objective' }, ctx(runner));
-    expect(r.isError).toBeFalsy();
-    expect(r.content).toContain('auto-completed');
-    expect(r.content).toContain('superseded');
-    // The active goal is now the new one.
+    const r = await createGoal.handler({ goal: 'second' }, ctx(runner));
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('already in_progress');
     const g = await getGoal.handler({}, ctx(runner));
-    expect(g.content).toContain('Goal: new objective');
+    expect(g.content).toContain('Goal: first');
     expect(g.content).toContain('in_progress');
   });
 
-  it('auto-supersede explicit (replace_active=true) preserves prior createdAt-style chain', async () => {
+  it('allows a pivot only after the active goal is completed first', async () => {
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
+    _resetCreateBurstForKey(runner as unknown as object);
     await createGoal.handler({ goal: 'phase 1' }, ctx(runner));
-    const r = await createGoal.handler(
-      { goal: 'phase 2', replace_active: true },
-      ctx(runner),
-    );
+    await updateGoal.handler({ status: 'complete' }, ctx(runner));
+    const r = await createGoal.handler({ goal: 'phase 2' }, ctx(runner));
     expect(r.isError).toBeFalsy();
-    // Sanity: the new goal is in_progress and the message mentions the supersede.
     const g = await getGoal.handler({}, ctx(runner));
     expect(g.content).toContain('Goal: phase 2');
+    expect(g.content).toContain('in_progress');
   });
 
   it('marks complete via update_goal', async () => {
@@ -289,15 +274,20 @@ describe('goal — create / get / update', () => {
     expect(g.content).toContain('in_progress');
   });
 
-  it('refuses with "stop loop" error after 4th create_goal in tight burst', async () => {
-    // Threshold=3 inside the 90s window. Calls 1-3 succeed; call 4 trips the
-    // burst cap regardless of whether they were supersedes or first-creates.
+  it('refuses with "stop loop" error after a 4th create in a tight burst of pivots', async () => {
+    // Threshold=3 inside the 90s window. Each create needs the prior goal
+    // completed first (an in_progress goal rejects a redundant create), but
+    // the burst counter still counts every create call and trips on the 4th —
+    // a backstop against rapid pivot-thrashing.
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
     _resetCreateBurstForKey(runner as unknown as object);
     const r1 = await createGoal.handler({ goal: 'phase 1' }, ctx(runner));
+    await updateGoal.handler({ status: 'complete' }, ctx(runner));
     const r2 = await createGoal.handler({ goal: 'phase 2' }, ctx(runner));
+    await updateGoal.handler({ status: 'complete' }, ctx(runner));
     const r3 = await createGoal.handler({ goal: 'phase 3' }, ctx(runner));
+    await updateGoal.handler({ status: 'complete' }, ctx(runner));
     const r4 = await createGoal.handler({ goal: 'phase 4' }, ctx(runner));
     expect(r1.isError).toBeFalsy();
     expect(r2.isError).toBeFalsy();
@@ -310,17 +300,15 @@ describe('goal — create / get / update', () => {
   it('returns a quiet success message — no in-result nudge that would re-prime the model', async () => {
     // The earlier "DO NOT call create_goal again" tail was paradoxically
     // reinforcing the loop by keeping the tool name in the model's context.
-    // The real fix lives in the runner (filterGoalToolsByState removes the
-    // tool from the surface), so the success body is intentionally minimal.
+    // The loop guard now lives in the handler (in_progress rejection +
+    // bumpCreateBurst), so the success body is intentionally minimal.
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
     _resetCreateBurstForKey(runner as unknown as object);
     const r1 = await createGoal.handler({ goal: 'phase 1' }, ctx(runner));
+    expect(r1.isError).toBeFalsy();
     expect(r1.content).not.toContain('DO NOT call create_goal');
-    const r2 = await createGoal.handler({ goal: 'phase 2' }, ctx(runner));
-    expect(r2.content).not.toContain('DO NOT call create_goal');
-    expect(r2.content).toContain('superseded');
-    expect(r2.content).toContain('Goal set');
+    expect(r1.content).toContain('Goal set');
   });
 
   it('different runners have independent burst counters', async () => {

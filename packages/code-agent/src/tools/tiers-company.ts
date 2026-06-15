@@ -51,9 +51,9 @@ export const COMPANY_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Builder-mode tools — registered only when the session carries a sandbox /
- * builderStack binding (index.ts `if (sandbox || builderStack)`). Always-on
- * within builder sessions.
+ * Sandbox-bound tools — registered only when the session carries a live
+ * sandbox binding (index.ts `if (companyContext?.sandbox)`), i.e.
+ * service-bound company subordinates. Always-on within those sessions.
  */
 export const BUILDER_TOOLS: ReadonlySet<string> = new Set([
   // Databases tab — query registered Postgres/MySQL instances.
@@ -68,7 +68,7 @@ export const BUILDER_TOOLS: ReadonlySet<string> = new Set([
   'docs_write',
   // NOTE: env_* tools moved to COMPANY_TOOLS — they're registered for every
   // company session (external-backend sessions need them too), not only when
-  // a sandbox/builderStack is present.
+  // a sandbox binding is present.
   // Sandbox + pipeline/service control.
   'read_sandbox_logs',
   'get_pipeline_status',

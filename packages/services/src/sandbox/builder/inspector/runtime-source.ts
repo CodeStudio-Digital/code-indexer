@@ -62,6 +62,9 @@ function initMcpInspector(post) {
     e.preventDefault(); e.stopPropagation();
     var r = rectOf(el);
     var classes = (el.getAttribute('class') || '').split(/\s+/).filter(Boolean);
+    // Ctrl (Win/Linux) / Cmd (Mac) → add to the selection set instead of
+    // replacing it, so the user can cite several elements in one message.
+    var additive = !!(e.ctrlKey || e.metaKey);
     post({
       type: 'mcp:select',
       loc: el.getAttribute('data-mcp-loc'),
@@ -70,6 +73,7 @@ function initMcpInspector(post) {
       classes: classes,
       text: (el.textContent || '').trim().slice(0, 120),
       rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+      additive: additive || undefined,
     });
   }
   function onKey(e) {

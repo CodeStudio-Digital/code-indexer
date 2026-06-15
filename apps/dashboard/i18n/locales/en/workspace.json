@@ -69,5 +69,12 @@
   "chat.empty.archived": "No archived sessions yet.",
   "chat.empty.activeTitle": "No sessions yet",
   "chat.empty.activeDescription": "Start the first conversation about {{projectName}}.",
-  "chat.empty.newSession": "New session"
+  "chat.empty.newSession": "New session",
+  "editorChat.openPanel": "Open chat",
+  "editorChat.addActiveFile": "Add file",
+  "editorChat.noFileOpen": "No file open",
+  "editorChat.removeSelection": "Remove selection",
+  "editorChat.lineRange": "L{{start}}–{{end}}",
+  "editorChat.currentSelection": "Current selection — sent with your next message",
+  "editorChat.pinSelection": "Pin selection"
 }

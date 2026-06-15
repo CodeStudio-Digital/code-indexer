@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Eye, FileText, Maximize2, Paperclip, Shield, ShieldCheck, ShieldOff, Sparkles, X } from 'lucide-react';
+import { FileText, Paperclip, Sparkles, X } from 'lucide-react';
 import { Textarea } from '../../../components/ui/textarea.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { useConfirm } from '../../../components/ui/dialog-provider.js';
 import type { AgentAttachment, EnrichedProviderModel, ProviderOption } from '../types.js';
 import { fileToAttachment } from '../utils.js';
 import { ComposerToolbar } from './ComposerToolbar.js';
+import { ComposerActionIcons } from './ComposerActionIcons.js';
 import { MarkdownToolbar } from './MarkdownToolbar.js';
-import { PipelinePicker } from './PipelinePicker.js';
+import { RailComposerBar } from './RailComposerBar.js';
 import { useMarkdownShortcuts } from './useMarkdownShortcuts.js';
 
 interface SlashCommand {
@@ -19,7 +19,7 @@ interface SlashCommand {
   context_mode: string;
 }
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api';
 
 // Visual cue: tints the composer's left border by the active mode so the
 // user sees-at-a-glance which agent is loaded. The functional gates
@@ -30,6 +30,7 @@ const BORDER_TINT: Record<AgentId, string> = {
   build: 'border-l-emerald-500',
   admin: 'border-l-rose-500',
   spec: 'border-l-amber-500',
+  api: 'border-l-cyan-500',
 };
 
 export interface ComposerHandle {
@@ -40,6 +41,14 @@ interface ComposerProps {
   onSend: (text: string, attachments: AgentAttachment[], selectedSkillIds?: string[]) => void;
   onAbort: () => void;
   streaming: boolean;
+  /**
+   * Compact "Copilot" layout (editor rail): no markdown formatting toolbar,
+   * pickers (agent/provider/model/max-turns/temperature/fallback) collapse
+   * behind a settings dialog, the Think toggle is promoted to a labelled
+   * pill, and the session action icons stay inline. Every function from the
+   * full composer remains reachable — see `RailComposerBar`.
+   */
+  compact?: boolean;
   /** Project file paths chosen in the sidebar; injected into the prompt
    *  as a `<file_refs>` block on send and cleared via `onClearPicks`. */
   filePicks?: string[];
@@ -442,6 +451,45 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             disabled={streaming}
             className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent text-sm min-h-0"
           />
+          {props.compact ? (
+            <RailComposerBar
+              hasInput={hasInput}
+              autoSuggestText={debouncedInput}
+              agent={props.agent}
+              setAgent={props.setAgent}
+              provider={props.provider}
+              model={props.model}
+              setModel={props.setModel}
+              onSwitchProvider={props.onSwitchProvider}
+              onSend={handleSend}
+              onAbort={props.onAbort}
+              streaming={streaming}
+              handleFiles={handleFiles}
+              providerOptions={props.providerOptions}
+              currentProviderModels={props.currentProviderModels}
+              maxTurns={props.maxTurns}
+              setMaxTurns={props.setMaxTurns}
+              temperature={props.temperature}
+              setTemperature={props.setTemperature}
+              unrestrictedOutput={props.unrestrictedOutput ?? false}
+              setUnrestrictedOutput={props.setUnrestrictedOutput}
+              fallbackProvider={props.fallbackProvider ?? null}
+              fallbackModel={props.fallbackModel ?? null}
+              onFallbackChange={props.onFallbackChange ?? (() => {})}
+              getModelsForProvider={props.getModelsForProvider ?? (() => [])}
+              sessionId={props.sessionId ?? null}
+              selectedPipelineId={props.selectedPipelineId ?? null}
+              setSelectedPipelineId={props.setSelectedPipelineId}
+              thinking={props.thinking}
+              setThinking={props.setThinking}
+              supportsThinking={props.supportsThinking}
+              describeImages={props.describeImages}
+              setDescribeImages={props.setDescribeImages}
+              toolPermissionMode={props.toolPermissionMode}
+              setToolPermissionMode={props.setToolPermissionMode}
+            />
+          ) : (
+          <>
           {/*
             Markdown formatting toolbar + a slot on the right for the
             "session-level" icons (attachment / pipeline / think /
@@ -454,205 +502,21 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
               onAction={applyAction}
               disabled={streaming}
               rightSlot={
-                <>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <label className="cursor-pointer">
-                        <input
-                          type="file"
-                          multiple
-                          accept="image/*,.pdf,.txt,.md,.json,.csv,.yaml,.yml,.xml,.html,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.sh,.sql,.toml,.ini,.log"
-                          className="hidden"
-                          onChange={(e) => {
-                            handleFiles(e.target.files);
-                            e.target.value = '';
-                          }}
-                          disabled={streaming}
-                        />
-                        <span
-                          className={`inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
-                            streaming
-                              ? 'text-muted-foreground/40 cursor-not-allowed'
-                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                          }`}
-                        >
-                          <Paperclip className="h-3.5 w-3.5" />
-                        </span>
-                      </label>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">{t('composer.attach', { defaultValue: 'Anexar arquivos' })}</TooltipContent>
-                  </Tooltip>
-
-                  {props.setSelectedPipelineId && (
-                    <PipelinePicker
-                      sessionId={props.sessionId ?? null}
-                      selectedPipelineId={props.selectedPipelineId ?? null}
-                      onChange={props.setSelectedPipelineId}
-                      compact
-                    />
-                  )}
-
-                  {/* Thinking icon. Active when the toggle is on. Only
-                      enabled when the active provider/model supports it
-                      (provider-caps.ts); rendered greyed out otherwise so
-                      the user knows the feature exists. */}
-
-                    {/*disabled={!props.supportsThinking}*/}
-                  {props.setThinking && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => props.setThinking?.(!props.thinking)}
-
-                          aria-pressed={props.thinking ?? false}
-                          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                            props.thinking
-                              ? 'bg-purple-500/15 text-purple-500 hover:bg-purple-500/25'
-                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                          }`}
-                        >
-                          <Brain className="h-3.5 w-3.5" />
-                          {props.thinking && (
-                            <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-purple-500" />
-                          )}
-                        </button>
-                      </TooltipTrigger>
-                      {/*<TooltipContent side="top" className="max-w-[260px]">
-                        {props.supportsThinking
-                          ? t('toolbar.thinking', {
-                              defaultValue:
-                                'Extended thinking: o modelo raciocina passo-a-passo antes de responder. Mais lento e mais caro nos tiers Pro/Opus; ganho em problemas difíceis.',
-                            })
-                          : t('toolbar.thinkingUnsupported', {
-                              defaultValue: 'O modelo atual não suporta extended thinking.',
-                            })}
-                      </TooltipContent>*/}
-                    </Tooltip>
-                  )}
-
-                  {/* Describe images (vision fallback) — force image→text */}
-                  {props.setDescribeImages && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => props.setDescribeImages?.(!props.describeImages)}
-                          aria-pressed={props.describeImages ?? false}
-                          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
-                            props.describeImages
-                              ? 'bg-sky-500/15 text-sky-500 hover:bg-sky-500/25'
-                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                          }`}
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                          {props.describeImages && (
-                            <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
-                          )}
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-[260px]">
-                        {t('toolbar.describeImages', {
-                          defaultValue:
-                            'Descrever imagens: força um modelo de visão a traduzir imagens anexadas (e screenshots) para texto. Aplica-se automaticamente quando o modelo atual não enxerga imagens. Configure o modelo em Configurações → Pipelines (papel "vision").',
-                        })}
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-
-                  {/* Unrestricted-tool-output (cap / full) */}
-                  {props.setUnrestrictedOutput && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => props.setUnrestrictedOutput?.(!props.unrestrictedOutput)}
-                          aria-pressed={props.unrestrictedOutput ?? false}
-                          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
-                            props.unrestrictedOutput
-                              ? 'bg-amber-500/15 text-amber-500 hover:bg-amber-500/25'
-                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                          }`}
-                        >
-                          <Maximize2 className="h-3.5 w-3.5" />
-                          {props.unrestrictedOutput && (
-                            <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-amber-500" />
-                          )}
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-[260px]">
-                        {t('toolbar.unrestrictedOutput', {
-                          defaultValue:
-                            'Tool output: full. Eleva o cap de truncação por tool-call de ~24 KB para ~1 MB. Útil para Unity / leituras grandes. Auto-compactação continua. Aplica na próxima mensagem.',
-                        })}
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-
-                  {/* Tool permission mode (PermissionGate) — cycling 3-state shield.
-                      Not disabled while streaming: the PATCH pushes the change
-                      into the live runner (next gated call honours it). */}
-                  {props.setToolPermissionMode && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const mode = props.toolPermissionMode ?? 'auto';
-                            const next = mode === 'ask' ? 'auto' : mode === 'auto' ? 'unrestricted' : 'ask';
-                            props.setToolPermissionMode?.(next);
-                          }}
-                          aria-label={t(`toolbar.permissionMode.${props.toolPermissionMode ?? 'auto'}`)}
-                          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
-                            props.toolPermissionMode === 'ask'
-                              ? 'bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25'
-                              : props.toolPermissionMode === 'unrestricted'
-                                ? 'bg-red-500/15 text-red-500 hover:bg-red-500/25'
-                                : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                          }`}
-                        >
-                          {props.toolPermissionMode === 'ask' ? (
-                            <ShieldCheck className="h-3.5 w-3.5" />
-                          ) : props.toolPermissionMode === 'unrestricted' ? (
-                            <ShieldOff className="h-3.5 w-3.5" />
-                          ) : (
-                            <Shield className="h-3.5 w-3.5" />
-                          )}
-                          {props.toolPermissionMode !== 'auto' && props.toolPermissionMode !== undefined && (
-                            <span
-                              aria-hidden
-                              className={`absolute top-1 right-1 h-1.5 w-1.5 rounded-full ${
-                                props.toolPermissionMode === 'ask' ? 'bg-emerald-500' : 'bg-red-500'
-                              }`}
-                            />
-                          )}
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-[280px]">
-                        <span className="font-medium">
-                          {t(`toolbar.permissionMode.${props.toolPermissionMode ?? 'auto'}`, {
-                            defaultValue:
-                              props.toolPermissionMode === 'ask'
-                                ? 'Solicitar Permissão'
-                                : props.toolPermissionMode === 'unrestricted'
-                                  ? 'Sem Impedimento'
-                                  : 'Modo Auto',
-                          })}
-                        </span>
-                        {' — '}
-                        {t(`toolbar.permissionModeTip.${props.toolPermissionMode ?? 'auto'}`, {
-                          defaultValue:
-                            props.toolPermissionMode === 'ask'
-                              ? 'toda ferramenta de escrita/execução/admin pausa e pede sua aprovação.'
-                              : props.toolPermissionMode === 'unrestricted'
-                                ? 'nunca pergunta — o agente executa tudo livremente.'
-                                : 'edições de arquivos rodam livres; shell, git e ações administrativas pedem aprovação.',
-                        })}{' '}
-                        {t('toolbar.permissionModeCycle', { defaultValue: 'Clique para alternar.' })}
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </>
+                <ComposerActionIcons
+                  streaming={streaming}
+                  handleFiles={handleFiles}
+                  thinking={props.thinking}
+                  setThinking={props.setThinking}
+                  describeImages={props.describeImages}
+                  setDescribeImages={props.setDescribeImages}
+                  unrestrictedOutput={props.unrestrictedOutput ?? false}
+                  setUnrestrictedOutput={props.setUnrestrictedOutput}
+                  toolPermissionMode={props.toolPermissionMode}
+                  setToolPermissionMode={props.setToolPermissionMode}
+                  sessionId={props.sessionId}
+                  selectedPipelineId={props.selectedPipelineId}
+                  setSelectedPipelineId={props.setSelectedPipelineId}
+                />
               }
             />
           </div>
@@ -690,6 +554,8 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             describeImages={props.describeImages}
             setDescribeImages={props.setDescribeImages}
           />
+          </>
+          )}
         </div>
       </div>
     );

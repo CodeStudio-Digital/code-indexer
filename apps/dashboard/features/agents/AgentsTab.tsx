@@ -32,11 +32,7 @@ import { TemplateBuilderModal } from './TemplateBuilderModal.js';
 import { TemplateListPanel } from './TemplateListPanel.js';
 import { NewCompanyDialog } from './NewCompanyDialog.js';
 import { buildAgentsDefaultUrl } from './routing.js';
-// BuilderView is a smart wrapper: when the session was created with a
-// `builder.stack`, it renders the split chat+preview layout; otherwise
-// it delegates transparently to CompanySessionView. Routing through it
-// means AgentsTab doesn't need to branch on session mode.
-import { BuilderView } from '../builder/BuilderView.js';
+import { CompanySessionView } from './CompanySessionView.js';
 
 interface CompanySession {
   id: number;
@@ -199,7 +195,7 @@ export function AgentsTab() {
 
         {selectedSession ? (
           <div className="flex-1 min-h-0 overflow-hidden">
-            <BuilderView
+            <CompanySessionView
               key={selectedSession.id}
               sessionId={selectedSession.id}
               sessionName={selectedSession.name}

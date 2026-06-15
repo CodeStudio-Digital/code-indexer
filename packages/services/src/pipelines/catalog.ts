@@ -23,7 +23,9 @@ export type BindingRole =
   | 'rewriter'
   | 'reviewer'
   | 'vision'
-  | 'distiller';
+  | 'distiller'
+  | 'preflight'
+  | 'autocomplete';
 
 export interface PipelineCatalogEntry {
   pipelineName: string;
@@ -320,6 +322,55 @@ export const PIPELINE_CATALOG: PipelineCatalogEntry[] = [
       config: { temperature: 0.2, max_tokens: 1200 },
     },
     introducedInPhase: 'vision-fallback',
+  },
+
+  // ─── Task preflight (first-prompt analysis) ──────────────────────────────
+  // When bound, the FIRST user prompt of a fresh coder chat session is
+  // analyzed by this cheap model BEFORE the agent starts: it picks the
+  // smallest tool profile, up to a dozen tools to pin, and which project
+  // memories the agent should read (titles only). The result seeds the
+  // session toolset and is injected as a <preflight> hint on turn 1.
+  // Unset = feature off (sessions start exactly as before). Fail-open:
+  // timeouts/errors never block the session.
+  {
+    pipelineName: 'code-agent',
+    bindingRole: 'preflight',
+    description:
+      'Cheap model that analyzes the FIRST user prompt of a fresh coder session and seeds it: minimal tool profile, pinned tools, and which project memories to read (titles only, injected as a <preflight> hint). Unset = off; failures never block the session.',
+    recommendedDefault: {
+      providerKind: 'cloudflare',
+      modelHint: '@cf/meta/llama-3.1-8b-instruct',
+      config: { temperature: 0, max_tokens: 700 },
+    },
+    introducedInPhase: 'task-preflight',
+  },
+
+  // ─── Editor inline autocomplete (ghost text) ─────────────────────────────
+  // Powers the editor's AI ghost-text suggestions. Privacy warning lives in
+  // the description because the code around the cursor IS sent to the bound
+  // provider on every (debounced) request. Unset = the editor chip shows
+  // "not configured" and no request is ever made. Knobs are read by the
+  // editor handler from config (not by the chat layer).
+  {
+    pipelineName: 'editor',
+    bindingRole: 'autocomplete',
+    description:
+      'Inline AI code completion (ghost text) in the editor. PRIVACY: the code around the cursor is sent to this provider on each suggestion. Pick a FAST, cheap model — reasoning is auto-disabled per request for GLM/Gemini-2.5+/Qwen3/R1 (set disable_thinking:false to opt out); other thinking models will burn the token budget and return empty. Unset = feature unavailable (editor toggle shows "not configured"). Config knobs: max_tokens, temperature, debounce_ms, multiline, max_prefix_lines, max_suffix_lines, context_budget_chars, timeout_ms, disable_thinking.',
+    recommendedDefault: {
+      providerKind: 'deepseek',
+      modelHint: 'deepseek-chat',
+      config: {
+        temperature: 0.2,
+        max_tokens: 160,
+        debounce_ms: 300,
+        multiline: true,
+        max_prefix_lines: 80,
+        max_suffix_lines: 30,
+        context_budget_chars: 2000,
+        timeout_ms: 8000,
+      },
+    },
+    introducedInPhase: 'editor-autocomplete',
   },
 ];
 

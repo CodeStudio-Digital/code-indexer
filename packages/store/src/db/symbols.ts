@@ -18,8 +18,9 @@ export function upsert(db: DB, projectId: number, fileId: number, filePath: stri
 
     const insert = db.prepare(`
       INSERT INTO symbols (project_id, file_id, file_path, name, kind, signature,
-        parent, modifiers, return_type, parameters, line, comment, tags, stable_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        parent, modifiers, return_type, parameters, line, col, end_line, exported,
+        comment, tags, stable_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertRelation = db.prepare(`
@@ -39,7 +40,8 @@ export function upsert(db: DB, projectId: number, fileId: number, filePath: stri
       const result = insert.run(
         projectId, fileId, filePath, sym.name, sym.kind, sym.signature,
         sym.parent, JSON.stringify(sym.modifiers), sym.return_type,
-        sym.parameters, sym.line, sym.comment, JSON.stringify(sym.tags),
+        sym.parameters, sym.line, sym.col ?? null, sym.end_line ?? null,
+        sym.exported ? 1 : 0, sym.comment, JSON.stringify(sym.tags),
         stableId
       );
 
@@ -112,6 +114,31 @@ export function classMembers(db: DB, parentName: string, projectId: number): DBS
 export function listAll(db: DB, projectId: number): DBSymbol[] {
   return db.prepare('SELECT * FROM symbols WHERE project_id = ? ORDER BY name')
     .all(projectId) as DBSymbol[];
+}
+
+/**
+ * Identifier-prefix completion. Deliberately a b-tree range scan, NOT FTS:
+ * `symbols_fts` tokenizes with unicode61 where `_` splits tokens, so
+ * `my_func*` can never prefix-match `my_function`. The range
+ * `name >= prefix AND name < prefix + U+10FFFF` walks
+ * `idx_symbols_project_name(project_id, name)` — O(log N) seek + K rows,
+ * case-SENSITIVE (BINARY collation is what makes the index usable).
+ */
+export function searchByPrefix(
+  db: DB,
+  projectId: number,
+  prefix: string,
+  limit: number = 50,
+  opts?: { exportedOnly?: boolean },
+): DBSymbol[] {
+  if (!prefix) return [];
+  return db.prepare(`
+    SELECT * FROM symbols
+    WHERE project_id = ? AND name >= ? AND name < ?
+      ${opts?.exportedOnly ? 'AND exported = 1' : ''}
+    ORDER BY exported DESC, LENGTH(name) ASC, name ASC
+    LIMIT ?
+  `).all(projectId, prefix, prefix + '\u{10FFFF}', limit) as DBSymbol[];
 }
 
 export function search(db: DB, projectId: number, query: string, limit: number = 20): DBSymbol[] {

@@ -1,8 +1,12 @@
 import { CodeIndexDB } from '@mcp/store/db.js';
+import { registerShutdownTask } from './shutdown-tasks.js';
+import { getMemoryLedger } from './perf/memory-ledger.js';
 import { loadConfig, type IndexerConfig } from '@mcp/shared/utils/config.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { CostTracker } from '@mcp/services/services/costs.js';
 import { SnapshotService } from '@mcp/services/services/snapshots.js';
+import { ProjectIndexService, createInProcessStructuralExecutor } from '@mcp/services/services/project-index/index.js';
+import { getLspServerManager } from '@mcp/services/lsp/lsp-server-manager.js';
 import { MemoryRetriever } from '@mcp/services/memory/retriever.js';
 import { createRunEndMemory, type RunEndMemory } from '@mcp/services/memory/run-end.js';
 import { MemoryExtractor } from '@mcp/services/memory/extractor.js';
@@ -26,10 +30,13 @@ import { QaTestRunStore } from '@mcp/services/qa/store/qa-test-run-store.js';
 import { QaTestResultStore } from '@mcp/services/qa/store/qa-test-result-store.js';
 import { ChromeServiceStore } from '@mcp/store/chrome-service-store.js';
 import { DesignSystemStore } from '@mcp/store/design-system-store.js';
+import { ApiClientStore } from '@mcp/store/api-client-store.js';
 import { VerdaccioStore } from '@mcp/store/verdaccio-store.js';
 import { PipelineTelemetryStore } from '@mcp/store/pipeline-telemetry-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { PipelineProviderResolver, generalDefaultAsFallback } from '@mcp/services/pipelines/index.js';
+import { TaskPreflightService } from '@mcp/services/services/task-preflight/index.js';
+import { getAllKnownToolsMeta } from '@mcp/code-agent/tools/tiers.js';
 import { NoopTelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import type { TelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import {
@@ -106,6 +113,7 @@ import {
 import { createReranker } from '@mcp/indexer/search/reranker.js';
 import { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import { setGlobalRecentFilesTouchSink } from '@mcp/code-agent/tools/global-recent-files.js';
+import { setBuilderCheckpointDeps } from '../sse/builder-checkpoint.js';
 import { resolve as pathResolveNode, sep as pathSep } from 'node:path';
 import type { ChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { invokePluginTool, type PluginToolInvokeFn } from '../sse/PluginHostSingleton.js';
@@ -133,6 +141,15 @@ export function setChromeServiceForDocs(svc: ChromeService | null): void {
 export interface CoreDeps {
   config: IndexerConfig;
   db: CodeIndexDB;
+  /**
+   * Electron-only: returns `app.getAppMetrics()` — the full process tree
+   * (GPU, renderer, utility) with working-set + CPU. Injected by the
+   * Electron main process AFTER `createApp()` (http-api can't import
+   * `electron`); undefined on web deploys, where the perf monitor shows
+   * only the main process + worker threads. Read lazily per sampler tick
+   * by `server/perf/perf-sampler.ts`, so the late assignment is safe.
+   */
+  processMetricsProvider?: () => import('./perf/perf-sampler.js').ProcessMetricLike[];
 }
 
 export interface ProviderDeps {
@@ -188,6 +205,14 @@ export interface ProjectServiceDeps {
   diffService: DiffService;
   exportService: ExportService;
   webhookDispatcher: WebhookDispatcher;
+  /**
+   * IntelliJ-style structural auto-index: "project opened" → idempotent
+   * tree-sitter+FTS run ($0, no provider) + real-time watcher. Boots with
+   * the in-process executor; `server.ts`/`electron/main.ts` upgrade it to
+   * the dedicated indexer worker via `setExecutor` (late-bound — same
+   * pattern as the coder worker doc deps).
+   */
+  projectIndexService: ProjectIndexService;
 }
 
 export interface CoderDeps {
@@ -243,6 +268,16 @@ export interface DesignSystemDeps {
   verdaccioStore: VerdaccioStore;
 }
 
+export interface ApiClientDeps {
+  /**
+   * CRUD store for the in-app Postman tables (migration 147): collections,
+   * environments, requests (verification folded in) and regression-run
+   * history. Read by the api-client routes and re-wired into the coder/company
+   * workers (module globals don't cross worker_threads) for the `api_*` tools.
+   */
+  apiClientStore: ApiClientStore;
+}
+
 export interface PipelineDeps {
   /**
    * Per-stage telemetry rows emitted by the candidate-pipeline framework
@@ -262,6 +297,11 @@ export interface PipelineDeps {
    * a provider client directly.
    */
   pipelineProviderResolver: PipelineProviderResolver;
+  /**
+   * Task preflight — first-prompt analysis (binding `code-agent/preflight`).
+   * Fail-open: unconfigured/timeout/error → the session starts as before.
+   */
+  taskPreflight: TaskPreflightService;
   /**
    * SQLite-backed telemetry sink. Pass to any `new CandidatePipeline({ telemetry })`
    * to get automatic per-stage rows in `pipeline_telemetry`.
@@ -460,6 +500,7 @@ export type ServerDeps = CoreDeps
   & QaDeps
   & ChromeServiceDeps
   & DesignSystemDeps
+  & ApiClientDeps
   & PipelineDeps
   & DocCorpusDeps
   & PluginRuntimeDeps;
@@ -517,6 +558,14 @@ export function createDeps(): ServerDeps {
       recentFilesSource,
       pipelineTelemetrySink,
     );
+  // Release the local ONNX sessions (embeddings + reranker) on shutdown —
+  // both also self-evict after an idle TTL; this covers the exit path.
+  registerShutdownTask('onnx-dispose', async () => {
+    await Promise.allSettled([
+      embeddingService.dispose?.(),
+      (codeReranker as { dispose?: () => Promise<void> }).dispose?.(),
+    ]);
+  });
 
   // I2 follow-up wiring — the fs tools (read_file/edit_file/write_file/
   // create_file/multi_edit) call `emitRecentFileTouched({ absolutePath, kind })`
@@ -528,6 +577,10 @@ export function createDeps(): ServerDeps {
   const findFileStmt = db
     .raw()
     .prepare(`SELECT id FROM files WHERE project_id = ? AND path = ? LIMIT 1`);
+  // Builder checkpoints — run-end hook deps (worker pool + in-process
+  // stream both notify through the builder-checkpoint module global).
+  setBuilderCheckpointDeps({ db });
+
   setGlobalRecentFilesTouchSink((event) => {
     try {
       const absolutePath = pathResolveNode(event.absolutePath);
@@ -564,6 +617,23 @@ export function createDeps(): ServerDeps {
   });
 
   const snapshotService = new SnapshotService(db, embeddingService, searchableVectorStore);
+
+  // Structural auto-index (dumb mode). In-process executor by default —
+  // the entrypoints upgrade it to the indexer worker_thread right after
+  // createApp so the feature never depends on the worker build existing.
+  const projectIndexService = new ProjectIndexService(
+    db,
+    createInProcessStructuralExecutor(db, {
+      ignorePatterns: config.ignorePatterns,
+      maxFileSizeKB: config.maxFileSize,
+      concurrency: config.concurrency,
+    }),
+  );
+  registerShutdownTask('project-index-dispose', () => projectIndexService.dispose());
+  // External LSP servers (intelephense/pyright/...) — graceful shutdown +
+  // exit + SIGKILL fallback. The manager is lazy (wired on first LSP call);
+  // a never-wired manager is just a null here.
+  registerShutdownTask('lsp-servers-stop', () => getLspServerManager()?.stopAll() ?? Promise.resolve());
   // Mem C — project-memory retriever over the snapshot store (reuses the
   // admin-configured embedding/vector backend via hybridSearch). Passed into
   // runCoder so the runner proactively injects relevant memory per turn.
@@ -587,12 +657,32 @@ export function createDeps(): ServerDeps {
   const qaTestResultStore = new QaTestResultStore(db.raw());
   const chromeServiceStore = new ChromeServiceStore(db.raw());
   const designSystemStore = new DesignSystemStore(db.raw());
+  const apiClientStore = new ApiClientStore(db.raw());
   const verdaccioStore = new VerdaccioStore(db.raw());
   // I1 — pipelineTelemetryStore + pipelineTelemetrySink are declared
   // EARLIER (before createSearchBundle) so the V2 search path can emit
   // per-stage telemetry. The references here are the same instances.
   const pipelineBindingsStore = new PipelineProviderBindingsStore(db.raw());
   const pipelineProviderResolver = new PipelineProviderResolver(pipelineBindingsStore, providerStore);
+  // Task preflight — analyzes the FIRST prompt of a fresh coder session when
+  // the `code-agent/preflight` binding is set. Tool catalog is the static
+  // tiered meta (name + tier + short description); the memory index reads
+  // the same store that feeds the runner's MEMORY.md-style block.
+  const taskPreflight = new TaskPreflightService({
+    resolver: pipelineProviderResolver,
+    getToolCatalog: () =>
+      getAllKnownToolsMeta().map((t) => ({ name: t.name, tier: t.tier, description: t.description })),
+    getMemoryIndex: (projectId) => {
+      try {
+        if (!db.getProjectMemoryEnabled(projectId)) return [];
+        return db
+          .listMemoryIndex(projectId, 20)
+          .map((m) => ({ title: m.title, category: m.category, excerpt: m.excerpt }));
+      } catch {
+        return [];
+      }
+    },
+  });
   // Mem C write-back — distills durable memory (facts + `gotcha` lessons) at
   // run-end. Reuses the snapshot writer + hybrid dedup + the resolver's
   // `memory_extraction` binding; when no binding is set it falls back to the
@@ -947,12 +1037,45 @@ export function createDeps(): ServerDeps {
   const embeddingKind = deriveKindLabel(embeddingService, 'EmbeddingService');
   const vectorStoreKind = deriveKindLabel(vectorStore, 'VectorStore');
 
+  // ─── Perf-monitor ledger — subsystems self-report occupancy ─────────
+  // Pull-based: the sampler calls these closures every tick. Keep them
+  // O(1) — counts and flags only, never deep walks.
+  {
+    const ledger = getMemoryLedger();
+    ledger.register('embeddings.tools', () => ({
+      count: toolEmbeddingStore.size(),
+      detail: 'vetores de descrição de tools (processo inteiro)',
+    }));
+    ledger.register('embeddings.messages', () => ({
+      count: messageEmbeddingStore.size(),
+      detail: 'vetores de mensagens (context-relevance)',
+    }));
+    ledger.register('embeddings.roles', () => ({
+      count: roleEmbeddingStore.size(),
+      detail: 'vetores de roles (company)',
+    }));
+    ledger.register('embeddings.localModel', () => {
+      const svc = embeddingService as { diagnostics?: () => { model: string; loaded: boolean } };
+      const d = svc.diagnostics?.();
+      if (!d) return null;
+      return {
+        count: d.loaded ? 1 : 0,
+        detail: `${d.model} — ONNX ${d.loaded ? 'CARREGADO (memória nativa, fora do JS heap)' : 'descarregado'}`,
+      };
+    });
+    ledger.register('search.recentFiles', () => ({
+      count: recentFilesSource.size(),
+      detail: 'cache de arquivos recentes (Mem A)',
+    }));
+  }
+
   return {
     config,
     db,
     providerStore,
     costTracker,
     snapshotService,
+    projectIndexService,
     diffService,
     exportService,
     webhookDispatcher,
@@ -976,10 +1099,12 @@ export function createDeps(): ServerDeps {
     qaTestResultStore,
     chromeServiceStore,
     designSystemStore,
+    apiClientStore,
     verdaccioStore,
     pipelineTelemetryStore,
     pipelineBindingsStore,
     pipelineProviderResolver,
+    taskPreflight,
     pipelineTelemetrySink,
     toolEmbeddingStore,
     toolSelectionEmbed,

@@ -69,5 +69,12 @@
   "chat.empty.archived": "Nenhuma sessão arquivada ainda.",
   "chat.empty.activeTitle": "Nenhuma sessão ainda",
   "chat.empty.activeDescription": "Comece a primeira conversa sobre {{projectName}}.",
-  "chat.empty.newSession": "Nova sessão"
+  "chat.empty.newSession": "Nova sessão",
+  "editorChat.openPanel": "Abrir chat",
+  "editorChat.addActiveFile": "Adicionar arquivo",
+  "editorChat.noFileOpen": "Nenhum arquivo aberto",
+  "editorChat.removeSelection": "Remover seleção",
+  "editorChat.lineRange": "L{{start}}–{{end}}",
+  "editorChat.currentSelection": "Seleção atual — enviada na próxima mensagem",
+  "editorChat.pinSelection": "Fixar seleção"
 }

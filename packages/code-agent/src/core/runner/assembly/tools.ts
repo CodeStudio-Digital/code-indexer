@@ -21,7 +21,6 @@ import { terseDescription } from '@mcp/code-agent/tools/descriptions.js';
 import { getModelMaxTools } from '@mcp/code-agent/providers/capabilities.js';
 import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { isEssentialCompanyTool } from '../company-essentials.js';
-import { filterGoalToolsByState } from '../pure-helpers.js';
 
 export interface SerializedTool {
   name: string;
@@ -42,10 +41,14 @@ export interface BuildToolsArgs {
    * tool-filter hook and the goal-gate still apply every turn.
    */
   pinnedTools?: ReadonlySet<string>;
+  /**
+   * Session-level visible-tool ceiling (task preflight). Effective cap is
+   * `min(model cap, sessionToolCap)`. Terse-description behavior stays tied
+   * to the MODEL cap — a seeded session on a large model keeps full text.
+   */
+  sessionToolCap?: number;
   toolContext: ToolContext;
   provider: ChatProvider;
-  /** Caller-owned flag — true if a goal-hidden log already fired this run. */
-  goalToolAlreadyLogged: boolean;
 }
 
 /** Trim stats for the turn — null when the model cap didn't fire. */
@@ -60,11 +63,6 @@ export interface BuildToolsCapInfo {
 
 export interface BuildToolsResult {
   tools: SerializedTool[];
-  /**
-   * New value for the runner's `goalToolHiddenLogged` flag. Caller MUST
-   * persist this so the once-per-session log discipline survives.
-   */
-  goalToolHiddenLogged: boolean;
   capInfo: BuildToolsCapInfo | null;
 }
 
@@ -114,25 +112,15 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     }
   }
 
-  // Hide `create_goal` when an in-progress goal exists. Eliminates the loop
-  // seen in sessions 656/658 where the model kept calling create_goal
-  // instead of executing real work. Read fresh each turn — `update_goal`
-  // flipping status to 'complete' re-exposes the tool automatically.
-  let goalToolHiddenLogged = args.goalToolAlreadyLogged;
-  const activeGoal = args.toolContext.getGoalState?.();
-  if (activeGoal && activeGoal.status === 'in_progress') {
-    const before = filtered.length;
-    filtered = filterGoalToolsByState(filtered, activeGoal);
-    if (filtered.length < before && !goalToolHiddenLogged) {
-      goalToolHiddenLogged = true;
-      const preview = activeGoal.text.length > 80
-        ? `${activeGoal.text.slice(0, 80)}…`
-        : activeGoal.text;
-      console.log(`[coder] hiding create_goal — active goal: "${preview}"`);
-    }
-  } else {
-    goalToolHiddenLogged = false;
-  }
+  // NOTE: `create_goal` stays in the tool surface for the ENTIRE run — we
+  // deliberately do NOT remove it once a goal is in_progress. Tool-array
+  // membership is the first segment of the provider prompt-cache prefix;
+  // dropping a tool mid-run changes the serialized bytes and invalidates the
+  // whole prefix (measured: a full ~50–80k-token re-write on the turn after
+  // the goal is created, every round). The create_goal loop guard
+  // (sessions 656/658) now lives entirely in the handler: `bumpCreateBurst`
+  // hard-refuses bursts, and a redundant call while a goal is in_progress is
+  // rejected (not superseded). See `packages/code-agent/src/tools/goal.ts`.
 
   // Protection partition BEFORE truncation: company orchestration tools
   // (master / subordinate) and the session-class-agnostic NEVER_TRIM floor
@@ -149,7 +137,10 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
       (isCompanyRunner && isEssentialCompanyTool(t.name, isMasterRunner));
     (isProtected ? protectedBucket : others).push(t);
   }
-  const maxTools = getModelMaxTools(args.provider.model ?? '');
+  const modelMaxTools = getModelMaxTools(args.provider.model ?? '');
+  const maxTools = args.sessionToolCap != null && args.sessionToolCap > 0
+    ? Math.min(modelMaxTools, args.sessionToolCap)
+    : modelMaxTools;
   const totalBefore = protectedBucket.length + others.length;
   let capInfo: BuildToolsCapInfo | null = null;
   if (totalBefore > maxTools) {
@@ -174,8 +165,9 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     const overflow = protectedBucket.length > maxTools
       ? ` — protected set alone exceeds the cap, kept all ${protectedBucket.length}`
       : '';
+    const capSource = maxTools < modelMaxTools ? 'session preflight cap' : 'model limit';
     console.log(
-      `[coder] tool cap: ${totalBefore} → ${filtered.length} (model limit ${maxTools} for ${args.provider.model}, strategy=${legacy ? 'legacy' : 'priority'}) — ` +
+      `[coder] tool cap: ${totalBefore} → ${filtered.length} (${capSource} ${maxTools} for ${args.provider.model}, strategy=${legacy ? 'legacy' : 'priority'}) — ` +
         `${protectedBucket.length} protected kept, ${keptOthers.length}/${others.length} others kept, ${cutNames.length} dropped${overflow}. ` +
         `Dropped: ${cutNames.slice(0, 20).join(', ')}${cutNames.length > 20 ? `, … (+${cutNames.length - 20})` : ''}`,
     );
@@ -200,8 +192,9 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   // descriptions in EVERY tier state: serialized bytes compete with real
   // context on a small model, and full text is recoverable via find_tools.
   // Exception: the NEVER_TRIM core keeps its full USE/DON'T text — those
-  // are the tools whose discipline notes matter most.
-  const compactModel = maxTools <= 64;
+  // are the tools whose discipline notes matter most. Deliberately keyed
+  // to the MODEL cap, not the session preflight cap.
+  const compactModel = modelMaxTools <= 64;
   const useTerse = (name: string): boolean =>
     (bootstrapOnly || compactModel) && !(compactModel && NEVER_TRIM.has(name));
 
@@ -211,27 +204,26 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     parameters: t.parameters,
   }));
 
-  return { tools, goalToolHiddenLogged, capInfo };
+  return { tools, capInfo };
 }
 
 export interface BuildToolsCacheKeyArgs {
   activeTiers: Set<ToolTier> | null;
   pinnedTools?: ReadonlySet<string>;
-  getGoalState: ToolContext['getGoalState'];
 }
 
 /**
- * Cache key driving `buildTools` re-runs. Includes goal status so that a
- * goal flipping to `complete` re-exposes `create_goal` automatically. Goal
- * contributes only its STATUS — keeps prefix caches byte-stable within a
- * status. Pins contribute their sorted names: a new pin = a new key (one
- * rebuild, then stable).
+ * Cache key driving `buildTools` re-runs. Goal status is intentionally NOT
+ * part of the key: `create_goal` now stays visible for the whole run, so the
+ * tool membership no longer depends on goal lifecycle. Keeping the key
+ * goal-independent keeps the provider prompt-cache prefix byte-stable.
+ * Pins contribute their sorted names: a new pin = a new key (one rebuild,
+ * then stable).
  */
 export function buildToolsCacheKey(args: BuildToolsCacheKeyArgs): string {
   const tierKey = args.activeTiers ? Array.from(args.activeTiers).sort().join(',') : '*';
   const pinKey = args.pinnedTools?.size ? Array.from(args.pinnedTools).sort().join(',') : '';
-  const goalStatus = args.getGoalState?.()?.status ?? 'none';
-  return `${tierKey}|pins=${pinKey}|goal=${goalStatus}`;
+  return `${tierKey}|pins=${pinKey}`;
 }
 
 /**
@@ -241,4 +233,13 @@ export function buildToolsCacheKey(args: BuildToolsCacheKeyArgs): string {
  */
 export function fingerprintTools(tools: SerializedTool[]): string {
   return createHash('sha1').update(JSON.stringify(tools)).digest('hex');
+}
+
+/**
+ * Same fingerprint, but over an already-serialized tools array — callers
+ * that stringify for size metrics (`tools_def_chars`) reuse the JSON
+ * instead of paying a second stringify.
+ */
+export function fingerprintToolsJson(toolsJson: string): string {
+  return createHash('sha1').update(toolsJson).digest('hex');
 }

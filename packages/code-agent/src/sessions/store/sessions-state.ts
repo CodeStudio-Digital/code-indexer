@@ -53,6 +53,64 @@ export function addToolPermissionGrant(db: DB, id: number, toolName: string): vo
   db.prepare("UPDATE coder_sessions SET tool_permission_grants = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(grants), id);
 }
 
+const PROFILE_RANK: Record<string, number> = { bootstrap: 0, navigate: 1, full: 2 };
+
+/**
+ * Persist the sticky tool profile (migration 142). WIDEN-ONLY: writes only
+ * when `profile` outranks the stored value — the visible tool array must
+ * never narrow between runs or the provider prompt-cache prefix busts on
+ * the next round's turn 1. Racing writers are therefore harmless.
+ */
+export function setToolProfile(db: DB, id: number, profile: 'bootstrap' | 'navigate' | 'full'): void {
+  const row = db.prepare('SELECT tool_profile FROM coder_sessions WHERE id = ?')
+    .get(id) as { tool_profile: string | null } | undefined;
+  if (!row) return;
+  const current = row.tool_profile;
+  if (current != null && (PROFILE_RANK[current] ?? -1) >= (PROFILE_RANK[profile] ?? -1)) return;
+  db.prepare("UPDATE coder_sessions SET tool_profile = ?, updated_at = datetime('now') WHERE id = ?").run(profile, id);
+}
+
+/**
+ * Merge into the session's widen-only toolset state (migration 142):
+ * `{v:1, extraTiers:[], pins:[], visibleCap:null}`. Arrays merge by union,
+ * `visibleCap` is written only while unset (the preflight cap is decided
+ * once per session). Idempotent — a no-op patch never touches the row.
+ */
+export function mergeToolsetState(
+  db: DB, id: number,
+  patch: { addExtraTiers?: readonly string[]; addPins?: readonly string[]; visibleCap?: number | null },
+): void {
+  const row = db.prepare('SELECT tool_state_json FROM coder_sessions WHERE id = ?')
+    .get(id) as { tool_state_json: string | null } | undefined;
+  if (!row) return;
+  let state: { v: number; extraTiers: string[]; pins: string[]; visibleCap: number | null } =
+    { v: 1, extraTiers: [], pins: [], visibleCap: null };
+  try {
+    const parsed = JSON.parse(row.tool_state_json ?? 'null');
+    if (parsed && typeof parsed === 'object') {
+      state = {
+        v: 1,
+        extraTiers: Array.isArray(parsed.extraTiers) ? parsed.extraTiers.filter((t: unknown): t is string => typeof t === 'string') : [],
+        pins: Array.isArray(parsed.pins) ? parsed.pins.filter((p: unknown): p is string => typeof p === 'string') : [],
+        visibleCap: typeof parsed.visibleCap === 'number' ? parsed.visibleCap : null,
+      };
+    }
+  } catch { /* corrupted column — rebuild from scratch */ }
+  let changed = false;
+  for (const t of patch.addExtraTiers ?? []) {
+    if (!state.extraTiers.includes(t)) { state.extraTiers.push(t); changed = true; }
+  }
+  for (const p of patch.addPins ?? []) {
+    if (!state.pins.includes(p)) { state.pins.push(p); changed = true; }
+  }
+  if (patch.visibleCap != null && state.visibleCap == null) {
+    state.visibleCap = patch.visibleCap;
+    changed = true;
+  }
+  if (!changed) return;
+  db.prepare("UPDATE coder_sessions SET tool_state_json = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(state), id);
+}
+
 /**
  * Bump `updated_at` only. Used as a keep-alive while a tool approval is
  * pending so the stuck-running watchdog doesn't flip the session to idle.

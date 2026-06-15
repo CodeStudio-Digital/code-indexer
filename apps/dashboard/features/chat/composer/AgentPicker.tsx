@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Compass, ClipboardList, Hammer, ShieldAlert, Sparkles, ScrollText } from 'lucide-react';
+import { Compass, ClipboardList, Hammer, ShieldAlert, Sparkles, ScrollText, Webhook } from 'lucide-react';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
 
 /**
@@ -17,7 +17,7 @@ import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.j
  */
 
 interface AgentDef {
-  id: 'explore' | 'plan' | 'build' | 'admin' | 'spec';
+  id: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api';
   description: string;
   profile: string;
   planMode: boolean;
@@ -31,6 +31,7 @@ const ICONS: Record<AgentId, React.ComponentType<{ className?: string }>> = {
   build: Hammer,
   admin: ShieldAlert,
   spec: ScrollText,
+  api: Webhook,
 };
 
 // Positive framing per mode — what it PROMISES, not what it blocks.
@@ -41,6 +42,7 @@ const PROMISE: Record<AgentId, string> = {
   build: 'Edits, verifies, reports',
   admin: 'Commits, snapshots, ops — asks first',
   spec: 'Writes a spec, waits for approval',
+  api: 'Tests the API, fixes the spec',
 };
 
 // Tailwind text-color class per mode — applied to the leading icon so the
@@ -51,6 +53,7 @@ const MODE_TINT: Record<AgentId, string> = {
   build: 'text-emerald-500',
   admin: 'text-rose-500',
   spec: 'text-amber-500',
+  api: 'text-cyan-500',
 };
 
 interface AgentPickerProps {

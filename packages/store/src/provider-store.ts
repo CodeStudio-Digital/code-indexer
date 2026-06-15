@@ -89,6 +89,7 @@ export class ProviderStore {
   listAllModels(): ProviderModel[] { return models.listAll(this.db); }
   replaceModelsFromSource(providerId: string, source: string, modelInputs: UpsertModelInput[]): void { models.replaceFromSource(this.db, providerId, source, modelInputs); }
   updateModel(providerId: string, modelId: string, mode: string, patch: Parameters<typeof models.update>[4]): void { models.update(this.db, providerId, modelId, mode, patch); }
+  deleteManualModel(providerId: string, modelId: string, mode: string): number { return models.remove(this.db, providerId, modelId, mode); }
   backfillContextWindowsFromRegistry(lookup: (modelId: string) => number | null): { updated: number; still_null: number; total: number } { return models.backfillContextWindows(this.db, lookup); }
 
   // ─── Model Prices ──────────────────────────────────────────────

@@ -53,6 +53,11 @@ interface TurnRow {
   summarizer_ran: number;
   paginate_count: number;
   created_at: string;
+  /** Prompt-cache diagnostics (mig 143). NULL on rows older than the migration. */
+  tools_fingerprint?: string | null;
+  prefix_head_hash?: string | null;
+  reducer_retired_count?: number | null;
+  reducer_freed_chars?: number | null;
 }
 
 /** One "round" = all the assistant turns triggered by a single user
@@ -576,6 +581,23 @@ function TurnsTimeline({
   // the heavy one.
   const maxInput = turns.reduce((m, r) => Math.max(m, r.input_tokens ?? 0), 0);
   const rounds = groupTurnsByRound(turns);
+  // Previous turn in GLOBAL session order (per main/subagent class) — a
+  // round's T1 compares against the LAST turn of the previous round, which
+  // is exactly where a toolset flip shows up. Used by the cache-bust badge.
+  const prevById = new Map<number, TurnRow | null>();
+  {
+    let prevMain: TurnRow | null = null;
+    let prevSub: TurnRow | null = null;
+    for (const row of turns) {
+      if (row.is_subagent) {
+        prevById.set(row.id, prevSub);
+        prevSub = row;
+      } else {
+        prevById.set(row.id, prevMain);
+        prevMain = row;
+      }
+    }
+  }
 
   // Pluralisation suffixes for the header. i18n's count interpolation is
   // ICU-style and we're using plain {{var}}; cheap workaround is to pass
@@ -614,6 +636,7 @@ function TurnsTimeline({
             // open. Older rounds collapsed by default to keep the modal
             // scrollable when sessions get long.
             defaultOpen={round.index === rounds.length}
+            prevById={prevById}
             t={t}
           />
         ))}
@@ -633,12 +656,14 @@ function RoundGroup({
   maxInput,
   forceOpen,
   defaultOpen,
+  prevById,
   t,
 }: {
   round: TurnRound;
   maxInput: number;
   forceOpen: boolean;
   defaultOpen: boolean;
+  prevById: Map<number, TurnRow | null>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   t: any;
 }) {
@@ -691,6 +716,7 @@ function RoundGroup({
             <TurnRowView
               key={row.id}
               row={row}
+              prev={prevById.get(row.id) ?? null}
               maxInput={maxInput}
               forceOpen={forceOpen}
               t={t}
@@ -704,11 +730,14 @@ function RoundGroup({
 
 function TurnRowView({
   row,
+  prev,
   maxInput,
   forceOpen,
   t,
 }: {
   row: TurnRow;
+  /** Previous turn in global session order (same main/subagent class). */
+  prev: TurnRow | null;
   maxInput: number;
   forceOpen: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -724,6 +753,24 @@ function TurnRowView({
   const fresh = Math.max(0, input - cacheRead);
   const inputPct = maxInput > 0 ? (input / maxInput) * 100 : 0;
   const cachePct = input > 0 ? Math.round((cacheRead / input) * 100) : 0;
+
+  // Cache-bust cause badge (mig 143): when the cache hit drops sharply vs
+  // the previous turn, the fingerprints say WHICH prefix segment diverged.
+  // Rows from before the migration have NULL hashes → no badge.
+  const bustCause = (() => {
+    if (!prev?.input_tokens) return null;
+    const prevPct = Math.round(((prev.cache_read_input_tokens ?? 0) / prev.input_tokens) * 100);
+    if (prevPct < 50 || prevPct - cachePct < 40) return null;
+    if (!row.tools_fingerprint || !prev.tools_fingerprint || !row.prefix_head_hash || !prev.prefix_head_hash) return null;
+    if (row.tools_fingerprint !== prev.tools_fingerprint) return 'toolset';
+    if (row.prefix_head_hash !== prev.prefix_head_hash) {
+      const reducerMoved =
+        (row.reducer_retired_count ?? 0) !== (prev.reducer_retired_count ?? 0) ||
+        (row.reducer_freed_chars ?? 0) !== (prev.reducer_freed_chars ?? 0);
+      return reducerMoved ? 'historyReducer' : 'history';
+    }
+    return 'ttl';
+  })();
 
   let toolNames: string[] = [];
   if (row.tools_called_json) {
@@ -763,6 +810,20 @@ function TurnRowView({
         <span className="tabular-nums text-muted-foreground shrink-0">
           {formatK(input)} in · {formatK(output)} out
         </span>
+        {bustCause && (
+          <span
+            className={`shrink-0 rounded px-1 py-px text-[9px] uppercase tracking-wide ${
+              bustCause === 'toolset'
+                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                : bustCause === 'ttl'
+                  ? 'bg-muted text-muted-foreground'
+                  : 'bg-orange-500/15 text-orange-600 dark:text-orange-400'
+            }`}
+            title={t(`chat:metrics.timeline.bust.${bustCause}Hint`)}
+          >
+            {t(`chat:metrics.timeline.bust.${bustCause}`)}
+          </span>
+        )}
         <span
           className={`tabular-nums shrink-0 ${
             cachePct >= 60 ? 'text-emerald-600 dark:text-emerald-400' : cachePct < 30 && row.turn > 1 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'

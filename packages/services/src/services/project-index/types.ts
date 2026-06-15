@@ -1,0 +1,122 @@
+/**
+ * Shared contracts for the structural auto-index service ("dumb mode").
+ * The executor abstraction is the worker seam: in-process by default,
+ * upgraded to the dedicated indexer worker_thread by the app boots.
+ */
+
+export type ProjectIndexPhase =
+  | 'none'
+  | 'scanning'
+  | 'structural_indexing'
+  | 'structural_ready'
+  | 'semantic_indexing'
+  | 'semantic_ready'
+  | 'too_large'
+  | 'error';
+
+export interface ProjectIndexStatus {
+  projectId: number;
+  phase: ProjectIndexPhase;
+  watcherActive: boolean;
+  /** Files waiting in the dirty queue for the next incremental drain. */
+  dirtyPending: number;
+  fileCount: number;
+  symbolCount: number;
+  /** Files whose LLM/embedding layer lags current content (dumb→smart gap). */
+  semanticStaleCount: number;
+  progress?: { current: number; total: number };
+  lastStructuralAt: string | null;
+  lastSemanticAt: string | null;
+  error?: string;
+}
+
+export type DirtyKind = 'upsert' | 'delete';
+
+export interface DirtyEvent {
+  /** Project-relative, forward-slash path. */
+  path: string;
+  kind: DirtyKind;
+}
+
+/**
+ * Filesystem change surfaced to the UI (live file tree + open-tab reload).
+ * Superset of DirtyEvent: directories flow here but never into the indexer.
+ */
+export interface FsEvent {
+  /** Project-relative, forward-slash path. */
+  path: string;
+  kind: DirtyKind;
+  isDir: boolean;
+}
+
+export interface StructuralRunSummary {
+  totalFiles: number;
+  indexed: number;
+  removed: number;
+  skipped: number;
+  errorCount: number;
+  durationMs: number;
+  aborted?: 'too_large' | 'signal' | 'empty_scan';
+}
+
+export interface IndexFilesSummary {
+  indexed: number;
+  skippedUnchanged: number;
+  skippedIgnored: number;
+  removed: number;
+  errors: number;
+}
+
+export interface StructuralProgressFrame {
+  current: number;
+  total: number;
+  currentFile: string;
+}
+
+/**
+ * The three structural operations the service needs. Implementations:
+ * in-process (fallback, always available) and the indexer worker client
+ * (keeps scanner/parse/SQLite writes off the main thread).
+ */
+export interface StructuralExecutor {
+  runStructuralIndex(
+    projectId: number,
+    opts: {
+      maxFiles?: number;
+      /** Manual reindex bypasses the empty-scan anti-wipe guard. */
+      allowEmptyWipe?: boolean;
+      onProgress?: (p: StructuralProgressFrame) => void;
+    },
+  ): Promise<StructuralRunSummary>;
+  indexFiles(projectId: number, relPaths: string[]): Promise<IndexFilesSummary>;
+  removeFiles(projectId: number, relPaths: string[]): Promise<{ removed: number }>;
+}
+
+export interface ProjectIndexSettings {
+  /** MCP_AUTO_INDEX_STRUCTURAL — master switch for auto runs on open. */
+  autoIndex: boolean;
+  /** MCP_AUTO_WATCH — real-time watcher per opened project. */
+  autoWatch: boolean;
+  /** MCP_AUTO_INDEX_MAX_FILES — candidate cap before bailing too_large. */
+  maxFiles: number;
+  /** MCP_WATCH_MAX_PROJECTS — LRU cap on concurrently watched projects. */
+  maxWatchedProjects: number;
+  /** MCP_WATCH_DEBOUNCE_MS — chokidar burst coalescing. */
+  watchDebounceMs: number;
+}
+
+function envInt(name: string, fallback: number): number {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
+}
+
+/** Read at call time so admin-settings changes apply without a restart. */
+export function readProjectIndexSettings(): ProjectIndexSettings {
+  return {
+    autoIndex: process.env.MCP_AUTO_INDEX_STRUCTURAL !== '0',
+    autoWatch: process.env.MCP_AUTO_WATCH !== '0',
+    maxFiles: envInt('MCP_AUTO_INDEX_MAX_FILES', 20000),
+    maxWatchedProjects: envInt('MCP_WATCH_MAX_PROJECTS', 3),
+    watchDebounceMs: envInt('MCP_WATCH_DEBOUNCE_MS', 1000),
+  };
+}

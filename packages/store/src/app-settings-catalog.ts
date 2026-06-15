@@ -31,10 +31,12 @@ import { AGENT_SPAWN_SETTINGS } from './app-settings/agent-spawn.js';
 import { AGENT_TASK_SETTINGS } from './app-settings/agent-tasks.js';
 import { COMPANY_SETTINGS } from './app-settings/company.js';
 import { DEBUG_SETTINGS } from './app-settings/debug.js';
+import { INDEXING_SETTINGS } from './app-settings/indexing.js';
 
 export const APP_SETTINGS: readonly SettingDef[] = [
   ...LLM_SETTINGS,
   ...MCP_SETTINGS,
+  ...INDEXING_SETTINGS,
   ...AGENT_BEHAVIOUR_SETTINGS,
   ...AGENT_GUARD_SETTINGS,
   ...AGENT_OUTPUT_SETTINGS,

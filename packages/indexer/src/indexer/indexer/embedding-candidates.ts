@@ -27,6 +27,10 @@ export interface EmbeddingCandidate {
   filePath: string;
   metadata: Record<string, string>;
   hash: string;
+  /**
+   * Persists the candidate's hash. MUST stay synchronous — the executor
+   * runs the whole chunk's commits inside ONE better-sqlite3 transaction.
+   */
   onCommit: () => void;
   /**
    * Candidates sharing a groupKey form one logical unit (the windows of a

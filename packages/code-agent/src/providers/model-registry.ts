@@ -52,6 +52,7 @@ export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
   // capabilities.ts header). Aggressive tiered caps; the priority-based trim
   // keeps the hot core and the admin can override per model (provider_models
   // .max_tools) or via CODER_MODEL_CAPS.
+  'glm-5.2':                    { maxTools: 96,  contextWindow: 200_000, maxOutputTokens: 16_000, note: 'Base window 200K; the glm-5.2[1m] variant resolves to 1M via the [1m] suffix rule' },
   'glm-5.1':                    { maxTools: 96,  contextWindow: 200_000, maxOutputTokens: 16_000 },
   'glm-4.7-flash':              { maxTools: 32,  contextWindow: 128_000, maxOutputTokens: 16_000, note: 'GLM flash degrades above ~30 tools — aggressive cap, admin can override' },
   'glm-4.6':                    { maxTools: 48,  contextWindow: 200_000, maxOutputTokens: 16_000 }, // FIX: doc says 200K

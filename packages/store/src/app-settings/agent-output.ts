@@ -62,6 +62,18 @@ export const AGENT_OUTPUT_SETTINGS: readonly SettingDef[] = [
     advanced: true,
   },
   {
+    key: 'CODER_REDUCER_FLUSH_CHARS',
+    label: 'Rolling reducer flush threshold (chars)',
+    description:
+      'Stale duplicate reads/searches are retired in batches of this many chars instead of one-by-one — ' +
+      'each in-place retirement busts the provider prompt cache from that message on. 0 = retire immediately (legacy).',
+    type: 'int',
+    category: 'agent',
+    default: '32768',
+    min: 0,
+    advanced: true,
+  },
+  {
     key: 'CODER_COMPACT_PRESERVE_LAST_N_TURNS',
     label: 'Compact preserve last N turns',
     description: 'Number of recent turns left untouched during compaction.',

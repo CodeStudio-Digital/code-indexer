@@ -31,24 +31,17 @@ export interface CompanyContext {
   allowedProjectIds: number[];
   isMaster: boolean;
   /**
-   * Builder-mode sandbox binding. When present, filesystem/shell tools
-   * are routed into the container referenced here instead of touching
-   * the host filesystem. Populated by `SandboxService` after a successful
-   * provision; absent for normal (non-builder) company sessions.
+   * Sandbox binding. When present, filesystem/shell tools are routed
+   * into the container referenced here instead of touching the host
+   * filesystem. Populated by `SandboxService` after a successful
+   * provision (service-bound subordinates); absent otherwise.
    */
   sandbox?: SandboxBinding;
-  /**
-   * Configured stack name for builder-mode sessions (e.g. `react-ts`).
-   * Set from the session config regardless of whether the primary container
-   * is currently live — allows the master to operate in builder mode even
-   * when `sandbox` is absent (container down, provisioning failure, etc.).
-   */
-  builderStack?: string;
 }
 
 /**
- * What a `CompanyContext` carries for builder mode. Consumed by
- * `runCoder` to swap the default local filesystem/shell ports for
+ * What a `CompanyContext` carries for a container-bound agent. Consumed
+ * by `runCoder` to swap the default local filesystem/shell ports for
  * sandbox adapters — transparent to every tool.
  */
 export interface SandboxBinding {

@@ -121,6 +121,8 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
       lastInjectedMemoryIds: new Set<string>(),
       lastInjectedSessionStateHash: null,
       lastInjectedProjectIndexHash: null,
+      lastInjectedUserMemoryHash: null,
+      lastInjectedPreflightHash: null,
       // Fix A — self_review nudge gate state.
       selfReview: { suppressed: false },
     },

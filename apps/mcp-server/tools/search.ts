@@ -2,6 +2,7 @@ import { minimatch } from 'minimatch';
 import { glob as fastGlob } from 'glob';
 import { defineTool, type McpTool } from '../tool.js';
 import { grepInFiles } from '@mcp/services/services/code-reader.js';
+import { buildContentMatchQuery } from '@mcp/indexer/search/content-grep.js';
 import type { SearchMode, SearchType } from '@mcp/shared/types.js';
 import { withProject } from './_helpers.js';
 import { renderDegradedTrailer, renderZeroResultDiagnostics } from './search-diagnostics.js';
@@ -61,7 +62,10 @@ const search = defineTool({
       limit: (args.limit as number) ?? 20,
     });
     if (results.length === 0) {
-      return renderZeroResultDiagnostics(requestedMode, diagnostics, () => db.getEmbeddingCoverage(project.id));
+      return renderZeroResultDiagnostics(requestedMode, diagnostics, () => ({
+        ...db.getEmbeddingCoverage(project.id),
+        files_semantic_stale: db.countSemanticStale(project.id),
+      }));
     }
     const body = results.map(r => {
       const d = r.data as unknown as Record<string, unknown>;
@@ -202,7 +206,48 @@ const grep_code = defineTool({
       fallbackNote = `[note: pattern was not valid regex, searched as literal string]\n`;
     }
 
-    let hits = grepInFiles(project.root_path, files.map(f => f.path), re, maxResults);
+    // Content-index pre-filter (the IntelliJ word-index): scan bm25-ranked
+    // candidate files FIRST and short-circuit when the result cap is already
+    // reached — same contract as today (results were capped anyway), ~20-50ms
+    // instead of a full read of every indexed file. NOT a complete superset
+    // (word index ≠ substring index: literal `Change` hides inside the token
+    // `handlechange`), so when the cap isn't reached we FINISH with the
+    // remaining files — exactness preserved, the index only buys ordering +
+    // early exit.
+    const allPaths = files.map(f => f.path);
+    let hits: ReturnType<typeof grepInFiles> = [];
+    let viaContentIndex = false;
+    let scannedAll = false;
+    const ftsQuery = process.env.MCP_FTS_CONTENT_GREP !== '0' ? buildContentMatchQuery(pattern, literal) : null;
+    if (ftsQuery) {
+      try {
+        const allowed = new Set(allPaths);
+        const candidatePaths = db.searchFileContents(project.id, ftsQuery, 500)
+          .map(c => c.path)
+          .filter(p => allowed.has(p));
+        if (candidatePaths.length > 0) {
+          hits = grepInFiles(project.root_path, candidatePaths, re, maxResults);
+          if (hits.length >= maxResults) {
+            viaContentIndex = true;
+            scannedAll = true; // cap reached — nothing more would be returned
+          } else {
+            const scanned = new Set(candidatePaths);
+            hits = hits.concat(grepInFiles(
+              project.root_path,
+              allPaths.filter(p => !scanned.has(p)),
+              re,
+              maxResults - hits.length,
+            ));
+            scannedAll = true;
+          }
+        }
+      } catch {
+        // Malformed MATCH / vtab missing (pre-migration DB) — legacy path covers.
+      }
+    }
+    if (!scannedAll) {
+      hits = grepInFiles(project.root_path, allPaths, re, maxResults);
+    }
 
     // Disk fallback: when the index can't satisfy the search (empty index,
     // glob filtered everything out, or no hits in indexed set), scan disk
@@ -226,7 +271,7 @@ const grep_code = defineTool({
     const capNote = hits.length >= maxResults ? `\n... [capped at ${maxResults} results]` : '';
     const fallbackTag = usedFallback
       ? '\n[note: results from disk fallback — some files may not be indexed yet, consider re-indexing]'
-      : '';
+      : viaContentIndex ? '\n[via content-index]' : '';
     return fallbackNote + results + capNote + fallbackTag;
   }),
 });

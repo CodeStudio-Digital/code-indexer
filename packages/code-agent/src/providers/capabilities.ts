@@ -290,10 +290,25 @@ const CONTEXT_WINDOW_PREFIX_FALLBACKS: Array<[string, number]> = [
  * APIs don't expose context-window (notably Z.AI's `/v4/models`, which
  * returns IDs but no context_length field).
  */
+/**
+ * `[1m]` is the conventional model-id suffix for a 1M-context variant —
+ * Z.AI's `glm-5.2[1m]` (https://docs.z.ai/devpack/latest-model) and
+ * Anthropic's 1M beta both use it. Detect it so the budget reflects the real
+ * window instead of the base-family prefix (e.g. `glm-5` → 200K). Checked
+ * before the prefix table so the suffix always wins; an exact MODEL_REGISTRY
+ * entry still takes precedence over it.
+ */
+const ONE_MILLION_CONTEXT_WINDOW = 1_000_000;
+function oneMillionSuffixWindow(model: string): number | null {
+  return model.includes('[1m]') ? ONE_MILLION_CONTEXT_WINDOW : null;
+}
+
 export function getRegistryContextWindow(model: string): number | null {
   if (!model) return null;
   const direct = MODEL_REGISTRY[model]?.contextWindow;
   if (direct != null) return direct;
+  const oneM = oneMillionSuffixWindow(model);
+  if (oneM != null) return oneM;
   for (const [prefix, cw] of CONTEXT_WINDOW_PREFIX_FALLBACKS) {
     if (model.startsWith(prefix)) return cw;
   }
@@ -331,6 +346,10 @@ export function resolveContextWindowWithSource(model: string): ResolvedContextWi
   const direct = MODEL_REGISTRY[model]?.contextWindow;
   if (direct != null) {
     return { window: direct, source: 'registry-exact', via: `registry:${model}` };
+  }
+  const oneM = oneMillionSuffixWindow(model);
+  if (oneM != null) {
+    return { window: oneM, source: 'registry-prefix', via: 'suffix:[1m]' };
   }
   for (const [prefix, cw] of CONTEXT_WINDOW_PREFIX_FALLBACKS) {
     if (model.startsWith(prefix)) {

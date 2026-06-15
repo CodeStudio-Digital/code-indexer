@@ -56,7 +56,7 @@ Only stop when one of these holds:
 If a tool call fails, persevere: read the error, adjust, retry. Do not stop on first failure.
 
 # Do not re-read what you already have
-Before reading a file (\`read_file\`, \`mcp__read_file\`, \`mcp__get_file_skeleton\`, \`mcp__get_file_structure\`) check the prior tool results. The slice resolver snaps line ranges to enclosing symbols, so shifting \`around_line\` by a few does NOT yield new content. The runner refuses identical-result reads after the second duplicate — repeating yourself burns the parent's tokens and stalls the session.`;
+The runner refuses identical-content tool results after the second duplicate. Reads snap to the enclosing symbol — nudging \`around_line\` inside a range you already received returns the same body. Repeating yourself burns the parent's tokens and stalls the session.`;
 }
 
 export type ProviderFamily =
@@ -150,6 +150,15 @@ export interface PromptContext {
    * cache-stable, stays above the dynamic boundary.
    */
   sessionDrive?: boolean;
+  /**
+   * Whether the active model natively consumes images. `true` drops the
+   * "Images & vision" section (it only explains the image→text fallback);
+   * `false`/`undefined` keeps it. Session-fixed (model is fixed) →
+   * cache-stable, one more axis of the static-prefix tuple. The caller
+   * passes `false` when the composer "Describe images" flag forces the
+   * fallback even on vision-capable models.
+   */
+  modelCanSeeImages?: boolean;
 }
 
 /**
@@ -256,6 +265,8 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     os: describeShell(ctx.os),
     tierHint: tierHint(ctx.profile),
     mcpSection: mcpSection(ctx.mcpAvailable, ctx.isIndexed),
+    visionSection: visionSection(ctx.modelCanSeeImages),
+    memorySection: memorySection(ctx.sessionDrive),
   });
 
   // Plan section — optional, only when planMode is true AND the active agent
@@ -286,27 +297,9 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 - \`submit_spec\`: REQUIRED before any mutating tool (see Spec mode above). Pass \`{ name, body, parent_id? }\`. The runner writes the spec to \`.mcp/specs/<slug>-<unix>.md\` and blocks until a human approves or requests changes.` : ''}
 - \`submit_plan\`: ${isSpec ? 'BLOCKED in spec mode — the spec IS the plan.' : ctx.planMode ? 'REQUIRED before mutating tools when the work is linear/informational (see Plan mode above).' : 'Optional — call when the user explicitly asks for a plan.'}
 - \`submit_tasks\`: ${isSpec ? 'BLOCKED before spec approval. After approval, derive tasks from the spec\'s Implementation Plan and call submit_tasks.' : ctx.planMode ? 'REQUIRED instead of submit_plan when the work decomposes into 2+ independent tasks (see Plan mode above).' : 'Optional — for multi-item work that benefits from per-task context curation and individual user approval.'}
-- \`list_tasks\` / \`execute_tasks\` / \`task_complete\`: companions to submit_tasks. Task ids are backend-generated \`tsk_...\` ids; call list_tasks if unsure, then \`execute_tasks\` ONCE to dispatch the whole approved list (wave-based; runs investigate/implement/verify kinds with the right toolset). \`task_complete\` only closes an inline scope opened by \`execute_tasks\` — never call it on a subagent-mode task.
-- \`cancel_tasks\` / \`delete_tasks\` / \`archive_task_list\`: use these to abandon, remove, or clear task rounds. Never reuse legacy ids like \`task_1\` as executable ids.
+- \`list_tasks\` / \`execute_tasks\` / \`task_complete\`: companions to submit_tasks. Task ids are backend-generated \`tsk_...\`; \`execute_tasks\` ONCE dispatches the whole approved list in dependency waves; \`task_complete\` only closes an inline scope opened by \`execute_tasks\` — never call it on a subagent-mode task.
+- \`cancel_tasks\` / \`delete_tasks\` / \`archive_task_list\`: abandon, remove, or clear task rounds. Never reuse legacy ids like \`task_1\`.
 `;
-
-  // Session & project memory — single-session durable working memory plus
-  // the cross-session project memory. Gated on ctx.sessionDrive (true only
-  // for non-company sessions, where the save_note / list_notes / read_plan /
-  // recall_investigations / recall_memory tools are registered).
-  // Session-fixed → cache-stable, stays in the static prefix.
-  const sessionDriveSection = ctx.sessionDrive
-    ? `
-
-# Session & project memory
-This session has a durable working memory (the Session Drive panel) plus a cross-session PROJECT MEMORY:
-- \`save_note({title, body, kind?, scope?})\` — scope 'session' (default): a decision, a non-obvious fact, a risk, or a TODO you'd regret losing when older turns get summarized (\`title\` is the key; re-saving updates it). scope 'project': a DURABLE fact about THIS CODEBASE — a non-obvious gotcha you hit, a convention you confirmed, a decision with its why, a recipe that worked. Save project memory AS YOU LEARN IT, not at the end; never save transient task state or file dumps to project scope.
-- \`recall_memory({query})\` — fetch full project memories by meaning BEFORE re-exploring something this project likely already learned (the memory index in context shows titles only).
-- \`list_notes\` — review the session notes you've saved.
-- \`read_plan\` — re-read the plan you submitted; it is otherwise invisible once it scrolls out of context.
-- \`recall_investigations({query})\` — BEFORE spawning an explore subagent, check past (auto-saved) sub-agent findings and reuse them instead of paying to re-investigate.
-The runner re-injects your plan, notes and session state automatically after compaction — you don't need to re-call read_plan/list_notes for what that block already shows.`
-    : '';
 
   // Static "agent loop" + "do not re-read" + "active context pointer". The
   // dynamic payload (live goal / todos / active task scope) is injected as
@@ -374,7 +367,7 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   // sessions because of trailing-newline rules.
   const boundary = `\n\n${SYSTEM_PROMPT_DYNAMIC_BOUNDARY}`;
 
-  return `${preamble}${base}${planSection}${agentSection}${interactionSection}${sessionDriveSection}${agentLoopBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+  return `${preamble}${base}${planSection}${agentSection}${interactionSection}${agentLoopBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
 }
 
 /**
@@ -397,19 +390,10 @@ Only stop when one of these holds:
 If a tool call fails, persevere: read the error, adjust, retry. Do not stop on the first failure unless it is genuinely unrecoverable.
 
 # Preambles before tool calls
-Before each tool call (or grouped batch of related calls) emit a 1–2 sentence preamble explaining what you are about to do. Keep it tight: roughly 8–12 words for a quick update, longer only when the action is novel and needs context.
-- Group related calls into ONE preamble — do not narrate every individual read.
-- Build on prior context: connect to what was just done so the user sees momentum.
-- Skip preambles for trivial reads inside a larger grouped action you already announced.
-- Keep the tone collaborative and concrete; no apologies, no restating the user's question.
+Before each tool call (or grouped batch of related calls) emit a 1–2 sentence preamble: what you're about to do, ~8–12 words, connected to what was just done. ONE preamble per related group — don't narrate every individual read. Concrete and collaborative; no apologies, no restating the question.
 
 # Do not re-read what you already have
-Before reading a file (\`read_file\`, \`mcp__read_file\`, \`mcp__get_file_skeleton\`, \`mcp__get_file_structure\`) check the prior tool results in this conversation:
-- If the same path/range/symbol was already returned, the content is in your context. Do NOT re-fetch — quote it from memory or scroll back.
-- The slice resolver snaps \`around_line\` to enclosing symbols, so shifting the line number by a few does NOT yield new content. If the previous read returned lines X–Y and your new \`around_line\` falls inside that range, you will get the same body back.
-- If you genuinely need a different region, change \`start_line\`/\`end_line\` or pass a different \`symbol\` — and only after confirming the previous slice did not cover it.
-- After \`apply_patch\`, \`edit_file\`, or \`multi_edit\`, the tool already reported the result. Re-reading just to verify is wasteful — only re-read if the edit failed or you need adjacent context not in your last view.
-The runner enforces this: identical-content tool results are refused after the second duplicate. Repeating yourself burns tokens and stalls the session.
+The runner refuses identical-content tool results after the second duplicate. Reads snap to the enclosing symbol — nudging \`around_line\` inside a range you already received returns the same body. After a successful \`edit_file\`/\`multi_edit\`/\`apply_patch\`, trust the tool result; re-read only on failure or for adjacent context you have not seen.
 
 # Active context
 Each turn you will receive a final user message wrapped in \`<active-context>...</active-context>\` containing the live goal, todo list, and any active task scope. Read it before acting — it is the source of truth, more authoritative than older history.`;
@@ -433,17 +417,10 @@ function tierHint(profile?: 'bootstrap' | 'navigate' | 'full'): string {
   }
 
   if (profile === 'bootstrap') {
+    // No enumeration of VISIBLE tools — the model already sees them (with
+    // descriptions) in the tools array; the hint's job is what's hidden.
     return `# Tool tiers (IMPORTANT)
-You started in the **bootstrap** tier. The essential read/search, workflow, and delegation tools are visible right now:
-- Read & search: get_project_pulse, search_memory, query_snapshots, get_context_for, search, grep_code, get_file_skeleton, read_file, list_directory, glob, find_tools, rag_search_docs
-- Planning & workflow: ask_user, create_goal/get_goal/update_goal, todo_write, submit_plan, submit_tasks, list_tasks/cancel_tasks/delete_tasks/archive_task_list, execute_tasks, self_review
-- Delegation & tiers: spawn_agent, expand_toolset
-
-Write/edit/git/shell tools and deep navigation tools (find_references, trace_usage, prepare_edit, get_symbol_body, etc.) are HIDDEN. To unlock them, call \`expand_toolset({tier: "navigate", reason: "..."})\`. They become visible on the next turn.
-
-Admin tools (git_commit, add_snapshot, index_project, ...) require \`expand_toolset({tier: "admin"})\` — unlock ONLY when the user explicitly asks.
-
-Rule of thumb: stay in bootstrap for informational questions. Unlock navigate the moment you realize the task requires code changes, shell commands, or deep cross-reference analysis.
+You started in the **bootstrap** tier — the essential read/search, workflow, and delegation tools you can already see in your tools array. Write/edit/git/shell and deep-navigation tools (find_references, trace_usage, prepare_edit, get_symbol_body, ...) are HIDDEN: call \`expand_toolset({tier: "navigate", reason: "..."})\` the moment the task requires code changes, shell commands, or deep cross-reference analysis (visible next turn). Admin tools (git_commit, add_snapshot, index_project, ...) need \`expand_toolset({tier: "admin"})\` — unlock ONLY when the user explicitly asks. Stay in bootstrap for informational questions.
 `;
   }
   // navigate
@@ -514,40 +491,61 @@ Use native tools for all code exploration:
 `;
   }
   if (isIndexed === false) {
+    // Category-level stripped list — the per-tool refusal error already
+    // names the exact tool when the model hits one.
     return `# Tool strategy — project NOT indexed
-The MCP bridge is connected, but this project has never been indexed. The runtime kept the tools that have a tree-sitter / disk-grep fallback and stripped the ones that strictly need the symbol DB.
+The MCP bridge is connected, but this project was never indexed. Tools that strictly need the symbol DB were stripped — DB-backed search/overview/graph tools (\`search*\`, \`get_project_*\`, \`get_context_for\`, \`query_snapshots\`, \`get_hierarchy\`, \`semantic_neighbors\`, \`get_dependencies\`/\`get_dependents\`, ...) are NOT callable; the error names the tool if you hit one.
 
-Stripped (do not call): \`get_symbol_details\`, \`get_class_members\`, \`get_hierarchy\`, \`find_implementations\`, \`semantic_neighbors\`, \`get_dependencies\`, \`get_dependents\`, \`search\`, \`search_global\`, \`search_concepts\`, \`search_by_kind\`, \`get_project_overview\`, \`get_project_pulse\`, \`get_architecture\`, \`get_repo_map\`, \`get_context_for\`, \`query_snapshots\`, \`get_project_context\`.
-
-Still available — fall back to tree-sitter or disk grep automatically:
-- \`mcp__read_file\`, \`mcp__list_directory\` — overlay-aware.
-- \`mcp__grep_code\` — ripgrep on disk.
-- \`mcp__get_file_skeleton\`, \`mcp__get_file_structure\` — tree-sitter on disk; outputs are tagged "tree-sitter fallback".
-- \`mcp__get_symbol_body\` — regex declaration locator + brace/indent body extractor.
-- \`mcp__find_references\`, \`mcp__trace_usage\` (depth=1 only), \`mcp__prepare_edit\` — disk-grep callers + tree-sitter neighbors. Imports/tests are omitted by prepare_edit because they need DB dependency tables.
-
-Native tools that always work:
-1. \`read_file\` — pass \`symbol: "<name>"\` for one function/class body, or \`around_line: <n>\` to grab the symbol containing that line.
-2. \`glob\` — fast filename matching.
-3. \`run_command\` with \`rg\` for text search, \`find\`/\`dir /s\` for path discovery.
-
-If you want full caller graphs / search scoring / vector neighbors, ask the user to index the project via the admin panel.
+Still available with automatic tree-sitter / disk-grep fallbacks: \`mcp__read_file\`, \`mcp__list_directory\`, \`mcp__grep_code\`, \`mcp__get_file_skeleton\` / \`get_file_structure\`, \`mcp__get_symbol_body\`, \`mcp__find_references\`, \`mcp__trace_usage\` (depth=1), \`mcp__prepare_edit\` (no imports/tests).
+Native always works: \`read_file\` (pass \`symbol\` or \`around_line\`), \`glob\`, \`run_command\` with \`rg\`.
+For full caller graphs / scored search / vector neighbors, ask the user to index the project via the admin panel.
 `;
   }
   return `# Tool strategy — token economy
-This project ships dozens of MCP tools (prefixed \`mcp__\`) for semantic codebase navigation. The bootstrap tier shows the cheap, common ones; deeper tools (find_references, prepare_edit, semantic_neighbors, etc.) live in the \`navigate\` tier and are loaded on demand.
-
-The 5 default cheap entry points (always visible):
+Dozens of MCP tools (prefixed \`mcp__\`) power semantic codebase navigation; deeper ones (find_references, prepare_edit, semantic_neighbors, ...) live in the \`navigate\` tier, loaded on demand. The 5 cheap entry points (always visible):
 1. \`mcp__get_project_pulse\` — ultra-compact overview (~100 tokens). Start here.
 2. \`mcp__query_snapshots\` — full-text search over saved knowledge. Try this BEFORE exploring code.
 3. \`mcp__get_context_for\` — curated bundle for "how does X work?". Add \`hyde: true\` if recall is weak.
 4. \`mcp__search\` / \`mcp__grep_code\` — hybrid search and ripgrep with filters.
 5. \`mcp__get_file_skeleton\` — file outline; ALWAYS prefer over a full \`read_file\`.
 
-When you need a tool you cannot see in the visible tools array:
-- Call \`find_tools({ query: "<what you need>" })\` first — it searches the FULL catalog (all tiers) and returns up to 5 matches with their tier and a hint to unlock.
-- Then call \`expand_toolset({ tier: "<tier>" })\` if needed; the new tools become visible next turn.
+When you need a tool you cannot see: \`find_tools({ query: "<what you need>" })\` searches the FULL catalog (all tiers, returns names + tier + unlock hint), then \`expand_toolset({ tier: "<tier>" })\` if needed — visible next turn. Always prefer MCP semantic tools over native file reads; never grep when \`mcp__find_references\` exists.
+`;
+}
 
-Always prefer MCP semantic tools over native file reads. Never grep when \`mcp__find_references\` exists.
+/**
+ * "Images & vision" — only relevant when the active model can NOT see
+ * images natively (or the composer forces the describe-images fallback).
+ * Vision-capable sessions drop it entirely (~450 chars saved).
+ */
+function visionSection(modelCanSeeImages?: boolean): string {
+  if (modelCanSeeImages === true) return '';
+  return `
+# Images & vision
+If your model can't natively see images, uploaded attachments and screenshots may arrive as \`[Image description]\` TEXT (a vision model translates them for you) — treat that text as the image. To steer it, pass an intent: \`view_image({ describe: "..." })\` and \`preview_screenshot({ lookFor: "..." })\` — say what you need (e.g. "detailed layout to recreate" for design work, "list alignment/overflow bugs" for QA). It's task-specific.
+`;
+}
+
+/**
+ * Unified memory section. With Session Drive (single sessions): one block
+ * covering session notes + project memory + the mcp__save_memory pointer
+ * (previously split across "# Long-term memory" and "# Session & project
+ * memory"). Without it (company subordinates): just the long-term pointer.
+ */
+function memorySection(sessionDrive?: boolean): string {
+  if (!sessionDrive) {
+    return `
+# Long-term memory
+When you make an important architectural decision or identify a reusable pattern, save it via \`mcp__save_memory\` (\`category: decision | convention | gotcha | architecture\`). It lives in the \`navigate\` tier; future sessions retrieve it via \`mcp__search_memory\`. (\`mcp__add_snapshot\` is a separate, \`admin\`-tier tool for curated project snapshots — not for routine memory.)
+`;
+  }
+  return `
+# Memory (session + project)
+This session has a durable working memory (Session Drive) plus a cross-session PROJECT MEMORY:
+- \`save_note({title, body, kind?, scope?})\` — scope 'session' (default): a decision, non-obvious fact, risk, or TODO you'd regret losing when older turns get summarized (\`title\` is the key; re-saving updates it). scope 'project': a DURABLE fact about THIS CODEBASE — a gotcha you hit, a confirmed convention, a decision with its why, a recipe that worked. Save project memory AS YOU LEARN IT; never transient task state or file dumps.
+- \`recall_memory({query})\` — fetch full project memories BEFORE re-exploring something this project likely already learned (the index in context shows titles only).
+- \`list_notes\` / \`read_plan\` — review your saved notes / re-read your submitted plan.
+- \`recall_investigations({query})\` — BEFORE spawning an explore subagent, reuse past auto-saved findings instead of paying to re-investigate.
+The runner re-injects plan/notes/session state after compaction. \`mcp__save_memory\` (navigate tier) also persists durable decisions/conventions/gotchas; \`mcp__add_snapshot\` is admin-tier for curated snapshots, not routine memory.
 `;
 }

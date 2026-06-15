@@ -20,6 +20,7 @@ import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import type { VectorRecord, VectorMatch } from '@mcp/shared/types.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
+import { applyTuningPragmas } from './db/pragmas.js';
 import type { VectorStore } from './vectors.js';
 
 const require = createRequire(import.meta.url);
@@ -54,6 +55,11 @@ export class SqliteVecVectorStore implements VectorStore {
   constructor(opts: { path: string }) {
     this.db = new Database(opts.path);
     this.db.pragma('journal_mode = WAL');
+    // WAL's standard pairing — vectors are derivable data and upserts come in
+    // chunk batches, so trading power-loss durability of the last commits for
+    // far fewer fsyncs is the right call here (same setting as index.db).
+    this.db.pragma('synchronous = NORMAL');
+    applyTuningPragmas(this.db);
   }
 
   /** Load the sqlite-vec extension into this connection (once). */

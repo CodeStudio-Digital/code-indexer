@@ -150,6 +150,17 @@ import { coderToolCallsParent133 } from './133_coder_tool_calls_parent.js';
 import { projectDocCollections134 } from './134_project_doc_collections.js';
 import { modelMaxTools135 } from './135_model_max_tools.js';
 import { memoryDistill136 } from './136_memory_distill.js';
+import { filesMtime137 } from './137_files_mtime.js';
+import { runPhaseTelemetry138 } from './138_run_phase_telemetry.js';
+import { structuralIndex139 } from './139_structural_index.js';
+import { fileContentsFts140 } from './140_file_contents_fts.js';
+import { symbolsColExported141 } from './141_symbols_col_exported.js';
+import { sessionToolProfile142 } from './142_session_tool_profile.js';
+import { turnCacheDiagnostics143 } from './143_turn_cache_diagnostics.js';
+import { builderCheckpoints144 } from './144_builder_checkpoints.js';
+import { userMemory145 } from './145_user_memory.js';
+import { snapshotArchive146 } from './146_snapshot_archive.js';
+import { apiCollections147 } from './147_api_collections.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -316,6 +327,17 @@ export const MIGRATIONS: Migration[] = [
   projectDocCollections134,
   modelMaxTools135,
   memoryDistill136,
+  filesMtime137,
+  runPhaseTelemetry138,
+  structuralIndex139,
+  fileContentsFts140,
+  symbolsColExported141,
+  sessionToolProfile142,
+  turnCacheDiagnostics143,
+  builderCheckpoints144,
+  userMemory145,
+  snapshotArchive146,
+  apiCollections147,
 ];
 
 /**

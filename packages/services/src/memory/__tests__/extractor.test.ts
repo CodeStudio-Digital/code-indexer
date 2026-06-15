@@ -65,7 +65,23 @@ describe('MemoryExtractor', () => {
     expect(r).toEqual({ created: 0, merged: 1, skipped: 0 });
     expect(w.updates[0].id).toBe(7);
     expect(String(w.updates[0].updates.content)).toContain('new detail');
+    // Corroboration bumps importance: min(1, 0.5 + 0.02).
+    expect(w.updates[0].updates.importance).toBeCloseTo(0.52);
     expect(w.creates).toHaveLength(0);
+  });
+
+  it('bumps importance without rewriting content when the body is already present', async () => {
+    const w = fakeWriter();
+    const ex = new MemoryExtractor(
+      fakeDistiller([{ title: 'Use JWT auth', content: 'original content', category: 'decision', importance: 0.9 }]),
+      w.writer, fakeSearch([snap(7, 'Use JWT for auth', 'original content', 'decision')]),
+    );
+    const r = await ex.extractAndPersist(1, 'proj', 'session', {});
+    expect(r).toEqual({ created: 0, merged: 1, skipped: 0 });
+    // Body unchanged → stays on the cheap metadata path (no content key), but
+    // importance is still bumped.
+    expect(w.updates[0].updates.content).toBeUndefined();
+    expect(w.updates[0].updates.importance).toBeCloseTo(0.52);
   });
 
   it('does not merge across different categories', async () => {

@@ -145,6 +145,7 @@
   "progress.indexDone": "Indexação concluída",
   "progress.starting": "Iniciando…",
   "progress.close": "Fechar",
+  "progress.runInBackground": "Rodar em segundo plano",
   "progress.phase.fetching": "Buscando páginas",
   "progress.phase.reading": "Lendo arquivos da pasta",
   "progress.phase.gating": "Filtrando relevância",

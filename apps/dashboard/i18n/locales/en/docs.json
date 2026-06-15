@@ -145,6 +145,7 @@
   "progress.indexDone": "Indexing complete",
   "progress.starting": "Starting…",
   "progress.close": "Close",
+  "progress.runInBackground": "Run in background",
   "progress.phase.fetching": "Fetching pages",
   "progress.phase.reading": "Reading folder files",
   "progress.phase.gating": "Filtering relevance",

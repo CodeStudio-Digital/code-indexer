@@ -121,7 +121,12 @@ function MenuItem({ item, onClose }: { item: ContextMenuItem; onClose: () => voi
       type="button"
       role="menuitem"
       disabled={item.disabled}
-      onClick={() => {
+      onClick={(e) => {
+        // The portal renders to document.body, but React synthetic events
+        // still bubble through the *component* tree — i.e. up to the
+        // trigger row/card's onClick (which opens the project). Stop here
+        // so a menu-item click never doubles as a row click.
+        e.stopPropagation();
         if (item.disabled) return;
         item.onSelect();
         onClose();

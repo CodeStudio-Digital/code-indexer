@@ -29,6 +29,7 @@ interface MemoryHealth {
     total: number;
     byCategory: Record<string, number>;
     bySource: Record<string, number>;
+    archived?: number;
   };
 }
 
@@ -82,12 +83,18 @@ export function MemoryHealthCard({ projectId }: { projectId: number }) {
               {last.status}
             </span>
             <span className="truncate">
-              {t('memory.health.lastDistill', {
-                when: formatRelativeTime(last.created_at),
-                trigger: last.trigger,
-                created: last.created,
-                merged: last.merged,
-              })}
+              {last.trigger === 'consolidation'
+                ? t('memory.health.lastConsolidation', {
+                    when: formatRelativeTime(last.created_at),
+                    merged: last.merged,
+                    archived: last.skipped,
+                  })
+                : t('memory.health.lastDistill', {
+                    when: formatRelativeTime(last.created_at),
+                    trigger: last.trigger,
+                    created: last.created,
+                    merged: last.merged,
+                  })}
             </span>
             {last.error && (
               <span className="flex items-center gap-0.5 text-red-500 truncate" title={last.error}>
@@ -119,6 +126,11 @@ export function MemoryHealthCard({ projectId }: { projectId: number }) {
               .map(([src, n]) => `${t(`memory.source.${src}`, src)} ${n}`)
               .join(' · ')}
           </span>
+          {!!totals.archived && totals.archived > 0 && (
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-muted text-muted-foreground">
+              {t('memory.health.archived', { count: totals.archived })}
+            </span>
+          )}
         </div>
       )}
     </div>

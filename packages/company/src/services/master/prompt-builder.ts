@@ -5,8 +5,7 @@
  * actually runs against.
  *
  * Also handles the optional sandbox provisioning hook the orchestrator
- * exposes — present only in builder-mode sessions; absent / no-op
- * otherwise.
+ * exposes — a no-op for sessions without a primary container.
  */
 import {
   buildMasterCompanyBlock,
@@ -58,21 +57,6 @@ export function buildPromptRoster(
   }));
 }
 
-/** Read `config_json.builder.studio` for the session. Defensive: any parse
- *  failure or missing field degrades to `false` (non-studio builder). */
-function readBuilderStudioFlag(ctx: SessionContext): boolean {
-  try {
-    const row = ctx.companyStore.getCompanySession(ctx.companySessionId);
-    if (!row) return false;
-    const cfg = JSON.parse(row.config_json || '{}') as {
-      builder?: { studio?: boolean };
-    };
-    return !!cfg.builder?.studio;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Compose the master's `CompanyContext` + system-prompt block from the
  * session context, role configs, allowed_models, and the orchestrator's
@@ -96,12 +80,12 @@ export async function buildMasterPromptInputs(
   const orchestrator = orchestratorRef as MasterOrchestratorHooks;
   const configuredStack = orchestrator.getSandboxStackForService?.() ?? null;
 
-  // Builder mode: provision the sandbox BEFORE runCoder so the binding
-  // can be woven into the master's CompanyContext. For non-builder
-  // sessions this call is a no-op that returns null (the SandboxService
-  // inspects `config_json.builder` and bails out cleanly). It never
-  // throws — returns null when the container can't start, so the
-  // master always starts.
+  // Provision the primary sandbox BEFORE runCoder so the binding can be
+  // woven into the master's CompanyContext. For sessions without a
+  // primary container config this call is a no-op that returns null
+  // (the SandboxService inspects the session config and bails out
+  // cleanly). It never throws — returns null when the container can't
+  // start, so the master always starts.
   const sandboxBinding = orchestrator.provisionSandboxIfNeeded
     ? await orchestrator.provisionSandboxIfNeeded(signal)
     : null;
@@ -114,7 +98,6 @@ export async function buildMasterPromptInputs(
     allowedProjectIds: ctx.projects.map((p) => p.project_id),
     isMaster: true,
     sandbox: sandboxBinding ?? undefined,
-    builderStack: configuredStack ?? undefined,
   };
 
   const projectInfos = ctx.projects.map((p) => {
@@ -130,19 +113,6 @@ export async function buildMasterPromptInputs(
   const promptBlock = buildMasterCompanyBlock({
     roster: buildPromptRoster(roleConfigs, configuredStack),
     projects: projectInfos,
-    // Builder-mode awareness: tell the master it's in a builder session
-    // and which files are MCP-managed. When the primary container is
-    // down (sandboxBinding null) we still pass the stack so the master
-    // knows it's a builder session — workdir/previewUrl are omitted and
-    // `buildBuilderInstructions` renders a degraded but useful block.
-    builder: configuredStack
-      ? {
-          workdir: sandboxBinding?.workdir,
-          stack: orchestrator.getSandboxStackForService?.() ?? configuredStack,
-          previewUrl: sandboxBinding?.previewUrl,
-          studio: readBuilderStudioFlag(ctx),
-        }
-      : undefined,
     // Curated pool — when non-empty, the master prompt gains a strict
     // "ALLOWED SUBORDINATE MODELS" section + tool rejection guidance.
     allowedModels: allowedModels.length > 0 ? [...allowedModels] : undefined,

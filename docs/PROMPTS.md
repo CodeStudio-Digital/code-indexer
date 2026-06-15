@@ -100,16 +100,10 @@ assembled via [`services/master/prompt-builder.ts`](../packages/company/src/serv
   delegates; it has no code-reading or code-writing tools.
 - **`buildSubordinateCompanyBlock(ctx)`** — a worker bound to one project:
   deliverable requirement, tool surface, focus, optional role override.
-- **`buildBuilderInstructions(b, isMaster)`** — shared sandbox/builder facts
-  (reserved files, dev server, env store, peers). **Pass `isMaster: true` for the
-  master copy** so it omits subordinate-only tooling (`query_snapshots`, `docs_*`,
-  `env_set`/`db_*`, `list_services`) that the master's hard filter strips — see
-  [`tools/master-filter.ts`](../packages/company/src/tools/master-filter.ts).
+- **`buildBuilderInstructions(b)`** — container-environment facts for
+  service-bound subordinates (reserved files, dev server, env store, peers).
 - **`buildSddMasterBlock()`** — [`prompts/sdd-master-block.ts`](../packages/company/src/prompts/sdd-master-block.ts);
   routes work through the SDD pipeline (`list_pipelines` → `start_pipeline`).
-- **`BUILDER_STUDIO_RULES`** — [`prompts/builder-studio-rules.ts`](../packages/company/src/prompts/builder-studio-rules.ts);
-  studio-only behavior (design-first, element-targeted edits, self-healing),
-  appended after `buildBuilderInstructions` when studio mode is on.
 
 **Operational rules** (operator-authored, per session) are read by
 `readOperationalRules(config_json)` in
@@ -155,9 +149,8 @@ to change every turn.
 | session working memory | `code-agent/src/core/system-prompt.ts` (`sessionDriveSection`, gated on `ctx.sessionDrive`) | Surfaces `save_note`/`list_notes`/`read_plan`/`recall_investigations` in non-company sessions | EN | No |
 | company master block | `company/src/system-prompts.ts` (`buildMasterCompanyBlock`) | Orchestration framing | EN | No |
 | company subordinate block | `company/src/system-prompts.ts` (`buildSubordinateCompanyBlock`) | Worker framing | EN | No |
-| builder instructions | `company/src/system-prompts.ts` (`buildBuilderInstructions`) | Sandbox facts (master/sub-aware) | EN | No |
+| builder instructions | `company/src/system-prompts.ts` (`buildBuilderInstructions`) | Container facts (service-bound subordinates) | EN | No |
 | SDD master block | `company/src/prompts/sdd-master-block.ts` | Spec-driven pipeline | EN | No |
-| builder studio rules | `company/src/prompts/builder-studio-rules.ts` | Studio (V0) behavior | EN | No |
 | **snapshot review** | `services/src/services/snapshot-review-prompt.ts` | Pre-commit diff review | EN | **YES** — `findings[]` (parser: `snapshot-review-pipeline.ts`) |
 | **review subagent** | `code-agent/src/tools/review-subagent.ts` | Fresh-eyes reviewer | EN | **YES** — `<review>{findings[]}` (parser: same file) |
 | **summarize v1 / v2** | `code-agent/src/prompts/summarize{,-v2}.txt` | Compaction summary | EN | **YES** — 6 / 9 keys (parser: `core/summarizer.ts`) |

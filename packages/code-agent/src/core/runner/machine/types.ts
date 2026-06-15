@@ -228,6 +228,10 @@ export interface RunContext {
     lastInjectedSessionStateHash: string | null;
     /** Hash of the last injected project memory index — re-inject on change. */
     lastInjectedProjectIndexHash: string | null;
+    /** Hash of the last injected user-preferences block — re-inject on change. */
+    lastInjectedUserMemoryHash: string | null;
+    /** Hash of the last injected `<preflight>` hint — re-inject on milestones only. */
+    lastInjectedPreflightHash: string | null;
     /**
      * self_review nudge state (Fix A). The nudge in `dynamic-injection.ts`
      * is recomputed every turn while changes are pending; without this gate
@@ -418,6 +422,12 @@ export interface BridgeCallbacks {
    */
   getProjectMemoryIndex?: () => ReadonlyArray<{ title: string; category: string }> | null;
   /**
+   * Global user-preferences index (migration 145) — top-N user/feedback
+   * memories (title + excerpt) injected into EVERY project. NOT gated by the
+   * project's memory toggle. Unset = off.
+   */
+  getUserMemoryIndex?: () => ReadonlyArray<{ title: string; category?: string; excerpt?: string }> | null;
+  /**
    * Drain `runner.pendingUserMessages` into the main `messages` array.
    * Called at the START of each Executing turn so messages pushed via
    * `runner.pushUserMessage` (master → subordinate, SSE push from the
@@ -454,6 +464,10 @@ export interface BridgeCallbacks {
     systemPromptChars: number;
     toolsDefChars: number;
     visibleToolsCount?: number;
+    /** Prompt-cache diagnostics (mig 143) — see telemetry/prefix-head.ts. */
+    toolsFingerprint?: string | null;
+    prefixHeadHash?: string | null;
+    reducerStats?: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number } | null;
     responseMeta: import('@mcp/code-agent/core/messages.js').ChatProviderResponseMeta | null;
     compactionTriggered: boolean;
     summarizerRan: boolean;

@@ -89,6 +89,24 @@ export interface DynamicInjectionContext {
   projectMemoryIndex?: { text: string; hash: string } | null;
   lastInjectedProjectIndexHash?: string | null;
   /**
+   * Global user-preferences block (migration 145, pre-rendered) — who the user
+   * is + how they want the agent to work, applied to EVERY project. Injected on
+   * milestones (turn 1 / post-compaction) or when it changed, placed ABOVE the
+   * project index (higher salience). Hash-gated so an unchanged block isn't
+   * re-sent every turn (cache-safe tail block).
+   */
+  userMemoryIndex?: { text: string; hash: string } | null;
+  lastInjectedUserMemoryHash?: string | null;
+  /**
+   * Task-preflight hint (pre-rendered `<preflight>` block) — the seed's
+   * compass for the task. Injected on milestones (turn 1 / post-compaction)
+   * or while not yet injected (hash mismatch). Content never changes
+   * mid-session; the hash only guards double-injection. NOT gated by the
+   * injection policy — the block is small and matters most on short windows.
+   */
+  preflightHint?: { text: string; hash: string } | null;
+  lastInjectedPreflightHash?: string | null;
+  /**
    * Test-mode escape hatch — when true, the provider always returns
    * null so snapshot tests don't see non-deterministic injections.
    */
@@ -108,6 +126,10 @@ export interface DynamicInjectionResult {
   includedSessionStateHash?: string | null;
   /** Hash of the project memory index included — caller stores for dedup. */
   includedProjectIndexHash?: string | null;
+  /** Hash of the user-preferences block included — caller stores for dedup. */
+  includedUserMemoryHash?: string | null;
+  /** Hash of the preflight hint included — caller stores for dedup. */
+  includedPreflightHash?: string | null;
 }
 
 const DEFAULT_MAX_FILES = 6;
@@ -167,6 +189,17 @@ export function computeDynamicInjection(
     driveMilestone ||
     ctx.projectMemoryIndex.hash !== (ctx.lastInjectedProjectIndexHash ?? null)
   );
+  // User preferences — milestones, or when the block changed. Always-relevant
+  // and small, so even minimal windows carry it (budget gated upstream).
+  const showUserMemory = !!ctx.userMemoryIndex && (
+    driveMilestone ||
+    ctx.userMemoryIndex.hash !== (ctx.lastInjectedUserMemoryHash ?? null)
+  );
+  // Preflight hint — milestones, or while never injected yet.
+  const showPreflight = !!ctx.preflightHint && (
+    driveMilestone ||
+    ctx.preflightHint.hash !== (ctx.lastInjectedPreflightHash ?? null)
+  );
 
   if (
     includedSkillIds.length === 0 &&
@@ -174,6 +207,8 @@ export function computeDynamicInjection(
     includedMemory.length === 0 &&
     !showSessionState &&
     !showProjectIndex &&
+    !showUserMemory &&
+    !showPreflight &&
     !recentCompaction &&
     !ctx.hasReviewableChanges
   ) {
@@ -185,6 +220,9 @@ export function computeDynamicInjection(
     lines.push(
       `compaction occurred at turn ${ctx.recentCompactionAt}; older details were summarized — re-read files instead of recalling from memory.`,
     );
+  }
+  if (showPreflight && ctx.preflightHint) {
+    lines.push(ctx.preflightHint.text);
   }
   if (includedSkillIds.length > 0) {
     lines.push(`skills registered this session and worth consulting: ${includedSkillIds.join(', ')}`);
@@ -207,6 +245,9 @@ export function computeDynamicInjection(
       .join('\n');
     lines.push(`relevant project memory (retrieved — verify against current code before relying on it):\n${items}`);
   }
+  if (showUserMemory && ctx.userMemoryIndex) {
+    lines.push(ctx.userMemoryIndex.text);
+  }
   if (showProjectIndex && ctx.projectMemoryIndex) {
     lines.push(ctx.projectMemoryIndex.text);
   }
@@ -227,6 +268,8 @@ export function computeDynamicInjection(
     includedMemoryIds: includedMemory.map((m) => m.id),
     includedSessionStateHash: showSessionState ? ctx.sessionState!.hash : null,
     includedProjectIndexHash: showProjectIndex ? ctx.projectMemoryIndex!.hash : null,
+    includedUserMemoryHash: showUserMemory ? ctx.userMemoryIndex!.hash : null,
+    includedPreflightHash: showPreflight ? ctx.preflightHint!.hash : null,
   };
 }
 

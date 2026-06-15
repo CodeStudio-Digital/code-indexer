@@ -39,6 +39,8 @@ import { CompanyStore } from '../../../packages/store/src/company-store.js';
 import { CodeIndexDB } from '../../../packages/store/src/db.js';
 import { hydrateWorkerCapabilities } from './worker-capabilities.js';
 import { DesignSystemStore } from '../../../packages/store/src/design-system-store.js';
+import { ApiClientStore } from '../../../packages/store/src/api-client-store.js';
+import { setApiClientStore } from '../../../packages/code-agent/src/tools/api-client/index.js';
 import { SkillStore } from '../../../packages/store/src/skill-store.js';
 import { CompanySessionEnvStore } from '../../../packages/store/src/company-session-env-store.js';
 import { QaTestRunStore } from '../../../packages/services/src/qa/store/qa-test-run-store.js';
@@ -88,6 +90,8 @@ import {
 import type { DocsResearchResult } from '../../../packages/docs-agent/src/types.js';
 import { setCompanyMemoryPorts } from '../../../packages/company/src/services/memory/ports.js';
 import { buildWorkerMemoryShims } from './memory-shims.js';
+import { installWorkerLspShim } from './lsp-shim.js';
+import { registerPerfStatsHandler } from './perf-stats.js';
 import { subscribe, publish, markEnded, type CoderRunBus } from '../coder-bus.js';
 
 interface CompanyWorkerData {
@@ -198,6 +202,12 @@ setGlobalDocsResearcher(docsResearcherShim);
 // is constructed so the very first spawn already sees the ports.
 setCompanyMemoryPorts(buildWorkerMemoryShims(bridge));
 
+// Multi-language LSP nav for subordinate agents — RPC to the main-side
+// router. Degrades to "TS only" when main hasn't wired the deps.
+installWorkerLspShim(bridge);
+// Per-isolate heap stats for the admin perf monitor (best-effort RPC).
+registerPerfStatsHandler(bridge);
+
 // Build the stores. Both wrap better-sqlite3 internally — we let
 // them open their own handles to keep the construction unchanged.
 // `CodeIndexDB` and `CompanyStore` are both safe to instantiate
@@ -218,6 +228,9 @@ const db = new CodeIndexDB(dbPath);
 // designSystemEnabled in packages/code-agent/src/index.ts.
 const rawDb = db.raw();
 setDesignSystemStore(new DesignSystemStore(rawDb));
+// API client store for the `api_*` tools, re-wired per worker (module globals
+// don't cross worker_threads).
+setApiClientStore(new ApiClientStore(rawDb));
 setDesignSystemSkillStore(new SkillStore(rawDb));
 // <indexed-docs> hint provider — worker-local DocStore reads (two SELECTs
 // per 30s/project; no RPC). Inlined for the same alias-resolution reason

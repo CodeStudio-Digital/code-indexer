@@ -25,7 +25,7 @@
  */
 import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 
-export type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'builder';
+export type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'builder' | 'api';
 
 export interface AgentDefinition {
   id: AgentId;
@@ -112,6 +112,16 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     // more variation in layout/styling choices while staying coherent.
     defaultTemperature: 0.5,
   },
+  api: {
+    id: 'api',
+    description:
+      'API verification. Imports an OpenAPI/Swagger spec, runs each endpoint against the LIVE dev server, fixes the request/spec to match real responses, and marks each request verified — building a non-LLM regression battery. Navigate tier + the `api` tool tier; edit_file patches the spec.',
+    profile: 'navigate',
+    planMode: false,
+    maxTurns: 120,
+    // Verification, not creativity — keep it deterministic.
+    defaultTemperature: 0.1,
+  },
 };
 
 export function isAgentId(v: string): v is AgentId {
@@ -121,7 +131,8 @@ export function isAgentId(v: string): v is AgentId {
     v === 'build' ||
     v === 'admin' ||
     v === 'spec' ||
-    v === 'builder'
+    v === 'builder' ||
+    v === 'api'
   );
 }
 

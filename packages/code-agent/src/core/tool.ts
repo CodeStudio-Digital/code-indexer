@@ -323,6 +323,20 @@ export interface ToolContext {
       staleNote?: string;
     }>>;
   };
+  /**
+   * Global USER memory port (migration 145) — durable facts about who the user
+   * is and how they want the agent to work, stored on the reserved user
+   * project and injected into EVERY project. Backs `save_note` scope 'user'.
+   * Same dedup/merge as project memory; undefined → the tool answers with a
+   * clear message instead of throwing.
+   */
+  userMemory?: {
+    save(entry: {
+      title: string;
+      content: string;
+      category: string;
+    }): Promise<{ created: number; merged: number; skipped: number } | null>;
+  };
   /** Company orchestrator context — present when this runner is part of a company session. */
   companyContext?: import('@mcp/company/types.js').CompanyContext;
   /**

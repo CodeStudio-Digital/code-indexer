@@ -55,6 +55,7 @@ import { sendMessageTools } from '@mcp/code-agent/tools/send-message.js';
 import { sendInputTools } from '@mcp/code-agent/tools/send-input.js';
 import { followupTaskTools } from '@mcp/code-agent/tools/followup-task.js';
 import { worktreeTools } from '@mcp/code-agent/tools/worktree.js';
+import { apiClientTools } from '@mcp/code-agent/tools/api-client/index.js';
 
 // ── Static tool arrays (@mcp/company — builder mode) ───────────────────────
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
@@ -73,6 +74,7 @@ const STATIC_TOOLS: NamedTool[] = [
   ...todoTools, ...viewImageTools, ...previewTools, ...goalTools, ...listAgentsTools,
   ...waitAgentsTools, ...sendMessageTools, ...sendInputTools, ...followupTaskTools,
   ...worktreeTools, ...sandboxTools, ...docsTools, ...envTools, ...databaseTools,
+  ...apiClientTools,
 ].flatMap(arr);
 
 /**

@@ -4,7 +4,7 @@
  * apps/http-api/server/routes/projects.ts now delegate here.
  */
 
-import { ApiError, type ApiContext, type AsyncStream, type ProjectsApi, type IndexStreamEvent, type ScaffoldStreamEvent } from '@mcp/api-bus';
+import { ApiError, type ApiContext, type AsyncStream, type ProjectsApi, type ProjectIndexStatus, type FsEventsFrame, type IndexStreamEvent, type ScaffoldStreamEvent } from '@mcp/api-bus';
 import { runScaffoldStream } from './scaffold.js';
 import {
   CreateProjectService,
@@ -107,6 +107,16 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     return { known: vectorIds.length, deleted, error };
   }
 
+  // Serialize manual index runs against the structural service (auto run ×
+  // watcher drain × full index share one per-project mutex) and surface the
+  // semantic_indexing phase to status subscribers. Structural-mode manual
+  // runs take the bare lock — they must not flip the phase to semantic.
+  function lockedIndexRun<T>(id: number, input: IndexProjectInput, fn: () => Promise<T>): Promise<T> {
+    return input.mode === 'structural'
+      ? deps.projectIndexService.withProjectLock(id, fn)
+      : deps.projectIndexService.withSemanticRun(id, fn);
+  }
+
   return {
     async list(_input, _ctx: ApiContext) {
       return db.listProjects();
@@ -115,6 +125,10 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     async get({ id }) {
       const project = db.getProject(id);
       if (!project) throw new ApiError('not_found', 404, 'project not found');
+      // "Project opened" — the ProjectView mount lands here in both
+      // transports (HTTP + Electron IPC). Fire-and-forget: memory-only
+      // checks inside; never delays the GET.
+      deps.projectIndexService.ensureFresh(id, 'open');
       return project;
     },
 
@@ -132,6 +146,7 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       const project = db.getProject(id);
       if (!project) throw new ApiError('not_found', 404, 'project not found');
 
+      await deps.projectIndexService.stopWatching(id).catch(() => undefined);
       const v = await clearProjectVectors(project);
       db.deleteProject(id);
       return {
@@ -187,13 +202,125 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       return db.getStats(id);
     },
 
+    async indexStatus({ id }) {
+      if (!db.getProject(id)) throw new ApiError('not_found', 404, 'project not found');
+      return deps.projectIndexService.getStatus(id);
+    },
+
+    fsEventsStream({ id }): AsyncStream<FsEventsFrame> {
+      if (!db.getProject(id)) throw new ApiError('not_found', 404, 'project not found');
+      const svc = deps.projectIndexService;
+      // Same hand-rolled iterator rationale as indexStatusStream: an
+      // indefinite stream must unsubscribe on return(). Frames coalesce
+      // events for ~200ms so checkout bursts arrive as one batch.
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<FsEventsFrame> {
+          const queue: FsEventsFrame[] = [];
+          let waiter: ((r: IteratorResult<FsEventsFrame>) => void) | null = null;
+          let pending: FsEventsFrame['events'] = [];
+          let timer: ReturnType<typeof setTimeout> | null = null;
+          let closed = false;
+          const push = (frame: FsEventsFrame) => {
+            if (closed) return;
+            if (waiter) { const w = waiter; waiter = null; w({ value: frame, done: false }); }
+            else queue.push(frame);
+          };
+          const unsub = svc.subscribeFsEvents(id, (events) => {
+            pending.push(...events);
+            if (timer) return;
+            timer = setTimeout(() => {
+              timer = null;
+              if (pending.length > 0) { const events = pending; pending = []; push({ events }); }
+            }, 200);
+          });
+          const cleanup = () => {
+            if (closed) return;
+            closed = true;
+            unsub();
+            if (timer) clearTimeout(timer);
+            if (waiter) { const w = waiter; waiter = null; w({ value: undefined as never, done: true }); }
+          };
+          return {
+            async next(): Promise<IteratorResult<FsEventsFrame>> {
+              if (queue.length > 0) return { value: queue.shift()!, done: false };
+              if (closed) return { value: undefined as never, done: true };
+              return new Promise((resolve) => { waiter = resolve; });
+            },
+            async return(): Promise<IteratorResult<FsEventsFrame>> {
+              cleanup();
+              return { value: undefined as never, done: true };
+            },
+            async throw(e?: unknown): Promise<IteratorResult<FsEventsFrame>> {
+              cleanup();
+              throw e;
+            },
+          };
+        },
+      };
+    },
+
+    indexStatusStream({ id }): AsyncStream<ProjectIndexStatus> {
+      if (!db.getProject(id)) throw new ApiError('not_found', 404, 'project not found');
+      const svc = deps.projectIndexService;
+      // Hand-rolled iterator (not streamFromCallbacks): a status stream is
+      // INDEFINITE, so cancellation must unsubscribe — for-await calls
+      // `return()` on break/throw, which is our cleanup hook. The callback
+      // bridge has no return() and would leak the subscription forever.
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<ProjectIndexStatus> {
+          const queue: ProjectIndexStatus[] = [];
+          let waiter: ((r: IteratorResult<ProjectIndexStatus>) => void) | null = null;
+          let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
+          let pending: ProjectIndexStatus | null = null;
+          let closed = false;
+          const push = (s: ProjectIndexStatus) => {
+            if (closed) return;
+            if (waiter) { const w = waiter; waiter = null; w({ value: s, done: false }); }
+            else queue.push(s);
+          };
+          const onStatus = (s: ProjectIndexStatus) => {
+            pending = s;
+            if (coalesceTimer) return;
+            coalesceTimer = setTimeout(() => {
+              coalesceTimer = null;
+              if (pending) { const p = pending; pending = null; push(p); }
+            }, 150);
+          };
+          const unsub = svc.subscribe(id, onStatus);
+          push(svc.getStatus(id)); // initial frame
+          const cleanup = () => {
+            if (closed) return;
+            closed = true;
+            unsub();
+            if (coalesceTimer) clearTimeout(coalesceTimer);
+            if (waiter) { const w = waiter; waiter = null; w({ value: undefined as never, done: true }); }
+          };
+          return {
+            async next(): Promise<IteratorResult<ProjectIndexStatus>> {
+              if (queue.length > 0) return { value: queue.shift()!, done: false };
+              if (closed) return { value: undefined as never, done: true };
+              return new Promise((resolve) => { waiter = resolve; });
+            },
+            async return(): Promise<IteratorResult<ProjectIndexStatus>> {
+              cleanup();
+              return { value: undefined as never, done: true };
+            },
+            async throw(e?: unknown): Promise<IteratorResult<ProjectIndexStatus>> {
+              cleanup();
+              throw e;
+            },
+          };
+        },
+      };
+    },
+
     async index({ id, ...input }) {
-      return wrapAsync(() => indexUseCase.run(id, input as IndexProjectInput));
+      return wrapAsync(() => lockedIndexRun(id, input as IndexProjectInput, () => indexUseCase.run(id, input as IndexProjectInput)));
     },
 
     indexStream({ id, ...input }): AsyncStream<IndexStreamEvent> {
       return streamFromCallbacks<IndexStreamEvent>((emit) =>
-        indexUseCase.runStream(id, input as IndexProjectInput, {
+        lockedIndexRun(id, input as IndexProjectInput, () => indexUseCase.runStream(id, input as IndexProjectInput, {
           onStart: (p) => emit({ event: 'start', data: p }),
           onProgress: (p) => emit({ event: 'progress', data: p }),
           onDone: (result) =>
@@ -210,7 +337,7 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
               },
             }),
           onError: (message) => emit({ event: 'error', data: { message } }),
-        }),
+        })),
       );
     },
 

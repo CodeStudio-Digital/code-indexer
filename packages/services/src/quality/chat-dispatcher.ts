@@ -37,6 +37,35 @@ export function pickChatFn(binding: ResolvedBinding): ChatFn {
   return openAiCompatibleChat;
 }
 
+// Providers that reject unknown body params (OpenAI-proper) or where the
+// thinking-suppression knob is unsupported/risky. The gemini + most
+// OpenAI-compatible hosts (ZAI/GLM, DeepSeek, Cloudflare, Kimi, Moonshot)
+// either honor `disableThinking` or silently ignore the params (verified —
+// see llm-chat.ts), so suppression is safe there; OpenAI/ChatGPT/Codex,
+// Bedrock, Copilot and OpenRouter (proxies to strict OpenAI models) 400 on
+// unknown params, so they must NOT receive the suppression body.
+const STRICT_THINKING_PROVIDER_IDS = new Set(['openai', 'openai-chatgpt', 'aws', 'openrouter']);
+const STRICT_THINKING_KINDS = new Set(['chatgpt', 'copilot', 'bedrock', 'openai']);
+
+/**
+ * Whether it's safe + useful to pass `disableThinking: true` to this binding.
+ * Suppressing reasoning on one-shot structured tasks (memory distillation)
+ * stops thinking models (Gemini 2.5, GLM) from burning the token budget and
+ * returning empty/truncated JSON. Returns false for strict OpenAI-family
+ * providers that reject unknown body params.
+ *
+ * NOTE: `kind:'openai'` is shared by real OpenAI AND OpenAI-compatible hosts
+ * (ZAI/DeepSeek/AWS); the compatible ones are re-allowed by provider id below.
+ */
+export function suppressThinkingFor(binding: ResolvedBinding): boolean {
+  const p = binding.provider;
+  const COMPAT_OK_IDS = new Set(['zai', 'deepseek']); // kind 'openai' but ignore unknown params
+  if (COMPAT_OK_IDS.has(p.id)) return true;
+  if (STRICT_THINKING_PROVIDER_IDS.has(p.id)) return false;
+  if (STRICT_THINKING_KINDS.has(p.kind)) return false;
+  return true;
+}
+
 export {
   openAiCompatibleChat,
   anthropicChat,

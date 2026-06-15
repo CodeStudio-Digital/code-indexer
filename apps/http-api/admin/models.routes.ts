@@ -136,6 +136,31 @@ export function modelsRouter(store: ProviderStore): Hono {
     return c.json({ ok: true });
   });
 
+  app.delete('/providers/:id/models/:modelId', (c) => {
+    // Remove a single manually-added model. Scoped to source='manual' in the
+    // store, so live/seeded rows can't be deleted here (the admin disables
+    // those via the enabled toggle; they'd return on the next refresh).
+    const id = c.req.param('id');
+    const modelId = c.req.param('modelId');
+    const mode = c.req.query('mode') ?? '';
+    if (!store.getProvider(id)) return c.json({ error: 'not found' }, 404);
+    const deleted = store.deleteManualModel(id, modelId, mode);
+    if (deleted === 0) {
+      return c.json(
+        { error: 'no manual model matched (only manually-added models can be deleted)' },
+        404,
+      );
+    }
+    // Drop the row from the in-memory capability cache so newly-created
+    // sessions stop seeing its overrides without a server restart.
+    try {
+      mergeDBCapabilities(store.listAllModels());
+    } catch {
+      /* best-effort */
+    }
+    return c.json({ ok: true });
+  });
+
   /**
    * POST /providers/models/backfill-context-windows — walks every row in
    * provider_models that has context_window=NULL and fills it from the

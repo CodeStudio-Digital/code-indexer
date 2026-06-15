@@ -8,6 +8,7 @@ import { Switch } from '../../components/ui/switch.js';
 import { ClaudeCodeUsagePanel } from './ClaudeCodeUsagePanel.js';
 import { GoogleQuotaPanel } from './GoogleQuotaPanel.js';
 import { FallbackChainPanel } from './FallbackChainPanel.js';
+import { AddModelForm, type AddModelInput } from './providers/AddModelForm.js';
 import type { AdminModel, AdminProvider, TestResult } from './types.js';
 
 interface ProviderCardProps {
@@ -26,6 +27,8 @@ interface ProviderCardProps {
   onConnect?: () => void;
   onRemove: () => void;
   onToggleModel: (modelId: string, mode: string, enabled: boolean) => void;
+  onAddModel: (input: AddModelInput) => void;
+  onDeleteModel: (modelId: string, mode: string) => void;
   onSetModelEffort: (modelId: string, mode: string, level: string | null) => void;
   onSetModelContextWindow: (modelId: string, mode: string, value: number | null) => void;
   onSetModelMaxTools: (modelId: string, mode: string, value: number | null) => void;
@@ -55,6 +58,8 @@ export function ProviderCard({
   onConnect,
   onRemove,
   onToggleModel,
+  onAddModel,
+  onDeleteModel,
   onSetModelEffort,
   onSetModelContextWindow,
   onSetModelMaxTools,
@@ -175,6 +180,7 @@ export function ProviderCard({
               </select>
             </div>
           )}
+          <AddModelForm onAdd={onAddModel} kind={p.kind} />
           {models.length === 0 ? (
             <div className="py-3 text-sm text-muted-foreground">
               {t('admin:provider.noModels')}
@@ -249,6 +255,17 @@ export function ProviderCard({
                       checked={m.enabled}
                       onCheckedChange={(v) => onToggleModel(m.model_id, m.mode, v)}
                     />
+                    {m.source === 'manual' && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 w-7 p-0"
+                        onClick={() => onDeleteModel(m.model_id, m.mode)}
+                        title={t('admin:provider.deleteModel.tooltip')}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               ))}

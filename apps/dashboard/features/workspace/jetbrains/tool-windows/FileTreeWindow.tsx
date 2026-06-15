@@ -11,7 +11,7 @@
 import { FilePlus2, FolderPlus, RefreshCw } from 'lucide-react';
 import { Button } from '../../../../components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../../components/ui/tooltip.js';
-import { FileTreeRail } from '../../FileTreeRail.js';
+import { FileTreeView } from '../../file-tree/FileTreeView.js';
 import { ToolWindowFrame } from '../ToolWindowFrame.js';
 
 interface FileTreeWindowProps {
@@ -75,7 +75,7 @@ export function FileTreeWindow({ projectId, activePath, onOpen, onClose }: FileT
         </>
       }
     >
-      <FileTreeRail projectId={projectId} activePath={activePath} onOpen={onOpen} />
+      <FileTreeView projectId={projectId} activePath={activePath} onOpen={onOpen} />
     </ToolWindowFrame>
   );
 }

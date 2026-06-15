@@ -26,6 +26,16 @@ export interface RecordTurnTelemetryInput {
   tools_def_chars?: number | null;
   /** How many tools were visible to the model this turn. Migration 135. */
   visible_tools_count?: number | null;
+  /** SHA-1 of the serialized tools array. Migration 143. */
+  tools_fingerprint?: string | null;
+  /** SHA-1 sample of the assembled history head. Migration 143. */
+  prefix_head_hash?: string | null;
+  /** Rolling-reducer retirements applied in this turn's view. Migration 143. */
+  reducer_retired_count?: number | null;
+  /** Chars freed by applied retirements. Migration 143. */
+  reducer_freed_chars?: number | null;
+  /** Chars detected but deferred below the flush threshold. Migration 143. */
+  reducer_pending_chars?: number | null;
   /** USD cost computed from pricing table. Migration 072. */
   estimated_cost_usd?: number | null;
   /** Sanitized provider request/response metadata. Migration 093. */
@@ -59,13 +69,15 @@ export function record(db: DB, input: RecordTurnTelemetryInput): number | null {
           history_chars, tool_count, tools_called_json,
           largest_tool_result_chars, compaction_triggered, summarizer_ran, paginate_count,
           system_prompt_chars, tools_def_chars, visible_tools_count, estimated_cost_usd,
+          tools_fingerprint, prefix_head_hash,
+          reducer_retired_count, reducer_freed_chars, reducer_pending_chars,
           request_api_model, request_requested_model, request_display_model,
           request_max_tokens, request_stream, request_betas_json,
           request_thinking_type, request_effort,
           response_status, response_ok, response_request_id,
           response_retry_after, response_x_should_retry,
           response_rate_limits_json, response_path
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.session_id, input.run_id, input.turn, input.is_subagent ? 1 : 0,
@@ -81,6 +93,11 @@ export function record(db: DB, input: RecordTurnTelemetryInput): number | null {
         input.tools_def_chars ?? null,
         input.visible_tools_count ?? null,
         input.estimated_cost_usd ?? null,
+        input.tools_fingerprint ?? null,
+        input.prefix_head_hash ?? null,
+        input.reducer_retired_count ?? null,
+        input.reducer_freed_chars ?? null,
+        input.reducer_pending_chars ?? null,
         request?.api_model ?? null,
         request?.requested_model ?? null,
         request?.display_model ?? null,

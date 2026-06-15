@@ -35,11 +35,6 @@ import { SidebarRail, type SidePanel } from './preview-sidebar/SidebarRail.js';
 import { SidebarPanels } from './preview-sidebar/SidebarPanels.js';
 import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
 import { useResizableWidth } from '../../hooks/useResizableWidth.js';
-import {
-  consumeSelectionPrefix,
-  onStudioSend,
-  setAgentBusy,
-} from '../builder/studio/studio-context-store.js';
 import type {
   AvailableProject,
   PersistedAgentRun,
@@ -58,12 +53,6 @@ interface CompanySessionViewProps {
    */
   sessionsListOpen?: boolean;
   onToggleSessionsList?: () => void;
-  /**
-   * Builder studio: when set, the composer prefixes each message with the
-   * element the user selected in the preview, and the studio's "Fix"
-   * button can trigger a send. Absent for normal company sessions.
-   */
-  studioContext?: { sessionId: number };
 }
 
 interface SessionFullData {
@@ -105,7 +94,6 @@ export function CompanySessionView({
   sessionStatus,
   sessionsListOpen,
   onToggleSessionsList,
-  studioContext,
 }: CompanySessionViewProps) {
   const { t } = useTranslation('agents');
   const contribWindows = useContributions((s) => s.toolWindows);
@@ -326,28 +314,6 @@ export function CompanySessionView({
     }
   }
 
-  // Builder studio: the preview pane's "Fix" button asks us to send a
-  // message (we own the company stream). Scoped to this session id.
-  useEffect(() => {
-    if (!studioContext) return;
-    return onStudioSend(studioContext.sessionId, (text) => {
-      void handleSend(text, []);
-    });
-    // handleSend closes over the latest stream; re-subscribe when it changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [studioContext, stream]);
-
-  // Builder studio: publish the master's busy state so the auto-fix loop
-  // never fires mid-turn or while the agent is awaiting user input. Busy =
-  // any status other than a settled/idle one.
-  const masterStatus = stream.masterState?.status;
-  useEffect(() => {
-    if (!studioContext) return;
-    const settled = masterStatus === undefined || masterStatus === 'idle' ||
-      masterStatus === 'completed' || masterStatus === 'error' || masterStatus === 'aborted';
-    setAgentBusy(studioContext.sessionId, !settled);
-  }, [studioContext, masterStatus]);
-
   function openAgentRun(agentRunId: number, role: string, status: string) {
     // Resolve the coder session id from the merged live agent first (a
     // freshly-spawned subordinate carries it via the spawn `agent_status`
@@ -479,11 +445,6 @@ export function CompanySessionView({
             composer={
               <MasterComposer
                 onSend={handleSend}
-                buildPrefix={
-                  studioContext
-                    ? () => consumeSelectionPrefix(studioContext.sessionId)
-                    : undefined
-                }
                 placeholder={
                   !stream.started && !sessionAlreadyRan
                     ? t('company.inputPlaceholder')

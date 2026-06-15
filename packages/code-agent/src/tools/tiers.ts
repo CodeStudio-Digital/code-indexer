@@ -35,7 +35,7 @@ import { COMPANY_TOOLS, BUILDER_TOOLS } from '@mcp/code-agent/tools/tiers-compan
 // public entry point for tier data.
 export { COMPANY_TOOLS, BUILDER_TOOLS };
 
-export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master' | 'preview';
+export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master' | 'preview' | 'api';
 export type ToolTier = string;
 
 /** The set of built-in core tier names. Custom tiers must not collide. */
@@ -45,6 +45,7 @@ export const CORE_TIER_NAMES: ReadonlySet<string> = new Set<CoreTier>([
   'admin',
   'master',
   'preview',
+  'api',
 ]);
 
 /**
@@ -74,6 +75,23 @@ export const PREVIEW_TOOLS: ReadonlySet<string> = new Set<string>([
   'preview_hover',
   'preview_double_click',
   'preview_right_click',
+]);
+
+/**
+ * API client tools — the dedicated `api` tier. Activated only for the `api`
+ * agent (auto-test/auto-fix of an OpenAPI surface), so these never pollute
+ * other sessions' turn-1 prompt. Listed explicitly so the bootstrap fallback
+ * in `getToolTier` can't expose them; other sessions unlock on demand via
+ * `expand_toolset('api')`.
+ */
+export const API_TOOLS: ReadonlySet<string> = new Set<string>([
+  'api_import_openapi',
+  'api_list_requests',
+  'api_get_request',
+  'api_run_request',
+  'api_update_request',
+  'api_mark_verified',
+  'api_run_collection',
 ]);
 
 /**
@@ -420,6 +438,7 @@ export function getToolTier(
   if (ADMIN_TOOLS.has(name)) return 'admin';
   if (MASTER_TOOLS.has(name)) return 'master';
   if (PREVIEW_TOOLS.has(name)) return 'preview';
+  if (API_TOOLS.has(name)) return 'api';
   // Always-on within their own session class; map to bootstrap (see set docs).
   if (COMPANY_TOOLS.has(name) || BUILDER_TOOLS.has(name)) return 'bootstrap';
   // Unlisted — no explicit tier.
@@ -442,6 +461,7 @@ export function allTieredToolNames(): Set<string> {
     ...ADMIN_TOOLS,
     ...MASTER_TOOLS,
     ...PREVIEW_TOOLS,
+    ...API_TOOLS,
     ...COMPANY_TOOLS,
     ...BUILDER_TOOLS,
   ]);
@@ -679,6 +699,7 @@ export function getAllKnownToolsMeta(): ToolMeta[] {
   push('admin', ADMIN_TOOLS);
   push('master', MASTER_TOOLS);
   push('preview', PREVIEW_TOOLS);
+  push('api', API_TOOLS);
   // Company/builder tools resolve to bootstrap in getToolTier (always-on within
   // their session class); label them as such so the catalog matches.
   push('bootstrap', COMPANY_TOOLS);
@@ -693,6 +714,7 @@ export const TIER_COUNTS = {
   admin: ADMIN_TOOLS.size,
   master: MASTER_TOOLS.size,
   preview: PREVIEW_TOOLS.size,
+  api: API_TOOLS.size,
   company: COMPANY_TOOLS.size,
   builder: BUILDER_TOOLS.size,
 } as const;

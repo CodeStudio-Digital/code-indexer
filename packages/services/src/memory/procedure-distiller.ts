@@ -11,7 +11,7 @@
  * so the steps come from commands that actually worked.
  */
 import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
-import { pickChatFn } from '../quality/chat-dispatcher.js';
+import { pickChatFn, suppressThinkingFor } from '../quality/chat-dispatcher.js';
 import { parseMemoryCandidates } from './distiller.js';
 import type { MemoryCandidate, MemoryDistiller, SessionMemoryInput } from './extractor.js';
 
@@ -44,7 +44,7 @@ export class ProcedureDistiller implements MemoryDistiller {
       const result = await chat(binding, [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: buildPrompt(input, commands) },
-      ]);
+      ], { disableThinking: suppressThinkingFor(binding) });
       // Mint recipes only — force the category so a mislabeling model still lands
       // as a retrievable procedure.
       return parseMemoryCandidates(result.content).map((c) => ({ ...c, category: 'procedure' as const }));
