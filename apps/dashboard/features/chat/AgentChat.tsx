@@ -23,7 +23,9 @@ import { RightPanelHost } from './right-panel/RightPanelHost.js';
 import { usePluginPanels } from './right-panel/usePluginPanels.js';
 import type { RightPanelId } from './right-panel/types.js';
 import { Composer, type ComposerHandle } from './composer/Composer.js';
-import { providerSupportsThinking } from './composer/provider-caps.js';
+import { useMessageQueue, type QueueDeliver, type QueueMode } from './composer/useMessageQueue.js';
+import { QueuedMessages } from './composer/QueuedMessages.js';
+import { providerSupportsThinking, resolveReasoningLevels } from './composer/provider-caps.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { MessageList } from './messages/MessageList.js';
@@ -62,7 +64,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [provider, setProvider] = useState('zai');
   const [model, setModel] = useState('');
-  const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin' | 'spec'>('explore');
+  const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api'>('explore');
 
   // SSE-driven agent transitions (Plan→Build after submit_plan approval,
   // Spec→Build after submit_spec, manual server-side switches). Backend
@@ -79,7 +81,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
       if (
         next
         && next !== agent
-        && (next === 'explore' || next === 'plan' || next === 'build' || next === 'admin' || next === 'spec')
+        && (next === 'explore' || next === 'plan' || next === 'build' || next === 'admin' || next === 'spec' || next === 'api')
       ) {
         setAgent(next);
       }
@@ -91,6 +93,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
   const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
   const [sessionTemperature, setSessionTemperature] = useState<number | null>(null);
+  const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
   const [unrestrictedOutput, setUnrestrictedOutput] = useState<boolean>(false);
   const [toolPermissionMode, setToolPermissionMode] = useState<'ask' | 'auto' | 'unrestricted'>('auto');
   const [summarizing, setSummarizing] = useState<boolean>(false);
@@ -133,6 +136,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
       return legacyMetaClosed ? null : 'meta';
     }
     if (saved === 'null') return null;
+    // Migrate the old split Skills/Tools panels into the merged config cog.
+    if (saved === 'skills' || saved === 'tools') return 'config';
     return saved as RightPanelId;
   });
   useEffect(() => {
@@ -414,6 +419,36 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     }, { attachments: atts, agent, maxTurns, thinking, describeImages, selectedSkillIds });
   }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, describeImages, selectionPrefixSessionId]);
 
+  // ─── Message queue (compose/enqueue while streaming) ───────────────
+  // Delivery is run-state-aware and serves BOTH queue modes:
+  //   • live run  → POST /inject (JSON, NO new stream): enqueues into the live
+  //     runner; the already-open SSE renders the agent's next turn. Calling
+  //     sendMessage here would open a 2nd stream that aborts the live one and
+  //     wipes the in-flight turn (the freeze bug) — so we never do that mid-run.
+  //   • no run    → /inject returns { noActiveRun }; fall back to sendMessage,
+  //     which opens a fresh streamed run (the end-of-session path).
+  const deliverQueued = useCallback<QueueDeliver>(async (text, { interject, skillIds }) => {
+    if (!selectedId) return;
+    try {
+      const r = await apiPost<{ injected?: boolean; noActiveRun?: boolean; waiting?: boolean }>(
+        `/coder/sessions/${selectedId}/inject`,
+        { content: text, interject, selected_skill_ids: skillIds },
+      );
+      if (r?.injected) { refetchSession(); return; }
+    } catch { /* fall through to a fresh streamed send */ }
+    await sendMessage(text, async () => { refetchSession(); }, {
+      agent, maxTurns, thinking, describeImages, selectedSkillIds: skillIds, interject,
+    });
+  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking, describeImages]);
+  const queue = useMessageQueue({ streaming, deliver: deliverQueued });
+  const handleQueue = useCallback((text: string, mode: QueueMode, skillIds?: string[]) => {
+    if (!selectedId) return;
+    const prefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
+    queue.enqueue(prefix ? `${prefix}\n${text}` : text, mode, skillIds);
+  }, [selectedId, selectionPrefixSessionId, queue]);
+  // Discard the queue when switching sessions (per-session, ephemeral).
+  useEffect(() => { queue.clear(); }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Builder preview "Fix" / auto-fix → send a message into this chat.
   // Scoped to the builder key (the project id) so only this chat reacts.
   useEffect(() => {
@@ -509,6 +544,17 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     setSessionTemperature(typeof t === 'number' ? t : null);
   }, [sessionData?.session]);
 
+  // Reasoning-effort override (migration 150). Same read pattern as temperature —
+  // the column flows through the full session payload. Orthogonal to thinking.
+  useEffect(() => {
+    if (!sessionData?.session) {
+      setReasoningEffort(null);
+      return;
+    }
+    const e = sessionData.session.reasoning_effort_override;
+    setReasoningEffort(typeof e === 'string' && e.length > 0 ? e : null);
+  }, [sessionData?.session]);
+
   // Unrestricted-tool-output toggle (migration 078). Same pattern as the
   // temperature override above — reads from the session row, writes via PATCH.
   useEffect(() => {
@@ -530,11 +576,43 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     setToolPermissionMode(sessionData.session.tool_permission_mode ?? 'auto');
   }, [sessionData?.session]);
 
+  // Agent/mode hydration. Keyed on the session ID (NOT the session object) so
+  // an end-of-run refetch — same id, new object — never clobbers a manual
+  // dropdown pick made mid-session; only a session switch / first load
+  // re-hydrates. Live transitions (plan→build) arrive via the
+  // `coder:session_agent_changed` handler above (disjoint trigger). 'builder'
+  // sessions aren't selectable in this composer, so they're left untouched.
+  useEffect(() => {
+    const a = sessionData?.session?.agent;
+    if (a && (a === 'explore' || a === 'plan' || a === 'build' || a === 'admin' || a === 'spec' || a === 'api')) {
+      setAgent(a);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionData?.session?.id]);
+
+  // Persist a manual dropdown pick immediately so leaving WITHOUT sending still
+  // remembers it. Applies to the NEXT run (agent identity is baked into the
+  // runner at construction; mid-run transitions are runner-driven).
+  const handleAgentChange = (next: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api') => {
+    setAgent(next);
+    if (selectedId) apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: next }).catch(() => {});
+  };
+
   const handleTemperatureChange = async (next: number | null) => {
     setSessionTemperature(next);
     if (!selectedId) return;
     try {
       await apiPatch(`/coder/sessions/${selectedId}/temperature`, { temperature: next });
+    } catch {
+      /* ignore — UI optimistic, server is the source of truth on next refetch */
+    }
+  };
+
+  const handleReasoningEffortChange = async (next: string | null) => {
+    setReasoningEffort(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/reasoning-effort`, { effort: next });
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
     }
@@ -698,6 +776,39 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
   };
 
+  // Rollback: destructively truncate THIS session at the message, then drop its
+  // text + attachments back into the composer for editing & re-sending.
+  const handleRollback = async (messageId: number) => {
+    if (!selectedId) return;
+    const ok = await confirm({
+      title: t('chat:rollbackConfirmTitle'),
+      description: t('chat:rollbackConfirmDescription'),
+      variant: 'destructive',
+      confirmLabel: t('chat:rollbackConfirmLabel'),
+    });
+    if (!ok) return;
+    // The backend rejects with 409 when a run is active (and 400 on a stale
+    // message id). Surface that instead of swallowing it into a silent no-op —
+    // the destructive delete either fully succeeds or fully fails server-side.
+    try {
+      const res = await apiPost<{ seed_text: string; seed_attachments: AgentAttachment[] }>(
+        `/coder/sessions/${selectedId}/rollback-to-message`,
+        { message_id: messageId },
+      );
+      await refetchSession();
+      composerRef.current?.setInput(res.seed_text);
+      composerRef.current?.setAttachments(res.seed_attachments ?? []);
+      refetchSessions();
+      window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+    } catch (e) {
+      await confirm({
+        title: t('chat:rollbackFailed'),
+        description: e instanceof Error ? e.message : String(e),
+        confirmLabel: t('common:actions.close'),
+      });
+    }
+  };
+
   const handleBatchArchive = async (ids: number[], archived: boolean) => {
     await Promise.all(ids.map((id) => apiPatch(`/coder/sessions/${id}/archive`, { archived })));
     if (selectedId != null && ids.includes(selectedId)) setSelectedId(null);
@@ -783,7 +894,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
               if (
                 s.agent
                 && s.agent !== agent
-                && (s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' || s.agent === 'spec')
+                && (s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' || s.agent === 'spec' || s.agent === 'api')
               ) {
                 setAgent(s.agent);
               }
@@ -806,7 +917,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
               if (
                 s.agent
                 && s.agent !== agent
-                && (s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' || s.agent === 'spec')
+                && (s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' || s.agent === 'spec' || s.agent === 'api')
               ) {
                 setAgent(s.agent);
               }
@@ -817,9 +928,10 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
         }
       },
       onFork: handleFork,
+      onRollback: handleRollback,
       onToolApproval: (toolUseId, verdict) => respondToToolApproval(toolUseId, verdict),
     }),
-    // handleFork depends on selectedId — re-create when session changes.
+    // handleFork / handleRollback depend on selectedId — re-create on switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [answerQuestion, respondToPlan, respondToTasks, respondToSpec, respondToToolApproval, selectedId, agent],
   );
@@ -1075,7 +1187,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
                 onRemoveSkillPick={toggleSkillPick}
                 onClearSkillPicks={clearSkillPicks}
                 agent={agent}
-                setAgent={setAgent}
+                setAgent={handleAgentChange}
                 provider={provider}
                 model={model}
                 setModel={setModel}
@@ -1098,6 +1210,9 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
                 onFallbackChange={handleFallbackChange}
                 temperature={sessionTemperature}
                 setTemperature={handleTemperatureChange}
+                reasoningEffort={reasoningEffort}
+                setReasoningEffort={handleReasoningEffortChange}
+                reasoningLevels={resolveReasoningLevels(provider, providerOptions, model)}
                 unrestrictedOutput={unrestrictedOutput}
                 setUnrestrictedOutput={handleUnrestrictedOutputChange}
                 toolPermissionMode={toolPermissionMode}
@@ -1106,6 +1221,9 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
                 selectedPipelineId={selectedPipelineId}
                 setSelectedPipelineId={setSelectedPipelineId}
                 onRunPipeline={handleRunPipeline}
+                queueable={!!selectedId && selectedPipelineId == null}
+                onQueue={handleQueue}
+                queuedStrip={<QueuedMessages items={queue.items} onPromote={queue.promote} onRemove={queue.remove} />}
               />
             </main>
           )}

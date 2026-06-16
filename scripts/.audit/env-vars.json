@@ -1,5 +1,5 @@
 {
-  "generatedFrom": 2224,
+  "generatedFrom": 2227,
   "report": [
     {
       "key": "ALL_PROXY",
@@ -2611,6 +2611,30 @@
       "tier": "review"
     },
     {
+      "key": "MCP_EMBED_WORKER",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/sse/EmbeddingsWorkerClient.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_EMBED_WORKER_IDLE_MS",
+      "prefix": "MCP",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/server/deps.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "MCP_FTS_CONTENT_GREP",
       "prefix": "MCP",
       "inferred_type": "bool",
@@ -3037,8 +3061,8 @@
       "files": [
         "packages/services/src/sandbox/sandbox-manager.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_ARCHIVE_IMPORTANCE_MAX",
@@ -3049,8 +3073,8 @@
       "files": [
         "apps/http-api/sse/memory-consolidator.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_ARCHIVE_MAX_ACCESS",
@@ -3061,8 +3085,8 @@
       "files": [
         "apps/http-api/sse/memory-consolidator.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_ARCHIVE_UNUSED_DAYS",
@@ -3073,8 +3097,8 @@
       "files": [
         "apps/http-api/sse/memory-consolidator.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_CONSOLIDATE",
@@ -3085,8 +3109,8 @@
       "files": [
         "apps/http-api/sse/memory-consolidator.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_CONSOLIDATE_IDLE_MS",
@@ -3097,8 +3121,8 @@
       "files": [
         "apps/http-api/sse/memory-consolidator.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_CONSOLIDATE_INTERVAL_MS",
@@ -3109,8 +3133,8 @@
       "files": [
         "apps/http-api/sse/memory-consolidator.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_CONSOLIDATE_MAX_PROJECTS",
@@ -3121,8 +3145,8 @@
       "files": [
         "apps/http-api/sse/memory-consolidator.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_IDLE_AFTER_MS",
@@ -3145,8 +3169,8 @@
       "files": [
         "apps/http-api/sse/memory-consolidator.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_MAX_SNAPSHOTS_PER_PASS",
@@ -3157,8 +3181,8 @@
       "files": [
         "apps/http-api/sse/memory-consolidator.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_MERGE_COSINE",
@@ -3169,8 +3193,8 @@
       "files": [
         "apps/http-api/sse/memory-consolidator.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_MERGE_TITLE_JACCARD",
@@ -3181,8 +3205,8 @@
       "files": [
         "apps/http-api/sse/memory-consolidator.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_MEMORY_SWEEP_INTERVAL_MS",
@@ -3773,8 +3797,8 @@
       "files": [
         "packages/services/src/sandbox/manager/reaper-loop.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_BINARY",
@@ -3785,8 +3809,8 @@
       "files": [
         "packages/services/src/sandbox/network-controller.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_BIND_MOUNT",
@@ -3797,8 +3821,8 @@
       "files": [
         "packages/services/src/sandbox/manager/io/env-helpers.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_CPUS",
@@ -3809,8 +3833,8 @@
       "files": [
         "packages/services/src/sandbox/types.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_DESTROY_AFTER_PAUSE_MS",
@@ -3821,8 +3845,8 @@
       "files": [
         "packages/services/src/sandbox/sandbox-manager.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_DEV_PORT",
@@ -3833,8 +3857,8 @@
       "files": [
         "packages/company/src/orchestrator/sandbox-helpers.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_DROP_CAPS",
@@ -3845,8 +3869,8 @@
       "files": [
         "packages/services/src/sandbox/types.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_EGRESS_FIREWALL",
@@ -3857,8 +3881,8 @@
       "files": [
         "packages/services/src/sandbox/network-controller.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_HTTP_PROXY",
@@ -3869,8 +3893,8 @@
       "files": [
         "packages/services/src/sandbox/types.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_IDLE_MS",
@@ -3881,8 +3905,8 @@
       "files": [
         "packages/services/src/sandbox/sandbox-manager.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_MEMORY",
@@ -3893,8 +3917,8 @@
       "files": [
         "packages/services/src/sandbox/types.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_NETWORK",
@@ -3905,8 +3929,8 @@
       "files": [
         "packages/services/src/sandbox/types.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_NO_NEW_PRIVS",
@@ -3917,8 +3941,8 @@
       "files": [
         "packages/services/src/sandbox/types.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_PAUSE_AFTER_MS",
@@ -3929,8 +3953,8 @@
       "files": [
         "packages/services/src/sandbox/sandbox-manager.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_PIDS",
@@ -3941,8 +3965,8 @@
       "files": [
         "packages/services/src/sandbox/types.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_READONLY_ROOT",
@@ -3953,8 +3977,8 @@
       "files": [
         "packages/services/src/sandbox/types.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_RUNTIME",
@@ -3969,8 +3993,8 @@
         "packages/services/src/sandbox/manager/persistence/cleanup.ts",
         "packages/services/src/sandbox/manager/util/naming.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_SECCOMP",
@@ -3981,8 +4005,8 @@
       "files": [
         "packages/services/src/sandbox/types.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_STATS_MS",
@@ -3993,8 +4017,8 @@
       "files": [
         "packages/services/src/sandbox/sandbox-manager.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SANDBOX_USER",
@@ -4005,8 +4029,8 @@
       "files": [
         "packages/services/src/sandbox/types.ts"
       ],
-      "in_catalog": false,
-      "tier": "review"
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "MCP_SCAN_PARANOID",
@@ -4059,7 +4083,7 @@
     {
       "key": "MCP_SUPERVISOR_ENABLED",
       "prefix": "MCP",
-      "inferred_type": "bool",
+      "inferred_type": "string",
       "enums": [],
       "usage_count": 1,
       "files": [
@@ -4076,6 +4100,19 @@
       "usage_count": 1,
       "files": [
         "apps/http-api/workers/company-worker.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "MCP_SUPERVISOR_RECOVERY_MODE",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/company/src/services/supervisor/AgentSupervisor.ts",
+        "packages/company/src/services/supervisor/recovery-actions.ts"
       ],
       "in_catalog": true,
       "tier": "cataloged"

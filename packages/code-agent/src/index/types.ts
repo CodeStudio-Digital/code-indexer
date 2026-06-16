@@ -25,6 +25,8 @@ export interface PreflightSeed {
   pinTools?: string[];
   /** Project memories the agent should READ (titles only, never content). */
   memories?: Array<{ title: string; reason: string }>;
+  /** Skills the agent should consider loading before starting (ids, validated). */
+  suggestedSkills?: Array<{ id: string; reason: string }>;
   taskKind?: string;
 }
 
@@ -229,6 +231,14 @@ export interface RunCoderOptions {
    * precedence than per-session, higher than agent preset default.
    */
   roleTemperature?: number;
+  /**
+   * Explicit reasoning-effort override (e.g. `minimal`/`low`/`medium`/`high`/
+   * `xhigh`). Company callers pass the master/role config value here; for
+   * single sessions it is left undefined and runCoder reads the sticky
+   * `coder_sessions.reasoning_effort_override` column instead. Orthogonal to
+   * `thinking`; forwarded to the runner → `ChatRequest.reasoningEffort`.
+   */
+  reasoningEffort?: string;
   /**
    * Resolver for OAuth bearer tokens of external MCP servers. When provided,
    * external servers with `auth_type='oauth2'` automatically receive

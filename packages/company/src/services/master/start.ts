@@ -44,6 +44,13 @@ export interface MasterStartOpts {
   /** Enable extended thinking on the master's first turn. */
   thinking?: boolean;
   /**
+   * Sticky reasoning-effort override for the master (config_json
+   * `master_reasoning_effort`). Orthogonal to `thinking`. Forwarded to
+   * `runCoder({ reasoningEffort })`. Only honoured by providers with discrete
+   * effort levels (Codex/OpenRouter). Undefined → model default.
+   */
+  reasoningEffort?: string;
+  /**
    * Route work through the built-in SDD pipeline by default. Threaded into
    * `MasterPromptContext.sddMode` via `buildMasterPromptInputs` so the master
    * prompt picks up the SDD MODE block.
@@ -199,6 +206,7 @@ export async function startMaster(
       companyContext: inputs.companyContext,
       companyPromptBlock: inputs.promptBlock,
       thinking: opts.thinking,
+      reasoningEffort: opts.reasoningEffort,
       // Wire HumanInTheLoop BEFORE the runner takes turn 1, so a master
       // that calls `ask_user` immediately is still captured.
       onRunnerReady: (runner) => deps.wireRunner(runner, agentRunId),

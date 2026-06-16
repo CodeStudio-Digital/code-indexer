@@ -373,6 +373,7 @@ export async function spawnSubordinate(
     roleTemperature: spec.temperature,
     thinking: spec.thinking,
     thinkingBudgetTokens: spec.thinkingBudgetTokens,
+    reasoningEffort: spec.reasoningEffort,
     // Wire HumanInTheLoop + meta-bus listeners BEFORE the runner takes
     // turn 1, so a sub that calls `submit_plan_to_master` or
     // `ask_master` immediately on turn 1 doesn't slip through (same

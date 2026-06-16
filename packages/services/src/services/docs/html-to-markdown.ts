@@ -59,6 +59,34 @@ turndown.addRule('fencedCodeWithLang', {
   },
 });
 
+// Heading rule that carries a deep-link anchor as a Pandoc `{#id}` suffix:
+// the real HTML `id` when the page set one (MDN, most static-site generators),
+// else a GitHub-style slug of the heading text. The section chunker strips the
+// `{#id}` back off (heading_path stays clean) and stores it as the chunk's
+// `anchor`, so citations can point to `source_uri#anchor` — the exact section.
+turndown.addRule('headingWithAnchor', {
+  filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+  replacement: (content, node) => {
+    const el = node as HTMLElement;
+    const text = content.trim().replace(/\n+/g, ' ');
+    if (!text) return '';
+    const level = Number(el.nodeName.charAt(1)) || 1;
+    const id = (el.getAttribute?.('id') ?? '').trim() || slugify(text);
+    return `\n\n${'#'.repeat(level)} ${text} {#${id}}\n\n`;
+  },
+});
+
+/** GitHub-style heading slug: lowercase, punctuation dropped, spaces → hyphens. */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, '')
+    .trim()
+    .replace(/[\s_]+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 80) || 'section';
+}
+
 export interface ConvertedPage {
   title: string | null;
   markdown: string;

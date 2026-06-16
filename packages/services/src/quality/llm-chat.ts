@@ -66,6 +66,14 @@ export interface ChatCallOptions {
    * provider/model (OpenAI proper 400s on unknown body params).
    */
   disableThinking?: boolean;
+  /**
+   * Explicit reasoning-effort level (`minimal`/`low`/`medium`/`high`) for
+   * providers that expose discrete effort (Codex via `reasoning.effort`).
+   * Forwarded by the OAuth coder path (`coderProviderChat`) to the adapter,
+   * which clamps it against the model's supported levels. The direct REST
+   * path ignores it — it uses `disableThinking` for reasoning suppression.
+   */
+  reasoningEffort?: string;
 }
 
 interface OpenAiChatBodyOpts {

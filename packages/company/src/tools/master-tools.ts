@@ -192,6 +192,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           attachments: attachments && attachments.length > 0 ? attachments : undefined,
           thinking: effectiveThinking,
           thinkingBudgetTokens: defaults?.thinkingBudgetTokens,
+          reasoningEffort: defaults?.reasoningEffort,
         });
 
         // Auto-assign agent to Kanban card and move to in_progress

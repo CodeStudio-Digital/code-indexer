@@ -146,6 +146,20 @@ const docSearchShim: DocSearchBackend = {
       input,
       { timeoutMs: 15_000 },
     ),
+  // rag_read_doc mode:'section' — also plain SQLite reads on the main side.
+  readSection: async (input) =>
+    bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['readSection']>>>>(
+      'docReadSection',
+      input,
+      { timeoutMs: 15_000 },
+    ),
+  // rag_doc_outline — heading tree / source list, plain SQLite reads.
+  outline: async (input) =>
+    bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['outline']>>>>(
+      'docOutline',
+      input,
+      { timeoutMs: 15_000 },
+    ),
 };
 setGlobalDocSearch(docSearchShim);
 
@@ -160,11 +174,28 @@ const workerDocStore = new DocStore(dbConn.handle);
 setGlobalDocsHintProvider({
   listForProject: (projectId) => {
     try {
-      return workerDocStore.listCollectionsForProject(projectId).map((c) => ({
-        name: c.name,
-        description: c.description,
-        chunk_count: c.chunk_count,
-      }));
+      // Mirror buildDocsHintProvider (server/docs/search-backend.ts): aggregate
+      // freshness + types from the collection's sources so the per-turn hint
+      // can flag staleness and signal the doc kind. Kept inline because that
+      // module pulls @mcp/* aliases that don't resolve inside worker_threads.
+      return workerDocStore.listCollectionsForProject(projectId).map((c) => {
+        const sources = workerDocStore.listSourcesByCollection(c.id);
+        const lastIndexed = sources.reduce<string | null>(
+          (max, s) =>
+            s.last_indexed_at && (max == null || s.last_indexed_at > max) ? s.last_indexed_at : max,
+          null,
+        );
+        const docTypes = Array.from(
+          new Set(sources.map((s) => s.doc_type).filter((t) => t && t !== 'mixed')),
+        );
+        return {
+          name: c.name,
+          description: c.description,
+          chunk_count: c.chunk_count,
+          last_indexed_at: lastIndexed,
+          doc_types: docTypes,
+        };
+      });
     } catch {
       // Pre-migration DB or transient read error — hint silently absent.
       return [];

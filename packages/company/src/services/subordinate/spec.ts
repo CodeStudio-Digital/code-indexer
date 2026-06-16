@@ -48,6 +48,14 @@ export interface SpawnSubordinateSpec {
    */
   temperature?: number;
   /**
+   * Per-role reasoning-effort override, taken from `CompanyRoleConfig.reasoningEffort`.
+   * Orthogonal to `thinking`. Forwarded to `runCoder({ reasoningEffort })` →
+   * `ChatRequest.reasoningEffort`. When undefined, `SubordinateLifecycle.spawn`
+   * falls back to `RoleConfig.reasoningEffort` so the template default applies.
+   * Only honoured by providers with discrete effort levels (Codex/OpenRouter).
+   */
+  reasoningEffort?: string;
+  /**
    * Optional attachments (typically images) the master forwards to the
    * subordinate alongside the task — e.g. design inspiration for the
    * frontend role. Threaded through `runCoder` as the first user turn,

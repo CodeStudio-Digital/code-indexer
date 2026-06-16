@@ -381,6 +381,22 @@ export class WorkerOrchestratorPool {
       }
       return backend.readChunk(payload as Parameters<NonNullable<DocSearchBackend['readChunk']>>[0]);
     });
+    // rag_read_doc mode:'section' — whole-section reassembly (optional verb).
+    const offDocReadSection = bridge.handle('docReadSection', async (payload) => {
+      const backend = this.opts.docDeps?.docSearch;
+      if (!backend?.readSection) {
+        throw new Error('section mode is not available in this process — call rag_read_doc without mode to read this chunk + neighbors.');
+      }
+      return backend.readSection(payload as Parameters<NonNullable<DocSearchBackend['readSection']>>[0]);
+    });
+    // rag_doc_outline — structural navigation (optional verb).
+    const offDocOutline = bridge.handle('docOutline', async (payload) => {
+      const backend = this.opts.docDeps?.docSearch;
+      if (!backend?.outline) {
+        throw new Error('rag_doc_outline is not available in this process. Use rag_search_docs instead.');
+      }
+      return backend.outline(payload as Parameters<NonNullable<DocSearchBackend['outline']>>[0]);
+    });
     const offDocsResearch = bridge.handle('docsResearch', async (payload) => {
       const researcher = this.opts.docDeps?.docsResearch;
       if (!researcher) {
@@ -484,6 +500,8 @@ export class WorkerOrchestratorPool {
       try { offSupervisorIncident(); } catch { /* best-effort */ }
       try { offDocSearch(); } catch { /* best-effort */ }
       try { offDocReadChunk(); } catch { /* best-effort */ }
+      try { offDocReadSection(); } catch { /* best-effort */ }
+      try { offDocOutline(); } catch { /* best-effort */ }
       try { offDocsResearch(); } catch { /* best-effort */ }
       try { offPreviewDevtools(); } catch { /* best-effort */ }
       try { offVisionDescribe(); } catch { /* best-effort */ }

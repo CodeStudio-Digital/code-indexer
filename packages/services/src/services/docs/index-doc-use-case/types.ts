@@ -1,6 +1,6 @@
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
-import type { DocCrawlConfig, DocStore } from '@mcp/store/doc-store.js';
+import type { DocCrawlConfig, DocStore, DocType } from '@mcp/store/doc-store.js';
 import type { PipelineProviderResolver } from '../../../pipelines/index.js';
 import type {
   DocIngestEstimate,
@@ -78,6 +78,8 @@ export interface IndexPdfInput {
   bytes: Uint8Array;
   contentType?: string;
   title?: string;
+  /** Kind of documentation (migration 149). Defaults to 'mixed' downstream. */
+  docType?: DocType;
 }
 
 export interface IndexUrlInput {
@@ -85,6 +87,8 @@ export interface IndexUrlInput {
   url: string;
   crawl?: DocCrawlConfig;
   title?: string;
+  /** Kind of documentation (migration 149). Defaults to 'mixed' downstream. */
+  docType?: DocType;
 }
 
 /**
@@ -95,6 +99,8 @@ export interface IndexFolderInput {
   collectionId: number;
   rootPath: string;
   title?: string;
+  /** Kind of documentation (migration 149). Defaults to 'mixed' downstream. */
+  docType?: DocType;
   folder?: {
     include_glob?: string | null;
     exclude_glob?: string | null;

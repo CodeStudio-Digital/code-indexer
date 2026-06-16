@@ -43,7 +43,12 @@ function recordHistory(
 ): void {
   // Best-effort: a timeline write must never fail the actual send response.
   try {
-    store.insertRequestHistory({ request_id: requestId, ...entry });
+    store.insertRequestHistory({
+      request_id: requestId,
+      ...entry,
+      // Cap the error blob — a misbehaving endpoint could return a huge message.
+      error: entry.error ? entry.error.slice(0, 2000) : undefined,
+    });
     store.pruneRequestHistory(requestId, HISTORY_KEEP);
   } catch { /* non-fatal */ }
 }
@@ -107,7 +112,8 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
   // Per-request timeline — newest first, capped by HISTORY_KEEP on write.
   app.get('/api/projects/:projectId/api-client/requests/:rid/history', (c) => {
     const rid = parseIdParam(c, 'rid');
-    const limit = Math.min(Number(c.req.query('limit') ?? HISTORY_KEEP) || HISTORY_KEEP, HISTORY_KEEP);
+    // Clamp to [1, HISTORY_KEEP] — a negative limit becomes "unlimited" in SQLite.
+    const limit = Math.max(1, Math.min(Number(c.req.query('limit') ?? HISTORY_KEEP) || HISTORY_KEEP, HISTORY_KEEP));
     return c.json({ history: store.listRequestHistory(rid, limit) });
   });
 }

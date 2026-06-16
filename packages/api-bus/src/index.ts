@@ -71,7 +71,6 @@ export * from './auth.js';
 export * from './billing.js';
 export * from './plugins.js';
 export * from './system.js';
-export * from './training.js';
 export * from './misc.js';
 
 /**

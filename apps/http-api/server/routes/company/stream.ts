@@ -17,6 +17,8 @@ import {
   summarizeRuntimeEvents,
 } from '../../../sse/runtime-event-log.js';
 import { resolveAndRunMaster } from './master-resolve.js';
+import { normalizeAttachmentsForModel, pdfHandledNatively } from '@mcp/services/services/docs/attachment-extract.js';
+import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 
 /**
  * Backoff before retrying a resume that hit `port_closed`. The default
@@ -70,19 +72,26 @@ function validateAttachments(input: unknown): { ok: true; value: AttachmentBody[
       return { ok: false, error: `attachments[${i}] must be an object` };
     }
     const a = att as Record<string, unknown>;
-    if (typeof a.mediaType !== 'string' || !a.mediaType.startsWith('image/')) {
-      return { ok: false, error: `attachments[${i}].mediaType must be "image/*"` };
+    if (typeof a.mediaType !== 'string' || a.mediaType.length === 0) {
+      return { ok: false, error: `attachments[${i}].mediaType is required` };
     }
-    if (typeof a.base64 !== 'string' || a.base64.length === 0) {
-      return { ok: false, error: `attachments[${i}].base64 is required` };
+    // Images AND documents are allowed (docx/xlsx/pptx/odt/pdf…). An item must
+    // carry a payload: base64 (images, binary docs) or pre-decoded text. The
+    // extractor (normalizeAttachmentsForModel) turns office base64 → text so
+    // the master and its subordinates actually see the content.
+    const hasBase64 = typeof a.base64 === 'string' && a.base64.length > 0;
+    const hasText = typeof a.text === 'string' && a.text.length > 0;
+    if (!hasBase64 && !hasText) {
+      return { ok: false, error: `attachments[${i}] must have base64 or text` };
     }
-    if (a.base64.length > MAX_ATTACHMENT_BASE64_BYTES) {
+    if (hasBase64 && (a.base64 as string).length > MAX_ATTACHMENT_BASE64_BYTES) {
       return { ok: false, error: `attachments[${i}] is too large (max ~10 MB)` };
     }
     out.push({
       name: typeof a.name === 'string' && a.name ? a.name : `attachment-${i + 1}`,
       mediaType: a.mediaType,
-      base64: a.base64,
+      ...(hasBase64 ? { base64: a.base64 as string } : {}),
+      ...(hasText ? { text: a.text as string } : {}),
     });
   }
   return { ok: true, value: out };
@@ -96,7 +105,33 @@ interface PlanResponseBody {
 }
 
 export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore, db } = deps;
+  const { companyStore, db, providerStore } = deps;
+
+  // Attachment-extraction options derived from the MASTER's model (the company
+  // UI has no per-message toggles): extract embedded images only when the
+  // master can see images, and extract PDF text (dropping base64) unless the
+  // master's adapter reads PDF natively. Defaults to the vision-capable,
+  // PDF-native Anthropic master when the config is missing/unparseable.
+  function masterAttachmentOpts(id: number): { extractImages: boolean; extractPdfText: boolean } {
+    let providerName = 'anthropic';
+    let modelId = 'claude-sonnet-4-6';
+    try {
+      const cur = companyStore.getCompanySession(id);
+      const config = JSON.parse(cur?.config_json ?? '{}') as {
+        master_provider?: string;
+        master_model?: string;
+      };
+      providerName = config.master_provider ?? providerName;
+      modelId = config.master_model ?? modelId;
+    } catch {
+      /* defaults */
+    }
+    const providerKind = providerStore.getProvider(providerName)?.kind ?? providerName;
+    return {
+      extractImages: modelSupportsVision({ providerKind, modelId }) === true,
+      extractPdfText: !pdfHandledNatively(providerKind),
+    };
+  }
 
   app.get('/api/company/sessions/:id/events.jsonl', (c) => {
     const id = parseIdParam(c);
@@ -139,7 +174,10 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     // Capture into a local const so TS narrowing survives the async closure below.
     const userMessage = body.user_message;
     const maxTurnsRequested = body.max_turns;
-    const attachments = attachmentsCheck.value;
+    const attachments = await normalizeAttachmentsForModel(
+      attachmentsCheck.value,
+      masterAttachmentOpts(id),
+    );
 
     // Serialize the "is there already a master for this id?" decision so two
     // concurrent POSTs cannot both pass the status check.
@@ -161,6 +199,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       let config: {
         master_provider?: string;
         master_model?: string;
+        master_reasoning_effort?: string;
         role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }>;
       } = {};
       try { config = JSON.parse(cur.config_json); } catch { /* use defaults */ }
@@ -201,6 +240,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           roleConfigs,
           attachments,
           thinking: body.thinking,
+          reasoningEffort: config.master_reasoning_effort,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -255,7 +295,10 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     if (!attachmentsCheck.ok) {
       return c.json({ error: attachmentsCheck.error }, 400);
     }
-    const attachments = attachmentsCheck.value;
+    const attachments = await normalizeAttachmentsForModel(
+      attachmentsCheck.value,
+      masterAttachmentOpts(id),
+    );
 
     // Serialize the "is there an existing orchestrator?" decision so two
     // concurrent /resume calls can't both observe registry-empty and each
@@ -285,6 +328,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       let config: {
         master_provider?: string;
         master_model?: string;
+        master_reasoning_effort?: string;
         role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }>;
       } = {};
       try { config = JSON.parse(session.config_json); } catch { /* defaults */ }
@@ -319,6 +363,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           roleConfigs,
           attachments,
           thinking: body.thinking,
+          reasoningEffort: config.master_reasoning_effort,
         });
         return { orchestrator, bus: spawned.bus };
       };
@@ -513,7 +558,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
     const result = orchestrator.sendMessageToMaster(body.message, {
       interject: body.interject,
-      attachments: attachmentsCheck.value,
+      attachments: await normalizeAttachmentsForModel(attachmentsCheck.value, masterAttachmentOpts(id)),
       thinking: body.thinking,
     });
     if (!result.ok && result.pending === 'interactive_wait') {

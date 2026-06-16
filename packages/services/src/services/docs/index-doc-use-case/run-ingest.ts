@@ -1,5 +1,6 @@
 import type { DocChunkInput, DocCollection, DocSource } from '@mcp/store/doc-store.js';
 import { chunkMarkdown } from '../section-chunker.js';
+import { extractApiSignature } from '../api-signature.js';
 import { enrichChunks } from '../enricher.js';
 import { gatePages } from '../relevance-gate.js';
 import { DocError } from '../errors.js';
@@ -226,11 +227,15 @@ function buildChunks(
 ): DocChunkInput[] {
   const chunkInputs: DocChunkInput[] = [];
   let globalOrd = 0;
+  // Symbol/signature extraction only makes sense for reference docs whose
+  // headings are signatures — gate it on the source type to avoid noise.
+  const isApiRef = source.doc_type === 'api_reference';
   for (const page of accepted) {
     const sections = chunkMarkdown(page.markdown, { defaultRootTitle: page.title ?? 'Document' });
     for (const s of sections) {
       if (chunkInputs.length >= HARD_MAX_CHUNKS_PER_SOURCE) break;
       const ord = globalOrd++;
+      const api = isApiRef ? extractApiSignature(s.heading_path) : null;
       chunkInputs.push({
         collection_id: collection.id,
         source_id: source.id,
@@ -240,6 +245,13 @@ function buildChunks(
         content_hash: hashContent(s.content),
         token_count: s.token_count,
         source_uri: page.uri,
+        // Stamp the source's documentation type onto every chunk so retrieval
+        // can format/filter without a JOIN. Per-page refinement for 'mixed'
+        // sources is a follow-up.
+        doc_type: source.doc_type,
+        anchor: s.anchor,
+        api_symbol: api?.symbol ?? null,
+        api_signature: api?.signature ?? null,
       });
     }
     if (chunkInputs.length >= HARD_MAX_CHUNKS_PER_SOURCE) break;

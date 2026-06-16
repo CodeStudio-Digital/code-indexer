@@ -31,7 +31,7 @@ import {
   WorkerPoolSaturatedError,
 } from './types.js';
 
-const KINDS: WorkerKind[] = ['coder', 'lsp', 'index', 'plugin', 'training', 'training-data'];
+const KINDS: WorkerKind[] = ['coder', 'lsp', 'index', 'plugin'];
 
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 30_000;

@@ -26,6 +26,9 @@ export async function resolveAndRunMaster(
     roleConfigs: Parameters<CompanyOrchestrator['startMaster']>[0]['roleConfigs'];
     attachments: Parameters<CompanyOrchestrator['startMaster']>[0]['attachments'];
     thinking?: boolean;
+    /** Sticky master reasoning-effort override (config_json
+     *  `master_reasoning_effort`). Orthogonal to thinking. */
+    reasoningEffort?: string;
   },
 ): Promise<void> {
   if (masterExists) {
@@ -35,6 +38,7 @@ export async function resolveAndRunMaster(
       roleConfigs: opts.roleConfigs,
       attachments: opts.attachments,
       thinking: opts.thinking,
+      reasoningEffort: opts.reasoningEffort,
     });
     return;
   }
@@ -46,5 +50,6 @@ export async function resolveAndRunMaster(
     roleConfigs: opts.roleConfigs,
     attachments: opts.attachments,
     thinking: opts.thinking,
+    reasoningEffort: opts.reasoningEffort,
   });
 }

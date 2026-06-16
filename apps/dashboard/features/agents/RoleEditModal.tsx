@@ -24,6 +24,13 @@ export interface RoleConfig {
   /** Sampling temperature override for this role (range [0, 1]). */
   temperature?: number;
   /**
+   * Per-role sticky reasoning-effort override (e.g. `minimal`/`low`/`medium`/
+   * `high`/`xhigh`). Orthogonal to `thinking`. Only meaningful when this role's
+   * model exposes discrete effort levels; the selector is hidden otherwise.
+   * Undefined → model default.
+   */
+  reasoningEffort?: string;
+  /**
    * Phase E: when true, subordinates spawned with this role run with
    * extended thinking (deep reasoning) on providers that support it.
    */
@@ -51,7 +58,9 @@ interface RoleEditModalProps {
   roleIdx: number;
   availableSkills: SkillDef[];
   providerOptions: Array<{ id: string; label: string }>;
-  getModelsForProvider: (provider: string) => Array<{ id: string; name: string; mode?: string }>;
+  getModelsForProvider: (
+    provider: string,
+  ) => Array<{ id: string; name: string; mode?: string; supported_reasoning_levels?: string[] | null }>;
   onUpdate: (patch: Partial<RoleConfig>) => void;
   onClose: () => void;
   /**
@@ -218,6 +227,35 @@ export function RoleEditModal({
               className="rounded-md border bg-background px-3 py-1.5 text-sm font-mono w-32"
             />
           </div>
+
+          {/* Reasoning effort — orthogonal to thinking. Only shown when this
+              role's model exposes discrete effort levels (Codex/GPT-5 family). */}
+          {(() => {
+            const selected = models.find((m) => m.id === role.model);
+            const levels = selected?.supported_reasoning_levels ?? [];
+            if (levels.length === 0) return null;
+            return (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  {t('agents:role.effort', { defaultValue: 'Reasoning effort' })}
+                </label>
+                <select
+                  value={role.reasoningEffort ?? ''}
+                  onChange={(e) =>
+                    onUpdate({ reasoningEffort: e.target.value === '' ? undefined : e.target.value })
+                  }
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm w-40"
+                >
+                  <option value="">{t('agents:role.effortAuto', { defaultValue: 'auto (model default)' })}</option>
+                  {levels.map((lv) => (
+                    <option key={lv} value={lv}>
+                      {lv}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            );
+          })()}
 
           {/* Extended thinking — Phase E */}
           <div

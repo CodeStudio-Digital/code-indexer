@@ -18,8 +18,7 @@ import {
   HardDrive,
   Info,
   ScrollText,
-  Sparkles,
-  Wrench,
+  Settings,
   type LucideIcon,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
@@ -70,16 +69,19 @@ export function ChatRightRail({
       kind: 'panel' as const,
     }));
 
-  const entries: RailEntry[] = [
+  // Grouped by purpose so the rail reads as intentional, not a flat dump:
+  // context (what the agent is working with) → inspection (observe the run)
+  // → plugins → a bottom-pinned Configuration cog (Skills + Tools tabs).
+  const contextEntries: RailEntry[] = [
     { id: 'meta', icon: Compass, labelKey: 'rightRail.meta', kind: 'panel' },
     { id: 'drive', icon: HardDrive, labelKey: 'rightRail.drive', kind: 'panel' },
-    { id: 'skills', icon: Sparkles, labelKey: 'rightRail.skills', kind: 'panel' },
-    { id: 'tools', icon: Wrench, labelKey: 'rightRail.tools', kind: 'panel' },
+  ];
+
+  const inspectEntries: RailEntry[] = [
     { id: 'metrics', icon: Gauge, labelKey: 'rightRail.metrics', kind: 'panel' },
+    { id: 'details', icon: Info, labelKey: 'rightRail.details', kind: 'panel' },
     { id: 'tool-stats', icon: BarChart3, labelKey: 'rightRail.toolStats', kind: 'panel' },
     { id: 'worker-log', icon: ScrollText, labelKey: 'rightRail.workerLog', kind: 'panel' },
-    { id: 'details', icon: Info, labelKey: 'rightRail.details', kind: 'panel' },
-    ...pluginEntries,
     {
       id: 'snapshots',
       icon: GitCompare,
@@ -89,56 +91,79 @@ export function ChatRightRail({
     },
   ];
 
+  // Skills + Tools collapsed into one bottom-pinned cog (VS Code "Manage" pattern).
+  const configEntry: RailEntry = {
+    id: 'config',
+    icon: Settings,
+    labelKey: 'rightRail.config',
+    kind: 'panel',
+  };
+
+  const renderEntry = (entry: RailEntry) => {
+    const Icon = entry.icon;
+    const active = entry.kind === 'panel' && activePanelId === entry.id;
+    const label = entry.label ?? t(`chat:${entry.labelKey}`, entry.id);
+    const handleClick = () => {
+      if (entry.kind === 'modal') {
+        if (entry.id === 'snapshots') onOpenSnapshots?.();
+        return;
+      }
+      // Toggle: clicking the active panel closes it.
+      onSelectPanel(active ? null : (entry.id as RightPanelId));
+    };
+    return (
+      <Tooltip key={entry.id}>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={handleClick}
+            aria-label={label}
+            aria-pressed={active}
+            className={cn(
+              'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
+              active
+                ? 'bg-accent text-accent-foreground'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+            )}
+          >
+            <Icon className="h-4 w-4" />
+            {active && (
+              <span
+                aria-hidden
+                className="absolute -right-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
+              />
+            )}
+            {entry.badge != null && entry.badge > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 px-1 rounded-full bg-primary text-primary-foreground text-[8px] font-medium flex items-center justify-center tabular-nums">
+                {entry.badge > 99 ? '99+' : entry.badge}
+              </span>
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="left">{label}</TooltipContent>
+      </Tooltip>
+    );
+  };
+
   return (
     <nav
       className="flex flex-col w-10 shrink-0 border-l bg-card/40 py-1 gap-0.5 items-center"
       aria-label="Session tools"
     >
-      {entries.map((entry) => {
-        const Icon = entry.icon;
-        const active = entry.kind === 'panel' && activePanelId === entry.id;
-        const label = entry.label ?? t(`chat:${entry.labelKey}`, entry.id);
-        const handleClick = () => {
-          if (entry.kind === 'modal') {
-            if (entry.id === 'snapshots') onOpenSnapshots?.();
-            return;
-          }
-          // Toggle: clicking the active panel closes it.
-          onSelectPanel(active ? null : (entry.id as RightPanelId));
-        };
-        return (
-          <Tooltip key={entry.id}>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={handleClick}
-                aria-label={label}
-                aria-pressed={active}
-                className={cn(
-                  'relative h-8 w-8 grid place-items-center rounded-md transition-colors',
-                  active
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {active && (
-                  <span
-                    aria-hidden
-                    className="absolute -right-1 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"
-                  />
-                )}
-                {entry.badge != null && entry.badge > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 px-1 rounded-full bg-primary text-primary-foreground text-[8px] font-medium flex items-center justify-center tabular-nums">
-                    {entry.badge > 99 ? '99+' : entry.badge}
-                  </span>
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="left">{label}</TooltipContent>
-          </Tooltip>
-        );
-      })}
+      {contextEntries.map(renderEntry)}
+      <RailDivider />
+      {inspectEntries.map(renderEntry)}
+      {pluginEntries.length > 0 && <RailDivider />}
+      {pluginEntries.map(renderEntry)}
+      <div className="mt-auto flex flex-col items-center gap-0.5 pt-1">
+        <RailDivider />
+        {renderEntry(configEntry)}
+      </div>
     </nav>
   );
+}
+
+/** Thin horizontal rule between rail groups — mirrors the left `ProjectRail`. */
+function RailDivider() {
+  return <span aria-hidden className="h-px w-6 bg-border my-1" />;
 }

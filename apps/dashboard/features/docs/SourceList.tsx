@@ -134,7 +134,14 @@ export function SourceList({ collection, sources, onChanged }: Props) {
                       <Globe className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                     )}
                     <div className="min-w-0">
-                      <div className="font-medium truncate">{s.title ?? prettyUri(s.uri)}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium truncate">{s.title ?? prettyUri(s.uri)}</span>
+                        {s.doc_type && s.doc_type !== 'mixed' && (
+                          <Badge variant="outline" className="text-[9px] shrink-0 font-normal">
+                            {t(`addSource.docTypes.${s.doc_type}`)}
+                          </Badge>
+                        )}
+                      </div>
                       <div className="text-xs text-muted-foreground truncate">{s.uri}</div>
                       {s.error_message && (
                         <div className="text-xs text-destructive mt-0.5">{s.error_message}</div>

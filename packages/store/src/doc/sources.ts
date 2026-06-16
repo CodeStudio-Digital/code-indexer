@@ -8,6 +8,7 @@ import type {
   DocSourceStatus,
 } from './types.js';
 import { mapSource, normalizeRequiredPath } from './mappers.js';
+import { coerceDocType } from './doc-type.js';
 import * as collections from './collections.js';
 
 export function create(db: DB, input: DocSourceInput): DocSource {
@@ -23,18 +24,19 @@ export function create(db: DB, input: DocSourceInput): DocSource {
   }
   const stmt = db.prepare(`
     INSERT INTO doc_sources (
-      collection_id, type, uri, title,
+      collection_id, type, doc_type, uri, title,
       crawl_enabled, crawl_max_pages, crawl_max_depth, crawl_same_origin,
       crawl_include_pattern, crawl_exclude_pattern, crawl_required_path,
       crawl_llm_extract_links, crawl_force_browser, crawl_browser_seed_only,
       pdf_size_bytes,
       folder_root_path, folder_include_glob, folder_exclude_glob,
       folder_max_files, folder_bypass_relevance_gate
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const result = stmt.run(
     input.collection_id,
     input.type,
+    coerceDocType(input.doc_type),
     input.uri,
     input.title ?? null,
     crawl.enabled ? 1 : 0,
@@ -109,6 +111,13 @@ export function updateStats(db: DB, id: number, patch: SourceStatsPatch): void {
   if (fields.length === 0) return;
   fields.push(`updated_at = datetime('now')`);
   db.prepare(`UPDATE doc_sources SET ${fields.join(', ')} WHERE id = ?`).run(...values, id);
+}
+
+/** Re-tag a source's documentation type (migration 149). */
+export function updateDocType(db: DB, id: number, docType: string): void {
+  db.prepare(
+    `UPDATE doc_sources SET doc_type = ?, updated_at = datetime('now') WHERE id = ?`,
+  ).run(coerceDocType(docType), id);
 }
 
 export function del(db: DB, id: number): void {

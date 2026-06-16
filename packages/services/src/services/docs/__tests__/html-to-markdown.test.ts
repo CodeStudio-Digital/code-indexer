@@ -83,4 +83,22 @@ describe('convertHtmlToMarkdown — link extraction scope', () => {
     const result = convertHtmlToMarkdown(html, { baseUrl: 'https://example.com/' });
     expect(result.noindex).toBe(true);
   });
+
+  it('emits a deep-link anchor on each heading ({#id} preferred, slug fallback)', () => {
+    const html = `
+      <body>
+        <main>
+          <h2 id="add-force">Rigidbody.AddForce</h2>
+          <p>Adds a force to the rigidbody so the object starts moving.</p>
+          <h2>Manual Setup Guide</h2>
+          <p>An explanation long enough that the section is kept by the gate.</p>
+        </main>
+      </body>
+    `;
+    const result = convertHtmlToMarkdown(html, { baseUrl: 'https://docs.example.com/x.html' });
+    // Real HTML id wins.
+    expect(result.markdown).toContain('## Rigidbody.AddForce {#add-force}');
+    // No id → GitHub-style slug fallback.
+    expect(result.markdown).toContain('## Manual Setup Guide {#manual-setup-guide}');
+  });
 });

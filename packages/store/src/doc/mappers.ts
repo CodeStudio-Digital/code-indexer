@@ -6,6 +6,7 @@ import type {
   DocSourceStatus,
   DocSourceType,
 } from './types.js';
+import { coerceDocType, type DocType } from './doc-type.js';
 import { buildFtsMatch } from '../db/fts-query.js';
 
 export function boolFromInt(n: number | boolean): boolean {
@@ -32,6 +33,7 @@ export function mapSource(row: Record<string, unknown>): DocSource {
     id: row.id as number,
     collection_id: row.collection_id as number,
     type: row.type as DocSourceType,
+    doc_type: coerceDocType(row.doc_type),
     uri: row.uri as string,
     title: (row.title as string | null) ?? null,
     status: row.status as DocSourceStatus,
@@ -89,6 +91,13 @@ export function mapChunk(row: Record<string, unknown>): DocChunk {
     embedding_hash: (row.embedding_hash as string | null) ?? null,
     embedding_provider_id: (row.embedding_provider_id as string | null) ?? null,
     source_uri: (row.source_uri as string | null) ?? null,
+    // Chunk doc_type is nullable (older chunks predate typing); keep null so
+    // "untyped" stays distinguishable, but coerce any non-null junk to a valid
+    // DocType (defense-in-depth, mirrors mapSource).
+    doc_type: row.doc_type == null ? null : coerceDocType(row.doc_type),
+    anchor: (row.anchor as string | null) ?? null,
+    api_symbol: (row.api_symbol as string | null) ?? null,
+    api_signature: (row.api_signature as string | null) ?? null,
     created_at: row.created_at as string,
   };
 }

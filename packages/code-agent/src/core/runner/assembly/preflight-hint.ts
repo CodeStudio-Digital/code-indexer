@@ -22,6 +22,13 @@ export function renderPreflightHint(seed: PreflightSeed): string {
     lines.push(`toolset seeded for this task: ${toolsetParts.join('; ')}`);
   }
 
+  if (seed.suggestedSkills?.length) {
+    lines.push('skills that may fit this task — load the body BEFORE starting (get_skill_content({skill_id:"<id>"})):');
+    for (const skill of seed.suggestedSkills) {
+      lines.push(`- ${skill.id}${skill.reason ? ` — ${skill.reason}` : ''}`);
+    }
+  }
+
   if (seed.memories?.length) {
     lines.push('read these project memories BEFORE exploring (recall_memory({query:"<title>"})):');
     for (const memory of seed.memories) {

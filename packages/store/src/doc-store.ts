@@ -21,6 +21,15 @@ import * as projectLinks from './doc/project-links.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
+// Documentation type taxonomy (migration 149) — vocabulary + helpers.
+export {
+  DOC_TYPES,
+  DEFAULT_DOC_TYPE,
+  DOC_TYPE_LABELS,
+  coerceDocType,
+  type DocType,
+} from './doc/doc-type.js';
+
 // Re-export public types so consumers of `@mcp/store/doc-store.js`
 // keep working unchanged.
 export type {
@@ -86,6 +95,7 @@ export class DocStore {
   updateSourceStats(id: number, patch: sources.SourceStatsPatch): void { sources.updateStats(this.db, id, patch); }
   deleteSource(id: number): void { sources.del(this.db, id); }
   updateSourceCrawlConfig(id: number, crawl: DocCrawlConfig): void { sources.updateCrawlConfig(this.db, id, crawl); }
+  updateSourceDocType(id: number, docType: string): void { sources.updateDocType(this.db, id, docType); }
   updateSourceFolderConfig(id: number, folder: DocFolderConfig): void { sources.updateFolderConfig(this.db, id, folder); }
   getSourceHealth(sourceId: number): DocSourceHealth | null { return sources.getHealth(this.db, sourceId); }
   tryAcquireSource(id: number, staleAfterMs: number = 5 * 60 * 1000): boolean { return sources.tryAcquire(this.db, id, staleAfterMs); }
@@ -98,6 +108,7 @@ export class DocStore {
   getChunksByIds(ids: readonly number[]): DocChunk[] { return chunks.getByIds(this.db, ids); }
   getChunkNeighbors(chunkId: number, window: number = 1): DocChunk[] { return chunks.getNeighbors(this.db, chunkId, window); }
   listChunksBySource(sourceId: number): DocChunk[] { return chunks.listBySource(this.db, sourceId); }
+  listChunksBySourceHeading(sourceId: number, headingPath: string | null, sourceUri: string | null): DocChunk[] { return chunks.listBySourceHeading(this.db, sourceId, headingPath, sourceUri); }
   clearEmbeddingsForSource(sourceId: number): { cleared: number } { return chunks.clearEmbeddingsForSource(this.db, sourceId); }
   listChunksMissingEmbedding(opts: { sourceId?: number; collectionId?: number; limit?: number } = {}): DocChunk[] { return chunks.listMissingEmbedding(this.db, opts); }
   updateChunkEmbedding(chunkId: number, embeddingHash: string, providerId: string): void { chunks.updateEmbedding(this.db, chunkId, embeddingHash, providerId); }

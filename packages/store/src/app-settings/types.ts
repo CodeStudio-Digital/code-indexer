@@ -5,7 +5,7 @@
  * public import path (`@mcp/store/.../app-settings-catalog.js`) is unchanged.
  */
 export type SettingType = 'string' | 'bool' | 'int' | 'float' | 'url' | 'secret';
-export type SettingCategory = 'llm' | 'mcp' | 'indexing' | 'agent' | 'company' | 'memory' | 'debug';
+export type SettingCategory = 'llm' | 'mcp' | 'indexing' | 'sandbox' | 'agent' | 'company' | 'memory' | 'debug';
 
 export interface SettingDef {
   /** The env-var name as referenced in `process.env`. */
@@ -34,6 +34,7 @@ export const SETTING_CATEGORIES: readonly { id: SettingCategory; label: string }
   { id: 'llm', label: 'LLM & API keys' },
   { id: 'mcp', label: 'MCP & workers' },
   { id: 'indexing', label: 'Indexing & search' },
+  { id: 'sandbox', label: 'Sandbox & containers' },
   { id: 'agent', label: 'Agent behaviour' },
   { id: 'company', label: 'Company / multi-agent' },
   { id: 'memory', label: 'Memory & consolidation' },

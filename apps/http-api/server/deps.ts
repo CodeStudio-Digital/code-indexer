@@ -37,6 +37,10 @@ import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bind
 import { PipelineProviderResolver, generalDefaultAsFallback } from '@mcp/services/pipelines/index.js';
 import { TaskPreflightService } from '@mcp/services/services/task-preflight/index.js';
 import { getAllKnownToolsMeta } from '@mcp/code-agent/tools/tiers.js';
+import {
+  buildPreflightToolCatalog,
+  buildPreflightSkillCatalog,
+} from './preflight-capability-catalog.js';
 import { NoopTelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import type { TelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import {
@@ -111,9 +115,11 @@ import {
   deriveKindLabel,
 } from '@mcp/indexer/bootstrap/index.js';
 import { createReranker } from '@mcp/indexer/search/reranker.js';
+import { createEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import { setGlobalRecentFilesTouchSink } from '@mcp/code-agent/tools/global-recent-files.js';
 import { setBuilderCheckpointDeps } from '../sse/builder-checkpoint.js';
+import { createEmbeddingExecutor } from '../sse/EmbeddingsWorkerClient.js';
 import { resolve as pathResolveNode, sep as pathSep } from 'node:path';
 import type { ChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { invokePluginTool, type PluginToolInvokeFn } from '../sse/PluginHostSingleton.js';
@@ -550,6 +556,28 @@ export function createDeps(): ServerDeps {
   // RAG cross-encoder below — a LocalReranker lazily loads a ~hundreds-of-MB
   // ONNX model, so we must NOT construct it twice.
   const codeReranker = createReranker(providerStore);
+  // Embeddings off the main thread: wrap the in-process service in a worker-
+  // backed executor when the backend is local ONNX. That inference is CPU-
+  // bound and would otherwise freeze the UI while the semantic pass reduces
+  // the "stale" count. cloudflare/bedrock stay in-process (async network I/O
+  // never blocks the event loop). Kill switch MCP_EMBED_WORKER=0; per-call
+  // fallback to in-process on worker errors. Built HERE (not in
+  // createSearchBundle) so the SAME wrapped instance reaches every consumer —
+  // there's no late-bound setter like the structural executor has.
+  const baseEmbedding = createEmbeddingService(providerStore);
+  const embedFingerprint = baseEmbedding.fingerprint?.() ?? '';
+  const embedLocalCfg = (providerStore.getDefaultEmbedding()?.config ?? {}) as { model?: string; cacheDir?: string };
+  const idleEnv = Number(process.env.MCP_EMBED_WORKER_IDLE_MS);
+  const embedExec = createEmbeddingExecutor(
+    {
+      isLocal: embedFingerprint.startsWith('local:'),
+      fingerprint: embedFingerprint,
+      model: embedLocalCfg.model,
+      cacheDir: embedLocalCfg.cacheDir,
+      idleTtlMs: Number.isFinite(idleEnv) && idleEnv > 0 ? idleEnv : undefined,
+    },
+    baseEmbedding,
+  );
   const { embeddingService, vectorStore, searchableVectorStore, hybridSearch } =
     createSearchBundle(
       db,
@@ -557,6 +585,7 @@ export function createDeps(): ServerDeps {
       codeReranker,
       recentFilesSource,
       pipelineTelemetrySink,
+      embedExec.executor,
     );
   // Release the local ONNX sessions (embeddings + reranker) on shutdown —
   // both also self-evict after an idle TTL; this covers the exit path.
@@ -664,14 +693,20 @@ export function createDeps(): ServerDeps {
   // per-stage telemetry. The references here are the same instances.
   const pipelineBindingsStore = new PipelineProviderBindingsStore(db.raw());
   const pipelineProviderResolver = new PipelineProviderResolver(pipelineBindingsStore, providerStore);
-  // Task preflight — analyzes the FIRST prompt of a fresh coder session when
-  // the `code-agent/preflight` binding is set. Tool catalog is the static
-  // tiered meta (name + tier + short description); the memory index reads
-  // the same store that feeds the runner's MEMORY.md-style block.
+  // Task preflight — analyzes the FIRST prompt of a fresh coder session.
+  // Runs zero-config: a `code-agent/preflight` binding wins, else the general
+  // default model (getFallbackDefault). The catalog spans native tools +
+  // cached external MCP tools + active skills, so the analyzer can pin MCP
+  // tools and suggest task-relevant skills. The memory index reads the same
+  // store that feeds the runner's MEMORY.md-style block.
+  const nativeToolMeta = () =>
+    getAllKnownToolsMeta().map((t) => ({ name: t.name, tier: t.tier, description: t.description }));
   const taskPreflight = new TaskPreflightService({
     resolver: pipelineProviderResolver,
-    getToolCatalog: () =>
-      getAllKnownToolsMeta().map((t) => ({ name: t.name, tier: t.tier, description: t.description })),
+    getFallbackDefault: () => generalDefaultAsFallback(providerStore),
+    getToolCatalog: () => buildPreflightToolCatalog(config.dbPath, nativeToolMeta()),
+    getSkillCatalog: (sessionId, projectId) =>
+      buildPreflightSkillCatalog(skillStore, sessionId, projectId),
     getMemoryIndex: (projectId) => {
       try {
         if (!db.getProjectMemoryEnabled(projectId)) return [];

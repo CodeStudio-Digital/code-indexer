@@ -39,8 +39,16 @@ export function createSearchBundle(
   reranker?: RerankerService,
   recentFilesSource?: RecentFilesSource,
   pipelineTelemetry?: TelemetrySink,
+  /**
+   * Pre-built embedding service to use instead of `createEmbeddingService`.
+   * The http-api layer passes a worker-backed wrapper here (so local ONNX
+   * inference runs off the main thread) while keeping all consumers —
+   * snapshotService, hybridSearch, etc. — on the SAME instance. Other callers
+   * (mcp-server, cli) omit it and get the plain in-process service.
+   */
+  embeddingOverride?: EmbeddingService,
 ): SearchBundle {
-  const embeddingService = createEmbeddingService(providerStore);
+  const embeddingService = embeddingOverride ?? createEmbeddingService(providerStore);
   const vectorStore = createVectorStore(providerStore);
   const searchableVectorStore =
     vectorStore instanceof NullVectorStore ? null : vectorStore;

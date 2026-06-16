@@ -206,6 +206,10 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // below: search prints chunk_ids on turn 1 that the agent couldn't follow.
   'rag_search_docs',
   'rag_read_doc',
+  // rag_doc_outline — structural navigation companion (collection → source →
+  // headings). Same bootstrap rationale as rag_read_doc: it prints chunk_ids
+  // the agent must be able to follow without unlocking a tier.
+  'rag_doc_outline',
   // Skill discovery — needed in lazy/compact modes so the agent can fetch
   // skill descriptions and bodies on demand without paying for them up front.
   'get_skills_list',
@@ -578,6 +582,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   invoke_skill: 'Invoke a reusable skill by ID',
   rag_search_docs: 'Search the indexed documentation corpus (Documentação)',
   rag_read_doc: 'Read one doc section in full by chunk_id (+ neighbors)',
+  rag_doc_outline: 'Browse a doc collection/source structurally (sources → headings)',
   docs_deep_research: 'Multi-step cited research over the doc corpus (slow, LLM cost)',
   // ─── Subordinate kanban ──────────────────────────────────────
   post_to_board: 'Post to the shared company board',

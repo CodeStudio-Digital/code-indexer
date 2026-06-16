@@ -171,9 +171,10 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     key: 'CODER_PREFLIGHT',
     label: 'Task preflight (first-prompt analysis)',
     description:
-      'When the code-agent/preflight binding is set (Admin → Pipelines), a cheap model analyzes ' +
-      'the first prompt of a fresh session and seeds it: minimal tool profile, pinned tools, and ' +
-      'which project memories to read. This is the kill-switch; the binding is what enables it.',
+      'A cheap model analyzes the first prompt of a fresh session and seeds it: minimal tool ' +
+      'profile, pinned tools (incl. relevant external MCP tools), suggested skills, and which ' +
+      'project memories to read. Runs zero-config — uses the code-agent/preflight binding ' +
+      '(Admin → Pipelines) if set, otherwise the general default AI model. This is the kill-switch.',
     type: 'bool',
     category: 'agent',
     default: '1',
@@ -181,10 +182,13 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
   {
     key: 'CODER_PREFLIGHT_TIMEOUT_MS',
     label: 'Task preflight timeout (ms)',
-    description: 'Hard ceiling for the preflight analysis call. On timeout the session starts unseeded.',
+    description:
+      'Hard ceiling for the preflight one-shot call; on timeout the call is cancelled and the session ' +
+      'starts unseeded. Headroom for a reasoning model\'s first round-trip — actual latency is ~1-2s ' +
+      'once reasoning is minimized.',
     type: 'int',
     category: 'agent',
-    default: '4000',
+    default: '8000',
     min: 500,
     advanced: true,
   },
@@ -196,6 +200,31 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     category: 'agent',
     default: '12',
     min: 1,
+    advanced: true,
+  },
+  {
+    key: 'CODER_PREFLIGHT_EXT_CATALOG_MAX',
+    label: 'Task preflight external MCP catalog cap',
+    description:
+      'How many cached external MCP-server tools are shown to the preflight analyzer (input cap, ' +
+      'bounds prompt cost). Native tools are always included; this only limits external tools. ' +
+      'Set 0 to hide external MCP tools from preflight entirely.',
+    type: 'int',
+    category: 'agent',
+    default: '40',
+    min: 0,
+    advanced: true,
+  },
+  {
+    key: 'CODER_PREFLIGHT_SKILLS_MAX',
+    label: 'Task preflight skills catalog cap',
+    description:
+      'How many active skills are shown to the preflight analyzer (input cap, bounds prompt cost). ' +
+      'The analyzer suggests a small subset of these as task-relevant. Set 0 to disable skill suggestions.',
+    type: 'int',
+    category: 'agent',
+    default: '30',
+    min: 0,
     advanced: true,
   },
   {

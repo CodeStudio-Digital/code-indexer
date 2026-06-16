@@ -18,8 +18,13 @@ export function fileToAttachment(file: File): Promise<AgentAttachment> {
   return new Promise((resolve, reject) => {
     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
     const isImage = file.type.startsWith('image/');
+    // RTF must reach the server-side office extractor as base64. Some browsers
+    // report it as `text/rtf`, which would otherwise hit the text branch and
+    // send raw RTF control-word markup to the model instead of clean text.
+    const isRtf = ext === 'rtf' || file.type === 'text/rtf' || file.type === 'application/rtf';
     const isText =
-      file.type.startsWith('text/') || file.type === 'application/json' || TEXT_LIKE_EXTS.has(ext);
+      !isRtf &&
+      (file.type.startsWith('text/') || file.type === 'application/json' || TEXT_LIKE_EXTS.has(ext));
     const reader = new FileReader();
     reader.onerror = () => reject(reader.error);
     if (isText) {

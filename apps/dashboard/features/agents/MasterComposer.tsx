@@ -1,10 +1,11 @@
 import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, ChevronDown, ChevronUp, Paperclip, Send, X } from 'lucide-react';
+import { Brain, ChevronDown, ChevronUp, Gauge, Paperclip, Send, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
-import { MarkdownToolbar } from '../chat/composer/MarkdownToolbar.js';
 import { useMarkdownShortcuts } from '../chat/composer/useMarkdownShortcuts.js';
 import { fileToAttachment } from '../chat/utils.js';
+import { useFileDrop } from '../chat/composer/useFileDrop.js';
+import { DropOverlay } from '../chat/composer/DropOverlay.js';
 import type { AgentAttachment } from '../../hooks/agent-stream/types.js';
 
 interface MasterComposerProps {
@@ -13,6 +14,15 @@ interface MasterComposerProps {
   disabled?: boolean;
   /** When true, render the brain toggle. Computed by the parent from the master's provider capabilities. */
   supportsThinking?: boolean;
+  /**
+   * Sticky master reasoning-effort override (config_json `master_reasoning_effort`).
+   * Orthogonal to thinking. The selector renders only when `reasoningLevels` is
+   * non-empty (master model exposes discrete effort levels). `null` = auto.
+   */
+  reasoningEffort?: string | null;
+  setReasoningEffort?: (v: string | null) => void;
+  /** Discrete effort levels the master model supports. Empty → hide selector. */
+  reasoningLevels?: string[];
   /**
    * Optional prefix builder (Builder studio). Called once per send to
    * prepend context (e.g. the selected element block) to the message and
@@ -32,7 +42,7 @@ function readCollapsed(): boolean {
   }
 }
 
-export function MasterComposer({ onSend, placeholder, disabled, supportsThinking, buildPrefix }: MasterComposerProps) {
+export function MasterComposer({ onSend, placeholder, disabled, supportsThinking, reasoningEffort, setReasoningEffort, reasoningLevels, buildPrefix }: MasterComposerProps) {
   const { t } = useTranslation('agents');
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
@@ -40,7 +50,9 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { handleKeyDown: mdHandleKeyDown, applyAction } = useMarkdownShortcuts(textareaRef, input, setInput);
+  // Markdown formatting toolbar removed (useless markers for an AI prompt);
+  // the smart keyboard behaviors (Tab indent, Enter list continuation) stay.
+  const { handleKeyDown: mdHandleKeyDown } = useMarkdownShortcuts(textareaRef, input, setInput);
 
   function toggleCollapsed() {
     setCollapsed((cur) => {
@@ -53,9 +65,10 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     const arr = await Promise.all(Array.from(files).map(fileToAttachment));
-    // Images-only filter — backend rejects non-images for company sessions.
-    setAttachments((prev) => [...prev, ...arr.filter((a) => a.mediaType.startsWith('image/'))]);
+    setAttachments((prev) => [...prev, ...arr]);
   }
+
+  const { isDragging, dropHandlers } = useFileDrop({ onFiles: handleFiles, disabled });
 
   async function handleSend() {
     const text = input.trim();
@@ -77,7 +90,8 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
   }
 
   return (
-    <div className="space-y-2 relative">
+    <div className="space-y-2 relative" {...dropHandlers}>
+      <DropOverlay show={isDragging} />
       <button
         type="button"
         onClick={toggleCollapsed}
@@ -89,23 +103,33 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
 
       {!collapsed && attachments.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {attachments.map((a, i) => (
-            <div key={i} className="relative group">
-              <img
-                src={`data:${a.mediaType};base64,${a.base64}`}
-                alt={a.name}
-                className="h-14 w-14 object-cover rounded-md border"
-              />
-              <button
-                type="button"
-                onClick={() => setAttachments((p) => p.filter((_, j) => j !== i))}
-                className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow"
-                aria-label="Remove attachment"
-              >
-                <X className="h-2.5 w-2.5" />
-              </button>
-            </div>
-          ))}
+          {attachments.map((a, i) => {
+            const isImg = a.mediaType.startsWith('image/') && a.base64;
+            return (
+              <div key={i} className="relative group">
+                {isImg ? (
+                  <img
+                    src={`data:${a.mediaType};base64,${a.base64}`}
+                    alt={a.name}
+                    className="h-14 w-14 object-cover rounded-md border"
+                  />
+                ) : (
+                  <div className="h-14 px-3 flex items-center text-xs rounded-md border bg-muted gap-1.5 max-w-[180px]">
+                    <Paperclip className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{a.name}</span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setAttachments((p) => p.filter((_, j) => j !== i))}
+                  className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow"
+                  aria-label="Remove attachment"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -132,7 +156,7 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept="image/*"
+                  accept="image/*,.pdf,.docx,.xlsx,.pptx,.odt,.ods,.odp,.rtf,.txt,.md,.json,.csv,.yaml,.yml,.xml,.html"
                   className="hidden"
                   onChange={(e) => {
                     handleFiles(e.target.files);
@@ -143,7 +167,6 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
                   <Paperclip className="h-3.5 w-3.5" />
                 </span>
               </label>
-              <MarkdownToolbar onAction={applyAction} />
               {supportsThinking && (
                 <button
                   type="button"
@@ -157,6 +180,27 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
                 >
                   <Brain className="h-3.5 w-3.5" />
                 </button>
+              )}
+              {setReasoningEffort && reasoningLevels && reasoningLevels.length > 0 && (
+                <span
+                  className="ml-1 inline-flex items-center gap-1 text-muted-foreground"
+                  title={t('composer.effortHint', 'Reasoning effort (auto = model default). Independent of thinking.')}
+                >
+                  <Gauge className="h-3.5 w-3.5" />
+                  <select
+                    aria-label={t('composer.effort', 'Reasoning effort')}
+                    className="h-7 rounded border bg-background px-1 text-xs"
+                    value={reasoningEffort ?? ''}
+                    onChange={(e) => setReasoningEffort(e.target.value === '' ? null : e.target.value)}
+                  >
+                    <option value="">{t('composer.effortAuto', 'auto')}</option>
+                    {reasoningLevels.map((lv) => (
+                      <option key={lv} value={lv}>
+                        {lv}
+                      </option>
+                    ))}
+                  </select>
+                </span>
               )}
             </div>
           )}

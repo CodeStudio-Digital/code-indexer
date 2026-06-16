@@ -19,6 +19,17 @@ export function setTemperature(db: DB, id: number, temperature: number | null): 
 }
 
 /**
+ * Persist the per-session sticky reasoning-effort override (migration 150).
+ * Pass `null` to clear (provider falls back to the thinking-derived effort and
+ * then the model default). Membership validation against the model's
+ * `supported_reasoning_levels` lives at the HTTP write path; an unsupported
+ * value is also degraded gracefully by the provider at request time.
+ */
+export function setReasoningEffort(db: DB, id: number, effort: string | null): void {
+  db.prepare("UPDATE coder_sessions SET reasoning_effort_override = ?, updated_at = datetime('now') WHERE id = ?").run(effort, id);
+}
+
+/**
  * Persist the per-session "unrestricted tool output" toggle. Pass `null` to
  * clear (back to the production cap defaults). Stored as 0|1|NULL.
  */

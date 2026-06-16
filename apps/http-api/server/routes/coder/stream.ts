@@ -22,6 +22,7 @@ import {
 } from '../../../sse/coderWorkerPoolSingleton.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import { withSessionLock } from './sessionLock.js';
+import { normalizeAttachmentsForModel, pdfHandledNatively } from '@mcp/services/services/docs/attachment-extract.js';
 import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { getGlobalMcpExternalPool } from '../../../sse/McpExternalPool.js';
 import { listEnabledPluginRuntime, buildPluginTools } from '@mcp/plugin-host';
@@ -127,6 +128,13 @@ export function mountCoderStreamRoutes(
     });
   }
 
+  /** Resolved provider `kind` for the session (drives PDF-native gating). */
+  function resolveProviderKind(id: number): string | undefined {
+    const session = sessionStore.getSession(id);
+    if (!session?.provider) return undefined;
+    return providerStore.getProvider(session.provider)?.kind;
+  }
+
   /**
    * Whether the `preview` DevTools tier should auto-activate for this session.
    * True for any PROJECT-scoped coder session — opening/inspecting/driving the
@@ -202,6 +210,10 @@ export function mountCoderStreamRoutes(
             task_kind: result.seed?.taskKind ?? null,
             profile: result.seed?.profile ?? null,
             tools: result.seed?.pinTools ?? [],
+            // External MCP tools the analyzer pinned (subset of pinTools) —
+            // distinguishes MCP suggestions from native pins in the funnel.
+            ext_tools: result.seed?.pinTools?.filter((t) => t.startsWith('ext_')) ?? [],
+            skills: result.seed?.suggestedSkills?.map((s) => s.id) ?? [],
             memories: result.seed?.memories?.map((m) => m.title) ?? [],
           },
         });
@@ -332,6 +344,26 @@ export function mountCoderStreamRoutes(
       body.selected_skill_ids && body.selected_skill_ids.length > 0
         ? body.selected_skill_ids
         : undefined;
+
+    // Documents (docx/xlsx/pptx/odt…) arrive as base64, but every provider
+    // adapter only serializes a DocumentBlock's `text` — a base64 office doc is
+    // silently dropped. Extract to text up-front so the model actually sees it.
+    // No-op for images, pre-decoded text and PDF (Anthropic-native). Embedded
+    // figures are pulled out as image blocks only when the model has vision (or
+    // the user forced the vision-fallback), so a blind model doesn't pay surprise
+    // describe-image cost. Mutating `body` here covers both the worker and legacy
+    // fresh paths; attachments are first-message-only, so this runs at most once.
+    if (body.attachments && body.attachments.length > 0) {
+      const extractImages =
+        resolveModelSupportsVision(id) === true || body.describe_images === true;
+      // Non-native PDF providers (everyone but Anthropic/Gemini) get the PDF
+      // text-extracted; the base64 is dropped so it isn't carried unused.
+      const extractPdfText = !pdfHandledNatively(resolveProviderKind(id));
+      body.attachments = await normalizeAttachmentsForModel(body.attachments, {
+        extractImages,
+        extractPdfText,
+      });
+    }
 
     // Structural auto-index — agents work live against symbols/grep/FTS, so
     // a session turn counts as "project became active". Memory-only no-op

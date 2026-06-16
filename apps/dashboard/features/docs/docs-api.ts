@@ -19,10 +19,25 @@ export interface DocCollection {
   updated_at: string;
 }
 
+/**
+ * Documentation type taxonomy (migration 149). Mirrors `DocType` in
+ * `@mcp/store/doc/doc-type.ts` — kept as a local union so the dashboard
+ * stays decoupled from the store package.
+ */
+export type DocType =
+  | 'api_reference'
+  | 'guide'
+  | 'conceptual'
+  | 'reference'
+  | 'changelog'
+  | 'handbook'
+  | 'mixed';
+
 export interface DocSource {
   id: number;
   collection_id: number;
-  type: 'pdf' | 'url';
+  type: 'pdf' | 'url' | 'folder';
+  doc_type: DocType;
   uri: string;
   title: string | null;
   status: 'queued' | 'fetching' | 'indexing' | 'done' | 'error';
@@ -281,7 +296,7 @@ export async function sweepVectorTombstones(): Promise<{ drained: number; still_
 
 export async function addUrlSource(
   collectionId: number,
-  input: { url: string; title?: string; crawl?: DocCrawlConfig; defer_indexing?: boolean },
+  input: { url: string; title?: string; doc_type?: DocType; crawl?: DocCrawlConfig; defer_indexing?: boolean },
 ): Promise<DocSource> {
   return jsonFetch(`/api/docs/collections/${collectionId}/sources/url`, {
     method: 'POST',
@@ -297,7 +312,7 @@ export async function addUrlSource(
  */
 export async function indexUrlStream(
   collectionId: number,
-  input: { url: string; title?: string; crawl?: DocCrawlConfig },
+  input: { url: string; title?: string; doc_type?: DocType; crawl?: DocCrawlConfig },
   callbacks: {
     onStart?: (p: unknown) => void;
     onScan?: (p: DocIngestScanFrame) => void;
@@ -331,10 +346,12 @@ export async function indexPdfStream(
     onError?: (msg: string) => void;
   } = {},
   title?: string,
+  docType?: string,
 ): Promise<void> {
   const form = new FormData();
   form.append('file', file);
   if (title) form.append('title', title);
+  if (docType) form.append('doc_type', docType);
   const r = await fetch(`/api/docs/collections/${collectionId}/sources/pdf`, {
     method: 'POST',
     headers: { accept: 'text/event-stream' },
@@ -366,7 +383,7 @@ export interface DocFolderConfig {
  */
 export async function indexFolderStream(
   collectionId: number,
-  input: { path: string; title?: string; folder?: DocFolderConfig },
+  input: { path: string; title?: string; doc_type?: DocType; folder?: DocFolderConfig },
   callbacks: {
     onStart?: (p: unknown) => void;
     onScan?: (p: DocIngestScanFrame) => void;

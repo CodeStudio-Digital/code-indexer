@@ -17,7 +17,7 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Network, Repeat, Send, Settings2, Square, Thermometer } from 'lucide-react';
+import { Brain, Gauge, Network, Repeat, Send, Settings2, Square, Thermometer } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -28,6 +28,8 @@ import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
+import { QueueSplitButton } from './QueueSplitButton.js';
+import type { QueueMode } from './useMessageQueue.js';
 
 type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api';
 
@@ -50,6 +52,11 @@ interface RailComposerBarProps {
   setMaxTurns: (v: number | null) => void;
   temperature: number | null;
   setTemperature: (v: number | null) => void;
+  /** Per-session sticky reasoning-effort override (migration 150). Orthogonal
+   *  to thinking; selector renders only when `reasoningLevels` is non-empty. */
+  reasoningEffort?: string | null;
+  setReasoningEffort?: (v: string | null) => void;
+  reasoningLevels?: string[];
   unrestrictedOutput: boolean;
   setUnrestrictedOutput?: (v: boolean) => void;
   fallbackProvider: string | null;
@@ -66,6 +73,9 @@ interface RailComposerBarProps {
   setDescribeImages?: (v: boolean) => void;
   toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
   setToolPermissionMode?: (v: 'ask' | 'auto' | 'unrestricted') => void;
+  /** When streaming + queueable, show the queue split button beside Stop. */
+  queueable?: boolean;
+  onQueueSend?: (mode: QueueMode) => void;
 }
 
 export function RailComposerBar(props: RailComposerBarProps) {
@@ -125,11 +135,16 @@ export function RailComposerBar(props: RailComposerBarProps) {
         showThink={false}
       />
 
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-1">
         {props.streaming ? (
-          <Button onClick={props.onAbort} variant="destructive" size="sm" className="h-7">
-            <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}
-          </Button>
+          <>
+            {props.queueable && props.onQueueSend && (
+              <QueueSplitButton hasInput={props.hasInput} onQueue={props.onQueueSend} compact />
+            )}
+            <Button onClick={props.onAbort} variant="destructive" size="sm" className="h-7">
+              <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}
+            </Button>
+          </>
         ) : props.selectedPipelineId != null ? (
           <Button onClick={props.onSend} disabled={!props.hasInput} size="sm" variant="default" className="h-7">
             <Network className="h-3.5 w-3.5" /> {t('chat:pipelinePicker.runButton')}
@@ -230,6 +245,27 @@ export function RailComposerBar(props: RailComposerBarProps) {
                 </div>
               </div>
             </div>
+            {props.setReasoningEffort && props.reasoningLevels && props.reasoningLevels.length > 0 && (
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground">{t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}</label>
+                <div className="flex items-center gap-1.5">
+                  <Gauge className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <select
+                    aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
+                    className="h-7 flex-1 rounded border bg-background px-1.5 text-xs"
+                    value={props.reasoningEffort ?? ''}
+                    onChange={(e) => props.setReasoningEffort?.(e.target.value === '' ? null : e.target.value)}
+                  >
+                    <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>
+                    {props.reasoningLevels.map((lv) => (
+                      <option key={lv} value={lv}>
+                        {lv}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">{t('chat:toolbar.fallback', { defaultValue: 'Fallback' })}</label>
               <FallbackPicker

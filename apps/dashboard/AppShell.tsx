@@ -16,7 +16,6 @@ import {
   BookOpen,
   Boxes,
   Clock,
-  GraduationCap,
   Home,
   Moon,
   Palette,
@@ -42,7 +41,7 @@ import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
 
 interface ActiveView {
-  page: 'home' | 'project' | 'project-analytics' | 'agents' | 'admin' | 'design-systems' | 'telemetry' | 'docs' | 'training' | 'other';
+  page: 'home' | 'project' | 'project-analytics' | 'agents' | 'admin' | 'design-systems' | 'telemetry' | 'docs' | 'other';
   projectId: number | null;
   sessionId: number | null;
 }
@@ -74,7 +73,6 @@ function parsePathname(pathname: string, search: string): ActiveView {
   if (pathname.startsWith('/design-systems')) return { page: 'design-systems', projectId: null, sessionId: null };
   if (pathname.startsWith('/telemetry')) return { page: 'telemetry', projectId: null, sessionId: null };
   if (pathname.startsWith('/docs')) return { page: 'docs', projectId: null, sessionId: null };
-  if (pathname.startsWith('/training')) return { page: 'training', projectId: null, sessionId: null };
   return { page: 'other', projectId: null, sessionId: null };
 }
 
@@ -159,7 +157,6 @@ export function AppShell() {
     },
     { id: 'telemetry', label: t('nav.telemetry'), icon: Activity, href: '/telemetry' },
     { id: 'docs', label: t('nav.docs'), icon: BookOpen, href: '/docs' },
-    { id: 'training', label: t('nav.training'), icon: GraduationCap, href: '/training' },
     { id: 'admin', label: t('nav.admin'), icon: Settings, href: '/admin' },
   ].filter((n) => n.show !== false);
 

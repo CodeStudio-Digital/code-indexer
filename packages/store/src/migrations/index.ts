@@ -162,6 +162,8 @@ import { userMemory145 } from './145_user_memory.js';
 import { snapshotArchive146 } from './146_snapshot_archive.js';
 import { apiCollections147 } from './147_api_collections.js';
 import { apiRequestHistory148 } from './148_api_request_history.js';
+import { docTyping149 } from './149_doc_typing.js';
+import { sessionReasoningEffort150 } from './150_session_reasoning_effort.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -340,6 +342,8 @@ export const MIGRATIONS: Migration[] = [
   snapshotArchive146,
   apiCollections147,
   apiRequestHistory148,
+  docTyping149,
+  sessionReasoningEffort150,
 ];
 
 /**

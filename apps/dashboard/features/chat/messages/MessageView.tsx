@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Brain, ChevronDown, ChevronRight, FileText, GitBranch, ImageIcon, Loader2, Paperclip, Sparkles, User } from 'lucide-react';
+import { Bot, Brain, ChevronDown, ChevronRight, FileText, GitBranch, ImageIcon, Loader2, Paperclip, RotateCcw, Sparkles, User } from 'lucide-react';
 import type { AgentsGroup, ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Avatar, AvatarFallback } from '../../../components/ui/avatar.js';
 import { cn } from '../../../lib/utils.js';
@@ -39,6 +39,7 @@ interface MessageViewProps {
   onPlanResponse: PromptHandlers['onPlanResponse'];
   onTasksResponse: PromptHandlers['onTasksResponse'];
   onFork?: PromptHandlers['onFork'];
+  onRollback?: PromptHandlers['onRollback'];
   /** Persisted task list state from coder_tasks_state — used to overlay live
    *  task statuses on top of the frozen tool_use input snapshot. */
   tasksState?: PersistedTasksState | null;
@@ -59,7 +60,8 @@ export const MessageView = React.memo(MessageViewInner, (prev, next) => {
     prev.onAnswer === next.onAnswer &&
     prev.onPlanResponse === next.onPlanResponse &&
     prev.onTasksResponse === next.onTasksResponse &&
-    prev.onFork === next.onFork
+    prev.onFork === next.onFork &&
+    prev.onRollback === next.onRollback
   );
 });
 
@@ -74,6 +76,7 @@ function MessageViewInner({
   onPlanResponse,
   onTasksResponse,
   onFork,
+  onRollback,
   tasksState,
 }: MessageViewProps) {
   const { t } = useTranslation('chat');
@@ -98,6 +101,7 @@ function MessageViewInner({
         messageId={messageId}
         tokenBadge={tokenBadge}
         onFork={onFork && messageId != null ? () => onFork(messageId) : undefined}
+        onRollback={onRollback && messageId != null ? () => onRollback(messageId) : undefined}
       />
     );
   if (message.role === 'tool') return null;
@@ -137,13 +141,16 @@ function UserMessage({
   messageId,
   tokenBadge,
   onFork,
+  onRollback,
 }: {
   message: PersistedMessage;
   sessionId?: number;
   messageId?: number;
   tokenBadge: React.ReactNode;
   onFork?: () => void;
+  onRollback?: () => void;
 }) {
+  const { t } = useTranslation('chat');
   // Suppress the synthetic tool-image plumbing caption ("(Image(s) attached
   // from the tool call above.)") so a tool screenshot renders as a clean image
   // bubble. The string is the sentinel emitted by executing.ts.
@@ -208,6 +215,17 @@ function UserMessage({
             >
               <GitBranch className="h-3 w-3" />
               Fork from here
+            </button>
+          )}
+          {onRollback && (
+            <button
+              type="button"
+              onClick={onRollback}
+              title={t('messages.rollbackTitle')}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 group-hover/user:opacity-100 hover:bg-muted hover:text-foreground transition-opacity"
+            >
+              <RotateCcw className="h-3 w-3" />
+              {t('messages.rollback')}
             </button>
           )}
           {text && <CopyMarkdownButton text={text} />}

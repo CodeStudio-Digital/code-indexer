@@ -31,7 +31,9 @@ import {
   indexPdfStream,
   indexUrlStream,
   type DocCollection,
+  type DocType,
 } from './docs-api.js';
+import { DocTypeSelect } from './DocTypeSelect.js';
 import { IndexProgressStream } from './IndexProgressStream.js';
 
 function Label(
@@ -71,6 +73,10 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
    * porque `running` só virava `null` no clique do botão interno.
    */
   const [streamFinished, setStreamFinished] = useState(false);
+
+  // Documentation type (migration 149). Shared across all three tabs — the
+  // operator tags the WHOLE source. Default 'mixed' never limits to API refs.
+  const [docType, setDocType] = useState<DocType>('mixed');
 
   // URL form state
   const [url, setUrl] = useState('');
@@ -131,6 +137,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
   const [folderError, setFolderError] = useState<string | null>(null);
 
   function reset() {
+    setDocType('mixed');
     setUrl('');
     setCrawlEnabled(false);
     setMaxPages(50);
@@ -243,7 +250,10 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
         </DialogHeader>
 
         {!running && (
-          <Tabs defaultValue="url">
+          <div className="space-y-4">
+            <DocTypeSelect value={docType} onChange={setDocType} />
+
+            <Tabs defaultValue="url">
             <TabsList>
               <TabsTrigger value="url">
                 <Globe className="h-3 w-3 mr-1" /> {t('addSource.tabsUrl')}
@@ -568,7 +578,8 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                 </Button>
               </div>
             </TabsContent>
-          </Tabs>
+            </Tabs>
+          </div>
         )}
 
         {running?.kind === 'url' && (
@@ -578,6 +589,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                 collection.id,
                 {
                   url: url.trim(),
+                  doc_type: docType,
                   crawl: {
                     enabled: crawlEnabled,
                     max_pages: crawlEnabled ? maxPages : 1,
@@ -599,7 +611,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
 
         {running?.kind === 'pdf' && pdfFile && (
           <IndexProgressStream
-            start={(cb) => indexPdfStream(collection.id, pdfFile, cb, pdfTitle.trim() || undefined)}
+            start={(cb) => indexPdfStream(collection.id, pdfFile, cb, pdfTitle.trim() || undefined, docType)}
             onClose={onStreamClosed}
             onFinished={() => setStreamFinished(true)}
           />
@@ -613,6 +625,7 @@ export function AddSourceDialog({ collection, onAdded }: Props) {
                 {
                   path: folderPath.trim(),
                   title: folderTitle.trim() || undefined,
+                  doc_type: docType,
                   folder: {
                     include_glob: folderIncludeGlob.trim() || undefined,
                     exclude_glob: folderExcludeGlob.trim() || undefined,

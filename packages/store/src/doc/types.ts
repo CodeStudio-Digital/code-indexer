@@ -1,3 +1,5 @@
+import type { DocType } from './doc-type.js';
+
 export type DocCollectionStatus = 'idle' | 'indexing' | 'error';
 
 /**
@@ -66,6 +68,8 @@ export interface DocSource {
   id: number;
   collection_id: number;
   type: DocSourceType;
+  /** Kind of documentation this source holds (drives ingestion + agent handling). */
+  doc_type: DocType;
   uri: string;
   title: string | null;
   status: DocSourceStatus;
@@ -119,6 +123,8 @@ export interface DocFolderConfig {
 export interface DocSourceInput {
   collection_id: number;
   type: DocSourceType;
+  /** Kind of documentation. Defaults to `'mixed'` when omitted. */
+  doc_type?: DocType;
   uri: string;
   title?: string | null;
   crawl?: DocCrawlConfig;
@@ -140,6 +146,14 @@ export interface DocChunkInput {
   concepts?: string[];
   token_count?: number;
   source_uri?: string | null;
+  /** Kind of documentation, denormalized from the source (or per-page classified). */
+  doc_type?: DocType | null;
+  /** Heading-level URL fragment for deep-link citations (`source_uri#anchor`). */
+  anchor?: string | null;
+  /** Extracted API symbol (e.g. `Rigidbody.AddForce`) for api_reference sections. */
+  api_symbol?: string | null;
+  /** Extracted signature (e.g. `AddForce(Vector3, ForceMode)`) for api_reference sections. */
+  api_signature?: string | null;
 }
 
 export interface DocChunk {
@@ -156,6 +170,10 @@ export interface DocChunk {
   embedding_hash: string | null;
   embedding_provider_id: string | null;
   source_uri: string | null;
+  doc_type: DocType | null;
+  anchor: string | null;
+  api_symbol: string | null;
+  api_signature: string | null;
   created_at: string;
 }
 

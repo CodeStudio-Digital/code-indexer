@@ -15,6 +15,16 @@ export interface ChatRequest {
   /** Enable thinking/reasoning mode (Gemini thinkingConfig, Anthropic extended thinking, Codex reasoning.effort). */
   thinking?: boolean;
   /**
+   * Explicit reasoning-effort level (e.g. `minimal`/`low`/`medium`/`high`/`xhigh`).
+   * Orthogonal to `thinking`: when set, providers that expose discrete effort
+   * levels (Codex via `reasoning.effort`, OpenRouter via `reasoning.effort`)
+   * MUST use this value directly instead of deriving effort from `thinking`.
+   * Validated against the model's `supported_reasoning_levels` upstream — the
+   * provider only checks membership against its own capability list. Undefined
+   * → provider falls back to the `thinking`-derived behaviour / model default.
+   */
+  reasoningEffort?: string | null;
+  /**
    * Per-request thinking budget (in tokens). Only honoured by providers
    * whose extended-thinking surface accepts a budget (Anthropic). Other
    * providers ignore it silently. When undefined the provider's

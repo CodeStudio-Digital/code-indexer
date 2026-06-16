@@ -82,14 +82,20 @@ export class OpenAIChatProvider implements ChatProvider {
     }
 
     // OpenRouter normalizes reasoning controls across providers via the
-    // `reasoning` parameter. Use the budget when the caller supplied one;
-    // otherwise ask OpenRouter to enable the model's default reasoning mode.
+    // `reasoning` parameter. An explicit effort override (composer/role) wins:
+    // OpenRouter accepts `reasoning.effort` (low/medium/high) and maps it per
+    // upstream model. Otherwise fall back to budget (when supplied) or the
+    // model's default reasoning mode when `thinking` is on.
     const openrouterExtras: Record<string, unknown> = {};
-    if (this.vendor === 'openrouter' && req.thinking === true) {
-      openrouterExtras.reasoning =
-        typeof req.thinkingBudgetTokens === 'number' && req.thinkingBudgetTokens > 0
-          ? { max_tokens: req.thinkingBudgetTokens }
-          : { enabled: true };
+    if (this.vendor === 'openrouter') {
+      if (req.reasoningEffort) {
+        openrouterExtras.reasoning = { effort: req.reasoningEffort };
+      } else if (req.thinking === true) {
+        openrouterExtras.reasoning =
+          typeof req.thinkingBudgetTokens === 'number' && req.thinkingBudgetTokens > 0
+            ? { max_tokens: req.thinkingBudgetTokens }
+            : { enabled: true };
+      }
     }
 
     // Stable cache hint per session. OpenAI accepts `prompt_cache_key`

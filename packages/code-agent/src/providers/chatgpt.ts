@@ -167,6 +167,24 @@ export class ChatGPTCodexProvider implements ChatProvider {
     return desired.find((level) => supported.includes(level)) ?? null;
   }
 
+  /**
+   * Resolve the effort to send, giving an explicit `req.reasoningEffort`
+   * (composer/role override) precedence over the `thinking`-derived level.
+   * The explicit value is only honoured when this model actually supports it
+   * (or capability is unknown); an unsupported override degrades gracefully to
+   * the derived behaviour rather than triggering a backend rejection.
+   */
+  private resolveReasoningEffort(req: ChatRequest): string | null {
+    const explicit = req.reasoningEffort;
+    if (explicit) {
+      const supported = this.reasoningCapability.supported;
+      if (!supported || supported.length === 0 || supported.includes(explicit)) {
+        return explicit;
+      }
+    }
+    return this.pickReasoningEffort(req.thinking);
+  }
+
   async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
     // The Codex Responses API does not honor `temperature` (the model uses
     // `reasoning.effort` to control variability). When the runner resolves a
@@ -228,7 +246,13 @@ export class ChatGPTCodexProvider implements ChatProvider {
     // The SDK's responses.create is typed loosely; cast through unknown to
     // avoid version-skew compile errors on the experimental shape. Runtime
     // behavior is what matters — Codex accepts the stable shape below.
-    const reasoningEffort = this.pickReasoningEffort(req.thinking);
+    //
+    // Effort resolution: an EXPLICIT `req.reasoningEffort` (composer/role
+    // override) wins over the `thinking`-derived level — these are orthogonal
+    // (e.g. thinking ON + effort 'xhigh'). We only honour the explicit value
+    // when the model supports it (or capability is unknown); otherwise we fall
+    // back to the derived behaviour so an invalid override never breaks a turn.
+    const reasoningEffort = this.resolveReasoningEffort(req);
 
     const stream = (await (this.client as unknown as {
       responses: {

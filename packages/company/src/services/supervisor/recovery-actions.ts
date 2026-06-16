@@ -50,6 +50,9 @@ export interface RecoveryContext {
   master?: {
     isAlive(): boolean;
     resurrect(reason: string): Promise<unknown>;
+    /** True when the master was resurrected recently (shared dedup with the
+     *  RuntimeReconciler). When set and true, the action defers. */
+    recentlyResurrected?(): boolean;
   };
   /**
    * Per-agent runner lookup. Used by `abortStuckTool` to inject a
@@ -287,6 +290,16 @@ export const resurrectMasterIfOrphaned: RecoveryAction = async (stuck, ctx) => {
       ok: false,
       action: 'resurrectMasterIfOrphaned',
       detail: 'master already alive',
+      reason: 'skipped',
+    };
+  }
+  // Shared dedup with the RuntimeReconciler — if a resurrect already fired in
+  // the recent window, defer instead of starting a second one.
+  if (ctx.master.recentlyResurrected?.()) {
+    return {
+      ok: false,
+      action: 'resurrectMasterIfOrphaned',
+      detail: 'master resurrected recently — deferring to in-flight revive',
       reason: 'skipped',
     };
   }

@@ -26,6 +26,10 @@ function makeChunk(id: number, heading: string | null = `Heading ${id}`): DocChu
     embedding_hash: null,
     embedding_provider_id: null,
     source_uri: `https://example.com/${id}`,
+    doc_type: null,
+    anchor: null,
+    api_symbol: null,
+    api_signature: null,
     created_at: new Date().toISOString(),
   };
 }

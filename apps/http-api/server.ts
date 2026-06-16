@@ -14,7 +14,6 @@ import { mountGraphRoutes } from './server/routes/graph.js';
 import { mountSnapshotsRoutes } from './server/routes/snapshots.js';
 import { mountUserMemoryRoutes } from './server/routes/user-memory.js';
 import { mountRunsRoutes } from './server/routes/runs.js';
-import { mountTrainingRoutes } from './server/routes/training.js';
 import { mountDiffRoutes } from './server/routes/diff.js';
 import { mountCostsRoutes } from './server/routes/costs.js';
 import { mountWebhooksRoutes } from './server/routes/webhooks.js';
@@ -708,7 +707,6 @@ export function createApp() {
   mountSnapshotsRoutes(app, deps);
   mountUserMemoryRoutes(app, deps);
   mountRunsRoutes(app, deps);
-  mountTrainingRoutes(app, deps);
   mountDiffRoutes(app, deps);
   mountCostsRoutes(app, deps);
   mountWebhooksRoutes(app, deps);

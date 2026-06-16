@@ -79,6 +79,13 @@ export type RoleConfig = {
    *  `SubordinateLifecycle.spawn`). See `CompanyRoleConfig.temperature`. */
   temperature?: number;
   /**
+   * Per-role sticky reasoning-effort override (e.g. `minimal`/`low`/`medium`/
+   * `high`/`xhigh`). Orthogonal to `thinking`. Forwarded into
+   * `runCoder({ reasoningEffort })` → `ChatRequest.reasoningEffort`. Only
+   * honoured by providers exposing discrete effort levels (Codex/OpenRouter);
+   * others ignore it. Undefined → model default. */
+  reasoningEffort?: string;
+  /**
    * Phase E: enable extended thinking ("deep reasoning") for subordinates
    * spawned with this role. Forwarded into `runCoder({ thinking })` →
    * `runner.opts.thinking`, which each provider adapter translates into
@@ -199,11 +206,23 @@ export class MasterLifecycle implements IMasterNotifier {
 
   constructor(private readonly deps: MasterLifecycleDeps) {}
 
+  /** Epoch ms of the most recent `resurrect()` start. 0 = never. See
+   *  `resurrectedWithinMs` — the supervisor/reconciler dedup point. */
+  private _lastResurrectAtMs = 0;
+
   // ─── IMasterNotifier ────────────────────────────────────────────
 
   get handle(): RunCoderHandle | null { return this._handle; }
   get agentRunId(): number | null { return this._agentRunId; }
   get isAlive(): boolean { return !this._ended && !!this._handle?.runner; }
+  /**
+   * True when `resurrect()` fired within the last `ms`. Single coordination
+   * point so the AgentSupervisor and the RuntimeReconciler don't BOTH revive a
+   * dead master in the same window (each consults this before resurrecting).
+   */
+  resurrectedWithinMs(ms: number): boolean {
+    return this._lastResurrectAtMs > 0 && Date.now() - this._lastResurrectAtMs < ms;
+  }
   get hasEnded(): boolean { return this._ended; }
   get endedWithError(): string | null { return this._endedWithError; }
   /** ISO timestamp of when the runner most recently exited. */
@@ -236,7 +255,7 @@ export class MasterLifecycle implements IMasterNotifier {
     this._roleConfigs = configs;
   }
 
-  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number; thinking?: boolean; thinkingBudgetTokens?: number } | null {
+  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number; thinking?: boolean; thinkingBudgetTokens?: number; reasoningEffort?: string } | null {
     const cfg = this._roleConfigs.find((r) => r.role === role);
     return cfg ? {
       provider: cfg.provider,
@@ -248,6 +267,7 @@ export class MasterLifecycle implements IMasterNotifier {
       temperature: cfg.temperature,
       thinking: cfg.thinking,
       thinkingBudgetTokens: cfg.thinkingBudgetTokens,
+      reasoningEffort: cfg.reasoningEffort,
     } : null;
   }
 
@@ -420,6 +440,9 @@ export class MasterLifecycle implements IMasterNotifier {
     attachments?: CoderAttachment[],
     thinking?: boolean,
   ): Promise<void> {
+    // Stamp BEFORE the async work so a concurrent watcher sees the in-flight
+    // resurrect and defers (resurrectedWithinMs) instead of starting a second.
+    this._lastResurrectAtMs = Date.now();
     return resurrectMaster(message, attachments, thinking, {
       ctx: this.deps.ctx,
       status: this.deps.status,

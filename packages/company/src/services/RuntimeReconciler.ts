@@ -51,7 +51,9 @@ const NUDGE_LRU_MAX = 1_000;
 /** Per-key cooldowns so we re-nudge a still-stuck item again later, but never
  *  every tick. Resurrect is costly → longer cooldown. */
 const COOLDOWN_DECISION_MS = 30_000;
-const COOLDOWN_RESURRECT_MS = 90_000;
+/** Resurrect dedup window — shared with the AgentSupervisor (company-worker
+ *  imports this so both watchers use the SAME window, no magic-number drift). */
+export const COOLDOWN_RESURRECT_MS = 90_000;
 
 /** 0 = disabled. Non-numeric / negative → default; 1..999 → floored at 1s to
  *  avoid a hot re-nudge loop. */
@@ -313,7 +315,13 @@ export class RuntimeReconciler {
     }
 
     // Master dead: revive for a pending decision the inbox heartbeat won't see.
-    if (stalled.length > 0 && !this.recentlyNudged('c:resurrect', now)) {
+    // Shared dedup: skip if a resurrect already fired recently — the supervisor
+    // (or a prior tick) may have revived the master through MasterLifecycle.
+    if (
+      stalled.length > 0 &&
+      !this.recentlyNudged('c:resurrect', now) &&
+      !this.deps.master.resurrectedWithinMs(COOLDOWN_RESURRECT_MS)
+    ) {
       this.recordNudge('c:resurrect', now);
       this.deps.master.notify(
         '[SYSTEM] A subordinate is blocked awaiting your decision and your run had ended. ' +

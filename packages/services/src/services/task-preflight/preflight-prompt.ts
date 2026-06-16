@@ -1,11 +1,11 @@
 /**
- * Task-preflight prompt + robust output parsing.
+ * Task-preflight prompt construction + shared seed/IO types.
  *
  * The analyzer is a cheap one-shot model: user's FIRST prompt + project
- * memory index (titles/excerpts) + tool catalog in → strict JSON out.
- * Parsing is defensive: every field fails independently, unknown tool
- * names and memory titles are dropped, and an empty validated seed is
- * reported as a parse failure (the session then runs exactly as today).
+ * memory index + tool catalog (native + external MCP) + skill catalog in →
+ * strict JSON out. Output parsing lives in `preflight-parse.ts` (kept
+ * separate for LOC discipline) and is re-exported here so existing import
+ * sites (`./preflight-prompt.js`) are unaffected.
  */
 import type { ChatMessage } from '../../quality/llm-chat.js';
 
@@ -16,6 +16,8 @@ export interface PreflightSeed {
   pinTools?: string[];
   /** Project memories the agent should READ (titles only, never content). */
   memories?: Array<{ title: string; reason: string }>;
+  /** Skills the agent should consider loading before starting (ids, validated). */
+  suggestedSkills?: Array<{ id: string; reason: string }>;
   taskKind?: string;
 }
 
@@ -31,34 +33,44 @@ export interface PreflightMemoryEntry {
   excerpt?: string;
 }
 
+export interface PreflightSkillMeta {
+  id: string;
+  description?: string;
+  namespace?: string;
+}
+
 export interface PreflightPromptInput {
   userMessage: string;
   toolCatalog: readonly PreflightToolMeta[];
   memoryIndex: readonly PreflightMemoryEntry[];
+  skillCatalog: readonly PreflightSkillMeta[];
   maxTools: number;
   maxMemories: number;
+  maxSkills: number;
 }
 
-const TASK_KINDS = new Set(['bugfix', 'feature', 'refactor', 'explore', 'docs', 'config', 'test', 'other']);
-const PROFILES = new Set(['bootstrap', 'navigate', 'full']);
 const MAX_TASK_CHARS = 2000;
-const MAX_REASON_CHARS = 120;
 
 export function buildPreflightMessages(input: PreflightPromptInput): ChatMessage[] {
   const system = [
     'You are a task-preflight analyzer for a coding agent. Given the user\'s first request,',
-    'the project\'s memory index and the tool catalog, output ONLY a JSON object (no prose,',
-    'no markdown fences) with this exact shape:',
+    'the project\'s memory index, the tool catalog and the skill catalog, output ONLY a JSON',
+    'object (no prose, no markdown fences) with this exact shape:',
     '{"task_kind":"bugfix|feature|refactor|explore|docs|config|test|other",',
     ' "profile":"bootstrap|navigate|full",',
     ' "tools":[{"name":"<catalog name>","why":"<=10 words"}],',
+    ' "skills":[{"id":"<catalog id>","why":"one line"}],',
     ' "memories":[{"title":"<exact title from the index>","why":"one line"}]}',
     `Rules: pick AT MOST ${input.maxTools} tools the agent will most likely need FIRST`,
-    '(read-only exploration counts); profile is the smallest that covers the task',
-    '(bootstrap = read/search only; navigate = also edit files and run commands;',
-    `full = also git commits and project administration); list AT MOST ${input.maxMemories} memories`,
-    'and ONLY titles that literally appear in the index; empty arrays are valid.',
-    'Do not invent tool names or memory titles.',
+    '(read-only exploration counts). The catalog includes external integrations whose names',
+    'begin with `ext_` (connected MCP servers) — pin one ONLY when the task clearly needs that',
+    'integration. Profile is the smallest that covers the task (bootstrap = read/search only;',
+    'navigate = also edit files and run commands; full = also git commits and project administration).',
+    `A skill is a reusable, task-specific playbook (e.g. building an API client, a QA flow); list`,
+    `AT MOST ${input.maxSkills} skills whose id LITERALLY appears in the skill catalog and whose`,
+    'description clearly matches this task. List AT MOST',
+    `${input.maxMemories} memories and ONLY titles that literally appear in the index. Empty arrays are valid.`,
+    'Do not invent tool names, skill ids or memory titles.',
   ].join('\n');
 
   const task = input.userMessage.length > MAX_TASK_CHARS
@@ -70,6 +82,14 @@ export function buildPreflightMessages(input: PreflightPromptInput): ChatMessage
     .join('\n');
 
   const parts = [`<task>\n${task}\n</task>`, `<tool_catalog>\n${catalog}\n</tool_catalog>`];
+
+  if (input.skillCatalog.length > 0) {
+    const skills = input.skillCatalog
+      .map((s) => `- ${s.id} [${s.namespace ?? 'skill'}]${s.description ? ` — ${s.description.replace(/\s+/g, ' ').trim()}` : ''}`)
+      .join('\n');
+    parts.push(`<skill_catalog>\n${skills}\n</skill_catalog>`);
+  }
+
   if (input.memoryIndex.length > 0) {
     const memory = input.memoryIndex
       .map((m) => `- [${m.category ?? 'note'}] ${m.title}${m.excerpt ? ` — "${m.excerpt.replace(/\s+/g, ' ').trim()}"` : ''}`)
@@ -83,80 +103,6 @@ export function buildPreflightMessages(input: PreflightPromptInput): ChatMessage
   ];
 }
 
-function extractJson(raw: string): unknown {
-  const trimmed = raw.trim();
-  if (!trimmed) throw new Error('empty response');
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-    if (fenced) return JSON.parse(fenced);
-    const start = trimmed.indexOf('{');
-    const end = trimmed.lastIndexOf('}');
-    if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
-    throw new Error('response was not JSON');
-  }
-}
-
-export interface PreflightParseContext {
-  toolNames: ReadonlySet<string>;
-  memoryTitles: readonly string[];
-  maxTools: number;
-  maxMemories: number;
-}
-
-/**
- * Validate + clamp the analyzer output. Returns null when nothing usable
- * survives (caller reports `parse_fail` and the session runs unseeded).
- */
-export function parsePreflightOutput(raw: string, ctx: PreflightParseContext): PreflightSeed | null {
-  let parsed: Record<string, unknown>;
-  try {
-    const value = extractJson(raw);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    parsed = value as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-
-  const seed: PreflightSeed = {};
-
-  if (typeof parsed.profile === 'string' && PROFILES.has(parsed.profile)) {
-    seed.profile = parsed.profile as PreflightSeed['profile'];
-  }
-  if (typeof parsed.task_kind === 'string' && TASK_KINDS.has(parsed.task_kind)) {
-    seed.taskKind = parsed.task_kind;
-  }
-
-  if (Array.isArray(parsed.tools)) {
-    const pins: string[] = [];
-    for (const item of parsed.tools) {
-      const name = typeof item === 'string' ? item : (item as { name?: unknown } | null)?.name;
-      if (typeof name !== 'string') continue;
-      const trimmed = name.trim();
-      if (!ctx.toolNames.has(trimmed) || pins.includes(trimmed)) continue;
-      pins.push(trimmed);
-      if (pins.length >= ctx.maxTools) break;
-    }
-    if (pins.length > 0) seed.pinTools = pins;
-  }
-
-  if (Array.isArray(parsed.memories)) {
-    const byLowerTitle = new Map(ctx.memoryTitles.map((t) => [t.toLowerCase(), t]));
-    const memories: Array<{ title: string; reason: string }> = [];
-    for (const item of parsed.memories) {
-      if (!item || typeof item !== 'object') continue;
-      const row = item as { title?: unknown; why?: unknown };
-      if (typeof row.title !== 'string') continue;
-      const canonical = byLowerTitle.get(row.title.trim().toLowerCase());
-      if (!canonical || memories.some((m) => m.title === canonical)) continue;
-      const reason = typeof row.why === 'string' ? row.why.trim().slice(0, MAX_REASON_CHARS) : '';
-      memories.push({ title: canonical, reason });
-      if (memories.length >= ctx.maxMemories) break;
-    }
-    if (memories.length > 0) seed.memories = memories;
-  }
-
-  const usable = seed.profile !== undefined || (seed.pinTools?.length ?? 0) > 0 || (seed.memories?.length ?? 0) > 0;
-  return usable ? seed : null;
-}
+// Re-export parsing from the split module so `./preflight-prompt.js` importers
+// (pipeline, tests, barrel) keep working without path churn.
+export { parsePreflightOutput, type PreflightParseContext } from './preflight-parse.js';

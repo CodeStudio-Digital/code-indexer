@@ -45,6 +45,7 @@ import { SkillStore } from '../../../packages/store/src/skill-store.js';
 import { CompanySessionEnvStore } from '../../../packages/store/src/company-session-env-store.js';
 import { QaTestRunStore } from '../../../packages/services/src/qa/store/qa-test-run-store.js';
 import { CompanyOrchestrator } from '../../../packages/company/src/orchestrator.js';
+import { COOLDOWN_RESURRECT_MS } from '../../../packages/company/src/services/RuntimeReconciler.js';
 import {
   setDesignSystemStore,
   setDesignSystemSkillStore,
@@ -162,6 +163,20 @@ const docSearchShim: DocSearchBackend = {
   readChunk: async (input) =>
     bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['readChunk']>>>>(
       'docReadChunk',
+      input,
+      { timeoutMs: 15_000 },
+    ),
+  // rag_read_doc mode:'section' — whole-section reassembly (plain reads).
+  readSection: async (input) =>
+    bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['readSection']>>>>(
+      'docReadSection',
+      input,
+      { timeoutMs: 15_000 },
+    ),
+  // rag_doc_outline — heading tree / source list (plain reads).
+  outline: async (input) =>
+    bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['outline']>>>>(
+      'docOutline',
       input,
       { timeoutMs: 15_000 },
     ),
@@ -329,6 +344,9 @@ const workerSupervisor: AgentSupervisor | null = startAgentSupervisorIfEnabled({
       isAlive: () => orchestrator.isMasterAlive,
       resurrect: (reason: string) =>
         Promise.resolve(orchestrator.notifyMasterAboutSubordinate(`[supervisor] ${reason}`)),
+      // Shared dedup window (single source of truth — RuntimeReconciler exports
+      // it): skip if a resurrect already fired so both watchers don't double-revive.
+      recentlyResurrected: () => orchestrator.masterResurrectedWithinMs(COOLDOWN_RESURRECT_MS),
     },
     subordinates: {
       // Async signature on the public method; preserve it through.

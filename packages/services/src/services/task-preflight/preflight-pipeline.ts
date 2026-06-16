@@ -8,6 +8,7 @@
  * this service NEVER throws and never blocks a session.
  */
 import {
+  type FallbackDefault,
   type PipelineProviderResolver,
 } from '../../pipelines/index.js';
 import {
@@ -15,21 +16,24 @@ import {
   callConfiguredChat,
   friendlyProviderError,
 } from '../../quality/binding-chat.js';
+import { suppressThinkingFor } from '../../quality/chat-dispatcher.js';
 import type { ChatCallResult } from '../../quality/llm-chat.js';
 import {
   buildPreflightMessages,
   parsePreflightOutput,
   type PreflightMemoryEntry,
   type PreflightSeed,
+  type PreflightSkillMeta,
   type PreflightToolMeta,
 } from './preflight-prompt.js';
 
 const PIPELINE_NAME = 'code-agent';
 const ROLE = 'preflight';
 const LABEL = `${PIPELINE_NAME}/${ROLE}`;
-const DEFAULT_TIMEOUT_MS = 4000;
+const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_MAX_TOOLS = 12;
 const MAX_MEMORIES = 5;
+const MAX_SKILLS = 3;
 
 export type PreflightStatus = 'ok' | 'unconfigured' | 'timeout' | 'provider_error' | 'parse_fail';
 
@@ -48,6 +52,15 @@ export interface TaskPreflightDeps {
   resolver: PipelineProviderResolver;
   getToolCatalog: () => PreflightToolMeta[];
   getMemoryIndex: (projectId: number) => PreflightMemoryEntry[];
+  /** Active skills for the session (id + description + namespace), for task-aware suggestion. */
+  getSkillCatalog?: (sessionId: number, projectId: number) => PreflightSkillMeta[];
+  /**
+   * Zero-config fallback model (the general default) used when no
+   * `code-agent/preflight` binding is configured. A configured binding always
+   * wins; this removes the silent-dead state where an unset binding meant
+   * preflight never ran. Mirrors the run-end memory distiller.
+   */
+  getFallbackDefault?: () => FallbackDefault | null;
 }
 
 export interface TaskPreflightInput {
@@ -77,9 +90,14 @@ export class TaskPreflightService {
     });
 
     try {
-      const binding = await this.deps.resolver.resolveOrNull(PIPELINE_NAME, ROLE, {
-        sessionId: input.sessionId,
-      });
+      // Resolve GLOBALLY (no sessionId scope) — preflight is a pre-session
+      // analysis, not a session-bound call. A configured `code-agent/preflight`
+      // binding wins; otherwise fall back to the general default model so
+      // preflight runs zero-config.
+      const binding = await this.deps.resolver.resolveOrNull(
+        PIPELINE_NAME, ROLE, {},
+        this.deps.getFallbackDefault?.() ?? undefined,
+      );
       if (!binding) return done({ status: 'unconfigured' });
 
       const ids = { providerId: binding.provider.id, modelId: binding.modelId };
@@ -88,36 +106,55 @@ export class TaskPreflightService {
 
       const toolCatalog = this.deps.getToolCatalog();
       const memoryIndex = input.projectId != null ? this.deps.getMemoryIndex(input.projectId) : [];
+      const skillCatalog = input.projectId != null && this.deps.getSkillCatalog
+        ? this.deps.getSkillCatalog(input.sessionId, input.projectId)
+        : [];
       const maxTools = input.maxTools ?? envInt('CODER_PREFLIGHT_MAX_TOOLS', DEFAULT_MAX_TOOLS);
       const timeoutMs = input.timeoutMs ?? envInt('CODER_PREFLIGHT_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
       const messages = buildPreflightMessages({
         userMessage: input.userMessage,
         toolCatalog,
         memoryIndex,
+        skillCatalog,
         maxTools,
         maxMemories: MAX_MEMORIES,
+        maxSkills: MAX_SKILLS,
       });
 
       const cfg = binding.config as Record<string, unknown>;
+      // Abort on timeout: both the direct REST path and the chatgpt/codex OAuth
+      // adapter honor an AbortSignal, so a slow model never leaks a background
+      // request after we give up.
+      const controller = new AbortController();
       const call = callConfiguredChat(binding, messages, {
         temperature: 0,
         maxTokens: typeof cfg.max_tokens === 'number' ? cfg.max_tokens : 700,
         timeoutMs,
+        // One-shot SELECTION task (pick tools/skills/profile): minimize reasoning
+        // so a reasoning model answers in ~1-2s instead of blowing the budget.
+        // disableThinking is gated per provider (strict OpenAI-family rejects
+        // unknown body params) and covers GLM/Gemini; reasoningEffort 'minimal'
+        // is the lever for the Codex/OAuth path (e.g. gpt-5.x), clamped upstream.
+        disableThinking: suppressThinkingFor(binding),
+        reasoningEffort: 'minimal',
+        signal: controller.signal,
         fetchFn: input.fetchFn,
       });
 
-      // Global backstop: the OAuth coder-client path has no AbortController,
-      // so race the call against a timer (+ small grace over the HTTP timeout).
+      // Backstop timer in case the provider ignores the abort: resolve the race
+      // at the deadline, abort the call (cancel the underlying request) and fail
+      // open. The session then starts unseeded — never blocked.
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeoutSentinel = Symbol('preflight-timeout');
       const raced = await Promise.race([
         call,
         new Promise<typeof timeoutSentinel>((resolve) => {
-          timer = setTimeout(() => resolve(timeoutSentinel), timeoutMs + 250);
+          timer = setTimeout(() => resolve(timeoutSentinel), timeoutMs);
         }),
       ]);
       if (timer) clearTimeout(timer);
       if (raced === timeoutSentinel) {
+        controller.abort();
         void call.catch(() => undefined); // abandoned; never unhandled
         return done({ status: 'timeout', ...ids, error: `preflight timed out after ${timeoutMs}ms` });
       }
@@ -135,8 +172,10 @@ export class TaskPreflightService {
       const seed = parsePreflightOutput(result.content, {
         toolNames: new Set(toolCatalog.map((t) => t.name)),
         memoryTitles: memoryIndex.map((m) => m.title),
+        skillIds: new Set(skillCatalog.map((s) => s.id)),
         maxTools,
         maxMemories: MAX_MEMORIES,
+        maxSkills: MAX_SKILLS,
       });
       if (!seed) return done({ status: 'parse_fail', ...ids, raw: result.content });
 

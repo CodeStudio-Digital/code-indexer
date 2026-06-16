@@ -10,7 +10,10 @@
  * Signing: `/publish` signs sha256(zip) with Ed25519; the host re-hashes the
  * downloaded bytes and verifies the signature before extracting.
  */
-import { searchPlugins, getPlugin, getVersionRow, recordDownload, upsertVersion } from './catalog.js';
+import {
+  searchPlugins, getPlugin, getVersionRow, recordDownload, upsertVersion,
+  listPendingPlugins, approvePlugin,
+} from './catalog.js';
 import { signBundle } from './sign.js';
 
 interface Env {
@@ -72,12 +75,34 @@ export default {
       const name = url.searchParams.get('name');
       const version = url.searchParams.get('version');
       if (!name || !version) return json({ error: 'name and version query params required' }, 400);
+      // Constrain to a safe charset — `name`/`version` flow into the R2 key
+      // `${name}/${version}.zip`; reject path-traversal / namespace pollution.
+      if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(name) || !/^[a-z0-9][a-z0-9._-]{0,31}$/i.test(version)) {
+        return json({ error: 'invalid name or version format' }, 400);
+      }
       const bundle = await request.arrayBuffer();
       const { sha256, signature } = await signBundle(env.MARKET_SIGNING_PRIVKEY, bundle);
       const r2Key = `${name}/${version}.zip`;
       await env.BUNDLES.put(r2Key, bundle);
       await upsertVersion(env.DB, { name, version, r2Key, size: bundle.byteLength, sha256, signature });
-      return json({ ok: true, name, version, sha256 });
+      // A brand-new plugin lands approved=0 (pending moderation); re-publishing
+      // an already-approved one keeps its approval (upsert leaves the column).
+      return json({ ok: true, name, version, sha256, pending: !(await getPlugin(env.DB, name)) });
+    }
+
+    // ── Moderation (Bearer AUTH_TOKEN) ──────────────────────────────────
+    if (path === '/admin/plugins/pending' && method === 'GET') {
+      const authErr = authorize(request, env);
+      if (authErr) return authErr;
+      return json(await listPendingPlugins(env.DB));
+    }
+
+    const approveMatch = path.match(/^\/plugins\/([^/]+)\/approve$/);
+    if (approveMatch && method === 'POST') {
+      const authErr = authorize(request, env);
+      if (authErr) return authErr;
+      const ok = await approvePlugin(env.DB, decodeURIComponent(approveMatch[1]));
+      return ok ? json({ ok: true }) : json({ error: 'not found' }, 404);
     }
 
     return json({ error: 'not found' }, 404);

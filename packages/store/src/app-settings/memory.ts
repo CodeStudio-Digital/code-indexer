@@ -14,10 +14,10 @@ export const MEMORY_SETTINGS: readonly SettingDef[] = [
     description:
       'Periodically merges near-duplicate memory snapshots and archives fully-stale, cold, ' +
       'low-importance ones. Archiving is reversible (restore from the project Memory tab). Runs only ' +
-      'on idle projects whose memory changed since the last pass. On by default; set to 0 to disarm.',
+      'on idle projects whose memory changed since the last pass. Off by default (opt-in): set to 1 to arm.',
     type: 'bool',
     category: 'memory',
-    default: '1',
+    default: '0',
   },
   {
     key: 'MCP_MEMORY_CONSOLIDATE_INTERVAL_MS',

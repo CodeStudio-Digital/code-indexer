@@ -18,15 +18,13 @@ import {
   HardDrive,
   Info,
   ScrollText,
-  Sparkles,
-  Wrench,
+  Settings,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { PanelChrome } from './PanelChrome.js';
 import { SessionStateSidebar } from '../SessionStateSidebar.js';
 import { SessionDriveView } from '../SessionDrivePanel.js';
-import { SkillConfigView } from '../SkillConfigDialog.js';
-import { ToolConfigView } from '../ToolConfigDialog.js';
+import { SessionConfigView } from './SessionConfigPanel.js';
 import { SessionMetricsView } from '../SessionMetricsModal.js';
 import { ToolStatsView } from '../ToolStatsModal.js';
 import { SessionDetailsView } from '../SessionDetailsModal.js';
@@ -114,16 +112,10 @@ export function RightPanelHost(props: RightPanelHostProps) {
           <SessionDriveView sessionId={sessionId} active />
         </PanelChrome>
       );
-    case 'skills':
+    case 'config':
       return (
-        <PanelChrome title={t('chat:rightRail.skills', 'Skills')} icon={Sparkles} onClose={onClose}>
-          <SkillConfigView sessionId={sessionId} loadKey={props.refreshKey} />
-        </PanelChrome>
-      );
-    case 'tools':
-      return (
-        <PanelChrome title={t('chat:rightRail.tools', 'Tools')} icon={Wrench} onClose={onClose}>
-          <ToolConfigView sessionId={sessionId} />
+        <PanelChrome title={t('chat:rightRail.config', 'Configuration')} icon={Settings} onClose={onClose}>
+          <SessionConfigView sessionId={sessionId} loadKey={props.refreshKey} />
         </PanelChrome>
       );
     case 'metrics':

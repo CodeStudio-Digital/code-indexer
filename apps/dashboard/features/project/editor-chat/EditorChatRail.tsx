@@ -13,6 +13,7 @@ import { useWorkspaceStore } from '../../../state/workspace.js';
 import { editorChatContextActions, useEditorChatContext } from '../../../state/editor-chat-context.js';
 import { MessageList } from '../../chat/messages/MessageList.js';
 import { Composer } from '../../chat/composer/Composer.js';
+import { QueuedMessages } from '../../chat/composer/QueuedMessages.js';
 import { SelectionChips } from './SelectionChips.js';
 import { SessionPickerDropdown } from './SessionPickerDropdown.js';
 import { useEditorChatSession } from './useEditorChatSession.js';
@@ -133,7 +134,13 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
           onFallbackChange={s.onFallbackChange}
           temperature={s.temperature}
           setTemperature={s.setTemperature}
+          reasoningEffort={s.reasoningEffort}
+          setReasoningEffort={s.setReasoningEffort}
+          reasoningLevels={s.reasoningLevels}
           getModelsForProvider={s.getModelsForProvider}
+          queueable={s.selectedId != null}
+          onQueue={s.handleQueue}
+          queuedStrip={<QueuedMessages items={s.queue.items} onPromote={s.queue.promote} onRemove={s.queue.remove} />}
         />
       </div>
     </TooltipProvider>

@@ -12,6 +12,8 @@
  *   - `ord`:         monotonic ordinal so neighbor hydration can reconstruct context
  */
 
+import { packSections } from './chunk-packer.js';
+
 /** Approximate cap per chunk — ~1500 tokens × 4 chars/token. */
 export const MAX_CHUNK_CHARS = 6_000;
 /** Don't emit chunks shorter than this — they're almost never useful retrieval units. */
@@ -23,6 +25,8 @@ export interface SectionChunk {
   content: string;
   /** Coarse-grained token estimate. Embedder may recompute. */
   token_count: number;
+  /** Heading-level deep-link fragment (`{#id}` from the HTML→MD converter), or null. */
+  anchor: string | null;
 }
 
 export interface ChunkOptions {
@@ -42,13 +46,15 @@ export function chunkMarkdown(markdown: string, opts: ChunkOptions = {}): Sectio
   const defaultRoot = opts.defaultRootTitle ?? 'Document';
 
   const lines = markdown.split(/\r?\n/);
-  const sections: { headingPath: string; lines: string[] }[] = [];
+  const sections: { headingPath: string; anchor: string | null; lines: string[] }[] = [];
   const stack: string[] = [defaultRoot];
   let currentLines: string[] = [];
+  // Anchor of the heading that opened the section currently being accumulated.
+  let currentAnchor: string | null = null;
 
   const pushSection = () => {
     if (currentLines.length === 0) return;
-    sections.push({ headingPath: stack.join(' > '), lines: currentLines });
+    sections.push({ headingPath: stack.join(' > '), anchor: currentAnchor, lines: currentLines });
     currentLines = [];
   };
 
@@ -56,70 +62,51 @@ export function chunkMarkdown(markdown: string, opts: ChunkOptions = {}): Sectio
     const heading = parseHeading(line);
     if (heading) {
       pushSection();
-      const { level, text } = heading;
+      const { level, text, anchor } = heading;
       // Pop stack to match the new level (level=1 → keep [root], replace top with text)
       while (stack.length > level) stack.pop();
       while (stack.length < level) stack.push(text);
       stack[stack.length - 1] = text;
+      currentAnchor = anchor;
       continue;
     }
     currentLines.push(line);
   }
   pushSection();
 
-  // Materialize chunks, splitting overly long sections at paragraph boundaries.
+  // Materialize chunks. Long sections are split by the code/table-aware packer
+  // so a fenced block or table is never severed; fragments share heading + anchor.
   const chunks: SectionChunk[] = [];
   let ord = 0;
   for (const sec of sections) {
     const body = sec.lines.join('\n').trim();
     if (body.length < MIN_CHUNK_CHARS) continue;
-    for (const piece of splitByParagraphs(body, maxChars)) {
+    for (const piece of packSections(body, maxChars)) {
       chunks.push({
         ord: ord++,
         heading_path: sec.headingPath,
         content: piece,
         token_count: estimateTokens(piece),
+        anchor: sec.anchor,
       });
     }
   }
   return chunks;
 }
 
-function parseHeading(line: string): { level: number; text: string } | null {
+function parseHeading(line: string): { level: number; text: string; anchor: string | null } | null {
   const m = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
   if (!m) return null;
-  return { level: m[1]!.length, text: m[2]!.trim() };
-}
-
-/**
- * Split `body` into pieces of at most `maxChars`, breaking at paragraph
- * boundaries (`\n\n`). If a single paragraph itself exceeds `maxChars`,
- * it's hard-split into char windows.
- */
-function splitByParagraphs(body: string, maxChars: number): string[] {
-  if (body.length <= maxChars) return [body];
-  const paragraphs = body.split(/\n{2,}/);
-  const pieces: string[] = [];
-  let buf = '';
-  for (const p of paragraphs) {
-    const candidate = buf ? `${buf}\n\n${p}` : p;
-    if (candidate.length <= maxChars) {
-      buf = candidate;
-      continue;
-    }
-    if (buf) pieces.push(buf);
-    if (p.length <= maxChars) {
-      buf = p;
-    } else {
-      // Pathological single paragraph — hard-split.
-      for (let i = 0; i < p.length; i += maxChars) {
-        pieces.push(p.slice(i, i + maxChars));
-      }
-      buf = '';
-    }
+  let text = m[2]!.trim();
+  let anchor: string | null = null;
+  // Pandoc-style `{#id}` appended by the HTML→MD converter — pull it off the
+  // heading TEXT and surface it as the section anchor for deep-link citations.
+  const anchorMatch = /\s*\{#([^}]+)\}\s*$/.exec(text);
+  if (anchorMatch) {
+    anchor = anchorMatch[1]!.trim() || null;
+    text = text.slice(0, anchorMatch.index).trim();
   }
-  if (buf) pieces.push(buf);
-  return pieces;
+  return { level: m[1]!.length, text, anchor };
 }
 
 /** Rough token estimate — char count divided by 4 (English-ish heuristic). */

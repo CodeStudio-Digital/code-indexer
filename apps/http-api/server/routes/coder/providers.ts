@@ -31,6 +31,11 @@ export function mountCoderProvidersRoutes(app: Hono, deps: ServerDeps): void {
         mode: m.mode || null,
         context_window: m.context_window,
         default_max_tokens: m.default_max_tokens,
+        // Reasoning-effort capability — drives the composer effort selector
+        // (shown only when supported_reasoning_levels is non-empty). Mirrors
+        // the admin ProviderCard gating.
+        supported_reasoning_levels: m.supported_reasoning_levels ?? null,
+        default_reasoning_level: m.default_reasoning_level ?? null,
       })),
     }));
     return c.json({ providers: enriched, legacy: false });

@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Eye, Network, Repeat, Send, Settings2, Shield, Square, Thermometer } from 'lucide-react';
+import { Brain, Eye, Gauge, Network, Repeat, Send, Settings2, Shield, Square, Thermometer } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -9,6 +9,8 @@ import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
 import { FallbackPicker } from '../../../components/FallbackPicker.js';
+import { QueueSplitButton } from './QueueSplitButton.js';
+import type { QueueMode } from './useMessageQueue.js';
 
 type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api';
 
@@ -36,6 +38,15 @@ interface ComposerToolbarProps {
    */
   temperature: number | null;
   setTemperature: (v: number | null) => void;
+  /**
+   * Per-session sticky reasoning-effort override (migration 150). Orthogonal to
+   * `thinking`. The selector renders only when `reasoningLevels` is non-empty
+   * (model exposes discrete effort levels). `null` = auto (model default).
+   * Persisted by AgentChat via PATCH /api/coder/sessions/:id/reasoning-effort.
+   */
+  reasoningEffort?: string | null;
+  setReasoningEffort?: (v: string | null) => void;
+  reasoningLevels?: string[];
   /**
    * Per-session "unrestricted tool output" toggle (migration 078). When on,
    * the runner / mcp-bridge / code_exec lift the per-tool-call truncation
@@ -71,6 +82,9 @@ interface ComposerToolbarProps {
    */
   describeImages?: boolean;
   setDescribeImages?: (v: boolean) => void;
+  /** When streaming + queueable, show the queue split button beside Abort. */
+  queueable?: boolean;
+  onQueueSend?: (mode: QueueMode) => void;
 }
 
 export const ComposerToolbar = React.memo(function ComposerToolbar({
@@ -92,6 +106,9 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   setMaxTurns,
   temperature,
   setTemperature,
+  reasoningEffort,
+  setReasoningEffort,
+  reasoningLevels,
   unrestrictedOutput,
   setUnrestrictedOutput,
   fallbackProvider,
@@ -106,14 +123,16 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   supportsThinking,
   describeImages,
   setDescribeImages,
+  queueable,
+  onQueueSend,
 }: ComposerToolbarProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Note: the Paperclip (attach), PipelinePicker, think, and cap/full
-  // icons now live in the markdown toolbar row above (passed as
-  // `rightSlot` to MarkdownToolbar). This row is reserved for the
-  // pickers + send button so the bottom of the composer is calmer.
-  // `handleFiles` is still threaded through because the mobile popover
-  // (and a future drag/drop overlay) may want it.
+  // icons live in the thin action-icons strip above (the markdown
+  // formatting toolbar that used to host them was removed). This row is
+  // reserved for the pickers + send/queue button so the bottom of the
+  // composer is calmer. `handleFiles` is still threaded through because the
+  // mobile popover (and a future drag/drop overlay) may want it.
   void handleFiles; void selectedPipelineId; void setSelectedPipelineId; void sessionId;
 
   return (
@@ -201,6 +220,31 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
           className="h-7 w-16 text-xs font-mono px-1.5"
         />
       </div>
+
+      {/* Reasoning effort — orthogonal to thinking. Only rendered when the
+          selected model exposes discrete effort levels (Codex/GPT-5 family,
+          OpenRouter). 'auto' = the model's default_reasoning_level. */}
+      {setReasoningEffort && reasoningLevels && reasoningLevels.length > 0 && (
+        <div
+          className="hidden sm:flex items-center gap-1 text-muted-foreground"
+          title={t('chat:toolbar.effortHint', { defaultValue: 'Reasoning effort (auto = model default)' })}
+        >
+          <Gauge className="h-3.5 w-3.5" />
+          <select
+            aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
+            className="h-7 rounded border bg-background px-1.5 text-xs"
+            value={reasoningEffort ?? ''}
+            onChange={(e) => setReasoningEffort(e.target.value === '' ? null : e.target.value)}
+          >
+            <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>
+            {reasoningLevels.map((lv) => (
+              <option key={lv} value={lv}>
+                {lv}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* Think / cap toggles moved to the markdown toolbar row above
           (rendered by MarkdownToolbar's `rightSlot`). We keep the props
@@ -337,6 +381,29 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
                 />
               </div>
             </div>
+            {setReasoningEffort && reasoningLevels && reasoningLevels.length > 0 && (
+              <div className="space-y-2">
+                <label className="text-xs text-muted-foreground">
+                  {t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
+                </label>
+                <div className="flex items-center gap-2">
+                  <Gauge className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <select
+                    aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
+                    className="h-7 flex-1 rounded border bg-background px-1.5 text-xs"
+                    value={reasoningEffort ?? ''}
+                    onChange={(e) => setReasoningEffort(e.target.value === '' ? null : e.target.value)}
+                  >
+                    <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>
+                    {reasoningLevels.map((lv) => (
+                      <option key={lv} value={lv}>
+                        {lv}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
             {supportsThinking && setThinking && (
               <button
                 type="button"
@@ -388,9 +455,14 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
         </Popover>
 
         {streaming ? (
-          <Button onClick={onAbort} variant="destructive" size="sm">
-            <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}
-          </Button>
+          <>
+            {queueable && onQueueSend && (
+              <QueueSplitButton hasInput={hasInput} onQueue={onQueueSend} />
+            )}
+            <Button onClick={onAbort} variant="destructive" size="sm">
+              <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}
+            </Button>
+          </>
         ) : selectedPipelineId != null ? (
           <Button onClick={onSend} disabled={!hasInput} size="sm" variant="default">
             <Network className="h-3.5 w-3.5" /> {t('chat:pipelinePicker.runButton')}

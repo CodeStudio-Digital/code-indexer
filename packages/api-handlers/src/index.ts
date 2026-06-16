@@ -84,7 +84,6 @@ export { createSearchHandlers } from './search/index.js';
 export { createProjectGitHandlers } from './projectGit/index.js';
 export { createPluginsHandlers } from './plugins/index.js';
 export { createSystemHandlers } from './system/index.js';
-export { createTrainingHandlers, MCP_BLOCK_SERVER_KEY } from './training/index.js';
 export { generateAiPipeline, type GeneratePipelineResult } from './projectPipeline/generate.js';
 
 /**

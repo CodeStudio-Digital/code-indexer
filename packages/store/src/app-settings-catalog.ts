@@ -34,11 +34,13 @@ import { COMPANY_SUPERVISOR_SETTINGS } from './app-settings/company-supervisor.j
 import { MEMORY_SETTINGS } from './app-settings/memory.js';
 import { DEBUG_SETTINGS } from './app-settings/debug.js';
 import { INDEXING_SETTINGS } from './app-settings/indexing.js';
+import { SANDBOX_SETTINGS } from './app-settings/sandbox.js';
 
 export const APP_SETTINGS: readonly SettingDef[] = [
   ...LLM_SETTINGS,
   ...MCP_SETTINGS,
   ...INDEXING_SETTINGS,
+  ...SANDBOX_SETTINGS,
   ...AGENT_BEHAVIOUR_SETTINGS,
   ...AGENT_GUARD_SETTINGS,
   ...AGENT_OUTPUT_SETTINGS,

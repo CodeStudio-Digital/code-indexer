@@ -90,6 +90,67 @@ export function mountCoderInteractionRoutes(
     return c.json({ ok: true });
   });
 
+  /**
+   * Inject a follow-up user message into a LIVE run WITHOUT opening a new SSE
+   * stream. Persists the message + pushes it onto the runner's
+   * `pendingUserMessages` (drained at the next turn). The caller's ALREADY-OPEN
+   * stream renders the agent's processing of it — the session bus is fan-out,
+   * so a second connection is neither needed nor wanted (opening one would
+   * abort the live stream and wipe the in-flight turn). Powers the composer's
+   * "inject on next turn" queue.
+   *
+   * Returns JSON (never a stream):
+   *   { injected: true }    — enqueued into the live runner.
+   *   { noActiveRun: true } — no live run; caller falls back to POST /messages
+   *                           (which starts a fresh, streamed run).
+   *   { waiting: true }     — runner is blocked on an interactive tool and
+   *                           `interject` was not set (caller decides).
+   */
+  app.post('/api/coder/sessions/:id/inject', async (c) => {
+    const id = parseIdParam(c);
+    const body = await c.req.json<{ content?: string; interject?: boolean; selected_skill_ids?: string[] }>();
+    const content = typeof body.content === 'string' ? body.content : '';
+    if (!content.trim()) return c.json({ error: 'content required' }, 400);
+    const interject = !!body.interject;
+    const skillIds = body.selected_skill_ids && body.selected_skill_ids.length > 0
+      ? body.selected_skill_ids
+      : undefined;
+    logRouteHit(id, '/inject', { content_preview: content.slice(0, 80), interject });
+    const userMsg: AgentMessage = {
+      role: 'user',
+      content: [{ type: 'text', text: content }],
+      ...(skillIds ? { selectedSkillIds: skillIds } : {}),
+    };
+
+    // Worker mode: the runner lives in a worker_thread — poke it via pool RPCs
+    // (the main-side mirrored bus has no `.runner`).
+    if (coderWorkerEnabled()) {
+      const pool = getCoderWorkerPool();
+      const bus = pool.getBus(id);
+      if (!bus || bus.ended) return c.json({ noActiveRun: true });
+      const waiting = await pool.isWaitingForInput(id).catch(() => false);
+      if (waiting) {
+        if (!interject) return c.json({ waiting: true });
+        await pool.interruptWait(id).catch(() => undefined);
+      }
+      sessionStore.appendMessage(id, userMsg);
+      await pool.pushUserMessage(id, content, skillIds);
+      return c.json({ injected: true });
+    }
+
+    // Legacy in-process runner.
+    const entry = activeRuns.get(id);
+    if (!entry || entry.ended || !entry.runner) return c.json({ noActiveRun: true });
+    const runner = entry.runner;
+    if (runner.isWaitingForInput()) {
+      if (!interject) return c.json({ waiting: true });
+      runner.interruptWait();
+    }
+    sessionStore.appendMessage(id, userMsg);
+    runner.pushUserMessage(content, { selectedSkillIds: skillIds });
+    return c.json({ injected: true });
+  });
+
   app.post('/api/coder/sessions/:id/answer', async (c) => {
     const id = parseIdParam(c);
     const body = await c.req.json<AnswerBody>();

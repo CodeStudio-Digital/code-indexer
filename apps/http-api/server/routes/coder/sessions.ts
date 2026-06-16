@@ -394,6 +394,46 @@ export function mountCoderSessionsRoutes(
     return c.json(session);
   });
 
+  /**
+   * Per-session sticky reasoning-effort override (migration 150). Orthogonal to
+   * the thinking toggle. `null` clears back to the provider default. A non-null
+   * value is validated against the session model's persisted
+   * `supported_reasoning_levels` (mirrors the admin model PATCH) so the column
+   * never holds a level the model can't accept.
+   */
+  app.patch('/api/coder/sessions/:id/reasoning-effort', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ effort?: string | null }>(c);
+    const effort = body.effort ?? null;
+    if (effort !== null && typeof effort !== 'string') {
+      return c.json({ error: 'effort:string|null required' }, 400);
+    }
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    if (effort !== null) {
+      // Validate against the model's persisted supported levels. When the row
+      // says null we don't know what the model accepts, so we don't gate.
+      // `session.model` may carry a `::mode` suffix — match the bare id.
+      const bareModel = session.model.split('::')[0];
+      const row = providerStore
+        .listModels(session.provider)
+        .find((m) => m.model_id === bareModel);
+      const supported = row?.supported_reasoning_levels;
+      if (supported && supported.length > 0 && !supported.includes(effort)) {
+        return c.json(
+          {
+            error: `reasoning effort '${effort}' not supported for ${session.model}; supported: ${supported.join(',')}`,
+          },
+          400,
+        );
+      }
+    }
+    sessionStore.setSessionReasoningEffort(id, effort);
+    const updated = sessionStore.getSession(id);
+    if (!updated) return notFound(c);
+    return c.json(updated);
+  });
+
   app.patch('/api/coder/sessions/:id/unrestricted-output', async (c) => {
     const id = parseIdParam(c);
     const body = await parseJsonBody<{ enabled?: boolean | null }>(c);
@@ -431,6 +471,28 @@ export function mountCoderSessionsRoutes(
         runtime.activeRuns.get(id)?.runner?.setToolPermissionMode(effective);
       } catch { /* best-effort live push */ }
     }
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    return c.json(session);
+  });
+
+  /**
+   * Per-session agent/mode (explore/plan/build/admin/spec/builder/api).
+   * Persists the column so a manual dropdown pick is remembered even when
+   * the user leaves without sending. Unlike tool-permission-mode there is NO
+   * live-runner push: the agent identity (system prompt, tier seed, gates) is
+   * baked into the runner at construction, so a switch applies to the NEXT
+   * run — mid-run transitions (plan→build) are driven by the runner itself.
+   * `null` clears the column.
+   */
+  app.patch('/api/coder/sessions/:id/agent', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ agent?: string | null }>(c);
+    const agent = body.agent ?? null;
+    if (agent !== null && !(agent in AGENTS)) {
+      return c.json({ error: `agent: one of ${Object.keys(AGENTS).join('|')}|null required` }, 400);
+    }
+    sessionStore.setSessionAgent(id, agent);
     const session = sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);

@@ -32,3 +32,26 @@ export function providerSupportsThinking(
   // chatgpt-kind providers working even when the API hasn't been re-rolled.
   return option.kind === 'chatgpt';
 }
+
+/**
+ * Resolve the discrete reasoning-effort levels the selected model accepts
+ * (from `provider_models.supported_reasoning_levels`, forwarded via
+ * `/api/coder/providers`). Returns `[]` when the model has none — the composer
+ * uses a non-empty result to decide whether to render the effort selector.
+ * `model` may carry a `::mode` suffix (the composer encodes it that way).
+ */
+export function resolveReasoningLevels(
+  providerId: string | null | undefined,
+  providerOptions: ProviderOption[],
+  model?: string | null,
+): string[] {
+  if (!providerId || !model) return [];
+  const option = providerOptions.find((p) => p.id === providerId);
+  if (!option) return [];
+  const [bare, mode] = model.split('::');
+  const match =
+    option.models.find(
+      (m) => m.id === bare && ((mode ?? '') === '' || (m.mode ?? '') === mode),
+    ) ?? option.models.find((m) => m.id === bare);
+  return match?.supported_reasoning_levels ?? [];
+}

@@ -10,7 +10,7 @@ import { useApi } from '../../hooks/useApi.js';
 import { useCompanyStream } from '../../hooks/useCompanyStream.js';
 import { useCompanySiblings } from '../../hooks/useCompanySiblings.js';
 import { useProviders } from '../../hooks/useProviders.js';
-import { providerSupportsThinking } from '../chat/composer/provider-caps.js';
+import { providerSupportsThinking, resolveReasoningLevels } from '../chat/composer/provider-caps.js';
 import type { AgentAttachment } from '../../hooks/agent-stream/types.js';
 import type { MasterPrompt } from '@mcp/company/types.js';
 import { AgentSessionModal } from './AgentSessionModal.js';
@@ -275,6 +275,20 @@ export function CompanySessionView({
   const masterProvider = (config?.master_provider as string | undefined) ?? null;
   const masterModel = (config?.master_model as string | undefined) ?? null;
   const masterSupportsThinking = providerSupportsThinking(masterProvider, providerOptions, masterModel);
+  const masterReasoningLevels = resolveReasoningLevels(masterProvider, providerOptions, masterModel);
+  const masterReasoningEffort = (config?.master_reasoning_effort as string | undefined) ?? null;
+  const handleMasterEffortChange = async (next: string | null) => {
+    try {
+      await fetch(`/api/company/sessions/${activeSessionId}/config`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ master_reasoning_effort: next }),
+      });
+      refetch();
+    } catch {
+      /* optimistic — server is source of truth on next refetch */
+    }
+  };
   const builderMode = !!(
     config &&
     typeof config === 'object' &&
@@ -451,6 +465,9 @@ export function CompanySessionView({
                     : t('company.inputPlaceholderMaster')
                 }
                 supportsThinking={masterSupportsThinking}
+                reasoningEffort={masterReasoningEffort}
+                setReasoningEffort={handleMasterEffortChange}
+                reasoningLevels={masterReasoningLevels}
               />
             }
           />

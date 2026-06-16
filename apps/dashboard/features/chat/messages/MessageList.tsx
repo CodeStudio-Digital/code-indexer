@@ -303,6 +303,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
               onPlanResponse={handlers.onPlanResponse}
               onTasksResponse={handlers.onTasksResponse}
               onFork={handlers.onFork}
+              onRollback={handlers.onRollback}
               tasksState={tasksState}
             />
           );
@@ -323,6 +324,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
               onPlanResponse={handlers.onPlanResponse}
               onTasksResponse={handlers.onTasksResponse}
               onFork={handlers.onFork}
+              onRollback={handlers.onRollback}
               tasksState={tasksState}
             />
           );

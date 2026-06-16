@@ -7,6 +7,7 @@
  * Copilot rail (`RailComposerBar`) render the EXACT same controls from one
  * source of truth — anything wired here is available in both surfaces.
  */
+import { useEffect, useRef, useState } from 'react';
 import { Brain, Eye, Maximize2, Paperclip, Shield, ShieldCheck, ShieldOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
@@ -47,6 +48,23 @@ export function ComposerActionIcons({
   showThink = true,
 }: ComposerActionIconsProps) {
   const { t } = useTranslation('chat');
+  // Transient "applied to the running session" pulse: the permission-mode
+  // PATCH already pushes into the live runner mid-run, but that change is
+  // invisible. Flash a ring on the shield when toggled while streaming so the
+  // user sees it took effect on the active run. Pure visual.
+  const [permissionPulse, setPermissionPulse] = useState(false);
+  const pulseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(pulseTimer.current), []);
+  const cyclePermissionMode = () => {
+    const mode = toolPermissionMode ?? 'auto';
+    const next = mode === 'ask' ? 'auto' : mode === 'auto' ? 'unrestricted' : 'ask';
+    setToolPermissionMode?.(next);
+    if (streaming) {
+      setPermissionPulse(true);
+      clearTimeout(pulseTimer.current);
+      pulseTimer.current = setTimeout(() => setPermissionPulse(false), 1200);
+    }
+  };
   return (
     <>
       <Tooltip>
@@ -55,7 +73,7 @@ export function ComposerActionIcons({
             <input
               type="file"
               multiple
-              accept="image/*,.pdf,.txt,.md,.json,.csv,.yaml,.yml,.xml,.html,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.sh,.sql,.toml,.ini,.log"
+              accept="image/*,.pdf,.docx,.xlsx,.pptx,.odt,.ods,.odp,.rtf,.txt,.md,.json,.csv,.yaml,.yml,.xml,.html,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.sh,.sql,.toml,.ini,.log"
               className="hidden"
               onChange={(e) => {
                 handleFiles(e.target.files);
@@ -169,13 +187,11 @@ export function ComposerActionIcons({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={() => {
-                const mode = toolPermissionMode ?? 'auto';
-                const next = mode === 'ask' ? 'auto' : mode === 'auto' ? 'unrestricted' : 'ask';
-                setToolPermissionMode?.(next);
-              }}
+              onClick={cyclePermissionMode}
               aria-label={t(`toolbar.permissionMode.${toolPermissionMode ?? 'auto'}`)}
               className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
+                permissionPulse ? 'ring-2 ring-offset-1 ring-offset-background ring-current animate-pulse ' : ''
+              }${
                 toolPermissionMode === 'ask'
                   ? 'bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25'
                   : toolPermissionMode === 'unrestricted'

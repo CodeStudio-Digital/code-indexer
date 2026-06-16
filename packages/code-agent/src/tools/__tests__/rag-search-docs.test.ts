@@ -49,6 +49,9 @@ describe('rag_search_docs rendering', () => {
             source_id: 1,
             source_uri: 'https://docs.unity.com/Rigidbody.AddForce',
             heading_path: 'Physics > Rigidbody',
+            anchor: null,
+            api_symbol: null,
+            api_signature: null,
             snippet: 'AddForce applies a force to the Rigidbody.',
             score: 0.0164,
             relevance: 0.88,
@@ -88,6 +91,9 @@ describe('rag_search_docs rendering', () => {
             source_id: 1,
             source_uri: null,
             heading_path: 'A',
+            anchor: null,
+            api_symbol: null,
+            api_signature: null,
             snippet: 'text',
             score: 0.014,
             relevance: null,
@@ -119,6 +125,9 @@ describe('rag_search_docs rendering', () => {
             source_id: 1,
             source_uri: 'https://react.dev/x',
             heading_path: 'Hooks > useEffect',
+            anchor: 'useeffect',
+            api_symbol: 'useEffect',
+            api_signature: 'useEffect(setup, dependencies?)',
             snippet: 'snippet',
             score: 0.01,
             relevance: 0.8,
@@ -132,6 +141,9 @@ describe('rag_search_docs rendering', () => {
     const res = await ragSearchDocsTool.handler({ query: 'q' }, ctx);
     expect(res.content).toContain('chunk_id: 42');
     expect(res.content).toContain('rag_read_doc({chunk_id})');
+    // Deep-link anchor + API signature surfaced for grounding.
+    expect(res.content).toContain('https://react.dev/x#useeffect');
+    expect(res.content).toContain('Signature: useEffect(setup, dependencies?)');
   });
 
   it('passes scope + project_id through and reports the scoped collections', async () => {

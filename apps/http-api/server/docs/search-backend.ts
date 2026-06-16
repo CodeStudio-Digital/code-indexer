@@ -15,6 +15,7 @@ import type { DocHybridSearch, DocSearchInput } from '@mcp/services/services/doc
 import { DEFAULT_MIN_RELEVANCE } from '@mcp/services/services/docs/index.js';
 import type { DocChunk, DocStore } from '@mcp/store/doc-store.js';
 import type { DocsHintCollection, DocsHintProvider } from '@mcp/code-agent/core/docs-hint.js';
+import { buildDocNavVerbs } from './doc-nav-backend.js';
 
 /** What the `rag_search_docs` tool sends — superset of DocSearchInput. */
 export interface BackendSearchInput {
@@ -39,6 +40,7 @@ export interface DocChunkNeighbor {
   heading_path: string | null;
   content: string;
   token_count: number;
+  source_uri: string | null;
 }
 
 export interface DocChunkRead {
@@ -48,6 +50,9 @@ export interface DocChunkRead {
     source_id: number;
     source_uri: string | null;
     heading_path: string | null;
+    anchor: string | null;
+    api_symbol: string | null;
+    api_signature: string | null;
     content: string;
     token_count: number;
     summary: string | null;
@@ -122,6 +127,7 @@ export function buildDocSearchBackend({ docHybridSearch, docStore }: DocSearchBa
         heading_path: c.heading_path,
         content: c.content,
         token_count: c.token_count,
+        source_uri: c.source_uri,
       });
       return {
         chunk: {
@@ -130,6 +136,9 @@ export function buildDocSearchBackend({ docHybridSearch, docStore }: DocSearchBa
           source_id: seed.source_id,
           source_uri: seed.source_uri,
           heading_path: seed.heading_path,
+          anchor: seed.anchor,
+          api_symbol: seed.api_symbol,
+          api_signature: seed.api_signature,
           content: seed.content,
           token_count: seed.token_count,
           summary: seed.summary,
@@ -139,6 +148,10 @@ export function buildDocSearchBackend({ docHybridSearch, docStore }: DocSearchBa
         next: neighbors.filter((c) => c.ord > seed.ord).map(toNeighbor),
       };
     },
+
+    // Structural navigation (rag_read_doc mode:'section' + rag_doc_outline) —
+    // implemented in doc-nav-backend.ts to keep this file under the LOC cap.
+    ...buildDocNavVerbs(docStore),
   };
 }
 
@@ -151,11 +164,30 @@ export function buildDocsHintProvider(docStore: DocStore): DocsHintProvider {
   return {
     listForProject(projectId: number): DocsHintCollection[] {
       try {
-        return docStore.listCollectionsForProject(projectId).map((c) => ({
-          name: c.name,
-          description: c.description,
-          chunk_count: c.chunk_count,
-        }));
+        return docStore.listCollectionsForProject(projectId).map((c) => {
+          // Aggregate freshness + types from the collection's sources so the
+          // per-turn hint can flag staleness and signal what kind of docs
+          // these are. Cheap — the hint block is cached for 30s per project.
+          const sources = docStore.listSourcesByCollection(c.id);
+          // SQLite timestamps are fixed-width UTC → lexicographic max == latest.
+          const lastIndexed = sources.reduce<string | null>(
+            (max, s) =>
+              s.last_indexed_at && (max == null || s.last_indexed_at > max)
+                ? s.last_indexed_at
+                : max,
+            null,
+          );
+          const docTypes = Array.from(
+            new Set(sources.map((s) => s.doc_type).filter((t) => t && t !== 'mixed')),
+          );
+          return {
+            name: c.name,
+            description: c.description,
+            chunk_count: c.chunk_count,
+            last_indexed_at: lastIndexed,
+            doc_types: docTypes,
+          };
+        });
       } catch {
         return [];
       }

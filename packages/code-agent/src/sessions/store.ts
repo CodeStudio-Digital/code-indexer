@@ -82,6 +82,7 @@ export class SessionStore {
   // ─── Sessions state (set*) ─────────────────────────────────────
   setSessionAgent(id: number, agent: string | null): void { state.setAgent(this.db, id, agent); }
   setSessionTemperature(id: number, temperature: number | null): void { state.setTemperature(this.db, id, temperature); }
+  setSessionReasoningEffort(id: number, effort: string | null): void { state.setReasoningEffort(this.db, id, effort); }
   setSessionUnrestrictedToolOutput(id: number, enabled: boolean | null): void { state.setUnrestrictedToolOutput(this.db, id, enabled); }
   setSessionToolPermissionMode(id: number, mode: 'ask' | 'auto' | 'unrestricted' | null): void { state.setToolPermissionMode(this.db, id, mode); }
   addToolPermissionGrant(id: number, toolName: string): void { state.addToolPermissionGrant(this.db, id, toolName); }
@@ -115,6 +116,11 @@ export class SessionStore {
   }
   forkSessionBeforeMessage(sourceSessionId: number, beforeMessageId: number): { session: CoderSession; seed_text: string } {
     return ops.forkBeforeMessage(this.db, sourceSessionId, beforeMessageId);
+  }
+  /** Destructive: delete `messageId` + everything after it, returning its text
+   *  and attachments to seed the composer. See `ops.rollbackToMessage`. */
+  rollbackSessionToMessage(sessionId: number, messageId: number): ops.RollbackResult {
+    return ops.rollbackToMessage(this.db, sessionId, messageId);
   }
   duplicateSession(sourceId: number): CoderSession { return ops.duplicate(this.db, sourceId); }
 

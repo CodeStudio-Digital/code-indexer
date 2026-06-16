@@ -39,6 +39,9 @@ export interface MasterResumeOpts {
   attachments?: CoderAttachment[];
   /** Enable extended thinking on the resumed master's next turn. */
   thinking?: boolean;
+  /** Sticky reasoning-effort override for the master (config_json
+   *  `master_reasoning_effort`). Orthogonal to `thinking`. */
+  reasoningEffort?: string;
 }
 
 export interface MasterResumeDeps {
@@ -125,6 +128,7 @@ export async function resumeMaster(
       companyContext: inputs.companyContext,
       companyPromptBlock: inputs.promptBlock,
       thinking: opts.thinking,
+      reasoningEffort: opts.reasoningEffort,
       onRunnerReady: (runner) => deps.wireRunner(runner, masterRun.id),
     } as RunCoderOptions & { companyPromptBlock: string });
 

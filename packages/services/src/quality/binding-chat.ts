@@ -102,6 +102,11 @@ export async function coderProviderChat(
       messages: agentMessages,
       tools: [],
       thinking: false,
+      // Codex/OAuth honors an explicit effort (clamped to supported levels)
+      // and an AbortSignal — wire both so latency-critical one-shots (preflight)
+      // can force minimal reasoning and actually cancel on timeout.
+      reasoningEffort: options.reasoningEffort,
+      signal: options.signal,
       inference: { temperature: options.temperature },
     })) {
       if (delta.type === 'text_delta') content += delta.text;

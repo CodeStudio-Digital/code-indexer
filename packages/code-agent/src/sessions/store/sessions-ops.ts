@@ -7,6 +7,9 @@ import { createRequire } from 'node:module';
 import * as core from './sessions-core.js';
 import * as state from './sessions-state.js';
 import * as messages from './messages.js';
+import * as plans from './plans.js';
+import * as tasks from './tasks.js';
+import * as goals from './goals.js';
 import * as sessionDrive from './session-drive.js';
 
 const require = createRequire(import.meta.url);
@@ -199,6 +202,112 @@ export function forkBeforeMessage(
   });
 
   return { session: tx(), seed_text: seedText };
+}
+
+export interface RollbackResult {
+  session: CoderSession;
+  seed_text: string;
+  /** Image/document attachments of the rolled-back message, ready to re-load
+   *  into the composer (shape matches the dashboard `AgentAttachment`). Images
+   *  and PDFs carry `base64`; text-backed documents (md/txt/json/csv/code)
+   *  carry `text` instead — both must round-trip or the attachment is lost. */
+  seed_attachments: Array<{ name: string; mediaType: string; base64?: string; text?: string }>;
+  had_attachments: boolean;
+}
+
+/**
+ * Roll a session back to a user message, IN PLACE and DESTRUCTIVELY: delete the
+ * target message AND everything after it, returning the target's text +
+ * attachments so the caller can seed the composer for editing & re-sending.
+ *
+ * Unlike `forkBeforeMessage` (which copies a prefix into a NEW session and
+ * leaves the source intact), this is the irreversible inverse. It also resets
+ * the session-scoped "in-flight intent" that would otherwise be re-injected
+ * into the next run's `<active-context>` describing now-deleted work:
+ *  - `coder_plans` orphaned by the truncation (message_id is SET NULL, not
+ *    cascaded) → cleared via `plans.clearFrom` BEFORE the message delete;
+ *  - `coder_tasks_state` (active_task), the session goal, and `todos_json`
+ *    (the todo_write checklist, rehydrated into `<active-context>`/`<session-state>`
+ *    every turn) → cleared;
+ *  - the Responses-API pointer (`last_response_id`) → nulled, same as
+ *    `setCompactionBoundary`, since its server-side prefix is now stale;
+ *  - `memory_distilled_message_id` → clamped to the new MAX(id) so the distiller
+ *    doesn't skip a region;
+ *  - token totals → recomputed from the surviving rows.
+ *
+ * The summary boundary is intentionally untouched: visible user messages always
+ * have id > boundary, so deleting id >= target keeps it valid.
+ */
+export function rollbackToMessage(
+  db: DB, sessionId: number, messageId: number,
+): RollbackResult {
+  const target = messages.getById(db, sessionId, messageId);
+  if (!target) throw new Error(`message ${messageId} not in session ${sessionId}`);
+  if (target.role !== 'user') {
+    throw new Error(`message ${messageId} is not a user message (role=${target.role})`);
+  }
+
+  const blocks = Array.isArray(target.content)
+    ? (target.content as Array<{ type: string; text?: string; mediaType?: string; base64?: string; name?: string }>)
+    : [];
+  const seedText = blocks
+    .filter((b) => b.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text ?? '')
+    .join('\n');
+  // Images/PDFs carry base64; text-backed documents (md/txt/json/csv/code)
+  // carry `text` and no base64. Keep BOTH and preserve whichever field is set,
+  // otherwise text documents silently vanish from the re-seeded composer.
+  const seedAttachments = blocks
+    .filter((b) =>
+      (b.type === 'image' && typeof b.base64 === 'string') ||
+      (b.type === 'document' && (typeof b.base64 === 'string' || typeof b.text === 'string')),
+    )
+    .map((b) => ({
+      name: b.name ?? (b.type === 'image' ? 'image.png' : 'document'),
+      mediaType: b.mediaType ?? (b.type === 'image' ? 'image/png' : 'application/octet-stream'),
+      ...(typeof b.base64 === 'string' ? { base64: b.base64 } : {}),
+      ...(typeof b.text === 'string' ? { text: b.text } : {}),
+    }));
+
+  const tx = db.transaction(() => {
+    // Clear plans BEFORE the message delete: it keys off message_id, which the
+    // delete would SET NULL out from under us.
+    plans.clearFrom(db, sessionId, messageId);
+    tasks.clear(db, sessionId);
+    goals.clear(db, sessionId);
+    // Clear the live todo_write checklist — it's session-scoped (not message-
+    // anchored) and would otherwise be re-injected describing deleted work.
+    state.setTodos(db, sessionId, null);
+    db.prepare('DELETE FROM coder_messages WHERE session_id = ? AND id >= ?').run(sessionId, messageId);
+    // Subqueries below run AFTER the delete, so they see the surviving rows.
+    db.prepare(`
+      UPDATE coder_sessions SET
+        last_response_id = NULL,
+        last_response_message_count = NULL,
+        memory_distilled_message_id = MIN(
+          memory_distilled_message_id,
+          (SELECT COALESCE(MAX(id), 0) FROM coder_messages WHERE session_id = ?)
+        ),
+        total_input_tokens = (SELECT COALESCE(SUM(input_tokens), 0) FROM coder_messages WHERE session_id = ?),
+        total_output_tokens = (SELECT COALESCE(SUM(output_tokens), 0) FROM coder_messages WHERE session_id = ?),
+        total_cache_read_tokens = (SELECT COALESCE(SUM(cache_read_tokens), 0) FROM coder_messages WHERE session_id = ?),
+        total_cache_creation_tokens = (SELECT COALESCE(SUM(cache_creation_tokens), 0) FROM coder_messages WHERE session_id = ?),
+        last_turn_input_tokens = COALESCE(
+          (SELECT input_tokens FROM coder_messages
+            WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1), 0
+        ),
+        updated_at = datetime('now')
+      WHERE id = ?
+    `).run(sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId);
+    return core.get(db, sessionId)!;
+  });
+
+  return {
+    session: tx(),
+    seed_text: seedText,
+    seed_attachments: seedAttachments,
+    had_attachments: seedAttachments.length > 0,
+  };
 }
 
 /**

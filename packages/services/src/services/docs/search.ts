@@ -80,6 +80,12 @@ export interface DocSearchResult {
   source_id: number;
   source_uri: string | null;
   heading_path: string | null;
+  /** Heading-level deep-link fragment — cite as `source_uri#anchor`. */
+  anchor: string | null;
+  /** API symbol (api_reference docs), e.g. `Rigidbody.AddForce`. */
+  api_symbol: string | null;
+  /** API signature (api_reference docs), e.g. `AddForce(Vector3, ForceMode)`. */
+  api_signature: string | null;
   snippet: string;
   /** Raw fusion score (RRF reciprocal-rank). NOT comparable across queries. */
   score: number;
@@ -269,6 +275,9 @@ export class DocHybridSearch {
         source_id: chunk.source_id,
         source_uri: chunk.source_uri,
         heading_path: chunk.heading_path,
+        anchor: chunk.anchor,
+        api_symbol: chunk.api_symbol,
+        api_signature: chunk.api_signature,
         snippet: buildSnippet(chunk),
         score: m.rrfScore ?? m.score,
         // Uncalibrated until the reranker (Stage 3) overwrites these.

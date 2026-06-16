@@ -7,9 +7,11 @@ import type { AgentAttachment, EnrichedProviderModel, ProviderOption } from '../
 import { fileToAttachment } from '../utils.js';
 import { ComposerToolbar } from './ComposerToolbar.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
-import { MarkdownToolbar } from './MarkdownToolbar.js';
 import { RailComposerBar } from './RailComposerBar.js';
+import { useFileDrop } from './useFileDrop.js';
+import { DropOverlay } from './DropOverlay.js';
 import { useMarkdownShortcuts } from './useMarkdownShortcuts.js';
+import type { QueueMode } from './useMessageQueue.js';
 
 interface SlashCommand {
   id: string;
@@ -35,6 +37,9 @@ const BORDER_TINT: Record<AgentId, string> = {
 
 export interface ComposerHandle {
   setInput: (v: string) => void;
+  /** Replace the composer's staged attachments — used by Rollback to restore
+   *  the original message's image/document attachments alongside its text. */
+  setAttachments: (a: AgentAttachment[]) => void;
 }
 
 interface ComposerProps {
@@ -74,6 +79,15 @@ interface ComposerProps {
   temperature: number | null;
   setTemperature: (v: number | null) => void;
   /**
+   * Per-session sticky reasoning-effort override (migration 150). `null` = use
+   * the model default. Orthogonal to `thinking`. The selector is only rendered
+   * when `reasoningLevels` is non-empty (model exposes discrete effort levels).
+   */
+  reasoningEffort?: string | null;
+  setReasoningEffort?: (v: string | null) => void;
+  /** Discrete effort levels the selected model supports. Empty → hide selector. */
+  reasoningLevels?: string[];
+  /**
    * Per-session "unrestricted tool output" toggle (migration 078). When true,
    * the runner / mcp-bridge / code_exec lift their per-tool-call truncation
    * caps to a high safety ceiling (≈1 MB). Useful for Unity / large file
@@ -111,6 +125,15 @@ interface ComposerProps {
   selectedPipelineId?: number | null;
   setSelectedPipelineId?: (v: number | null) => void;
   onRunPipeline?: (pipelineId: number, initialInput: string) => Promise<void> | void;
+  /**
+   * Message-queue wiring. When `queueable`, the composer stays usable while the
+   * agent streams: composing + the split button enqueue a follow-up via
+   * `onQueue` (next-turn → injected into the live run; end-of-session → parked).
+   * `queuedStrip` is the rendered queue list, shown above the input.
+   */
+  queueable?: boolean;
+  onQueue?: (text: string, mode: QueueMode, skillIds?: string[]) => void;
+  queuedStrip?: React.ReactNode;
 }
 
 export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
@@ -120,7 +143,10 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
     const [input, setInput] = useState('');
     const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const { handleKeyDown: mdKeyDown, applyAction } = useMarkdownShortcuts(textareaRef, input, setInput);
+    // Keep only the smart keyboard behaviors (Tab indent + Enter list
+    // continuation) — the visual markdown formatting toolbar was removed
+    // (useless markers for an AI-prompt composer).
+    const { handleKeyDown: mdKeyDown } = useMarkdownShortcuts(textareaRef, input, setInput);
     const confirm = useConfirm();
 
     // Debounced value for AgentPicker auto-suggest (avoids re-rendering toolbar on every keystroke)
@@ -154,13 +180,15 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
       setSlashIndex(0);
     }, [input]);
 
-    useImperativeHandle(ref, () => ({ setInput }), []);
+    useImperativeHandle(ref, () => ({ setInput, setAttachments }), []);
 
     const handleFiles = useCallback(async (files: FileList | null) => {
       if (!files || files.length === 0) return;
       const arr = await Promise.all(Array.from(files).map(fileToAttachment));
       setAttachments((prev) => [...prev, ...arr]);
     }, []);
+
+    const { isDragging, dropHandlers } = useFileDrop({ onFiles: handleFiles, disabled: streaming });
 
     // Auto-resize textarea based on content
     useEffect(() => {
@@ -257,6 +285,41 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
       props.onSend(finalText, atts, skillIds.length > 0 ? skillIds : undefined);
     }, [input, attachments, slashCommands, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline, confirm]);
 
+    // Enqueue the composed message while the agent is streaming. Same
+    // file_refs prefixing + clears as `handleSend`, but the delivery timing
+    // (next turn vs end of session) is decided by the queue. Text-only —
+    // attachments can't be added mid-run (the attach button is disabled), and
+    // the backend rejects mid-run attachments anyway.
+    const handleQueue = useCallback((mode: QueueMode) => {
+      if (!input.trim() || !props.onQueue) return;
+      const text = input;
+      const picks = props.filePicks ?? [];
+      const skillIds = props.skillPicks ?? [];
+      // Slash command: same interception as handleSend — the typed `/cmd`
+      // stays as the message, the matched skill rides as a pick (no file_refs
+      // prefix), so a queued slash command behaves like a sent one.
+      if (text.startsWith('/') && props.sessionId) {
+        const spaceIdx = text.indexOf(' ');
+        const cmd = spaceIdx > 0 ? text.slice(1, spaceIdx) : text.slice(1);
+        const match = slashCommands.find((c) => c.command.toLowerCase() === cmd.toLowerCase());
+        if (match) {
+          setInput('');
+          props.onClearPicks?.();
+          props.onClearSkillPicks?.();
+          const merged = [match.id, ...skillIds.filter((s) => s !== match.id)];
+          props.onQueue(text, mode, merged);
+          return;
+        }
+      }
+      const finalText = picks.length > 0
+        ? `<file_refs>\n${picks.map((p) => `- ${p}`).join('\n')}\n</file_refs>\n\n${text}`
+        : text;
+      setInput('');
+      props.onClearPicks?.();
+      props.onClearSkillPicks?.();
+      props.onQueue(finalText, mode, skillIds.length > 0 ? skillIds : undefined);
+    }, [input, slashCommands, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue]);
+
     const filePicks = props.filePicks ?? [];
     const PICKS_VISIBLE = 3;
     const visiblePicks = filePicks.slice(0, PICKS_VISIBLE);
@@ -277,7 +340,9 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
     const skillPicks = props.skillPicks ?? [];
 
     return (
-      <div className="border-t bg-card p-4">
+      <div className="relative border-t bg-card p-4" {...dropHandlers}>
+        <DropOverlay show={isDragging} />
+        {props.queuedStrip}
         {(attachments.length > 0 || filePicks.length > 0 || skillPicks.length > 0) && (
           <div className="flex flex-wrap items-center gap-1.5 mb-3">
             {skillPicks.map((id) => (
@@ -437,10 +502,14 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
                   return;
                 }
               }
-              // Highest priority: send message
+              // Highest priority: send message — or enqueue while streaming.
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
-                handleSend();
+                if (streaming) {
+                  if (props.queueable && hasInput) handleQueue('next-turn');
+                } else {
+                  handleSend();
+                }
                 return;
               }
               // Markdown shortcuts and smart behaviors
@@ -448,7 +517,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             }}
             placeholder={t('composer.placeholder')}
             rows={3}
-            disabled={streaming}
+            disabled={streaming && !props.queueable}
             className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent text-sm min-h-0"
           />
           {props.compact ? (
@@ -471,6 +540,9 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
               setMaxTurns={props.setMaxTurns}
               temperature={props.temperature}
               setTemperature={props.setTemperature}
+              reasoningEffort={props.reasoningEffort ?? null}
+              setReasoningEffort={props.setReasoningEffort}
+              reasoningLevels={props.reasoningLevels ?? []}
               unrestrictedOutput={props.unrestrictedOutput ?? false}
               setUnrestrictedOutput={props.setUnrestrictedOutput}
               fallbackProvider={props.fallbackProvider ?? null}
@@ -487,37 +559,34 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
               setDescribeImages={props.setDescribeImages}
               toolPermissionMode={props.toolPermissionMode}
               setToolPermissionMode={props.setToolPermissionMode}
+              queueable={!!props.queueable}
+              onQueueSend={handleQueue}
             />
           ) : (
           <>
           {/*
-            Markdown formatting toolbar + a slot on the right for the
-            "session-level" icons (attachment / pipeline / think /
-            cap). Tucking them up here keeps the busier bottom row
-            focused on pickers (agent / provider / model) and the
-            Send button.
+            Thin strip for the "session-level" action icons (attachment /
+            pipeline / think / describe / cap / permission shield). The
+            markdown formatting toolbar that used to host these was removed —
+            its markers are useless in an AI-prompt composer. Keeping this row
+            above the busier bottom row leaves the pickers (agent / provider /
+            model) and Send button focused.
           */}
-          <div className="flex items-center">
-            <MarkdownToolbar
-              onAction={applyAction}
-              disabled={streaming}
-              rightSlot={
-                <ComposerActionIcons
-                  streaming={streaming}
-                  handleFiles={handleFiles}
-                  thinking={props.thinking}
-                  setThinking={props.setThinking}
-                  describeImages={props.describeImages}
-                  setDescribeImages={props.setDescribeImages}
-                  unrestrictedOutput={props.unrestrictedOutput ?? false}
-                  setUnrestrictedOutput={props.setUnrestrictedOutput}
-                  toolPermissionMode={props.toolPermissionMode}
-                  setToolPermissionMode={props.setToolPermissionMode}
-                  sessionId={props.sessionId}
-                  selectedPipelineId={props.selectedPipelineId}
-                  setSelectedPipelineId={props.setSelectedPipelineId}
-                />
-              }
+          <div className="flex items-center justify-end gap-0.5 px-2 py-1 border-t border-dashed border-border/40">
+            <ComposerActionIcons
+              streaming={streaming}
+              handleFiles={handleFiles}
+              thinking={props.thinking}
+              setThinking={props.setThinking}
+              describeImages={props.describeImages}
+              setDescribeImages={props.setDescribeImages}
+              unrestrictedOutput={props.unrestrictedOutput ?? false}
+              setUnrestrictedOutput={props.setUnrestrictedOutput}
+              toolPermissionMode={props.toolPermissionMode}
+              setToolPermissionMode={props.setToolPermissionMode}
+              sessionId={props.sessionId}
+              selectedPipelineId={props.selectedPipelineId}
+              setSelectedPipelineId={props.setSelectedPipelineId}
             />
           </div>
           <ComposerToolbar
@@ -539,6 +608,9 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             setMaxTurns={props.setMaxTurns}
             temperature={props.temperature}
             setTemperature={props.setTemperature}
+            reasoningEffort={props.reasoningEffort ?? null}
+            setReasoningEffort={props.setReasoningEffort}
+            reasoningLevels={props.reasoningLevels ?? []}
             unrestrictedOutput={props.unrestrictedOutput ?? false}
             setUnrestrictedOutput={props.setUnrestrictedOutput}
             fallbackProvider={props.fallbackProvider ?? null}
@@ -553,6 +625,8 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             supportsThinking={props.supportsThinking}
             describeImages={props.describeImages}
             setDescribeImages={props.setDescribeImages}
+            queueable={!!props.queueable}
+            onQueueSend={handleQueue}
           />
           </>
           )}

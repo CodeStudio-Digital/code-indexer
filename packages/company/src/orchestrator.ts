@@ -143,6 +143,8 @@ export class CompanyOrchestrator {
    */
   get effectiveSessionId(): number { return this.ctx.effectiveSessionId; }
   get isMasterAlive(): boolean { return this.master?.isAlive ?? false; }
+  /** Shared resurrect-dedup point (supervisor ↔ RuntimeReconciler). */
+  masterResurrectedWithinMs(ms: number): boolean { return this.master?.resurrectedWithinMs(ms) ?? false; }
   get hasMasterStarted(): boolean { return !!this.master?.handle; }
   get masterEndedAt(): string | null { return this.master?.endedAt ?? null; }
   /** @deprecated prefer `getMasterAgentRunId()`. */
@@ -173,6 +175,8 @@ export class CompanyOrchestrator {
     userMessage: string; provider: string; model: string; maxTurns?: number; signal?: AbortSignal;
     roleConfigs?: RoleConfig[]; attachments?: import('@mcp/code-agent/index.js').CoderAttachment[];
     thinking?: boolean;
+    /** Sticky master reasoning-effort override (orthogonal to thinking). */
+    reasoningEffort?: string;
     /**
      * When true the master prompt routes non-trivial work through the
      * built-in SDD pipeline. Threaded into `MasterPromptContext.sddMode`.
@@ -188,6 +192,8 @@ export class CompanyOrchestrator {
   async resumeExistingMaster(opts: {
     userMessage: string; maxTurns?: number; roleConfigs?: RoleConfig[];
     attachments?: import('@mcp/code-agent/index.js').CoderAttachment[]; thinking?: boolean;
+    /** Sticky master reasoning-effort override (orthogonal to thinking). */
+    reasoningEffort?: string;
   }): Promise<MasterStartResult> {
     return this.master.resumeExisting(opts);
   }
@@ -235,7 +241,7 @@ export class CompanyOrchestrator {
     // Lazy-start: sub-session's master is dormant until the first message.
     if (!this.master.isAlive && this.master.agentRunId == null) {
       const session = this.ctx.companyStore.getCompanySession(this.companySessionId);
-      let cfg: { master_provider?: string; master_model?: string; role_assignments?: RoleConfig[] } = {};
+      let cfg: { master_provider?: string; master_model?: string; master_reasoning_effort?: string; role_assignments?: RoleConfig[] } = {};
       try { cfg = session ? JSON.parse(session.config_json || '{}') : {}; } catch { /* defaults */ }
       void this.master.start({
         userMessage: message,
@@ -245,6 +251,7 @@ export class CompanyOrchestrator {
         roleConfigs: cfg.role_assignments ?? [],
         attachments: options.attachments,
         thinking: options.thinking,
+        reasoningEffort: cfg.master_reasoning_effort,
       }).catch((e) => {
         console.error(`[company s=${this.companySessionId}] lazy master start failed:`, e);
       });

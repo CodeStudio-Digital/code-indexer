@@ -115,6 +115,14 @@ export interface CompanyRoleConfig {
    * `company_templates.roles_json` (no schema change — JSON field).
    */
   temperature?: number;
+  /**
+   * Per-role sticky reasoning-effort override (e.g. `minimal`/`low`/`medium`/
+   * `high`/`xhigh`). Orthogonal to extended thinking. Forwarded to the runner
+   * and only honoured by providers exposing discrete effort levels (Codex/
+   * OpenRouter). Persisted in `company_templates.roles_json` (JSON field, no
+   * schema change). Undefined → model default.
+   */
+  reasoningEffort?: string;
 }
 
 export interface CompanyTemplate {

@@ -423,6 +423,9 @@ export class ExecutingNode implements BehaviorNode {
         tools: toolsBuilt.tools,
         thinking: ctx.opts.thinking,
         thinkingBudgetTokens: ctx.opts.thinkingBudgetTokens,
+        ...(ctx.opts.reasoningEffort
+          ? { reasoningEffort: ctx.opts.reasoningEffort }
+          : {}),
         sessionId: ctx.opts.sessionId,
         signal: ctx.opts.toolContext.signal,
         ...(tempResolution && typeof tempResolution.temperature === 'number'

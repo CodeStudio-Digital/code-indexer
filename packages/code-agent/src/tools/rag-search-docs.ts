@@ -22,84 +22,20 @@
  */
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { DocSearchBackend } from './doc-search-types.js';
 
-/**
- * Shape of the search backend the tool relies on. Only the methods the
- * tool actually calls are listed here so the code-agent package stays
- * decoupled from `@mcp/services` at the type level.
- */
-export interface DocSearchBackend {
-  search(input: {
-    query: string;
-    collection?: string;
-    limit?: number;
-    /** 'project' (default) = prefer project-linked collections; 'all' = global. */
-    scope?: 'project' | 'all';
-    /** Session's project id — lets the backend resolve linked collections. */
-    project_id?: number;
-  }): Promise<{
-    results: Array<{
-      chunk_id: number;
-      collection: string;
-      source_id: number;
-      source_uri: string | null;
-      heading_path: string | null;
-      snippet: string;
-      /** Raw fusion score — opaque. Prefer `relevance` when present. */
-      score: number;
-      /** Calibrated 0-1 relevance from the reranker; null when uncalibrated. */
-      relevance: number | null;
-      summary: string | null;
-      concepts: string[];
-    }>;
-    diag: {
-      fts_hits: number;
-      vector_hits: number;
-      mode: 'hybrid' | 'fts' | 'vector';
-      embedding_available: boolean;
-      vector_available: boolean;
-      /** Calibrated scoring ran and nothing cleared the relevance bar. */
-      no_good_match?: boolean;
-      /** Best calibrated relevance seen (even when below the bar). */
-      top_relevance?: number | null;
-      /** 'project' when filtered to project-linked collections. */
-      scope?: 'project' | 'all';
-      /** Names of the collections searched when scope === 'project'. */
-      scoped_collections?: string[];
-    };
-  }>;
-  /**
-   * Full-content read of one chunk + its neighbors — backs `rag_read_doc`.
-   * Optional so older backend wirings keep type-checking; the tool emits a
-   * clear "not available" error when absent. Null = chunk id not found.
-   */
-  readChunk?(input: { chunk_id: number; window?: number }): Promise<DocChunkRead | null>;
-}
-
-export interface DocChunkNeighborRef {
-  chunk_id: number;
-  ord: number;
-  heading_path: string | null;
-  content: string;
-  token_count: number;
-}
-
-export interface DocChunkRead {
-  chunk: {
-    chunk_id: number;
-    collection: string;
-    source_id: number;
-    source_uri: string | null;
-    heading_path: string | null;
-    content: string;
-    token_count: number;
-    summary: string | null;
-    concepts: string[];
-  };
-  /** Neighbors by `ord` within the same source, ascending. */
-  prev: DocChunkNeighborRef[];
-  next: DocChunkNeighborRef[];
-}
+// The doc-tool type contract lives in doc-search-types.ts (shared with the
+// host backend + worker shims). Re-exported here so existing importers of
+// '@mcp/code-agent/tools/rag-search-docs.js' keep resolving these names.
+export type {
+  DocSearchBackend,
+  DocChunkNeighborRef,
+  DocChunkRead,
+  DocSectionRead,
+  DocOutline,
+  DocOutlineHeading,
+  DocOutlineSource,
+} from './doc-search-types.js';
 
 let globalBackend: DocSearchBackend | null = null;
 
@@ -221,7 +157,10 @@ export const ragSearchDocsTool: CoderTool = {
     const blocks = results.map((r, i) => {
       const lines: string[] = [];
       lines.push(`## [${i + 1}] ${r.heading_path ?? '(untitled)'} — ${r.collection} (chunk_id: ${r.chunk_id})`);
-      if (r.source_uri) lines.push(`Source: ${r.source_uri}`);
+      // Deep-link to the exact section when an anchor was captured at index time.
+      if (r.source_uri) lines.push(`Source: ${r.source_uri}${r.anchor ? `#${r.anchor}` : ''}`);
+      if (r.api_signature) lines.push(`Signature: ${r.api_signature}`);
+      else if (r.api_symbol) lines.push(`Symbol: ${r.api_symbol}`);
       // Prefer the calibrated relevance; fall back to the opaque RRF score
       // (clearly flagged) when rerank didn't run.
       if (typeof r.relevance === 'number') {
@@ -235,7 +174,14 @@ export const ragSearchDocsTool: CoderTool = {
       return lines.join('\n');
     });
     const footer = 'Snippets are truncated — use rag_read_doc({chunk_id}) to read any section in full (with surrounding sections).';
-    return ok(`${header}\n\n${blocks.join('\n\n---\n\n')}\n\n${footer}`);
+    // When NO result carries a calibrated relevance, the reranker didn't run
+    // (no model loaded, or ≤1 candidate): the order is raw fusion rank, not a
+    // 0-1 confidence. Warn so the agent judges by CONTENT, not position.
+    const uncalibrated = results.every((r) => r.relevance == null);
+    const calNote = uncalibrated
+      ? '\nNote: relevance is UNCALIBRATED (raw fusion rank, not a 0-1 confidence) — the reranker did not score these. Judge each snippet on its content, not its rank, and broaden the query if the top hit looks weak.'
+      : '';
+    return ok(`${header}\n\n${blocks.join('\n\n---\n\n')}\n\n${footer}${calNote}`);
   },
 };
 

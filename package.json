@@ -30,11 +30,15 @@
     "check:loc": "tsx scripts/check-loc-cap.ts",
     "check:cycles": "tsx scripts/check-circular-imports.ts",
     "check:arch": "npm run check:loc && npm run check:cycles",
+    "audit:env": "tsx scripts/audit-env-vars.ts",
+    "audit:env:check": "tsx scripts/audit-env-vars.ts --check",
+    "market:smoke": "tsx scripts/market-smoke.ts",
     "migrate:data-dir": "tsx scripts/migrate-data-dir.ts",
     "typecheck": "tsc --noEmit",
     "postinstall": "pnpm rebuild better-sqlite3",
     "eval": "tsx src/benchmarks/search-quality.ts --project CodeStudio/MCP-CodeBase",
-    "eval:strict": "tsx src/benchmarks/search-quality.ts --project CodeStudio/MCP-CodeBase --modes fts,hybrid --min-recall 0.7 --gate-mode hybrid"
+    "eval:strict": "tsx src/benchmarks/search-quality.ts --project CodeStudio/MCP-CodeBase --modes fts,hybrid --min-recall 0.7 --gate-mode hybrid",
+    "eval:docs": "tsx scripts/docs-rag-eval.ts --file packages/services/src/services/docs/__tests__/eval/gold-set.example.jsonl"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

@@ -2,6 +2,33 @@ import type { Database as DB } from 'better-sqlite3';
 import type { DocChunk, DocChunkInput } from './types.js';
 import { mapChunk } from './mappers.js';
 
+// Single source of truth for the INSERT shape so `insert` and
+// `replaceForSource` can never drift (doc_type/anchor/api_* added in mig 149).
+const CHUNK_COLUMNS =
+  'collection_id, source_id, ord, heading_path, content, content_hash, ' +
+  'summary, concepts, token_count, source_uri, doc_type, anchor, api_symbol, api_signature';
+const CHUNK_PLACEHOLDERS = new Array(14).fill('?').join(', ');
+const CHUNK_INSERT_SQL = `INSERT INTO doc_chunks (${CHUNK_COLUMNS}) VALUES (${CHUNK_PLACEHOLDERS})`;
+
+function chunkValues(c: DocChunkInput): unknown[] {
+  return [
+    c.collection_id,
+    c.source_id,
+    c.ord,
+    c.heading_path ?? null,
+    c.content,
+    c.content_hash,
+    c.summary ?? null,
+    c.concepts && c.concepts.length > 0 ? JSON.stringify(c.concepts) : null,
+    c.token_count ?? 0,
+    c.source_uri ?? null,
+    c.doc_type ?? null,
+    c.anchor ?? null,
+    c.api_symbol ?? null,
+    c.api_signature ?? null,
+  ];
+}
+
 /**
  * Insert chunks in a single transaction. Returns inserted row ids in input
  * order. Run inside `replaceForSource` when re-indexing — FTS triggers fire
@@ -9,28 +36,11 @@ import { mapChunk } from './mappers.js';
  */
 export function insert(db: DB, inputs: DocChunkInput[]): number[] {
   if (inputs.length === 0) return [];
-  const stmt = db.prepare(`
-    INSERT INTO doc_chunks (
-      collection_id, source_id, ord, heading_path,
-      content, content_hash, summary, concepts,
-      token_count, source_uri
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
+  const stmt = db.prepare(CHUNK_INSERT_SQL);
   const ids: number[] = [];
   const tx = db.transaction((rows: DocChunkInput[]) => {
     for (const c of rows) {
-      const r = stmt.run(
-        c.collection_id,
-        c.source_id,
-        c.ord,
-        c.heading_path ?? null,
-        c.content,
-        c.content_hash,
-        c.summary ?? null,
-        c.concepts && c.concepts.length > 0 ? JSON.stringify(c.concepts) : null,
-        c.token_count ?? 0,
-        c.source_uri ?? null,
-      );
+      const r = stmt.run(...chunkValues(c));
       ids.push(r.lastInsertRowid as number);
     }
   });
@@ -47,26 +57,9 @@ export function replaceForSource(db: DB, sourceId: number, inputs: DocChunkInput
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM doc_chunks WHERE source_id = ?').run(sourceId);
     if (inputs.length === 0) return;
-    const stmt = db.prepare(`
-      INSERT INTO doc_chunks (
-        collection_id, source_id, ord, heading_path,
-        content, content_hash, summary, concepts,
-        token_count, source_uri
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    const stmt = db.prepare(CHUNK_INSERT_SQL);
     for (const c of inputs) {
-      const r = stmt.run(
-        c.collection_id,
-        c.source_id,
-        c.ord,
-        c.heading_path ?? null,
-        c.content,
-        c.content_hash,
-        c.summary ?? null,
-        c.concepts && c.concepts.length > 0 ? JSON.stringify(c.concepts) : null,
-        c.token_count ?? 0,
-        c.source_uri ?? null,
-      );
+      const r = stmt.run(...chunkValues(c));
       ids.push(r.lastInsertRowid as number);
     }
   });
@@ -108,6 +101,29 @@ export function listBySource(db: DB, sourceId: number): DocChunk[] {
   const rows = db
     .prepare('SELECT * FROM doc_chunks WHERE source_id = ? ORDER BY ord ASC')
     .all(sourceId) as Array<Record<string, unknown>>;
+  return rows.map(mapChunk);
+}
+
+/**
+ * All chunks of ONE section — same source, same `heading_path` AND same
+ * `source_uri` (so a same-named heading on another crawled page isn't merged
+ * in), in `ord` order. Backs `rag_read_doc({mode:'section'})`: a section the
+ * chunker split by size is reassembled into one contiguous read. `IS ?` binds
+ * NULL correctly for the (legitimately nullable) heading_path / source_uri.
+ */
+export function listBySourceHeading(
+  db: DB,
+  sourceId: number,
+  headingPath: string | null,
+  sourceUri: string | null,
+): DocChunk[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM doc_chunks
+        WHERE source_id = ? AND heading_path IS ? AND source_uri IS ?
+        ORDER BY ord ASC`,
+    )
+    .all(sourceId, headingPath, sourceUri) as Array<Record<string, unknown>>;
   return rows.map(mapChunk);
 }
 

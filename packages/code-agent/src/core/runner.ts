@@ -1950,7 +1950,13 @@ export class CoderRunner extends EventEmitter {
         enforcePreRead: (toolName, input, turn, toolUseId) =>
           this.enforcePreReadForBridge(toolName, input, turn, toolUseId),
         registerInFlightTool: (toolUseId, ctl) => { this.inFlightTools.set(toolUseId, ctl); },
-        unregisterInFlightTool: (toolUseId) => { this.inFlightTools.delete(toolUseId); },
+        unregisterInFlightTool: (toolUseId) => {
+          this.inFlightTools.delete(toolUseId);
+          // Drop any stashed inject message the dispatch loop didn't consume —
+          // e.g. the tool resolved in the same tick the supervisor aborted, so
+          // the abort branch never ran. Prevents an unbounded map leak.
+          this.injectedToolErrors.delete(toolUseId);
+        },
         consumeInjectedToolError: (toolUseId) => {
           const msg = this.injectedToolErrors.get(toolUseId);
           if (msg !== undefined) this.injectedToolErrors.delete(toolUseId);

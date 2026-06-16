@@ -382,6 +382,13 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         projectIds?: number[];
         skills?: string[];
         systemPromptOverride?: string;
+        /** Per-role sampling temperature override. */
+        temperature?: number;
+        /** Per-role extended thinking + Anthropic budget. */
+        thinking?: boolean;
+        thinkingBudgetTokens?: number;
+        /** Per-role sticky reasoning-effort override (orthogonal to thinking). */
+        reasoningEffort?: string;
       }>;
       skills?: Record<string, string[]>;
       allowed_models?: Array<{
@@ -393,6 +400,11 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       }>;
       /** Session-level operational rules (markdown). Empty string clears them. */
       operational_rules?: string;
+      /**
+       * Sticky master reasoning-effort override (orthogonal to thinking).
+       * Persisted to config_json and read by /start and /resume. `null`/'' clears.
+       */
+      master_reasoning_effort?: string | null;
     }
     const body = await parseJsonBody<ConfigPatchBody>(c);
     if (!body) return c.json({ error: 'Invalid body' }, 400);
@@ -445,6 +457,10 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
             projectIds: r.projectIds,
             skills: r.skills,
             systemPromptOverride: r.systemPromptOverride,
+            temperature: r.temperature,
+            thinking: r.thinking,
+            thinkingBudgetTokens: r.thinkingBudgetTokens,
+            reasoningEffort: r.reasoningEffort,
           })),
           skills: body.skills,
           allowed_models: body.allowed_models,
@@ -467,6 +483,20 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     // running — spawn/resume read them fresh from config_json (see helper).
     if (body.operational_rules !== undefined) {
       applyOperationalRulesPatch(companyStore, id, body.operational_rules);
+    }
+
+    // Sticky master reasoning-effort — persist to config_json regardless of
+    // running state (mirrors operational_rules). /start and /resume read it
+    // fresh; a live master keeps its current effort until the next start/resume
+    // (same sticky semantics as temperature). `null`/'' clears the override.
+    if (body.master_reasoning_effort !== undefined) {
+      const fresh = companyStore.getCompanySession(id);
+      let cfg: Record<string, unknown> = {};
+      try { cfg = JSON.parse(fresh?.config_json || '{}'); } catch { cfg = {}; }
+      const eff = body.master_reasoning_effort;
+      if (eff === null || eff === '') delete cfg.master_reasoning_effort;
+      else cfg.master_reasoning_effort = eff;
+      companyStore.updateCompanySessionConfig(id, JSON.stringify(cfg));
     }
     return c.json({ ok: true });
   });

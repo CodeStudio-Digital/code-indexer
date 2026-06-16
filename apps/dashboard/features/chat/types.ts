@@ -57,9 +57,23 @@ export interface CoderSession {
    * Surfaced as the shield toggle in the Composer.
    */
   tool_permission_mode?: 'ask' | 'auto' | 'unrestricted' | null;
+  /**
+   * Per-session agent/mode (explore/plan/build/admin/spec/builder/api).
+   * Drives the composer's agent select. Persisted on the session row so the
+   * select reflects the actual session state on reload (hydrated on session
+   * load) and live transitions (plan→build) via `coder:session_agent_changed`.
+   */
+  agent?: 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'builder' | 'api' | null;
   /** Durable compaction summary (mig 128). Rendered as a card above the chat
    *  when set; the older messages it covers are hidden behind the boundary. */
   compaction_summary?: string | null;
+  /**
+   * Per-session sticky reasoning-effort override (migration 150), e.g.
+   * `minimal`/`low`/`medium`/`high`/`xhigh`. Orthogonal to the thinking toggle.
+   * NULL → provider/model default. Surfaced as the effort selector in the
+   * Composer (only for models exposing supported_reasoning_levels).
+   */
+  reasoning_effort_override?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -172,6 +186,12 @@ export interface EnrichedProviderModel {
   mode: string | null;
   context_window?: number | null;
   default_max_tokens?: number | null;
+  /** Discrete reasoning-effort levels this model accepts (e.g.
+   *  `['minimal','low','medium','high','xhigh']`). Non-empty → the composer
+   *  shows the effort selector. Null/empty → hidden. */
+  supported_reasoning_levels?: string[] | null;
+  /** Model's default effort when no override is set. Shown as the "auto" hint. */
+  default_reasoning_level?: string | null;
 }
 
 export interface ProviderCapabilities {
@@ -230,6 +250,10 @@ export interface PromptHandlers {
    *  session containing history up to (exclusive) the message, pre-fill the
    *  composer with the message text for editing. */
   onFork?: (messageId: number) => Promise<void> | void;
+  /** Roll the session back to the given persisted user-message id: DELETE that
+   *  message and everything after it (in place, destructive), then re-seed the
+   *  composer with its text + attachments for editing and re-sending. */
+  onRollback?: (messageId: number) => Promise<void> | void;
   /**
    * PermissionGate verdict — resolves a tool call paused awaiting approval
    * (POST /tool-approval). Wired by AgentChat; the ToolCallBlock renders the

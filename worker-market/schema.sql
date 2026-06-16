@@ -9,6 +9,9 @@ CREATE TABLE IF NOT EXISTS plugins (
   brand_color TEXT,
   latest_version TEXT NOT NULL,
   downloads INTEGER NOT NULL DEFAULT 0,
+  -- Moderation gate: new plugins land 0 (pending) until an operator approves.
+  -- Public reads (search/info/bundle) filter approved=1.
+  approved INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

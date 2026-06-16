@@ -29,7 +29,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, copyFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -119,6 +119,21 @@ if (!skipDashboard) {
 
 // 3. CJS preload bundle (overwrites the ESM tsc output)
 await buildPreload();
+
+// 3b. Copy the static splash page next to main so it ships in the asar
+//     (tsc only emits .js — it never copies .html). main.ts/splash-window.ts
+//     load it from dist/apps/electron/splash.html in the packaged app.
+{
+  const splashSrc = resolve(root, 'apps/electron/splash.html');
+  const splashDest = resolve(root, 'dist/apps/electron/splash.html');
+  if (existsSync(splashSrc)) {
+    mkdirSync(dirname(splashDest), { recursive: true });
+    copyFileSync(splashSrc, splashDest);
+    console.log(`✓ splash copied → ${splashDest}`);
+  } else {
+    console.warn(`! splash.html not found at ${splashSrc} — splash will be skipped`);
+  }
+}
 
 if (noPackage) {
   console.log('\n--no-package: skipping electron-builder. Done.');

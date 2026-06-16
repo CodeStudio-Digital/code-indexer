@@ -32,6 +32,7 @@ import {
   docErrorStatus,
   type DocIngestProgress,
 } from '@mcp/services/services/docs/index.js';
+import { coerceDocType } from '@mcp/store/doc-store.js';
 
 /**
  * Set the response headers proxies need to pass `text/event-stream`
@@ -62,6 +63,8 @@ interface CreateCollectionBody {
 interface CreateUrlSourceBody {
   url: string;
   title?: string;
+  /** Documentation type (migration 149); coerced to a valid DocType server-side. */
+  doc_type?: string;
   crawl?: {
     enabled?: boolean;
     max_pages?: number;
@@ -100,6 +103,8 @@ interface CreateFolderSourceBody {
   /** Absolute path no servidor. Obrigatório. */
   path: string;
   title?: string;
+  /** Documentation type (migration 149); coerced to a valid DocType server-side. */
+  doc_type?: string;
   folder?: {
     /** Default `**\/*.{html,htm,md,markdown,pdf,txt}`. */
     include_glob?: string | null;
@@ -190,6 +195,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
           type: 'url',
           uri: body.url.trim(),
           title: body.title?.trim() || null,
+          doc_type: coerceDocType(body.doc_type),
           crawl: body.crawl,
         });
         return c.json(source, 201);
@@ -220,6 +226,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
               collectionId,
               url: body.url!.trim(),
               title: body.title?.trim(),
+              docType: coerceDocType(body.doc_type),
               crawl: body.crawl,
             },
             {
@@ -246,6 +253,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
         collectionId,
         url: body.url.trim(),
         title: body.title?.trim(),
+        docType: coerceDocType(body.doc_type),
         crawl: body.crawl,
       });
       return c.json(result, 201);
@@ -265,6 +273,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
     let bytes: Uint8Array;
     let fileName: string;
     let title: string | undefined;
+    let docType: string | undefined;
     try {
       const form = await c.req.parseBody();
       const file = form.file;
@@ -276,6 +285,8 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
       fileName = file.name || 'document.pdf';
       const rawTitle = form.title;
       if (typeof rawTitle === 'string') title = rawTitle.trim() || undefined;
+      const rawDocType = form.doc_type;
+      if (typeof rawDocType === 'string') docType = rawDocType;
     } catch (err) {
       return c.json({ error: `multipart parse failed: ${err instanceof Error ? err.message : String(err)}` }, 400);
     }
@@ -292,7 +303,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
         await send('open', { ok: true, ts: Date.now() });
         try {
           await indexDocsUseCase.indexPdf(
-            { collectionId, fileName, bytes, title },
+            { collectionId, fileName, bytes, title, docType: coerceDocType(docType) },
             {
               onStart: (p) => send('start', p),
               onProgress: (p: DocIngestProgress) => send('progress', p),
@@ -310,7 +321,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
     }
 
     try {
-      const result = await indexDocsUseCase.indexPdf({ collectionId, fileName, bytes, title });
+      const result = await indexDocsUseCase.indexPdf({ collectionId, fileName, bytes, title, docType: coerceDocType(docType) });
       return c.json(result, 201);
     } catch (err) {
       return mapDocError(c, err);
@@ -376,6 +387,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
           type: 'folder',
           uri: `folder://${rawPath}`,
           title: title ?? null,
+          doc_type: coerceDocType(body.doc_type),
           folder_root_path: rawPath,
           folder: body.folder,
         });
@@ -403,6 +415,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
               collectionId,
               rootPath: rawPath,
               title,
+              docType: coerceDocType(body.doc_type),
               folder: body.folder,
             },
             {
@@ -430,6 +443,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
         collectionId,
         rootPath: rawPath,
         title,
+        docType: coerceDocType(body.doc_type),
         folder: body.folder,
       });
       return c.json(result, 201);

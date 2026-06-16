@@ -37,6 +37,7 @@ export async function indexPdf(
     type: 'pdf',
     uri,
     title: input.title ?? stripExtension(input.fileName),
+    doc_type: input.docType,
     pdf_size_bytes: input.bytes.byteLength,
   });
   return runIngest(deps, collection, source, async () => {
@@ -72,6 +73,7 @@ export async function indexUrl(
     type: 'url',
     uri: normalizedUrl,
     title: input.title ?? null,
+    doc_type: input.docType,
     crawl: input.crawl,
   });
   return runIngest(deps, collection, source, async () => {
@@ -134,6 +136,7 @@ export async function indexFolder(
     type: 'folder',
     uri,
     title: input.title ?? null,
+    doc_type: input.docType,
     folder_root_path: rootPath,
     folder: input.folder,
   });

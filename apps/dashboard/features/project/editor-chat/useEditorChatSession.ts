@@ -15,8 +15,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiPatch, apiPost, useApi } from '../../../hooks/useApi.js';
 import { useAgentStream, type AgentAttachment } from '../../../hooks/useAgentStream.js';
+import { useMessageQueue, type QueueDeliver, type QueueMode } from '../../chat/composer/useMessageQueue.js';
 import { useAgentChatState } from '../../chat/useAgentChatState.js';
-import { providerSupportsThinking } from '../../chat/composer/provider-caps.js';
+import { providerSupportsThinking, resolveReasoningLevels } from '../../chat/composer/provider-caps.js';
 import { PROVIDERS } from '../../chat/constants.js';
 import type { CoderSession, MessagePage, PromptHandlers, SessionData } from '../../chat/types.js';
 import {
@@ -29,7 +30,7 @@ import {
 import { readActiveSelection } from '../../workspace/editor/chat-actions.js';
 import { useEditorSessionSettings } from './useEditorSessionSettings.js';
 
-type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec';
+type AgentId = 'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api';
 
 export function useEditorChatSession(projectId: number) {
   const { selections } = useEditorChatContext(projectId);
@@ -45,6 +46,7 @@ export function useEditorChatSession(projectId: number) {
   const [agent, setAgent] = useState<AgentId>('explore');
   const [maxTurns, setMaxTurns] = useState<number | null>(null);
   const [temperature, setTemperature] = useState<number | null>(null);
+  const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
   const [thinking, setThinking] = useState(false);
   const pendingAutoTitle = useRef<Set<number>>(new Set());
 
@@ -90,6 +92,23 @@ export function useEditorChatSession(projectId: number) {
     })();
     return () => { cancelled = true; };
   }, [doneReason, selectedId, refetchSession, refetchSessions, clearCurrentTurn]);
+
+  // Agent/mode hydration — reflect the session's real mode on (re)open and on
+  // session switch. Keyed on session id so an end-of-run refetch doesn't
+  // clobber a manual mid-session pick. 'builder' isn't selectable here.
+  useEffect(() => {
+    const a = (sessionData?.session as { agent?: string | null } | undefined)?.agent;
+    if (a && (a === 'explore' || a === 'plan' || a === 'build' || a === 'admin' || a === 'spec' || a === 'api')) {
+      setAgent(a);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionData?.session?.id]);
+
+  // Persist a manual dropdown pick immediately (applies to the next run).
+  const handleAgentChange = useCallback((next: AgentId) => {
+    setAgent(next);
+    if (selectedId) apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: next }).catch(() => {});
+  }, [selectedId]);
 
   // Avoid double-rendering the live turn once it lands in the DB.
   const persistedMessageCount = sessionData?.messages.length ?? 0;
@@ -151,6 +170,39 @@ export function useEditorChatSession(projectId: number) {
     }, { attachments: atts, agent, maxTurns, thinking, describeImages: settings.describeImages, selectedSkillIds });
   }, [selectedId, selections, projectId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, settings.describeImages]);
 
+  // ─── Message queue (compose/enqueue while streaming) ───────────────
+  // Live run → POST /inject (no new stream; the open SSE renders the injected
+  // turn). No run → fall back to sendMessage (fresh streamed run). See the
+  // AgentChat copy for the full rationale (avoids the mid-run stream-abort freeze).
+  const deliverQueued = useCallback<QueueDeliver>(async (text, { interject, skillIds }) => {
+    if (!selectedId) return;
+    try {
+      const r = await apiPost<{ injected?: boolean; noActiveRun?: boolean }>(
+        `/coder/sessions/${selectedId}/inject`,
+        { content: text, interject, selected_skill_ids: skillIds },
+      );
+      if (r?.injected) { refetchSession(); return; }
+    } catch { /* fall through to a fresh streamed send */ }
+    await sendMessage(text, async () => { refetchSession(); }, {
+      agent, maxTurns, thinking, describeImages: settings.describeImages, selectedSkillIds: skillIds, interject,
+    });
+  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking, settings.describeImages]);
+  const queue = useMessageQueue({ streaming, deliver: deliverQueued });
+  const handleQueue = useCallback((text: string, mode: QueueMode, skillIds?: string[]) => {
+    if (!selectedId) return;
+    // Mirror handleSend's staged-context prefixing (selected-code), then clear.
+    const st = editorChatContextActions();
+    const raw = readActiveSelection();
+    const live = raw && raw.projectId === projectId
+      ? { id: selectionId(raw.path, raw.startLine, raw.endLine), path: raw.path, startLine: raw.startLine, endLine: raw.endLine, text: raw.text.slice(0, MAX_SELECTION_CHARS) }
+      : null;
+    const allSels = live && !selections.some((x) => x.id === live.id) ? [...selections, live] : selections;
+    const prefix = formatSelections(allSels);
+    st.clear(projectId);
+    queue.enqueue(prefix ? `${prefix}\n\n${text}` : text, mode, skillIds);
+  }, [selectedId, selections, projectId, queue]);
+  useEffect(() => { queue.clear(); }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const onSwitchProvider = useCallback(async (newProvider: string, newModel: string) => {
     setProvider(newProvider);
     setModel(newModel);
@@ -164,6 +216,12 @@ export function useEditorChatSession(projectId: number) {
     setTemperature(next);
     if (!selectedId) return;
     try { await apiPatch(`/coder/sessions/${selectedId}/temperature`, { temperature: next }); } catch { /* optimistic */ }
+  }, [selectedId]);
+
+  const handleReasoningEffortChange = useCallback(async (next: string | null) => {
+    setReasoningEffort(next);
+    if (!selectedId) return;
+    try { await apiPatch(`/coder/sessions/${selectedId}/reasoning-effort`, { effort: next }); } catch { /* optimistic */ }
   }, [selectedId]);
 
   const loadEarlierMessages = useCallback(async (beforeId: number, limit = 40, includeArchived = false): Promise<number> => {
@@ -195,8 +253,11 @@ export function useEditorChatSession(projectId: number) {
     sessions: sessions ?? null, refetchSessions, selectedId, setSelectedId, createSession, creating,
     sessionData: sessionData ?? null, streaming, currentTurn, doneReason, error,
     liveTurnDuplicatedInHistory, tasksState, handlers, loadEarlierMessages, abort, handleSend,
-    provider, model, setModel, agent, setAgent, maxTurns, setMaxTurns,
+    queue, handleQueue,
+    provider, model, setModel, agent, setAgent: handleAgentChange, maxTurns, setMaxTurns,
     temperature, setTemperature: handleTemperatureChange, onSwitchProvider,
+    reasoningEffort, setReasoningEffort: handleReasoningEffortChange,
+    reasoningLevels: resolveReasoningLevels(provider, providerOptions, model),
     providerOptions, currentProviderModels, getModelsForProvider,
     thinking, setThinking, supportsThinking: providerSupportsThinking(provider, providerOptions, model),
     ...settings,

@@ -238,6 +238,17 @@ describe('resurrectMasterIfOrphaned', () => {
     expect(out.ok).toBe(true);
     expect(resurrect).toHaveBeenCalledWith(expect.stringContaining('frontend'));
   });
+
+  it('defers when master was resurrected recently (shared dedup with reconciler)', async () => {
+    const resurrect = vi.fn().mockResolvedValue(undefined);
+    const ctx: RecoveryContext = {
+      master: { isAlive: () => false, resurrect, recentlyResurrected: () => true },
+    };
+    const stuck = makeStuck('STUCK_AWAITING_MASTER', 'AWAITING_MASTER_APPROVAL', { role: 'frontend' });
+    const out = await resurrectMasterIfOrphaned(stuck, ctx);
+    expect(out.ok).toBe(false);
+    expect(resurrect).not.toHaveBeenCalled();
+  });
 });
 
 describe('dispatchRecovery', () => {

@@ -10,5 +10,6 @@ export {
   parsePreflightOutput,
   type PreflightMemoryEntry,
   type PreflightSeed,
+  type PreflightSkillMeta,
   type PreflightToolMeta,
 } from './preflight-prompt.js';

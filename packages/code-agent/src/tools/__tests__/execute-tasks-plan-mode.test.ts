@@ -123,7 +123,9 @@ describe('execute_tasks — plan mode', () => {
     expect(runner.approvePlan).toHaveBeenCalledOnce();
     expect(ctx.setSessionAgent).toHaveBeenCalledWith('build');
     expect(result.content).toMatch(/build mode/i);
-    expect(result.extraUserBlocks?.[0]?.text).toMatch(/Plan → Build/);
+    const firstBlock = result.extraUserBlocks?.[0];
+    expect(firstBlock?.type).toBe('text');
+    expect(firstBlock?.type === 'text' ? firstBlock.text : '').toMatch(/Plan → Build/);
     expect(runSubagent).not.toHaveBeenCalled();
   });
 

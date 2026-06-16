@@ -90,6 +90,7 @@ import { apiClientTools } from '@mcp/code-agent/tools/api-client/index.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { ragReadDocTools } from '@mcp/code-agent/tools/rag-read-doc.js';
+import { ragDocOutlineTools } from '@mcp/code-agent/tools/rag-doc-outline.js';
 import { todoTools, generateTodoId } from '@mcp/code-agent/tools/todo.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
@@ -319,6 +320,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(globTools);
   registry.registerAll(ragSearchDocsTools);
   registry.registerAll(ragReadDocTools);
+  registry.registerAll(ragDocOutlineTools);
   registry.registerAll(todoTools);
   registry.registerAll(viewImageTools);
   registry.registerAll(previewTools);
@@ -1607,6 +1609,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     agentId: effectiveAgentId,
     sessionTemperature: session.temperature_override,
     roleTemperature: opts.roleTemperature,
+    // Reasoning-effort override (orthogonal to thinking). Company callers pass
+    // the master/role config value via opts; single sessions fall back to the
+    // sticky `coder_sessions.reasoning_effort_override` column (migration 149).
+    reasoningEffort: opts.reasoningEffort ?? session.reasoning_effort_override ?? undefined,
     // Per-session unrestricted-tool-output toggle (migration 078). Lifts the
     // per-block PUSH_TIME_CAP to the high safety ceiling so verbose MCP tools
     // (Unity, large file reads, batched code_exec) arrive intact.

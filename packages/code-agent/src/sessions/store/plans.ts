@@ -27,6 +27,21 @@ export function record(db: DB, input: RecordPlanInput): CoderPlanRow {
   return db.prepare('SELECT * FROM coder_plans WHERE tool_use_id = ?').get(input.tool_use_id) as CoderPlanRow;
 }
 
+/**
+ * Delete plans tied to a rolled-back region. `coder_plans.message_id` is
+ * `ON DELETE SET NULL` (not CASCADE), so truncating messages would otherwise
+ * leave orphan plan rows that `list()[0]` re-injects into the next run. Run
+ * this BEFORE the message DELETE, while `message_id` is still intact: removes
+ * the current turn's pending plan (`message_id IS NULL`) plus any plan in the
+ * truncated tail (`message_id >= sinceMessageId`), preserving resolved plans
+ * anchored to surviving messages.
+ */
+export function clearFrom(db: DB, sessionId: number, sinceMessageId: number): number {
+  return db.prepare(
+    'DELETE FROM coder_plans WHERE session_id = ? AND (message_id IS NULL OR message_id >= ?)',
+  ).run(sessionId, sinceMessageId).changes;
+}
+
 export function resolve(db: DB, toolUseId: string, status: CoderPlanStatus, feedback?: string): void {
   db.prepare(`
     UPDATE coder_plans

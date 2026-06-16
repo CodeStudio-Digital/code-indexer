@@ -20,6 +20,16 @@ import { APP_SETTINGS } from '../packages/store/src/app-settings-catalog.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..');
 const ROOTS = ['apps', 'packages', 'src'];
+
+/**
+ * Anti-drift ratchet. `--check` exits non-zero when the count of uncataloged
+ * user-facing candidates ("review" tier) climbs ABOVE this baseline — i.e. a
+ * new env var landed without a catalog entry. Lower it as catalog batches land;
+ * the goal is to walk it down to ~0. Wire `tsx scripts/audit-env-vars.ts --check`
+ * into CI.
+ */
+const REVIEW_BASELINE = 199;
+const CHECK_MODE = process.argv.includes('--check');
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.vite', '.git', 'coverage', '__tests__']);
 
 /** Owned elsewhere / not a CodeStudio knob — never a catalog candidate. */
@@ -151,3 +161,15 @@ console.log(`  coverage:     ${coverage}% of ${eligible} catalog-eligible vars`)
 console.log('  review candidates by prefix:');
 for (const [p, n] of [...byPrefix.entries()].sort((a, b) => b[1] - a[1])) console.log(`    ${p.padEnd(10)} ${n}`);
 console.log(`  full report → scripts/.audit/env-vars.json`);
+
+if (CHECK_MODE) {
+  if (review > REVIEW_BASELINE) {
+    console.error(
+      `\n[audit-env-vars] DRIFT: ${review} review candidates > baseline ${REVIEW_BASELINE}. ` +
+      `A new user-facing env var landed without a catalog entry — add a SettingDef ` +
+      `(or exclude it) and lower REVIEW_BASELINE.`,
+    );
+    process.exit(1);
+  }
+  console.log(`\n[audit-env-vars] check OK: ${review} review <= baseline ${REVIEW_BASELINE}`);
+}

@@ -148,6 +148,13 @@ export interface RunnerOptions {
   /** Enable thinking/reasoning mode for providers that support it. */
   thinking?: boolean;
   /**
+   * Explicit reasoning-effort level (e.g. `minimal`/`low`/`medium`/`high`/`xhigh`).
+   * Orthogonal to `thinking`. Resolved by runCoder from the session sticky
+   * override (single) or the role/master config (company) and forwarded to the
+   * provider via `ChatRequest.reasoningEffort`. Undefined → provider default.
+   */
+  reasoningEffort?: string;
+  /**
    * Vision fallback. `modelSupportsVision === false` (strict) means the active
    * model can't consume images → the runner routes image blocks through the
    * configured vision model for a text description. `describeImages` is the

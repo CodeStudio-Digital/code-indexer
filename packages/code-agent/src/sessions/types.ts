@@ -56,6 +56,15 @@ export interface CoderSession {
    */
   temperature_override: number | null;
   /**
+   * Per-session sticky reasoning-effort override (migration 150), e.g.
+   * `minimal`/`low`/`medium`/`high`/`xhigh`. Orthogonal to `thinking`. When
+   * non-null, forwarded to the provider via `ChatRequest.reasoningEffort`,
+   * taking precedence over the `thinking`-derived effort and the model's
+   * `default_reasoning_level`. NULL → provider default. Only meaningful for
+   * models exposing `supported_reasoning_levels`.
+   */
+  reasoning_effort_override: string | null;
+  /**
    * Per-session toggle that lifts the per-tool-call truncation caps when true.
    * When null/false, the runner uses the production defaults
    * (PUSH_TIME_CAP=24k, MCP_OUTPUT_HARD_CAP=16k, code_exec MAX_OUTPUT_BYTES=50k).

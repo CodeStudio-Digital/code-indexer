@@ -32,6 +32,7 @@ import { mountTerminalIpc } from './src/terminal-ipc.js';
 import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
 import { APP_USER_MODEL_ID, resolveAppIconPath } from './src/app-icon.js';
+import { createSplashWindow, whenSplashPainted, updateSplashStatus, closeSplash } from './src/splash-window.js';
 import type { Hono } from 'hono';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -93,6 +94,14 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 async function bootstrap() {
+  // Electron must be ready before any BrowserWindow can open. Do this FIRST
+  // so the splash can be shown to cover the heavy in-process backend boot.
+  await app.whenReady();
+
+  if (process.platform === 'win32') {
+    app.setAppUserModelId(APP_USER_MODEL_ID);
+  }
+
   // Pin the local-embedding model cache to a stable per-user dir so the
   // transformers.js model downloads once and survives app updates — never
   // into the read-only asar bundle. Read by LocalEmbeddingService. Set
@@ -108,6 +117,14 @@ async function bootstrap() {
   // mcp-servers-oauth.routes.ts; must be set before createApp() so DCR
   // registers the loopback redirect_uri. Web deployments leave it unset.
   process.env.MCP_OAUTH_REDIRECT_BASE = `http://127.0.0.1:${OAUTH_LOOPBACK_PORT}`;
+
+  // Show the splash immediately and wait for its first paint, so the CSS
+  // spinner is on screen BEFORE createApp() freezes the main process. The
+  // splash renders in its own renderer process, so it keeps animating
+  // throughout the synchronous backend boot. (~20s "white screen" cover.)
+  createSplashWindow();
+  await whenSplashPainted();
+  updateSplashStatus('Iniciando o servidor…');
 
   // Boot the backend in-process. The Hono app is built but not served
   // unless MCP_DEV_HTTP=1 — that flag exists so an operator can curl
@@ -132,15 +149,11 @@ async function bootstrap() {
     app.exit(0);
   });
 
-  await app.whenReady();
-
-  if (process.platform === 'win32') {
-    app.setAppUserModelId(APP_USER_MODEL_ID);
-  }
+  updateSplashStatus('Carregando a interface…');
 
   // Production lockdown: strip the application menu + install the renderer
   // CSP. No-op in dev (gated on app.isPackaged inside). Runs before the
-  // first window loads so the CSP header applies to the document.
+  // main window loads so the CSP header applies to the document.
   installGlobalHardening();
 
   // Pass the Hono app so handlers-mount can register a fallback for
@@ -192,7 +205,8 @@ async function bootstrap() {
     })();
   });
 
-  await createAppWindow();
+  // First paint of the main window → reveal it and dismiss the splash.
+  await createAppWindow(undefined, () => closeSplash());
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
@@ -270,9 +284,10 @@ function attachWindowHandlers(win: BrowserWindow) {
  * Create the main BrowserWindow (also reused for "open in new window"
  * spawned via the `window:open` IPC handler). `routeSuffix` is appended
  * to the dashboard base URL — e.g. `/projects/42` or
- * `/company/sessions/7/main/work/chat`.
+ * `/company/sessions/7/main/work/chat`. `onReveal` runs once the window
+ * has painted its first frame (used to dismiss the splash).
  */
-async function createAppWindow(routeSuffix?: string): Promise<BrowserWindow> {
+async function createAppWindow(routeSuffix?: string, onReveal?: () => void): Promise<BrowserWindow> {
   const appIconPath = resolveAppIconPath();
   const win = new BrowserWindow({
     width: 1400,
@@ -282,6 +297,11 @@ async function createAppWindow(routeSuffix?: string): Promise<BrowserWindow> {
     title: 'CodeStudio',
     ...(appIconPath ? { icon: appIconPath } : {}),
     autoHideMenuBar: true,
+    // Stay hidden until the renderer paints its first frame, then reveal —
+    // this is what kills the blank/white window flash. The dark background
+    // also avoids a white flicker for the brief pre-paint moment.
+    show: false,
+    backgroundColor: '#0b0d12',
     webPreferences: {
       preload: PRELOAD_PATH,
       contextIsolation: true,
@@ -289,6 +309,19 @@ async function createAppWindow(routeSuffix?: string): Promise<BrowserWindow> {
       sandbox: false,
     },
   });
+
+  // Reveal on first paint. `did-finish-load` is a belt-and-suspenders
+  // fallback so a delayed/absent `ready-to-show` can never leave the window
+  // (and the splash) stuck hidden. Attached BEFORE load to avoid a race.
+  let revealed = false;
+  const reveal = (): void => {
+    if (revealed || win.isDestroyed()) return;
+    revealed = true;
+    win.show();
+    onReveal?.();
+  };
+  win.once('ready-to-show', reveal);
+  win.webContents.once('did-finish-load', reveal);
 
   attachWindowHandlers(win);
   applyProductionHardening(win);

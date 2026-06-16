@@ -38,12 +38,15 @@ function toInfo(r: PluginRow): MarketInfo {
   };
 }
 
+// Public reads only surface APPROVED plugins (moderation gate). New publishes
+// land approved=0 (pending) until an operator approves them; existing plugins
+// were grandfathered to approved=1 when the column was added.
 export async function searchPlugins(db: D1Database, q: string): Promise<MarketInfo[]> {
   const like = `%${q}%`;
   const { results } = await db
     .prepare(
       `SELECT ${SELECT_COLS} FROM plugins
-       WHERE name LIKE ?1 OR display_name LIKE ?1 OR description LIKE ?1
+       WHERE approved = 1 AND (name LIKE ?1 OR display_name LIKE ?1 OR description LIKE ?1)
        ORDER BY downloads DESC LIMIT 50`,
     )
     .bind(like)
@@ -53,10 +56,27 @@ export async function searchPlugins(db: D1Database, q: string): Promise<MarketIn
 
 export async function getPlugin(db: D1Database, name: string): Promise<MarketInfo | null> {
   const row = await db
-    .prepare(`SELECT ${SELECT_COLS} FROM plugins WHERE name = ?`)
+    .prepare(`SELECT ${SELECT_COLS} FROM plugins WHERE name = ? AND approved = 1`)
     .bind(name)
     .first<PluginRow>();
   return row ? toInfo(row) : null;
+}
+
+/** Admin: plugins awaiting approval (newest first). Bearer-gated by the caller. */
+export async function listPendingPlugins(db: D1Database): Promise<MarketInfo[]> {
+  const { results } = await db
+    .prepare(`SELECT ${SELECT_COLS} FROM plugins WHERE approved = 0 ORDER BY created_at DESC LIMIT 100`)
+    .all<PluginRow>();
+  return results.map(toInfo);
+}
+
+/** Admin: flip a plugin to approved. Returns false when the name doesn't exist. */
+export async function approvePlugin(db: D1Database, name: string): Promise<boolean> {
+  const res = await db
+    .prepare(`UPDATE plugins SET approved = 1, updated_at = datetime('now') WHERE name = ?`)
+    .bind(name)
+    .run();
+  return (res.meta.changes ?? 0) > 0;
 }
 
 export async function getVersionRow(
@@ -64,8 +84,14 @@ export async function getVersionRow(
   name: string,
   version: string,
 ): Promise<{ r2_key: string; signature: string } | null> {
+  // Bundle download is also gated on approval — a known name+version of an
+  // unapproved plugin must not be fetchable behind the catalog's back.
   return db
-    .prepare('SELECT r2_key, signature FROM plugin_versions WHERE name = ? AND version = ?')
+    .prepare(
+      `SELECT r2_key, signature FROM plugin_versions
+        WHERE name = ?1 AND version = ?2
+          AND name IN (SELECT name FROM plugins WHERE approved = 1)`,
+    )
     .bind(name, version)
     .first<{ r2_key: string; signature: string }>();
 }

@@ -23,15 +23,19 @@ const DEFAULT_IDLE_MS = Number(process.env.MCP_MEMORY_CONSOLIDATE_IDLE_MS ?? 30 
 const DEFAULT_MAX_PROJECTS = Number(process.env.MCP_MEMORY_CONSOLIDATE_MAX_PROJECTS ?? 3);
 
 /**
- * On by default — archiving is reversible (rows soft-delete with a restore UI
- * in Admin → Memory) and the pass only touches idle projects. `MCP_MEMORY_CONSOLIDATE`
- * stays the kill-switch: set it to `0`/`false`/`off` to disarm the periodic timer.
+ * Off by default (opt-in). Archiving is reversible (rows soft-delete with a
+ * restore UI in Admin → Memory), but the periodic pass runs UNATTENDED on idle
+ * projects every few hours — silently hiding a memory the user still relied on
+ * erodes trust in the whole memory feature, so an operator arms it deliberately.
+ * Set `MCP_MEMORY_CONSOLIDATE` to `1`/`true`/`on` to arm the periodic timer;
+ * anything else (including unset) leaves it disarmed. The manual "run now" route
+ * (`POST /api/projects/:id/memory/consolidate`) works regardless of this flag.
  */
 export function memoryConsolidateEnabled(): boolean {
   const raw = process.env.MCP_MEMORY_CONSOLIDATE;
-  if (raw == null || raw === '') return true;
-  const v = raw.toLowerCase();
-  return !(v === '0' || v === 'false' || v === 'off');
+  if (raw == null || raw === '') return false;
+  const v = raw.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'on';
 }
 
 function num(env: string | undefined, fallback: number): number {

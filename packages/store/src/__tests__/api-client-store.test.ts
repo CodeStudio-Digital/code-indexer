@@ -92,11 +92,16 @@ describe('ApiClientStore', () => {
     expect(hist[1].ok).toBe(true);
     expect(hist[1].status).toBe(200);
 
-    // Prune keeps only the newest N.
+    // Prune keeps only the newest N. The 10 inserts below are the most recent,
+    // so after keeping 5 the two original rows (incl. the ECONNREFUSED error)
+    // must be gone — proving the prune keeps NEWEST, not oldest.
     for (let i = 0; i < 10; i++) h.store.insertRequestHistory({ request_id: req.id, status: 200, ok: true, duration_ms: i });
     const pruned = h.store.pruneRequestHistory(req.id, 5);
     expect(pruned).toBe(7); // 12 total → keep 5 → delete 7
-    expect(h.store.listRequestHistory(req.id)).toHaveLength(5);
+    const kept = h.store.listRequestHistory(req.id, 100);
+    expect(kept).toHaveLength(5);
+    expect(kept[0].id).toBeGreaterThan(kept[4].id); // newest-first
+    expect(kept.every((r) => r.status === 200 && !r.error)).toBe(true); // the older error row was pruned
 
     // Deleting the request removes its history (explicit cascade).
     h.store.deleteRequest(req.id);

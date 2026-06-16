@@ -411,6 +411,56 @@ describe('ChatGPTCodexProvider stream handler', () => {
     expect((args.reasoning as { effort: string }).effort).toBe('medium');
   });
 
+  it('explicit reasoningEffort wins over thinking-derived effort (orthogonal)', async () => {
+    // thinking=false would derive 'minimal', but an explicit 'xhigh' override
+    // must be sent verbatim — the two controls are independent.
+    const provider = new ChatGPTCodexProvider({
+      apiKey: 'tok',
+      baseURL: 'https://chatgpt.com/backend-api/codex',
+      accountId: 'a',
+      model: 'gpt-5.5',
+      reasoning: { supportedLevels: ['minimal', 'low', 'medium', 'high', 'xhigh'] },
+    });
+    const create = vi
+      .fn()
+      .mockResolvedValue(
+        events({ type: 'response.completed', response: { usage: {}, status: 'completed' } }),
+      );
+    (provider as unknown as { client: { responses: { create: typeof create } } }).client = {
+      responses: { create },
+    };
+
+    const out: ChatDelta[] = [];
+    for await (const d of provider.chat({ ...baseReq, thinking: false, reasoningEffort: 'xhigh' })) out.push(d);
+    const args = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(args.reasoning).toEqual({ effort: 'xhigh', summary: 'auto' });
+  });
+
+  it('degrades an unsupported reasoningEffort to the thinking-derived effort', async () => {
+    // 'xhigh' isn't in supportedLevels → fall back to thinking=true derivation
+    // ('high') rather than sending a level the model would reject.
+    const provider = new ChatGPTCodexProvider({
+      apiKey: 'tok',
+      baseURL: 'https://chatgpt.com/backend-api/codex',
+      accountId: 'a',
+      model: 'gpt-5.5',
+      reasoning: { supportedLevels: ['minimal', 'low', 'medium', 'high'] },
+    });
+    const create = vi
+      .fn()
+      .mockResolvedValue(
+        events({ type: 'response.completed', response: { usage: {}, status: 'completed' } }),
+      );
+    (provider as unknown as { client: { responses: { create: typeof create } } }).client = {
+      responses: { create },
+    };
+
+    const out: ChatDelta[] = [];
+    for await (const d of provider.chat({ ...baseReq, thinking: true, reasoningEffort: 'xhigh' })) out.push(d);
+    const args = create.mock.calls[0][0] as Record<string, unknown>;
+    expect((args.reasoning as { effort: string }).effort).toBe('high');
+  });
+
   // ─── P1: image generation ────────────────────────────────────
 
   it('attaches image_generation tool when imageGenerationEnabled=true', async () => {

@@ -648,7 +648,6 @@
     "apps/dashboard/features/telemetry/ModelPricesPanel.tsx|jsxText|Output": 1,
     "apps/dashboard/features/telemetry/ModelPricesPanel.tsx|jsxText|sem preço": 1,
     "apps/dashboard/features/telemetry/TelemetryDashboard.tsx|jsxText|ms": 2,
-    "apps/dashboard/features/training/ExampleViewer.tsx|jsxText|holdout": 1,
     "apps/dashboard/features/workspace/BottomPanel.tsx|attr:aria-label|Close panel": 1,
     "apps/dashboard/features/workspace/editor/DiffMount.tsx|jsxText|Could not parse this diff. Run": 1,
     "apps/dashboard/features/workspace/editor/DiffMount.tsx|jsxText|git diff": 1,
