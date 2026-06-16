@@ -120,6 +120,15 @@ export interface RunContext {
    */
   consecutiveNoopCompactions: number;
   /**
+   * Mandatory-plan nudges issued this run. In plan mode, a text-only turn that
+   * ends without ever submitting a plan (and without approval) gets ONE
+   * `<system-reminder>` nudge to call `submit_plan`/`submit_tasks` before the
+   * Executing node lets the run finish. Bounded at 1 so a genuinely
+   * conversational reply (greeting / trivial Q&A) still terminates after the
+   * nudge instead of looping. Incremented by the Executing node's plan gate.
+   */
+  planNudges: number;
+  /**
    * EMA of `real_prompt_tokens / tokenizer_estimate`, learned on turns where
    * the provider reported usage. Calibrates the pre-emit projection and the
    * estimate fallback of the post-turn gates (chars/4 drifts with content
@@ -301,6 +310,12 @@ export interface BridgeCallbacks {
    * null when allowed.
    */
   toolGate?: (toolName: string, input: unknown) => string | null;
+  /**
+   * Whether the user has approved a plan in this run (`runner.isPlanApproved()`).
+   * Read by the Executing node's mandatory-plan gate so a plan-mode run can't
+   * end with a text-only "switch to build" without ever submitting a plan.
+   */
+  isPlanApproved?: () => boolean;
   /**
    * Pre-read enforcement — refuse re-reads of the same path+slice that
    * a prior turn already produced. Returns a refusal string when the

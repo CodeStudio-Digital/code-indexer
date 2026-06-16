@@ -142,6 +142,14 @@ export interface PromptContext {
    */
   agentId?: AgentId;
   /**
+   * Plan-depth directive — `simple` | `normal` | `complex`. Only consumed in
+   * plan mode (agentId='plan'); ignored otherwise. Calibrates how deeply the
+   * planning agent investigates and the target size of the produced plan (a
+   * ceiling, not a quota). Session-fixed → cache-stable, stays above the
+   * dynamic boundary (3 buckets per depth). Defaults to `normal` when unset.
+   */
+  planDepth?: 'simple' | 'normal' | 'complex';
+  /**
    * True for single (non-company) sessions where the Session Drive tools
    * (`save_note` / `list_notes` / `read_plan` / `recall_investigations`) are
    * registered. Gates the "Session working memory" section so company
@@ -277,6 +285,14 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     ? `\n\n${loadPrompt('plan')}`
     : '';
 
+  // Plan-depth calibration — appended to the plan section as an H2 sub-block
+  // (so it folds into the "# Plan mode is ACTIVE" section, not a new H1). Gives
+  // the planning agent a target ambition per the user's Simple/Normal/Complex
+  // pick. Only when plan mode is active and the agent isn't `spec`.
+  const planDepthSection = ctx.planMode && ctx.agentId !== 'spec'
+    ? `\n\n${buildPlanDepthBlock(ctx.planDepth ?? 'normal')}`
+    : '';
+
   // Mode identity section — concrete behavioural prompt for the active built-in
   // agent (`explore` / `build` / `admin`). 'plan' is already covered by
   // planSection via plan.txt, so we don't double-load it. Fixed at session
@@ -367,7 +383,26 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   // sessions because of trailing-newline rules.
   const boundary = `\n\n${SYSTEM_PROMPT_DYNAMIC_BOUNDARY}`;
 
-  return `${preamble}${base}${planSection}${agentSection}${interactionSection}${agentLoopBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+  return `${preamble}${base}${planSection}${planDepthSection}${agentSection}${interactionSection}${agentLoopBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+}
+
+/**
+ * Plan-depth calibration block. Rendered as an H2 (`## Plan depth (...)`) so it
+ * folds into the "# Plan mode is ACTIVE" section rather than starting a new
+ * top-level section. Each level states a target plan size + investigation
+ * ambition — a CEILING, not a quota. The shared closing line reiterates
+ * right-sizing so a trivial task in `complex` still yields a small plan.
+ */
+function buildPlanDepthBlock(depth: 'simple' | 'normal' | 'complex'): string {
+  const body: Record<typeof depth, string> = {
+    simple:
+      'Target a lean, direct plan (~50–150 lines of markdown). Investigate just enough to be correct: localize the change and its immediate call-sites, then plan.',
+    normal:
+      'Target a complete plan (~300–1000 lines of markdown). Investigate the affected areas thoroughly: dependencies, call-sites, reusable prior art, and the verification path.',
+    complex:
+      'Target a meticulous plan (2000+ lines of markdown). Investigate exhaustively: map the full dependency graph, edge cases, migrations, and a concrete end-to-end verification plan. Decompose with `submit_tasks` when the work has 2+ independent parts.',
+  };
+  return `## Plan depth — ${depth}\n${body[depth]}\nThis is a target ceiling, not a quota: if the task is genuinely simpler than the selected depth and your investigation is exhausted, deliver the smaller plan the task warrants.`;
 }
 
 /**

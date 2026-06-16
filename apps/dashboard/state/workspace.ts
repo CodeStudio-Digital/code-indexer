@@ -79,15 +79,26 @@ export interface OpenGitStash {
   stashRef: string;
 }
 
-export type OpenTab = OpenFile | OpenDiff | OpenGitLog | OpenGitStash;
+export interface OpenMerge {
+  kind: 'merge';
+  projectId: number;
+  /** Synthetic path used as tab identity (e.g. "merge:src/foo.ts"). */
+  path: string;
+  /** Friendly label rendered on the tab. */
+  title: string;
+  /** repoRoot-relative path of the conflicted file being resolved. */
+  file: string;
+}
+
+export type OpenTab = OpenFile | OpenDiff | OpenGitLog | OpenGitStash | OpenMerge;
 
 /**
- * Virtual tabs (diff / git-log / git-stash) carry a `title` and have no
- * on-disk identity — they never go dirty and render with their own glyph
- * rather than a file-type icon.
+ * Virtual tabs (diff / git-log / git-stash / merge) carry a `title` and
+ * have no on-disk identity — they never go dirty and render with their own
+ * glyph rather than a file-type icon.
  */
-export function isVirtualTab(f: OpenTab): f is OpenDiff | OpenGitLog | OpenGitStash {
-  return f.kind === 'diff' || f.kind === 'git-log' || f.kind === 'git-stash';
+export function isVirtualTab(f: OpenTab): f is OpenDiff | OpenGitLog | OpenGitStash | OpenMerge {
+  return f.kind === 'diff' || f.kind === 'git-log' || f.kind === 'git-stash' || f.kind === 'merge';
 }
 
 interface WorkspaceState {
@@ -98,6 +109,7 @@ interface WorkspaceState {
   openDiff: (diff: OpenDiff) => void;
   openGitLog: (tab: OpenGitLog) => void;
   openGitStash: (tab: OpenGitStash) => void;
+  openMerge: (tab: OpenMerge) => void;
   closeFile: (path: string) => void;
   /** Close every tab except the given one. Activates the survivor. */
   closeOthers: (keepPath: string) => void;
@@ -162,6 +174,7 @@ export function savePersistedTabs(projectId: number, openFiles: OpenTab[], activ
       f.kind !== 'diff' &&
       f.kind !== 'git-log' &&
       f.kind !== 'git-stash' &&
+      f.kind !== 'merge' &&
       !isIndexerInternalPath(f.path),
   );
   const payload: PersistedTabs = {
@@ -222,6 +235,19 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     }),
 
   openGitStash: (tab) =>
+    set((s) => {
+      const existing = s.openFiles.findIndex(
+        (f) => f.path === tab.path && f.projectId === tab.projectId,
+      );
+      if (existing >= 0) {
+        const next = [...s.openFiles];
+        next[existing] = tab;
+        return { openFiles: next, activeFilePath: tab.path };
+      }
+      return { openFiles: [...s.openFiles, tab], activeFilePath: tab.path };
+    }),
+
+  openMerge: (tab) =>
     set((s) => {
       const existing = s.openFiles.findIndex(
         (f) => f.path === tab.path && f.projectId === tab.projectId,

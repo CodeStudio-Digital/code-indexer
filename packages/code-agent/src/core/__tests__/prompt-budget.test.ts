@@ -84,7 +84,8 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Long-term memory': 440,
   '# Memory (session + project)': 1300,
   '# Style': 290,
-  '# Plan mode is ACTIVE': 2760,
+  '# Plan mode is ACTIVE': 4250, // specialist plan.txt rewrite + ## Plan depth block (mig 151); complex variant ≈ 3866 + ~10%
+
   '# Explore mode is ACTIVE': 2420,
   '# Build mode is ACTIVE': 2530,
   '# Admin mode is ACTIVE': 2450,
@@ -98,7 +99,7 @@ const SECTION_BUDGETS: Record<string, number> = {
 /** Whole-composition ceilings for the two canonical shapes (chars). */
 const TOTAL_BUDGETS = {
   default: 11000,   // zai · navigate · no plan · no agentId · loop v2 · drive
-  planMode: 13800,  // same + plan.txt
+  planMode: 14300,  // same + specialist plan.txt + ## Plan depth block (mig 151); normal ≈ 13839, complex ≈ 13918
 };
 
 interface Composition {
@@ -122,6 +123,9 @@ MATRIX.push({ label: 'zai|mcp-unavailable', ctx: { ...BASE_CTX, mcpAvailable: fa
 MATRIX.push({ label: 'zai|bootstrap-profile', ctx: { ...BASE_CTX, profile: 'bootstrap' } });
 MATRIX.push({ label: 'zai|model-sees-images', ctx: { ...BASE_CTX, modelCanSeeImages: true } });
 MATRIX.push({ label: 'zai|company (no drive)', ctx: { ...BASE_CTX, sessionDrive: false } });
+// Plan-depth variants (migration 151): `complex` is the longest plan-section
+// payload, so it sets the "# Plan mode is ACTIVE" ceiling.
+MATRIX.push({ label: 'zai|plan=true|depth=complex', ctx: { ...BASE_CTX, planMode: true, planDepth: 'complex' } });
 
 describe('prompt-budget — per-section ceilings', () => {
   it('every section is registered and within budget across the matrix', () => {

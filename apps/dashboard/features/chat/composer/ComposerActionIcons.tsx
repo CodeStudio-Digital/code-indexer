@@ -8,10 +8,12 @@
  * source of truth — anything wired here is available in both surfaces.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Brain, Eye, Maximize2, Paperclip, Shield, ShieldCheck, ShieldOff } from 'lucide-react';
+import { Brain, Eye, Paperclip, Shield, ShieldCheck, ShieldOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { PipelinePicker } from './PipelinePicker.js';
+import { OutputCapPicker } from './OutputCapPicker.js';
+import type { OutputCapLevel } from './output-cap-levels.js';
 
 interface ComposerActionIconsProps {
   streaming: boolean;
@@ -20,8 +22,8 @@ interface ComposerActionIconsProps {
   setThinking?: (v: boolean) => void;
   describeImages?: boolean;
   setDescribeImages?: (v: boolean) => void;
-  unrestrictedOutput?: boolean;
-  setUnrestrictedOutput?: (v: boolean) => void;
+  outputCapLevel?: OutputCapLevel;
+  setOutputCapLevel?: (v: OutputCapLevel) => void;
   toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
   setToolPermissionMode?: (v: 'ask' | 'auto' | 'unrestricted') => void;
   sessionId?: number | null;
@@ -38,8 +40,8 @@ export function ComposerActionIcons({
   setThinking,
   describeImages,
   setDescribeImages,
-  unrestrictedOutput,
-  setUnrestrictedOutput,
+  outputCapLevel,
+  setOutputCapLevel,
   toolPermissionMode,
   setToolPermissionMode,
   sessionId,
@@ -154,32 +156,8 @@ export function ComposerActionIcons({
         </Tooltip>
       )}
 
-      {setUnrestrictedOutput && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => setUnrestrictedOutput?.(!unrestrictedOutput)}
-              aria-pressed={unrestrictedOutput ?? false}
-              className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
-                unrestrictedOutput
-                  ? 'bg-amber-500/15 text-amber-500 hover:bg-amber-500/25'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-              }`}
-            >
-              <Maximize2 className="h-3.5 w-3.5" />
-              {unrestrictedOutput && (
-                <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-amber-500" />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-[260px]">
-            {t('toolbar.unrestrictedOutput', {
-              defaultValue:
-                'Tool output: full. Eleva o cap de truncação por tool-call de ~24 KB para ~1 MB. Útil para Unity / leituras grandes. Auto-compactação continua. Aplica na próxima mensagem.',
-            })}
-          </TooltipContent>
-        </Tooltip>
+      {setOutputCapLevel && (
+        <OutputCapPicker value={outputCapLevel ?? 'economic'} onChange={setOutputCapLevel} />
       )}
 
       {setToolPermissionMode && (

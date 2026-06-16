@@ -8,6 +8,7 @@ import { BrowserWindow } from 'electron';
 import type { IPreviewDevtools, PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
 import { UNIVERSAL_INSPECTOR_SOURCE } from '@mcp/services/sandbox/builder/inspector/universal-inspector-source.js';
 import { UNIVERSAL_TOOLBAR_SOURCE } from '@mcp/services/sandbox/builder/inspector/universal-toolbar-source.js';
+import { REGION_HELPERS_SOURCE } from '@mcp/services/sandbox/builder/inspector/region-runtime.js';
 import { PreviewWindow, DEFAULT_VIEWPORT, type Viewport } from './cdp.js';
 import { dispatchInteraction } from './interact.js';
 import { resolveViewport, applyViewport, clampToScreen, VIEWPORT_PRESETS } from './viewport.js';
@@ -122,10 +123,23 @@ export class PreviewWindowService implements IPreviewDevtools {
         return { value: r.result?.value ?? r.result?.description ?? null };
       }
       case 'screenshot': {
-        const r = (await pw.send('Page.captureScreenshot', {
+        // Optional `clip` ({x,y,width,height}) crops to a region — used by the
+        // dashboard's region-select to capture exactly the drawn box.
+        const clip = (args.clip as { x: number; y: number; width: number; height: number } | undefined) ?? null;
+        const params: Record<string, unknown> = {
           format: 'png',
           captureBeyondViewport: !!args.fullPage,
-        })) as { data?: string };
+        };
+        if (clip && clip.width > 0 && clip.height > 0) {
+          params.clip = {
+            x: Math.round(clip.x),
+            y: Math.round(clip.y),
+            width: Math.round(clip.width),
+            height: Math.round(clip.height),
+            scale: 1,
+          };
+        }
+        const r = (await pw.send('Page.captureScreenshot', params)) as { data?: string };
         return { base64: r.data };
       }
       case 'inspect_css': {
@@ -256,7 +270,9 @@ export class PreviewWindowService implements IPreviewDevtools {
         pw.onControl((action) => this.handleControl(key, action));
         this.inspectForwarded.add(pw);
       }
-      await pw.armInspect(`${UNIVERSAL_INSPECTOR_SOURCE}\n${UNIVERSAL_TOOLBAR_SOURCE}`); // inspector + control bar
+      // region helpers FIRST (the inspector's marquee handlers call them), then
+      // the inspector, then the floating control bar.
+      await pw.armInspect(`${REGION_HELPERS_SOURCE}\n${UNIVERSAL_INSPECTOR_SOURCE}\n${UNIVERSAL_TOOLBAR_SOURCE}`);
       await pw.send('Runtime.evaluate', {
         expression: opts.arm ? 'window.__mcpArm && window.__mcpArm()' : 'window.__mcpDisarm && window.__mcpDisarm()',
       }).catch(() => undefined);

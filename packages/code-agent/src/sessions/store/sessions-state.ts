@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import type { Database as DB } from 'better-sqlite3';
 import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
+import type { ToolOutputCapLevel } from '../../core/runner/output-caps.js';
 
 const require = createRequire(import.meta.url);
 
@@ -30,12 +31,32 @@ export function setReasoningEffort(db: DB, id: number, effort: string | null): v
 }
 
 /**
+ * Persist the per-session sticky plan-depth override (migration 151):
+ * `simple` | `normal` | `complex`. Pass `null` to clear (the runner defaults
+ * to `normal`). Membership validation against the allowed set lives at the
+ * HTTP write path; this setter is permissive.
+ */
+export function setPlanDepth(db: DB, id: number, depth: string | null): void {
+  db.prepare("UPDATE coder_sessions SET plan_depth_override = ?, updated_at = datetime('now') WHERE id = ?").run(depth, id);
+}
+
+/**
  * Persist the per-session "unrestricted tool output" toggle. Pass `null` to
  * clear (back to the production cap defaults). Stored as 0|1|NULL.
  */
 export function setUnrestrictedToolOutput(db: DB, id: number, enabled: boolean | null): void {
   const v = enabled == null ? null : enabled ? 1 : 0;
   db.prepare("UPDATE coder_sessions SET unrestricted_tool_output = ?, updated_at = datetime('now') WHERE id = ?").run(v, id);
+}
+
+/**
+ * Persist the per-session sticky tool-output cap LEVEL (migration 153):
+ * economic | medium | high | extra | max | ultra. Pass `null` to clear (the
+ * runner then derives the level from the legacy `unrestricted_tool_output`).
+ * Membership validation lives at the HTTP write path; this setter is permissive.
+ */
+export function setToolOutputCapLevel(db: DB, id: number, level: ToolOutputCapLevel | null): void {
+  db.prepare("UPDATE coder_sessions SET tool_output_cap_level = ?, updated_at = datetime('now') WHERE id = ?").run(level, id);
 }
 
 /**

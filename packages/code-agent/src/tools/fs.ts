@@ -33,29 +33,74 @@ import {
   findEnclosingDeclLine,
 } from '@mcp/services/services/code-reader.js';
 
-function resolveSafe(filePath: string, ctx: ToolContext): string | null {
-  return resolveSafePath(filePath, ctx.cwd);
+/** The project root a native fs call resolved to (primary or a linked root). */
+interface RootSel {
+  root: string;
+  projectName: string;
+  projectId: number | undefined;
 }
 
 /**
- * Cross-project misfire guard. In multi-project (company) sessions models
- * sometimes call the NATIVE fs tools with mcp__read_file-style args
- * (`project_name` + path) — observed in telemetry. Native tools always
- * resolve against the CURRENT session root; silently ignoring a different
- * `project_name` would read/write the WRONG project's file at the same
- * relative path. Returns an error result to surface instead, or null when
- * the call is fine.
+ * Resolve WHICH project root a native fs call targets, replacing the old
+ * binary cross-project guard.
+ *
+ * - No `project`/`project_name`, or it equals the primary → the PRIMARY root
+ *   (`ctx.cwd`). This is the path EVERY normal (single-project) session takes,
+ *   so their behaviour is byte-identical to before.
+ * - A `project`/`project_name` matching a linked secondary root (global
+ *   session, migration 152) → THAT root. Resolution still validates containment
+ *   via `resolveSafePath`, which is root-parameterised and rejects traversal.
+ * - A `project`/`project_name` matching neither → REFUSED with the same
+ *   guidance the old `crossProjectGuard` surfaced. Silently resolving against
+ *   the primary would read/write the wrong project's file at the same path.
  */
-function crossProjectGuard(args: Record<string, unknown>, ctx: ToolContext): ToolResult | null {
-  const requested = typeof args.project_name === 'string' ? args.project_name.trim() : '';
-  if (!requested || requested === ctx.projectName) return null;
-  return err(
-    `This native tool operates on the current session project ('${ctx.projectName}') and ignores ` +
-      `project_name — '${requested}' would silently resolve against the wrong root. ` +
-      `To access another indexed project, use its prefixed MCP tools (e.g. mcp__<project>__read_file) ` +
-      `from your toolset, or expand_toolset/find_tools to locate them.`,
-  );
+function selectRoot(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): { sel: RootSel } | { error: ToolResult } {
+  const requested =
+    typeof args.project === 'string'
+      ? args.project.trim()
+      : typeof args.project_name === 'string'
+        ? args.project_name.trim()
+        : '';
+  if (!requested || requested === ctx.projectName) {
+    return { sel: { root: ctx.cwd, projectName: ctx.projectName, projectId: ctx.projectId } };
+  }
+  const hit = ctx.roots?.find((r) => r.slug === requested || r.name === requested);
+  if (hit) {
+    return { sel: { root: hit.rootPath, projectName: hit.name, projectId: hit.projectId } };
+  }
+  const known =
+    ctx.roots && ctx.roots.length > 0
+      ? ` Linked projects in this session: ${ctx.roots.map((r) => r.slug).join(', ')}.`
+      : '';
+  return {
+    error: err(
+      `This native tool operates on the current project ('${ctx.projectName}'). ` +
+        `'${requested}' is neither the primary project nor a linked root, so it would silently ` +
+        `resolve against the wrong root.${known} ` +
+        `To access another indexed project, use its prefixed MCP tools (e.g. mcp__<project>__read_file).`,
+    ),
+  };
 }
+
+/**
+ * The overlay to mark a touched file in. For a write to a linked secondary root
+ * (global session) it's that root's overlay so the project's MCP reads serve
+ * fresh content; otherwise the PRIMARY overlay. Identical to `ctx.overlay` for
+ * normal sessions (no `overlayByRoot`).
+ */
+function overlayFor(ctx: ToolContext, projectId: number | undefined): ToolContext['overlay'] {
+  if (projectId != null && ctx.overlayByRoot?.has(projectId)) return ctx.overlayByRoot.get(projectId);
+  return ctx.overlay;
+}
+
+/** Optional `project` schema param shared by the native fs tools (global sessions). */
+const PROJECT_PARAM = {
+  type: 'string',
+  description: 'Optional. Linked-project slug for a global (multi-project) session; omit for the primary project.',
+} as const;
 
 const writeFile: CoderTool = {
   name: 'write_file',
@@ -75,21 +120,23 @@ const writeFile: CoderTool = {
     properties: {
       path: { type: 'string', description: 'Project-relative path' },
       content: { type: 'string', description: 'Full new content of the file' },
+      project: PROJECT_PARAM,
     },
     required: ['path', 'content'],
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const guard = crossProjectGuard(args, ctx);
-    if (guard) return guard;
+    const picked = selectRoot(args, ctx);
+    if ('error' in picked) return picked.error;
+    const { root, projectId } = picked.sel;
     const path = String(args.path ?? '');
     const content = String(args.content ?? '');
-    const abs = resolveSafe(path, ctx);
+    const abs = resolveSafePath(path, root);
     if (!abs) return err(`Path '${path}' is outside project root`);
     const fs = fsPort(ctx);
-    await fs.mkdir(pathFor(ctx.cwd).dirname(abs), { recursive: true });
+    await fs.mkdir(pathFor(root).dirname(abs), { recursive: true });
     await fs.writeFile(abs, content);
-    ctx.overlay?.mark(path);
+    overlayFor(ctx, projectId)?.mark(path);
     emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
     const lines = content.split('\n').length;
     return ok(`Wrote ${path} (${lines} lines, ${content.length} bytes)`);
@@ -105,16 +152,18 @@ const createFile: CoderTool = {
     properties: {
       path: { type: 'string', description: 'Project-relative path' },
       content: { type: 'string', description: 'Initial content' },
+      project: PROJECT_PARAM,
     },
     required: ['path', 'content'],
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const guard = crossProjectGuard(args, ctx);
-    if (guard) return guard;
+    const picked = selectRoot(args, ctx);
+    if ('error' in picked) return picked.error;
+    const { root, projectId } = picked.sel;
     const path = String(args.path ?? '');
     const content = String(args.content ?? '');
-    const abs = resolveSafe(path, ctx);
+    const abs = resolveSafePath(path, root);
     if (!abs) return err(`Path '${path}' is outside project root`);
     const fs = fsPort(ctx);
     try {
@@ -123,9 +172,9 @@ const createFile: CoderTool = {
     } catch {
       // Doesn't exist — proceed
     }
-    await fs.mkdir(pathFor(ctx.cwd).dirname(abs), { recursive: true });
+    await fs.mkdir(pathFor(root).dirname(abs), { recursive: true });
     await fs.writeFile(abs, content);
-    ctx.overlay?.mark(path);
+    overlayFor(ctx, projectId)?.mark(path);
     emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
     return ok(`Created ${path} (${content.length} bytes)`);
   },
@@ -319,13 +368,15 @@ const editFile: CoderTool = {
       old_string: { type: 'string', description: 'Text to find. Should match file content closely — minor whitespace differences are tolerated automatically.' },
       new_string: { type: 'string', description: 'Replacement text' },
       replace_all: { type: 'boolean', description: 'Replace all occurrences (default false)' },
+      project: PROJECT_PARAM,
     },
     required: ['path', 'old_string', 'new_string'],
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const guard = crossProjectGuard(args, ctx);
-    if (guard) return guard;
+    const picked = selectRoot(args, ctx);
+    if ('error' in picked) return picked.error;
+    const { root, projectId } = picked.sel;
     const path = String(args.path ?? '');
     const oldStr = String(args.old_string ?? '');
     const newStr = String(args.new_string ?? '');
@@ -333,7 +384,7 @@ const editFile: CoderTool = {
     if (!path) return err('path is required and cannot be empty');
     if (!oldStr) return err('old_string cannot be empty');
 
-    const abs = resolveSafe(path, ctx);
+    const abs = resolveSafePath(path, root);
     if (!abs) return err(`Path '${path}' is outside project root`);
     const fs = fsPort(ctx);
 
@@ -359,7 +410,7 @@ const editFile: CoderTool = {
       const r = applyEditWithTransform(content, oldStr, newStr, replaceAll, transform, label);
       if (r.applied && r.content !== undefined) {
         await fs.writeFile(abs, r.content);
-        ctx.overlay?.mark(path);
+        overlayFor(ctx, projectId)?.mark(path);
         emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
         const suffix = r.strategy === 'exact' ? '' : ` [matched via: ${r.strategy}]`;
         return ok(`Edited ${path} (${r.occurrences} replacement${r.occurrences === 1 ? '' : 's'})${suffix}`);
@@ -392,7 +443,7 @@ const editFile: CoderTool = {
       }
       const updated = applyHits(content, hits, newStr, replaceAll);
       await fs.writeFile(abs, updated);
-      ctx.overlay?.mark(path);
+      overlayFor(ctx, projectId)?.mark(path);
       emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
       return ok(`Edited ${path} (${hits.length} replacement${hits.length === 1 ? '' : 's'}) [matched via: ${label}]`);
     }
@@ -463,16 +514,18 @@ const readFile: CoderTool = {
         description:
           'Bypass the duplicate-result check. Use ONLY when you legitimately believe the underlying file changed since a previous read (file edited, snapshot refreshed). Different from `force`: `force` controls truncation policy (size), `force_reread` controls cache policy (skip the dup-content marker). Default false.',
       },
+      project: PROJECT_PARAM,
     },
     required: ['path'],
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const guard = crossProjectGuard(args, ctx);
-    if (guard) return guard;
+    const picked = selectRoot(args, ctx);
+    if ('error' in picked) return picked.error;
+    const { root } = picked.sel;
     const path = String(args.path ?? '');
     if (!path) return err('path is required and cannot be empty');
-    const abs = resolveSafe(path, ctx);
+    const abs = resolveSafePath(path, root);
     if (!abs) return err(`Path '${path}' is outside project root`);
 
     let content: string;
@@ -585,23 +638,25 @@ const listDirectory: CoderTool = {
     properties: {
       path: { type: 'string', description: 'Project-relative path (default: project root)' },
       recursive: { type: 'boolean', description: 'Recurse into subdirectories (default false)' },
+      project: PROJECT_PARAM,
     },
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const guard = crossProjectGuard(args, ctx);
-    if (guard) return guard;
+    const picked = selectRoot(args, ctx);
+    if ('error' in picked) return picked.error;
+    const { root } = picked.sel;
     const path = String(args.path ?? '.');
-    const abs = resolveSafe(path, ctx);
+    const abs = resolveSafePath(path, root);
     if (!abs) return err(`Path '${path}' is outside project root`);
 
     try {
       const fs = fsPort(ctx);
       const recursive = Boolean(args.recursive);
-      const p = pathFor(ctx.cwd);
+      const p = pathFor(root);
       const entries = recursive
-        ? await walkDir(fs, abs, ctx.cwd)
-        : (await fs.readdir(abs, { withFileTypes: true })).map((e) => `${e.isDirectory() ? 'd' : 'f'} ${p.relative(ctx.cwd, p.resolve(abs, e.name)).replace(/\\/g, '/')}`);
+        ? await walkDir(fs, abs, root)
+        : (await fs.readdir(abs, { withFileTypes: true })).map((e) => `${e.isDirectory() ? 'd' : 'f'} ${p.relative(root, p.resolve(abs, e.name)).replace(/\\/g, '/')}`);
       const lines = entries.sort();
       return ok(`${path} (${lines.length} entries)\n${lines.join('\n')}`);
     } catch (e) {
@@ -725,18 +780,22 @@ export const multiEdit: CoderTool = {
           required: ['old_string', 'new_string'],
         },
       },
+      project: PROJECT_PARAM,
     },
     required: ['path', 'edits'],
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    const picked = selectRoot(args, ctx);
+    if ('error' in picked) return picked.error;
+    const { root, projectId } = picked.sel;
     const path = String(args.path ?? '');
     const edits = Array.isArray(args.edits) ? args.edits : [];
     if (!path) return err('path is required and cannot be empty');
     if (edits.length === 0) return err('edits array cannot be empty — use write_file to replace the whole file or edit_file for a single change.');
     if (edits.length > 50) return err(`edits array has ${edits.length} items, max 50 per call. Split into multiple calls.`);
 
-    const abs = resolveSafe(path, ctx);
+    const abs = resolveSafePath(path, root);
     if (!abs) return err(`Path '${path}' is outside project root`);
     const fs = fsPort(ctx);
 
@@ -795,7 +854,7 @@ export const multiEdit: CoderTool = {
     const failed = outcomes.filter((o): o is Extract<EditOutcome, { ok: false }> => !o.ok);
     if (failed.length === 0) {
       await fs.writeFile(abs, current);
-      ctx.overlay?.mark(path);
+      overlayFor(ctx, projectId)?.mark(path);
       emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
       const summary = outcomes
         .filter((o): o is Extract<EditOutcome, { ok: true }> => o.ok)

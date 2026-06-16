@@ -240,6 +240,13 @@ export interface RunCoderOptions {
    */
   reasoningEffort?: string;
   /**
+   * Plan-depth directive for the `plan` agent: `simple` | `normal` | `complex`.
+   * For single sessions it is left undefined and runCoder reads the sticky
+   * `coder_sessions.plan_depth_override` column instead (defaulting to
+   * `normal`). Feeds the system prompt (cache-stable axis), not the provider.
+   */
+  planDepth?: 'simple' | 'normal' | 'complex';
+  /**
    * Resolver for OAuth bearer tokens of external MCP servers. When provided,
    * external servers with `auth_type='oauth2'` automatically receive
    * `Authorization: Bearer <access>` (with auto-refresh). When null/omitted,

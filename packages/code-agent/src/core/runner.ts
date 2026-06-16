@@ -157,6 +157,7 @@ import {
 // see the import block above. The corresponding doc-blocks live in those files.)
 import { hashShort, rowToVerdictSnapshot } from './runner/dup-utils.js';
 import { envInt, doomLoopThreshold } from './runner/constants.js';
+import { capFor } from './runner/output-caps.js';
 import { isEssentialCompanyTool } from './runner/company-essentials.js';
 
 // Assembly modules — extracted in Commit 2 of the BT refactor. The legacy
@@ -1016,7 +1017,7 @@ export class CoderRunner extends EventEmitter {
   public readonly sessionStore: import('@mcp/code-agent/sessions/store.js').SessionStore | undefined;
   /**
    * Resolved per-block tool-result cap for this run. Computed once in the
-   * constructor from `opts.unrestrictedToolOutput`, `opts.pushTimeCap`, and
+   * constructor from `opts.toolOutputCapLevel`, `opts.pushTimeCap`, and
    * `opts.isSubagent`. All callsites that previously read
    * `this.effectivePushTimeCap` should use this instead so the
    * unrestricted ceiling stays consistent across `buildToolResultBlock`
@@ -1335,18 +1336,18 @@ export class CoderRunner extends EventEmitter {
     // Resolve tunables once. When opts.tunables is omitted, envTunables()
     // reproduces the legacy CODER_*-from-env behavior bit-identically.
     this.tunables = opts.tunables ?? envTunables();
-    // Resolve the per-block tool-result cap once. Order of precedence:
-    //   1. unrestricted toggle on → high safety ceiling (per main/subagent)
-    //   2. explicit opts.pushTimeCap (set by subagent factories etc.)
-    //   3. per-session tunables (this.tunables — built from Decider or env)
-    if (opts.unrestrictedToolOutput) {
-      this.effectivePushTimeCap = this.isSubagent
-        ? this.tunables.unrestrictedSubagentPushTimeCap
-        : this.tunables.unrestrictedPushTimeCap;
-    } else {
-      this.effectivePushTimeCap =
-        opts.pushTimeCap ?? (this.isSubagent ? this.tunables.subagentPushTimeCap : this.tunables.pushTimeCap);
-    }
+    // Resolve the per-block tool-result cap once from the session's cap LEVEL
+    // (economic|medium|high|extra|max|ultra). `economic` preserves the legacy
+    // precedence: explicit opts.pushTimeCap (subagent factories) → per-session
+    // tunables base. Any elevated level applies the multiplier/ceiling via
+    // capFor() against the main/subagent (base, ceiling) pair.
+    const capLevel = opts.toolOutputCapLevel ?? 'economic';
+    const capBase = this.isSubagent ? this.tunables.subagentPushTimeCap : this.tunables.pushTimeCap;
+    const capCeiling = this.isSubagent
+      ? this.tunables.unrestrictedSubagentPushTimeCap
+      : this.tunables.unrestrictedPushTimeCap;
+    this.effectivePushTimeCap =
+      capLevel === 'economic' ? (opts.pushTimeCap ?? capBase) : capFor(capLevel, capBase, capCeiling);
     this.messages = (opts.initialMessages ?? []).map((m) =>
       normalizeMessageForCache(m, this.effectivePushTimeCap),
     );
@@ -1916,6 +1917,7 @@ export class CoderRunner extends EventEmitter {
           this.previousResponseMessageCount = messageCount;
           this.opts.onResponseId?.(id, messageCount);
         },
+        isPlanApproved: () => this.isPlanApproved(),
         toolGate: (toolName, _input) => {
           // Plan/spec gates: mutating tools blocked until the user approves
           // the plan/spec. The detailed wording mirrors the legacy refusal

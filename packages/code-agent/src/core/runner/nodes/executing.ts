@@ -53,6 +53,7 @@ import {
 } from '../assembly/session-state.js';
 import { resolveInjectionPolicy } from '../assembly/injection-policy.js';
 import { applySelfReviewDecline, computeSelfReviewNudge } from './executing-self-review.js';
+import { maybePlanNudge } from './executing-plan-gate.js';
 import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../guards/nested-observer.js';
@@ -625,6 +626,16 @@ export class ExecutingNode implements BehaviorNode {
     });
 
     if (result.toolUses.length === 0) {
+      // Mandatory-plan gate: in plan mode the deliverable IS a plan. If the
+      // model tries to end with bare text (no submit_plan/submit_tasks, no
+      // approval), inject a ONE-SHOT reminder as the next user message and
+      // re-enter the turn instead of finishing. Bounded at one nudge so a
+      // genuinely conversational reply still terminates. See executing-plan-gate.
+      const planNudge = maybePlanNudge(ctx);
+      if (planNudge) {
+        ctx.messages.push({ role: 'user', content: [{ type: 'text', text: planNudge }] });
+        return events.turnSucceeded({ hasToolCalls: false });
+      }
       // Text-only assistant turn ends the run — no tool_use means the
       // model is delivering its final reply.
       runQualityCheck(ctx, joinText(result.textBlocks), [], result.toolUses);

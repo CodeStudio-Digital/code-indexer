@@ -14,7 +14,9 @@ export type BuiltinRightPanelId =
   | 'config'      // Per-session Skills + Tools enable/disable, tabbed (was 'skills' + 'tools')
   | 'metrics'     // Token / cost / turn metrics (was SessionMetricsModal)
   | 'tool-stats'  // Aggregated coder_tool_calls breakdown (was ToolStatsModal)
-  | 'details'     // Session details + stats (was SessionDetailsModal)
+  | 'plans'       // submit_plan history (was the Details "Planos" tab)
+  | 'tasks'       // todo_write history (was the Details "Tarefas" tab)
+  | 'details'     // Session summary + inputs (was SessionDetailsModal; plans/tasks split out)
   | 'worker-log'; // Endpoint/hook/tool inspector (was WorkerLogPanel inline 440px)
 
 /**

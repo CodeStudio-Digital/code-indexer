@@ -47,11 +47,13 @@ function routeBase(scope: Scope): string {
 }
 
 function projectRootResolver(deps: ServerDeps) {
-  return (kind: 'coder' | 'company', sessionId: number): string | null => {
+  return (kind: 'coder' | 'company', sessionId: number, projectId?: number | null): string | null => {
     if (kind !== 'coder') return null;
     const session = deps.sessionStore.getSession(sessionId);
     if (!session) return null;
-    const project = deps.db.getProject(session.project_id);
+    // Global session: honor the baseline's project_id (linked secondary root),
+    // falling back to the session's primary project.
+    const project = deps.db.getProject(projectId ?? session.project_id);
     return project?.root_path ?? null;
   };
 }

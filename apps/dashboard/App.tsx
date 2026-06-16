@@ -16,6 +16,7 @@ import {
 } from './components/ui/prompt-dialog.js';
 import Admin from './features/admin/index.js';
 import { ProjectDetail, ProjectList, ProjectView } from './features/project/index.js';
+import { AgentChat } from './features/chat/index.js';
 import { AgentsTab } from './features/agents/AgentsTab.js';
 import { DesignSystemsTab } from './features/design-systems/DesignSystemsTab.js';
 import { TelemetryDashboard } from './features/telemetry/TelemetryDashboard.js';
@@ -182,6 +183,23 @@ function ProjectViewRoute() {
   );
 }
 
+/**
+ * `/global` — Global (multi-project) sessions. Renders the SAME chat surface as
+ * a project's Sessões view (`AgentChat`), but in `mode="global"`: the session
+ * list is cross-project and a session can span several linked projects.
+ */
+function GlobalSessionRoute() {
+  const [searchParams] = useSearchParams();
+  const sessionIdRaw = searchParams.get('session');
+  const initialSessionId = sessionIdRaw ? Number(sessionIdRaw) : undefined;
+  return (
+    <AgentChat
+      mode="global"
+      initialSessionId={Number.isFinite(initialSessionId) ? initialSessionId : undefined}
+    />
+  );
+}
+
 function CompanyRedirectRoute() {
   const { rootId } = useParams<{ rootId: string }>();
   const id = Number(rootId);
@@ -210,6 +228,7 @@ const router = createBrowserRouter([
       { path: 'projects/:id', element: <ProjectViewRoute /> },
       { path: 'projects/:id/analytics', element: <ProjectRoute /> },
       { path: 'agents', element: <AgentsTab /> },
+      { path: 'global', element: <GlobalSessionRoute /> },
       { path: 'company/sessions/:rootId', element: <CompanyRedirectRoute /> },
       { path: 'company/sessions/:rootId/:frontId/:zone/:tab', element: <AgentsTab /> },
       { path: 'admin', element: <Admin /> },

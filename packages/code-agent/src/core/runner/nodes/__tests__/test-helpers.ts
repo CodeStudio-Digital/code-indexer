@@ -92,6 +92,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     autoContinues: 0,
     preEmitCompactions: 0,
     consecutiveNoopCompactions: 0,
+    planNudges: 0,
     estimateCalibration: null,
     runId: 'test-run',
     aborted: false,

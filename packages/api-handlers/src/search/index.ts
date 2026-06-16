@@ -8,6 +8,8 @@ import { ApiError, type SearchApi, type SymbolHit } from '@mcp/api-bus';
 import { buildContentMatchQuery } from '@mcp/indexer/search/content-grep.js';
 import type { SearchMode, SearchType } from '@mcp/shared/types.js';
 import type { HandlerDeps } from '../types.js';
+import { grepProject } from './text-grep.js';
+import { replaceInProject } from './text-replace.js';
 
 /** Tokens → FTS5 prefix-AND (`tok1* AND tok2*`), or null when unusable. */
 function ftsPrefixQuery(query: string): string | null {
@@ -88,6 +90,20 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
       } catch {
         return []; // pre-migration DB without the contents vtab
       }
+    },
+
+    async grep(input) {
+      if (!db.getProject(input.projectId)) throw new ApiError('not_found', 404, 'project not found');
+      return grepProject(db, input.projectId, input);
+    },
+
+    async replace(input) {
+      if (!db.getProject(input.projectId)) throw new ApiError('not_found', 404, 'project not found');
+      const idx = deps.projectIndexService;
+      const markDirty = idx
+        ? (pid: number, changes: Array<{ path: string; kind: 'upsert' }>) => idx.markDirty(pid, changes)
+        : undefined;
+      return replaceInProject(db, markDirty, input.projectId, input);
     },
   };
 }

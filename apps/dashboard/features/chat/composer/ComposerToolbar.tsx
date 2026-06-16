@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Eye, Gauge, Network, Repeat, Send, Settings2, Shield, Square, Thermometer } from 'lucide-react';
+import { Brain, Eye, Gauge, Layers, Network, Repeat, Send, Settings2, Shield, Square, Thermometer } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/
 import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
+import type { OutputCapLevel } from './output-cap-levels.js';
 import { FallbackPicker } from '../../../components/FallbackPicker.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
@@ -48,12 +49,20 @@ interface ComposerToolbarProps {
   setReasoningEffort?: (v: string | null) => void;
   reasoningLevels?: string[];
   /**
+   * Per-session sticky plan-depth (migration 151): 'simple' | 'normal' |
+   * 'complex'. `null` = normal. The selector renders ONLY when the `plan`
+   * agent is active. Persisted by AgentChat via PATCH
+   * /api/coder/sessions/:id/plan-depth.
+   */
+  planDepth?: string | null;
+  setPlanDepth?: (v: string | null) => void;
+  /**
    * Per-session "unrestricted tool output" toggle (migration 078). When on,
    * the runner / mcp-bridge / code_exec lift the per-tool-call truncation
    * cap from ~24 KB to ~1 MB. Auto-compaction still runs.
    */
-  unrestrictedOutput: boolean;
-  setUnrestrictedOutput?: (v: boolean) => void;
+  outputCapLevel: OutputCapLevel;
+  setOutputCapLevel?: (v: OutputCapLevel) => void;
   fallbackProvider: string | null;
   fallbackModel: string | null;
   onFallbackChange: (provider: string | null, model: string | null) => void;
@@ -109,8 +118,10 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   reasoningEffort,
   setReasoningEffort,
   reasoningLevels,
-  unrestrictedOutput,
-  setUnrestrictedOutput,
+  planDepth,
+  setPlanDepth,
+  outputCapLevel,
+  setOutputCapLevel,
   fallbackProvider,
   fallbackModel,
   onFallbackChange,
@@ -242,6 +253,28 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
                 {lv}
               </option>
             ))}
+          </select>
+        </div>
+      )}
+
+      {/* Plan depth — only while the `plan` agent is active. Drives how deeply
+          the planning agent investigates + the target plan size (a ceiling,
+          not a quota). Migration 151. */}
+      {agent === 'plan' && setPlanDepth && (
+        <div
+          className="hidden sm:flex items-center gap-1 text-muted-foreground"
+          title={t('chat:toolbar.planDepthHint', { defaultValue: 'Plan depth — how deep the planning agent goes' })}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          <select
+            aria-label={t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}
+            className="h-7 rounded border bg-background px-1.5 text-xs"
+            value={planDepth ?? 'normal'}
+            onChange={(e) => setPlanDepth(e.target.value)}
+          >
+            <option value="simple">{t('chat:toolbar.planDepthSimple', { defaultValue: 'Simple' })}</option>
+            <option value="normal">{t('chat:toolbar.planDepthNormal', { defaultValue: 'Normal' })}</option>
+            <option value="complex">{t('chat:toolbar.planDepthComplex', { defaultValue: 'Complex' })}</option>
           </select>
         </div>
       )}
@@ -400,6 +433,26 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
                         {lv}
                       </option>
                     ))}
+                  </select>
+                </div>
+              </div>
+            )}
+            {agent === 'plan' && setPlanDepth && (
+              <div className="space-y-2">
+                <label className="text-xs text-muted-foreground">
+                  {t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}
+                </label>
+                <div className="flex items-center gap-2">
+                  <Layers className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <select
+                    aria-label={t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}
+                    className="h-7 flex-1 rounded border bg-background px-1.5 text-xs"
+                    value={planDepth ?? 'normal'}
+                    onChange={(e) => setPlanDepth(e.target.value)}
+                  >
+                    <option value="simple">{t('chat:toolbar.planDepthSimple', { defaultValue: 'Simple' })}</option>
+                    <option value="normal">{t('chat:toolbar.planDepthNormal', { defaultValue: 'Normal' })}</option>
+                    <option value="complex">{t('chat:toolbar.planDepthComplex', { defaultValue: 'Complex' })}</option>
                   </select>
                 </div>
               </div>

@@ -4,9 +4,26 @@ import type {
   StreamTaskExecutionMode,
 } from '../../hooks/useAgentStream.js';
 
+/** A project linked to a global (multi-project) session. */
+export interface LinkedProject {
+  project_id: number;
+  name: string;
+  root_path: string;
+  is_primary: boolean;
+  label: string | null;
+}
+
 export interface AgentChatProps {
-  projectId: number;
-  projectName: string;
+  /** Primary project. Optional in `mode="global"` (the session list is
+   *  cross-project and a session's primary comes from its own row). */
+  projectId?: number;
+  projectName?: string;
+  /**
+   * `'project'` (default) — the per-project Sessões view. `'global'` — the
+   * "Sessões Globais" surface: cross-project session list + multi-project
+   * sessions. Defaults to `'project'` so every existing call site is unchanged.
+   */
+  mode?: 'project' | 'global';
   /** Optional session to pre-select on mount, set when the user clicks a
    *  recent-session entry in the global sidebar. */
   initialSessionId?: number;
@@ -22,6 +39,12 @@ export interface AgentChatProps {
 export interface CoderSession {
   id: number;
   project_id: number;
+  /** Global (multi-project) session flag (migration 152). */
+  is_global?: boolean;
+  /** Primary project name — only enriched on the global-sessions list payload. */
+  project_name?: string;
+  /** Count of linked projects — only on the global-sessions list payload. */
+  linked_count?: number;
   title: string;
   provider: string;
   model: string;
@@ -50,6 +73,8 @@ export interface CoderSession {
    * Surfaced as a switch in the Composer.
    */
   unrestricted_tool_output?: boolean | null;
+  /** Per-session tool-output cap level (migration 153): economic|medium|high|extra|max|ultra. */
+  tool_output_cap_level?: string | null;
   /**
    * Per-session tool permission mode (migration 131) driving the
    * PermissionGate: 'ask' pauses every write/execute/admin tool, 'auto'
@@ -74,6 +99,12 @@ export interface CoderSession {
    * Composer (only for models exposing supported_reasoning_levels).
    */
   reasoning_effort_override?: string | null;
+  /**
+   * Per-session sticky plan-depth (migration 151): 'simple' | 'normal' |
+   * 'complex'. NULL → 'normal'. Surfaced as the depth selector in the Composer
+   * only while the `plan` agent is active.
+   */
+  plan_depth_override?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -171,6 +202,8 @@ export interface SessionData {
   archived_count?: number;
   /** Status fallback for tool calls whose tool_result block is missing. Absent/empty for healthy sessions. */
   tool_results?: ToolResultFallback[];
+  /** Linked projects for a global session (migration 152). Empty for normal sessions. */
+  linked_projects?: LinkedProject[];
 }
 
 /** Response shape from GET /api/coder/sessions/:id/messages?before_id=N */
@@ -230,7 +263,7 @@ export interface PersistedTasksState {
 
 export interface PromptHandlers {
   onAnswer: (answer: string) => Promise<void>;
-  onPlanResponse: (approved: boolean, feedback?: string) => Promise<void>;
+  onPlanResponse: (verdict: { approved: boolean; aborted?: boolean; feedback?: string }) => Promise<void>;
   onTasksResponse: (verdict: {
     approved: boolean;
     feedback?: string;

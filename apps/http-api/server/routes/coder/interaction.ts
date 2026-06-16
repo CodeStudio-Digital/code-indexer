@@ -25,6 +25,12 @@ interface AnswerBody {
 interface PlanResponseBody {
   approved: boolean;
   feedback?: string;
+  /**
+   * "Recusar" — end the planning run. Maps to the submit_plan tool's `aborted`
+   * branch (resolvePlan 'aborted', no plan→build transition). The user can
+   * still send a new message afterwards.
+   */
+  aborted?: boolean;
 }
 
 interface TasksResponseBody {
@@ -273,17 +279,17 @@ export function mountCoderInteractionRoutes(
   app.post('/api/coder/sessions/:id/plan-response', async (c) => {
     const id = parseIdParam(c);
     const body = await c.req.json<PlanResponseBody>();
-    const approved = !!body.approved;
-    logRouteHit(id, '/plan-response', { approved, has_feedback: !!body.feedback });
+    const aborted = !!body.aborted;
+    // "Recusar" wins over approved: an abort verdict ends the planning run.
+    const approved = !aborted && !!body.approved;
+    logRouteHit(id, '/plan-response', { approved, aborted, has_feedback: !!body.feedback });
+    const envelope = JSON.stringify({ approved, feedback: body.feedback, aborted });
     const inWorkerMode = coderWorkerEnabled(); // Apêndice 4 Fase 2.
     // P17 — worker mode: forward the verdict via the pool RPC so the
     // worker-side runner unblocks. See `/answer` for the rationale.
     if (inWorkerMode) {
       try {
-        const ok = await getCoderWorkerPool().provideUserInput(
-          id,
-          JSON.stringify({ approved, feedback: body.feedback }),
-        );
+        const ok = await getCoderWorkerPool().provideUserInput(id, envelope);
         if (ok) return c.json({ ok: true });
       } catch (err) {
         console.warn(
@@ -293,21 +299,22 @@ export function mountCoderInteractionRoutes(
     }
     const entry = activeRuns.get(id);
     if (entry?.runner) {
-      const ok = entry.runner.provideUserInput(
-        JSON.stringify({ approved, feedback: body.feedback }),
-      );
+      const ok = entry.runner.provideUserInput(envelope);
       if (ok) return c.json({ ok });
     }
     const pending = findPendingInteraction(id);
     if (!pending || pending.name !== 'submit_plan') {
       return c.json({ error: 'no pending plan' }, 404);
     }
+    const resultText = aborted
+      ? `Plan review aborted by user.${body.feedback ? ` Feedback: ${body.feedback}` : ''}`
+      : formatPlanResult(approved, body.feedback);
     const toolMsg: AgentMessage = {
       role: 'tool',
       content: [{
         type: 'tool_result',
         tool_use_id: pending.toolUseId,
-        content: formatPlanResult(approved, body.feedback),
+        content: resultText,
       }],
     };
     sessionStore.appendMessage(id, toolMsg);
@@ -315,7 +322,7 @@ export function mountCoderInteractionRoutes(
     // resolved status even when the live runner was no longer in memory.
     sessionStore.resolvePlan(
       pending.toolUseId,
-      approved ? 'approved' : 'rejected',
+      aborted ? 'aborted' : approved ? 'approved' : 'rejected',
       body.feedback,
     );
     // Iteration 2: auto plan→build after approval. Mirrors the in-runner

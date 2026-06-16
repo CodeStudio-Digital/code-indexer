@@ -20,11 +20,13 @@ import { mountSnapshotReviewRoutes } from '../snapshot-review-routes.js';
 export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
   const snapshotStore = new SessionFileSnapshotStore(sessionStore.getDb());
-  const service = new SessionSnapshotService(snapshotStore, (kind, sessionId) => {
+  const service = new SessionSnapshotService(snapshotStore, (kind, sessionId, projectId) => {
     if (kind !== 'coder') return null;
     const s = sessionStore.getSession(sessionId);
     if (!s) return null;
-    const p = db.getProject(s.project_id);
+    // Global session: a baseline may belong to a linked secondary project; use
+    // its project_id when present, else the session's primary project.
+    const p = db.getProject(projectId ?? s.project_id);
     return p?.root_path ?? null;
   });
 

@@ -38,12 +38,14 @@ export const UNIVERSAL_TOOLBAR_SOURCE = String.raw`(function () {
       'display:inline-flex;align-items:center;gap:5px}' +
       'button:hover{background:#1e2540;color:#fff}' +
       '#insp.on{background:#6366f1;color:#fff}' +
+      '#region.on{background:#6366f1;color:#fff}' +
       '.dot{width:7px;height:7px;border-radius:50%;background:#64748b;display:inline-block}' +
       '#insp.on .dot{background:#fff;box-shadow:0 0 6px #fff}' +
       '</style>' +
       '<div class="bar">' +
       '<span class="grip" id="grip">⁙</span>' +
       '<button id="insp"><span class="dot"></span><span id="insplbl">Inspect</span></button>' +
+      '<button id="region" title="Select region — drag a box to cite every element inside it + a screenshot">▦</button>' +
       '<span class="sep"></span>' +
       '<button id="back" title="Back">‹</button>' +
       '<button id="fwd" title="Forward">›</button>' +
@@ -61,8 +63,11 @@ export const UNIVERSAL_TOOLBAR_SOURCE = String.raw`(function () {
       var on = !!(window.__mcpIsArmed && window.__mcpIsArmed());
       var b = $('insp'); if (b) b.className = on ? 'on' : '';
       var l = $('insplbl'); if (l) l.textContent = on ? 'Inspecting' : 'Inspect';
+      var ron = !!(window.__mcpIsRegionArmed && window.__mcpIsRegionArmed());
+      var rb = $('region'); if (rb) rb.className = ron ? 'on' : '';
     }
     $('insp').onclick = function () { try { window.__mcpToggleInspect && window.__mcpToggleInspect(); } catch (e) {} refresh(); };
+    $('region').onclick = function () { try { window.__mcpToggleRegion && window.__mcpToggleRegion(); } catch (e) {} refresh(); };
     $('reload').onclick = function () { try { location.reload(); } catch (e) {} };
     $('back').onclick = function () { try { history.back(); } catch (e) {} };
     $('fwd').onclick = function () { try { history.forward(); } catch (e) {} };

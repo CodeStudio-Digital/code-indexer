@@ -15,13 +15,14 @@
  * sub-views start with the assumption that we ARE in a git repo.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Archive,
   Check,
   GitBranch,
   GitCommit as GitCommitIcon,
+  GitMerge,
   History,
   Loader2,
   Minus,
@@ -31,6 +32,7 @@ import {
   Trash2,
   Undo2,
 } from 'lucide-react';
+import type { GitMergeState } from '@mcp/api-bus';
 import { apiCall } from '../../../../lib/api-client.js';
 import { useWorkspaceStore } from '../../../../state/workspace.js';
 import { Button } from '../../../../components/ui/button.js';
@@ -44,8 +46,11 @@ import { StashView } from './git/StashView.js';
 import { CommitBox } from './git/CommitBox.js';
 import { CollapsibleSection } from './git/CollapsibleSection.js';
 import { fileKind } from './git/file-kind.js';
+import { MergeBanner } from './git/merge/MergeBanner.js';
+import { ConflictsView } from './git/merge/ConflictsView.js';
+import { setConflicts, clearConflicts, onGitReloadRequest } from '../../editor/conflict-registry.js';
 
-type GitTab = 'changes' | 'branches' | 'history' | 'stash' | 'ai';
+type GitTab = 'changes' | 'branches' | 'history' | 'stash' | 'ai' | 'conflicts';
 
 interface GitStatusFile {
   path: string;
@@ -75,6 +80,8 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
   const [error, setError] = useState<string | null>(null);
   const [openSections, setOpenSections] = useState({ staged: true, unstaged: true, untracked: false });
   const [tab, setTab] = useState<GitTab>('changes');
+  const [mergeState, setMergeState] = useState<GitMergeState | null>(null);
+  const prevKindRef = useRef<GitMergeState['kind']>(null);
   const openDiff = useWorkspaceStore((s) => s.openDiff);
 
   const showDiff = useCallback(
@@ -107,8 +114,15 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const s = await apiCall<GitStatus>('projectGit.status', { projectId });
+      const [s, ms] = await Promise.all([
+        apiCall<GitStatus>('projectGit.status', { projectId }),
+        apiCall<GitMergeState>('projectGit.mergeState', { projectId }),
+      ]);
       setStatus(s);
+      setMergeState(ms);
+      // Feed the editor's conflict registry so open files light up inline.
+      if (ms.kind) setConflicts(projectId, ms.conflictedFiles);
+      else clearConflicts();
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -120,6 +134,21 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Auto-surface the Conflicts tab the moment a sequencer op flips into a
+  // conflicted state; fall back to Changes once it clears.
+  useEffect(() => {
+    const kind = mergeState?.kind ?? null;
+    if (kind && !prevKindRef.current) setTab('conflicts');
+    else if (!kind && prevKindRef.current) setTab((cur) => (cur === 'conflicts' ? 'changes' : cur));
+    prevKindRef.current = kind;
+  }, [mergeState?.kind]);
+
+  // Clear the registry when this Git window unmounts (project switch / close).
+  useEffect(() => () => clearConflicts(), []);
+
+  // The 3-pane merge editor (in the editor pane) pings us after resolving.
+  useEffect(() => onGitReloadRequest(() => void reload()), [reload]);
 
   const groups = useMemo(() => {
     const staged: GitStatusFile[] = [];
@@ -228,10 +257,20 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
             </div>
           )}
 
+          {/* Merge/cherry-pick/revert in progress → banner with Resolve +
+              Abort, directly under the branch header (WebStorm-style). */}
+          {mergeState?.kind && (
+            <MergeBanner projectId={projectId} state={mergeState} onMutated={() => void reload()} />
+          )}
+
           {/* Sub-tab nav — narrow, icon+label. The selected tab gets a
               top accent stripe + filled chip to match the IDE-rail
               convention elsewhere in the workspace. */}
-          <GitTabNav active={tab} onChange={setTab} />
+          <GitTabNav
+            active={tab}
+            onChange={setTab}
+            conflictCount={mergeState?.kind ? mergeState.conflictedFiles.length : null}
+          />
 
           {error && tab === 'changes' && (
             <div className="px-3 py-2 text-[11px] text-destructive shrink-0">{error}</div>
@@ -261,6 +300,9 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
           {tab === 'stash' && (
             <StashView projectId={projectId} onMutated={() => void reload()} />
           )}
+          {tab === 'conflicts' && mergeState && (
+            <ConflictsView projectId={projectId} state={mergeState} onMutated={() => void reload()} />
+          )}
           {tab === 'ai' && (
             <GitPromptView projectId={projectId} onMutated={() => void reload()} />
           )}
@@ -273,6 +315,8 @@ export function GitWindow({ projectId, onClose }: GitWindowProps) {
 interface GitTabNavProps {
   active: GitTab;
   onChange: (t: GitTab) => void;
+  /** Number of conflicted files when a sequencer op is in progress; null otherwise (tab hidden). */
+  conflictCount: number | null;
 }
 
 /**
@@ -284,19 +328,29 @@ interface GitTabNavProps {
  * second-most), History for archeology, AI last because it's the
  * "I don't know the git command" escape hatch.
  */
-function GitTabNav({ active, onChange }: GitTabNavProps) {
+function GitTabNav({ active, onChange, conflictCount }: GitTabNavProps) {
   const { t } = useTranslation('workspace');
-  const tabs: { id: GitTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  const tabs: {
+    id: GitTab;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    badge?: number;
+  }[] = [
     { id: 'changes', label: t('git.tabs.changes'), icon: GitCommitIcon },
     { id: 'branches', label: t('git.tabs.branches'), icon: GitBranch },
     { id: 'history', label: t('git.tabs.history'), icon: History },
     { id: 'stash', label: t('git.tabs.stash'), icon: Archive },
+    // Conflicts tab only exists while a sequencer op is mid-flight.
+    ...(conflictCount !== null
+      ? [{ id: 'conflicts' as const, label: t('git.tabs.conflicts'), icon: GitMerge, badge: conflictCount }]
+      : []),
     { id: 'ai', label: t('git.tabs.ai'), icon: Sparkles },
   ];
   return (
     <div className="shrink-0 flex items-stretch border-b bg-card/30">
-      {tabs.map(({ id, label, icon: Icon }) => {
+      {tabs.map(({ id, label, icon: Icon, badge }) => {
         const isActive = active === id;
+        const isConflicts = id === 'conflicts';
         return (
           <button
             key={id}
@@ -307,10 +361,16 @@ function GitTabNav({ active, onChange }: GitTabNavProps) {
               isActive
                 ? 'text-foreground'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+              isConflicts && 'text-amber-500',
             )}
           >
             <Icon className={cn('h-3 w-3', isActive && id === 'ai' && 'text-primary')} />
             <span className="font-medium">{label}</span>
+            {badge !== undefined && badge > 0 && (
+              <span className="grid place-items-center min-w-[14px] h-[14px] px-1 rounded-full bg-amber-500/20 text-amber-500 text-[9px] font-semibold">
+                {badge}
+              </span>
+            )}
             {isActive && (
               <span className="absolute inset-x-1 top-0 h-[2px] bg-primary rounded-full" />
             )}

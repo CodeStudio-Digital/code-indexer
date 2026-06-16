@@ -75,6 +75,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     autoContinues: 0,
     preEmitCompactions: 0,
     consecutiveNoopCompactions: 0,
+    planNudges: 0,
     estimateCalibration: null,
     runId: randomUUID(),
     aborted: false,

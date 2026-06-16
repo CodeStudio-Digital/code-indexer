@@ -160,6 +160,62 @@ export interface GitPlan {
   refusal?: string;
 }
 
+/**
+ * In-progress sequencer operation. git lets exactly one of merge /
+ * cherry-pick / revert / rebase be mid-flight at a time; we detect which
+ * by stat-ing its state file under the gitdir.
+ */
+export type MergeKind = 'merge' | 'cherry-pick' | 'revert' | 'rebase';
+
+/**
+ * Snapshot of "are we stuck mid-merge?" state — drives the conflict
+ * resolver UI (banner + Conflicts tab). `kind` is null when the working
+ * tree is clean of any in-progress sequencer op.
+ */
+export interface GitMergeState {
+  kind: MergeKind | null;
+  /** Unmerged (conflicted) paths, repoRoot-relative posix. */
+  conflictedFiles: string[];
+  /** Label for "our" side — the current branch, or 'HEAD (detached)'. */
+  oursLabel: string;
+  /** Label for the incoming side — incoming subject, else short sha. */
+  theirsLabel: string;
+  /** Subject line of the incoming commit, when resolvable. */
+  incomingSubject?: string;
+  /** Sha of the incoming commit (from CHERRY_PICK_HEAD / MERGE_HEAD / …). */
+  incomingSha?: string;
+}
+
+/**
+ * The three index stages of one conflicted file plus the working-tree
+ * text (which carries git's `<<<<<<<` markers). A stage is null when it
+ * doesn't exist for this conflict (add/add has no base; modify/delete is
+ * missing ours or theirs). When `binary` the UI must offer only
+ * ours/theirs — there's no sensible text merge.
+ */
+export interface GitConflictFile {
+  /** Common ancestor (`:1:path`), or null (add/add). */
+  base: string | null;
+  /** Our side (`:2:path`), or null when our side deleted it. */
+  ours: string | null;
+  /** Their side (`:3:path`), or null when their side deleted it. */
+  theirs: string | null;
+  /** Working-tree contents WITH conflict markers; '' when the file is gone. */
+  merged: string;
+  hasOurs: boolean;
+  hasTheirs: boolean;
+  binary: boolean;
+  /** Best-effort language id (derived from extension), when known. */
+  language?: string;
+}
+
+/**
+ * How to resolve one conflicted file: take a whole side, or write
+ * explicit merged content. String sides run `git checkout --ours/--theirs`;
+ * `{ content }` writes the file then stages it.
+ */
+export type ConflictResolution = 'ours' | 'theirs' | { content: string };
+
 export interface ProjectGitApi {
   status(input: { projectId: number }, ctx: ApiContext): Promise<GitStatus>;
 
@@ -256,6 +312,46 @@ export interface ProjectGitApi {
     input: { projectId: number; commits: string[]; noCommit?: boolean },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
+
+  // ── Conflict resolution ────────────────────────────────────
+  /**
+   * Detect an in-progress sequencer op (merge / cherry-pick / revert /
+   * rebase) and the files it left conflicted. Returns `kind: null` on a
+   * clean tree. Powers the resolver banner + Conflicts tab. Cheap — a
+   * couple of `git rev-parse`/`diff` calls.
+   */
+  mergeState(input: { projectId: number }, ctx: ApiContext): Promise<GitMergeState>;
+
+  /**
+   * The three index stages + working-tree text of one conflicted file.
+   * Seeds the 3-pane merge editor (ours / theirs panes) and gates the
+   * inline editor for binary files.
+   */
+  conflictFile(
+    input: { projectId: number; path: string },
+    ctx: ApiContext,
+  ): Promise<GitConflictFile>;
+
+  /**
+   * Resolve one conflicted file and stage it. `'ours'`/`'theirs'` run
+   * `git checkout --ours/--theirs` then `git add`; `{ content }` writes
+   * the merged text then `git add`. Throws on binary `{ content }`.
+   */
+  resolveConflict(
+    input: { projectId: number; path: string; resolution: ConflictResolution },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
+
+  /**
+   * Finish the in-progress op (`<kind> --continue`) once every conflict
+   * is staged. Runs non-interactively (the commit-message editor is
+   * suppressed) so it can never hang. Refuses (409) while unmerged files
+   * remain. Returns the rich GitRunResult on failure.
+   */
+  mergeContinue(input: { projectId: number }, ctx: ApiContext): Promise<GitRunResult>;
+
+  /** Abort the in-progress op (`<kind> --abort`), restoring pre-op state. */
+  mergeAbort(input: { projectId: number }, ctx: ApiContext): Promise<GitRunResult>;
 
   // ── Remote sync ────────────────────────────────────────────
   /**

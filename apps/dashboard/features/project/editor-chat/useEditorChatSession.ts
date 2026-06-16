@@ -244,7 +244,7 @@ export function useEditorChatSession(projectId: number) {
 
   const handlers: PromptHandlers = useMemo(() => ({
     onAnswer: (answer) => answerQuestion(answer),
-    onPlanResponse: (approved, feedback) => respondToPlan(approved, feedback),
+    onPlanResponse: (verdict) => respondToPlan(verdict),
     onTasksResponse: (verdict) => respondToTasks(verdict),
     onToolApproval: (toolUseId, verdict) => respondToToolApproval(toolUseId, verdict),
   }), [answerQuestion, respondToPlan, respondToTasks, respondToToolApproval]);

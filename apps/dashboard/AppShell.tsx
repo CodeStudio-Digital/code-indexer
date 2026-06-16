@@ -14,8 +14,8 @@ import { useTranslation } from 'react-i18next';
 import {
   Activity,
   BookOpen,
-  Boxes,
   Clock,
+  Globe,
   Home,
   Moon,
   Palette,
@@ -41,7 +41,7 @@ import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
 
 interface ActiveView {
-  page: 'home' | 'project' | 'project-analytics' | 'agents' | 'admin' | 'design-systems' | 'telemetry' | 'docs' | 'other';
+  page: 'home' | 'project' | 'project-analytics' | 'agents' | 'global' | 'admin' | 'design-systems' | 'telemetry' | 'docs' | 'other';
   projectId: number | null;
   sessionId: number | null;
 }
@@ -68,6 +68,11 @@ function parsePathname(pathname: string, search: string): ActiveView {
   }
   if (pathname === '/agents' || pathname.startsWith('/company/sessions/')) {
     return { page: 'agents', projectId: null, sessionId: null };
+  }
+  if (pathname.startsWith('/global')) {
+    const params = new URLSearchParams(search);
+    const sessionIdRaw = params.get('session');
+    return { page: 'global', projectId: null, sessionId: sessionIdRaw ? Number(sessionIdRaw) : null };
   }
   if (pathname.startsWith('/admin')) return { page: 'admin', projectId: null, sessionId: null };
   if (pathname.startsWith('/design-systems')) return { page: 'design-systems', projectId: null, sessionId: null };
@@ -148,6 +153,7 @@ export function AppShell() {
   const nav: NavItem[] = [
     { id: 'home', label: t('nav.projects'), icon: Home, href: '/' },
     { id: 'agents', label: t('nav.agents'), icon: Users, href: '/agents' },
+    { id: 'global', label: t('nav.global'), icon: Globe, href: '/global' },
     {
       id: 'design-systems',
       label: t('nav.designSystems'),
@@ -170,9 +176,7 @@ export function AppShell() {
           className="h-7 inline-flex items-center gap-1.5 px-2 rounded text-[12px] font-semibold text-foreground hover:bg-muted"
           aria-label={t('brand.homeAria')}
         >
-          <span className="h-5 w-5 rounded-md bg-primary text-primary-foreground grid place-items-center">
-            <Boxes className="h-3 w-3" />
-          </span>
+          <img src="/brand/logo-mark.svg" alt="" className="h-5 w-5 shrink-0" draggable={false} />
           <span>CodeStudio</span>
           <span className="text-[9px] text-muted-foreground uppercase tracking-wider font-normal">
             v{__APP_VERSION__}
@@ -234,6 +238,7 @@ export function AppShell() {
           // the bottom of the viewport.
           view.page === 'project' ||
           view.page === 'agents' ||
+          view.page === 'global' ||
           view.page === 'design-systems' ||
           view.page === 'project-analytics'
             ? 'flex flex-col overflow-hidden'

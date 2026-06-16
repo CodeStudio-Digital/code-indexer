@@ -16,7 +16,7 @@
  *     model — the editor instance is reused, the model swaps)
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type * as MonacoNs from 'monaco-editor';
 import { Loader2 } from 'lucide-react';
@@ -35,6 +35,7 @@ import {
 import { consumePendingReveal } from './pending-reveal.js';
 import { registerChatActions } from './chat-actions.js';
 import { useEnsureFileContent } from './useEnsureFileContent.js';
+import { useConflictMarkers } from './useConflictMarkers.js';
 import { applyMonacoKeymap } from './monaco-keymap.js';
 import { useKeymapStore } from '../../../keymap/keymap-store.js';
 
@@ -51,14 +52,23 @@ export function MonacoMount({ file }: MonacoMountProps) {
   const editorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
   const currentPathRef = useRef(file.path);
   const setContent = useWorkspaceStore((s) => s.setContent);
+  // Editor + monaco exposed as state (not just refs) so conflict UI can
+  // attach reactively once the editor has actually mounted.
+  const [editorInstance, setEditorInstance] = useState<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
+  const [monacoInstance, setMonacoInstance] = useState<typeof MonacoNs | null>(null);
 
   // Lazy content: tabs open with null and fetch on activation; loaded tabs
   // revalidate by mtime (stat-only round trip when unchanged).
   useEnsureFileContent(file);
+  // Inline conflict-marker decorations + Accept CodeLens, when this file is
+  // a conflicted working-tree file (gated inside the hook).
+  useConflictMarkers(file, editorInstance, monacoInstance);
 
   const handleMount = useCallback<OnMount>(
     (editor, monaco) => {
       editorRef.current = editor;
+      setEditorInstance(editor);
+      setMonacoInstance(monaco);
       initEditorModels(monaco);
       setActiveEditor(editor);
       // Editor-level keymap (Ctrl+D duplicate, Ctrl+B declaration, …) per

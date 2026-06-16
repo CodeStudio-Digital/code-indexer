@@ -12,11 +12,13 @@
 import { useTranslation } from 'react-i18next';
 import {
   BarChart3,
+  ClipboardList,
   Compass,
   Gauge,
   GitCompare,
   HardDrive,
   Info,
+  ListChecks,
   ScrollText,
   Settings,
   type LucideIcon,
@@ -74,6 +76,8 @@ export function ChatRightRail({
   // → plugins → a bottom-pinned Configuration cog (Skills + Tools tabs).
   const contextEntries: RailEntry[] = [
     { id: 'meta', icon: Compass, labelKey: 'rightRail.meta', kind: 'panel' },
+    { id: 'plans', icon: ClipboardList, labelKey: 'rightRail.plans', kind: 'panel' },
+    { id: 'tasks', icon: ListChecks, labelKey: 'rightRail.tasks', kind: 'panel' },
     { id: 'drive', icon: HardDrive, labelKey: 'rightRail.drive', kind: 'panel' },
   ];
 

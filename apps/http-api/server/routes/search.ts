@@ -60,4 +60,26 @@ export function mountSearchRoutes(app: Hono, deps: ServerDeps): void {
       return mapApiError(c, err);
     }
   });
+
+  // Find in Files — literal/regex grep with per-match positions.
+  app.post('/api/projects/:id/search/grep', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const body = await c.req.json<Record<string, unknown>>();
+      return c.json(await h.grep({ ...body, projectId } as never, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  // Replace in Files — applies the matcher and writes changed files.
+  app.post('/api/projects/:id/search/replace', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const body = await c.req.json<Record<string, unknown>>();
+      return c.json(await h.replace({ ...body, projectId } as never, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
 }

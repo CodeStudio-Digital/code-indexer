@@ -13,6 +13,10 @@ export const INSPECTOR_RUNTIME_SOURCE = String.raw`// MCP Builder element-select
 function initMcpInspector(post) {
   var armed = false;
   var overlay = null;
+  // Region/marquee mode (drag a box → cite every stamped element inside it).
+  var regionArmed = false;
+  var dragging = false;
+  var dragStart = { x: 0, y: 0 };
 
   function ensureOverlay() {
     if (overlay) return overlay;
@@ -48,6 +52,13 @@ function initMcpInspector(post) {
   }
 
   function onMove(e) {
+    if (regionArmed) {
+      if (dragging) {
+        var rg = mcpRegionFromPoints(dragStart.x, dragStart.y, e.clientX, e.clientY);
+        mcpDrawMarquee(rg.x, rg.y, rg.width, rg.height);
+      }
+      return;
+    }
     if (!armed) return;
     var el = stamped(e.target);
     if (!el) { hideOverlay(); return; }
@@ -55,7 +66,45 @@ function initMcpInspector(post) {
     drawOverlay(r);
     post({ type: 'mcp:hover', loc: el.getAttribute('data-mcp-loc'), rect: { x: r.x, y: r.y, width: r.width, height: r.height } });
   }
+  // ── Region/marquee selection ──────────────────────────────────────
+  function onDown(e) {
+    if (!regionArmed) return;
+    e.preventDefault(); e.stopPropagation();
+    dragging = true;
+    dragStart = { x: e.clientX, y: e.clientY };
+    mcpDrawMarquee(e.clientX, e.clientY, 0, 0);
+  }
+  function describeStamped(el) {
+    var r = el.getBoundingClientRect();
+    var classes = (el.getAttribute('class') || '').split(/\s+/).filter(Boolean);
+    return {
+      loc: el.getAttribute('data-mcp-loc') || '',
+      componentName: el.getAttribute('data-mcp-name') || null,
+      tag: el.tagName.toLowerCase(),
+      classes: classes,
+      text: (el.textContent || '').trim().slice(0, 120),
+      rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+    };
+  }
+  function onUp(e) {
+    if (!regionArmed || !dragging) return;
+    dragging = false;
+    e.preventDefault(); e.stopPropagation();
+    var rg = mcpRegionFromPoints(dragStart.x, dragStart.y, e.clientX, e.clientY);
+    if (rg.width < 6 || rg.height < 6) { mcpHideMarquee(); return; }
+    var sels = mcpCollectRegion(rg, {
+      all: function () { return document.querySelectorAll('[data-mcp-loc]'); },
+      describe: describeStamped,
+    });
+    // Clear our overlays BEFORE the host screenshots the region, then wait a
+    // paint so the dashed box never leaks into the capture.
+    hideOverlay(); mcpHideMarquee();
+    requestAnimationFrame(function () {
+      post({ type: 'mcp:region-select', selections: sels, rect: rg, dpr: window.devicePixelRatio || 1 });
+    });
+  }
   function onClick(e) {
+    if (regionArmed) { e.preventDefault(); e.stopPropagation(); return; }
     if (!armed) return;
     var el = stamped(e.target);
     if (!el) return;
@@ -77,18 +126,23 @@ function initMcpInspector(post) {
     });
   }
   function onKey(e) {
-    if (e.key === 'Escape' && armed) { hideOverlay(); post({ type: 'mcp:clear' }); }
+    if (e.key !== 'Escape') return;
+    if (regionArmed) { dragging = false; mcpHideMarquee(); }
+    else if (armed) { hideOverlay(); post({ type: 'mcp:clear' }); }
   }
 
   document.addEventListener('mousemove', onMove, true);
+  document.addEventListener('mousedown', onDown, true);
+  document.addEventListener('mouseup', onUp, true);
   document.addEventListener('click', onClick, true);
   document.addEventListener('keydown', onKey, true);
 
   window.addEventListener('message', function (ev) {
     var d = ev && ev.data;
     if (!d || typeof d.type !== 'string') return;
-    if (d.type === 'mcp:arm') { armed = true; }
-    else if (d.type === 'mcp:disarm') { armed = false; hideOverlay(); }
+    if (d.type === 'mcp:arm') { armed = true; regionArmed = false; mcpHideMarquee(); }
+    else if (d.type === 'mcp:arm-region') { regionArmed = true; armed = false; dragging = false; hideOverlay(); }
+    else if (d.type === 'mcp:disarm') { armed = false; regionArmed = false; dragging = false; hideOverlay(); mcpHideMarquee(); }
   });
 }
 `;

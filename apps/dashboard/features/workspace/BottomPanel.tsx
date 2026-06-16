@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
+import { ErrorBoundary } from '../../components/ErrorBoundary.js';
 import { WorkspaceTerminal } from './WorkspaceTerminal.js';
 import { WebviewWindow } from './jetbrains/tool-windows/WebviewWindow.js';
 import type { ContribToolWindow } from '../../state/contribution-registry.js';
@@ -149,22 +150,27 @@ export function BottomPanel({
       </div>
       {isOpen && (
         <div className="flex-1 min-h-0 overflow-hidden">
-          {tab === 'terminal' && <WorkspaceTerminal projectId={projectId} />}
-          {tab === 'problems' && !activePlugin && (
-            <ProblemsPanel items={diagnostics.items} onOpenFile={onOpenFile} />
-          )}
-          {tab === 'output' && !activePlugin && <OutputPanel projectId={projectId} />}
-          {tab === 'find' && !activePlugin && (
-            <FindPanel projectId={projectId} onOpenFile={onOpenFile} />
-          )}
-          {activePlugin && (
-            <WebviewWindow
-              namespace={activePlugin.pluginNs}
-              title={activePlugin.title}
-              entry={activePlugin.entry}
-              projectId={projectId}
-            />
-          )}
+          {/* Contain a crash to the active tab — a broken panel shows an inline
+              message instead of taking down the whole workspace. Keyed by tab so
+              switching tabs clears a stuck error. */}
+          <ErrorBoundary label={tab} resetKey={tab}>
+            {tab === 'terminal' && <WorkspaceTerminal projectId={projectId} />}
+            {tab === 'problems' && !activePlugin && (
+              <ProblemsPanel items={diagnostics.items} onOpenFile={onOpenFile} />
+            )}
+            {tab === 'output' && !activePlugin && <OutputPanel projectId={projectId} />}
+            {tab === 'find' && !activePlugin && (
+              <FindPanel projectId={projectId} onOpenFile={onOpenFile} />
+            )}
+            {activePlugin && (
+              <WebviewWindow
+                namespace={activePlugin.pluginNs}
+                title={activePlugin.title}
+                entry={activePlugin.entry}
+                projectId={projectId}
+              />
+            )}
+          </ErrorBoundary>
         </div>
       )}
     </div>

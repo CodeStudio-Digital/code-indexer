@@ -8,6 +8,7 @@
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { ToolOutputCapLevel } from '@mcp/code-agent/core/runner/output-caps.js';
 import type {
   CoderMessageRow,
   CoderPlanRow,
@@ -18,6 +19,8 @@ import type {
   CoderTask,
   CoderTasksRow,
   RecentCoderSession,
+  GlobalCoderSession,
+  LinkedProject,
   SessionInputRow,
   SessionWithMessages,
   TaskExecutionMode,
@@ -25,6 +28,7 @@ import type {
 } from '@mcp/code-agent/sessions/types.js';
 
 import * as core from './store/sessions-core.js';
+import * as sessionProjects from './store/session-projects.js';
 import * as state from './store/sessions-state.js';
 import * as ops from './store/sessions-ops.js';
 import * as goals from './store/goals.js';
@@ -66,6 +70,14 @@ export class SessionStore {
   getSession(id: number): CoderSession | null { return core.get(this.db, id); }
   listSessions(projectId: number, opts: { archived?: boolean | null; groupId?: number | null } = {}): CoderSession[] { return core.list(this.db, projectId, opts); }
   listRecentSessionsGlobal(limit = 10): RecentCoderSession[] { return core.listRecentGlobal(this.db, limit); }
+
+  // ─── Global (multi-project) sessions (migration 152) ───────────
+  createGlobalSession(input: core.CreateGlobalSessionInput): CoderSession { return core.createGlobal(this.db, input); }
+  listGlobalSessions(opts: { archived?: boolean | null } = {}): GlobalCoderSession[] { return core.listGlobal(this.db, opts); }
+  /** Linked projects (enriched with name + root) for a session. Empty for non-global sessions. */
+  getSessionProjects(sessionId: number): LinkedProject[] { return sessionProjects.listLinked(this.db, sessionId); }
+  linkSessionProject(sessionId: number, projectId: number, opts: { label?: string | null; isPrimary?: boolean } = {}): void { sessionProjects.add(this.db, sessionId, projectId, opts); }
+  unlinkSessionProject(sessionId: number, projectId: number): void { sessionProjects.remove(this.db, sessionId, projectId); }
   deleteSession(id: number): void { core.del(this.db, id); }
   deleteSessionsBatch(ids: number[]): number { return core.delBatch(this.db, ids); }
   recoverStaleSessions(): number { return core.recoverStale(this.db); }
@@ -83,7 +95,9 @@ export class SessionStore {
   setSessionAgent(id: number, agent: string | null): void { state.setAgent(this.db, id, agent); }
   setSessionTemperature(id: number, temperature: number | null): void { state.setTemperature(this.db, id, temperature); }
   setSessionReasoningEffort(id: number, effort: string | null): void { state.setReasoningEffort(this.db, id, effort); }
+  setSessionPlanDepth(id: number, depth: string | null): void { state.setPlanDepth(this.db, id, depth); }
   setSessionUnrestrictedToolOutput(id: number, enabled: boolean | null): void { state.setUnrestrictedToolOutput(this.db, id, enabled); }
+  setSessionToolOutputCapLevel(id: number, level: ToolOutputCapLevel | null): void { state.setToolOutputCapLevel(this.db, id, level); }
   setSessionToolPermissionMode(id: number, mode: 'ask' | 'auto' | 'unrestricted' | null): void { state.setToolPermissionMode(this.db, id, mode); }
   addToolPermissionGrant(id: number, toolName: string): void { state.addToolPermissionGrant(this.db, id, toolName); }
   setSessionToolProfile(id: number, profile: 'bootstrap' | 'navigate' | 'full'): void { state.setToolProfile(this.db, id, profile); }

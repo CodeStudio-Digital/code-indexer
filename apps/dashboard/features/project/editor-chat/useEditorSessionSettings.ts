@@ -8,11 +8,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiPatch } from '../../../hooks/useApi.js';
 import type { SessionData } from '../../chat/types.js';
+import { levelFromSession, type OutputCapLevel } from '../../chat/composer/output-cap-levels.js';
 
 export function useEditorSessionSettings(selectedId: number | null, sessionData: SessionData | null) {
   // Describe-images is a per-send flag (not persisted), matching AgentChat.
   const [describeImages, setDescribeImages] = useState(false);
-  const [unrestrictedOutput, setUnrestrictedOutput] = useState(false);
+  const [outputCapLevel, setOutputCapLevel] = useState<OutputCapLevel>('economic');
   const [toolPermissionMode, setToolPermissionMode] = useState<'ask' | 'auto' | 'unrestricted'>('auto');
   const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
@@ -20,7 +21,7 @@ export function useEditorSessionSettings(selectedId: number | null, sessionData:
   // Hydrate the persisted toggles from the session row.
   useEffect(() => {
     const s = sessionData?.session;
-    setUnrestrictedOutput(!!s?.unrestricted_tool_output);
+    setOutputCapLevel(levelFromSession(s));
     setToolPermissionMode(s?.tool_permission_mode ?? 'auto');
   }, [sessionData?.session]);
 
@@ -43,10 +44,10 @@ export function useEditorSessionSettings(selectedId: number | null, sessionData:
     return () => { cancelled = true; };
   }, [selectedId]);
 
-  const changeUnrestricted = useCallback(async (next: boolean) => {
-    setUnrestrictedOutput(next);
+  const changeOutputCapLevel = useCallback(async (next: OutputCapLevel) => {
+    setOutputCapLevel(next);
     if (!selectedId) return;
-    try { await apiPatch(`/coder/sessions/${selectedId}/unrestricted-output`, { enabled: next }); } catch { /* optimistic */ }
+    try { await apiPatch(`/coder/sessions/${selectedId}/tool-output-cap-level`, { level: next }); } catch { /* optimistic */ }
   }, [selectedId]);
 
   const changePermissionMode = useCallback(async (next: 'ask' | 'auto' | 'unrestricted') => {
@@ -71,8 +72,8 @@ export function useEditorSessionSettings(selectedId: number | null, sessionData:
   return {
     describeImages,
     setDescribeImages,
-    unrestrictedOutput,
-    setUnrestrictedOutput: changeUnrestricted,
+    outputCapLevel,
+    setOutputCapLevel: changeOutputCapLevel,
     toolPermissionMode,
     setToolPermissionMode: changePermissionMode,
     fallbackProvider,

@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Crosshair, ExternalLink, MousePointerClick, PanelRightClose, Play, RotateCw, Wrench } from 'lucide-react';
+import { Bot, BoxSelect, Crosshair, ExternalLink, MousePointerClick, PanelRightClose, Play, RotateCw, Wrench } from 'lucide-react';
 import {
   isPreviewMessage,
   type ParentToPreviewMessage,
   type PreviewToParentMessage,
 } from '@mcp/services/sandbox/builder/protocol.js';
-import { setSelected, toggleSelected } from '../../builder/studio/studio-context-store.js';
+import { addPendingAttachment, addSelections, setSelected, toggleSelected } from '../../builder/studio/studio-context-store.js';
 import { SelectionChip } from '../../builder/studio/selection/SelectionChip.js';
+import { RegionShotChip } from '../../builder/studio/selection/RegionShotChip.js';
+import { apiCall } from '../../../lib/api-client.js';
 import { usePreviewProblems } from '../../builder/studio/problems/usePreviewProblems.js';
 import { useAutoFix } from '../../builder/studio/problems/useAutoFix.js';
 import { ProblemsBadge } from '../../builder/studio/problems/ProblemsBadge.js';
@@ -66,6 +68,7 @@ export function ProjectPreview({
   // Driven by the `coder:agent_preview` event from the coder stream handlers.
   const [agentPreview, setAgentPreview] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
+  const [regionMode, setRegionMode] = useState(false);
   const [device, setDevice] = useState<DeviceFrame>('desktop');
   const [reloadKey, setReloadKey] = useState(0);
   const { problems, add, clear, dismiss, errorCount } = usePreviewProblems();
@@ -95,12 +98,48 @@ export function ProjectPreview({
   }, [url]);
   const selectModeRef = useRef(selectMode);
   selectModeRef.current = selectMode;
+  const regionModeRef = useRef(regionMode);
+  regionModeRef.current = regionMode;
 
   const post = useCallback(
     (msg: ParentToPreviewMessage) => {
       if (origin) iframeRef.current?.contentWindow?.postMessage(msg, origin);
     },
     [origin],
+  );
+
+  // Region/marquee pick: cite every element inside the box AND attach a
+  // screenshot clipped to it. The inspector reports the box in the iframe's
+  // viewport coords; we offset by the iframe's on-screen position and ask the
+  // host to capture that rect of the dashboard window (the cross-origin iframe
+  // is composited in, so capturePage sees its pixels).
+  const handleRegionSelect = useCallback(
+    async (msg: Extract<PreviewToParentMessage, { type: 'mcp:region-select' }>) => {
+      if (msg.selections.length) {
+        addSelections(projectId, msg.selections.map((s) => ({ type: 'mcp:select', ...s })));
+      }
+      const f = iframeRef.current?.getBoundingClientRect();
+      if (!f || msg.rect.width < 1 || msg.rect.height < 1) return;
+      const rect = {
+        x: f.left + msg.rect.x,
+        y: f.top + msg.rect.y,
+        width: msg.rect.width,
+        height: msg.rect.height,
+      };
+      try {
+        const res = await apiCall<{ base64?: string }>('preview.captureRegion', rect);
+        if (res?.base64) {
+          addPendingAttachment(projectId, {
+            name: `region-${Date.now()}.png`,
+            mediaType: 'image/png',
+            base64: res.base64,
+          });
+        }
+      } catch {
+        /* capture unavailable (browser dev / no Electron) — refs still cite */
+      }
+    },
+    [projectId],
   );
 
   // Re-instrument this Builder project for element selection (rewrites the
@@ -140,21 +179,27 @@ export function ProjectPreview({
     function onMessage(e: MessageEvent) {
       if (e.origin !== origin || !isPreviewMessage(e.data)) return;
       const msg = e.data as PreviewToParentMessage;
-      if (msg.type === 'mcp:ready' && selectModeRef.current) post({ type: 'mcp:arm' });
+      if (msg.type === 'mcp:ready') {
+        if (regionModeRef.current) post({ type: 'mcp:arm-region' });
+        else if (selectModeRef.current) post({ type: 'mcp:arm' });
+      }
       else if (msg.type === 'mcp:select') {
         if (msg.additive) toggleSelected(projectId, msg);
         else setSelected(projectId, msg);
       }
+      else if (msg.type === 'mcp:region-select') void handleRegionSelect(msg);
       else if (msg.type === 'mcp:clear') setSelected(projectId, null);
       else if (msg.type === 'mcp:runtime-error' || msg.type === 'mcp:network' || msg.type === 'mcp:console') add(msg);
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [origin, projectId, add, post]);
+  }, [origin, projectId, add, post, handleRegionSelect]);
 
   useEffect(() => {
-    post({ type: selectMode ? 'mcp:arm' : 'mcp:disarm' });
-  }, [selectMode, reloadKey, post]);
+    if (regionMode) post({ type: 'mcp:arm-region' });
+    else if (selectMode) post({ type: 'mcp:arm' });
+    else post({ type: 'mcp:disarm' });
+  }, [selectMode, regionMode, reloadKey, post]);
 
   // Pop the preview out to a separate window. While popped out the in-project
   // iframe is UNMOUNTED (frees its renderer process) — only one preview
@@ -243,11 +288,18 @@ export function ProjectPreview({
         {selectionEnabled && (
           <>
             <button
-              onClick={() => setSelectMode((v) => !v)}
+              onClick={() => { setSelectMode((v) => !v); setRegionMode(false); }}
               className={`p-1.5 rounded-md ${selectMode ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40' : 'hover:bg-muted'}`}
               title={selectMode ? 'Selecting — click an element (Esc to cancel)' : 'Select an element to edit'}
             >
               <MousePointerClick className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => { setRegionMode((v) => !v); setSelectMode(false); }}
+              className={`p-1.5 rounded-md ${regionMode ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40' : 'hover:bg-muted'}`}
+              title={regionMode ? 'Region — drag a box to cite everything inside it + a screenshot (Esc to cancel)' : 'Select a region: drag a box to cite every element inside it and attach a screenshot'}
+            >
+              <BoxSelect className="h-3.5 w-3.5" />
             </button>
             <button
               onClick={repairSelection}
@@ -381,6 +433,7 @@ export function ProjectPreview({
       {(selectionEnabled || windowOpen) && (
         <div className="px-2 py-1 border-t empty:hidden">
           <SelectionChip sessionId={projectId} projectId={projectId} />
+          <RegionShotChip sessionId={projectId} />
         </div>
       )}
       {/* Two-way visual editing — stamped iframe only (loc write-back). */}

@@ -65,6 +65,24 @@ export function mountPreviewInspectIpc(service: PreviewWindowService): void {
     }
   });
 
+  // Region screenshot for the CDP preview window: clip Page.captureScreenshot to
+  // the marquee box (in the window's own viewport coords — no offset needed).
+  ipcMain.handle(
+    'api:previewInspect:captureRegion',
+    async (_e, input: { projectId: number; clip: { x: number; y: number; width: number; height: number } }) => {
+      try {
+        const res = (await service.invoke({
+          key: inspectKey(input.projectId),
+          method: 'screenshot',
+          args: { clip: input.clip },
+        })) as { base64?: string };
+        return ok({ base64: res?.base64 ?? null });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
   ipcMain.on('stream:api:previewInspect:events', (event: IpcMainEvent, msg: { requestId: string; payload: { projectId: number } }) => {
     const { requestId, payload } = msg;
     const { port1, port2 } = new MessageChannelMain();

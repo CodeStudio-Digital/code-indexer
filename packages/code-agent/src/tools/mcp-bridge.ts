@@ -9,6 +9,7 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { getOverlayHandler } from '@mcp/code-agent/overlay/overlay-handlers.js';
 import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
+import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
 
 /**
  * Default `max_tokens` injected by the bridge for verbose MCP tools when the
@@ -183,13 +184,15 @@ export class McpToolBridge {
           // the caller via a tiny synthetic prefix on the response when the
           // clamp actually kicks in. Default (no max_lines) goes to the
           // server-side default (400) — we only clamp when the caller
-          // explicitly asked for more than HARD_MAX. When the session has
-          // `unrestricted_tool_output` enabled, the ceiling is raised to
-          // UNRESTRICTED_READ_FILE_HARD_MAX (5 000 lines) instead of 800.
+          // explicitly asked for more than HARD_MAX. The ceiling scales with
+          // the session's tool-output cap LEVEL (READ_FILE_HARD_MAX=800 base →
+          // up to UNRESTRICTED_READ_FILE_HARD_MAX=5 000 lines at `max`, 20 000 at `ultra`).
           let clampNote = '';
-          const effectiveReadFileHardMax = toolCtx.unrestrictedToolOutput
-            ? UNRESTRICTED_READ_FILE_HARD_MAX
-            : READ_FILE_HARD_MAX;
+          const effectiveReadFileHardMax = capFor(
+            toolCtx.toolOutputCapLevel ?? 'economic',
+            READ_FILE_HARD_MAX,
+            UNRESTRICTED_READ_FILE_HARD_MAX,
+          );
           if (t.name === 'read_file') {
             const requested = typeof finalArgs.max_lines === 'number' ? finalArgs.max_lines : null;
             if (requested != null && requested > effectiveReadFileHardMax) {
@@ -294,13 +297,14 @@ export class McpToolBridge {
  * thousands of tokens into the conversation history. The marker is
  * deterministic so identical truncations preserve prefix-cache stability.
  *
- * When `ctx?.unrestrictedToolOutput` is true, the cap is raised to
- * `UNRESTRICTED_MCP_HARD_CAP` (≈1 MB) instead of `MCP_OUTPUT_HARD_CAP` (≈16k).
+ * The cap scales with the session's tool-output cap LEVEL via `capFor`:
+ * `MCP_OUTPUT_HARD_CAP` (≈200k) base, up to `UNRESTRICTED_MCP_HARD_CAP` (≈1 MB)
+ * at `max` and ≈4 MB at `ultra`.
  * Useful for sessions doing Unity work or large file reads where truncation
  * actively degrades the agent's quality.
  */
 function applyOutputCap(text: string, ctx?: ToolContext): string {
-  const cap = ctx?.unrestrictedToolOutput ? UNRESTRICTED_MCP_HARD_CAP : MCP_OUTPUT_HARD_CAP;
+  const cap = capFor(ctx?.toolOutputCapLevel ?? 'economic', MCP_OUTPUT_HARD_CAP, UNRESTRICTED_MCP_HARD_CAP);
   if (text.length <= cap) return text;
   return (
     text.slice(0, cap) +

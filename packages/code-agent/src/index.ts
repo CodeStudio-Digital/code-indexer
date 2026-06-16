@@ -7,6 +7,7 @@ import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { parseToolOutputCapLevel, levelFromLegacyBoolean } from '@mcp/code-agent/core/runner/output-caps.js';
 import { PermissionGate, normalizeToolPermissionMode } from '@mcp/code-agent/core/permission-gate.js';
 import { runDurableCompaction } from '@mcp/code-agent/core/runner/compaction/durable-compaction.js';
 import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
@@ -225,6 +226,40 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const project = db.getProject(session.project_id);
   if (!project) throw new Error(`Project ${session.project_id} not found`);
 
+  // Global (multi-project) session: the linked SECONDARY projects. The PRIMARY
+  // (`session.project_id`) stays the native cwd and keeps its normal single
+  // bridge; each secondary is additionally exposed as prefixed `mcp__<slug>__*`
+  // read tools (Seam B below). Empty for normal sessions AND for company runs
+  // (company gets its projects from `companyContext.orchestrator` instead), so
+  // this is completely inert for them. Sorted by project_id so the resulting
+  // tool array — a prompt-cache prefix — stays byte-stable across turns.
+  const linkedSecondaryProjects: { id: number; name: string; rootPath: string }[] =
+    (!opts.companyContext && session.is_global)
+      ? store
+          .getSessionProjects(session.id)
+          .filter((lp) => lp.project_id !== session.project_id)
+          .map((lp) => ({ id: lp.project_id, name: lp.name, rootPath: lp.root_path }))
+          .sort((a, b) => a.id - b.id)
+      : [];
+
+  // Deterministic project→slug shared by every prefixed-tool path AND the
+  // multi-root fs resolver. The tool array is a prompt-cache prefix, so this
+  // MUST be stable for a given project name.
+  const projectSlug = (name: string): string =>
+    name.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+
+  // Per-secondary-root overlays (reused by the read bridges below AND the write
+  // path) + the resolved root descriptors handed to the fs tools' multi-root
+  // resolver and the snapshot recorder. Empty for normal / company sessions, so
+  // every downstream consumer that branches on these stays inert for them.
+  const secondaryOverlays = new Map<number, SessionOverlay>();
+  const secondaryRoots = linkedSecondaryProjects.map((p) => {
+    const rootPath = resolvePath(p.rootPath);
+    const ov = new SessionOverlay(rootPath);
+    secondaryOverlays.set(p.id, ov);
+    return { projectId: p.id, name: p.name, slug: projectSlug(p.name), rootPath };
+  });
+
   // For google-oauth sessions, ensure a persistent CloudCode session ID exists.
   let cloudCodeSessionId: string | undefined;
   if (session.provider === 'google-oauth') {
@@ -372,7 +407,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(worktreeTools);
 
   // MCP bridges — Master gets N bridges (one per company project, prefixed tools),
-  // subordinates and regular sessions get a single bridge.
+  // subordinates and regular sessions get a single bridge. A GLOBAL session gets
+  // the regular single bridge for its PRIMARY project PLUS one prefixed bridge
+  // per linked secondary project (the block after the if/else below). `projectSlug`
+  // and `secondaryOverlays` are built in Seam A above.
   const bridge = new McpToolBridge();
   const extraBridges: McpToolBridge[] = [];
   let mcpBridgeOk = false;
@@ -384,7 +422,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       const projBridge = new McpToolBridge();
       try {
         await projBridge.connect();
-        const slug = proj.name.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+        const slug = projectSlug(proj.name);
         const projOverlay = new SessionOverlay(resolvePath(proj.rootPath));
         const mcpTools = await projBridge.listTools({ projectName: proj.name, overlay: projOverlay });
         // Rename: mcp__read_file → mcp__{slug}__read_file
@@ -413,6 +451,34 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       mcpBridgeOk = mcpTools.length > 0;
     } catch (e) {
       console.warn(`[coder] MCP bridge failed to connect: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Global (multi-project) session: ALSO expose each linked SECONDARY project as
+  // prefixed `mcp__<slug>__*` read tools, on top of the primary's native bridge
+  // above. `linkedSecondaryProjects` is empty for normal sessions and company
+  // runs, so this loop never executes for them (the regular path is unchanged).
+  // Reuses the exact master prefixing so the model's cross-project tool
+  // vocabulary (`mcp__<slug>__read_file`, etc.) is identical in both modes.
+  for (const proj of linkedSecondaryProjects) {
+    const projBridge = new McpToolBridge();
+    try {
+      await projBridge.connect();
+      const slug = projectSlug(proj.name);
+      // Reuse the same overlay the write path uses for this root, so a write
+      // and a subsequent MCP read in this project see consistent fresh content.
+      const projOverlay = secondaryOverlays.get(proj.id) ?? new SessionOverlay(resolvePath(proj.rootPath));
+      const mcpTools = await projBridge.listTools({ projectName: proj.name, overlay: projOverlay });
+      const prefixed = mcpTools.map((t) => ({
+        ...t,
+        name: `mcp__${slug}__${t.name.replace(/^mcp__/, '')}`,
+      }));
+      registry.registerAll(prefixed);
+      extraBridges.push(projBridge);
+      console.log(`[coder] Global session: ${prefixed.length} MCP tools for project ${proj.name} (prefix: mcp__${slug}__*)`);
+    } catch (e) {
+      console.warn(`[coder] MCP bridge for ${proj.name} failed: ${e instanceof Error ? e.message : String(e)}`);
+      await projBridge.close();
     }
   }
 
@@ -685,6 +751,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     sessionKind: 'coder',
     sessionId: session.id,
     projectRoot: workspace.rootPath,
+    projectId: workspace.projectId,
+    // Global session: writes under a linked secondary root are recorded against
+    // that root's project (correct diff/revert target). Empty for normal sessions.
+    secondaryRoots: secondaryRoots.map((r) => ({ projectId: r.projectId, rootPath: r.rootPath })),
     store: snapshotStore,
     getTurn: () => runnerRef?.turn ?? null,
     onRecorded: opts.onSnapshotRecorded,
@@ -701,6 +771,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       dbHandle: store.getDb(),
       sessionId: session.id,
       projectRoot: workspace.rootPath,
+      secondaryRoots: secondaryRoots.map((r) => ({ projectId: r.projectId, rootPath: r.rootPath })),
     }),
   );
 
@@ -719,9 +790,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const toolContext: ToolContext = {
     cwd: effectiveCwd,
     projectName: workspace.displayName,
+    // Global (multi-project) session: linked secondary roots the fs tools can
+    // target via `project: "<slug>"`, plus their overlays. Undefined for normal
+    // and company sessions, so the single-root path is unchanged for them.
+    roots: secondaryRoots.length > 0 ? secondaryRoots : undefined,
+    overlayByRoot: secondaryOverlays.size > 0 ? secondaryOverlays : undefined,
     overlay,
     toolOutputStore,
-    unrestrictedToolOutput: !!session.unrestricted_tool_output,
+    toolOutputCapLevel:
+      parseToolOutputCapLevel(session.tool_output_cap_level) ??
+      levelFromLegacyBoolean(session.unrestricted_tool_output),
     signal: opts.signal,
     // Persistence hooks for submit_plan — let the dashboard list plans
     // long after the live tool_use scrolled out of view.
@@ -1119,6 +1197,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     repoMap,
     agentLoopV2: agentLoopV2EnvFlag,
     agentId: effectiveAgentId ?? undefined,
+    // Plan-depth directive (only consumed in plan mode). Explicit opt wins
+    // (company/role), else the sticky session column (migration 151), else
+    // `normal`. Cache-stable axis above SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
+    planDepth:
+      opts.planDepth
+      ?? (session.plan_depth_override as 'simple' | 'normal' | 'complex' | null)
+      ?? 'normal',
     sessionDrive: !opts.companyContext,
     // "Images & vision" section is only rendered when the model can't see
     // images natively (or the composer forces the describe-images path).
@@ -1370,6 +1455,22 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         .map((raw) => (typeof raw === 'string' ? raw : String(raw)))
         .filter(Boolean);
       if (rawStrs.length === 0) return;
+      // Global session: an edit may target a linked secondary root (the tool's
+      // `project` slug). Resolve the target root + project id ONCE per call so
+      // the refresh re-indexes the RIGHT project, not always the primary.
+      // `secondaryRoots` is empty for normal sessions → always the primary.
+      const reqProj =
+        typeof ctx.toolArgs.project === 'string'
+          ? ctx.toolArgs.project.trim()
+          : typeof ctx.toolArgs.project_name === 'string'
+            ? ctx.toolArgs.project_name.trim()
+            : '';
+      const target =
+        reqProj && reqProj !== workspace.displayName
+          ? secondaryRoots.find((r) => r.slug === reqProj || r.name === reqProj)
+          : undefined;
+      const idxRoot = target?.rootPath ?? toolContext.cwd;
+      const idxProjectId = target?.projectId ?? project.id;
       // Normalize to the same shape the scanner stores in `files.path`:
       // forward slashes, no leading `./`, no trailing slash. Without this,
       // `db.getFile(projectId, relPath)` misses on Windows (backslashes) or
@@ -1385,9 +1486,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         void (async () => {
           try {
             const indexFileNow = await loadIncrementalIndexer();
-            const abs = resolvePath(toolContext.cwd, relPath);
+            const abs = resolvePath(idxRoot, relPath);
             const content = await (toolContext.ports?.fs ?? defaultLocalFilesystemPort()).readFile(abs);
-            await indexFileNow(db, project.id, relPath, content);
+            await indexFileNow(db, idxProjectId, relPath, content);
           } catch {
             // best-effort — never crash on incremental refresh failures
           }
@@ -1613,10 +1714,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // the master/role config value via opts; single sessions fall back to the
     // sticky `coder_sessions.reasoning_effort_override` column (migration 149).
     reasoningEffort: opts.reasoningEffort ?? session.reasoning_effort_override ?? undefined,
-    // Per-session unrestricted-tool-output toggle (migration 078). Lifts the
-    // per-block PUSH_TIME_CAP to the high safety ceiling so verbose MCP tools
-    // (Unity, large file reads, batched code_exec) arrive intact.
-    unrestrictedToolOutput: !!session.unrestricted_tool_output,
+    // Per-session tool-output cap LEVEL (migration 153; falls back to the legacy
+    // migration-078 boolean → 'max'). Scales the per-block PUSH_TIME_CAP and the
+    // MCP/code_exec/read_file caps so verbose tools (Unity, large reads, batched
+    // code_exec) arrive intact.
+    toolOutputCapLevel:
+      parseToolOutputCapLevel(session.tool_output_cap_level) ??
+      levelFromLegacyBoolean(session.unrestricted_tool_output),
     // Tool permission mode (migration 131). Company runs force 'unrestricted'
     // in V1 — the company board has no approval UI yet, so a paused
     // subordinate would hang invisibly. Single sessions read the column

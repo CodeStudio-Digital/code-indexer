@@ -2,7 +2,22 @@ import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 
 export interface CoderSession {
   id: number;
+  /**
+   * The PRIMARY project (the native cwd). Always NOT NULL. For a global session
+   * (`is_global`), additional linked projects live in `coder_session_projects`
+   * and are exposed to the agent as `mcp__<slug>__*` read tools + writable roots;
+   * the primary stays the default root. For a normal session this is the only
+   * project.
+   */
   project_id: number;
+  /**
+   * Global (multi-project) session flag (migration 152). When true the session
+   * is NOT tied to a single project: it lists under the "Sessões Globais" menu
+   * (not under any project) and the runner exposes every linked project's tools.
+   * Defaults to false — every pre-existing session is non-global, so the
+   * per-project list and the single-root tool layer behave exactly as before.
+   */
+  is_global: boolean;
   title: string;
   provider: string;
   model: string;
@@ -65,6 +80,16 @@ export interface CoderSession {
    */
   reasoning_effort_override: string | null;
   /**
+   * Per-session sticky plan-depth override (migration 151) for the `plan`
+   * agent: `simple` | `normal` | `complex`. Drives how deeply the planning
+   * agent investigates and the target size of the produced plan (a ceiling,
+   * not a quota — a trivial task gets a small plan even in `complex`). NULL →
+   * `normal`. Unlike `reasoning_effort_override`, this feeds the SYSTEM PROMPT
+   * (cache-stable axis), not a provider sampling param. Only meaningful while
+   * the active agent is `plan`.
+   */
+  plan_depth_override: string | null;
+  /**
    * Per-session toggle that lifts the per-tool-call truncation caps when true.
    * When null/false, the runner uses the production defaults
    * (PUSH_TIME_CAP=24k, MCP_OUTPUT_HARD_CAP=16k, code_exec MAX_OUTPUT_BYTES=50k).
@@ -76,6 +101,17 @@ export interface CoderSession {
    * batched code_exec scripts) where truncation hurts the agent's quality.
    */
   unrestricted_tool_output: boolean | null;
+  /**
+   * Per-session sticky tool-output cap LEVEL (migration 153): economic | medium
+   * | high | extra | max | ultra. Supersedes the legacy binary
+   * `unrestricted_tool_output` — scales the per-tool-call truncation caps
+   * proportionally (economic = 24k base on the main runner → ultra ≈ 4 MB).
+   * When NULL, the runner derives the level from `unrestricted_tool_output`
+   * (1 → 'max', else 'economic'). Stored as TEXT; validated at the write path
+   * (PATCH `/api/coder/sessions/:id/tool-output-cap-level`). Surfaced as the
+   * cap selector in the Composer.
+   */
+  tool_output_cap_level: import('../core/runner/output-caps.js').ToolOutputCapLevel | null;
   /**
    * Per-session tool permission mode (migration 131). Drives the
    * PermissionGate: 'ask' pauses every write/execute/admin tool for user
@@ -123,6 +159,40 @@ export interface CoderSession {
 /** Recent session enriched with project name for the global sidebar list. */
 export interface RecentCoderSession extends CoderSession {
   project_name: string;
+}
+
+/**
+ * One `coder_session_projects` junction row (migration 152). Links a global
+ * session to a project. The primary project is stored here too with
+ * `is_primary = 1`, so the runner reads a single table to discover every root.
+ */
+export interface CoderSessionProject {
+  coder_session_id: number;
+  project_id: number;
+  label: string | null;
+  is_primary: number;
+}
+
+/**
+ * A linked project enriched with its name + root, for the API payload, the
+ * "linked projects" chip, and the runner's multi-root assembly. Resolved by
+ * joining `coder_session_projects` against `projects`.
+ */
+export interface LinkedProject {
+  project_id: number;
+  name: string;
+  root_path: string;
+  is_primary: boolean;
+  label: string | null;
+}
+
+/**
+ * A global session for the "Sessões Globais" sidebar: the primary project name
+ * plus how many projects are linked, so the list renders "N projetos" without
+ * an N+1.
+ */
+export interface GlobalCoderSession extends RecentCoderSession {
+  linked_count: number;
 }
 
 /** Per-project folder used to organize chat sessions in the sidebar. */

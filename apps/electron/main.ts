@@ -30,6 +30,7 @@ import { startOptionalDevHttp } from './src/dev-http.js';
 import { OAUTH_LOOPBACK_PORT, startOAuthLoopback, stopOAuthLoopback } from './src/oauth-loopback.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
 import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
+import { mountPreviewCaptureIpc } from './src/preview-capture-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
 import { APP_USER_MODEL_ID, resolveAppIconPath } from './src/app-icon.js';
 import { createSplashWindow, whenSplashPainted, updateSplashStatus, closeSplash } from './src/splash-window.js';
@@ -180,6 +181,9 @@ async function bootstrap() {
   // Dashboard "Inspect": reuse the SAME service so universal element-selection
   // windows are managed alongside the agent's preview windows.
   mountPreviewInspectIpc(previewService);
+  // Region screenshot of the inline preview iframe (captures the dashboard
+  // window's painted pixels clipped to the marquee box).
+  mountPreviewCaptureIpc();
   app.on('before-quit', () => previewService.closeAll());
   app.on('before-quit', () => stopOAuthLoopback());
 

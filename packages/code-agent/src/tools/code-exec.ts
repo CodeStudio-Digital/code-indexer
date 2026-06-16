@@ -31,6 +31,7 @@ import { evaluateToolInvocation, findScopeViolations, type PolicyContext } from 
 import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import { resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
+import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
 import { buildCodeExecFailureHint, wrapToolsBinding } from '@mcp/code-agent/tools/code-exec-hints.js';
 import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 
@@ -171,12 +172,14 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       const requested = typeof args.timeout_ms === 'number' ? args.timeout_ms : DEFAULT_TIMEOUT_MS;
       const timeout = Math.min(MAX_TIMEOUT_MS, Math.max(500, requested));
 
-      // Per-session "unrestricted tool output" toggle. Lifts the script's
-      // output cap from 50 KB to ~1 MB so batched Unity / MCP work isn't
-      // truncated mid-flight. Auto-compaction in the runner still runs.
-      const effectiveMaxOutput = ctx.unrestrictedToolOutput
-        ? UNRESTRICTED_MAX_OUTPUT_BYTES
-        : MAX_OUTPUT_BYTES;
+      // Per-session tool-output cap LEVEL. Scales the script's output cap from
+      // the 50 KB base (economic) up to ~1 MB (max) / ~4 MB (ultra) so batched
+      // Unity / MCP work isn't truncated mid-flight. Auto-compaction still runs.
+      const effectiveMaxOutput = capFor(
+        ctx.toolOutputCapLevel ?? 'economic',
+        MAX_OUTPUT_BYTES,
+        UNRESTRICTED_MAX_OUTPUT_BYTES,
+      );
 
       // Make sure the host doesn't crash if the model's script fires a
       // tool call without awaiting it (the proxy throws into a Promise

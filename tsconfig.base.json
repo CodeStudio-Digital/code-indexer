@@ -53,6 +53,16 @@
       "@mcp/plugin-market-client/*": ["packages/plugin-market-client/src/*"],
       "@mcp/podman-core": ["packages/podman-core/src/index.ts"],
       "@mcp/podman-core/*": ["packages/podman-core/src/*"],
+      "@cloudstudio/cloud-kernel": ["packages/cloud-kernel/src/index.ts"],
+      "@cloudstudio/cloud-kernel/*": ["packages/cloud-kernel/src/*"],
+      "@cloudstudio/cloud-identity": ["packages/cloud-identity/src/index.ts"],
+      "@cloudstudio/cloud-identity/*": ["packages/cloud-identity/src/*"],
+      "@cloudstudio/cloud-billing": ["packages/cloud-billing/src/index.ts"],
+      "@cloudstudio/cloud-billing/*": ["packages/cloud-billing/src/*"],
+      "@cloudstudio/cloud-feedback": ["packages/cloud-feedback/src/index.ts"],
+      "@cloudstudio/cloud-feedback/*": ["packages/cloud-feedback/src/*"],
+      "@cloudstudio/cloud-sharing": ["packages/cloud-sharing/src/index.ts"],
+      "@cloudstudio/cloud-sharing/*": ["packages/cloud-sharing/src/*"],
       "@apps/*": ["apps/*"]
     }
   }

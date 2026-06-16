@@ -17,7 +17,7 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Gauge, Network, Repeat, Send, Settings2, Square, Thermometer } from 'lucide-react';
+import { Brain, Gauge, Layers, Network, Repeat, Send, Settings2, Square, Thermometer } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
@@ -28,6 +28,7 @@ import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
+import type { OutputCapLevel } from './output-cap-levels.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
 
@@ -57,8 +58,12 @@ interface RailComposerBarProps {
   reasoningEffort?: string | null;
   setReasoningEffort?: (v: string | null) => void;
   reasoningLevels?: string[];
-  unrestrictedOutput: boolean;
-  setUnrestrictedOutput?: (v: boolean) => void;
+  /** Per-session sticky plan-depth (migration 151): simple|normal|complex.
+   *  Selector renders only while the `plan` agent is active. */
+  planDepth?: string | null;
+  setPlanDepth?: (v: string | null) => void;
+  outputCapLevel: OutputCapLevel;
+  setOutputCapLevel?: (v: OutputCapLevel) => void;
   fallbackProvider: string | null;
   fallbackModel: string | null;
   onFallbackChange: (provider: string | null, model: string | null) => void;
@@ -125,8 +130,8 @@ export function RailComposerBar(props: RailComposerBarProps) {
         setThinking={props.setThinking}
         describeImages={props.describeImages}
         setDescribeImages={props.setDescribeImages}
-        unrestrictedOutput={props.unrestrictedOutput}
-        setUnrestrictedOutput={props.setUnrestrictedOutput}
+        outputCapLevel={props.outputCapLevel}
+        setOutputCapLevel={props.setOutputCapLevel}
         toolPermissionMode={props.toolPermissionMode}
         setToolPermissionMode={props.setToolPermissionMode}
         sessionId={props.sessionId}
@@ -262,6 +267,24 @@ export function RailComposerBar(props: RailComposerBarProps) {
                         {lv}
                       </option>
                     ))}
+                  </select>
+                </div>
+              </div>
+            )}
+            {props.agent === 'plan' && props.setPlanDepth && (
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground">{t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}</label>
+                <div className="flex items-center gap-1.5">
+                  <Layers className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <select
+                    aria-label={t('chat:toolbar.planDepth', { defaultValue: 'Plan depth' })}
+                    className="h-7 flex-1 rounded border bg-background px-1.5 text-xs"
+                    value={props.planDepth ?? 'normal'}
+                    onChange={(e) => props.setPlanDepth?.(e.target.value)}
+                  >
+                    <option value="simple">{t('chat:toolbar.planDepthSimple', { defaultValue: 'Simple' })}</option>
+                    <option value="normal">{t('chat:toolbar.planDepthNormal', { defaultValue: 'Normal' })}</option>
+                    <option value="complex">{t('chat:toolbar.planDepthComplex', { defaultValue: 'Complex' })}</option>
                   </select>
                 </div>
               </div>

@@ -85,7 +85,15 @@ export class SessionSnapshotService {
 
   constructor(
     private readonly store: SessionFileSnapshotStore,
-    private readonly resolveProjectRoot: (kind: SessionKind, sessionId: number) => string | null,
+    // `projectId` (migration 154) lets a GLOBAL session's baselines resolve to
+    // the right root (a baseline may belong to a linked secondary project). When
+    // null the resolver falls back to the session's primary project, so normal
+    // sessions are unaffected.
+    private readonly resolveProjectRoot: (
+      kind: SessionKind,
+      sessionId: number,
+      projectId?: number | null,
+    ) => string | null,
   ) {}
 
   /**
@@ -99,10 +107,12 @@ export class SessionSnapshotService {
     sessionId: number,
     opts: { includeClosed?: boolean } = {},
   ): Promise<FileSummary[]> {
-    const projectRoot = this.resolveProjectRoot(kind, sessionId);
     const baselines = this.store.listBaselines(kind, sessionId, opts);
     const summaries: FileSummary[] = [];
     for (const b of baselines) {
+      // Resolve per baseline: a global session's files can live in different
+      // roots, so the diff must read each from its own project.
+      const projectRoot = this.resolveProjectRoot(kind, sessionId, b.project_id);
       let pendingHunks = 0;
       let hunkCount = 0;
       let addedLines = 0;
@@ -153,7 +163,7 @@ export class SessionSnapshotService {
   ): Promise<FileDiff | null> {
     const b = this.store.getBaselineById(baselineId);
     if (!b) return null;
-    const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id);
+    const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id, b.project_id);
     if (!projectRoot) return null;
 
     const decisions = new Map(
@@ -227,7 +237,7 @@ export class SessionSnapshotService {
       if (b.oversized)
         return { ok: false, closed: false, reason: 'oversized — only file-level revert available' };
 
-      const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id);
+      const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id, b.project_id);
       if (!projectRoot) return { ok: false, closed: false, reason: 'no-project-root' };
 
       const abs = absoluteFor(projectRoot, b.file_path);
@@ -258,7 +268,7 @@ export class SessionSnapshotService {
     return this.withMutex(baselineId, async () => {
       const b = this.store.getBaselineById(baselineId);
       if (!b) return { ok: false, reason: 'not-found' };
-      const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id);
+      const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id, b.project_id);
       if (!projectRoot) return { ok: false, reason: 'no-project-root' };
 
       const abs = absoluteFor(projectRoot, b.file_path);
@@ -298,7 +308,7 @@ export class SessionSnapshotService {
   // ─── Internals ───────────────────────────────────────────────────────
 
   private async maybeCloseIfNoPending(b: BaselineRow): Promise<boolean> {
-    const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id);
+    const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id, b.project_id);
     if (!projectRoot) return false;
     const abs = absoluteFor(projectRoot, b.file_path);
     const current = await readCurrentContent(abs);

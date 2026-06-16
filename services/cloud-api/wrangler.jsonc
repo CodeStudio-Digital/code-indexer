@@ -1,0 +1,43 @@
+{
+  // CodeStudio Cloud API — accounts / auth / billing / feedback / sharing.
+  // Resources live on the CodeStudio Cloudflare account
+  // (0748c7a37faefcdbd0b2ab71580791cd), region ENAM. Bindings are added
+  // INCREMENTALLY per plan phase so `wrangler dev` stays green at each step:
+  //   Phase 0 (now): D1 + KV + R2 + /v1/health
+  //   Phase 1: + Durable Object (LoginThrottleDO), secrets (ACCESS_SIGNING_KEY)
+  //   Phase 2: + send_email binding EMAIL (+ allowed_sender_addresses)
+  //   Phase 3: + Stripe secrets;  Phase 6: + ratelimit bindings
+  "name": "codestudio-cloud-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-12-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "0748c7a37faefcdbd0b2ab71580791cd",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "codestudio-cloud",
+      "database_id": "5b0b7069-d453-4e07-ab2c-906835edf6c4",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    { "binding": "CACHE", "id": "5a33b2b91d004648b0a72a70d69bf1a4" }
+  ],
+  "r2_buckets": [
+    { "binding": "ASSETS", "bucket_name": "codestudio-cloud-assets" }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "LOGIN_THROTTLE", "class_name": "LoginThrottleDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LoginThrottleDO"] }],
+  // Email Sending: enable once the sender domain is onboarded (Compute → Email
+  // Service → Email Sending) — uncomment and set EMAIL_FROM to that domain.
+  //   "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@yourdomain"] }],
+  "vars": {
+    "ENVIRONMENT": "development",
+    "APP_BASE_URL": "https://app.codestudio.dev",
+    "SHARE_BASE_URL": "https://share.codestudio.dev",
+    "EMAIL_FROM": "noreply@codestudio.dev"
+  }
+}

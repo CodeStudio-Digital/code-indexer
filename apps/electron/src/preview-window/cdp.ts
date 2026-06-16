@@ -76,6 +76,7 @@ export class PreviewWindow {
    */
   async armInspect(source: string): Promise<void> {
     await this.send('Runtime.addBinding', { name: '__mcpSelect' }).catch(() => undefined);
+    await this.send('Runtime.addBinding', { name: '__mcpRegionSelect' }).catch(() => undefined);
     await this.send('Runtime.addBinding', { name: '__mcpControl' }).catch(() => undefined);
     if (!this.inspectArmed) {
       await this.send('Page.addScriptToEvaluateOnNewDocument', { source }).catch(() => undefined);
@@ -195,8 +196,10 @@ export class PreviewWindow {
       void this.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => undefined);
     } else if (method === 'Runtime.bindingCalled') {
       const payload = typeof p.payload === 'string' ? p.payload : '';
-      if (p.name === '__mcpSelect') {
-        // The injected universal inspector calls window.__mcpSelect(json) on click.
+      if (p.name === '__mcpSelect' || p.name === '__mcpRegionSelect') {
+        // window.__mcpSelect(json) on click; window.__mcpRegionSelect(json) on a
+        // marquee drag. Both fan out to the same selection listeners — the payload
+        // self-identifies via `type` ('mcp:select' | 'mcp:region-select').
         let parsed: unknown = null;
         try { parsed = JSON.parse(payload); } catch { /* malformed */ }
         if (parsed) for (const cb of Array.from(this.selectListeners)) {

@@ -56,6 +56,7 @@ import {
 import { WorkspaceTopBar } from './WorkspaceTopBar.js';
 import { EditorPane } from './EditorPane.js';
 import { BottomPanel } from './BottomPanel.js';
+import { ErrorBoundary } from '../../components/ErrorBoundary.js';
 import { ActivityRail, type RailItem } from './jetbrains/ActivityRail.js';
 import { StatusBar } from './jetbrains/StatusBar.js';
 import { CommandPalette, type Command } from './jetbrains/CommandPalette.js';
@@ -351,12 +352,14 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
                   maxSize={40}
                   onResize={(size) => layout.setLeftSize(pxOf(size))}
                 >
-                  <LeftToolPanel
-                    activeFilePath={activeFilePath}
-                    onOpen={handleOpen}
-                    onClose={() => layout.setActiveLeft(null)}
-                    projectId={projectId}
-                  />
+                  <ErrorBoundary label="panel" resetKey={layout.activeLeft}>
+                    <LeftToolPanel
+                      activeFilePath={activeFilePath}
+                      onOpen={handleOpen}
+                      onClose={() => layout.setActiveLeft(null)}
+                      projectId={projectId}
+                    />
+                  </ErrorBoundary>
                 </Panel>
                 <PanelResizeHandle className="w-px bg-border hover:bg-primary/40 transition-colors" />
               </>
@@ -364,7 +367,9 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
             <Panel minSize={30}>
               <PanelGroup direction="vertical" autoSaveId="mcp-workspace-vertical-v2">
                 <Panel minSize={30}>
-                  <EditorPane />
+                  <ErrorBoundary label="editor" resetKey={activeFilePath}>
+                    <EditorPane />
+                  </ErrorBoundary>
                 </Panel>
                 {layout.activeBottom && (
                   <>
@@ -395,12 +400,14 @@ export function Workspace({ projectId, projectName, initialSessionId, onExit }: 
                   maxSize={50}
                   onResize={(size) => layout.setRightSize(pxOf(size))}
                 >
-                  <RightToolPanel
-                    projectId={projectId}
-                    projectName={projectName}
-                    initialSessionId={activeSessionId}
-                    onClose={() => layout.setActiveRight(null)}
-                  />
+                  <ErrorBoundary label="panel" resetKey={layout.activeRight}>
+                    <RightToolPanel
+                      projectId={projectId}
+                      projectName={projectName}
+                      initialSessionId={activeSessionId}
+                      onClose={() => layout.setActiveRight(null)}
+                    />
+                  </ErrorBoundary>
                 </Panel>
               </>
             )}

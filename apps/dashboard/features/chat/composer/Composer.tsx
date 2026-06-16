@@ -8,9 +8,11 @@ import { fileToAttachment } from '../utils.js';
 import { ComposerToolbar } from './ComposerToolbar.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
 import { RailComposerBar } from './RailComposerBar.js';
+import type { OutputCapLevel } from './output-cap-levels.js';
 import { useFileDrop } from './useFileDrop.js';
 import { DropOverlay } from './DropOverlay.js';
 import { useMarkdownShortcuts } from './useMarkdownShortcuts.js';
+import { useComposerDraft } from './useComposerDraft.js';
 import type { QueueMode } from './useMessageQueue.js';
 
 interface SlashCommand {
@@ -88,13 +90,20 @@ interface ComposerProps {
   /** Discrete effort levels the selected model supports. Empty → hide selector. */
   reasoningLevels?: string[];
   /**
+   * Per-session sticky plan-depth (migration 151): 'simple' | 'normal' |
+   * 'complex'. `null` → 'normal'. The selector is rendered only when the
+   * `plan` agent is active.
+   */
+  planDepth?: string | null;
+  setPlanDepth?: (v: string | null) => void;
+  /**
    * Per-session "unrestricted tool output" toggle (migration 078). When true,
    * the runner / mcp-bridge / code_exec lift their per-tool-call truncation
    * caps to a high safety ceiling (≈1 MB). Useful for Unity / large file
    * reads. Auto-compaction still runs.
    */
-  unrestrictedOutput?: boolean;
-  setUnrestrictedOutput?: (v: boolean) => void;
+  outputCapLevel?: OutputCapLevel;
+  setOutputCapLevel?: (v: OutputCapLevel) => void;
   /**
    * Per-session tool permission mode (migration 131) — PermissionGate.
    * 'ask' pauses every write/execute/admin tool for approval, 'auto'
@@ -142,6 +151,12 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
     const { streaming } = props;
     const [input, setInput] = useState('');
     const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
+    // Per-session draft persistence: keep the in-progress text + attachments
+    // alive across navigation (this component unmounts on route change). Keyed
+    // in the `coder:` namespace — company sessions use `company:` to avoid id
+    // collisions. `clearDraft` is called synchronously at every send site.
+    const draftKey = props.sessionId != null ? `coder:${props.sessionId}` : null;
+    const { clearDraft } = useComposerDraft({ draftKey, input, setInput, attachments, setAttachments });
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     // Keep only the smart keyboard behaviors (Tab indent + Enter list
     // continuation) — the visual markdown formatting toolbar was removed
@@ -249,6 +264,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
         const pid = props.selectedPipelineId;
         setInput('');
         setAttachments([]);
+        clearDraft();
         props.onClearPicks?.();
         props.onClearSkillPicks?.();
         void props.onRunPipeline(pid, text);
@@ -266,6 +282,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
         if (match) {
           setInput('');
           setAttachments([]);
+          clearDraft();
           props.onClearPicks?.();
           props.onClearSkillPicks?.();
           const merged = [match.id, ...skillIds.filter((s) => s !== match.id)];
@@ -280,10 +297,11 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
       const atts = attachments;
       setInput('');
       setAttachments([]);
+      clearDraft();
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onSend(finalText, atts, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, attachments, slashCommands, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline, confirm]);
+    }, [input, attachments, slashCommands, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline, confirm, clearDraft]);
 
     // Enqueue the composed message while the agent is streaming. Same
     // file_refs prefixing + clears as `handleSend`, but the delivery timing
@@ -304,6 +322,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
         const match = slashCommands.find((c) => c.command.toLowerCase() === cmd.toLowerCase());
         if (match) {
           setInput('');
+          clearDraft();
           props.onClearPicks?.();
           props.onClearSkillPicks?.();
           const merged = [match.id, ...skillIds.filter((s) => s !== match.id)];
@@ -315,10 +334,11 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
         ? `<file_refs>\n${picks.map((p) => `- ${p}`).join('\n')}\n</file_refs>\n\n${text}`
         : text;
       setInput('');
+      clearDraft();
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onQueue(finalText, mode, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, slashCommands, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue]);
+    }, [input, slashCommands, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue, clearDraft]);
 
     const filePicks = props.filePicks ?? [];
     const PICKS_VISIBLE = 3;
@@ -543,8 +563,10 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
               reasoningEffort={props.reasoningEffort ?? null}
               setReasoningEffort={props.setReasoningEffort}
               reasoningLevels={props.reasoningLevels ?? []}
-              unrestrictedOutput={props.unrestrictedOutput ?? false}
-              setUnrestrictedOutput={props.setUnrestrictedOutput}
+              planDepth={props.planDepth ?? null}
+              setPlanDepth={props.setPlanDepth}
+              outputCapLevel={props.outputCapLevel ?? 'economic'}
+              setOutputCapLevel={props.setOutputCapLevel}
               fallbackProvider={props.fallbackProvider ?? null}
               fallbackModel={props.fallbackModel ?? null}
               onFallbackChange={props.onFallbackChange ?? (() => {})}
@@ -572,7 +594,7 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             above the busier bottom row leaves the pickers (agent / provider /
             model) and Send button focused.
           */}
-          <div className="flex items-center justify-end gap-0.5 px-2 py-1 border-t border-dashed border-border/40">
+          <div className="flex items-center justify-start gap-0.5 px-2 py-1 border-t border-dashed border-border/40">
             <ComposerActionIcons
               streaming={streaming}
               handleFiles={handleFiles}
@@ -580,8 +602,8 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
               setThinking={props.setThinking}
               describeImages={props.describeImages}
               setDescribeImages={props.setDescribeImages}
-              unrestrictedOutput={props.unrestrictedOutput ?? false}
-              setUnrestrictedOutput={props.setUnrestrictedOutput}
+              outputCapLevel={props.outputCapLevel ?? 'economic'}
+              setOutputCapLevel={props.setOutputCapLevel}
               toolPermissionMode={props.toolPermissionMode}
               setToolPermissionMode={props.setToolPermissionMode}
               sessionId={props.sessionId}
@@ -611,8 +633,10 @@ export const Composer = React.forwardRef<ComposerHandle, ComposerProps>(
             reasoningEffort={props.reasoningEffort ?? null}
             setReasoningEffort={props.setReasoningEffort}
             reasoningLevels={props.reasoningLevels ?? []}
-            unrestrictedOutput={props.unrestrictedOutput ?? false}
-            setUnrestrictedOutput={props.setUnrestrictedOutput}
+            planDepth={props.planDepth ?? null}
+            setPlanDepth={props.setPlanDepth}
+            outputCapLevel={props.outputCapLevel ?? 'economic'}
+            setOutputCapLevel={props.setOutputCapLevel}
             fallbackProvider={props.fallbackProvider ?? null}
             fallbackModel={props.fallbackModel ?? null}
             onFallbackChange={props.onFallbackChange ?? (() => {})}

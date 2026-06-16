@@ -6,6 +6,7 @@
  */
 import { useEffect } from 'react';
 import type { PreviewToParentMessage } from '@mcp/services/sandbox/builder/protocol.js';
+import type { AgentAttachment } from '../../../hooks/useAgentStream.js';
 
 export type SelectedElement = Extract<PreviewToParentMessage, { type: 'mcp:select' }>;
 export type ProblemMessage = Extract<
@@ -44,6 +45,22 @@ export function getSelected(sid: number): SelectedElement | null {
 /** Plain click / programmatic set: replace the whole set with one element (or clear with null). */
 export function setSelected(sid: number, sel: SelectedElement | null): void {
   selectedBySession.set(sid, sel ? [sel] : []);
+  notify(sid);
+}
+
+/** Region/marquee pick: append several elements at once, deduped by key. */
+export function addSelections(sid: number, sels: SelectedElement[]): void {
+  if (!sels.length) return;
+  const list = getSelections(sid);
+  const seen = new Set(list.map(selectionKey));
+  const next = list.slice();
+  for (const s of sels) {
+    const k = selectionKey(s);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    next.push(s);
+  }
+  selectedBySession.set(sid, next);
   notify(sid);
 }
 
@@ -114,6 +131,44 @@ export function formatSelectedElement(sel: SelectedElement): string {
     .filter(Boolean)
     .join(' ');
   return `<selected-element ${attrs}>\n${sel.text}\n</selected-element>\n`;
+}
+
+// ── Pending attachments (preview → composer) ────────────────────────
+// Region-select captures a screenshot of the drawn box; it's stashed here and
+// drained by the chat send path (consumePendingAttachments at send time),
+// mirroring how selections are drained by consumeSelectionPrefix. Keeps the
+// preview pane decoupled from the composer's internal attachment state.
+const pendingAttBySession = new Map<number, AgentAttachment[]>();
+const attListeners = new Map<number, Set<() => void>>();
+function notifyAtt(sid: number): void {
+  attListeners.get(sid)?.forEach((cb) => cb());
+}
+
+export function getPendingAttachments(sid: number): AgentAttachment[] {
+  return pendingAttBySession.get(sid) ?? [];
+}
+export function addPendingAttachment(sid: number, att: AgentAttachment): void {
+  pendingAttBySession.set(sid, [...getPendingAttachments(sid), att]);
+  notifyAtt(sid);
+}
+export function removePendingAttachment(sid: number, index: number): void {
+  pendingAttBySession.set(sid, getPendingAttachments(sid).filter((_, i) => i !== index));
+  notifyAtt(sid);
+}
+/** Return all pending attachments and CLEAR them (called at send/enqueue). */
+export function consumePendingAttachments(sid: number): AgentAttachment[] {
+  const list = getPendingAttachments(sid);
+  if (list.length) {
+    pendingAttBySession.set(sid, []);
+    notifyAtt(sid);
+  }
+  return list;
+}
+export function subscribePendingAttachments(sid: number, cb: () => void): () => void {
+  let set = attListeners.get(sid);
+  if (!set) attListeners.set(sid, (set = new Set()));
+  set.add(cb);
+  return () => set!.delete(cb);
 }
 
 /** Format a captured problem as a message block for the builder agent. */

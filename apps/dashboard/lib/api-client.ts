@@ -223,6 +223,10 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       if (ip!.type) qp.set('type', String(ip!.type));
       return { url: `/api/projects/${ip!.projectId}/search?${qp.toString()}`, init: {} };
     }
+    case 'search.grep':
+      return { url: `/api/projects/${ip!.projectId}/search/grep`, init: json(ip!) };
+    case 'search.replace':
+      return { url: `/api/projects/${ip!.projectId}/search/replace`, init: json(ip!) };
     case 'search.symbols':
       return { url: `/api/projects/${ip!.projectId}/search/symbols?q=${encodeURIComponent(String(ip!.query))}&limit=${Number(ip!.limit ?? 50)}`, init: {} };
     case 'search.text':

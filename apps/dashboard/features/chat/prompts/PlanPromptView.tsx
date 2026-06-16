@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ClipboardList, Copy, X } from 'lucide-react';
+import { Check, ClipboardList, Copy, Pencil, X } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { copyText } from '../../../lib/clipboard.js';
@@ -9,7 +9,11 @@ import { Markdown } from '../messages/Markdown.js';
 
 interface PlanPromptViewProps {
   plan: { id: string; plan: string; resolved?: 'approved' | 'rejected'; kind?: 'informational' | 'mutating' };
-  onResponse: (approved: boolean, feedback?: string) => Promise<void>;
+  /**
+   * Three verdicts: Accept (`approved`), Revise (`approved:false` — keep
+   * planning with feedback), Reject (`aborted:true` — end the planning run).
+   */
+  onResponse: (verdict: { approved: boolean; aborted?: boolean; feedback?: string }) => Promise<void>;
 }
 
 export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
@@ -61,26 +65,38 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
             rows={2}
             className="mb-2 text-xs"
           />
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant="success"
               onClick={async () => {
-                await onResponse(true, feedback);
+                await onResponse({ approved: true, feedback });
                 setResolved('approved');
               }}
             >
               <Check className="h-3.5 w-3.5" /> {t('common:actions.approve')}
             </Button>
+            {/* Revise — keep planning with feedback (agent re-submits). */}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={async () => {
+                await onResponse({ approved: false, feedback });
+                setResolved('revise');
+              }}
+            >
+              <Pencil className="h-3.5 w-3.5" /> {t('chat:plan.revise')}
+            </Button>
+            {/* Reject — end the planning run (aborted). */}
             <Button
               size="sm"
               variant="destructive"
               onClick={async () => {
-                await onResponse(false, feedback);
-                setResolved('rejected');
+                await onResponse({ approved: false, aborted: true, feedback });
+                setResolved('reject');
               }}
             >
-              <X className="h-3.5 w-3.5" /> {t('common:actions.reject')}
+              <X className="h-3.5 w-3.5" /> {t('chat:plan.reject')}
             </Button>
           </div>
         </>
@@ -88,11 +104,25 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
         <div
           className={cn(
             'text-xs flex items-center gap-1.5',
-            resolved === 'approved' ? 'text-success' : 'text-destructive',
+            resolved === 'approved'
+              ? 'text-success'
+              : resolved === 'revise'
+                ? 'text-warning'
+                : 'text-destructive',
           )}
         >
-          {resolved === 'approved' ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
-          {resolved === 'approved' ? t('chat:plan.approved') : t('chat:plan.rejected')}
+          {resolved === 'approved' ? (
+            <Check className="h-3.5 w-3.5" />
+          ) : resolved === 'revise' ? (
+            <Pencil className="h-3.5 w-3.5" />
+          ) : (
+            <X className="h-3.5 w-3.5" />
+          )}
+          {resolved === 'approved'
+            ? t('chat:plan.approved')
+            : resolved === 'revise'
+              ? t('chat:plan.reviseRequested')
+              : t('chat:plan.rejected')}
         </div>
       )}
     </div>

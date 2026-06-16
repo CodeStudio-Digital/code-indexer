@@ -373,6 +373,16 @@ export function mountCoderStreamRoutes(
       const session = sessionStore.getSession(id);
       if (session?.project_id != null) {
         deps.projectIndexService.ensureFresh(session.project_id, 'session');
+        // Global session: also keep every linked secondary project fresh, so the
+        // agent's cross-project search/symbols (mcp__<slug>__*) hit live indexes.
+        // ensureFresh is a no-op when already fresh, so looping is cheap.
+        if (session.is_global) {
+          for (const lp of sessionStore.getSessionProjects(id)) {
+            if (lp.project_id !== session.project_id) {
+              deps.projectIndexService.ensureFresh(lp.project_id, 'session');
+            }
+          }
+        }
       }
     }
 

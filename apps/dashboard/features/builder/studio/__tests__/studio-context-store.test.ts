@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addPendingAttachment,
+  addSelections,
+  consumePendingAttachments,
   consumeSelectionPrefix,
+  getPendingAttachments,
   getSelected,
   getSelections,
+  removePendingAttachment,
   removeSelected,
   selectionKey,
   setSelected,
@@ -79,6 +84,54 @@ describe('multi-selection (Ctrl/Cmd click)', () => {
     toggleSelected(s, el({ loc: 'b.tsx:2:2' }));
     removeSelected(s, 'a.tsx:1:1');
     expect(getSelections(s).map((e) => e.loc)).toEqual(['b.tsx:2:2']);
+  });
+});
+
+describe('addSelections (region/marquee batch)', () => {
+  it('appends many at once, deduped by key, preserving order', () => {
+    const s = sid();
+    setSelected(s, el({ loc: 'a.tsx:1:1' }));
+    addSelections(s, [el({ loc: 'b.tsx:2:2' }), el({ loc: 'a.tsx:1:1' }), el({ loc: 'c.tsx:3:3' })]);
+    expect(getSelections(s).map((e) => e.loc)).toEqual(['a.tsx:1:1', 'b.tsx:2:2', 'c.tsx:3:3']);
+  });
+
+  it('dedups within the batch itself', () => {
+    const s = sid();
+    addSelections(s, [el({ loc: 'a.tsx:1:1' }), el({ loc: 'a.tsx:1:1' })]);
+    expect(getSelections(s).map((e) => e.loc)).toEqual(['a.tsx:1:1']);
+  });
+
+  it('an empty batch is a no-op', () => {
+    const s = sid();
+    setSelected(s, el({ loc: 'a.tsx:1:1' }));
+    addSelections(s, []);
+    expect(getSelections(s).map((e) => e.loc)).toEqual(['a.tsx:1:1']);
+  });
+});
+
+describe('pending attachments (region screenshots)', () => {
+  const shot = (name: string) => ({ name, mediaType: 'image/png', base64: 'AAAA' });
+
+  it('add accumulates; consume returns all and clears', () => {
+    const s = sid();
+    addPendingAttachment(s, shot('region-1.png'));
+    addPendingAttachment(s, shot('region-2.png'));
+    expect(getPendingAttachments(s).map((a) => a.name)).toEqual(['region-1.png', 'region-2.png']);
+    const drained = consumePendingAttachments(s);
+    expect(drained.map((a) => a.name)).toEqual(['region-1.png', 'region-2.png']);
+    expect(getPendingAttachments(s)).toEqual([]); // consumed → cleared
+  });
+
+  it('removePendingAttachment drops only the indexed item', () => {
+    const s = sid();
+    addPendingAttachment(s, shot('a.png'));
+    addPendingAttachment(s, shot('b.png'));
+    removePendingAttachment(s, 0);
+    expect(getPendingAttachments(s).map((a) => a.name)).toEqual(['b.png']);
+  });
+
+  it('consume on an empty slot returns []', () => {
+    expect(consumePendingAttachments(sid())).toEqual([]);
   });
 });
 

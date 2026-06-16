@@ -80,10 +80,12 @@ export interface RunnerOptions {
    */
   tunables?: CoderTunables;
   /**
-   * Per-session "unrestricted tool output" toggle. Bumps `effectivePushTimeCap`
-   * to the high safety ceiling. Auto-compaction still runs.
+   * Per-session tool-output cap LEVEL (economic|medium|high|extra|max|ultra).
+   * Resolves `effectivePushTimeCap` via `capFor`; also threads to mcp-bridge /
+   * code_exec / read_file through the ToolContext. Undefined → 'economic'.
+   * Auto-compaction still runs.
    */
-  unrestrictedToolOutput?: boolean | null;
+  toolOutputCapLevel?: import('./output-caps.js').ToolOutputCapLevel;
   /**
    * Per-session tool permission mode driving the PermissionGate
    * ('ask' | 'auto' | 'unrestricted'). Null/undefined → 'auto'. Read live by

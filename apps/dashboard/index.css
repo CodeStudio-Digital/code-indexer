@@ -254,3 +254,11 @@ h4 { font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-sp
 .diff-block .diff-code { padding: 0 0 0 0.5em; }
 .diff-block .diff-gutter { min-width: 3ch; }
 .diff-block .diff-gutter-col { width: 3.5ch; }
+
+/* Conflict-marker highlighting inside Monaco (inline resolver + 3-pane
+   Result). Whole-line tints for the "current"/"incoming" hunks plus a thin
+   gutter accent, themed off the design-system success/destructive vars. */
+.conflict-current { background: color-mix(in srgb, var(--success) 12%, transparent); }
+.conflict-incoming { background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.conflict-current-gutter { border-left: 3px solid var(--success); }
+.conflict-incoming-gutter { border-left: 3px solid var(--primary); }

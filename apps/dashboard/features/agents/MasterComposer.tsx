@@ -6,6 +6,7 @@ import { useMarkdownShortcuts } from '../chat/composer/useMarkdownShortcuts.js';
 import { fileToAttachment } from '../chat/utils.js';
 import { useFileDrop } from '../chat/composer/useFileDrop.js';
 import { DropOverlay } from '../chat/composer/DropOverlay.js';
+import { useComposerDraft } from '../chat/composer/useComposerDraft.js';
 import type { AgentAttachment } from '../../hooks/agent-stream/types.js';
 
 interface MasterComposerProps {
@@ -29,6 +30,8 @@ interface MasterComposerProps {
    * clear that pending state. Returns '' when there's nothing to prepend.
    */
   buildPrefix?: () => string;
+  /** Company session id — keys the per-session draft persistence (`company:<id>`). */
+  sessionId?: number | null;
 }
 
 const COLLAPSED_KEY = 'agents.composer.collapsed';
@@ -42,10 +45,13 @@ function readCollapsed(): boolean {
   }
 }
 
-export function MasterComposer({ onSend, placeholder, disabled, supportsThinking, reasoningEffort, setReasoningEffort, reasoningLevels, buildPrefix }: MasterComposerProps) {
+export function MasterComposer({ onSend, placeholder, disabled, supportsThinking, reasoningEffort, setReasoningEffort, reasoningLevels, buildPrefix, sessionId }: MasterComposerProps) {
   const { t } = useTranslation('agents');
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
+  // Per-session draft persistence (survives navigation / rail unmount).
+  const draftKey = sessionId != null ? `company:${sessionId}` : null;
+  const { clearDraft } = useComposerDraft({ draftKey, input, setInput, attachments, setAttachments });
   const [thinking, setThinking] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -76,6 +82,7 @@ export function MasterComposer({ onSend, placeholder, disabled, supportsThinking
     const atts = attachments;
     setInput('');
     setAttachments([]);
+    clearDraft();
     // Builder studio: prepend the selected-element block (and clear it).
     const prefix = buildPrefix?.() ?? '';
     await onSend(prefix ? `${prefix}\n${text}` : text, atts, { thinking });

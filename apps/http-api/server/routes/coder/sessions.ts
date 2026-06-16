@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
+import { TOOL_OUTPUT_CAP_LEVELS, parseToolOutputCapLevel } from '@mcp/code-agent/core/runner/output-caps.js';
 import { AGENTS } from '@mcp/code-agent/agents/index.js';
 import { getAllKnownToolsMeta, getToolTier, inferProfileFromMessage, TIER_COUNTS } from '@mcp/code-agent/tools/tiers.js';
 import { getModelContextWindow } from '@mcp/code-agent/providers/capabilities.js';
@@ -21,6 +22,10 @@ import {
  * Extracted so both the session-detail and paginated-messages endpoints use
  * exactly the same shape.
  */
+/** Allowed plan-depth values for the `plan` agent (migration 151). */
+const PLAN_DEPTHS = ['simple', 'normal', 'complex'] as const;
+type PlanDepth = (typeof PLAN_DEPTHS)[number];
+
 const TRIM_TOOL_RESULT = 4000;
 function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(messages: M[]): M[] {
   return messages.map((m) => {
@@ -169,6 +174,17 @@ function cleanGeneratedTitle(raw: string): string {
     .slice(0, 80);
 }
 
+interface CreateGlobalSessionBody {
+  title: string;
+  provider: CoderProviderName;
+  model?: string;
+  agent?: string | null;
+  /** Which linked project is the native cwd. Defaults to project_ids[0]. */
+  primary_project_id?: number;
+  /** All linked projects (including the primary). At least one required. */
+  project_ids: number[];
+}
+
 interface CreateSessionBody {
   project_id: number;
   title: string;
@@ -197,6 +213,72 @@ export function mountCoderSessionsRoutes(
   app.get('/api/coder/sessions/recent', (c) => {
     const limit = Math.max(1, Math.min(50, parseIntQuery(c, 'limit', 10)));
     return c.json(sessionStore.listRecentSessionsGlobal(limit));
+  });
+
+  /**
+   * Global (multi-project) sessions list — powers the "Sessões Globais" menu.
+   * MUST be registered BEFORE the /api/coder/sessions/:id routes (same reason
+   * as /recent: Hono would otherwise read "global" as an id).
+   */
+  app.get('/api/coder/sessions/global', (c) => {
+    const archivedQ = c.req.query('archived');
+    let archived: boolean | null = false;
+    if (archivedQ === '1' || archivedQ === 'true') archived = true;
+    else if (archivedQ === 'all') archived = null;
+    return c.json(sessionStore.listGlobalSessions({ archived }));
+  });
+
+  /**
+   * Create a global session linking 1+ projects. The primary project is the
+   * native cwd; the rest are exposed to the agent as `mcp__<slug>__*` read tools
+   * and writable secondary roots.
+   */
+  app.post('/api/coder/sessions/global', async (c) => {
+    const body = await parseJsonBody<CreateGlobalSessionBody>(c);
+    const projectIds = Array.isArray(body.project_ids)
+      ? Array.from(new Set(body.project_ids.filter((n) => Number.isFinite(n))))
+      : [];
+    if (!body.title || !body.provider) {
+      return c.json({ error: 'title, provider required' }, 400);
+    }
+    if (projectIds.length === 0) {
+      return c.json({ error: 'project_ids must contain at least one project' }, 400);
+    }
+    const primaryId = body.primary_project_id && projectIds.includes(body.primary_project_id)
+      ? body.primary_project_id
+      : projectIds[0];
+    // Validate every linked project exists before creating anything.
+    for (const pid of projectIds) {
+      if (!deps.db.getProject(pid)) {
+        return c.json({ error: `project ${pid} not found` }, 400);
+      }
+    }
+    const session = sessionStore.createGlobalSession({
+      project_id: primaryId,
+      title: body.title,
+      provider: body.provider,
+      model: body.model ?? '',
+      agent: body.agent ?? null,
+      secondaryProjects: projectIds
+        .filter((pid) => pid !== primaryId)
+        .map((pid) => ({ projectId: pid })),
+    });
+    // Best-effort base_commit_sha capture for the PRIMARY project only (the
+    // reviewer subagent diffs the cwd). Mirrors the single-project create route.
+    try {
+      const project = (deps as { projectStore?: { getProject?: (id: number) => { workdir?: string | null } | null } }).projectStore?.getProject?.(primaryId);
+      const workdir = project?.workdir;
+      if (workdir) {
+        const { execSync } = await import('node:child_process');
+        const sha = execSync('git rev-parse HEAD', { cwd: workdir, encoding: 'utf8', timeout: 2000 }).trim();
+        if (sha && /^[0-9a-f]{40}$/i.test(sha)) {
+          sessionStore.setSessionBaseCommit(session.id, sha);
+        }
+      }
+    } catch {
+      /* not a git repo or no workdir — fine */
+    }
+    return c.json(session, 201);
   });
 
   /**
@@ -434,6 +516,28 @@ export function mountCoderSessionsRoutes(
     return c.json(updated);
   });
 
+  /**
+   * Per-session sticky plan-depth override (migration 151) for the `plan`
+   * agent: `simple` | `normal` | `complex`. `null` clears back to the runtime
+   * default (`normal`). Validated against the fixed set; unlike reasoning-effort
+   * there is no model-capability gate. No live-runner push — the depth is baked
+   * into the system prompt at the next runner construction (like `/agent`).
+   */
+  app.patch('/api/coder/sessions/:id/plan-depth', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ depth?: string | null }>(c);
+    const depth = body.depth ?? null;
+    if (depth !== null && !PLAN_DEPTHS.includes(depth as PlanDepth)) {
+      return c.json({ error: `depth: one of ${PLAN_DEPTHS.join('|')}|null required` }, 400);
+    }
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    sessionStore.setSessionPlanDepth(id, depth);
+    const updated = sessionStore.getSession(id);
+    if (!updated) return notFound(c);
+    return c.json(updated);
+  });
+
   app.patch('/api/coder/sessions/:id/unrestricted-output', async (c) => {
     const id = parseIdParam(c);
     const body = await parseJsonBody<{ enabled?: boolean | null }>(c);
@@ -445,6 +549,29 @@ export function mountCoderSessionsRoutes(
     const session = sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);
+  });
+
+  /**
+   * Per-session sticky tool-output cap LEVEL (migration 153): economic | medium
+   * | high | extra | max | ultra. Supersedes the binary `/unrestricted-output`
+   * toggle. `null` clears back to the runtime default (derived from the legacy
+   * boolean, else 'economic'). Validated against the fixed set; no model gate.
+   * No live-runner push — the cap is baked into `effectivePushTimeCap` at the
+   * next runner construction (like `/plan-depth` and `/reasoning-effort`).
+   */
+  app.patch('/api/coder/sessions/:id/tool-output-cap-level', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ level?: string | null }>(c);
+    const level = body.level ?? null;
+    if (level !== null && parseToolOutputCapLevel(level) === null) {
+      return c.json({ error: `level: one of ${TOOL_OUTPUT_CAP_LEVELS.join('|')}|null required` }, 400);
+    }
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    sessionStore.setSessionToolOutputCapLevel(id, parseToolOutputCapLevel(level));
+    const updated = sessionStore.getSession(id);
+    if (!updated) return notFound(c);
+    return c.json(updated);
   });
 
   /**
@@ -546,6 +673,17 @@ export function mountCoderSessionsRoutes(
     return c.json(session, 201);
   });
 
+  /**
+   * Linked projects of a (global) session — for the "linked projects" chip and
+   * the active-root switcher. Returns [] for a normal session (no junction rows).
+   */
+  app.get('/api/coder/sessions/:id/projects', (c) => {
+    const id = parseIdParam(c);
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    return c.json(sessionStore.getSessionProjects(id));
+  });
+
   app.get('/api/coder/sessions/:id', (c) => {
     const id = parseIdParam(c);
     const full = c.req.query('full') === '1';
@@ -567,9 +705,14 @@ export function mountCoderSessionsRoutes(
     // sessions). Empty for healthy sessions — costs nothing in the common case.
     const tool_results = reconstructMissingToolResults(sessionStore, id, data.messages);
 
-    if (full) return c.json({ ...data, total_messages, archived_count, tool_results });
+    // For a global session, surface the linked projects so the chat can render
+    // the "linked projects" chip + default the file-tree root to the primary
+    // (`session.project_id`). Empty for normal sessions — no extra query cost.
+    const linked_projects = data.session.is_global ? sessionStore.getSessionProjects(id) : [];
 
-    return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages, archived_count, tool_results });
+    if (full) return c.json({ ...data, total_messages, archived_count, tool_results, linked_projects });
+
+    return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages, archived_count, tool_results, linked_projects });
   });
 
   /**

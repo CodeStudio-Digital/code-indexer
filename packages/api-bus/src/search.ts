@@ -44,6 +44,47 @@ export interface TextHit {
   path: string;
 }
 
+// ─── Find/Replace in Files (literal/regex grep over indexed files) ───────
+export interface GrepMatch {
+  /** 1-based line number. */
+  line: number;
+  /** Full source line. */
+  text: string;
+  /** Match span within `text`. */
+  start: number;
+  end: number;
+}
+export interface GrepFile {
+  path: string;
+  matches: GrepMatch[];
+}
+export interface GrepResult {
+  files: GrepFile[];
+  total: number;
+  fileCount: number;
+  /** True when `maxMatches` capped the scan. */
+  truncated: boolean;
+}
+export interface ReplaceResult {
+  replaced: number;
+  fileCount: number;
+}
+export interface GrepInput {
+  projectId: number;
+  query: string;
+  regex?: boolean;
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  /** Comma-separated globs (e.g. `*.tsx, *.ts`). Empty = all files. */
+  mask?: string;
+  maxMatches?: number;
+}
+export interface ReplaceInput extends GrepInput {
+  replacement: string;
+  /** Restrict the replace to these project-relative paths. */
+  files?: string[];
+}
+
 export interface SearchApi {
   /** Project-scoped search. */
   project(
@@ -65,4 +106,10 @@ export interface SearchApi {
    * (file_contents_fts, tokens AND). Returns matching paths ranked by bm25.
    */
   text(input: { projectId: number; query: string; limit?: number }, ctx: ApiContext): Promise<TextHit[]>;
+
+  /** Find in Files — literal/regex grep with per-match positions for highlighting. */
+  grep(input: GrepInput, ctx: ApiContext): Promise<GrepResult>;
+
+  /** Replace in Files — apply the same matcher and write changed files. */
+  replace(input: ReplaceInput, ctx: ApiContext): Promise<ReplaceResult>;
 }

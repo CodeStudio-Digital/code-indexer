@@ -164,6 +164,10 @@ import { apiCollections147 } from './147_api_collections.js';
 import { apiRequestHistory148 } from './148_api_request_history.js';
 import { docTyping149 } from './149_doc_typing.js';
 import { sessionReasoningEffort150 } from './150_session_reasoning_effort.js';
+import { sessionPlanDepth151 } from './151_session_plan_depth.js';
+import { globalSessions152 } from './152_global_sessions.js';
+import { sessionToolOutputCapLevel153 } from './153_session_tool_output_cap_level.js';
+import { snapshotProjectScope154 } from './154_snapshot_project_scope.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -344,6 +348,10 @@ export const MIGRATIONS: Migration[] = [
   apiRequestHistory148,
   docTyping149,
   sessionReasoningEffort150,
+  sessionPlanDepth151,
+  globalSessions152,
+  sessionToolOutputCapLevel153,
+  snapshotProjectScope154,
 ];
 
 /**

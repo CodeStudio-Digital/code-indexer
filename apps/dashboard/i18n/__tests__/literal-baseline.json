@@ -460,6 +460,7 @@
     "apps/dashboard/features/builder/studio/problems/ProblemsBadge.tsx|jsxText|Fixes sent": 1,
     "apps/dashboard/features/builder/studio/problems/ProblemsBadge.tsx|jsxText|problem(s)": 1,
     "apps/dashboard/features/builder/studio/problems/ProblemsBadge.tsx|jsxText|review": 1,
+    "apps/dashboard/features/builder/studio/selection/RegionShotChip.tsx|attr:aria-label|Remove screenshot": 1,
     "apps/dashboard/features/builder/studio/selection/SelectionChip.tsx|attr:aria-label|Clear selection": 1,
     "apps/dashboard/features/builder/studio/selection/SelectionChip.tsx|attr:aria-label|Open in editor": 1,
     "apps/dashboard/features/builder/studio/selection/SelectionChip.tsx|jsxText|&gt;": 1,

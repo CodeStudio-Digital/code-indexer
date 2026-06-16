@@ -279,11 +279,11 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     projectName: parent.ctx.projectName,
     overlay: parent.ctx.overlay,
     signal: subAbort.signal,
-    // Inherit the parent's "unrestricted tool output" toggle so MCP/code_exec
-    // calls inside the subagent honour the same per-call truncation policy
-    // as the main session (with the smaller subagent ceiling enforced by
-    // the runner's `effectivePushTimeCap`).
-    unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput,
+    // Inherit the parent's tool-output cap LEVEL so MCP/code_exec calls inside
+    // the subagent honour the same per-call truncation policy as the main
+    // session (with the smaller subagent ceiling enforced by the runner's
+    // `effectivePushTimeCap`).
+    toolOutputCapLevel: parent.ctx.toolOutputCapLevel,
     // Permission gate inheritance: the gate instance holds the PARENT
     // runner's waitForUserInput/emit, so subagent approvals render and
     // resolve at session level (the sub has no bus of its own).
@@ -321,11 +321,11 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     // PR-6: subagent inherits the parent's v2 flag so pre-read cap, result-
     // dup cap, and exp+jitter retry apply inside the subagent loop too.
     agentLoopV2: parent.agentLoopV2,
-    // Inherit the parent's "unrestricted tool output" toggle so the subagent's
-    // `effectivePushTimeCap` is bumped to UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP
-    // (≈500 KB) instead of the default 12 KB when the parent session has the
-    // toggle on. Coherent with the user intent: "this whole session is free."
-    unrestrictedToolOutput: parent.ctx.unrestrictedToolOutput ?? false,
+    // Inherit the parent's tool-output cap LEVEL so the subagent's
+    // `effectivePushTimeCap` scales proportionally (max → ≈500 KB, ultra → ≈2 MB)
+    // instead of the default 12 KB when the parent session elevates it.
+    // Coherent with the user intent: "this whole session is free."
+    toolOutputCapLevel: parent.ctx.toolOutputCapLevel,
   });
 
   const abortRunner = () => subRunner.abort();

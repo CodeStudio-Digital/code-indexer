@@ -142,10 +142,28 @@ export interface NestedToolObserver {
 }
 
 export interface ToolContext {
-  /** Project root path. All filesystem operations must stay inside this. */
+  /** Project root path of the PRIMARY project. Native fs operations default here
+   *  and must stay inside SOME known root (primary or a linked `roots` entry). */
   cwd: string;
-  /** Project name (used to inject project_name into MCP tool calls). */
+  /** Project name of the PRIMARY project (injected as project_name into MCP calls). */
   projectName: string;
+  /**
+   * Linked SECONDARY roots for a GLOBAL (multi-project) session (migration 152).
+   * The PRIMARY stays `cwd`/`projectName`/`projectId`; these are additional roots
+   * the agent can read/write by passing `project: "<slug>"` (or `project_name`)
+   * to the native fs tools. Each `slug` matches the `mcp__<slug>__*` read-tool
+   * prefix the model already sees for that project. Empty/undefined for normal
+   * sessions, so single-root behaviour (and the cross-project refusal guard) is
+   * unchanged for them.
+   */
+  roots?: ReadonlyArray<{ projectId: number; name: string; slug: string; rootPath: string }>;
+  /**
+   * Per-secondary-root session overlays keyed by projectId. `overlay` (below)
+   * stays the PRIMARY's overlay; a write to a secondary root marks the touched
+   * file in that root's overlay so the project's MCP reads serve fresh content.
+   * Undefined for normal sessions.
+   */
+  overlayByRoot?: ReadonlyMap<number, import('@mcp/code-agent/overlay/session-overlay.js').SessionOverlay>;
   /** Session overlay — tracks files touched during this session so reads
    *  bypass the stale MCP index. Optional to keep tests lightweight. */
   overlay?: import('@mcp/code-agent/overlay/session-overlay.js').SessionOverlay;
@@ -156,14 +174,15 @@ export interface ToolContext {
    */
   toolOutputStore?: import('@mcp/code-agent/overlay/tool-output-store.js').ToolOutputStore;
   /**
-   * Per-session "unrestricted tool output" flag. When true, the per-tool-call
-   * truncation caps (`MCP_OUTPUT_HARD_CAP` in mcp-bridge, `MAX_OUTPUT_BYTES` in
-   * code_exec, `READ_FILE_HARD_MAX` clamp on read_file) are raised to a high
-   * safety ceiling instead of using the production defaults. Auto-compaction
-   * still runs, so this is not the same as "no caps at all". Mirrors the
-   * `coder_sessions.unrestricted_tool_output` column.
+   * Per-session tool-output cap LEVEL (economic|medium|high|extra|max|ultra).
+   * Replaces the legacy binary `unrestrictedToolOutput`. Each cap site calls
+   * `capFor(level, <its base>, <its ceiling>)` (`MCP_OUTPUT_HARD_CAP` in
+   * mcp-bridge, `MAX_OUTPUT_BYTES` in code_exec, `READ_FILE_HARD_MAX` clamp on
+   * read_file, and the runner push-time cap). Undefined → 'economic' (production
+   * defaults). Auto-compaction still runs. Mirrors the
+   * `coder_sessions.tool_output_cap_level` column.
    */
-  unrestrictedToolOutput?: boolean;
+  toolOutputCapLevel?: import('./runner/output-caps.js').ToolOutputCapLevel;
   /**
    * Per-session tool permission gate (ask/auto/unrestricted). Consulted by
    * executing-dispatch and code_exec BEFORE invoking gated tools. Holds the

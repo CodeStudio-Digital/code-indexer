@@ -26,9 +26,42 @@ export interface RectLike {
   height: number;
 }
 
+/**
+ * The body of an element selection (the `mcp:select` payload, minus `type`).
+ * Factored out so a region/marquee pick (`mcp:region-select`) can carry MANY
+ * of these at once with the exact same per-element shape.
+ */
+export interface SelectedElementPayload {
+  loc: SourceLoc;
+  componentName: string | null;
+  tag: string;
+  classes: string[];
+  text: string;
+  rect: RectLike;
+  // ── Optional enrichments (universal CDP inspect; absent on the inline
+  //    `data-mcp-loc` builder path so its output stays byte-identical) ──
+  /** Framework detected at runtime: 'react' | 'vue' | 'angular' | 'unknown'. */
+  framework?: string;
+  /** Robust CSS selector path (nth-of-type) for elements without a `loc`. */
+  selector?: string;
+  /** Best-effort source file from framework dev metadata (no build stamp). */
+  sourceFile?: string;
+  /** 1-based source line, when the framework exposes it (React `__source`). */
+  sourceLine?: number;
+  /** `data-testid` / `id`, if present — extra anchors for the model. */
+  testId?: string;
+  /**
+   * Ctrl/Cmd-click: accumulate into the selection set (multi-citation)
+   * instead of replacing it. Absent/false → plain click → single select.
+   */
+  additive?: boolean;
+}
+
 /** Messages the dashboard (parent) posts INTO the preview iframe. */
 export type ParentToPreviewMessage =
   | { type: 'mcp:arm' }
+  /** Arm REGION mode: drag a marquee to pick every stamped element inside it. */
+  | { type: 'mcp:arm-region' }
   | { type: 'mcp:disarm' }
   // ── Visual editing (two-way): optimistic DOM ops the panel applies
   //    instantly while the server rewrites the source behind them ──
@@ -45,32 +78,13 @@ export type ParentToPreviewMessage =
 export type PreviewToParentMessage =
   | { type: 'mcp:ready' }
   | { type: 'mcp:hover'; loc: SourceLoc; rect: RectLike }
-  | {
-      type: 'mcp:select';
-      loc: SourceLoc;
-      componentName: string | null;
-      tag: string;
-      classes: string[];
-      text: string;
-      rect: RectLike;
-      // ── Optional enrichments (universal CDP inspect; absent on the inline
-      //    `data-mcp-loc` builder path so its output stays byte-identical) ──
-      /** Framework detected at runtime: 'react' | 'vue' | 'angular' | 'unknown'. */
-      framework?: string;
-      /** Robust CSS selector path (nth-of-type) for elements without a `loc`. */
-      selector?: string;
-      /** Best-effort source file from framework dev metadata (no build stamp). */
-      sourceFile?: string;
-      /** 1-based source line, when the framework exposes it (React `__source`). */
-      sourceLine?: number;
-      /** `data-testid` / `id`, if present — extra anchors for the model. */
-      testId?: string;
-      /**
-       * Ctrl/Cmd-click: accumulate into the selection set (multi-citation)
-       * instead of replacing it. Absent/false → plain click → single select.
-       */
-      additive?: boolean;
-    }
+  | ({ type: 'mcp:select' } & SelectedElementPayload)
+  /**
+   * Marquee/region pick: every stamped element inside the drawn box, plus the
+   * box itself in VIEWPORT coords (+ `dpr`) so the host can clip a screenshot
+   * to exactly that region. Region picks are additive (a batch citation).
+   */
+  | { type: 'mcp:region-select'; selections: SelectedElementPayload[]; rect: RectLike; dpr: number }
   | { type: 'mcp:clear' }
   /** Inline text edit committed in the preview (blur/Enter). */
   | { type: 'mcp:text-committed'; loc: SourceLoc; text: string; ts: number }
@@ -93,6 +107,7 @@ const PREVIEW_TYPES = new Set<PreviewToParentMessage['type']>([
   'mcp:ready',
   'mcp:hover',
   'mcp:select',
+  'mcp:region-select',
   'mcp:clear',
   'mcp:text-committed',
   'mcp:loc-count',

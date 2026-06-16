@@ -125,8 +125,8 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
           supportsThinking={s.supportsThinking}
           describeImages={s.describeImages}
           setDescribeImages={s.setDescribeImages}
-          unrestrictedOutput={s.unrestrictedOutput}
-          setUnrestrictedOutput={s.setUnrestrictedOutput}
+          outputCapLevel={s.outputCapLevel}
+          setOutputCapLevel={s.setOutputCapLevel}
           toolPermissionMode={s.toolPermissionMode}
           setToolPermissionMode={s.setToolPermissionMode}
           fallbackProvider={s.fallbackProvider}

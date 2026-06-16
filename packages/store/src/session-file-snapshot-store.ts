@@ -28,6 +28,12 @@ export interface BaselineRow {
   id: number;
   session_kind: SessionKind;
   session_id: number;
+  /**
+   * The project this baseline's file belongs to (migration 154). NULL only for
+   * stray legacy/company rows; the diff/revert resolver falls back to the
+   * session's primary project in that case.
+   */
+  project_id: number | null;
   file_path: string;
   content_before: string | null;
   existed_before: number;
@@ -60,6 +66,9 @@ export interface HunkDecisionRow {
 export interface CreateBaselineInput {
   session_kind: SessionKind;
   session_id: number;
+  /** Project the file belongs to (migration 154). Omitted/NULL when unknown —
+   *  the resolver then falls back to the session's primary project. */
+  project_id?: number | null;
   file_path: string;
   content_before: string | null;
   existed_before: boolean;
@@ -86,14 +95,19 @@ export class SessionFileSnapshotStore {
     kind: SessionKind,
     sessionId: number,
     filePath: string,
+    projectId: number | null = null,
   ): BaselineRow | null {
+    // `project_id IS ?` is null-safe equality: with a number it matches that
+    // project; with NULL it matches legacy rows. This keeps each root's baseline
+    // for the same relative path distinct in a global (multi-project) session.
     const row = this.db
       .prepare(
         `SELECT * FROM session_file_baselines
          WHERE session_kind = ? AND session_id = ? AND file_path = ? AND status = 'active'
+           AND project_id IS ?
          LIMIT 1`,
       )
-      .get(kind, sessionId, filePath) as BaselineRow | undefined;
+      .get(kind, sessionId, filePath, projectId) as BaselineRow | undefined;
     return row ?? null;
   }
 
@@ -117,18 +131,20 @@ export class SessionFileSnapshotStore {
         create.session_kind,
         create.session_id,
         create.file_path,
+        create.project_id ?? null,
       );
       let created = false;
       if (!baseline) {
         const stmt = this.db.prepare(
           `INSERT INTO session_file_baselines
-            (session_kind, session_id, file_path, content_before, existed_before,
+            (session_kind, session_id, project_id, file_path, content_before, existed_before,
              baseline_hash, oversized, status, first_seen_at, last_edited_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
         );
         const r = stmt.run(
           create.session_kind,
           create.session_id,
+          create.project_id ?? null,
           create.file_path,
           create.content_before,
           create.existed_before ? 1 : 0,

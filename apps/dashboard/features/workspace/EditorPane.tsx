@@ -41,6 +41,9 @@ const GitLogView = lazy(() =>
 const StashDetailView = lazy(() =>
   import('./jetbrains/tool-windows/git/StashDetailView.js').then((m) => ({ default: m.StashDetailView })),
 );
+const MergeTabView = lazy(() =>
+  import('./editor/merge/MergeTabView.js').then((m) => ({ default: m.MergeTabView })),
+);
 
 function isMarkdownPath(path: string): boolean {
   return /\.(md|markdown|mdx)$/i.test(path);
@@ -68,6 +71,8 @@ export function EditorPane() {
               <GitLogView tab={activeFile} />
             ) : activeFile.kind === 'git-stash' ? (
               <StashDetailView tab={activeFile} />
+            ) : activeFile.kind === 'merge' ? (
+              <MergeTabView tab={activeFile} />
             ) : activeFile.kind === 'diff' ? (
               <DiffMount diff={activeFile} />
             ) : isMarkdownPath(activeFile.path) ? (

@@ -33,8 +33,11 @@ export interface SelfReviewDeps {
   dbHandle: DB;
   /** Coder session id whose snapshots get reviewed (the current session). */
   sessionId: number;
-  /** Absolute project root, for resolving on-disk file content. */
+  /** Absolute root of the PRIMARY project, for resolving on-disk file content. */
   projectRoot: string;
+  /** Linked SECONDARY roots for a global session, so snapshots of files edited
+   *  in another project resolve to the right root. Empty for normal sessions. */
+  secondaryRoots?: ReadonlyArray<{ projectId: number; rootPath: string }>;
 }
 
 /** Pipeline-config problems (not transient) → an actionable hint, not a failure. */
@@ -70,9 +73,15 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
     handler: async (): Promise<ToolResult> => {
       const snapshotStore = new SessionFileSnapshotStore(deps.dbHandle);
       const reviewStore = new SessionFileReviewStore(deps.dbHandle);
-      const snapshotService = new SessionSnapshotService(snapshotStore, (kind, sessionId) =>
-        kind === 'coder' && sessionId === deps.sessionId ? deps.projectRoot : null,
-      );
+      const snapshotService = new SessionSnapshotService(snapshotStore, (kind, sessionId, projectId) => {
+        if (kind !== 'coder' || sessionId !== deps.sessionId) return null;
+        // Global session: a baseline may belong to a linked secondary root.
+        if (projectId != null) {
+          const sec = deps.secondaryRoots?.find((r) => r.projectId === projectId);
+          if (sec) return sec.rootPath;
+        }
+        return deps.projectRoot;
+      });
       const resolver = new PipelineProviderResolver(
         new PipelineProviderBindingsStore(deps.dbHandle),
         new ProviderStore(deps.dbHandle),

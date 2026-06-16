@@ -39,7 +39,12 @@
 // o lifecycle de tasks, subagents/overlay/tierHint/not-indexed comprimidos,
 // memória unificada ({{memorySection}}), "Images & vision" condicional a
 // modelCanSeeImages. Static prefix mudou → invalida fingerprints stale.
-export const SYSTEM_PROMPT_VERSION = '20260612.1';
+// 2026-06-16.1 bump — agente de planejamento especialista: plan.txt reescrito
+// (protocolo de investigação + formato de documento de plano + right-sizing)
+// e novo bloco de calibração por profundidade (## Plan depth, simple/normal/
+// complex) injetado na seção de plan mode. Static prefix mudou → invalida
+// fingerprints stale.
+export const SYSTEM_PROMPT_VERSION = '20260616.1';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

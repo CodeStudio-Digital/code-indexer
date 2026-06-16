@@ -13,7 +13,21 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiCall, apiStream, electronApi } from '../../../lib/api-client.js';
-import { setSelected, toggleSelected, type SelectedElement } from '../../builder/studio/studio-context-store.js';
+import {
+  addPendingAttachment,
+  addSelections,
+  setSelected,
+  toggleSelected,
+  type SelectedElement,
+} from '../../builder/studio/studio-context-store.js';
+
+/** A marquee pick streamed from the CDP inspector (`window.__mcpRegionSelect`). */
+interface RegionFrame {
+  type: 'mcp:region-select';
+  selections: Array<Omit<SelectedElement, 'type'>>;
+  rect: { x: number; y: number; width: number; height: number };
+  dpr: number;
+}
 
 export interface UniversalInspect {
   /** Electron + a resolved dev URL → the window/inspect affordances are usable. */
@@ -38,9 +52,26 @@ export function useUniversalInspect(projectId: number, url: string | null): Univ
     // Subscribe BEFORE opening so no early selection / close is missed.
     void (async () => {
       try {
-        for await (const d of apiStream<SelectedElement | { type: 'mcp:closed' }>('previewInspect.events', { projectId })) {
+        for await (const d of apiStream<SelectedElement | RegionFrame | { type: 'mcp:closed' }>('previewInspect.events', { projectId })) {
           if (cancelled) break;
-          if ((d as { type?: string })?.type === 'mcp:closed') { setWindowOpen(false); break; }
+          const t = (d as { type?: string })?.type;
+          if (t === 'mcp:closed') { setWindowOpen(false); break; }
+          if (t === 'mcp:region-select') {
+            const rs = d as RegionFrame;
+            if (rs.selections?.length) {
+              addSelections(projectId, rs.selections.map((s) => ({ ...s, type: 'mcp:select' as const }) as SelectedElement));
+            }
+            // The CDP window has its own debugger, so clip Page.captureScreenshot
+            // directly to the box (window viewport coords — no offset needed).
+            void apiCall<{ base64?: string }>('previewInspect.captureRegion', { projectId, clip: rs.rect })
+              .then((res) => {
+                if (res?.base64) {
+                  addPendingAttachment(projectId, { name: `region-${Date.now()}.png`, mediaType: 'image/png', base64: res.base64 });
+                }
+              })
+              .catch(() => { /* capture failed — refs still cite */ });
+            continue;
+          }
           const sel = d as SelectedElement;
           if (sel.additive) toggleSelected(projectId, sel);
           else setSelected(projectId, sel);

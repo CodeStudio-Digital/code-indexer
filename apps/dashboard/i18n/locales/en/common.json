@@ -1,6 +1,7 @@
 {
   "nav.projects": "Projects",
   "nav.agents": "Agents",
+  "nav.global": "Global Sessions",
   "nav.designSystems": "Design Systems",
   "nav.admin": "Settings",
   "nav.telemetry": "Telemetry",

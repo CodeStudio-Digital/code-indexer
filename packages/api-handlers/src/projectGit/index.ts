@@ -25,6 +25,7 @@ import {
 } from '@mcp/api-bus';
 import type { HandlerDeps } from '../types.js';
 import { callGeneralAiJson } from '../aiJson.js';
+import { createConflictHandlers } from './conflicts.js';
 
 interface GitResult {
   code: number;
@@ -32,9 +33,26 @@ interface GitResult {
   stderr: string;
 }
 
-function runGit(cwd: string, args: string[], stdin?: string): Promise<GitResult> {
+/**
+ * Spawn `git` and collect output. The 3rd arg is either the legacy
+ * positional `stdin` string OR an options bag `{ stdin?, env? }` — kept a
+ * union so the ~30 existing positional callers (e.g. `commit` piping the
+ * message) work unchanged. `env` is MERGED over `process.env` (never
+ * replaces it — dropping PATH would make git unspawnable); used to inject
+ * GIT_EDITOR=true on the `--continue` path so it can't block on an editor.
+ */
+function runGit(
+  cwd: string,
+  args: string[],
+  optsOrStdin?: string | { stdin?: string; env?: Record<string, string> },
+): Promise<GitResult> {
+  const opts = typeof optsOrStdin === 'string' ? { stdin: optsOrStdin } : (optsOrStdin ?? {});
   return new Promise((resolve) => {
-    const child = spawn('git', args, { cwd, windowsHide: true });
+    const child = spawn('git', args, {
+      cwd,
+      windowsHide: true,
+      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+    });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
@@ -49,8 +67,8 @@ function runGit(cwd: string, args: string[], stdin?: string): Promise<GitResult>
         stderr: Buffer.concat(err).toString('utf8'),
       });
     });
-    if (stdin) {
-      child.stdin.write(stdin);
+    if (opts.stdin) {
+      child.stdin.write(opts.stdin);
       child.stdin.end();
     } else {
       child.stdin.end();
@@ -216,7 +234,10 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     return { repoRoot: r.stdout.trim(), notARepo: false };
   }
 
-  return {
+  const base: Omit<
+    ProjectGitApi,
+    'mergeState' | 'conflictFile' | 'resolveConflict' | 'mergeContinue' | 'mergeAbort'
+  > = {
     async status({ projectId }) {
       const root = requireRoot(projectId);
       const { repoRoot, notARepo } = await detectRepo(root);
@@ -787,6 +808,15 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { message };
     },
   };
+
+  // Conflict-resolution methods live in their own module to keep this
+  // god-file from growing further. They're injected with the same spawn
+  // helpers + repo resolver so there's a single source of truth for how
+  // we shell out to git.
+  return {
+    ...base,
+    ...createConflictHandlers({ runGit, runAsResult, requireRoot, detectRepo }),
+  };
 }
 
 /**
@@ -796,9 +826,18 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
  * information (the failure path in git is rich — conflict markers,
  * suggested next steps, etc.).
  */
-async function runAsResult(cwd: string, _cmd: 'git', args: string[]): Promise<GitRunResult> {
+async function runAsResult(
+  cwd: string,
+  _cmd: 'git',
+  args: string[],
+  env?: Record<string, string>,
+): Promise<GitRunResult> {
   return new Promise((resolve) => {
-    const child = spawn('git', args, { cwd, windowsHide: true });
+    const child = spawn('git', args, {
+      cwd,
+      windowsHide: true,
+      env: env ? { ...process.env, ...env } : process.env,
+    });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     child.stdout.on('data', (chunk: Buffer) => out.push(chunk));

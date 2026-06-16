@@ -29,7 +29,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, copyFileSync, cpSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -132,6 +132,19 @@ await buildPreload();
     console.log(`✓ splash copied → ${splashDest}`);
   } else {
     console.warn(`! splash.html not found at ${splashSrc} — splash will be skipped`);
+  }
+}
+
+// 3c. Copy brand SVGs used by the static splash. These live beside
+// splash.html in both dev and packaged builds, so the same relative paths work.
+{
+  const brandSrc = resolve(root, 'apps/electron/brand');
+  const brandDest = resolve(root, 'dist/apps/electron/brand');
+  if (existsSync(brandSrc)) {
+    cpSync(brandSrc, brandDest, { recursive: true });
+    console.log(`✓ splash brand assets copied → ${brandDest}`);
+  } else {
+    console.warn(`! brand assets not found at ${brandSrc} — splash logo will be skipped`);
   }
 }
 

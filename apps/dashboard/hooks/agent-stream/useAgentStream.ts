@@ -249,14 +249,13 @@ export function useAgentStream(sessionId: number | null) {
 
   const respondToPlan = useCallback(
     (
-      approved: boolean,
-      feedback?: string,
+      verdict: { approved: boolean; aborted?: boolean; feedback?: string },
       onMessageComplete?: () => void,
       extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' },
     ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/plan-response`,
-        { approved, feedback },
+        { approved: verdict.approved, feedback: verdict.feedback, aborted: verdict.aborted },
         { plan_mode: true, ...(extras?.agent ? { agent: extras.agent } : {}) },
         onMessageComplete,
       ),

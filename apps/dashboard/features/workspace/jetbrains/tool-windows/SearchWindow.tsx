@@ -16,11 +16,30 @@ interface SearchWindowProps {
   onClose?: () => void;
 }
 
+/**
+ * `search.project` returns `HybridSearchResult` — path/line/name live under
+ * `data` (DBFile `.path` for file hits, DBSymbol `.file_path`/`.name`/`.line`
+ * for symbol hits), NOT flat on the row. Read `data` defensively.
+ */
 interface SearchResult {
-  file_path: string;
-  line?: number;
-  snippet?: string;
+  id: number;
+  type: 'file' | 'symbol';
   score: number;
+  data?: { path?: string; file_path?: string; name?: string; line?: number | null } | null;
+}
+
+function resPath(r: SearchResult): string | null {
+  const p = r.data ? (r.data.path ?? r.data.file_path) : undefined;
+  return typeof p === 'string' && p.length > 0 ? p : null;
+}
+function resLine(r: SearchResult): number | undefined {
+  return typeof r.data?.line === 'number' ? r.data.line : undefined;
+}
+function resLabel(r: SearchResult): string {
+  const name = r.data?.name;
+  if (typeof name === 'string' && name.length > 0) return name;
+  const p = resPath(r);
+  return p ? p.slice(p.lastIndexOf('/') + 1) : '';
 }
 
 export function SearchWindow({ projectId, onOpen, onClose }: SearchWindowProps) {
@@ -85,29 +104,32 @@ export function SearchWindow({ projectId, onOpen, onClose }: SearchWindowProps) 
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto">
-          {results.map((r, i) => (
-            <button
-              key={`${r.file_path}:${r.line ?? 0}:${i}`}
-              type="button"
-              onClick={() => onOpen(r.file_path)}
-              className={cn(
-                'w-full text-left px-2.5 py-1.5 border-b last:border-b-0',
-                'hover:bg-muted/40 transition-colors',
-                'flex flex-col gap-0.5 min-w-0',
-              )}
-              title={`${r.file_path}:${r.line ?? '?'}`}
-            >
-              <span className="text-[11.5px] text-foreground truncate">
-                {r.file_path}
-                {r.line && <span className="text-muted-foreground/60">:{r.line}</span>}
-              </span>
-              {r.snippet && (
-                <span className="text-[10.5px] text-muted-foreground truncate font-mono">
-                  {r.snippet}
+          {results.map((r, i) => {
+            const path = resPath(r);
+            if (!path) return null;
+            const line = resLine(r);
+            return (
+              <button
+                key={`${r.id}:${i}`}
+                type="button"
+                onClick={() => onOpen(path)}
+                className={cn(
+                  'w-full text-left px-2.5 py-1.5 border-b last:border-b-0',
+                  'hover:bg-muted/40 transition-colors',
+                  'flex flex-col gap-0.5 min-w-0',
+                )}
+                title={`${path}${line != null ? `:${line}` : ''}`}
+              >
+                <span className="text-[11.5px] text-foreground truncate">
+                  {resLabel(r)}
+                  {line != null && <span className="text-muted-foreground/60">:{line}</span>}
                 </span>
-              )}
-            </button>
-          ))}
+                <span className="text-[10.5px] text-muted-foreground truncate font-mono">
+                  {path}
+                </span>
+              </button>
+            );
+          })}
           {!loading && query && results.length === 0 && (
             <div className="px-3 py-4 text-[11px] text-muted-foreground text-center">
               No matches for &quot;{query}&quot;.

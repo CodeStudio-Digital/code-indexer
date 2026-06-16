@@ -23,6 +23,7 @@ import { RightPanelHost } from './right-panel/RightPanelHost.js';
 import { usePluginPanels } from './right-panel/usePluginPanels.js';
 import type { RightPanelId } from './right-panel/types.js';
 import { Composer, type ComposerHandle } from './composer/Composer.js';
+import { levelFromSession, type OutputCapLevel } from './composer/output-cap-levels.js';
 import { useMessageQueue, type QueueDeliver, type QueueMode } from './composer/useMessageQueue.js';
 import { QueuedMessages } from './composer/QueuedMessages.js';
 import { providerSupportsThinking, resolveReasoningLevels } from './composer/provider-caps.js';
@@ -37,6 +38,7 @@ import { ToolLoopBanner } from './ToolLoopBanner.js';
 // — only Snapshots stays as a true Dialog because its diff viewer needs
 // the full viewport width.
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
+import { GlobalNewSessionDialog } from './global/GlobalNewSessionDialog.js';
 import { SnapshotsPanel } from '../snapshots/SnapshotsPanel.js';
 import { fetchSnapshotList } from '../snapshots/api.js';
 import type {
@@ -48,20 +50,31 @@ import type {
   SessionData,
 } from './types.js';
 import { useAgentChatState } from './useAgentChatState.js';
-import { consumeSelectionPrefix, onStudioSend, usePublishAgentBusy } from '../builder/studio/studio-context-store.js';
+import { consumePendingAttachments, consumeSelectionPrefix, onStudioSend, usePublishAgentBusy } from '../builder/studio/studio-context-store.js';
 import type { AgentAttachment } from '../../hooks/useAgentStream.js';
 
-export default function AgentChat({ projectId, projectName, initialSessionId, selectionPrefixSessionId }: AgentChatProps) {
+export default function AgentChat({ projectId, projectName, mode = 'project', initialSessionId, selectionPrefixSessionId }: AgentChatProps) {
   const { t } = useTranslation(['chat', 'common']);
   const confirm = useConfirm();
+  // Global (multi-project) mode: the session list is cross-project (no
+  // project_id filter), groups are disabled, and new sessions go through the
+  // project multi-select dialog. Default 'project' keeps every existing mount
+  // byte-identical.
+  const isGlobal = mode === 'global';
   const [view, setView] = useState<SessionView>('active');
   const { data: sessions, refetch: refetchSessions } = useApi<CoderSession[]>(
-    `/coder/sessions?project_id=${projectId}&archived=${view === 'archived' ? '1' : '0'}`,
+    isGlobal
+      ? `/coder/sessions/global?archived=${view === 'archived' ? '1' : '0'}`
+      : `/coder/sessions?project_id=${projectId}&archived=${view === 'archived' ? '1' : '0'}`,
   );
   const { data: groups, refetch: refetchGroups } = useApi<CoderSessionGroup[]>(
-    `/coder/groups?project_id=${projectId}`,
+    // Groups are per-project; disabled in global mode ('' → useApi skips the fetch).
+    isGlobal ? '' : `/coder/groups?project_id=${projectId}`,
   );
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Global mode: which linked project the right-rail file tree is rooted at.
+  // Defaults to the selected session's primary; reset when the session changes.
+  const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const [provider, setProvider] = useState('zai');
   const [model, setModel] = useState('');
   const [agent, setAgent] = useState<'explore' | 'plan' | 'build' | 'admin' | 'spec' | 'api'>('explore');
@@ -94,7 +107,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
   const [sessionTemperature, setSessionTemperature] = useState<number | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
-  const [unrestrictedOutput, setUnrestrictedOutput] = useState<boolean>(false);
+  const [planDepth, setPlanDepth] = useState<string | null>(null);
+  const [outputCapLevel, setOutputCapLevel] = useState<OutputCapLevel>('economic');
   const [toolPermissionMode, setToolPermissionMode] = useState<'ask' | 'auto' | 'unrestricted'>('auto');
   const [summarizing, setSummarizing] = useState<boolean>(false);
   const composerRef = useRef<ComposerHandle>(null);
@@ -103,6 +117,8 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
   const pendingAutoTitle = useRef<Set<number>>(new Set());
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState('');
+  // Global mode: the multi-project create dialog (project multi-select).
+  const [globalNewOpen, setGlobalNewOpen] = useState(false);
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [renameGroupTarget, setRenameGroupTarget] = useState<CoderSessionGroup | null>(null);
@@ -144,7 +160,9 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     localStorage.setItem('chatRightPanelId', activeRightPanelId ?? 'null');
   }, [activeRightPanelId]);
   // Plugin tool windows for the right rail (side: 'right'), with dead-id guard.
-  const pluginPanelWindows = usePluginPanels(projectId, activeRightPanelId, setActiveRightPanelId);
+  // In global mode there's no fixed project — scope plugin panels to the active
+  // linked project (0 = none, so no contributions match, which is fine).
+  const pluginPanelWindows = usePluginPanels((isGlobal ? activeProjectId : projectId) ?? 0, activeRightPanelId, setActiveRightPanelId);
   const [thinking, setThinking] = useState(false);
   /**
    * Per-session "Describe images" flag. FORCES the vision fallback (image →
@@ -159,6 +177,15 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
 
   const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=120` : '';
   const { data: sessionData, refetch: refetchSession, update: updateSessionData } = useApi<SessionData>(sessionUrl);
+
+  // Global mode: root the right-rail file tree at the selected session's primary
+  // linked project; re-derive whenever the session (or its payload) changes.
+  useEffect(() => {
+    if (!isGlobal) return;
+    const linked = sessionData?.linked_projects ?? [];
+    const primary = linked.find((p) => p.is_primary) ?? linked[0];
+    setActiveProjectId(primary?.project_id ?? sessionData?.session.project_id ?? null);
+  }, [isGlobal, selectedId, sessionData]);
 
   const stream = useAgentStream(selectedId);
   const { pipelineRuntime, openStream: openPipelineStream } = usePipelineStream(selectedId);
@@ -384,7 +411,28 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     return created;
   };
 
+  const createGlobalSession = async (opts: { projectIds: number[]; primaryProjectId: number; title?: string }) => {
+    const created = await apiPost<CoderSession>('/coder/sessions/global', {
+      project_ids: opts.projectIds,
+      primary_project_id: opts.primaryProjectId,
+      title: (opts.title ?? 'Nova sessão global').slice(0, 80),
+      provider,
+      model: model || PROVIDERS.find((p) => p.id === provider)?.defaultModel,
+    });
+    if (!opts.title) pendingAutoTitle.current.add(created.id);
+    refetchSessions();
+    setSelectedId(created.id);
+    window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+    return created;
+  };
+
   const handleNewSession = () => {
+    // Global mode opens the project multi-select dialog instead of an
+    // immediate single-project create.
+    if (isGlobal) {
+      setGlobalNewOpen(true);
+      return;
+    }
     void createSession();
   };
 
@@ -398,9 +446,12 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     if (!text.trim() || !selectedId) return;
     const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
     if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
-    // Builder studio: prepend the selected-element block (and clear it).
+    // Builder studio: prepend the selected-element block(s) and drain any
+    // region-select screenshot(s) into the attachments (then clear both).
     const prefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
+    const shots = selectionPrefixSessionId ? consumePendingAttachments(selectionPrefixSessionId) : [];
     const outgoing = prefix ? `${prefix}\n${text}` : text;
+    const allAtts = shots.length ? [...atts, ...shots] : atts;
     await sendMessage(outgoing, async () => {
       refetchSession();
       if (shouldAutoTitle) {
@@ -416,7 +467,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
             console.warn('[auto-title] generate-title failed:', err);
           });
       }
-    }, { attachments: atts, agent, maxTurns, thinking, describeImages, selectedSkillIds });
+    }, { attachments: allAtts, agent, maxTurns, thinking, describeImages, selectedSkillIds });
   }, [selectedId, sendMessage, refetchSession, refetchSessions, agent, maxTurns, thinking, describeImages, selectionPrefixSessionId]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
@@ -555,15 +606,21 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     setReasoningEffort(typeof e === 'string' && e.length > 0 ? e : null);
   }, [sessionData?.session]);
 
-  // Unrestricted-tool-output toggle (migration 078). Same pattern as the
-  // temperature override above — reads from the session row, writes via PATCH.
+  // Plan-depth override (migration 151). Sticky per session; only surfaced in
+  // the composer when the `plan` agent is active. NULL → `normal` at runtime.
   useEffect(() => {
     if (!sessionData?.session) {
-      setUnrestrictedOutput(false);
+      setPlanDepth(null);
       return;
     }
-    const v = sessionData.session.unrestricted_tool_output;
-    setUnrestrictedOutput(!!v);
+    const d = sessionData.session.plan_depth_override;
+    setPlanDepth(typeof d === 'string' && d.length > 0 ? d : null);
+  }, [sessionData?.session]);
+
+  // Tool-output cap level (migration 153; legacy migration-078 boolean → 'max'
+  // fallback). Reads from the session row, writes via PATCH /tool-output-cap-level.
+  useEffect(() => {
+    setOutputCapLevel(levelFromSession(sessionData?.session));
   }, [sessionData?.session]);
 
   // Tool permission mode (migration 131). Reads from the session row,
@@ -618,11 +675,21 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
     }
   };
 
-  const handleUnrestrictedOutputChange = async (next: boolean) => {
-    setUnrestrictedOutput(next);
+  const handlePlanDepthChange = async (next: string | null) => {
+    setPlanDepth(next);
     if (!selectedId) return;
     try {
-      await apiPatch(`/coder/sessions/${selectedId}/unrestricted-output`, { enabled: next });
+      await apiPatch(`/coder/sessions/${selectedId}/plan-depth`, { depth: next });
+    } catch {
+      /* ignore — UI optimistic, server is the source of truth on next refetch */
+    }
+  };
+
+  const handleOutputCapLevelChange = async (next: OutputCapLevel) => {
+    setOutputCapLevel(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/tool-output-cap-level`, { level: next });
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
     }
@@ -828,6 +895,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
   };
 
   const handleCreateGroup = async () => {
+    if (isGlobal) return; // groups are per-project; not available in global mode
     setNewGroupName('');
     setNewGroupOpen(true);
   };
@@ -880,13 +948,13 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
   const handlers: PromptHandlers = useMemo(
     () => ({
       onAnswer: (answer) => answerQuestion(answer),
-      onPlanResponse: async (approved, feedback) => {
-        await respondToPlan(approved, feedback);
+      onPlanResponse: async (verdict) => {
+        await respondToPlan(verdict);
         // Iteration 2: after an approved plan, the backend may auto-transition
         // the session agent from 'plan' to 'build'. Refetch the session
         // metadata so the AgentPicker reflects the new mode without
-        // requiring a manual reload.
-        if (approved && selectedId) {
+        // requiring a manual reload. (Skip on revise/abort — agent stays 'plan'.)
+        if (verdict.approved && selectedId) {
           try {
             const r = await fetch(`/api/coder/sessions/${selectedId}`);
             if (r.ok) {
@@ -961,6 +1029,13 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {isGlobal && (
+        <GlobalNewSessionDialog
+          open={globalNewOpen}
+          onOpenChange={setGlobalNewOpen}
+          onCreate={createGlobalSession}
+        />
+      )}
       <Dialog open={newGroupOpen} onOpenChange={setNewGroupOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -1097,7 +1172,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
           onCreateGroup={handleCreateGroup}
           onRenameGroup={handleRenameGroup}
           onDeleteGroup={handleDeleteGroup}
-          projectName={projectName}
+          projectName={isGlobal ? t('chat:global.workspaceName') : (projectName ?? '')}
           provider={provider}
           setProvider={(v) => {
             setProvider(v);
@@ -1127,7 +1202,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
             <main className="flex h-full w-full min-w-0 bg-card overflow-hidden min-h-0">
               <EmptyChatState
                 onNew={handleNewSession}
-                projectName={projectName}
+                projectName={isGlobal ? t('chat:global.workspaceName') : (projectName ?? '')}
                 onOpenSidebar={() => setMobileSidebarOpen(true)}
               />
             </main>
@@ -1213,8 +1288,10 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
                 reasoningEffort={reasoningEffort}
                 setReasoningEffort={handleReasoningEffortChange}
                 reasoningLevels={resolveReasoningLevels(provider, providerOptions, model)}
-                unrestrictedOutput={unrestrictedOutput}
-                setUnrestrictedOutput={handleUnrestrictedOutputChange}
+                planDepth={planDepth}
+                setPlanDepth={handlePlanDepthChange}
+                outputCapLevel={outputCapLevel}
+                setOutputCapLevel={handleOutputCapLevelChange}
                 toolPermissionMode={toolPermissionMode}
                 setToolPermissionMode={handleToolPermissionModeChange}
                 getModelsForProvider={getModelsForProvider}
@@ -1246,7 +1323,7 @@ export default function AgentChat({ projectId, projectName, initialSessionId, se
                 session={sessionData?.session ?? null}
                 sessionData={sessionData ?? null}
                 stats={stats}
-                projectId={projectId}
+                projectId={(isGlobal ? activeProjectId : projectId) ?? null}
                 refreshKey={stateRefreshKey + sidebarRefreshTick}
                 todos={todos}
                 filePicks={filePicks}

@@ -44,6 +44,7 @@ export interface CoderSession {
   is_favorite: boolean;
   phase_profile_id?: number | null;
   unrestricted_tool_output?: boolean;
+  tool_output_cap_level?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -67,6 +68,7 @@ export interface UpdateSessionInput {
   is_favorite?: boolean;
   phase_profile_id?: number | null;
   unrestricted_tool_output?: boolean;
+  tool_output_cap_level?: string | null;
 }
 
 /**

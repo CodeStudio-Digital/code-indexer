@@ -458,6 +458,7 @@ export function CompanySessionView({
             boardMessages={boardMessages}
             composer={
               <MasterComposer
+                sessionId={activeSessionId}
                 onSend={handleSend}
                 placeholder={
                   !stream.started && !sessionAlreadyRan

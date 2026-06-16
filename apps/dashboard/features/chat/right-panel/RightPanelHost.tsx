@@ -13,10 +13,12 @@
  */
 import {
   BarChart3,
+  ClipboardList,
   Compass,
   Gauge,
   HardDrive,
   Info,
+  ListChecks,
   ScrollText,
   Settings,
 } from 'lucide-react';
@@ -28,6 +30,8 @@ import { SessionConfigView } from './SessionConfigPanel.js';
 import { SessionMetricsView } from '../SessionMetricsModal.js';
 import { ToolStatsView } from '../ToolStatsModal.js';
 import { SessionDetailsView } from '../SessionDetailsModal.js';
+import { PlansPanel } from './PlansPanel.js';
+import { TasksPanel } from './TasksPanel.js';
 import { WorkerLogPanel } from '../WorkerLogPanel.js';
 import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
 import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
@@ -45,7 +49,8 @@ export interface RightPanelHostProps {
   session: CoderSession | null;
   sessionData: SessionData | null;
   stats: CoderSessionStats | null;
-  projectId: number;
+  /** Null in a global session before a linked project is active. */
+  projectId: number | null;
   // Meta panel deps
   refreshKey: number;
   todos: TodoItem[];
@@ -128,6 +133,18 @@ export function RightPanelHost(props: RightPanelHostProps) {
       return (
         <PanelChrome title={t('chat:rightRail.toolStats', 'Tool stats')} icon={BarChart3} onClose={onClose}>
           <ToolStatsView sessionId={sessionId} active />
+        </PanelChrome>
+      );
+    case 'plans':
+      return (
+        <PanelChrome title={t('chat:rightRail.plans', 'Plans')} icon={ClipboardList} onClose={onClose}>
+          <PlansPanel sessionId={sessionId} active />
+        </PanelChrome>
+      );
+    case 'tasks':
+      return (
+        <PanelChrome title={t('chat:rightRail.tasks', 'Tasks')} icon={ListChecks} onClose={onClose}>
+          <TasksPanel sessionId={sessionId} active />
         </PanelChrome>
       );
     case 'worker-log':
